@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Prepared autoScan arrays. Image arrays use `(sample, y, x)`; labels and
+# split are one-dimensional with the same sample count. Paths must be local.
+search_path: /abs/path/to/autoscan_search.npy
+template_path: /abs/path/to/autoscan_template.npy
+difference_path: /abs/path/to/autoscan_difference.npy
+labels_path: /abs/path/to/autoscan_labels.npy
+split_path: /abs/path/to/autoscan_split.npy
+# One JSON object per sample, including stable IDs, split, label, and source.
+metadata_jsonl: /abs/path/to/autoscan_metadata.jsonl

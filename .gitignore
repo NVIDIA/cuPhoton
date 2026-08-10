@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Environments
+.venv/
+.venv-*/
+.wheel-venv/
+venv/
+.conda/
+.env
+
+# Notebooks and local scratch
+.ipynb_checkpoints/
+Untitled.ipynb
+scratch/
+
+# Project runtime artifacts
+/core
+/cufile.log
+COMMAND-MAP.md
+/quickstart-output/
+/data/
+/*/data/
+/*/runs/
+/*/logs/
+/*/demo-data/
+*.fits
+*.fit
+*.fz
+*.npy
+*.npz
+*.parquet
+*.h5
+*.hdf5
+*.zarr/
+
+# Split-out/private material
+papers/
+agents/
+.roborev/
+.roborev.toml
+
+# Local tools
+.pre-commit-cache/
+
+# Git worktrees
+.worktrees/

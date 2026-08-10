@@ -1,0 +1,40 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+SPDX-License-Identifier: Apache-2.0
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>XRay Run {run} Report</title>
+    <style>
+      body {{
+        color: #171717;
+        font-family: Arial, sans-serif;
+        margin: 24px;
+      }}
+      img {{
+        max-width: 100%;
+      }}
+      .row {{
+        display: flex;
+        gap: 16px;
+        margin-bottom: 16px;
+      }}
+      .column {{
+        flex: 1 1 0;
+      }}
+    </style>
+  </head>
+  <body>
+    <h1>XRay Run {run} Report</h1>
+    <h2>Full Detector Plots</h2>
+    {summary_plots}
+    <h2>Tile Plots</h2>
+    {tile_plots}
+    <h2>Summary Plots</h2>
+    {phonon_plots}
+    {missing_optional}
+  </body>
+</html>

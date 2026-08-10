@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Point this manifest at a caller-supplied registry of local FITS products.
+# This smoke builder creates unlabeled review data, not training labels.
+registry: /path/to/local-fits-registry.parquet
+sample_count: 8
+stamp_size: 51
+seed: 0
+shuffle: true
+
+# Pair visit and difference images while retaining coadds for optional
+# metadata lookup. Values must match the registry's normalized product names.
+dataset_types:
+  - visit_image
+  - difference_image
+  - template_coadd
+  - deep_coadd
+
+# Optional local selection filters:
+# date_min: 20000101
+# date_max: 20000102
+# bands: [r, i]
+# visits: [1001, 1002]
+# detectors: [0, 1]
+
+include_coadd_metadata: true
+# FITS image extensions may be names or integer HDU indices.
+template_mode: search_minus_difference
+image_hdu: IMAGE
+difference_hdu: IMAGE
+nan_policy: zero

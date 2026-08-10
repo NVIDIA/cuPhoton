@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Local reconstruction bundle or converted data root. This configuration is a
+# throughput-oriented Blackwell example, not a universal science baseline.
+base: /abs/path/to/data
+
+# Balanced sample counts and image geometry in pixels.
+positive_count: 512
+negative_count: 512
+stamp_size: 51
+difference_context_size: 101
+template_source: median
+# Build a triplet dataset using an XPOIS difference image.
+include_difference: true
+difference_mode: xpois
+mask_mode: non_conservative
+mask_dilation_factor: 1
+mask_min_valid_fraction: 1.0
+template_min_valid_exposures: 1
+split_fractions: [0.7, 0.15, 0.15]
+# Separate sample and split seeds make both stages reproducible.
+sample_seed: 233
+split_seed: 377
+tile_size: 64
+band: i
+# Candidate-pool and morphology controls. Review them for a new catalog.
+positive_source_mode: catalog
+negative_source_mode: catalog-offset
+negative_offset_range: [8.0, 16.0]
+catalog_primary_only: true
+catalog_exclude_sky: true
+center_jitter: 0
+positive_catalog_extendedness_max: 0.2
+negative_catalog_extendedness_min: 0.8
+negative_catalog_flux_min: 1000.0
+xpois_kernel_shape: [9, 9]
+# Gaussian sigmas are pixels; each degree applies to the corresponding sigma.
+xpois_basis_sigmas: [1.5, 3.0]
+xpois_basis_degrees: [2, 1]
+xpois_background_degree: 0
+xpois_flux_conserve: false
+xpois_use_variance: true

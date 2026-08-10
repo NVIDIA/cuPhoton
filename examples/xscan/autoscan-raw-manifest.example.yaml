@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Raw records consumed by `cuphoton xscan data-build-autoscan-raw`. Each row
+# must point to caller-supplied local stamps and carry label provenance.
+records_path: /abs/path/to/autoscan_raw_records.jsonl
+
+# Deterministic group-aware split and optional class balancing.
+split_fractions: [0.9, 0.0, 0.1]
+split_seed: 0
+balance_classes: true
+subset_fraction: 1.0
+# Optional label vocabulary and smoke-run limit:
+# positive_labels: [1, real, positive]
+# negative_labels: [0, bogus, artifact]
+# limit_records: 1000

@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Unpack one or more redistributable no-Diff shard triplets first. The URL and
+# byte range below are recorded as dataset provenance, not fetched by cuPhoton.
+# For example:
+# curl -L --fail --range 0-20971519 \
+#   https://portal.nersc.gov/cfs/dessn/nodiff/all/nodiff_triplets_07_of_10.tar.gz \
+#   | tar -xzf - -C /tmp/nodiff-release-slice
+source_dir: /abs/path/to/unpacked/nodiff-release-slice
+# Output stamps are center-cropped to this odd pixel size.
+stamp_size: 51
+max_per_class: 64
+split_fractions: [0.8, 0.1, 0.1]
+split_seed: 20260514
+band: unknown
+# Preserve the exact external source and range used to create the local slice.
+release_shard_url: https://portal.nersc.gov/cfs/dessn/nodiff/all/nodiff_triplets_07_of_10.tar.gz
+release_byte_range: bytes=0-20971519

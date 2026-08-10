@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Raw exposure records consumed by `cuphoton xscan data-build-nodiff-raw`.
+# Records must reference local images and include stable exposure and label
+# identifiers.
+exposures_path: /abs/path/to/nodiff_raw_exposures.jsonl
+
+# Stamp/detection controls use pixels and background-sigma units.
+stamp_size: 51
+detection_threshold_sigma: 5.0
+detection_minarea: 5
+max_per_class_per_image: 15
+diff_snr_min: 3.5
+split_fractions: [0.9, 0.0, 0.1]
+# Split before balancing/subsetting to preserve deterministic membership.
+split_seed: 0
+balance_classes: true
+subset_fraction: 0.2
+# Optional label vocabulary and development limit:
+# positive_labels: [1, real, positive]
+# negative_labels: [0, bogus, artifact]
+# limit_exposures: 10

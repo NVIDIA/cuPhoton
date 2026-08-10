@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Prepared no-Diff arrays. Search and template use `(sample, y, x)`; labels
+# and split are one-dimensional and share the sample count.
+search_path: /abs/path/to/nodiff_search.npy
+template_path: /abs/path/to/nodiff_template.npy
+labels_path: /abs/path/to/nodiff_labels.npy
+split_path: /abs/path/to/nodiff_split.npy
+# One JSON object per sample with source and label provenance.
+metadata_jsonl: /abs/path/to/nodiff_metadata.jsonl

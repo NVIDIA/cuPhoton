@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+include *.md
+exclude AGENTS.md
+exclude CHANGELOG.md
+exclude CLAUDE.md
+exclude RELEASING.md
+prune .github
+prune .gitlab
+prune scripts
+include LICENSE
+include CITATION.cff
+include Makefile
+include pyproject.toml
+include setup.py
+include uv.lock
+include .pre-commit-config.yaml
+recursive-include docs *.md
+recursive-include examples *.py *.yaml
+recursive-include tests *.py
+recursive-include src/cuphoton/xdr/src *.cpp *.h *.sh

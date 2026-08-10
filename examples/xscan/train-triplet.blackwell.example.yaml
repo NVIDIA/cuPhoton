@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Prepared dataset with search, template, and difference arrays. This
+# Blackwell configuration is a throughput example.
+dataset_dir: data/hsc-domain
+output_root: runs
+run_name: blackwell-triplet-benchmark
+epochs: 5
+batch_size: 16
+learning_rate: 0.001
+weight_decay: 0.0
+seed: 0
+# `auto` prefers CUDA and reports a CPU fallback.
+device: auto
+train_split: train
+val_split: val
+eval_split: test
+early_stopping_metric: val_roc_auc
+early_stopping_patience: 8
+early_stopping_min_delta: 0.001
+performance:
+  # Mixed precision, TF32, and cuDNN autotuning can change numerical details.
+  amp_dtype: bf16
+  allow_tf32: true
+  cudnn_benchmark: true
+  compile: false
+  compile_mode: null
+  compile_backend: null
+  compile_threads: 1
+  compile_worker_start_method: spawn
+  worker_start_method: spawn
+  worker_cpu_threads: 1
+  num_workers: 2
+  pin_memory: true
+  persistent_workers: true
+  non_blocking_transfers: true
+model:
+  # Triplet mode requires difference.npy and matching square stamp dimensions.
+  input_mode: triplet
+  image_size: 51
+  depths: [3, 3, 3, 3, 3, 3]
+  num_heads: [2, 2, 4, 8, 8, 8]
+  embed_dims: [64, 128, 256, 512, 512, 512]
+  decoder_embedding_dim: 64
+  pos_dim: 16
+  output_nc: 2
+  drop_rate: 0.2
+  attn_drop: 0.2

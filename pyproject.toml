@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=83.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuphoton"
+dynamic = ["version"]
+description = "GPU-accelerated astronomy and imaging tools from NVIDIA."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "NVIDIA Corporation" }]
+keywords = ["astronomy", "cuda", "gpu", "image-processing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+  "astropy>=6.1.4",
+  "h5py>=3.10",
+  "numexpr>=2.10",
+  "numpy>=2.0,<2.6",
+  "pandas>=2.2",
+  "photutils>=3.0",
+  "pyarrow>=23.0",
+  "PyYAML>=6.0",
+  "scipy>=1.13",
+]
+
+[project.optional-dependencies]
+torch = [
+  "torch>=2.13,<3",
+]
+viz = [
+  "bokeh>=3.9",
+  "pillow>=10.4",
+]
+gpu = [
+  "cupy-cuda13x[ctk]>=14,<15; platform_system == 'Linux'",
+  "kvikio-cu13>=26.6,<27; platform_system == 'Linux'",
+  "libkvikio-cu13>=26.6,<27; platform_system == 'Linux'",
+  "numba>=0.61,<0.66; platform_system == 'Linux'",
+  "numba-cuda[cu13]>=0.30,<0.31; platform_system == 'Linux'",
+  "nvidia-libnvcomp-cu13>=5.2,<6; platform_system == 'Linux'",
+  "nvidia-nvcomp-cu13>=5.2,<6; platform_system == 'Linux'",
+  "pybind11>=2.12,<4; platform_system == 'Linux'",
+  "torch>=2.13,<3; platform_system == 'Linux'",
+]
+hdf5 = [
+  "legate>=25.1,<27; platform_system == 'Linux'",
+]
+cutile = [
+  "cuda-tile>=1.4; python_version >= '3.12' and python_version < '3.14' and platform_system == 'Linux'",
+  "cupy-cuda13x[ctk]>=14,<15; python_version >= '3.12' and python_version < '3.14' and platform_system == 'Linux'",
+]
+dev = [
+  "pre-commit>=4.0",
+  "pytest>=8.3",
+  "ruff>=0.15.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/NVIDIA/cuPhoton"
+Documentation = "https://github.com/NVIDIA/cuPhoton/tree/main/docs"
+Repository = "https://github.com/NVIDIA/cuPhoton.git"
+Issues = "https://github.com/NVIDIA/cuPhoton/issues"
+
+[project.scripts]
+cuphoton = "cuphoton.core.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = { attr = "cuphoton.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cuphoton*"]
+
+[tool.setuptools.package-data]
+"cuphoton.xpois" = ["assets/*"]
+"cuphoton.xscan" = ["assets/*"]
+"cuphoton.xray" = ["templates/*.html"]
+
+[tool.uv]
+package = true
+environments = ["sys_platform == 'linux'"]
+
+[tool.ruff]
+line-length = 78
+target-version = "py311"
+force-exclude = true
+extend-exclude = [
+  "*.ipynb",
+  "papers",
+  "agents",
+  "data",
+  "runs",
+  "demo-data",
+  "notebooks",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/cuphoton/xpois/review_bokeh.py" = ["E501"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = ["--import-mode=importlib"]
+markers = [
+  "real_data: opt-in tests that require caller-supplied observational data",
+]
+pythonpath = ["src"]
+testpaths = ["tests"]

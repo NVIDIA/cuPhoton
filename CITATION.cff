@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use cuPhoton, please cite this software release."
+title: "cuPhoton: GPU-accelerated astronomy and imaging reference workflows"
+type: software
+authors:
+  - name: "NVIDIA Corporation"
+version: 0.1.2
+date-released: 2026-08-17
+license: Apache-2.0
+repository-code: "https://github.com/NVIDIA/cuPhoton"
+url: "https://github.com/NVIDIA/cuPhoton"

@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Each variant changes one subtraction context or basis setting. Keep all
+# training data, seeds, and model settings fixed when comparing variants.
+variants:
+  - name: ctx051_default
+    # Context and odd kernel dimensions are pixels.
+    difference_context_size: 51
+    xpois_kernel_shape: [9, 9]
+    xpois_basis_sigmas: [1.5, 3.0]
+    xpois_basis_degrees: [2, 1]
+    # Background degree 0 is constant; flux_conserve rewrites non-leading
+    # basis terms to zero sum.
+    xpois_background_degree: 0
+    xpois_flux_conserve: false
+    xpois_use_variance: true
+  - name: ctx101_default
+    difference_context_size: 101
+    xpois_kernel_shape: [9, 9]
+    xpois_basis_sigmas: [1.5, 3.0]
+    xpois_basis_degrees: [2, 1]
+    xpois_background_degree: 0
+    xpois_flux_conserve: false
+    xpois_use_variance: true
+  - name: ctx151_default
+    difference_context_size: 151
+    xpois_kernel_shape: [9, 9]
+    xpois_basis_sigmas: [1.5, 3.0]
+    xpois_basis_degrees: [2, 1]
+    xpois_background_degree: 0
+    xpois_flux_conserve: false
+    xpois_use_variance: true
+  - name: ctx101_bg1
+    difference_context_size: 101
+    xpois_kernel_shape: [9, 9]
+    xpois_basis_sigmas: [1.5, 3.0]
+    xpois_basis_degrees: [2, 1]
+    xpois_background_degree: 1
+    xpois_flux_conserve: false
+    xpois_use_variance: true
+  - name: ctx101_k11
+    difference_context_size: 101
+    xpois_kernel_shape: [11, 11]
+    xpois_basis_sigmas: [1.5, 3.0]
+    xpois_basis_degrees: [2, 1]
+    xpois_background_degree: 0
+    xpois_flux_conserve: false
+    xpois_use_variance: true

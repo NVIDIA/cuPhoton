@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Local converted array store. Replace every absolute-path placeholder before
+# running `cuphoton xscan data-build-hsc`.
+base: /abs/path/to/data
+
+# Class counts and square stamp size in pixels.
+positive_count: 1000
+negative_count: 1000
+stamp_size: 51
+template_source: median
+# Pair datasets may omit `difference.npy`; triplet datasets include it.
+include_difference: true
+difference_mode: simple
+mask_mode: none
+mask_dilation_factor: 1
+mask_min_valid_fraction: 1.0
+template_min_valid_exposures: 1
+split_fractions: [0.7, 0.15, 0.15]
+# Sampling and split assignment use independent deterministic seeds.
+sample_seed: 0
+split_seed: 0
+tile_size: 256
+band: i
+positive_source_mode: catalog
+# Candidate selection policy. `random` negatives do not require morphology
+# columns; catalog-backed modes should set reviewed cuts below.
+negative_source_mode: random
+negative_offset_range: [8.0, 24.0]
+catalog_primary_only: true
+catalog_exclude_sky: true
+center_jitter: 0
+# Optional catalog, mask, difference, and quality controls:
+# positive_catalog_flux_min: 0.0
+# positive_catalog_flux_max: 500.0
+# positive_catalog_extendedness_min: 0.0
+# positive_catalog_extendedness_max: 0.2
+# negative_catalog_flux_min: 1000.0
+# negative_catalog_flux_max: 50000.0
+# negative_catalog_extendedness_min: 0.8
+# negative_catalog_extendedness_max: 1.0
+# catalog_parquet: /abs/path/to/objectTable.parq
+# coadd_fits: /abs/path/to/deepCoadd.fits
+# catalog_flux_column: i_psfFlux
+# catalog_flux_min: 100.0
+# catalog_limit: 10000
+# butler_registry: /abs/path/to/fits_registry.parquet
+# butler_collection: hsc_i_band
+# butler_datasettype: visit_image
+# butler_query: "band == 'i'"
+# butler_exposure_index_column: exposure_index
+# catalog_object_cap: 4
+# positive_catalog_object_cap: 4
+# negative_catalog_object_cap: 2
+# positive_quality_snr_min: 8.0
+# positive_quality_flux_ratio_min: 0.25
+# positive_quality_center_offset_max: 1.5
+# flux_scale_range: [6.0, 18.0]
+# difference_mode: xpois
+# difference_context_size: 101
+# xpois_kernel_shape: [9, 9]
+# xpois_basis_sigmas: [1.5, 3.0]
+# xpois_basis_degrees: [2, 1]
+# xpois_background_degree: 0
+# xpois_flux_conserve: false
+# xpois_use_variance: true

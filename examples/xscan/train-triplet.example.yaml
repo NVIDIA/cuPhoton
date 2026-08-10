@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Prepared triplet dataset and self-contained run destination.
+dataset_dir: data/hsc-domain
+output_root: runs
+run_name: triplet-example
+epochs: 4
+batch_size: 16
+learning_rate: 0.001
+weight_decay: 0.0
+seed: 0
+# `auto` prefers CUDA and records the resolved device.
+device: auto
+train_split: train
+val_split: val
+eval_split: test
+performance:
+  # Worker and mixed-precision settings are operational controls.
+  amp_dtype: bf16
+  allow_tf32: true
+  cudnn_benchmark: true
+  compile: false
+  compile_mode: null
+  compile_backend: null
+  compile_threads: 1
+  compile_worker_start_method: spawn
+  worker_start_method: spawn
+  worker_cpu_threads: 1
+  num_workers: 2
+  pin_memory: true
+  persistent_workers: true
+  non_blocking_transfers: true
+model:
+  # Triplet mode consumes search, template, and difference channels.
+  input_mode: triplet
+  image_size: 51
+  depths: [3, 3, 3, 3, 3, 3]
+  num_heads: [2, 2, 4, 8, 8, 8]
+  embed_dims: [64, 128, 256, 512, 512, 512]
+  decoder_embedding_dim: 64
+  pos_dim: 16
+  output_nc: 2
+  drop_rate: 0.2
+  attn_drop: 0.2
