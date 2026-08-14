@@ -97,6 +97,7 @@ include = ["cuphoton*"]
 "cuphoton.xray" = ["templates/*.html"]
 
 [tool.uv]
+managed = true
 package = true
 environments = ["sys_platform == 'linux'"]
 
