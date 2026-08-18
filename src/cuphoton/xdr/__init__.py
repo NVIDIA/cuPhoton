@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GPU-native FITS and HDF5 loading.
+"""GPU-native FITS loading.
 
 Pipeline: NVMe -> GPU memory via kvikio (GPUDirect Storage) -> nvCOMP batched
 decompression on device -> CuPy kernels for GZIP_2 unshuffle, dequantize, and
@@ -19,11 +19,6 @@ from cuphoton import __version__
 
 from ._caps import gpu_available, is_gds_active, warn_if_gds_fallback
 from .convenience import batch_to_device, open_gpu
-from .hdf5 import (
-    LegateHdf5Unavailable,
-    legate_hdf5_available,
-    load_hdf5,
-)
 from .mock_storage import mock_storage, storage_cache
 from .prefetch import batch_to_device_stream
 from .reader import GpuCompImageReader, GpuImageReader
@@ -38,9 +33,6 @@ __all__ = [
     "open_gpu",
     "batch_to_device",
     "batch_to_device_stream",
-    "LegateHdf5Unavailable",
-    "legate_hdf5_available",
-    "load_hdf5",
     "mock_storage",
     "storage_cache",
 ]

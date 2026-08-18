@@ -12,7 +12,7 @@ All Python APIs are in the `cuphoton.*` namespace:
 - `cuphoton.core` provides the shared command-line, application-context,
   logging, and invariant framework.
 - `cuphoton.xdr` loads FITS image HDUs through GPU-native GDS and nvCOMP
-  paths and exposes optional Legate-backed HDF5 loading.
+  paths.
 - `cuphoton.xfit` performs batched nonlinear least-squares fits for sampled
   stamp and analytic Gaussian dipole models.
 - `cuphoton.xpois` fits matching kernels and performs optimal image
@@ -74,16 +74,14 @@ The base install contains the shared CPU data and scientific stack. Optional
 extras are deliberately separated by purpose:
 
 Python 3.11 through 3.14 is supported on Linux for the base, GPU, CPU PyTorch,
-and visualization profiles. The locked Legate-backed HDF5 profile is
-unavailable on Python 3.14. The experimental cuTile profile remains limited to
-Python 3.12 and 3.13.
+and visualization profiles. The experimental cuTile profile remains limited
+to Python 3.12 and 3.13.
 
 | Extra | Use |
 | --- | --- |
 | `dev` | Tests, formatting, linting, and build tools |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
 | `gpu` | CUDA 13 PyTorch, CuPy, Numba-CUDA, KvikIO, and nvCOMP backends |
-| `hdf5` | Legate-backed HDF5 dataset loading |
 | `cutile` | Experimental `cuda.tile` backend on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |
 
@@ -117,7 +115,6 @@ Import through the namespaced modules:
 
 ```python
 from cuphoton.xdr import batch_to_device
-from cuphoton.xdr import load_hdf5
 from cuphoton.xfit import GaussianDipoleModel, fit_dipoles
 from cuphoton.xpois import solve_separable_kernel
 from cuphoton.xrep import ReprojectionSpec, reproject_array

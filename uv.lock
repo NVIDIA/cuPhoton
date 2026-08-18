@@ -276,9 +276,6 @@ gpu = [
     { name = "pybind11" },
     { name = "torch" },
 ]
-hdf5 = [
-    { name = "legate" },
-]
 torch = [
     { name = "torch" },
 ]
@@ -296,7 +293,6 @@ requires-dist = [
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=14,<15" },
     { name = "h5py", specifier = ">=3.10" },
     { name = "kvikio-cu13", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=26.6,<27" },
-    { name = "legate", marker = "sys_platform == 'linux' and extra == 'hdf5'", specifier = ">=25.1,<27" },
     { name = "libkvikio-cu13", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=26.6,<27" },
     { name = "numba", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=0.61,<0.66" },
     { name = "numba-cuda", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=0.30,<0.31" },
@@ -317,7 +313,7 @@ requires-dist = [
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=2.13,<3" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.13,<3" },
 ]
-provides-extras = ["torch", "viz", "gpu", "hdf5", "cutile", "dev"]
+provides-extras = ["torch", "viz", "gpu", "cutile", "dev"]
 
 [[package]]
 name = "cupy-cuda13x"
@@ -449,25 +445,6 @@ wheels = [
 ]
 
 [[package]]
-name = "legate"
-version = "26.6.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "h5py" },
-    { name = "numpy" },
-    { name = "nvidia-nccl-cu13" },
-    { name = "rich" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/92/86df54bf1e95ef1bf9220f345098beb01c2dcbae041e1ef22f026d392cce/legate-26.6.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:eff47e602b8b3d03587856822926f5ee8c88ab49074f869d0a264170e1d18b0d", size = 76187195, upload-time = "2026-06-11T13:54:18.2Z" },
-    { url = "https://files.pythonhosted.org/packages/1a/09/6885cbf7c9b182d8cb6db91095bc9c4738b1f0c9e3cde3bfc82f45a42513/legate-26.6.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:a6b96d428b5d58a9b5c3ec3de7acb96f58fcf45719c03a6d8130535153a1f1c2", size = 87346049, upload-time = "2026-06-11T13:54:21.734Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/a0/eb59de7284cd75367c5ecd98dfd5f816b164707fae25f529aa2447ac1247/legate-26.6.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:2ffeb791de95d17df9468817bf5ce67d2dcf5c810e1f3f087367f7ff4c08a16f", size = 76159135, upload-time = "2026-06-11T13:54:27.796Z" },
-    { url = "https://files.pythonhosted.org/packages/08/70/2c9f86cc6948926ef1a3b1b33ae28d0147dec53649a621049545ce6e9e05/legate-26.6.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:19207af43e0bb1811c3d88338f69435d049f631e5d656c699f89d2934d206718", size = 87333599, upload-time = "2026-06-11T13:54:32.743Z" },
-    { url = "https://files.pythonhosted.org/packages/66/3e/0d2c275ef93eb5e0b8c55a77e82f3776997f95beb8cc348cd6598c3b4e7a/legate-26.6.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:e3a0583a5474c7e2c417ac85e426030042b20089f68f10835aa0d52a369bbf08", size = 76141697, upload-time = "2026-06-11T13:54:39.295Z" },
-    { url = "https://files.pythonhosted.org/packages/71/fd/824ba87644ab19bb7f4a85ee62374446165e9cdaba772f6d7c119e583459/legate-26.6.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:c8ef14e3958cc34b2994d90ca44d2fc629da7ef7de07df776575463b2f1a32f4", size = 87315975, upload-time = "2026-06-11T13:54:42.567Z" },
-]
-
-[[package]]
 name = "libkvikio-cu13"
 version = "26.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -495,18 +472,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/84/3b/e679bc3b29127182a7f4aa2d2e9e5bea42adb93fb840484147d59c236299/llvmlite-0.47.0-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d4a7b778a2e144fc64468fb9bf509ac1226c9813a00b4d7afea5d988c4e22fca", size = 55128631, upload-time = "2026-03-31T18:29:29.536Z" },
     { url = "https://files.pythonhosted.org/packages/11/03/16090dd6f74ba2b8b922276047f15962fbeea0a75d5601607edb301ba945/llvmlite-0.47.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:fa1cbd800edd3b20bc141521f7fd45a6185a5b84109aa6855134e81397ffe72b", size = 56275178, upload-time = "2026-03-31T18:29:42.58Z" },
     { url = "https://files.pythonhosted.org/packages/f5/cb/0abf1dd4c5286a95ffe0c1d8c67aec06b515894a0dd2ac97f5e27b82ab0b/llvmlite-0.47.0-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f6725179b89f03b17dabe236ff3422cb8291b4c1bf40af152826dfd34e350ae8", size = 55128632, upload-time = "2026-03-31T18:29:46.939Z" },
-]
-
-[[package]]
-name = "markdown-it-py"
-version = "4.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mdurl" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454, upload-time = "2026-05-07T12:08:28.36Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a", size = 91687, upload-time = "2026-05-07T12:08:27.182Z" },
 ]
 
 [[package]]
@@ -551,15 +516,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5f/57/1b0b3f100259dc9fffe780cfb60d4be71375510e435efec3d116b6436d43/markupsafe-3.0.3-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:e56b7d45a839a697b5eb268c82a71bd8c7f6c94d6fd50c3d577fa39a9f1409f5", size = 24835, upload-time = "2025-09-27T18:37:23.296Z" },
     { url = "https://files.pythonhosted.org/packages/26/6a/4bf6d0c97c4920f1597cc14dd720705eca0bf7c787aebc6bb4d1bead5388/markupsafe-3.0.3-cp314-cp314t-musllinux_1_2_riscv64.whl", hash = "sha256:f3e98bb3798ead92273dc0e5fd0f31ade220f59a266ffd8a4f6065e0a3ce0523", size = 22733, upload-time = "2025-09-27T18:37:24.237Z" },
     { url = "https://files.pythonhosted.org/packages/14/c7/ca723101509b518797fedc2fdf79ba57f886b4aca8a7d31857ba3ee8281f/markupsafe-3.0.3-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:5678211cb9333a6468fb8d8be0305520aa073f50d17f089b5b4b477ea6e67fdc", size = 23672, upload-time = "2025-09-27T18:37:25.271Z" },
-]
-
-[[package]]
-name = "mdurl"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
 ]
 
 [[package]]
@@ -1183,19 +1139,6 @@ source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/80/ed/ba6a37af075e6c65addaaa5b9cd9668d818f738ae30493d63965713ab54a/rapids_logger-0.2.3-py3-none-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:119a0391a6965b773dc0e48c35e3872585e69418aedbc8b618ac2bf63ae12e28", size = 191718, upload-time = "2025-12-12T14:41:13.059Z" },
     { url = "https://files.pythonhosted.org/packages/69/b6/139d9df6d0f7bd289a9a6286cecfff999e41c36865515d7fdb56b7b32a14/rapids_logger-0.2.3-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7fe67ef4049c5d8ba6154746325dcf7cc0f327f0efa8f2611fc8f64e67510f60", size = 202028, upload-time = "2025-12-12T14:41:14.171Z" },
-]
-
-[[package]]
-name = "rich"
-version = "15.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "markdown-it-py" },
-    { name = "pygments" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
 ]
 
 [[package]]

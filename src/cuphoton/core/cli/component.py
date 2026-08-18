@@ -82,7 +82,7 @@ COMPONENTS = (
     ComponentSpec(
         "xdr",
         "cuphoton.xdr",
-        "xDataReader: GPU-native FITS and HDF5 metadata loading.",
+        "xDataReader: GPU-native FITS loading.",
         parser_style="argparse",
         supports_version_command=False,
     ),
