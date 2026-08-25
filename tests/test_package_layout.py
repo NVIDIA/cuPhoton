@@ -128,7 +128,14 @@ def test_cli_help_and_version_do_not_import_optional_gpu_packages(
 import importlib.abc
 import sys
 
-BLOCKED = ("cupy", "kvikio", "numba", "torch")
+BLOCKED = (
+    "cupy",
+    "dragon",
+    "kvikio",
+    "mpi4py",
+    "numba",
+    "torch",
+)
 
 class BlockOptional(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):

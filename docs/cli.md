@@ -1,7 +1,9 @@
 # Command-line index
 
-cuPhoton installs one executable, `cuphoton`. The same interface is available
-from a checkout as `uv run python -m cuphoton`.
+cuPhoton provides one Python console entry point, `cuphoton`. The same
+interface is available from a checkout as `uv run python -m cuphoton`.
+Installations also include the low-level `cuphoton-openmpi-rank-exec` helper
+used to bind Open MPI ranks before Python starts; it is not a component CLI.
 
 ```bash
 uv run cuphoton --help
@@ -36,10 +38,13 @@ portable fit and uncertainty artifacts. See [xFit](components/xfit.md).
 
 ## XPOIS: `cuphoton xpois`
 
-`data-inspect`, `fit-kernel`, `subtract`, `benchmark-backends`,
+`data-inspect`, `fit-kernel`, `subtract`, `fit-batch`, `benchmark-backends`,
 `evaluate-subtraction`, and `review-bokeh` cover local data inspection,
-subtraction, numerical comparison, and review. See
-[XPOIS](components/xpois.md).
+subtraction, distributed whole-pair execution, numerical comparison, and
+review. For `fit-batch`, `--executor mpi|dragon` selects process orchestration
+while `--backend cupy|numba-cuda|cutile` selects the numerical implementation
+inside each worker. Both are explicit; launcher and Dragon transport options
+remain outside cuPhoton. See [XPOIS](components/xpois.md).
 
 ## XScan: `cuphoton xscan`
 

@@ -66,17 +66,65 @@ class _UniqueKeySafeLoader(yaml.SafeLoader):
     """YAML loader that rejects duplicate mapping keys."""
 
 
-def _construct_unique_yaml_mapping(
+def _reject_duplicate_yaml_mapping_keys(
     loader: yaml.SafeLoader,
     node: yaml.MappingNode,
-    deep: bool = False,
-) -> dict[Any, Any]:
-    loader.flatten_mapping(node)
-    result: dict[Any, Any] = {}
-    for key_node, value_node in node.value:
+    deep: bool,
+    visited: set[int] | None = None,
+) -> None:
+    """Reject direct duplicates, including mappings used only by merges."""
+
+    if visited is None:
+        visited = set()
+    if id(node) in visited:
+        return
+    visited.add(id(node))
+
+    merge_tag = "tag:yaml.org,2002:merge"
+    seen: set[Any] = set()
+    seen_merge = False
+    for key_node, value_node in tuple(node.value):
+        if key_node.tag == merge_tag:
+            if seen_merge:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found duplicate merge key",
+                    key_node.start_mark,
+                )
+            seen_merge = True
+            merge_nodes = (
+                tuple(value_node.value)
+                if isinstance(value_node, yaml.SequenceNode)
+                else (value_node,)
+            )
+            merged_keys: set[Any] = set()
+            for merge_node in merge_nodes:
+                if isinstance(merge_node, yaml.MappingNode):
+                    _reject_duplicate_yaml_mapping_keys(
+                        loader,
+                        merge_node,
+                        deep,
+                        visited,
+                    )
+                    resolved = _resolved_yaml_mapping_keys(
+                        loader, merge_node, deep, set()
+                    )
+                    overlap = merged_keys & resolved
+                    if overlap:
+                        key = min(overlap, key=repr)
+                        raise yaml.constructor.ConstructorError(
+                            "while constructing a mapping",
+                            node.start_mark,
+                            f"found duplicate key {key!r} across merged "
+                            "mappings",
+                            merge_node.start_mark,
+                        )
+                    merged_keys |= resolved
+            continue
         key = loader.construct_object(key_node, deep=deep)
         try:
-            duplicate = key in result
+            duplicate = key in seen
         except TypeError as exc:
             raise yaml.constructor.ConstructorError(
                 "while constructing a mapping",
@@ -91,6 +139,49 @@ def _construct_unique_yaml_mapping(
                 f"found duplicate key {key!r}",
                 key_node.start_mark,
             )
+        seen.add(key)
+
+
+def _resolved_yaml_mapping_keys(
+    loader: yaml.SafeLoader,
+    node: yaml.MappingNode,
+    deep: bool,
+    visited: set[int],
+) -> set[Any]:
+    """Collect the keys one merge source contributes after resolution."""
+
+    if id(node) in visited:
+        return set()
+    visited.add(id(node))
+    merge_tag = "tag:yaml.org,2002:merge"
+    keys: set[Any] = set()
+    for key_node, value_node in tuple(node.value):
+        if key_node.tag == merge_tag:
+            merge_nodes = (
+                tuple(value_node.value)
+                if isinstance(value_node, yaml.SequenceNode)
+                else (value_node,)
+            )
+            for merge_node in merge_nodes:
+                if isinstance(merge_node, yaml.MappingNode):
+                    keys |= _resolved_yaml_mapping_keys(
+                        loader, merge_node, deep, visited
+                    )
+            continue
+        keys.add(loader.construct_object(key_node, deep=deep))
+    return keys
+
+
+def _construct_unique_yaml_mapping(
+    loader: yaml.SafeLoader,
+    node: yaml.MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    _reject_duplicate_yaml_mapping_keys(loader, node, deep)
+    loader.flatten_mapping(node)
+    result: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
         result[key] = loader.construct_object(value_node, deep=deep)
     return result
 
@@ -380,7 +471,7 @@ class BatchFitOptions:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> BatchFitOptions:
-        """Restore options passed through Dragon."""
+        """Restore options passed to a distributed worker."""
 
         values = dict(payload)
         values["kernel_shape"] = tuple(values["kernel_shape"])

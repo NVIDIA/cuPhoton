@@ -64,6 +64,8 @@ in its wheel or dependency lock. See the
 | Runtime | License and upstream notices | Use and installation |
 | --- | --- | --- |
 | DragonHPC (`dragonhpc`; import `dragon`) | [MIT](https://github.com/DragonHPC/dragon/blob/0.14.2/LICENSE) | Required for Dragon workers, placement and communication. Install separately in cuPhoton's Python environment; no Dragon source or binaries are bundled. |
+| `mpi4py` | [BSD-3-Clause](https://github.com/mpi4py/mpi4py/blob/4.1.2/LICENSE.rst) | Required for MPI collective aggregation and installed against the selected MPI implementation. |
+| Open MPI | [Upstream licenses and notices](https://github.com/open-mpi/ompi/blob/v4.1.6/LICENSE) | External launcher and runtime supported by the packaged rank-launch helper; not bundled in cuPhoton. |
 
 ## Native system dependency inventory
 

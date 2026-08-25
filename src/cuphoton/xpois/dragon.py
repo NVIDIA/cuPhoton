@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import queue
 import socket
+import stat
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -25,6 +25,7 @@ from cuphoton.core.bulk import (
     WorkItem,
     atomic_write_json,
     audit_terminal_records,
+    classify_physical_gpu_pair,
     error_payload,
     json_mapping,
     new_run_id,
@@ -32,6 +33,15 @@ from cuphoton.core.bulk import (
     read_json_mapping,
     timestamp_utc,
     validate_identifier,
+)
+from cuphoton.core.bulk import (
+    collect_gpu_identity as _collect_gpu_identity,
+)
+from cuphoton.core.bulk import (
+    item_ids_sha256 as _item_ids_sha256,
+)
+from cuphoton.core.bulk import (
+    regular_file as _regular_file,
 )
 
 from .batch import (
@@ -58,6 +68,7 @@ class DragonBatchResult:
         """Return a compact command result."""
 
         return {
+            "executor": "dragon",
             "run_id": self.run_id,
             "run_dir": str(self.run_dir),
             "summary_path": str(self.summary_path),
@@ -170,6 +181,7 @@ def run_dragon_image_pair_batch(
         {
             "schema": "cuphoton.xpois.dragon-run/v1",
             "record_type": "immutable-launch",
+            "executor": "dragon",
             "run_id": effective_run_id,
             "started_at_utc": started_at,
             "manifest_sha256": manifest.sha256,
@@ -356,7 +368,16 @@ def run_dragon_image_pair_batch(
         )
 
     audit_start = time.perf_counter()
-    records, record_errors = _load_terminal_records(run_dir)
+    records, record_errors = _wait_terminal_artifacts(
+        run_dir,
+        shards,
+        shard_results,
+        result_timeout_sec,
+    )
+    coordinator_timings["artifact_visibility_sec"] = (
+        time.perf_counter() - audit_start
+    )
+    audit_start = time.perf_counter()
     audit = audit_terminal_records([item.item_id for item in items], records)
     expected_records = {
         item.item_id: {
@@ -419,6 +440,7 @@ def run_dragon_image_pair_batch(
     coordinator_wall_sec = time.perf_counter() - invocation_start
     summary = {
         "schema": "cuphoton.xpois.dragon-summary/v1",
+        "executor": "dragon",
         "status": status,
         "run_id": effective_run_id,
         "started_at_utc": started_at,
@@ -485,6 +507,10 @@ def discover_gpu_placements(
         node = node_type(node_id)
         host = str(node.hostname)
         for gpu_id in node.gpus or []:
+            if isinstance(gpu_id, bool) or not isinstance(gpu_id, int):
+                raise RuntimeError(
+                    f"Dragon node {host!r} reported a non-integer GPU ID"
+                )
             key = (host, gpu_id)
             if key in seen:
                 raise RuntimeError(
@@ -548,19 +574,64 @@ def _dragon_shard_worker(
 ) -> None:
     """Dragon target: validate placement, run one shard, report compactly."""
 
-    placement = Placement(**dict(placement_payload))
-    items = tuple(WorkItem.from_dict(payload) for payload in item_payloads)
-    options = BatchFitOptions.from_payload(options_payload)
-    result = _execute_shard(
-        run_id=run_id,
-        run_dir=Path(run_dir_raw),
-        placement=placement,
-        items=items,
-        options=options,
-        item_runner=run_image_pair_item,
-        gpu_identity_loader=_collect_gpu_identity,
-        allow_loopback_alias=allow_loopback_alias,
-    )
+    worker_start = time.perf_counter()
+    started_at = timestamp_utc()
+    run_dir: Path | None = None
+    placement: Placement | None = None
+    items: tuple[WorkItem, ...] = ()
+    try:
+        run_dir = Path(run_dir_raw)
+        placement = Placement(**dict(placement_payload))
+        items = tuple(
+            WorkItem.from_dict(payload) for payload in item_payloads
+        )
+        options = BatchFitOptions.from_payload(options_payload)
+        result = _execute_shard(
+            run_id=run_id,
+            run_dir=run_dir,
+            placement=placement,
+            items=items,
+            options=options,
+            item_runner=run_image_pair_item,
+            gpu_identity_loader=_collect_gpu_identity,
+            allow_loopback_alias=allow_loopback_alias,
+        )
+    except Exception as exc:
+        worker_id = (
+            placement.worker_id
+            if placement is not None
+            else _strict_integer(
+                placement_payload.get("worker_id")
+                if isinstance(placement_payload, Mapping)
+                else None
+            )
+        )
+        result = {
+            "schema": "cuphoton.xpois.dragon-shard/v1",
+            "worker_id": worker_id,
+            "status": "failed",
+            "item_count": len(items),
+            "success_count": 0,
+            "failed_count": len(items),
+            "weight_bytes": sum(item.weight_bytes for item in items),
+            "item_ids_sha256": _item_ids_sha256(items),
+            "started_at_utc": started_at,
+            "completed_at_utc": timestamp_utc(),
+            "worker_wall_sec": time.perf_counter() - worker_start,
+            "timings_sec": {},
+            "provenance": None,
+            "record_write_errors": [],
+            "error": error_payload(exc),
+        }
+        if run_dir is not None and worker_id is not None and worker_id >= 0:
+            worker_path = run_dir / "workers" / f"worker-{worker_id:04d}.json"
+            try:
+                # An existing worker file is _execute_shard's complete
+                # durable result; this coarse fallback must not replace it.
+                if not _regular_file(worker_path):
+                    atomic_write_json(worker_path, result)
+            except Exception as artifact_exc:
+                result["artifact_error"] = error_payload(artifact_exc)
     results_queue.put(result)
 
 
@@ -582,28 +653,37 @@ def _execute_shard(
 
     worker_start = time.perf_counter()
     started_at = timestamp_utc()
-    actual_host = socket.gethostname()
-    if not _hostnames_match(
-        placement.host,
-        actual_host,
-        allow_loopback_alias=allow_loopback_alias,
-    ):
-        raise RuntimeError(
-            "Dragon worker placement mismatch: requested "
-            f"{placement.host!r}, running on {actual_host!r}"
+    actual_host = ""
+    visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    gpu_identity: dict[str, Any] | None = None
+    setup_exception: Exception | None = None
+    setup_error: dict[str, str] | None = None
+    try:
+        actual_host = socket.gethostname()
+        if not _hostnames_match(
+            placement.host,
+            actual_host,
+            allow_loopback_alias=allow_loopback_alias,
+        ):
+            raise RuntimeError(
+                "Dragon worker placement mismatch: requested "
+                f"{placement.host!r}, running on {actual_host!r}"
+            )
+        visibility = _singleton_cuda_visibility(placement.gpu_id)
+        premature = sorted(
+            name
+            for name in ("cupy", "numba.cuda", "cuda.tile")
+            if name in sys.modules
         )
-    visibility = _singleton_cuda_visibility(placement.gpu_id)
-    premature = sorted(
-        name
-        for name in ("cupy", "numba.cuda", "cuda.tile")
-        if name in sys.modules
-    )
-    if require_clean_cuda_imports and premature:
-        raise RuntimeError(
-            "CUDA modules were imported before Dragon worker placement: "
-            + ", ".join(premature)
-        )
-    gpu_identity = dict(gpu_identity_loader(options.backend))
+        if require_clean_cuda_imports and premature:
+            raise RuntimeError(
+                "CUDA modules were imported before Dragon worker placement: "
+                + ", ".join(premature)
+            )
+        gpu_identity = dict(gpu_identity_loader(options.backend))
+    except Exception as exc:
+        setup_exception = exc
+        setup_error = error_payload(exc)
     provenance = {
         "worker_id": placement.worker_id,
         "requested_host": placement.host,
@@ -619,7 +699,7 @@ def _execute_shard(
     worker_timings: dict[str, float] = {}
     for item in items:
         item_start = time.perf_counter()
-        record: dict[str, Any] = {
+        identity = {
             "schema": "cuphoton.xpois.dragon-item/v1",
             "run_id": run_id,
             "item_id": item.item_id,
@@ -627,10 +707,13 @@ def _execute_shard(
             "weight_bytes": item.weight_bytes,
             "started_at_utc": timestamp_utc(),
         }
+        record: dict[str, Any] = dict(identity)
         try:
-            metadata = dict(
-                item_runner(item, run_dir / "items" / item.item_id, options)
-            )
+            if setup_exception is not None:
+                raise setup_exception
+            item_dir = run_dir / "items" / item.item_id
+            metadata = dict(item_runner(item, item_dir, options))
+            _validate_success_item_output(item_dir, metadata)
             for field in ("run_dir", "summary_path"):
                 if field in metadata:
                     metadata[field] = str(
@@ -647,6 +730,7 @@ def _execute_shard(
                     field=f"item {item.item_id!r} wall_sec",
                 )
             record.update(metadata)
+            record.update(identity)
             record["status"] = "success"
         except Exception as exc:
             record["status"] = "failed"
@@ -681,7 +765,11 @@ def _execute_shard(
     result = {
         "schema": "cuphoton.xpois.dragon-shard/v1",
         "worker_id": placement.worker_id,
-        "status": "success" if failed_count == 0 else "failed",
+        "status": (
+            "success"
+            if setup_error is None and failed_count == 0
+            else "failed"
+        ),
         "item_count": len(items),
         "success_count": success_count,
         "failed_count": failed_count,
@@ -693,6 +781,7 @@ def _execute_shard(
         "timings_sec": worker_timings,
         "provenance": provenance,
         "record_write_errors": record_write_errors,
+        "error": setup_error,
     }
     atomic_write_json(
         run_dir / "workers" / f"worker-{placement.worker_id:04d}.json",
@@ -701,12 +790,46 @@ def _execute_shard(
     return result
 
 
+def _validate_success_item_output(
+    item_dir: Path, metadata: Mapping[str, Any]
+) -> None:
+    try:
+        item_mode = item_dir.lstat().st_mode
+    except OSError as exc:
+        raise ValueError(
+            "item runner did not create a real output directory"
+        ) from exc
+    if not stat.S_ISDIR(item_mode):
+        raise ValueError("item runner did not create a real output directory")
+    try:
+        recorded_dir = Path(metadata["run_dir"])
+        summary_path = Path(metadata["summary_path"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError("item runner did not report output paths") from exc
+    if recorded_dir != item_dir:
+        raise ValueError("item runner reported a different output directory")
+    if summary_path != item_dir / "summary.json":
+        raise ValueError("item runner reported a different summary path")
+    try:
+        summary_mode = summary_path.lstat().st_mode
+    except OSError as exc:
+        raise ValueError(
+            "item runner did not create a regular summary file"
+        ) from exc
+    if not stat.S_ISREG(summary_mode):
+        raise ValueError("item runner did not create a regular summary file")
+
+
 def _singleton_cuda_visibility(expected_gpu_id: int | None = None) -> str:
     raw = os.environ.get("CUDA_VISIBLE_DEVICES")
     if raw is None:
         raise RuntimeError("Dragon worker has no CUDA_VISIBLE_DEVICES")
-    tokens = [token.strip() for token in raw.split(",") if token.strip()]
-    if len(tokens) != 1 or tokens[0] == "-1":
+    tokens = [token.strip() for token in raw.split(",")]
+    if (
+        any(not token for token in tokens)
+        or len(tokens) != 1
+        or tokens[0] == "-1"
+    ):
         raise RuntimeError(
             f"Dragon worker must see exactly one CUDA device, got {raw!r}"
         )
@@ -745,77 +868,124 @@ def _hostnames_match(
     return False
 
 
-def _collect_gpu_identity(backend: str) -> dict[str, Any]:
-    """Initialize the selected backend only after singleton placement."""
-
-    if backend in {"cupy", "cutile"}:
-        return _collect_cupy_identity()
-    return _collect_numba_identity()
-
-
-def _collect_cupy_identity() -> dict[str, Any]:
-    import cupy as cp
-
-    device_index = int(cp.cuda.runtime.getDevice())
-    properties = cp.cuda.runtime.getDeviceProperties(device_index)
-    name = properties.get("name", "unknown")
-    if isinstance(name, bytes):
-        name = name.decode(errors="replace")
-    uuid_value = properties.get("uuid")
-    if isinstance(uuid_value, bytes):
-        uuid_value = uuid_value.hex()
-    elif uuid_value is not None and not isinstance(uuid_value, str):
-        uuid_value = str(uuid_value)
-    pci_bus_id = None
-    identity_error = None
-    try:
-        pci_bus_id = str(cp.cuda.runtime.deviceGetPCIBusId(device_index))
-    except Exception as exc:  # pragma: no cover - runtime-specific
-        identity_error = f"{type(exc).__name__}: {exc}"
-    return {
-        "backend": "cupy",
-        "device_index": device_index,
-        "name": str(name),
-        "uuid": uuid_value,
-        "pci_bus_id": pci_bus_id,
-        "identity_error": identity_error,
-    }
-
-
-def _collect_numba_identity() -> dict[str, Any]:
-    from numba import cuda
-
-    device = cuda.get_current_device()
-    name = device.name
-    if isinstance(name, bytes):
-        name = name.decode(errors="replace")
-    uuid_value = getattr(device, "uuid", None)
-    pci_bus_id = getattr(device, "pci_bus_id", None)
-    return {
-        "backend": "numba-cuda",
-        "device_index": int(getattr(device, "id", 0)),
-        "name": str(name),
-        "uuid": str(uuid_value) if uuid_value is not None else None,
-        "pci_bus_id": str(pci_bus_id) if pci_bus_id is not None else None,
-        "identity_error": None,
-    }
-
-
 def _load_terminal_records(
     run_dir: Path,
-) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    visible_expected: Sequence[Path] = (),
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     records: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-    for path in sorted((run_dir / "records").glob("*.json")):
+    errors: list[dict[str, Any]] = []
+    paths = set((run_dir / "records").glob("*.json"))
+    paths.update(visible_expected)
+    for path in sorted(paths):
         try:
+            if not _regular_file(path):
+                raise ValueError(f"record is not a regular file: {path.name}")
             records.append(read_json_mapping(path))
         except Exception as exc:
-            errors.append(
-                {
-                    "record_path": str(path.relative_to(run_dir)),
-                    **error_payload(exc),
-                }
+            error = {
+                "record_path": str(path.relative_to(run_dir)),
+                **error_payload(exc),
+            }
+            if isinstance(exc, OSError):
+                error["retryable"] = True
+            errors.append(error)
+    return records, errors
+
+
+def _wait_terminal_artifacts(
+    run_dir: Path,
+    shards: Sequence[Sequence[WorkItem]],
+    shard_results: Sequence[Mapping[str, Any]],
+    timeout: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Wait for worker-published records and successful item summaries."""
+
+    assigned = {
+        worker_id: {item.item_id for item in shard}
+        for worker_id, shard in enumerate(shards)
+    }
+    unwritten: set[str] = set()
+    reporting: set[int] = set()
+    for result in shard_results:
+        worker_id = _strict_integer(result.get("worker_id"))
+        if worker_id is not None:
+            reporting.add(worker_id)
+        worker_items = assigned.get(worker_id, set())
+        if result.get("provenance") is None and isinstance(
+            result.get("error"), Mapping
+        ):
+            unwritten.update(worker_items)
+        write_errors = result.get("record_write_errors")
+        if isinstance(write_errors, list):
+            unwritten.update(
+                item_id
+                for error in write_errors
+                if isinstance(error, Mapping)
+                and isinstance((item_id := error.get("item_id")), str)
+                and item_id in worker_items
             )
+    for worker_id, worker_items in assigned.items():
+        if worker_id not in reporting:
+            unwritten.update(worker_items)
+    expected = {
+        item.item_id: run_dir / "records" / f"{item.item_id}.json"
+        for shard in shards
+        for item in shard
+        if item.item_id not in unwritten
+    }
+    deadline = time.monotonic() + timeout
+    delay = 0.05
+    records: list[dict[str, Any]] = []
+    record_errors: list[dict[str, Any]] = []
+    missing: list[str] = []
+    missing_summaries: list[str] = []
+    while True:
+        visible_expected = []
+        missing = []
+        for path in expected.values():
+            if _regular_file(path):
+                visible_expected.append(path)
+            else:
+                missing.append(str(path.relative_to(run_dir)))
+        records, raw_errors = _load_terminal_records(
+            run_dir, visible_expected
+        )
+        permanent_errors = [
+            {key: value for key, value in error.items() if key != "retryable"}
+            for error in raw_errors
+            if not error.get("retryable", False)
+        ]
+        if permanent_errors:
+            return records, permanent_errors
+        record_errors = [
+            {key: value for key, value in error.items() if key != "retryable"}
+            for error in raw_errors
+        ]
+        missing_summaries = [
+            f"items/{item_id}/summary.json"
+            for record in records
+            if record.get("status") == "success"
+            and isinstance((item_id := record.get("item_id")), str)
+            and item_id in expected
+            and not _regular_file(
+                run_dir / "items" / item_id / "summary.json"
+            )
+        ]
+        if not missing and not record_errors and not missing_summaries:
+            return records, []
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(delay, remaining))
+        delay = min(delay * 2, 1.0)
+    errors = [*record_errors]
+    errors.extend(
+        {
+            "type": "TimeoutError",
+            "message": f"Dragon artifact did not become visible: {path}",
+        }
+        for path in (*missing, *missing_summaries)
+    )
     return records, errors
 
 
@@ -1018,6 +1188,18 @@ def _audit_shard_results(
         status = result.get("status")
         if status not in {"success", "failed"}:
             fields.add("status")
+        shard_error = result.get("error")
+        if shard_error is not None and (
+            not isinstance(shard_error, Mapping)
+            or any(
+                not isinstance(shard_error.get(field), str)
+                or not shard_error[field]
+                for field in ("type", "message")
+            )
+        ):
+            fields.add("error")
+        elif status == "success" and shard_error is not None:
+            fields.add("error")
         success_count = _strict_integer(result.get("success_count"))
         failed_count = _strict_integer(result.get("failed_count"))
         if success_count is None or success_count < 0:
@@ -1113,6 +1295,7 @@ def _audit_shard_results(
                 {"worker_id": worker_id, "fields": sorted(fields)}
             )
     duplicate_physical_gpu_worker_ids: set[int] = set()
+    incomparable_physical_gpu_worker_ids: set[int] = set()
     for index, (worker_id, host, identity) in enumerate(physical_identities):
         remaining_identities = physical_identities[index + 1 :]
         for (
@@ -1120,24 +1303,35 @@ def _audit_shard_results(
             other_host,
             other_identity,
         ) in remaining_identities:
-            if (
-                worker_id != other_worker_id
-                and _hostnames_match(host, other_host)
-                and identity & other_identity
-            ):
+            if worker_id == other_worker_id:
+                continue
+            comparison = classify_physical_gpu_pair(
+                dict(identity),
+                dict(other_identity),
+                same_host=_hostnames_match(host, other_host),
+            )
+            if comparison == "duplicate":
                 duplicate_physical_gpu_worker_ids.update(
                     (worker_id, other_worker_id)
                 )
+            elif comparison == "incomparable":
+                incomparable_physical_gpu_worker_ids.update(
+                    (worker_id, other_worker_id)
+                )
+    invalid_physical_gpu_worker_ids = (
+        duplicate_physical_gpu_worker_ids
+        | incomparable_physical_gpu_worker_ids
+    )
     marked_worker_ids: set[int] = set()
     for mismatch in mismatched:
         worker_id = mismatch["worker_id"]
-        if worker_id in duplicate_physical_gpu_worker_ids:
+        if worker_id in invalid_physical_gpu_worker_ids:
             mismatch["fields"] = sorted(
                 set(mismatch["fields"]) | {"provenance"}
             )
             marked_worker_ids.add(worker_id)
     for worker_id in sorted(
-        duplicate_physical_gpu_worker_ids - marked_worker_ids
+        invalid_physical_gpu_worker_ids - marked_worker_ids
     ):
         mismatched.append({"worker_id": worker_id, "fields": ["provenance"]})
     return {
@@ -1154,6 +1348,9 @@ def _audit_shard_results(
         "unexpected_worker_ids": unexpected,
         "duplicate_physical_gpu_worker_ids": sorted(
             duplicate_physical_gpu_worker_ids
+        ),
+        "incomparable_physical_gpu_worker_ids": sorted(
+            incomparable_physical_gpu_worker_ids
         ),
         "mismatched_shards": mismatched,
         "write_failed_shards": write_failed,
@@ -1303,11 +1500,6 @@ def _strict_integer(value: Any) -> int | None:
 def _shard_result_sort_key(result: Mapping[str, Any]) -> tuple[int, int]:
     worker_id = _strict_integer(result.get("worker_id"))
     return (worker_id is None, worker_id if worker_id is not None else 0)
-
-
-def _item_ids_sha256(items: Sequence[WorkItem]) -> str:
-    encoded = "\n".join(item.item_id for item in items).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _load_dragon_api() -> _DragonAPI:

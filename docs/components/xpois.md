@@ -215,18 +215,30 @@ resampling covariance, or fitted-kernel uncertainty. The standardized residual
 is a descriptive diagnostic, not a whitened residual or calibrated
 significance image. Prefer held-out pixels when assessing fit quality.
 
-## Dragon image-pair batches
+## Distributed image-pair batches
 
-`fit-batch-dragon` distributes complete reference/target image-pair fits across
-GPU workers. The coordinator reads a manifest, assigns one Dragon
-ProcessGroup worker to each selected GPU, and balances work by input size.
-Arrays and output files stay on shared storage; workers send compact result
-records through Dragon queues. Each image-pair fit runs on one GPU.
+`fit-batch` assigns complete, independent reference/target pairs to GPU
+workers. It does not split one image or one kernel solve across devices. The
+two required selection flags name different layers:
+
+| Flag | Selects | Values |
+| --- | --- | --- |
+| `--executor` | process placement, lifecycle, and result aggregation | `mpi`, `dragon` |
+| `--backend` | the numerical fit implementation inside each worker | `cupy`, `numba-cuda`, `cutile` |
+
+The distributed command deliberately rejects `--backend auto` and CPU
+fallback. A missing GPU package therefore cannot silently change a distributed
+run's execution mode. Executor-specific options are also rejected when used
+with the other executor. Inspect the complete surface with:
+
+```bash
+uv run cuphoton xpois help fit-batch
+```
 
 This command runs the constant-kernel workflow. It is whole-image-pair
 orchestration, not a distributed implementation of the spatial ALS model.
 
-### Runtime dependency
+### Runtime dependencies
 
 The Dragon executor requires [DragonHPC](https://dragonhpc.github.io/dragon/doc/_build/html/index.html)
 (Python distribution `dragonhpc`, import `dragon`) in the same Python
@@ -255,10 +267,16 @@ DragonHPC version it discovers. See the
 [runtime notices](../../THIRD_PARTY_NOTICES.md#optional-distributed-runtime-inventory)
 for licensing and installation details.
 
-### Manifest and launch
+The MPI executor uses an external MPI or scheduler launcher. Collective
+aggregation (`--aggregation-mode mpi`) also requires `mpi4py` built for the
+selected MPI implementation. Shared-file aggregation does not import
+`mpi4py`. Install the runtimes required by the selected executor on each node;
+the MPI executor does not require DragonHPC.
 
-Inputs and output directories must be accessible at the same paths on every
-node. The command accepts a strict JSON or YAML manifest:
+### Manifest and storage contract
+
+Both executors consume the same strict JSON or YAML manifest and run the same
+XPOIS item function. Manifests use resolved filesystem paths:
 
 ```yaml
 schema: cuphoton.xpois.image-pairs/v1
@@ -272,52 +290,199 @@ pairs:
     variance_hdu: 1
 ```
 
-Loading the manifest records each unique input's resolved path, byte size,
-and nanosecond modification time. These values are checked after coordinator
-preflight and before and after each item. A change that preserves both size
-and modification time is not detected; use immutable input data or external
-checksums when content identity matters.
+Inputs and output roots must be visible at the same paths on every node. Every
+rank must resolve `--output-dir/--name` to the same final run directory.
+Loading a manifest captures each unique input's resolved path, byte size, and
+nanosecond modification time. That identity is checked during preflight and
+before and after each item. The manifest SHA-256 binds both the canonical pair
+entries and this captured identity, and MPI ranks require the same digest
+before run setup. It avoids reading multi-gigabyte inputs solely to hash them,
+but is not a content checksum: use an immutable dataset version or an external
+checksum when content identity matters.
 
-Launch through Dragon within an existing scheduler allocation:
+Work is assigned as deterministic input-byte-balanced whole-item shards.
+Scientific arrays stay on shared storage; only compact rank or worker results
+are aggregated. Runs are immutable, so use a new `--name` for every attempt.
+
+### Launch with MPI
+
+An external `mpirun` or Slurm `srun` establishes the rank topology. With Open
+MPI, use the installed `cuphoton-openmpi-rank-exec` helper so every child
+narrows `CUDA_VISIBLE_DEVICES` before Python, `mpi4py`, or a CUDA-aware MPI can
+initialize CUDA:
 
 ```bash
-.venv/bin/dragon examples/xpois/dragon_batch.py \
-  --manifest /shared/manifests/image-pairs.yaml \
-  --output-dir /shared/results/xpois-dragon \
-  --name image-pairs-gpu4 \
-  --max-workers 4 \
-  --worker-timeout-sec 3600 \
-  --backend cupy
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpirun -n 4 \
+  --map-by slot \
+  --bind-to none \
+  -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xpois fit-batch \
+  --executor mpi \
+  --backend cupy \
+  --manifest /shared/manifests/fixed-32.yaml \
+  --output-dir /shared/results/xpois-mpi \
+  --name fixed-32-mpi4 \
+  --aggregation-mode mpi
 ```
 
-The wrapper invokes `cuphoton xpois fit-batch-dragon`. This command requires
-an explicit GPU backend: `cupy`, `numba-cuda`, or `cutile`. It rejects `auto`
-instead of falling back to CPU when a GPU package is unavailable.
+The parent visibility mask must enumerate the allocation in local-rank order.
+The helper validates that mask and Open MPI's local rank metadata, preserves
+the allocation in `CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES`, selects one token,
+and only then executes the requested command. Do not place another shell or
+Python process before the helper.
 
-The coordinator enumerates actual `Node.gpus` IDs and selects workers
-round-robin across hosts. Each worker checks its host and singleton
-`CUDA_VISIBLE_DEVICES` assignment before importing the numerical backend.
-Loopback hostname aliases are accepted only for a single-node allocation.
+Collective startup errors are exchanged before rank-context setup, and every
+rank verifies a root-written nonce through the resolved run directory before
+GPU work starts. A rank that cannot import or initialize MPI has no
+communicator through which cuPhoton can report its failure. The launcher must
+therefore terminate the remaining collective ranks when any task exits; with
+Slurm use `srun --kill-on-bad-exit=1` (or the site's equivalent) for
+`--aggregation-mode mpi`. Open MPI must retain its fail-fast policy for a
+nonzero or lost rank. cuPhoton deliberately leaves job-wide termination to
+the launcher: a Python exception hook cannot handle signals, process aborts,
+or a rank that never initializes MPI.
+
+`--aggregation-mode mpi` requires a compatible `mpi4py` installation.
+`--rank-setup-timeout-sec` bounds shared-filesystem metadata handoffs: setup
+markers, collective rank/record visibility before terminal audit, and staged
+file-rank visibility before promotion. It applies to both aggregation modes,
+defaults to 600 seconds, and must be identical on every rank. It does not bound
+MPI collectives themselves; retain the launcher's fail-fast policy described
+above. Each metadata phase has one shared absolute budget; the timeout is not
+restarted for every rank or artifact.
+
+`--aggregation-mode files` instead exchanges rank metadata through the shared
+output filesystem; give every rank the same explicit `--name` and one unique
+shared `--attempt-id` for that launch. File-mode ownership additionally binds
+ranks to the launcher's PMIx namespace or direct Slurm job and numeric step.
+A nested `mpirun` uses its PMIx namespace, not the surrounding Slurm allocation.
+For a launcher without these identifiers, set a fresh token **before** each
+launcher invocation and propagate it unchanged to every rank:
+
+```bash
+CUPHOTON_MPI_LAUNCH_ID="$(python -c 'import uuid; print(uuid.uuid4().hex)')" \
+  mpirun -x CUPHOTON_MPI_LAUNCH_ID ...
+```
+
+Do not generate this token separately in each rank or reuse it across launches.
+Competing launches cannot publish into each other's rank staging or preflight
+records. `--rank-timeout-sec` applies only to
+file aggregation, defaults to 3600 seconds, and must also be identical on
+every rank. It bounds rank zero's wait for peer completion markers after rank
+zero finishes its own shard, so size it above the worst expected completion
+skew between rank zero and the slowest peer. The default aggregation mode is
+`mpi`; there is no silent fallback to file aggregation. Rank zero claims the
+attempt identity atomically, so a reused ID is rejected instead of overwriting
+another launch. The only recovery exception is an exact retry after
+`summary.json` committed but the terminal attempt-marker write failed. Rank
+zero validates the regular marker, ready record, run record, summary, manifest,
+options, topology, and timeouts, then repairs only that marker and directs the
+operator to the existing immutable summary. Interrupted attempts without a
+committed summary are retained for inspection; restart with a new `--name` and
+`--attempt-id`. They are never reclaimed automatically.
+The output root's `.mpi-attempts/` directory holds the atomic attempt marker
+and retained per-rank preflight, staging, and completion evidence outside the
+immutable run directory. File-mode ranks publish their completion marker last.
+Before any promotion, the coordinator requires consistent completion and rank
+status, regular JSON evidence, and real local output trees for successful
+items; symlinks and missing success artifacts stay in staging and fail the run.
+In both executors, a failed item can retain partial output under `items/`.
+Consumers must check its terminal record before using that output.
+It promotes artifacts only from a completed, validated rank into the immutable
+run directory before writing its summary, so a rank that finishes after a
+timeout cannot change the audited run. If a shared-filesystem rename fails
+mid-promotion, the failed summary records `PartialRankPromotion` with the paths
+already published; it never claims an all-or-nothing rank publication.
+
+With file aggregation, rank zero owns the evidence timeout, terminal batch
+status, and authoritative launcher exit code. Nonzero ranks return zero after
+publishing their completion markers, even when their local shard failed, so
+rank zero can finish collecting and persisting the launch-wide failure
+evidence. With collective aggregation, rank zero broadcasts the terminal
+decision and a failed batch raises consistently on every rank.
+Do not add collective fail-fast launch policy to file aggregation: nonzero
+ranks intentionally publish their evidence and return so rank zero can finish
+the audit. A file-mode evidence timeout does not cancel peers or release
+their GPUs. Configure a scheduler wall-time limit or use job-level cancellation
+for hung ranks; rank zero cannot safely terminate remote launcher-owned
+processes. A launcher may wait for those ranks after rank zero has exited.
+
+When Slurm already gives each task singleton GPU visibility, it can launch the
+unified command directly:
+
+```bash
+srun --nodes=2 \
+  --ntasks=16 \
+  --ntasks-per-node=8 \
+  --gpus-per-task=1 \
+  --gpu-bind=single:1 \
+  .venv/bin/cuphoton xpois fit-batch \
+  --executor mpi \
+  --backend cupy \
+  --manifest /shared/manifests/fixed-32.yaml \
+  --output-dir /shared/results/xpois-mpi \
+  --name fixed-32-mpi16 \
+  --aggregation-mode files \
+  --attempt-id fixed-32-mpi16-attempt-1
+```
+
+The manifest must contain at least one image pair per task. XPOIS rejects idle
+MPI ranks instead of launching ranks with empty shards.
+
+### Launch with Dragon
+
+The checked-in wrapper routes the same `fit-batch` command with
+`--executor dragon`. The following launch selects TCP explicitly for
+both infrastructure and overlay transport. Verify transport availability
+for your installation before launching a distributed workload:
+
+```bash
+.venv/bin/dragon -m -N 2 -w slurm -t tcp -o tcp \
+  examples/xpois/dragon_batch.py \
+  --backend cupy \
+  --manifest /shared/manifests/fixed-32.yaml \
+  --output-dir /shared/results/xpois-dragon \
+  --name fixed-32-dragon16 \
+  --max-workers 16 \
+  --worker-timeout-sec 3600
+```
+
+Here `-m` is Dragon's multi-node override. The Dragon coordinator enumerates
+the allocation's actual hosts and GPU IDs, places one ProcessGroup worker per
+selected GPU, and verifies singleton visibility before importing the numerical
+backend. `--max-workers`, `--worker-timeout-sec`, and
+`--result-timeout-sec` apply only to this executor.
+
+For a single-node launch, use `-s` instead of `-m -N 2 -w slurm`, while
+retaining `-t tcp -o tcp` to select TCP transport.
 
 ### Results and limits
 
-Every attempt uses a new, immutable run directory. Each item has an atomic
-terminal record under `records/`; an ordinary item error does not prevent
-the remaining items in its shard from running. The final `summary.json`
-checks for missing, duplicate, unexpected, malformed, or assignment-inconsistent
-item and worker results, as well as nonzero worker exits. A worker that could
-not write a terminal record still fails the run, but its declared errors are
-reported under `shard_result_audit.write_failed_shards` rather than as an
-evidence mismatch. Worker wall time
-defaults to one hour. The coordinator attempts bounded stop and close cleanup
-after failed starts or joins.
+Both routes print a compact result containing the executor, run ID, run
+directory, summary path, and terminal status. Durable per-item records and the
+final summary audit missing, duplicate, unexpected, malformed, failed, and
+assignment-inconsistent results. An ordinary item error does not prevent the
+remaining items in its shard from running, but any item, rank, worker, or audit
+failure makes the batch command return nonzero after evidence is persisted.
+Declared worker record-write errors still fail the run and are reported
+under `shard_result_audit.write_failed_shards` rather than as evidence
+mismatches.
+The MPI rank-result audit reports trustworthy workload and setup failures in
+separate fields, apart from malformed or identity-inconsistent rank evidence.
+GPU identity comparison prefers UUID when both peers report one and otherwise
+uses PCI identity only on the same host. Partial lookup failures are retained
+as warnings when a stable identifier survives, while an incomparable
+same-host pair still fails closed.
 
-`coordinator_wall_sec` includes setup, worker cleanup, and terminal-result
-checks. Writing the final summary falls outside that interval. Per-item
-`timings_sec` separates input reads, preprocessing, solving, artifact writes,
-review work, and other postprocessing; `wall_sec` retains the enclosing
-workflow and item-runner measurements.
+For an MPI/Dragon comparison, stage one immutable manifest before timing and
+hold the allocation, filesystem, cache policy, cuPhoton revision, numerical
+backend, and fit options constant. Rotate launch order and compare exact output
+artifacts, exactly-once records, GPU placement, clean exits, complete launcher
+wall time, coordinator or rank work time, and per-item phase timings.
 
-The executor does not retry failed items, recover dead workers, or split one
-image-pair solve across GPUs. Inspect the terminal status before consuming a
-run's outputs, and start a new run after a failed attempt.
+This interface does not retry failed work, resume after a dead process,
+split one image across GPUs, or select a launcher automatically. Start a
+new run after a failed attempt and inspect the terminal status before
+consuming its outputs.

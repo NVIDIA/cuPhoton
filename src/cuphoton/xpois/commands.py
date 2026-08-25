@@ -25,7 +25,6 @@ from cuphoton.core.cli import (
 
 from .batch import BatchFitOptions
 from .data import inspect_hsc_data_tree
-from .dragon import run_dragon_image_pair_batch
 from .ois import (
     EXPLICIT_BACKENDS,
     SUPPORTED_BACKENDS,
@@ -56,6 +55,18 @@ _KNOWN_COMMAND_EXCEPTIONS = (
 
 def _emit_json_payload(payload: Any, *, out: Callable[[str], None]) -> None:
     out(json.dumps(payload, indent=2, default=str))
+
+
+def _run_dragon_image_pair_batch(**kwargs: Any) -> Any:
+    from .dragon import run_dragon_image_pair_batch
+
+    return run_dragon_image_pair_batch(**kwargs)
+
+
+def _run_mpi_image_pair_batch(**kwargs: Any) -> Any:
+    from .mpi import run_mpi_image_pair_batch
+
+    return run_mpi_image_pair_batch(**kwargs)
 
 
 class PathSpecInvariant(StringInvariant):
@@ -585,14 +596,29 @@ class SubtractCommand(_FitCommand):
         self._emit_json(result.summary)
 
 
-class FitBatchDragonCommand(_KernelSolveOptionsCommand):
-    """Fit an image-pair manifest with explicitly placed Dragon workers."""
+class FitBatchCommand(_KernelSolveOptionsCommand):
+    """Fit an image-pair manifest with a selected distributed executor."""
 
+    executor = None
     manifest = None
     max_workers = None
     result_timeout_sec = None
     worker_timeout_sec = None
+    aggregation_mode = None
+    rank_setup_timeout_sec = None
+    rank_timeout_sec = None
+    attempt_id = None
     backend = None
+
+    class ExecutorArg(SetInvariant):
+        _arg = "--executor"
+        _help = (
+            "Distributed executor. MPI requires an external mpirun/srun "
+            "launcher with GPU binding; see docs/components/xpois.md."
+        )
+        _mandatory = True
+        _set = {"dragon", "mpi"}
+        _metavar = "{dragon,mpi}"
 
     class ManifestArg(PathSpecInvariant):
         _arg = "--manifest"
@@ -601,38 +627,73 @@ class FitBatchDragonCommand(_KernelSolveOptionsCommand):
 
     class MaxWorkersArg(PositiveIntegerInvariant):
         _arg = "--max-workers"
-        _help = "Maximum explicitly placed GPU workers."
+        _help = "Dragon-only maximum explicitly placed GPU workers."
         _mandatory = False
         _default = None
 
     class ResultTimeoutSecArg(FloatInvariant):
         _arg = "--result-timeout-sec"
         _help = (
-            "Seconds of grace for ProcessGroup join and compact worker "
-            "results. [default: %default]"
+            "Dragon-only seconds of grace for ProcessGroup join and compact "
+            "worker results, plus shared artifact visibility. "
+            "[Dragon default: 60.0]"
         )
         _mandatory = False
-        _default = 60.0
+        _default = None
         _min = 0.001
 
     class WorkerTimeoutSecArg(FloatInvariant):
         _arg = "--worker-timeout-sec"
         _help = (
-            "Dragon ProcessGroup worker wall time in seconds. "
-            "[default: %default]"
+            "Dragon-only ProcessGroup worker wall time in seconds. "
+            "[Dragon default: 3600.0]"
         )
         _mandatory = False
-        _default = 3600.0
+        _default = None
         _min = 0.001
+
+    class AggregationModeArg(SetInvariant):
+        _arg = "--aggregation-mode"
+        _help = "MPI-only rank-metadata aggregation mode. [MPI default: mpi]"
+        _mandatory = False
+        _default = None
+        _set = {"mpi", "files"}
+        _metavar = "{files,mpi}"
+
+    class RankTimeoutSecArg(FloatInvariant):
+        _arg = "--rank-timeout-sec"
+        _help = "MPI file-mode rank-completion wait. [files default: 3600.0]"
+        _mandatory = False
+        _default = None
+        _min = 0.001
+
+    class RankSetupTimeoutSecArg(FloatInvariant):
+        _arg = "--rank-setup-timeout-sec"
+        _help = (
+            "MPI setup wait for file metadata and collective rank/record "
+            "visibility. [MPI default: 600.0]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.001
+
+    class AttemptIdArg(StringInvariant):
+        _arg = "--attempt-id"
+        _help = "MPI-only shared identity for one file-aggregation launch."
+        _mandatory = False
+        _default = None
+        _minlen = 1
+        _maxlen = 256
 
     class BackendArg(SetInvariant):
         _arg = "--backend"
-        _help = "GPU fit backend. [default: %default]"
-        _mandatory = False
-        _default = "cupy"
+        _help = "Explicit GPU fit backend."
+        _mandatory = True
         _set = {"cupy", "numba-cuda", "cutile"}
+        _metavar = "{cupy,cutile,numba-cuda}"
 
     def run(self) -> None:
+        self._validate_executor_options()
         components = self._components()
         options = self._call(
             BatchFitOptions,
@@ -652,21 +713,111 @@ class FitBatchDragonCommand(_KernelSolveOptionsCommand):
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
         )
-        result = self._call(
-            run_dragon_image_pair_batch,
-            manifest_path=Path(self.manifest).expanduser(),
-            output_root=self._output_root(),
-            run_id=self.run_name or None,
-            max_workers=self.max_workers,
-            result_timeout_sec=self.result_timeout_sec,
-            worker_timeout_sec=self.worker_timeout_sec,
-            options=options,
-        )
-        self._emit_json(result.to_dict())
-        if result.status != "success":
-            raise CommandError(
-                "Dragon batch failed; inspect " + str(result.summary_path)
+        common = {
+            "manifest_path": Path(self.manifest).expanduser(),
+            "output_root": self._output_root(),
+            "run_id": self.run_name or None,
+            "options": options,
+        }
+        if self.executor == "dragon":
+            result = self._call(
+                _run_dragon_image_pair_batch,
+                **common,
+                max_workers=self.max_workers,
+                result_timeout_sec=(
+                    60.0
+                    if self.result_timeout_sec is None
+                    else self.result_timeout_sec
+                ),
+                worker_timeout_sec=(
+                    3600.0
+                    if self.worker_timeout_sec is None
+                    else self.worker_timeout_sec
+                ),
             )
+        else:
+            aggregation_mode = self.aggregation_mode or "mpi"
+            result = self._call(
+                _run_mpi_image_pair_batch,
+                **common,
+                aggregation_mode=aggregation_mode,
+                rank_setup_timeout_sec=(
+                    600.0
+                    if self.rank_setup_timeout_sec is None
+                    else self.rank_setup_timeout_sec
+                ),
+                rank_timeout_sec=(
+                    3600.0
+                    if aggregation_mode == "files"
+                    and self.rank_timeout_sec is None
+                    else self.rank_timeout_sec
+                ),
+                attempt_id=self.attempt_id,
+            )
+        if result is None:
+            return
+        payload = dict(result.to_dict())
+        if payload.get("executor") != self.executor:
+            raise CommandError(
+                f"{self.executor} executor returned invalid provenance"
+            )
+        self._emit_json(payload)
+        if result.status != "success":
+            executor_name = "Dragon" if self.executor == "dragon" else "MPI"
+            raise CommandError(
+                f"{executor_name} batch failed; inspect {result.summary_path}"
+            )
+
+    def _validate_executor_options(self) -> None:
+        if self.executor == "dragon":
+            invalid = (
+                ("--aggregation-mode", self.aggregation_mode),
+                ("--rank-setup-timeout-sec", self.rank_setup_timeout_sec),
+                ("--rank-timeout-sec", self.rank_timeout_sec),
+                ("--attempt-id", self.attempt_id),
+            )
+        else:
+            invalid = (
+                ("--max-workers", self.max_workers),
+                ("--result-timeout-sec", self.result_timeout_sec),
+                ("--worker-timeout-sec", self.worker_timeout_sec),
+            )
+        supplied = [flag for flag, value in invalid if value is not None]
+        if supplied:
+            raise CommandError(
+                f"{', '.join(supplied)} cannot be used with "
+                f"--executor {self.executor}"
+            )
+        if (
+            self.executor == "mpi"
+            and (self.aggregation_mode or "mpi") != "files"
+        ):
+            file_only = (
+                ("--rank-timeout-sec", self.rank_timeout_sec),
+                ("--attempt-id", self.attempt_id),
+            )
+            supplied = [
+                flag for flag, value in file_only if value is not None
+            ]
+            if supplied:
+                raise CommandError(
+                    f"{', '.join(supplied)} can be used only with "
+                    "--aggregation-mode files"
+                )
+        if (
+            self.executor == "mpi"
+            and (self.aggregation_mode or "mpi") == "files"
+        ):
+            required = (
+                ("--name", self.run_name),
+                ("--attempt-id", self.attempt_id),
+            )
+            missing = [flag for flag, value in required if not value]
+            if missing:
+                raise CommandError(
+                    f"{', '.join(missing)} must be provided with "
+                    "--aggregation-mode files"
+                )
 
 
 class BenchmarkBackendsCommand(_KernelSolveCommand):

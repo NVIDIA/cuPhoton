@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 import pytest
+import yaml
 
 from cuphoton.xpois.batch import (
     BatchFitOptions,
@@ -92,6 +94,39 @@ def test_manifest_work_item_counts_reused_path_once(tmp_path) -> None:
     assert len(item.payload["_input_identity"]) == 1
 
 
+def test_manifest_hash_includes_captured_input_identity(tmp_path) -> None:
+    _write_array(tmp_path / "reference.npy")
+    _write_array(tmp_path / "target.npy")
+    manifest_path = tmp_path / "pairs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "cuphoton.xpois.image-pairs/v1",
+                "pairs": [
+                    {
+                        "id": "pair-1",
+                        "reference": "reference.npy",
+                        "target": "target.npy",
+                    }
+                ],
+            }
+        )
+    )
+    first = load_image_pair_manifest(manifest_path)
+    target = tmp_path / "target.npy"
+    stat_result = target.stat()
+    os.utime(
+        target,
+        ns=(stat_result.st_atime_ns, stat_result.st_mtime_ns + 1_000_000_000),
+    )
+
+    second = load_image_pair_manifest(manifest_path)
+
+    assert first.canonical_payload() == second.canonical_payload()
+    assert first.input_identity_payload() != second.input_identity_payload()
+    assert first.sha256 != second.sha256
+
+
 def test_preflight_rejects_input_changed_after_manifest_load(
     tmp_path,
 ) -> None:
@@ -165,6 +200,121 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="duplicate key"):
+        load_image_pair_manifest(manifest_path)
+
+
+def test_manifest_rejects_duplicate_yaml_keys(tmp_path) -> None:
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        """schema: cuphoton.xpois.image-pairs/v1
+schema: duplicate
+pairs: []
+"""
+    )
+
+    with pytest.raises(ValueError, match="duplicate key"):
+        load_image_pair_manifest(manifest_path)
+
+
+def test_manifest_yaml_merge_allows_explicit_override(tmp_path) -> None:
+    _write_array(tmp_path / "reference.npy")
+    _write_array(tmp_path / "target.npy")
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        """schema: cuphoton.xpois.image-pairs/v1
+pairs:
+  - &base
+    id: base
+    reference: reference.npy
+    target: target.npy
+  - <<: *base
+    id: override
+"""
+    )
+
+    manifest = load_image_pair_manifest(manifest_path)
+
+    assert [pair.item_id for pair in manifest.pairs] == ["base", "override"]
+    assert manifest.pairs[1].reference == tmp_path / "reference.npy"
+    assert manifest.pairs[1].target == tmp_path / "target.npy"
+
+
+def test_manifest_rejects_duplicate_yaml_keys_across_merged_mappings(
+    tmp_path,
+) -> None:
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        """schema: cuphoton.xpois.image-pairs/v1
+pairs:
+  - &first
+    id: first
+    reference: reference.npy
+    target: target.npy
+  - &second
+    id: second
+    reference: reference.npy
+    target: target.npy
+  - <<: [*first, *second]
+    id: merged
+"""
+    )
+
+    with pytest.raises(ValueError, match="across merged mappings"):
+        load_image_pair_manifest(manifest_path)
+
+
+def test_yaml_merge_allows_disjoint_merged_mappings() -> None:
+    from cuphoton.xpois.batch import _UniqueKeySafeLoader
+
+    document = """
+first: &first {reference: reference.npy}
+second: &second {target: target.npy}
+merged:
+  <<: [*first, *second]
+  id: merged
+"""
+
+    loaded = yaml.load(document, Loader=_UniqueKeySafeLoader)
+
+    assert loaded["merged"] == {
+        "reference": "reference.npy",
+        "target": "target.npy",
+        "id": "merged",
+    }
+
+
+def test_manifest_rejects_duplicate_yaml_merge_keys(tmp_path) -> None:
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        """schema: cuphoton.xpois.image-pairs/v1
+pairs:
+  - &base
+    id: base
+    reference: reference.npy
+    target: target.npy
+  - <<: *base
+    <<: *base
+"""
+    )
+
+    with pytest.raises(ValueError, match="duplicate merge key"):
+        load_image_pair_manifest(manifest_path)
+
+
+def test_manifest_rejects_duplicate_yaml_keys_inside_merge(tmp_path) -> None:
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        """schema: cuphoton.xpois.image-pairs/v1
+pairs:
+  - <<: &base
+      id: first
+      id: duplicate
+      reference: reference.npy
+      target: target.npy
+"""
+    )
+
+    with pytest.raises(ValueError, match="duplicate key 'id'"):
         load_image_pair_manifest(manifest_path)
 
 
