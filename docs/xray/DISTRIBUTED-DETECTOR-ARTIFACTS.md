@@ -132,6 +132,20 @@ a full or sampled content digest. They do not publish the source HDF5 paths.
 Changing an input file, normalization cache, or detector option changes the
 resume identity and forces the affected shard to run again.
 
+## Fit diagnostics
+
+Pass `--fit-diagnostics summary` or `--fit-diagnostics full` to retain the
+same status-aware tile-row diagnostics produced by a single worker. The merge
+command concatenates records in shard order and verifies the sidecar hash,
+record count, status totals, ragged offsets, and common fitted time axis.
+Diagnostic level and `--p2-ridge-alpha` are part of each worker's plan,
+configuration hash, and resume identity, so a shard from a different fit
+study cannot be silently reused.
+
+The default diagnostic level is `none`, and the default ridge alpha is zero.
+Use full diagnostics only for bounded regions because traces and
+reconstructions can make a detector-wide sidecar large.
+
 Generated plans, scripts, shard directories, logs, merged arrays, and manifests
 are run artifacts. Keep them out of git. A performance report should include
 a redacted plan summary, code revision, environment, GPU/driver/runtime, input

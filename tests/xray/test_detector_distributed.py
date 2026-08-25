@@ -16,9 +16,14 @@ import cuphoton.xray.detector_distributed as detector_distributed
 from cuphoton import __version__
 from cuphoton.core.cli import run_component
 from cuphoton.xray.detector_artifacts import (
+    FIT_DIAGNOSTICS_FILE,
+    FIT_STATUS_FAILED,
     FIT_STATUS_FILE,
     FIT_STATUS_OK,
+    _append_non_ok_fit_diagnostic,
     _detector_artifact_config_hash,
+    _FitDiagnosticsWriter,
+    _stable_json_hash,
     detector_artifact_complete,
     detector_artifact_input_identity,
     detector_artifact_resume_identity,
@@ -61,6 +66,10 @@ def test_detector_artifact_distributed_dry_run_cli_json(tmp_path, capsys):
                 "2",
                 "--run-label",
                 "dry",
+                "--fit-diagnostics",
+                "full",
+                "--p2-ridge-alpha",
+                "0.01",
                 "--json",
             ]
         )
@@ -77,6 +86,10 @@ def test_detector_artifact_distributed_dry_run_cli_json(tmp_path, capsys):
         [2, 4],
     ]
     assert "--shard-index 1" in payload["slurm_script"]
+    assert payload["detector_options"]["fit_diagnostics"] == "full"
+    assert payload["detector_options"]["p2_ridge_alpha"] == 0.01
+    assert "--fit-diagnostics full" in payload["slurm_script"]
+    assert "--p2-ridge-alpha 0.01" in payload["slurm_script"]
     assert payload["commands"][0][-1] == "--json"
 
 
@@ -101,6 +114,61 @@ def test_build_distributed_plan_uses_shard_width(tmp_path):
     assert [item["roi_dim"] for item in plan["shards"]] == [[4, 3], [4, 3]]
     command = plan["commands"][1]
     assert command[command.index("--roi-lower") + 1] == "5"
+
+
+def test_distributed_resume_identity_includes_diagnostics_and_ridge(tmp_path):
+    _write_synthetic_hdf5_pair(tmp_path, samples=8, rows=2, cols=2)
+    common = {
+        "h5dir": tmp_path,
+        "fon": "on.h5",
+        "foff": "off.h5",
+        "output_dir": tmp_path / "out",
+        "roi_dim": (2, 2),
+        "shard_count": 1,
+        "gpus": 1,
+        "run_label": "diagnostics",
+    }
+    baseline = build_detector_artifact_distributed_plan(**common)
+    summary = build_detector_artifact_distributed_plan(
+        **common,
+        detector_options={"fit_diagnostics": "summary"},
+    )
+    ridge = build_detector_artifact_distributed_plan(
+        **common,
+        detector_options={
+            "fit_diagnostics": "summary",
+            "p2_ridge_alpha": 0.01,
+        },
+    )
+
+    identities = {
+        plan["shards"][0]["resume_identity"]
+        for plan in (baseline, summary, ridge)
+    }
+    assert len(identities) == 3
+    assert "--fit-diagnostics" not in baseline["commands"][0]
+    assert "--p2-ridge-alpha" not in baseline["commands"][0]
+    assert "--fit-diagnostics" in summary["commands"][0]
+    assert "--p2-ridge-alpha" in ridge["commands"][0]
+
+
+@pytest.mark.parametrize("alpha", [-1.0, np.inf, np.nan])
+def test_distributed_plan_rejects_invalid_p2_ridge_alpha(tmp_path, alpha):
+    _write_synthetic_hdf5_pair(tmp_path, samples=8, rows=2, cols=2)
+
+    with pytest.raises(
+        ValueError,
+        match="p2_ridge_alpha must be finite and non-negative",
+    ):
+        build_detector_artifact_distributed_plan(
+            h5dir=tmp_path,
+            fon="on.h5",
+            foff="off.h5",
+            output_dir=tmp_path / "out",
+            roi_dim=(2, 2),
+            shard_count=1,
+            detector_options={"p2_ridge_alpha": alpha},
+        )
 
 
 @pytest.mark.parametrize(
@@ -372,6 +440,117 @@ def test_merge_detector_artifact_shards(tmp_path):
     assert [item["index"] for item in manifest["shard_runtimes"]] == [0, 1]
 
 
+def test_merge_detector_artifact_shards_combines_diagnostic_records(tmp_path):
+    left = _upgrade_shard_with_summary_diagnostics(
+        _write_shard(
+            tmp_path / "left-diagnostics",
+            index=0,
+            count=2,
+            roi_lower=(0, 0),
+            roi_dim=(3, 2),
+            global_roi_dim=(5, 2),
+            fill=1.0,
+        )
+    )
+    right = _upgrade_shard_with_summary_diagnostics(
+        _write_shard(
+            tmp_path / "right-diagnostics",
+            index=1,
+            count=2,
+            roi_lower=(3, 0),
+            roi_dim=(2, 2),
+            global_roi_dim=(5, 2),
+            fill=2.0,
+        )
+    )
+
+    merge_detector_artifact_shards(
+        shard_dirs=(right, left),
+        output_dir=tmp_path / "merged-diagnostics",
+    )
+
+    merged = tmp_path / "merged-diagnostics"
+    manifest = json.loads((merged / "manifest.json").read_text())
+    assert manifest["fit_diagnostics"]["record_count"] == 4
+    assert detector_artifact_complete(merged) is True
+    with np.load(merged / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        np.testing.assert_array_equal(data["tile_x_start"], [0, 0, 3, 3])
+        np.testing.assert_array_equal(data["detector_y"], [0, 1, 0, 1])
+
+
+def test_merge_detector_artifact_shards_combines_full_diagnostics(tmp_path):
+    left = _upgrade_shard_with_full_diagnostics(
+        _write_shard(
+            tmp_path / "left-full-diagnostics",
+            index=0,
+            count=2,
+            roi_lower=(0, 0),
+            roi_dim=(3, 2),
+            global_roi_dim=(5, 2),
+            fill=1.0,
+        )
+    )
+    right = _upgrade_shard_with_full_diagnostics(
+        _write_shard(
+            tmp_path / "right-full-diagnostics",
+            index=1,
+            count=2,
+            roi_lower=(3, 0),
+            roi_dim=(2, 2),
+            global_roi_dim=(5, 2),
+            fill=2.0,
+        )
+    )
+
+    merge_detector_artifact_shards(
+        shard_dirs=(right, left),
+        output_dir=tmp_path / "merged-full-diagnostics",
+    )
+
+    merged = tmp_path / "merged-full-diagnostics"
+    manifest = json.loads((merged / "manifest.json").read_text())
+    assert manifest["fit_diagnostics"]["record_count"] == 4
+    assert manifest["fit_diagnostics"]["array_lengths"] == {
+        "amplitude": 3,
+        "angular_frequency": 3,
+        "decay": 3,
+        "p1_singular_values": 5,
+        "p2_singular_values": 8,
+        "phase": 3,
+        "reconstruction": 6,
+        "time": 3,
+        "trace": 6,
+    }
+    assert detector_artifact_complete(merged) is True
+    with np.load(merged / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        np.testing.assert_array_equal(data["time"], [0.0, 0.25, 0.5])
+        np.testing.assert_array_equal(
+            data["fit_status"],
+            [FIT_STATUS_OK, FIT_STATUS_FAILED] * 2,
+        )
+        np.testing.assert_array_equal(data["trace_offsets"], [0, 3, 3, 6, 6])
+        np.testing.assert_array_equal(data["mode_offsets"], [0, 1, 1, 3, 3])
+        np.testing.assert_array_equal(
+            data["p1_singular_value_offsets"], [0, 2, 2, 5, 5]
+        )
+        np.testing.assert_array_equal(
+            data["p2_singular_value_offsets"], [0, 3, 3, 8, 8]
+        )
+        np.testing.assert_array_equal(
+            data["trace"], [1.0, 1.25, 1.5, 4.0, 4.25, 4.5]
+        )
+        np.testing.assert_array_equal(
+            data["angular_frequency"], [1.0, 1.0, 2.0]
+        )
+        np.testing.assert_array_equal(
+            data["p1_singular_values"], [0.0, 1.0, 0.0, 1.0, 2.0]
+        )
+        np.testing.assert_array_equal(
+            data["p2_singular_values"],
+            [0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 3.0, 4.0],
+        )
+
+
 def test_merge_rejects_shards_from_different_inputs(tmp_path):
     left = _write_shard(
         tmp_path / "left",
@@ -438,6 +617,48 @@ def test_merge_rejects_invalid_shard_config_hash(tmp_path):
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(ValueError, match="config_hash mismatch"):
+        merge_detector_artifact_shards(
+            shard_dirs=(shard,), output_dir=tmp_path / "merged"
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    (
+        (
+            "p2_ridge_alpha",
+            1.0,
+            "fit diagnostics artifact resume identity mismatch",
+        ),
+        (
+            "normalization_shift",
+            2.0,
+            "fit diagnostics artifact config hash mismatch",
+        ),
+    ),
+)
+def test_merge_rejects_diagnostics_bound_to_different_config(
+    tmp_path, field, value, error
+):
+    shard = _upgrade_shard_with_summary_diagnostics(
+        _write_shard(
+            tmp_path / "shard",
+            index=0,
+            count=1,
+            roi_lower=(0, 0),
+            roi_dim=(2, 2),
+            global_roi_dim=(2, 2),
+            fill=1.0,
+        )
+    )
+    manifest_path = shard / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = value
+    manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
+    manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=error):
         merge_detector_artifact_shards(
             shard_dirs=(shard,), output_dir=tmp_path / "merged"
         )
@@ -605,3 +826,147 @@ def _write_shard(
         encoding="utf-8",
     )
     return root
+
+
+def _upgrade_shard_with_summary_diagnostics(root: Path) -> Path:
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    writer = _FitDiagnosticsWriter(root, "summary")
+    x0 = int(manifest["roi_lower"][0])
+    x1 = x0 + int(manifest["roi_dim"][0])
+    y0 = int(manifest["roi_lower"][1])
+    y1 = y0 + int(manifest["roi_dim"][1])
+    for y in range(y0, y1):
+        writer.append(_summary_diagnostic_record(x0=x0, x1=x1, y=y))
+    manifest["manifest_schema_version"] = 2
+    manifest["p2_ridge_alpha"] = 0.0
+    manifest["fit_diagnostics"] = writer.finalize(
+        source_identity_sha256=_stable_json_hash(manifest["input_identity"])
+    )
+    manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
+    manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    manifest["fit_diagnostics"]["artifact_resume_identity"] = manifest[
+        "resume_identity"
+    ]
+    manifest["fit_diagnostics"]["artifact_config_hash"] = manifest[
+        "config_hash"
+    ]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return root
+
+
+def _upgrade_shard_with_full_diagnostics(root: Path) -> Path:
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    writer = _FitDiagnosticsWriter(root, "full")
+    x0 = int(manifest["roi_lower"][0])
+    x1 = x0 + int(manifest["roi_dim"][0])
+    y0 = int(manifest["roi_lower"][1])
+    y1 = y0 + int(manifest["roi_dim"][1])
+    mode_count = int(manifest["shard"]["index"]) + 1
+    for row, y in enumerate(range(y0, y1)):
+        if row == 0:
+            writer.append(
+                _full_diagnostic_record(
+                    x0=x0,
+                    x1=x1,
+                    y=y,
+                    modes=mode_count,
+                )
+            )
+        else:
+            _append_non_ok_fit_diagnostic(
+                writer,
+                level="full",
+                fit_status=FIT_STATUS_FAILED,
+                x0=x0,
+                x1=x1,
+                y0=y0,
+                y1=y1,
+                detector_y=y,
+            )
+
+    for name in ("freq_all", "amp_all", "fft_all", "fft_freq_all"):
+        values = np.load(root / f"{name}.npy")
+        values[1:, ...] = 0.0
+        np.save(root / f"{name}.npy", values)
+    amp_sum = np.load(root / "amp_all_sum_filtered.npy")
+    amp_sum[1:, :] = 0.0
+    np.save(root / "amp_all_sum_filtered.npy", amp_sum)
+    fit_status = np.load(root / FIT_STATUS_FILE)
+    fit_status[1:, :] = FIT_STATUS_FAILED
+    np.save(root / FIT_STATUS_FILE, fit_status)
+
+    manifest["manifest_schema_version"] = 2
+    manifest["raw_fits"] = 1
+    manifest["failures"] = y1 - y0 - 1
+    manifest["max_fit_failures"] = y1 - y0 - 1
+    manifest["p2_ridge_alpha"] = 0.0
+    manifest["fit_diagnostics"] = writer.finalize(
+        source_identity_sha256=_stable_json_hash(manifest["input_identity"])
+    )
+    manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
+    manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    manifest["fit_diagnostics"]["artifact_resume_identity"] = manifest[
+        "resume_identity"
+    ]
+    manifest["fit_diagnostics"]["artifact_config_hash"] = manifest[
+        "config_hash"
+    ]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return root
+
+
+def _summary_diagnostic_record(*, x0: int, x1: int, y: int):
+    return {
+        "tile_x_start": x0,
+        "tile_x_stop": x1,
+        "tile_y_start": 0,
+        "tile_y_stop": 2,
+        "detector_y": y,
+        "fit_status": FIT_STATUS_OK,
+        "trace_std": 1.0,
+        "residual_std": 0.1,
+        "relative_residual": 0.1,
+        "chi2": 0.01,
+        "selected_model_order": 2,
+        "mode_count": 1,
+        "p1_rank": 2,
+        "p1_singular_value_ratio": 0.1,
+        "p1_condition": 10.0,
+        "p2_rank": 3,
+        "p2_singular_value_ratio": 0.2,
+        "p2_condition": 5.0,
+        "max_amplitude": 1.0,
+    }
+
+
+def _full_diagnostic_record(
+    *,
+    x0: int,
+    x1: int,
+    y: int,
+    modes: int,
+):
+    time = np.asarray([0.0, 0.25, 0.5], dtype=np.float64)
+    mode_values = np.arange(modes, dtype=np.float64)
+    return {
+        **_summary_diagnostic_record(x0=x0, x1=x1, y=y),
+        "mode_count": modes,
+        "p2_rank": 2 * modes + 1,
+        "time": time,
+        "trace": time + x0 + 1.0,
+        "reconstruction": time + x0 + 0.9,
+        "angular_frequency": mode_values + 1.0,
+        "decay": mode_values + 0.5,
+        "amplitude": mode_values + 2.0,
+        "phase": mode_values * 0.1,
+        "p1_singular_values": np.arange(modes + 1, dtype=np.float64),
+        "p2_singular_values": np.arange(2 * modes + 1, dtype=np.float64),
+    }

@@ -69,12 +69,28 @@ uv run cuphoton xray model-order-sweep \
 uv run cuphoton xray detector-artifacts \
   --h5dir /path/to/input --fon on.h5 --foff off.h5 \
   --output-dir /path/to/artifacts --roi-lower 0 0 --roi-dim 64 64 \
-  --zero-offset-index 0 --components 6 --json
+  --zero-offset-index 0 --components 6 \
+  --fit-diagnostics summary --json
 ```
 
 `--zero-offset-index 0` is illustrative; select a physically appropriate fit
 start for the input scan. Start with a representative ROI and inspect the
 manifest, fit-status array, and numerical outputs before scaling out.
+
+`--fit-diagnostics summary` writes one status-aware record for each processed
+tile row, without duplicating records across the tile's x pixels. The summary
+includes the scale-free residual ratio and P1/P2 conditioning. `full` also
+retains the fitted time axis, traces, reconstructions, and flattened modal
+arrays; use it only for bounded studies. `fit_status.npy` remains an execution
+status product, and no diagnostic ratio is interpreted as a scientific
+acceptance threshold by the command. P2 rank, singular values, and condition
+describe the unregularized P2 design even when the recorded fit uses ridge;
+they do not describe the augmented ridge system.
+
+P2 ridge fitting is opt-in through `--p2-ridge-alpha`; its default of zero
+uses the unregularized least-squares path. Treat a nonzero value as an
+experiment configuration that requires independent validation, not as a
+general-purpose default.
 
 ## Input and artifact boundary
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from hashlib import sha256
 from pathlib import Path
 
 import h5py
@@ -15,22 +16,29 @@ import pytest
 from cuphoton.core.cli import run_component
 from cuphoton.xray.detector_artifacts import (
     DETECTOR_ARRAYS,
+    DETECTOR_ARTIFACT_MANIFEST_VERSION,
+    FIT_DIAGNOSTICS_FILE,
     FIT_STATUS_FILE,
     FIT_STATUS_OK,
     FIT_STATUS_SKIPPED,
     FIT_STATUS_UNPROCESSED,
     _clear_detector_artifact_outputs,
+    _detector_artifact_config_hash,
     _ensure_cuda_device,
     _fit_error_types,
+    _FitDiagnosticsWriter,
     _full_detector_trace,
     _integrate_cupy,
     _load_tile_signal,
     _publish_detector_artifact_outputs,
     _row_halo_bounds,
+    _stable_json_hash,
     _tdsfft_cupy,
     _zero_excluded_signal_rows,
     build_detector_artifacts_cupy,
     compare_detector_artifacts,
+    detector_artifact_complete,
+    detector_artifact_resume_identity,
 )
 from cuphoton.xray.detector_mask import AxisRange
 from cuphoton.xray.linear_prediction import synthetic_trace_batch
@@ -217,10 +225,185 @@ def test_detector_artifacts_rejects_negative_max_fit_failures(tmp_path):
         raise AssertionError("expected max_fit_failures validation")
 
 
+def test_detector_artifacts_rejects_unknown_fit_diagnostics_before_gpu(
+    tmp_path,
+):
+    with pytest.raises(
+        ValueError,
+        match="fit_diagnostics must be one of: none, summary, full",
+    ):
+        build_detector_artifacts_cupy(
+            h5dir=tmp_path,
+            fon="on.h5",
+            foff="off.h5",
+            output_dir=tmp_path / "out",
+            fit_diagnostics="unknown",
+        )
+
+
+@pytest.mark.parametrize("alpha", [-1.0, np.inf, -np.inf, np.nan])
+def test_detector_artifacts_rejects_invalid_p2_ridge_before_gpu(
+    tmp_path,
+    alpha,
+):
+    with pytest.raises(
+        ValueError,
+        match="p2_ridge_alpha must be finite and non-negative",
+    ):
+        build_detector_artifacts_cupy(
+            h5dir=tmp_path,
+            fon="on.h5",
+            foff="off.h5",
+            output_dir=tmp_path / "out",
+            p2_ridge_alpha=alpha,
+        )
+
+
+def test_fit_diagnostics_summary_preserves_tile_row_order(tmp_path):
+    writer = _FitDiagnosticsWriter(tmp_path, "summary")
+    writer.append(_diagnostic_record(x0=0, x1=5, y=2, modes=2))
+    writer.append(_diagnostic_record(x0=0, x1=5, y=3, modes=1))
+    writer.append(_diagnostic_record(x0=5, x1=10, y=2, modes=3))
+
+    metadata = writer.finalize(source_identity_sha256="a" * 64)
+
+    path = tmp_path / FIT_DIAGNOSTICS_FILE
+    assert metadata["record_count"] == 3
+    assert (
+        metadata["artifact_sha256"] == sha256(path.read_bytes()).hexdigest()
+    )
+    with np.load(path, allow_pickle=False) as diagnostics:
+        np.testing.assert_array_equal(diagnostics["tile_x_start"], [0, 0, 5])
+        np.testing.assert_array_equal(diagnostics["detector_y"], [2, 3, 2])
+        np.testing.assert_array_equal(
+            diagnostics["selected_model_order"], [4, 4, 4]
+        )
+        np.testing.assert_array_equal(
+            diagnostics["fit_status"], [FIT_STATUS_OK] * 3
+        )
+        assert "trace" not in diagnostics.files
+
+
+def test_fit_diagnostics_full_serializes_ragged_arrays_without_pickle(
+    tmp_path,
+):
+    writer = _FitDiagnosticsWriter(tmp_path, "full")
+    writer.append(_diagnostic_record(x0=0, x1=5, y=0, modes=1, samples=3))
+    writer.append(
+        _diagnostic_record(
+            x0=0,
+            x1=5,
+            y=1,
+            modes=0,
+            fit_status=FIT_STATUS_SKIPPED,
+        )
+    )
+    writer.append(_diagnostic_record(x0=0, x1=5, y=2, modes=3, samples=3))
+
+    metadata = writer.finalize(source_identity_sha256="b" * 64)
+
+    assert metadata["array_lengths"]["time"] == 3
+    assert metadata["array_lengths"]["trace"] == 6
+    assert metadata["array_lengths"]["angular_frequency"] == 4
+    with np.load(
+        tmp_path / FIT_DIAGNOSTICS_FILE, allow_pickle=False
+    ) as diagnostics:
+        np.testing.assert_array_equal(diagnostics["time"], [0.0, 0.25, 0.5])
+        np.testing.assert_array_equal(
+            diagnostics["trace_offsets"], [0, 3, 3, 6]
+        )
+        np.testing.assert_array_equal(
+            diagnostics["mode_offsets"], [0, 1, 1, 4]
+        )
+        np.testing.assert_array_equal(
+            diagnostics["p1_singular_value_offsets"], [0, 2, 2, 6]
+        )
+        np.testing.assert_array_equal(
+            diagnostics["p2_singular_value_offsets"], [0, 3, 3, 10]
+        )
+        np.testing.assert_array_equal(
+            diagnostics["fit_status"],
+            [FIT_STATUS_OK, FIT_STATUS_SKIPPED, FIT_STATUS_OK],
+        )
+        assert np.isnan(diagnostics["trace_std"][1])
+        assert diagnostics["selected_model_order"][1] == -1
+        assert all(
+            not diagnostics[name].dtype.hasobject
+            for name in diagnostics.files
+        )
+
+
+def test_fit_diagnostics_full_rejects_different_fitted_time_axes(tmp_path):
+    writer = _FitDiagnosticsWriter(tmp_path, "full")
+    writer.append(_diagnostic_record(x0=0, x1=2, y=0, modes=1))
+    record = _diagnostic_record(x0=0, x1=2, y=1, modes=1)
+    record["time"] = np.asarray(record["time"]) + 1.0
+
+    with pytest.raises(ValueError, match="common fitted time axis"):
+        writer.append(record)
+    writer.close()
+
+
+def test_detector_artifact_completeness_requires_v2_diagnostic_sidecar(
+    tmp_path,
+    monkeypatch,
+):
+    import cuphoton.xray.detector_artifacts as detector_artifacts
+
+    shape = (1, 1, 2)
+    for name in ("freq_all", "amp_all", "fft_all", "fft_freq_all"):
+        np.save(tmp_path / f"{name}.npy", np.ones(shape))
+    np.save(tmp_path / "amp_all_sum_filtered.npy", np.ones((1, 1)))
+    np.save(tmp_path / FIT_STATUS_FILE, np.ones((1, 1), dtype=np.uint8))
+    input_identity = {"on": {"identity_sha256": "on"}}
+    writer = _FitDiagnosticsWriter(tmp_path, "summary")
+    writer.append(_diagnostic_record(x0=0, x1=1, y=0, modes=1))
+    metadata = writer.finalize(
+        source_identity_sha256=_stable_json_hash(input_identity)
+    )
+    manifest = {
+        "kind": "xray-detector-artifacts",
+        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "input_identity": input_identity,
+        "output_shape": list(shape),
+        "roi_dim": [1, 1],
+        "raw_fits": 1,
+        "skipped_fits": 0,
+        "failures": 0,
+        "p2_ridge_alpha": 0.0,
+        "fit_diagnostics": metadata,
+    }
+    manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
+    manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    metadata["artifact_resume_identity"] = manifest["resume_identity"]
+    metadata["artifact_config_hash"] = manifest["config_hash"]
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    monkeypatch.setattr(
+        detector_artifacts,
+        "_sha256_file",
+        lambda _path: pytest.fail("resume completeness hashed diagnostics"),
+    )
+    assert detector_artifact_complete(tmp_path) is True
+    artifact = tmp_path / FIT_DIAGNOSTICS_FILE
+    artifact.write_bytes(artifact.read_bytes() + b"changed size")
+    assert detector_artifact_complete(tmp_path) is False
+    artifact.write_bytes(artifact.read_bytes()[: -len(b"changed size")])
+    (tmp_path / FIT_DIAGNOSTICS_FILE).unlink()
+    assert detector_artifact_complete(tmp_path) is False
+
+    manifest["manifest_schema_version"] = 1
+    manifest.pop("fit_diagnostics")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert detector_artifact_complete(tmp_path) is True
+
+
 def test_clear_detector_artifact_outputs_removes_known_files(tmp_path):
     for name in DETECTOR_ARRAYS:
         (tmp_path / f"{name}.npy").write_bytes(b"old")
     (tmp_path / FIT_STATUS_FILE).write_bytes(b"old")
+    (tmp_path / FIT_DIAGNOSTICS_FILE).write_bytes(b"old")
     (tmp_path / "manifest.json").write_text("old", encoding="utf-8")
     (tmp_path / "compare-reference.json").write_text("keep", encoding="utf-8")
 
@@ -229,6 +412,7 @@ def test_clear_detector_artifact_outputs_removes_known_files(tmp_path):
     for name in DETECTOR_ARRAYS:
         assert not (tmp_path / f"{name}.npy").exists()
     assert not (tmp_path / FIT_STATUS_FILE).exists()
+    assert not (tmp_path / FIT_DIAGNOSTICS_FILE).exists()
     assert not (tmp_path / "manifest.json").exists()
     assert (tmp_path / "compare-reference.json").exists()
 
@@ -251,7 +435,9 @@ def test_publish_detector_artifact_outputs_replaces_known_files(tmp_path):
         np.array([FIT_STATUS_UNPROCESSED], dtype=np.uint8),
     )
     (source / "manifest.json").write_text("new", encoding="utf-8")
+    (source / FIT_DIAGNOSTICS_FILE).write_bytes(b"new diagnostics")
     (target / "manifest.json").write_text("old", encoding="utf-8")
+    (target / FIT_DIAGNOSTICS_FILE).write_bytes(b"old diagnostics")
     (target / "compare-reference.json").write_text("keep", encoding="utf-8")
 
     _publish_detector_artifact_outputs(source, target)
@@ -264,9 +450,40 @@ def test_publish_detector_artifact_outputs_replaces_known_files(tmp_path):
         np.array([FIT_STATUS_OK], dtype=np.uint8),
     )
     assert (target / "manifest.json").read_text(encoding="utf-8") == "new"
+    assert (target / FIT_DIAGNOSTICS_FILE).read_bytes() == b"new diagnostics"
     assert (target / "compare-reference.json").read_text(
         encoding="utf-8"
     ) == "keep"
+
+
+def test_publish_detector_artifacts_leaves_no_manifest_when_sidecar_fails(
+    tmp_path,
+    monkeypatch,
+):
+    import cuphoton.xray.detector_artifacts as detector_artifacts
+
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    for name in DETECTOR_ARRAYS:
+        np.save(source / f"{name}.npy", np.ones((1,)))
+    np.save(source / FIT_STATUS_FILE, np.ones((1,), dtype=np.uint8))
+    (source / FIT_DIAGNOSTICS_FILE).write_bytes(b"diagnostics")
+    (source / "manifest.json").write_text("new", encoding="utf-8")
+    (target / "manifest.json").write_text("old", encoding="utf-8")
+    real_move = detector_artifacts.shutil.move
+
+    def fail_sidecar(source_path, target_path):
+        if Path(source_path).name == FIT_DIAGNOSTICS_FILE:
+            raise OSError("interrupted sidecar publication")
+        return real_move(source_path, target_path)
+
+    monkeypatch.setattr(detector_artifacts.shutil, "move", fail_sidecar)
+
+    with pytest.raises(OSError, match="interrupted sidecar publication"):
+        _publish_detector_artifact_outputs(source, target)
+    assert not (target / "manifest.json").exists()
 
 
 def test_detector_artifacts_rejects_savgol_window_longer_than_samples(
@@ -340,6 +557,7 @@ def test_detector_artifact_failure_preserves_existing_outputs(tmp_path):
             savgol_window=5,
             savgol_polyorder=3,
             amp_threshold=0.01,
+            fit_diagnostics="full",
         )
 
     assert (output / "manifest.json").read_text(encoding="utf-8") == "old"
@@ -442,6 +660,7 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
         savgol_window=5,
         savgol_polyorder=3,
         amp_threshold=0.01,
+        fit_diagnostics="summary",
         hdf5_reader="hdf5-ts-funcwrap",
         hdf5_reader_workers=2,
     )
@@ -461,6 +680,18 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
         == "ts_funcwrap_1"
     )
     assert FIT_STATUS_FILE in manifest["arrays"]
+    assert manifest["manifest_schema_version"] == 2
+    assert manifest["p2_ridge_alpha"] == 0.0
+    assert manifest["fit_diagnostics"]["level"] == "summary"
+    assert manifest["fit_diagnostics"]["record_count"] == 8
+    assert (
+        manifest["fit_diagnostics"]["artifact_resume_identity"]
+        == manifest["resume_identity"]
+    )
+    assert (
+        manifest["fit_diagnostics"]["artifact_config_hash"]
+        == manifest["config_hash"]
+    )
     freq_all = np.load(output / "freq_all.npy", mmap_mode="r")
     amp_all = np.load(output / "amp_all.npy", mmap_mode="r")
     amp_sum = np.load(output / "amp_all_sum_filtered.npy", mmap_mode="r")
@@ -470,6 +701,10 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
     assert amp_sum.shape == (4, 4)
     assert fit_status.shape == (4, 4)
     assert set(np.unique(fit_status)) == {FIT_STATUS_OK}
+    with np.load(output / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        np.testing.assert_array_equal(data["fit_status"], [FIT_STATUS_OK] * 8)
+        np.testing.assert_array_equal(data["tile_x_start"], [0] * 4 + [2] * 4)
+        np.testing.assert_array_equal(data["detector_y"], [0, 1, 2, 3] * 2)
     assert np.count_nonzero(amp_all) > 0
     np.testing.assert_allclose(freq_all[:, 0, :], freq_all[:, 1, :])
 
@@ -503,6 +738,8 @@ def test_max_tiles_zeroes_unprocessed_detector_tiles(tmp_path):
         savgol_polyorder=3,
         amp_threshold=0.01,
         max_tiles=1,
+        p2_ridge_alpha=0.01,
+        fit_diagnostics="full",
     )
 
     amp_all = np.load(output / "amp_all.npy", mmap_mode="r")
@@ -516,6 +753,12 @@ def test_max_tiles_zeroes_unprocessed_detector_tiles(tmp_path):
     assert set(np.unique(fit_status[:2, :2])) == {FIT_STATUS_OK}
     assert set(np.unique(fit_status[2:, :])) == {FIT_STATUS_UNPROCESSED}
     assert set(np.unique(fit_status[:, 2:])) == {FIT_STATUS_UNPROCESSED}
+    with np.load(output / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        assert data["fit_status"].shape == (2,)
+        assert data["time"].shape == (47,)
+        np.testing.assert_array_equal(data["trace_offsets"], [0, 47, 94])
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["p2_ridge_alpha"] == 0.01
 
 
 def test_excluded_rows_remain_zero_in_detector_artifacts(tmp_path):
@@ -547,6 +790,7 @@ def test_excluded_rows_remain_zero_in_detector_artifacts(tmp_path):
         savgol_window=5,
         savgol_polyorder=3,
         amp_threshold=0.01,
+        fit_diagnostics="summary",
     )
 
     amp_all = np.load(output / "amp_all.npy", mmap_mode="r")
@@ -556,6 +800,12 @@ def test_excluded_rows_remain_zero_in_detector_artifacts(tmp_path):
     assert np.count_nonzero(amp_all[1, :, :]) == 0
     assert np.count_nonzero(amp_sum[1, :]) == 0
     assert set(np.unique(fit_status[1, :])) == {FIT_STATUS_SKIPPED}
+    with np.load(output / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        assert data["fit_status"].shape == (8,)
+        assert np.count_nonzero(data["fit_status"] == FIT_STATUS_SKIPPED) == 2
+        skipped = data["fit_status"] == FIT_STATUS_SKIPPED
+        assert np.all(np.isnan(data["relative_residual"][skipped]))
+        assert np.all(data["selected_model_order"][skipped] == -1)
 
 
 def test_integrate_cupy_uses_detector_row_axis_only():
@@ -700,6 +950,80 @@ def test_tdsfft_cupy_rejects_short_time_axis_case():
             cupy.asarray([0.0]),
             cupy.asarray([1.0]),
         )
+
+
+def _diagnostic_record(
+    *,
+    x0: int,
+    x1: int,
+    y: int,
+    modes: int,
+    samples: int = 4,
+    fit_status: int = FIT_STATUS_OK,
+) -> dict[str, object]:
+    if fit_status != FIT_STATUS_OK:
+        empty = np.empty((0,), dtype=np.float64)
+        return {
+            "tile_x_start": x0,
+            "tile_x_stop": x1,
+            "tile_y_start": y,
+            "tile_y_stop": y + 1,
+            "detector_y": y,
+            "fit_status": fit_status,
+            "trace_std": None,
+            "residual_std": None,
+            "relative_residual": None,
+            "chi2": None,
+            "selected_model_order": -1,
+            "mode_count": -1,
+            "p1_rank": -1,
+            "p1_singular_value_ratio": None,
+            "p1_condition": None,
+            "p2_rank": -1,
+            "p2_singular_value_ratio": None,
+            "p2_condition": None,
+            "max_amplitude": None,
+            "trace": empty,
+            "reconstruction": empty,
+            "angular_frequency": empty,
+            "decay": empty,
+            "amplitude": empty,
+            "phase": empty,
+            "p1_singular_values": empty,
+            "p2_singular_values": empty,
+        }
+    mode_values = np.arange(modes, dtype=np.float64)
+    trace = np.linspace(0.0, 1.0, samples, dtype=np.float64)
+    return {
+        "tile_x_start": x0,
+        "tile_x_stop": x1,
+        "tile_y_start": y,
+        "tile_y_stop": y + 1,
+        "detector_y": y,
+        "fit_status": FIT_STATUS_OK,
+        "trace_std": 2.0,
+        "residual_std": 0.5,
+        "relative_residual": 0.25,
+        "chi2": 0.125,
+        "selected_model_order": 4,
+        "mode_count": modes,
+        "p1_rank": 4,
+        "p1_singular_value_ratio": 0.01,
+        "p1_condition": 100.0,
+        "p2_rank": 2 * modes + 1,
+        "p2_singular_value_ratio": 0.1,
+        "p2_condition": 10.0,
+        "max_amplitude": 3.0,
+        "time": np.arange(samples, dtype=np.float64) * 0.25,
+        "trace": trace,
+        "reconstruction": trace * 0.9,
+        "angular_frequency": mode_values + 1.0,
+        "decay": mode_values + 0.5,
+        "amplitude": mode_values + 2.0,
+        "phase": mode_values * 0.1,
+        "p1_singular_values": np.arange(modes + 1, dtype=np.float64),
+        "p2_singular_values": np.arange(2 * modes + 1, dtype=np.float64),
+    }
 
 
 class _MemoryBlockReader:

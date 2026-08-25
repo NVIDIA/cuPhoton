@@ -103,6 +103,356 @@ def test_linear_prediction_numpy_reconstructs_synthetic_trace():
     np.testing.assert_allclose(result.reconstruction, trace, atol=1e-10)
 
 
+def test_linear_prediction_numpy_reports_fit_diagnostics():
+    time, trace = synthetic_trace(samples=32)
+
+    result = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=4,
+        fit_diagnostics=True,
+    )
+
+    diagnostics = result.diagnostics
+    assert diagnostics is not None
+    residual = result.reconstruction - trace
+    assert diagnostics.trace_std == pytest.approx(np.std(trace))
+    assert diagnostics.residual_std == pytest.approx(np.std(residual))
+    assert diagnostics.relative_residual == pytest.approx(
+        np.std(residual) / np.std(trace)
+    )
+    assert diagnostics.chi2 == result.chi2
+    assert diagnostics.selected_model_order == result.selected_model_order
+    assert diagnostics.mode_count == len(result.angular_frequency)
+    assert diagnostics.max_amplitude == pytest.approx(
+        np.max(result.amplitude)
+    )
+
+    p1_threshold = np.max(result.singular_values) * 1e-12
+    assert diagnostics.p1_rank == np.count_nonzero(
+        np.isfinite(result.singular_values)
+        & (result.singular_values > p1_threshold)
+    )
+    assert diagnostics.p1_rank > diagnostics.selected_model_order
+    assert diagnostics.p1_singular_value_ratio == pytest.approx(
+        np.min(result.singular_values) / np.max(result.singular_values)
+    )
+    assert diagnostics.p1_condition == pytest.approx(
+        np.max(result.singular_values) / np.min(result.singular_values)
+    )
+
+    design, _fit_time = lp._p2_design_matrix(
+        np,
+        np.asarray(time),
+        result.decay,
+        result.angular_frequency,
+        dtype=np.float64,
+    )
+    _coefficients, _residuals, rank, singular_values = np.linalg.lstsq(
+        design,
+        trace,
+        rcond=None,
+    )
+    assert diagnostics.p2_rank == rank
+    np.testing.assert_allclose(
+        diagnostics.p2_singular_values,
+        singular_values,
+    )
+    assert diagnostics.p2_singular_value_ratio == pytest.approx(
+        singular_values[-1] / singular_values[0]
+    )
+    assert diagnostics.p2_condition == pytest.approx(
+        singular_values[0] / singular_values[-1]
+    )
+
+
+def test_fit_diagnostics_handle_zero_variance_trace():
+    time = np.linspace(0.0, 3.1, 32)
+    trace = np.full_like(time, 3.0)
+
+    result = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=4,
+        fit_diagnostics=True,
+    )
+
+    diagnostics = result.diagnostics
+    assert diagnostics is not None
+    assert diagnostics.trace_std == 0.0
+    assert np.isfinite(diagnostics.residual_std)
+    assert diagnostics.relative_residual is None
+
+
+def test_singular_value_diagnostics_handle_empty_and_zero_spectra():
+    assert (
+        lp._numerical_rank_from_singular_values(
+            [],
+            relative_tolerance=1e-12,
+        )
+        == 0
+    )
+    assert lp._singular_value_ratio_and_condition([]) == (None, None)
+
+    assert (
+        lp._numerical_rank_from_singular_values(
+            [4.0, 1e-13, 0.0],
+            relative_tolerance=1e-12,
+        )
+        == 1
+    )
+    ratio, condition = lp._singular_value_ratio_and_condition([4.0, 0.0])
+    assert ratio == 0.0
+    assert condition == float("inf")
+
+    ratio, condition = lp._singular_value_ratio_and_condition([4.0, np.nan])
+    assert ratio is None
+    assert condition == float("inf")
+
+
+def test_p2_ridge_alpha_zero_preserves_exact_results():
+    time, trace = synthetic_trace(samples=64)
+
+    default = linear_prediction_numpy(time, trace, n_components=8)
+    explicit_zero = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=8,
+        p2_ridge_alpha=0.0,
+    )
+
+    for name in (
+        "time_components",
+        "reconstruction",
+        "frequency",
+        "spectrum_components",
+        "spectrum_total",
+        "angular_frequency",
+        "decay",
+        "amplitude",
+        "phase",
+        "singular_values",
+    ):
+        np.testing.assert_array_equal(
+            getattr(explicit_zero, name),
+            getattr(default, name),
+        )
+    assert explicit_zero.chi2 == default.chi2
+    assert explicit_zero.selected_model_order == default.selected_model_order
+    assert explicit_zero.decaying_root_count == default.decaying_root_count
+    assert explicit_zero.diagnostics is None
+    assert default.diagnostics is None
+
+    default_artifacts = linear_prediction_p2_artifacts_numpy(
+        time,
+        trace,
+        default.decay,
+        default.angular_frequency,
+    )
+    explicit_zero_artifacts = linear_prediction_p2_artifacts_numpy(
+        time,
+        trace,
+        default.decay,
+        default.angular_frequency,
+        p2_ridge_alpha=0.0,
+    )
+    for name in (
+        "coefficients",
+        "amplitude",
+        "phase",
+        "time_components",
+        "reconstruction",
+        "frequency",
+        "spectrum_components",
+        "spectrum_total",
+        "frequency_centers",
+        "chi2",
+    ):
+        np.testing.assert_array_equal(
+            getattr(explicit_zero_artifacts, name),
+            getattr(default_artifacts, name),
+        )
+
+
+@pytest.mark.parametrize("alpha", [-1.0, np.nan, np.inf, -np.inf])
+def test_p2_ridge_rejects_negative_and_nonfinite_alpha(alpha):
+    time, trace = synthetic_trace(samples=32)
+
+    with pytest.raises(ValueError, match="finite nonnegative"):
+        linear_prediction_numpy(
+            time,
+            trace,
+            n_components=4,
+            p2_ridge_alpha=alpha,
+        )
+    with pytest.raises(ValueError, match="finite nonnegative"):
+        linear_prediction_p2_artifacts_numpy(
+            time,
+            trace,
+            np.asarray([0.1]),
+            np.asarray([1.0]),
+            p2_ridge_alpha=alpha,
+        )
+
+
+def test_p2_ridge_rejects_nonfinite_scaled_penalty():
+    time, trace = synthetic_trace(samples=32)
+
+    with pytest.raises(ValueError, match="nonfinite scaled penalty"):
+        linear_prediction_numpy(
+            time,
+            trace,
+            n_components=4,
+            p2_ridge_alpha=np.finfo(np.float64).max,
+        )
+
+
+def test_p2_ridge_does_not_penalize_constant_intercept():
+    time = np.linspace(0.0, 6.3, 64)
+    trace = np.full_like(time, 4.25)
+
+    artifacts = linear_prediction_p2_artifacts_numpy(
+        time,
+        trace,
+        np.asarray([0.1]),
+        np.asarray([0.0]),
+        p2_ridge_alpha=1.0,
+    )
+
+    assert artifacts.coefficients[-1] == pytest.approx(4.25)
+    np.testing.assert_allclose(artifacts.coefficients[:-1], 0.0, atol=1e-14)
+    np.testing.assert_allclose(artifacts.reconstruction, trace, atol=1e-14)
+
+
+def test_p2_ridge_stabilizes_ill_conditioned_known_modes():
+    time = np.linspace(0.0, 20.0, 160)
+    decay = np.asarray([0.03, 0.03])
+    angular_frequency = np.asarray([1.2, 1.2 + 1e-10])
+    clean = 0.4 + 1.7 * np.exp(-decay[0] * time) * np.cos(
+        angular_frequency[0] * time + 0.35
+    )
+    trace = clean + 1e-5 * np.sin(2.73 * time) + 7e-6 * np.cos(3.11 * time)
+
+    design, _fit_time = lp._p2_design_matrix(
+        np,
+        time,
+        decay,
+        angular_frequency,
+        dtype=np.float64,
+    )
+    assert np.linalg.cond(design) > 1e8
+
+    unregularized = linear_prediction_p2_artifacts_numpy(
+        time,
+        trace,
+        decay,
+        angular_frequency,
+    )
+    alpha = 1e-6
+    regularized = linear_prediction_p2_artifacts_numpy(
+        time,
+        trace,
+        decay,
+        angular_frequency,
+        p2_ridge_alpha=alpha,
+    )
+
+    modal_design = design[:, :-1]
+    penalty_weight = alpha * np.mean(np.sum(modal_design**2, axis=0))
+    penalty_rows = np.zeros((modal_design.shape[1], design.shape[1]))
+    penalty_rows[:, :-1] = np.eye(modal_design.shape[1]) * np.sqrt(
+        penalty_weight
+    )
+    expected_coefficients = np.linalg.lstsq(
+        np.concatenate((design, penalty_rows), axis=0),
+        np.concatenate((trace, np.zeros(modal_design.shape[1]))),
+        rcond=None,
+    )[0]
+    np.testing.assert_allclose(
+        regularized.coefficients,
+        expected_coefficients,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert np.linalg.norm(regularized.coefficients[:-1]) < (
+        np.linalg.norm(unregularized.coefficients[:-1]) / 100
+    )
+    assert np.max(regularized.amplitude) < 2.0
+    assert np.max(unregularized.amplitude) > 100.0
+    assert np.sum(regularized.amplitude) == pytest.approx(1.7, rel=1e-5)
+    assert np.sqrt(np.mean((regularized.reconstruction - clean) ** 2)) < 1e-5
+
+
+def test_p2_ridge_diagnostics_describe_unregularized_design():
+    time, trace = synthetic_trace(samples=64)
+
+    unregularized = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=6,
+        fit_diagnostics=True,
+    )
+    regularized = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=6,
+        p2_ridge_alpha=1e-2,
+        fit_diagnostics=True,
+    )
+
+    assert unregularized.diagnostics is not None
+    assert regularized.diagnostics is not None
+    assert (
+        regularized.diagnostics.p2_rank == unregularized.diagnostics.p2_rank
+    )
+    np.testing.assert_array_equal(
+        regularized.diagnostics.p2_singular_values,
+        unregularized.diagnostics.p2_singular_values,
+    )
+    assert (
+        regularized.diagnostics.p2_condition
+        == unregularized.diagnostics.p2_condition
+    )
+    assert not np.array_equal(
+        regularized.reconstruction,
+        unregularized.reconstruction,
+    )
+
+
+def test_p2_ridge_skips_diagnostics_only_solve_by_default(monkeypatch):
+    time, trace = synthetic_trace(samples=64)
+    real_lstsq = np.linalg.lstsq
+    calls = []
+
+    def counted_lstsq(*args, **kwargs):
+        calls.append(tuple(args[0].shape))
+        return real_lstsq(*args, **kwargs)
+
+    monkeypatch.setattr(np.linalg, "lstsq", counted_lstsq)
+
+    default = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=6,
+        p2_ridge_alpha=1e-2,
+    )
+
+    assert default.diagnostics is None
+    assert len(calls) == 1
+
+    calls.clear()
+    diagnosed = linear_prediction_numpy(
+        time,
+        trace,
+        n_components=6,
+        p2_ridge_alpha=1e-2,
+        fit_diagnostics=True,
+    )
+
+    assert diagnosed.diagnostics is not None
+    assert len(calls) == 2
+
+
 def test_synthetic_trace_batch_shape_and_variation():
     time, traces = synthetic_trace_batch(samples=32, traces=4)
 
@@ -1402,6 +1752,60 @@ def test_compare_cpu_gpu_reconstruction_matches_when_gpu_available():
     assert comparison.max_abs_reconstruction_diff < 1e-8
     assert comparison.rms_reconstruction_diff is not None
     assert comparison.rms_reconstruction_diff < 1e-9
+
+
+def test_p2_ridge_cupy_matches_numpy_when_gpu_available():
+    cupy = pytest.importorskip("cupy")
+    try:
+        if cupy.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except cupy.cuda.runtime.CUDARuntimeError as exc:
+        pytest.skip(f"CUDA runtime unavailable: {exc}")
+
+    time, trace = synthetic_trace(samples=64)
+    p1_reference = linear_prediction_numpy(time, trace, n_components=4)
+    cpu = linear_prediction_p2_artifacts_numpy(
+        time,
+        trace,
+        p1_reference.decay,
+        p1_reference.angular_frequency,
+        p2_ridge_alpha=1e-4,
+    )
+    gpu = lp._linear_prediction_p2_artifacts_impl(
+        xp=cupy,
+        time=cupy.asarray(time),
+        trace=cupy.asarray(trace),
+        decay=cupy.asarray(p1_reference.decay),
+        angular_frequency=cupy.asarray(p1_reference.angular_frequency),
+        p2_ridge_alpha=1e-4,
+    )
+    gpu_numpy = lp._p2_artifacts_to_numpy(cupy, gpu)
+
+    np.testing.assert_allclose(
+        gpu_numpy.coefficients,
+        cpu.coefficients,
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        gpu_numpy.amplitude,
+        cpu.amplitude,
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        gpu_numpy.phase,
+        cpu.phase,
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        gpu_numpy.reconstruction,
+        cpu.reconstruction,
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(gpu_numpy.chi2, cpu.chi2, rtol=1e-10)
 
 
 def test_cupy_roots_helpers_preserve_complex_coefficients():

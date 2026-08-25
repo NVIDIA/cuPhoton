@@ -23,6 +23,7 @@ from cuphoton import __version__ as CUPHOTON_VERSION
 
 from .detector_artifacts import (
     DETECTOR_ARTIFACT_MANIFEST_VERSION,
+    FIT_DIAGNOSTICS_LEVELS,
     detector_artifact_complete,
     detector_artifact_input_identity,
     detector_artifact_resume_identity,
@@ -41,6 +42,7 @@ _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
     "fit_trailing_drop": 1,
     "integrate": 3,
     "components": 30,
+    "p2_ridge_alpha": 0.0,
     "roots_backend": "eigvals",
     "savgol_window": 5,
     "savgol_polyorder": 3,
@@ -49,6 +51,7 @@ _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
     "hdf5_reader": "h5py",
     "hdf5_reader_workers": 2,
     "max_tiles": None,
+    "fit_diagnostics": "none",
 }
 
 
@@ -179,6 +182,15 @@ def build_detector_artifact_distributed_plan(
     options = dict(_DETECTOR_OPTION_DEFAULTS)
     options.update(detector_options or {})
     options["tile_shape"] = tuple(tile_shape)
+    if options["fit_diagnostics"] not in FIT_DIAGNOSTICS_LEVELS:
+        raise ValueError(
+            "fit_diagnostics must be one of: "
+            + ", ".join(FIT_DIAGNOSTICS_LEVELS)
+        )
+    p2_ridge_alpha = float(options["p2_ridge_alpha"])
+    if not np.isfinite(p2_ridge_alpha) or p2_ridge_alpha < 0:
+        raise ValueError("p2_ridge_alpha must be finite and non-negative")
+    options["p2_ridge_alpha"] = p2_ridge_alpha
     on_path = _resolve_path(h5dir_path, fon)
     off_path = _resolve_path(h5dir_path, foff)
     input_identity = detector_artifact_input_identity(on_path, off_path)
@@ -764,6 +776,7 @@ def _request_manifest_for_shard(
         "exclude_y": format_y_ranges(parse_y_ranges(options["exclude_y"])),
         "integrate_pixels": int(options["integrate"]),
         "components": int(options["components"]),
+        "p2_ridge_alpha": float(options["p2_ridge_alpha"]),
         "roots_backend": str(options["roots_backend"]),
         "savgol_window": int(options["savgol_window"]),
         "savgol_polyorder": int(options["savgol_polyorder"]),
@@ -776,6 +789,9 @@ def _request_manifest_for_shard(
             if options["max_tiles"] is None
             else int(options["max_tiles"])
         ),
+        "fit_diagnostics": {
+            "level": str(options["fit_diagnostics"]),
+        },
         "shard": {
             "index": int(shard.index),
             "count": int(shard.count),
@@ -890,6 +906,10 @@ def _append_detector_worker_options(
             cmd.extend([flag, str(value)])
     for item in options.get("exclude_y", ()) or ():
         cmd.extend(["--exclude-y", str(item)])
+    if options.get("fit_diagnostics", "none") != "none":
+        cmd.extend(["--fit-diagnostics", str(options["fit_diagnostics"])])
+    if float(options.get("p2_ridge_alpha", 0.0)) != 0.0:
+        cmd.extend(["--p2-ridge-alpha", str(options["p2_ridge_alpha"])])
 
 
 def _read_detector_input_spec(
