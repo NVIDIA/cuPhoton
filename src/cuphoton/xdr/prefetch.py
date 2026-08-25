@@ -108,6 +108,7 @@ class PrefetchedFile:
     host_buf: object  # pinned uint8 host buffer or native device batch buffer
     hdus: list[_HduPlan]
     buffer_base_offset: int = 0
+    hdu_header_sizes: dict[int, np.ndarray] | None = None
 
 
 @dataclass
@@ -240,14 +241,144 @@ class _CompBatchEntry:
     file_host_buf: object
     out: object
     file_buffer_offset: int = 0
+    header_sizes: np.ndarray | None = None
 
 
 @dataclass
 class _GpuBatchHandle:
     """Lifetime guard for one submitted GPU batch."""
 
-    event: object
+    event: object | None
     keepalive: list
+    stream: object
+    device_id: int | None = None
+    actively_awaited: bool = False
+
+
+_UNRESOLVED_GPU_BATCHES: list[_GpuBatchHandle] = []
+_UNRESOLVED_GPU_BATCHES_LOCK = threading.RLock()
+# Deliberately process-wide: pinned owners can outlive any one CUDA stream or
+# device. Clearing this state without confirmed completion would recreate the
+# use-after-free it prevents, so an unrecoverable CUDA state requires process
+# restart rather than an unsafe reset hook.
+
+
+@contextmanager
+def _gpu_batch_device(handle: _GpuBatchHandle):
+    """Restore the CUDA device that owns one batch's completion state."""
+    if handle.device_id is None:
+        yield
+        return
+
+    import cupy as cp
+
+    with cp.cuda.Device(handle.device_id):
+        yield
+
+
+def _quarantine_gpu_batches(
+    handles: Sequence[_GpuBatchHandle],
+    *,
+    actively_awaited: bool = False,
+) -> None:
+    """Durably retain batches before or after uncertain completion."""
+    with _UNRESOLVED_GPU_BATCHES_LOCK:
+        known = {id(handle) for handle in _UNRESOLVED_GPU_BATCHES}
+        new_handles = [
+            handle for handle in handles if id(handle) not in known
+        ]
+        for handle in handles:
+            if actively_awaited or id(handle) not in known:
+                handle.actively_awaited = actively_awaited
+        _UNRESOLVED_GPU_BATCHES.extend(new_handles)
+
+
+def _mark_gpu_batches_unresolved(
+    handles: Sequence[_GpuBatchHandle],
+) -> None:
+    """Make retained batches block later submissions until completion."""
+    with _UNRESOLVED_GPU_BATCHES_LOCK:
+        for handle in handles:
+            handle.actively_awaited = False
+
+
+def _release_quarantined_gpu_batches(
+    handles: Sequence[_GpuBatchHandle],
+) -> None:
+    """Release selected safety-quarantined batches by identity."""
+    released = {id(handle) for handle in handles}
+    with _UNRESOLVED_GPU_BATCHES_LOCK:
+        for handle in handles:
+            handle.actively_awaited = False
+        _UNRESOLVED_GPU_BATCHES[:] = [
+            handle
+            for handle in _UNRESOLVED_GPU_BATCHES
+            if id(handle) not in released
+        ]
+
+
+def _gpu_batch_completion_is_confirmed(handle: _GpuBatchHandle) -> bool:
+    """Return whether a quarantined batch is now known to be complete."""
+    try:
+        with _gpu_batch_device(handle):
+            if handle.event is not None:
+                return bool(handle.event.done)
+            return bool(handle.stream.done)
+    except Exception:
+        return False
+
+
+def _ensure_gpu_submissions_safe() -> None:
+    """Fail closed while an earlier batch may still use retained owners."""
+    with _UNRESOLVED_GPU_BATCHES_LOCK:
+        retained = []
+        for handle in _UNRESOLVED_GPU_BATCHES:
+            if _gpu_batch_completion_is_confirmed(handle):
+                handle.actively_awaited = False
+            else:
+                retained.append(handle)
+        _UNRESOLVED_GPU_BATCHES[:] = retained
+        unresolved = sum(
+            not handle.actively_awaited for handle in _UNRESOLVED_GPU_BATCHES
+        )
+    if unresolved:
+        raise RuntimeError(
+            "previous XDR GPU work could not be synchronized; refusing "
+            "another submission while its source, scratch, and output "
+            "buffers remain quarantined; "
+            "restart the process if the CUDA context cannot recover"
+        )
+
+
+@contextmanager
+def _gpu_submission_guard():
+    """Atomically gate and publish one bounded GPU submission group."""
+    with _UNRESOLVED_GPU_BATCHES_LOCK:
+        _ensure_gpu_submissions_safe()
+        yield
+
+
+def _synchronize_gpu_batch(
+    handle: _GpuBatchHandle,
+    *,
+    synchronize_stream: bool = False,
+) -> None:
+    """Synchronize one batch without exposing its owners to interruption."""
+    completion_confirmed = False
+    try:
+        _quarantine_gpu_batches([handle], actively_awaited=True)
+        target = handle.stream if synchronize_stream else handle.event
+        if target is None:
+            raise RuntimeError("GPU batch has no completion event")
+        with _gpu_batch_device(handle):
+            target.synchronize()
+        completion_confirmed = True
+    finally:
+        if completion_confirmed:
+            _release_quarantined_gpu_batches([handle])
+        else:
+            _quarantine_gpu_batches([handle])
+            _mark_gpu_batches_unresolved([handle])
 
 
 def _plan_file(
@@ -274,6 +405,72 @@ def _plan_file(
             f"{len(native_items)} files for one requested file"
         )
     return _planned_file_from_native_tuple(native_items[0])
+
+
+def _parse_hdu_header_sizes(
+    planned: _PlannedFile,
+    host_buf: np.ndarray,
+) -> dict[int, np.ndarray]:
+    """Parse gzip headers from a zero-based, file-local staged buffer.
+
+    Native pooled buffers can have nonzero per-file base offsets and use the
+    device header probe instead.
+    """
+    from .nvcomp_batch import (
+        _MAX_GZIP_HEADER_BYTES,
+        _parse_gzip_header_len,
+        _TruncatedGzipHeader,
+        _validate_tile_ranges,
+    )
+
+    host_bytes = memoryview(host_buf)
+    slots: dict[int, np.ndarray] = {}
+    for slot, hdu in enumerate(planned.hdus):
+        if hdu.kind != "comp":
+            continue
+
+        hdu_base = int(hdu.file_host_offset)
+        hdu_nbytes = int(hdu.heap_span_len)
+        hdu_end = hdu_base + hdu_nbytes
+        if hdu_base < 0 or hdu_nbytes < 0 or hdu_end > int(host_buf.size):
+            raise ValueError("compressed HDU exceeds staged host buffer")
+
+        rel_offsets, lengths = _validate_tile_ranges(
+            hdu.heap_rel_offsets,
+            hdu.plan["sel_lengths"],
+            hdu_nbytes,
+            minimum_length=20,
+        )
+        tile_starts = hdu_base + rel_offsets
+
+        sizes = np.empty(rel_offsets.size, dtype=np.int64)
+        minimal_headers = (
+            (host_buf[tile_starts] == 0x1F)
+            & (host_buf[tile_starts + 1] == 0x8B)
+            & (host_buf[tile_starts + 2] == 0x08)
+            & (host_buf[tile_starts + 3] == 0)
+        )
+        sizes[minimal_headers] = 10
+        for index in np.flatnonzero(~minimal_headers):
+            # Preserve the two-byte minimum DEFLATE stream and trailer.
+            # A memoryview avoids copying payloads with long optional fields.
+            tile_header_limit = int(lengths[index]) - 10
+            probe_length = min(tile_header_limit, _MAX_GZIP_HEADER_BYTES)
+            header_start = int(tile_starts[index])
+            header_bound = header_start + probe_length
+            try:
+                sizes[index] = _parse_gzip_header_len(
+                    host_bytes[header_start:header_bound]
+                )
+            except _TruncatedGzipHeader:
+                if tile_header_limit > probe_length:
+                    raise ValueError(
+                        "gzip header exceeds "
+                        f"{_MAX_GZIP_HEADER_BYTES}-byte safety limit"
+                    ) from None
+                raise
+        slots[slot] = sizes
+    return slots
 
 
 class _FilePrefetcher(threading.Thread):
@@ -347,11 +544,14 @@ class _FilePrefetcher(threading.Thread):
             for fut in futures:
                 fut.get()
 
+        hdu_header_sizes = _parse_hdu_header_sizes(planned, host_buf)
+
         return PrefetchedFile(
             path=planned.path,
             file_index=planned.file_index,
             host_buf=host_buf,
             hdus=planned.hdus,
+            hdu_header_sizes=hdu_header_sizes,
         )
 
     def run(self) -> None:
@@ -420,6 +620,10 @@ def _consume_comp_batch(
     lengths_parts = []
     out_bytes_parts = []
     postprocess_ranges = []
+    have_all_header_sizes = all(
+        entry.header_sizes is not None for entry in entries
+    )
+    header_sizes_parts = [] if have_all_header_sizes else None
 
     comp_cursor = 0
     tile_cursor = 0
@@ -453,6 +657,8 @@ def _consume_comp_batch(
             rel_offsets_parts.append(plan_item.heap_rel_offsets + comp_base)
             lengths_parts.append(plan["sel_lengths"])
             out_bytes_parts.append(plan["out_bytes"])
+            if header_sizes_parts is not None:
+                header_sizes_parts.append(entry.header_sizes)
             postprocess_ranges.append(
                 (
                     entry,
@@ -471,6 +677,11 @@ def _consume_comp_batch(
         rel_offsets = np.concatenate(rel_offsets_parts)
         lengths = np.concatenate(lengths_parts)
         out_bytes = np.concatenate(out_bytes_parts)
+        header_sizes = (
+            np.concatenate(header_sizes_parts)
+            if header_sizes_parts is not None
+            else None
+        )
 
         d_pixels, tile_byte_offsets_np = (
             GpuCompImageReader.inflate_device_heap(
@@ -480,10 +691,9 @@ def _consume_comp_batch(
                 out_bytes=out_bytes,
                 stream=stream,
                 keepalive=keepalive,
+                header_sizes=header_sizes,
             )
         )
-        if keepalive is not None:
-            keepalive.append(d_pixels)
 
         for (
             entry,
@@ -571,6 +781,7 @@ def _consume_prefetched_group(
                         file_host_buf=item.host_buf,
                         out=target,
                         file_buffer_offset=item.buffer_base_offset,
+                        header_sizes=(item.hdu_header_sizes or {}).get(slot),
                     )
                 )
             elif plan_item.kind == "image":
@@ -817,26 +1028,66 @@ def _submit_prefetched_group(
     *,
     stream,
     owner,
-) -> _GpuBatchHandle:
-    """Queue GPU work for a ready batch and return a lifetime handle."""
+    in_flight: deque[_GpuBatchHandle],
+) -> None:
+    """Queue GPU work and register its lifetime handle."""
     import cupy as cp
 
     use_stream = stream or cp.cuda.Stream.null
-    keepalive = [owner]
-    try:
-        with use_stream:
-            _consume_prefetched_group(
-                items, outs, stream, keepalive=keepalive
-            )
-            event = cp.cuda.Event()
-            event.record(use_stream)
-    except Exception:
+    device_id = int(cp.cuda.Device().id)
+    # The output list must survive an exceptional return too: outstanding
+    # scatter/image kernels can still be writing caller-unreturned arrays.
+    keepalive = [owner, outs]
+    guard = _GpuBatchHandle(
+        event=None,
+        keepalive=keepalive,
+        stream=use_stream,
+        device_id=device_id,
+    )
+    submission_error = None
+    with _gpu_submission_guard():
         try:
-            use_stream.synchronize()
-        except Exception:
-            pass
+            with use_stream:
+                _consume_prefetched_group(
+                    items, outs, stream, keepalive=keepalive
+                )
+                candidate_event = cp.cuda.Event()
+                candidate_event.record(use_stream)
+                guard.event = candidate_event
+            in_flight.append(guard)
+        except (KeyboardInterrupt, SystemExit):
+            _quarantine_gpu_batches([guard])
+            raise
+        except BaseException as error:
+            submission_error = error
+            # Publish before releasing the gate so concurrent submissions
+            # cannot pass while this completion state is unknown.
+            _quarantine_gpu_batches([guard], actively_awaited=True)
+
+    if submission_error is None:
+        return
+
+    try:
+        _synchronize_gpu_batch(guard, synchronize_stream=True)
+    except (KeyboardInterrupt, SystemExit):
         raise
-    return _GpuBatchHandle(event=event, keepalive=keepalive)
+    except BaseException:
+        if guard.event is None:
+            # A stream-wide completion query can remain false while unrelated
+            # work keeps a long-lived stream busy. Record a batch boundary
+            # when the context still accepts work, retaining the stream query
+            # as the fail-closed fallback if event recording also fails.
+            try:
+                with _gpu_batch_device(guard):
+                    recovery_event = cp.cuda.Event()
+                    recovery_event.record(use_stream)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:
+                pass
+            else:
+                guard.event = recovery_event
+    raise submission_error
 
 
 def _release_completed_gpu_batches(
@@ -844,11 +1095,7 @@ def _release_completed_gpu_batches(
 ) -> None:
     """Drop completed batch lifetime handles without synchronizing."""
     while in_flight:
-        try:
-            done = bool(in_flight[0].event.query())
-        except Exception:
-            done = False
-        if not done:
+        if not _gpu_batch_completion_is_confirmed(in_flight[0]):
             break
         in_flight.popleft()
 
@@ -859,15 +1106,92 @@ def _wait_for_oldest_gpu_batch(
     """Bound queued GPU work by waiting for one batch."""
     if not in_flight:
         return
-    in_flight[0].event.synchronize()
+    _synchronize_gpu_batch(in_flight[0])
     in_flight.popleft()
 
 
 def _wait_for_all_gpu_batches(
     in_flight: deque[_GpuBatchHandle],
 ) -> None:
-    while in_flight:
-        _wait_for_oldest_gpu_batch(in_flight)
+    """Drain events and quarantine owners with uncertain completion."""
+    handles = tuple(in_flight)
+    # Transfer every owner to durable storage before the first event wait.
+    # An asynchronous exception between event waits must not leave later
+    # handles owned only by a local deque that the caller can unwind past.
+    try:
+        _quarantine_gpu_batches(handles, actively_awaited=True)
+    except BaseException:
+        # Lock acquisition can itself be interrupted. Defer the original
+        # exception until ownership is durable, even if cleanup is interrupted
+        # again; do not enter GPU waits while propagating cancellation.
+        while True:
+            try:
+                _quarantine_gpu_batches(handles)
+                _mark_gpu_batches_unresolved(handles)
+            except BaseException:
+                continue
+            break
+        raise
+    first_error: BaseException | None = None
+    control_error: BaseException | None = None
+    unresolved: list[_GpuBatchHandle] = []
+    drain_finished = False
+    try:
+        for handle in handles:
+            try:
+                if handle.event is None:
+                    raise RuntimeError("GPU batch has no completion event")
+                with _gpu_batch_device(handle):
+                    handle.event.synchronize()
+            except BaseException as exc:
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    control_error = exc
+                elif first_error is None:
+                    first_error = exc
+                unresolved.append(handle)
+                _mark_gpu_batches_unresolved([handle])
+                if control_error is not None:
+                    break
+            else:
+                _release_quarantined_gpu_batches([handle])
+
+        if control_error is not None:
+            _mark_gpu_batches_unresolved(handles)
+        elif unresolved:
+            # An event wait can be interrupted before completion, or report a
+            # sticky asynchronous CUDA error. Owners are already quarantined,
+            # so make one best-effort synchronization attempt per stream.
+            by_stream: dict[
+                tuple[int | None, int],
+                tuple[object, list[_GpuBatchHandle]],
+            ] = {}
+            for handle in unresolved:
+                stream_key = (handle.device_id, id(handle.stream))
+                if stream_key not in by_stream:
+                    by_stream[stream_key] = (handle.stream, [])
+                by_stream[stream_key][1].append(handle)
+            for use_stream, stream_handles in by_stream.values():
+                try:
+                    with _gpu_batch_device(stream_handles[0]):
+                        use_stream.synchronize()
+                except BaseException as exc:
+                    # Preserve the first error and quarantined owners.
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        control_error = exc
+                        break
+                else:
+                    _release_quarantined_gpu_batches(stream_handles)
+
+        in_flight.clear()
+        drain_finished = True
+    finally:
+        if not drain_finished:
+            # The drain itself was interrupted outside an event wait. Durable
+            # owners remain, but they must now fail closed as abandoned work.
+            _mark_gpu_batches_unresolved(handles)
+    raised_error = control_error or first_error
+    if raised_error is not None:
+        raise raised_error
 
 
 class _NativeBatchPlanner(threading.Thread):
@@ -1076,66 +1400,169 @@ def _consume_native_batches(
     max_in_flight = max(1, int(batch_queue_depth))
     planner.start()
     try:
-        while True:
-            _release_completed_gpu_batches(in_flight)
-            with _nvtx_range("fits.stream.wait_native_batch"):
-                native_batch = builder.next_batch()
-            if native_batch is None:
-                break
+        try:
+            while True:
+                _release_completed_gpu_batches(in_flight)
+                if len(in_flight) >= max_in_flight:
+                    with _nvtx_range("fits.stream.release_completed_batches"):
+                        _wait_for_oldest_gpu_batch(in_flight)
+                with _nvtx_range("fits.stream.wait_native_batch"):
+                    native_batch = builder.next_batch()
+                if native_batch is None:
+                    break
 
-            batch_owner, device_ptr, device_nbytes, native_files = (
-                native_batch
-            )
-            device_nbytes = int(device_nbytes)
-            if device_nbytes > 0:
-                mem = cp.cuda.UnownedMemory(
-                    int(device_ptr), device_nbytes, batch_owner
+                batch_owner, device_ptr, device_nbytes, native_files = (
+                    native_batch
                 )
-                device_buf = cp.ndarray(
-                    (device_nbytes,),
-                    dtype=cp.uint8,
-                    memptr=cp.cuda.MemoryPointer(mem, 0),
-                )
-            else:
-                device_buf = cp.empty(0, dtype=cp.uint8)
-
-            items: list[PrefetchedFile] = []
-            for file_index, device_offset in native_files:
-                planned = planner.planned_by_index[int(file_index)]
-                items.append(
-                    PrefetchedFile(
-                        path=planned.path,
-                        file_index=planned.file_index,
-                        host_buf=device_buf,
-                        hdus=planned.hdus,
-                        buffer_base_offset=int(device_offset),
+                device_nbytes = int(device_nbytes)
+                if device_nbytes > 0:
+                    mem = cp.cuda.UnownedMemory(
+                        int(device_ptr), device_nbytes, batch_owner
                     )
-                )
+                    device_buf = cp.ndarray(
+                        (device_nbytes,),
+                        dtype=cp.uint8,
+                        memptr=cp.cuda.MemoryPointer(mem, 0),
+                    )
+                else:
+                    device_buf = cp.empty(0, dtype=cp.uint8)
 
-            with _nvtx_range("fits.stream.gpu_submit_batch"):
-                in_flight.append(
+                items: list[PrefetchedFile] = []
+                for file_index, device_offset in native_files:
+                    planned = planner.planned_by_index[int(file_index)]
+                    # Native reads are already device-resident, so host-side
+                    # gzip header parsing is unavailable and the device probe
+                    # remains intentional for this path.
+                    items.append(
+                        PrefetchedFile(
+                            path=planned.path,
+                            file_index=planned.file_index,
+                            host_buf=device_buf,
+                            hdus=planned.hdus,
+                            buffer_base_offset=int(device_offset),
+                        )
+                    )
+
+                with _nvtx_range("fits.stream.gpu_submit_batch"):
                     _submit_prefetched_group(
                         items,
                         outs,
                         stream=stream,
                         owner=native_batch,
+                        in_flight=in_flight,
                     )
-                )
-            _release_completed_gpu_batches(in_flight)
-            if len(in_flight) > max_in_flight:
-                with _nvtx_range("fits.stream.release_completed_batches"):
-                    _wait_for_oldest_gpu_batch(in_flight)
-        planner.join()
-        if planner.error is not None:
-            raise planner.error
-    finally:
-        try:
+            planner.join()
+            if planner.error is not None:
+                raise planner.error
+        except (KeyboardInterrupt, SystemExit):
+            handles = tuple(in_flight)
+            _quarantine_gpu_batches(handles)
+            _mark_gpu_batches_unresolved(handles)
+            raise
+        except BaseException:
+            try:
+                with _nvtx_range("fits.stream.final_gpu_sync"):
+                    _wait_for_all_gpu_batches(in_flight)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:
+                # Preserve the original planner/submission/cancellation error.
+                # The drain quarantines every owner it cannot synchronize.
+                pass
+            raise
+        else:
             with _nvtx_range("fits.stream.final_gpu_sync"):
                 _wait_for_all_gpu_batches(in_flight)
-        finally:
-            planner.request_stop()
-            builder.request_stop()
-            planner.join()
+    finally:
+        planner.request_stop()
+        builder.request_stop()
+        planner.join()
+
+
+def _consume_python_batches(
+    paths: Sequence[Path],
+    hdu_indices: Sequence[int],
+    outs: list,
+    *,
+    prefetch_depth: int,
+    decode_batch_files: int,
+    batch_queue_depth: int,
+    section,
+    stream,
+) -> None:
+    """Consume pinned-host batches with bounded event-owned lifetimes."""
+    n_files = len(paths)
+    q: queue.Queue = queue.Queue(maxsize=prefetch_depth)
+    prefetcher = _FilePrefetcher(paths, hdu_indices, q, section=section)
+    # Host-side header sizing removes the old blocking device probe. Retain
+    # each pinned source group until its stream event confirms completion.
+    in_flight: deque[_GpuBatchHandle] = deque()
+    max_in_flight = max(1, int(batch_queue_depth))
+
+    def submit(group: list[PrefetchedFile]) -> None:
+        _release_completed_gpu_batches(in_flight)
+        if len(in_flight) >= max_in_flight:
+            _wait_for_oldest_gpu_batch(in_flight)
+        _submit_prefetched_group(
+            group,
+            outs,
+            stream=stream,
+            owner=group,
+            in_flight=in_flight,
+        )
+
+    prefetcher.start()
+    try:
+        try:
+            received = 0
+            group: list[PrefetchedFile] = []
+            while received < n_files:
+                try:
+                    item = q.get(timeout=0.25)
+                except queue.Empty:
+                    if not prefetcher.is_alive():
+                        break
+                    continue
+                if item is _SENTINEL:
+                    break
+                assert isinstance(item, PrefetchedFile)
+                group.append(item)
+                received += 1
+                del item
+                if len(group) >= decode_batch_files:
+                    submit(group)
+                    group = []
+
+            if group and prefetcher.error is None:
+                submit(group)
+            if prefetcher.error is not None:
+                raise prefetcher.error
+        except (KeyboardInterrupt, SystemExit):
+            handles = tuple(in_flight)
+            _quarantine_gpu_batches(handles)
+            _mark_gpu_batches_unresolved(handles)
+            raise
+        except BaseException:
+            try:
+                _wait_for_all_gpu_batches(in_flight)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:
+                # Preserve the original prefetch/submission/cancellation
+                # error; unresolved owners are already quarantined by drain.
+                pass
+            raise
+        else:
+            _wait_for_all_gpu_batches(in_flight)
+    finally:
+        # Cancellation cannot leave the producer blocked on a full queue.
+        prefetcher.request_stop()
+        try:
+            while True:
+                q.get_nowait()
+        except queue.Empty:
+            pass
+        prefetcher.join()
 
 
 def batch_to_device_stream(
@@ -1170,9 +1597,16 @@ def batch_to_device_stream(
         into one `gpu_gzip_decompress_batch` call. 1 batches all selected
         compressed HDUs from one file; higher values batch across files.
     batch_queue_depth
-        Maximum number of completed native file batches to keep in device
-        memory. With the native batcher, 2 means "build batch N+1 while batch
-        N is staging/decoding." Ignored by the Python fallback path.
+        Native-builder backpressure depth and strict limit for consumer
+        event-owned batches. Native read workers can separately retain up to
+        ``batch_queue_depth + native_read_threads`` outstanding batches. The
+        Python fallback uses ``batch_queue_depth`` for event-owned GPU batches
+        and their pinned staging buffers; each event also retains that batch's
+        compressed and decompressed device scratch until completion. A
+        conservative peak bound is ``prefetch_depth + 1 +
+        (batch_queue_depth + 1) * decode_batch_files`` live file-staging
+        buffers, including the producer's blocked item and the consumer's
+        current group. Use shallow depths for multi-GB files.
     native_read_threads
         Number of native worker threads used for KvikIO reads into the native
         device batch buffer when the native batcher is enabled. None uses all
@@ -1188,7 +1622,12 @@ def batch_to_device_stream(
     section
         Optional 2D ROI applied uniformly to CompImageHDUs.
     stream
-        Optional CuPy stream for the consumer side.
+        Optional CuPy stream for the consumer side. The function waits for
+        all submitted work on this stream before returning. If completion
+        cannot be confirmed, that work's source, scratch, and output buffers
+        remain in a process-wide quarantine; later XDR submissions fail
+        closed until completion becomes observable, and an unrecoverable
+        CUDA context requires process restart.
     out
         Optional preallocated output array, or one array per HDU index. Each
         array must have shape ``(len(paths), ...)``, the expected dtype, and
@@ -1225,6 +1664,7 @@ def batch_to_device_stream(
         and native_batcher != "auto"
     ):
         raise ValueError("native_batcher must be 'auto', True, or False")
+    _ensure_gpu_submissions_safe()
     configure_kvikio_parallelism()
     NativeBatchBuilder, native_plan_files = _native_batch_components(
         native_batcher
@@ -1249,46 +1689,15 @@ def batch_to_device_stream(
         )
         return tuple(outs)
 
-    # Kick off the prefetcher.
-    q: queue.Queue = queue.Queue(maxsize=prefetch_depth)
-    prefetcher = _FilePrefetcher(paths, hdu_indices, q, section=section)
-    prefetcher.start()
-
-    # Consumer loop.
-    try:
-        received = 0
-        group: list[PrefetchedFile] = []
-        while received < n_files:
-            try:
-                item = q.get(timeout=0.25)
-            except queue.Empty:
-                if not prefetcher.is_alive():
-                    break
-                continue
-            if item is _SENTINEL:
-                # Prefetcher finished early (either done or errored).
-                break
-            assert isinstance(item, PrefetchedFile)
-            group.append(item)
-            received += 1
-            if len(group) >= decode_batch_files:
-                _consume_prefetched_group(group, outs, stream)
-                group = []
-
-        if group and prefetcher.error is None:
-            _consume_prefetched_group(group, outs, stream)
-    finally:
-        # Signal the prefetcher to stop and drain any remaining items so a
-        # crashed consumer doesn't deadlock on a full queue.
-        prefetcher.request_stop()
-        try:
-            while True:
-                q.get_nowait()
-        except queue.Empty:
-            pass
-        prefetcher.join()
-
-    if prefetcher.error is not None:
-        raise prefetcher.error
+    _consume_python_batches(
+        paths,
+        hdu_indices,
+        outs,
+        prefetch_depth=prefetch_depth,
+        decode_batch_files=decode_batch_files,
+        batch_queue_depth=batch_queue_depth,
+        section=section,
+        stream=stream,
+    )
 
     return tuple(outs)
