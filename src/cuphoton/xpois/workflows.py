@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 from dataclasses import dataclass
@@ -27,12 +28,18 @@ from .data import (
 )
 from .ois import (
     EXPLICIT_BACKENDS,
+    ConstantKernelFitResult,
     GaussianBasisComponent,
     build_compact_source_stamp_mask,
     solve_constant_kernel,
 )
 from .review import identify_residual_hotspots, write_review_metadata
 from .review_bokeh import write_interactive_review_artifact
+from .spatial_als import (
+    SpatialALSConfig,
+    SpatialALSFitResult,
+    solve_spatial_als,
+)
 
 
 @dataclass
@@ -51,6 +58,8 @@ class WorkflowResult:
     run_dir: Path
     summary: dict[str, Any]
 
+
+_LOGGER = logging.getLogger(__name__)
 
 MASK_POLICY_NONE = "none"
 MASK_POLICY_STRICT = "strict"
@@ -104,21 +113,62 @@ def run_constant_kernel_fit(
     flux_conserve: bool,
     backend: str = "auto",
     review: bool = True,
+    solver: str = "constant",
+    spatial_degree: int | None = None,
+    als_iterations: int | None = None,
+    als_tolerance: float | None = None,
+    als_regularization: float | None = None,
     workflow_name: str = "fit_kernel",
     run_prefix: str = "fit-kernel",
 ) -> WorkflowResult:
-    """Fit a constant kernel and persist a reproducible subtraction run.
+    """Fit a kernel model and persist a reproducible subtraction run.
 
     The workflow loads the reference and target images, applies the requested
     crop and masks, solves the kernel, and writes the matched image and
     ``target - matched`` residual. Image, variance, and mask paths may name
     NumPy arrays or FITS products; HDU selectors apply only to FITS inputs.
 
+    ``solver`` selects the model: ``"constant"`` fits one two-dimensional
+    kernel with :func:`solve_constant_kernel`, and ``"spatial-als"`` fits the
+    position-dependent separable model with :func:`solve_spatial_als`.
+    ``spatial_degree``, ``als_iterations``, ``als_tolerance``, and
+    ``als_regularization`` apply only to the spatial solver; ``None`` uses
+    the :class:`SpatialALSConfig` default and any explicit value is rejected
+    for the constant solver.
+
     Returns
     -------
     WorkflowResult
         Run directory and JSON-compatible summary of saved artifacts.
     """
+
+    if solver not in {"constant", "spatial-als"}:
+        raise ValueError(f"unsupported solver: {solver}")
+    if solver == "spatial-als" and backend not in {"auto", "cpu"}:
+        raise ValueError(
+            "solver 'spatial-als' currently supports only the CPU backend"
+        )
+    spatial_options = {
+        "spatial_degree": spatial_degree,
+        "max_iterations": als_iterations,
+        "tolerance": als_tolerance,
+        "regularization": als_regularization,
+    }
+    if solver == "constant" and any(
+        value is not None for value in spatial_options.values()
+    ):
+        raise ValueError("spatial ALS options require solver='spatial-als'")
+    als_config: SpatialALSConfig | None = None
+    if solver == "spatial-als":
+        als_config = SpatialALSConfig(
+            background_degree=background_degree,
+            flux_conserve=flux_conserve,
+            **{
+                key: value
+                for key, value in spatial_options.items()
+                if value is not None
+            },
+        )
 
     workflow_start = time.perf_counter()
     run_setup_start = time.perf_counter()
@@ -313,17 +363,28 @@ def run_constant_kernel_fit(
         prepare_sec = time.perf_counter() - prepare_start
         preprocess_sec = max(0.0, prepare_sec - input_read_sec)
         solve_start = time.perf_counter()
-        result = solve_constant_kernel(
-            reference,
-            target,
-            components,
-            kernel_shape=kernel_shape,
-            variance=variance,
-            fit_mask=fit_mask,
-            background_degree=background_degree,
-            flux_conserve=flux_conserve,
-            backend=backend,
-        )
+        if solver == "constant":
+            result = solve_constant_kernel(
+                reference,
+                target,
+                components,
+                kernel_shape=kernel_shape,
+                variance=variance,
+                fit_mask=fit_mask,
+                background_degree=background_degree,
+                flux_conserve=flux_conserve,
+                backend=backend,
+            )
+        else:
+            result = solve_spatial_als(
+                reference,
+                target,
+                components,
+                kernel_shape=kernel_shape,
+                variance=variance,
+                fit_mask=fit_mask,
+                config=als_config,
+            )
         solve_sec = time.perf_counter() - solve_start
 
         postprocess_start = time.perf_counter()
@@ -463,7 +524,7 @@ def run_constant_kernel_fit(
 
         runtime = runtime_metadata(
             backend=result.backend,
-            dtype=str(result.kernel.dtype),
+            dtype=str(result.matched.dtype),
         )
         postprocess_total_sec = time.perf_counter() - postprocess_start
         postprocess_other_sec = max(
@@ -499,6 +560,8 @@ def run_constant_kernel_fit(
             "variance_hdu": used_variance_hdu,
             "crop": crop_metadata,
             "mask_policy": normalized_mask_policy,
+            "solver": solver,
+            "image_shape": list(target.shape),
             "kernel_shape": list(kernel_shape),
             "basis": [component.__dict__ for component in components],
             "background_degree": background_degree,
@@ -506,14 +569,13 @@ def run_constant_kernel_fit(
             "requested_backend": backend,
             "backend": result.backend,
             "device": runtime["device"],
-            "dtype": str(result.kernel.dtype),
+            "dtype": str(result.matched.dtype),
             "runtime": runtime,
             "timings_sec": timings_sec,
             "wall_sec": wall_sec,
             "fit_pixel_count": result.fit_pixel_count,
             "chi2": result.chi2,
             "dof": result.dof,
-            "kernel_sum": float(result.kernel.sum()),
             "residual_mean": residual_mean,
             "residual_std": residual_std,
             "all_pixels_residual_mean": float(np.mean(valid_residual)),
@@ -527,6 +589,71 @@ def run_constant_kernel_fit(
             ),
             "saved": saved,
         }
+        if isinstance(result, ConstantKernelFitResult):
+            summary["kernel_sum"] = float(result.kernel.sum())
+        else:
+            center_y = (result.image_shape[0] - 1) / 2.0
+            center_x = (result.image_shape[1] - 1) / 2.0
+            summary["kernel_sum_center"] = float(
+                result.kernel_at(center_y, center_x).sum()
+            )
+            assert als_config is not None
+            final_relative_change = _final_relative_objective_change(
+                result.objective_history
+            )
+            summary["converged"] = result.converged
+            summary["iterations"] = result.iterations
+            if not result.converged:
+                _LOGGER.warning(
+                    "spatial ALS did not converge in %d of %d sweeps "
+                    "(final relative objective change %s, tolerance %g); "
+                    "the persisted kernel may be far from the optimum",
+                    result.iterations,
+                    als_config.max_iterations,
+                    "n/a"
+                    if final_relative_change is None
+                    else f"{final_relative_change:.3e}",
+                    als_config.tolerance,
+                )
+            summary["spatial_als"] = {
+                "spatial_degree": als_config.spatial_degree,
+                "spatial_terms": [
+                    list(term) for term in result.spatial_terms
+                ],
+                "background_terms": [
+                    list(term) for term in result.background_terms
+                ],
+                "coordinate_order": "y,x",
+                "term_degree_order": "x,y",
+                "coordinate_normalization": (
+                    "fitted image axes recorded in image_shape (the crop "
+                    "when a crop is applied) mapped to [-1,1]"
+                ),
+                "line_basis_normalization": (
+                    "unit-sum reference and unit-L2 corrections"
+                ),
+                "max_iterations": als_config.max_iterations,
+                "iterations": result.iterations,
+                "converged": result.converged,
+                "final_relative_objective_change": final_relative_change,
+                "tolerance": als_config.tolerance,
+                "regularization": result.regularization,
+                "vertical_reference_scale": result.flux_scale,
+                "vertical_reference_scale_interpretation": (
+                    "position-independent signed kernel sum"
+                    if result.flux_conserve
+                    else "vertical reference multiplier needed to evaluate "
+                    "the saved factors; not a standalone photometric scale "
+                    "without flux_conserve"
+                ),
+                "condition_number": result.condition_number,
+                "unique_fit_pixel_count": result.unique_fit_pixel_count,
+                "dof_interpretation": (
+                    "nominal N minus parameter count; not ridge effective dof"
+                ),
+            }
+            if result.flux_conserve:
+                summary["spatial_als"]["flux_scale"] = result.flux_scale
         if preprocessing_metadata is not None:
             summary["input_mask"] = preprocessing_metadata
         _write_json(run_dir / "summary.json", summary)
@@ -820,9 +947,10 @@ def evaluate_subtraction_run(run_dir: Path) -> dict[str, Any]:
         above_3sigma = int(np.count_nonzero(deviation > 3.0 * robust_sigma))
         above_5sigma = int(np.count_nonzero(deviation > 5.0 * robust_sigma))
 
+    solver = summary.get("solver", "constant")
     result = {
         "run_dir": str(resolved),
-        "kernel_sum": summary.get("kernel_sum"),
+        "solver": solver,
         "residual_mean": float(np.mean(fit_residual)),
         "residual_std": float(np.std(fit_residual)),
         "residual_rms": float(np.sqrt(np.mean(fit_residual**2))),
@@ -842,6 +970,13 @@ def evaluate_subtraction_run(run_dir: Path) -> dict[str, Any]:
         "fit_region_residual_median": float(np.median(fit_residual)),
         "fit_region_pixel_count": int(fit_mask.sum()),
     }
+    if solver == "constant":
+        result["kernel_sum"] = summary.get("kernel_sum")
+    else:
+        if "kernel_sum_center" in summary:
+            result["kernel_sum_center"] = summary["kernel_sum_center"]
+        result["converged"] = summary.get("converged")
+        result["iterations"] = summary.get("iterations")
     _write_json(resolved / "evaluation.json", result)
     return result
 
@@ -855,13 +990,14 @@ def rebuild_interactive_review(run_dir: Path) -> dict[str, Any]:
         summary = json.load(handle)
 
     artifacts_dir = resolved / "artifacts"
-    required = (
-        "kernel.npy",
+    required = [
         "matched.npy",
         "residual.npy",
         "fit_mask.npy",
         "background.npy",
-    )
+    ]
+    if summary.get("solver", "constant") == "constant":
+        required.append("kernel.npy")
     missing = [
         name for name in required if not (artifacts_dir / name).exists()
     ]
@@ -1286,19 +1422,57 @@ def _load_fit_mask(
     return mask_arr.astype(bool)
 
 
-def _save_artifacts(artifacts_dir: Path, result) -> dict[str, str]:
+def _save_artifacts(
+    artifacts_dir: Path,
+    result: ConstantKernelFitResult | SpatialALSFitResult,
+) -> dict[str, str]:
     saved: dict[str, str] = {}
-    for name, array in (
-        ("kernel", result.kernel),
+    arrays: list[tuple[str, np.ndarray]] = [
         ("matched", result.matched),
         ("residual", result.residual),
         ("fit_mask", result.fit_mask),
         ("background", result.background),
-    ):
+    ]
+    if isinstance(result, ConstantKernelFitResult):
+        arrays.insert(0, ("kernel", result.kernel))
+    else:
+        center_y = (result.image_shape[0] - 1) / 2.0
+        center_x = (result.image_shape[1] - 1) / 2.0
+        arrays.extend(
+            [
+                ("kernel_center", result.kernel_at(center_y, center_x)),
+                ("horizontal_reference", result.horizontal_reference),
+                ("horizontal_basis", result.horizontal_basis),
+                (
+                    "horizontal_coefficients",
+                    result.horizontal_coefficients,
+                ),
+                ("vertical_reference", result.vertical_reference),
+                ("vertical_basis", result.vertical_basis),
+                ("vertical_coefficients", result.vertical_coefficients),
+                ("background_coefficients", result.background_coefficients),
+                ("objective_history", result.objective_history),
+            ]
+        )
+    for name, array in arrays:
         path = artifacts_dir / f"{name}.npy"
         _save_array(path, array)
         saved[name] = str(path.relative_to(artifacts_dir.parent))
     return saved
+
+
+def _final_relative_objective_change(
+    objective_history: np.ndarray,
+) -> float | None:
+    """Relative change between the last two ALS objectives, if any."""
+
+    if objective_history.size < 2:
+        return None
+    prior = float(objective_history[-2])
+    current = float(objective_history[-1])
+    if prior == 0.0:
+        return 0.0 if current == 0.0 else float("inf")
+    return abs(prior - current) / abs(prior)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

@@ -7,6 +7,7 @@ from __future__ import annotations
 import builtins
 import importlib.util
 import json
+import logging
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import pytest
 
 from cuphoton.xpois import workflows
 from cuphoton.xpois.ois import GaussianBasisComponent
+from cuphoton.xpois.spatial_als import SpatialALSConfig
 
 
 def _compact_source_image(shape: tuple[int, int]) -> np.ndarray:
@@ -35,6 +37,37 @@ def _compact_source_image(shape: tuple[int, int]) -> np.ndarray:
             / (2.0 * sigma**2)
         )
     return image
+
+
+def _write_spatial_als_inputs(
+    tmp_path: Path,
+    *,
+    noise: float = 0.0,
+) -> tuple[Path, Path]:
+    rng = np.random.default_rng(3829)
+    source = rng.normal(size=(31, 33))
+    coordinates = np.arange(5, dtype=np.float64) - 2.0
+    line = np.exp(-(coordinates**2) / (2.0 * 0.9**2))
+    line /= line.sum()
+    kernel = np.outer(line, line)
+    patches = np.lib.stride_tricks.sliding_window_view(source, (5, 5))
+    target = np.zeros_like(source)
+    target[2:-2, 2:-2] = (
+        np.einsum(
+            "yxvu,vu->yx",
+            patches,
+            kernel[::-1, ::-1],
+            optimize=True,
+        )
+        + 0.25
+    )
+    if noise:
+        target += rng.normal(scale=noise, size=target.shape)
+    reference_path = tmp_path / "spatial-reference.npy"
+    target_path = tmp_path / "spatial-target.npy"
+    np.save(reference_path, source, allow_pickle=False)
+    np.save(target_path, target, allow_pickle=False)
+    return reference_path, target_path
 
 
 def test_run_constant_kernel_fit_cleans_failed_run_dir(
@@ -100,6 +133,313 @@ def test_run_constant_kernel_fit_uses_workflow_prefix_and_name(
     assert result.summary["dtype"] == "float64"
     assert result.summary["runtime"]["package_version"]
     assert result.run_dir.name == "subtract-run"
+
+
+def test_run_constant_kernel_fit_rejects_spatial_als_gpu_backend(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="spatial-als.*only the CPU backend",
+    ):
+        workflows.run_constant_kernel_fit(
+            reference_path=tmp_path / "missing-reference.npy",
+            target_path=tmp_path / "missing-target.npy",
+            output_root=tmp_path / "runs",
+            name="spatial-gpu-run",
+            reference_hdu=None,
+            target_hdu=None,
+            kernel_shape=(5, 5),
+            components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+            variance_path=None,
+            fit_mask_path=None,
+            background_degree=0,
+            flux_conserve=True,
+            backend="cupy",
+            solver="spatial-als",
+        )
+
+    assert not (tmp_path / "runs" / "spatial-gpu-run").exists()
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        {"spatial_degree": 2},
+        {"als_iterations": 11},
+        {"als_tolerance": 1e-6},
+        {"als_regularization": 0.0},
+    ],
+)
+def test_run_constant_kernel_fit_rejects_spatial_options_for_constant(
+    tmp_path: Path,
+    option: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="require solver='spatial-als'"):
+        workflows.run_constant_kernel_fit(
+            reference_path=tmp_path / "missing-reference.npy",
+            target_path=tmp_path / "missing-target.npy",
+            output_root=tmp_path / "runs",
+            name="constant-with-als-option",
+            reference_hdu=None,
+            target_hdu=None,
+            kernel_shape=(5, 5),
+            components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+            variance_path=None,
+            fit_mask_path=None,
+            background_degree=0,
+            flux_conserve=False,
+            solver="constant",
+            **option,
+        )
+
+    assert not (tmp_path / "runs").exists()
+
+
+def test_run_spatial_als_resolves_unset_options_from_config_defaults(
+    tmp_path: Path,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path)
+
+    result = workflows.run_constant_kernel_fit(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path / "runs",
+        name="spatial-als-defaults",
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(5, 5),
+        components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+        variance_path=None,
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=False,
+        solver="spatial-als",
+    )
+    defaults = SpatialALSConfig()
+    recorded = result.summary["spatial_als"]
+
+    assert recorded["spatial_degree"] == defaults.spatial_degree
+    assert recorded["max_iterations"] == defaults.max_iterations
+    assert recorded["tolerance"] == defaults.tolerance
+    assert recorded["regularization"] == defaults.regularization
+    assert "flux_scale" not in recorded
+    assert (
+        "not a standalone photometric scale"
+        in (recorded["vertical_reference_scale_interpretation"])
+    )
+
+
+def test_run_spatial_als_normalizes_coordinates_over_the_crop(
+    tmp_path: Path,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path)
+
+    result = workflows.run_constant_kernel_fit(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path / "runs",
+        name="spatial-als-crop",
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(5, 5),
+        components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+        variance_path=None,
+        fit_mask_path=None,
+        crop_y0=3,
+        crop_x0=2,
+        crop_height=25,
+        crop_width=27,
+        background_degree=0,
+        flux_conserve=True,
+        solver="spatial-als",
+    )
+
+    assert result.summary["crop"] == {
+        "y0": 3,
+        "x0": 2,
+        "height": 25,
+        "width": 27,
+    }
+    assert result.summary["image_shape"] == [25, 27]
+    normalization = result.summary["spatial_als"]["coordinate_normalization"]
+    assert "image_shape" in normalization
+    assert "crop" in normalization
+    center = np.load(result.run_dir / "artifacts" / "kernel_center.npy")
+    assert center.shape == (5, 5)
+
+
+def test_run_spatial_als_surfaces_non_convergence(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path, noise=0.05)
+
+    with caplog.at_level(logging.WARNING, logger="cuphoton.xpois"):
+        result = workflows.run_constant_kernel_fit(
+            reference_path=reference,
+            target_path=target,
+            output_root=tmp_path / "runs",
+            name="spatial-als-stalled",
+            reference_hdu=None,
+            target_hdu=None,
+            kernel_shape=(5, 5),
+            components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+            variance_path=None,
+            fit_mask_path=None,
+            background_degree=0,
+            flux_conserve=True,
+            solver="spatial-als",
+            als_iterations=2,
+            als_tolerance=0.0,
+        )
+
+    summary = result.summary
+    assert summary["converged"] is False
+    assert summary["iterations"] == 2
+    assert summary["spatial_als"]["converged"] is False
+    change = summary["spatial_als"]["final_relative_objective_change"]
+    assert change is not None and 0.0 < change < 1.0
+    assert any(
+        record.levelno == logging.WARNING
+        and "did not converge in 2 of 2 sweeps" in record.getMessage()
+        for record in caplog.records
+    )
+
+    evaluation = workflows.evaluate_subtraction_run(result.run_dir)
+    assert evaluation["converged"] is False
+    assert evaluation["iterations"] == 2
+    written = json.loads(
+        (result.run_dir / "evaluation.json").read_text(encoding="utf-8")
+    )
+    assert written["converged"] is False
+
+
+@pytest.mark.parametrize("noise", [0.0, 0.01])
+def test_run_spatial_als_single_sweep_reports_no_objective_change(
+    tmp_path: Path,
+    noise: float,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path, noise=noise)
+
+    result = workflows.run_constant_kernel_fit(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path / "runs",
+        name="spatial-als-one-sweep",
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(5, 5),
+        components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+        variance_path=None,
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=True,
+        solver="spatial-als",
+        als_iterations=1,
+    )
+
+    assert result.summary["converged"] is (noise == 0.0)
+    assert result.summary["iterations"] == 1
+    assert (
+        result.summary["spatial_als"]["final_relative_objective_change"]
+        is None
+    )
+
+
+def test_run_spatial_als_cleans_failed_run_dir(tmp_path: Path) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path)
+
+    with pytest.raises(ValueError, match="underdetermined"):
+        workflows.run_constant_kernel_fit(
+            reference_path=reference,
+            target_path=target,
+            output_root=tmp_path / "runs",
+            name="spatial-fail",
+            reference_hdu=None,
+            target_hdu=None,
+            kernel_shape=(15, 15),
+            components=[GaussianBasisComponent(sigma=1.5, degree=4)],
+            variance_path=None,
+            fit_mask_path=None,
+            crop_y0=0,
+            crop_x0=0,
+            crop_height=21,
+            crop_width=21,
+            background_degree=2,
+            flux_conserve=True,
+            solver="spatial-als",
+        )
+
+    assert not (tmp_path / "runs" / "spatial-fail").exists()
+
+
+@pytest.mark.parametrize("review_enabled", [False, True])
+def test_run_spatial_als_writes_solver_specific_artifacts(
+    tmp_path: Path,
+    review_enabled: bool,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path)
+
+    result = workflows.run_constant_kernel_fit(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path / "runs",
+        name="spatial-als-run",
+        review=review_enabled,
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(5, 5),
+        components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+        variance_path=None,
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=True,
+        backend="auto",
+        solver="spatial-als",
+        spatial_degree=1,
+        als_iterations=12,
+        als_tolerance=1e-9,
+        als_regularization=1e-8,
+    )
+
+    assert result.summary["solver"] == "spatial-als"
+    assert result.summary["requested_backend"] == "auto"
+    assert result.summary["backend"] == "cpu"
+    assert result.summary["kernel_sum_center"] == pytest.approx(
+        result.summary["spatial_als"]["flux_scale"],
+        abs=1e-10,
+    )
+    assert result.summary["spatial_als"]["spatial_degree"] == 1
+    assert result.summary["spatial_als"][
+        "vertical_reference_scale_interpretation"
+    ] == ("position-independent signed kernel sum")
+    saved = result.summary["saved"]
+    assert "kernel" not in saved
+    assert not (result.run_dir / "artifacts" / "kernel.npy").exists()
+    for name in (
+        "kernel_center",
+        "horizontal_coefficients",
+        "vertical_coefficients",
+        "background_coefficients",
+        "objective_history",
+    ):
+        assert name in saved
+        assert (result.run_dir / saved[name]).exists()
+
+    evaluation = workflows.evaluate_subtraction_run(result.run_dir)
+    assert evaluation["solver"] == "spatial-als"
+    assert evaluation["kernel_sum_center"] == pytest.approx(
+        result.summary["kernel_sum_center"]
+    )
+    assert evaluation["converged"] is True
+    assert evaluation["iterations"] == result.summary["iterations"]
+    assert "kernel_sum" not in evaluation
+
+    if importlib.util.find_spec("bokeh") is not None:
+        review = workflows.rebuild_interactive_review(result.run_dir)
+        assert review["run_dir"] == str(result.run_dir.resolve())
+        assert review["fit_region_pixel_count"] > 0
 
 
 def test_benchmark_constant_kernel_backends_writes_parity_artifacts(
@@ -246,8 +586,9 @@ def test_run_constant_kernel_fit_writes_interactive_and_numeric_review(
 
 
 @pytest.mark.parametrize("bokeh_available", [False, True])
+@pytest.mark.parametrize("solver", ["constant", "spatial-als"])
 def test_no_review_preserves_fit_and_skips_review_work(
-    tmp_path: Path, monkeypatch, bokeh_available: bool
+    tmp_path: Path, monkeypatch, bokeh_available: bool, solver: str
 ) -> None:
     if bokeh_available:
         pytest.importorskip("bokeh")
@@ -274,6 +615,7 @@ def test_no_review_preserves_fit_and_skips_review_work(
         reference_path=reference,
         target_path=target,
         output_root=tmp_path,
+        solver=solver,
         reference_hdu=None,
         target_hdu=None,
         kernel_shape=(9, 9),
@@ -320,7 +662,7 @@ def test_no_review_preserves_fit_and_skips_review_work(
         "fit_pixel_count",
         "chi2",
         "dof",
-        "kernel_sum",
+        "kernel_sum" if solver == "constant" else "kernel_sum_center",
         "residual_mean",
         "residual_std",
         "all_pixels_residual_mean",
@@ -328,6 +670,10 @@ def test_no_review_preserves_fit_and_skips_review_work(
         "fit_region",
     ):
         assert deferred.summary[key] == reviewed.summary[key]
+    if solver == "spatial-als":
+        assert (
+            deferred.summary["spatial_als"] == reviewed.summary["spatial_als"]
+        )
 
 
 def test_evaluate_subtraction_run_reports_fit_region_metrics(

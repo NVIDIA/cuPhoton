@@ -31,6 +31,8 @@ def test_curated_root_exports_are_real_objects() -> None:
     assert callable(xrep.build_stack_spec_from_fits)
     assert callable(xpois.inspect_hsc_data_tree)
     assert callable(xpois.load_image_array)
+    assert callable(xpois.solve_spatial_als)
+    assert xpois.SpatialALSConfig().spatial_degree == 2
     assert xpois.ConstantKernelNoiseResult is ConstantKernelNoiseResult
     assert (
         xpois.standardize_constant_kernel_residual
@@ -208,6 +210,7 @@ def test_xrep_existing_function_signatures_remain_stable() -> None:
         (ConstantKernelFitResult, "target - matched"),
         (ConstantKernelNoiseResult, "marginal diagonal"),
         (xpois.SeparableKernelFitResult, "target - matched"),
+        (xpois.SpatialALSFitResult, "target - matched"),
         (PreparedReprojection, "d(source pixel)/d(destination pixel)"),
         (StampDataset, "do not alias the memory-mapped files"),
         (LinearPredictionResult, "radians per input time unit"),

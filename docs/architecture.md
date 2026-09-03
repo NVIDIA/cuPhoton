@@ -54,7 +54,7 @@ orders are:
 | --- | --- |
 | xDataReader | KvikIO, nvCOMP, and CuPy on CUDA 13 |
 | xFit | CuPy, then NumPy |
-| XPOIS | CuPy, Numba-CUDA, then CPU |
+| XPOIS | Constant: CuPy, Numba-CUDA, then CPU; spatial ALS: CPU |
 | XScan | PyTorch CUDA, then PyTorch CPU |
 | xRep | CuPy, PyTorch CUDA, then CPU |
 | XRay | CuPy, then NumPy for supported operations |

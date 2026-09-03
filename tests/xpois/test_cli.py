@@ -7,9 +7,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from cuphoton.core.cli import ApplicationContext, get_component, run_component
+from cuphoton.xpois.spatial_als import SpatialALSConfig
 
 
 def _run_cli(argv: list[str]) -> int:
@@ -43,7 +45,17 @@ def test_help_for_fit_kernel_command(capsys) -> None:
     assert "--variance-hdu" in captured.out
     assert "--basis-sigmas" in captured.out
     assert "--backend" in captured.out
+    assert "--solver" in captured.out
+    unwrapped_help = " ".join(captured.out.split())
+    assert "Kernel model to fit: constant or spatial-als." in unwrapped_help
+    assert "spatial-als accepts only auto or cpu." in unwrapped_help
+    assert "--spatial-degree" in captured.out
+    assert "--als-iterations" in captured.out
+    assert "--als-tolerance" in captured.out
+    assert "--als-regularization" in captured.out
     assert "[default: auto]" in captured.out
+    assert f"[default: {SpatialALSConfig.max_iterations}]" in captured.out
+    assert f"[default: {SpatialALSConfig.tolerance}]" in captured.out
 
 
 def test_help_for_benchmark_backends_command_case(capsys) -> None:
@@ -72,6 +84,202 @@ def test_help_for_fit_batch_dragon_command(capsys) -> None:
     assert "--target" not in captured.out
     assert "--variance" not in captured.out
     assert "--fit-mask" not in captured.out
+    assert "--solver" not in captured.out
+    assert "--spatial-degree" not in captured.out
+    assert "--als-iterations" not in captured.out
+    assert "--als-tolerance" not in captured.out
+    assert "--als-regularization" not in captured.out
+
+
+def test_fit_kernel_forwards_spatial_solver_options(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    reference = tmp_path / "reference.npy"
+    target = tmp_path / "target.npy"
+    reference.touch()
+    target.touch()
+    seen = {}
+
+    def fake_fit(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(summary={"solver": kwargs["solver"]})
+
+    monkeypatch.setattr(commands, "run_constant_kernel_fit", fake_fit)
+
+    rc = _run_cli(
+        [
+            "fit-kernel",
+            "--reference",
+            str(reference),
+            "--target",
+            str(target),
+            "--solver",
+            "spatial-als",
+            "--spatial-degree",
+            "3",
+            "--als-iterations",
+            "17",
+            "--als-tolerance",
+            "2e-7",
+            "--als-regularization",
+            "4e-5",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert json.loads(captured.out) == {"solver": "spatial-als"}
+    assert seen["solver"] == "spatial-als"
+    assert seen["spatial_degree"] == 3
+    assert seen["als_iterations"] == 17
+    assert seen["als_tolerance"] == pytest.approx(2e-7)
+    assert seen["als_regularization"] == pytest.approx(4e-5)
+
+
+def test_subtract_forwards_unset_spatial_options_for_constant_solver(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    reference = tmp_path / "reference.npy"
+    target = tmp_path / "target.npy"
+    reference.touch()
+    target.touch()
+    seen = {}
+
+    def fake_fit(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(summary={"solver": kwargs["solver"]})
+
+    monkeypatch.setattr(commands, "run_constant_kernel_fit", fake_fit)
+
+    rc = _run_cli(
+        [
+            "subtract",
+            "--reference",
+            str(reference),
+            "--target",
+            str(target),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert json.loads(captured.out) == {"solver": "constant"}
+    assert seen["solver"] == "constant"
+    assert seen["spatial_degree"] is None
+    assert seen["als_iterations"] is None
+    assert seen["als_tolerance"] is None
+    assert seen["als_regularization"] is None
+
+
+def _write_cli_spatial_inputs(tmp_path) -> tuple[str, str]:
+    rng = np.random.default_rng(91)
+    source = rng.normal(size=(33, 35))
+    coordinates = np.arange(15, dtype=np.float64) - 7.0
+    line = np.exp(-(coordinates**2) / (2.0 * 1.5**2))
+    line /= line.sum()
+    kernel = np.outer(line, line)
+    patches = np.lib.stride_tricks.sliding_window_view(source, (15, 15))
+    target = np.zeros_like(source)
+    target[7:-7, 7:-7] = (
+        np.einsum(
+            "yxvu,vu->yx",
+            patches,
+            kernel[::-1, ::-1],
+            optimize=True,
+        )
+        + 0.1
+    )
+    reference_path = tmp_path / "reference.npy"
+    target_path = tmp_path / "target.npy"
+    np.save(reference_path, source, allow_pickle=False)
+    np.save(target_path, target, allow_pickle=False)
+    return str(reference_path), str(target_path)
+
+
+def test_fit_kernel_runs_spatial_solver_with_cli_defaults(
+    tmp_path, capsys
+) -> None:
+    reference_path, target_path = _write_cli_spatial_inputs(tmp_path)
+    output_dir = tmp_path / "runs"
+
+    rc = _run_cli(
+        [
+            "fit-kernel",
+            "--reference",
+            str(reference_path),
+            "--target",
+            str(target_path),
+            "--solver",
+            "spatial-als",
+            "--output-dir",
+            str(output_dir),
+            "--name",
+            "spatial-defaults",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0, captured.err
+    summary = json.loads(captured.out)
+    assert summary["solver"] == "spatial-als"
+    assert summary["basis"] == [
+        {"sigma": 1.5, "degree": 2},
+        {"sigma": 3.0, "degree": 1},
+        {"sigma": 6.0, "degree": 0},
+    ]
+    assert summary["flux_conserve"] is False
+    assert summary["spatial_als"]["spatial_degree"] == 2
+    assert summary["spatial_als"]["converged"] is True
+    assert summary["converged"] is True
+    assert summary["backend"] == "cpu"
+    assert "WARNING" not in captured.err
+
+
+@pytest.mark.parametrize("noise", [0.0, 0.01])
+def test_fit_kernel_reports_single_sweep_convergence(
+    tmp_path, capsys, noise
+) -> None:
+    reference_path, target_path = _write_cli_spatial_inputs(tmp_path)
+    if noise:
+        target = np.load(target_path)
+        target += np.random.default_rng(921).normal(
+            scale=noise, size=target.shape
+        )
+        np.save(target_path, target, allow_pickle=False)
+
+    rc = _run_cli(
+        [
+            "fit-kernel",
+            "--reference",
+            reference_path,
+            "--target",
+            target_path,
+            "--solver",
+            "spatial-als",
+            "--als-iterations",
+            "1",
+            "--output-dir",
+            str(tmp_path / "runs"),
+            "--name",
+            "spatial-one-sweep",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0, captured.err
+    summary = json.loads(captured.out)
+    assert summary["converged"] is (noise == 0.0)
+    assert summary["iterations"] == 1
+    if noise:
+        assert "WARNING: spatial ALS did not converge in 1 of 1 sweeps" in (
+            captured.err
+        )
+    else:
+        assert "WARNING" not in captured.err
 
 
 def test_fit_batch_dragon_accepts_manifest_without_pair_arguments(

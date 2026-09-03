@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from functools import lru_cache
+from numbers import Integral, Real
 from typing import Any, Iterable, Literal, Sequence
 
 import numpy as np
@@ -1419,8 +1420,20 @@ def _build_line_basis(
     x_coords = np.arange(length, dtype=np.float64) - length // 2
     basis_rows = []
     for component in components:
-        if component.sigma <= 0:
+        if not isinstance(component.sigma, Real) or isinstance(
+            component.sigma,
+            bool,
+        ):
+            raise ValueError("basis sigma must be a real number")
+        if not np.isfinite(component.sigma) or component.sigma <= 0:
             raise ValueError("basis sigma must be positive")
+        if not isinstance(component.degree, Integral) or isinstance(
+            component.degree,
+            bool,
+        ):
+            raise ValueError("basis degree must be an integer")
+        if component.degree < 0:
+            raise ValueError("basis degree must be non-negative")
         gaussian = np.exp(-(x_coords**2) / (2.0 * component.sigma**2))
         for degree in range(component.degree + 1):
             basis_rows.append(gaussian * (x_coords**degree))
