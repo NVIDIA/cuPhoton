@@ -46,6 +46,30 @@ while `--backend cupy|numba-cuda|cutile` selects the numerical implementation
 inside each worker. Both are explicit; launcher and Dragon transport options
 remain outside cuPhoton. See [XPOIS](components/xpois.md).
 
+Select the spatially varying alternating-linear-least-squares model and its
+single-GPU CuPy backend explicitly:
+
+```bash
+uv run cuphoton xpois fit-kernel \
+  --reference /path/to/reference.fits \
+  --target /path/to/target.fits \
+  --solver spatial-als \
+  --backend cupy
+
+uv run cuphoton xpois benchmark-backends \
+  --reference /path/to/reference.fits \
+  --target /path/to/target.fits \
+  --solver spatial-als \
+  --backends cpu,cupy \
+  --reference-backend cpu
+```
+
+For spatial ALS, `--backend auto` prefers CuPy when a usable CUDA device is
+available and otherwise uses the CPU reference implementation. Explicit
+`--backend cupy` fails instead of falling back. The CPU and CuPy paths use the
+same FP64 model and require no external calibration archive. MPI and Dragon
+batch orchestration remain separate from this single-fit backend.
+
 ## XScan: `cuphoton xscan`
 
 XScan has command families for dataset building and validation, pair or triplet

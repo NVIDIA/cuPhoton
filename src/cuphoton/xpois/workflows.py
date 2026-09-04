@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -144,31 +145,19 @@ def run_constant_kernel_fit(
 
     if solver not in {"constant", "spatial-als"}:
         raise ValueError(f"unsupported solver: {solver}")
-    if solver == "spatial-als" and backend not in {"auto", "cpu"}:
+    if solver == "spatial-als" and backend not in {"auto", "cpu", "cupy"}:
         raise ValueError(
-            "solver 'spatial-als' currently supports only the CPU backend"
+            "solver 'spatial-als' supports only auto, cpu, and cupy backends"
         )
-    spatial_options = {
-        "spatial_degree": spatial_degree,
-        "max_iterations": als_iterations,
-        "tolerance": als_tolerance,
-        "regularization": als_regularization,
-    }
-    if solver == "constant" and any(
-        value is not None for value in spatial_options.values()
-    ):
-        raise ValueError("spatial ALS options require solver='spatial-als'")
-    als_config: SpatialALSConfig | None = None
-    if solver == "spatial-als":
-        als_config = SpatialALSConfig(
-            background_degree=background_degree,
-            flux_conserve=flux_conserve,
-            **{
-                key: value
-                for key, value in spatial_options.items()
-                if value is not None
-            },
-        )
+    als_config = _resolve_spatial_als_config(
+        solver,
+        background_degree=background_degree,
+        flux_conserve=flux_conserve,
+        spatial_degree=spatial_degree,
+        als_iterations=als_iterations,
+        als_tolerance=als_tolerance,
+        als_regularization=als_regularization,
+    )
 
     workflow_start = time.perf_counter()
     run_setup_start = time.perf_counter()
@@ -384,6 +373,7 @@ def run_constant_kernel_fit(
                 variance=variance,
                 fit_mask=fit_mask,
                 config=als_config,
+                backend=backend,
             )
         solve_sec = time.perf_counter() - solve_start
 
@@ -647,6 +637,7 @@ def run_constant_kernel_fit(
                     "without flux_conserve"
                 ),
                 "condition_number": result.condition_number,
+                "design_chunk_size": result.design_chunk_size,
                 "unique_fit_pixel_count": result.unique_fit_pixel_count,
                 "dof_interpretation": (
                     "nominal N minus parameter count; not ridge effective dof"
@@ -688,10 +679,38 @@ def benchmark_constant_kernel_backends(
     warmup: int = 1,
     atol: float = 1e-8,
     rtol: float = 1e-9,
+    solver: str = "constant",
+    spatial_degree: int | None = None,
+    als_iterations: int | None = None,
+    als_tolerance: float | None = None,
+    als_regularization: float | None = None,
 ) -> WorkflowResult:
-    """Benchmark constant-kernel solve/application backends with parity."""
+    """Benchmark kernel-solver backends with numerical parity checks.
+
+    The spatial ALS options follow :func:`run_constant_kernel_fit`: ``None``
+    uses the :class:`SpatialALSConfig` default and any explicit value is
+    rejected for the constant solver.
+    """
 
     backend_names = _normalize_backend_list(backends)
+    if solver not in {"constant", "spatial-als"}:
+        raise ValueError(f"unsupported solver: {solver}")
+    if solver == "spatial-als":
+        unsupported = sorted(set(backend_names) - {"cpu", "cupy"})
+        if unsupported:
+            raise ValueError(
+                "solver 'spatial-als' supports only cpu and cupy benchmark "
+                "backends; unsupported: " + ", ".join(unsupported)
+            )
+    als_config = _resolve_spatial_als_config(
+        solver,
+        background_degree=background_degree,
+        flux_conserve=flux_conserve,
+        spatial_degree=spatial_degree,
+        als_iterations=als_iterations,
+        als_tolerance=als_tolerance,
+        als_regularization=als_regularization,
+    )
     if reference_backend not in backend_names:
         raise ValueError("reference_backend must be included in backends")
     if repeats <= 0:
@@ -752,48 +771,60 @@ def benchmark_constant_kernel_backends(
                 )
         load_seconds = float(time.perf_counter() - load_start)
 
+        warmup_timings_by_backend: dict[str, list[dict[str, float]]] = {}
         timings_by_backend: dict[str, list[dict[str, float]]] = {}
+        pre_benchmark_sync_seconds_by_backend: dict[str, float] = {}
         results = {}
         saved: dict[str, str] = {}
         for backend in backend_names:
-            for _ in range(warmup):
+            sync_start = time.perf_counter()
+            try:
                 _sync_backend(backend)
-                solve_constant_kernel(
-                    reference,
-                    target,
-                    components,
+            except Exception as exc:
+                raise RuntimeError(
+                    f"backend={backend!r} requires a usable CUDA device"
+                ) from exc
+            pre_benchmark_sync_seconds_by_backend[backend] = float(
+                time.perf_counter() - sync_start
+            )
+
+            def solve_backend() -> (
+                ConstantKernelFitResult | SpatialALSFitResult
+            ):
+                return _solve_benchmark_model(
+                    solver=solver,
+                    reference=reference,
+                    target=target,
+                    components=components,
                     kernel_shape=kernel_shape,
                     variance=variance,
                     fit_mask=fit_mask,
                     background_degree=background_degree,
                     flux_conserve=flux_conserve,
                     backend=backend,
+                    als_config=als_config,
                 )
-                _sync_backend(backend)
+
+            warmup_rows: list[dict[str, float]] = []
+            for _ in range(warmup):
+                _, timing = _time_benchmark_solve(
+                    backend,
+                    solve_backend,
+                )
+                warmup_rows.append(timing)
 
             rows: list[dict[str, float]] = []
             last_result = None
             for _ in range(repeats):
-                _sync_backend(backend)
-                start = time.perf_counter()
-                result = solve_constant_kernel(
-                    reference,
-                    target,
-                    components,
-                    kernel_shape=kernel_shape,
-                    variance=variance,
-                    fit_mask=fit_mask,
-                    background_degree=background_degree,
-                    flux_conserve=flux_conserve,
-                    backend=backend,
+                result, timing = _time_benchmark_solve(
+                    backend,
+                    solve_backend,
                 )
-                _sync_backend(backend)
-                rows.append(
-                    {"solve_seconds": float(time.perf_counter() - start)}
-                )
+                rows.append(timing)
                 last_result = result
 
             assert last_result is not None
+            warmup_timings_by_backend[backend] = warmup_rows
             timings_by_backend[backend] = rows
             results[backend] = last_result
             saved.update(
@@ -806,7 +837,8 @@ def benchmark_constant_kernel_backends(
 
         reference_result = results[reference_backend]
         comparisons = {
-            backend: _compare_constant_kernel_results(
+            backend: _compare_benchmark_results(
+                solver,
                 reference_result,
                 result,
                 atol=atol,
@@ -823,8 +855,34 @@ def benchmark_constant_kernel_backends(
         saved["timings_json"] = str(timings_path.relative_to(run_dir))
         saved["comparisons_json"] = str(comparisons_path.relative_to(run_dir))
 
+        timing_summaries = {
+            backend: _summarize_backend_timing_rows(rows)
+            for backend, rows in timings_by_backend.items()
+        }
+        first_solve_timings = {
+            backend: (
+                warmup_timings_by_backend[backend][0]
+                if warmup_timings_by_backend[backend]
+                else timings_by_backend[backend][0]
+            )
+            for backend in backend_names
+        }
+        warm_rows = {
+            backend: (
+                timings_by_backend[backend]
+                if warmup_timings_by_backend[backend]
+                else timings_by_backend[backend][1:]
+            )
+            for backend in backend_names
+        }
+        warm_timings = {
+            backend: (_summarize_backend_timing_rows(rows) if rows else None)
+            for backend, rows in warm_rows.items()
+        }
+
         summary = {
             "workflow": "benchmark-backends",
+            "solver": solver,
             "package_version": __version__,
             "created_at_utc": _timestamp(),
             "reference_path": str(reference_path.expanduser().resolve()),
@@ -838,6 +896,7 @@ def benchmark_constant_kernel_backends(
                 else None
             ),
             "crop": crop_metadata,
+            "image_shape": list(target.shape),
             "kernel_shape": list(kernel_shape),
             "basis": [component.__dict__ for component in components],
             "background_degree": background_degree,
@@ -847,7 +906,7 @@ def benchmark_constant_kernel_backends(
             "runtimes": {
                 backend: runtime_metadata(
                     backend=result.backend,
-                    dtype=str(result.kernel.dtype),
+                    dtype=str(result.matched.dtype),
                 )
                 for backend, result in results.items()
             },
@@ -859,11 +918,38 @@ def benchmark_constant_kernel_backends(
             },
             "setup_timings": {
                 "load_seconds": load_seconds,
+                "pre_benchmark_sync_seconds": (
+                    pre_benchmark_sync_seconds_by_backend
+                ),
             },
-            "timings": {
-                backend: _summarize_timing_rows(rows, "solve_seconds")
-                for backend, rows in timings_by_backend.items()
+            "timing_boundary": {
+                "wall": (
+                    "authoritative end-to-end solver call after a pre-call "
+                    "backend synchronization and including the post-call "
+                    "synchronization"
+                ),
+                "cuda_event": (
+                    "optional CUDA-stream interval spanning the CuPy solver "
+                    "call; it includes device work and host-induced stream "
+                    "idle gaps and is not a sum of kernel times"
+                ),
+                "first_solve": (
+                    "first solver call after a pre-benchmark sync; it may "
+                    "include remaining solver-specific lazy import, library-"
+                    "handle, or JIT initialization"
+                ),
             },
+            "first_solve_timings": first_solve_timings,
+            "timings": timing_summaries,
+            "warm_timings": warm_timings,
+            "median_speedup_vs_reference": _median_speedups(
+                timing_summaries,
+                reference_backend=reference_backend,
+            ),
+            "warm_median_speedup_vs_reference": _median_speedups(
+                warm_timings,
+                reference_backend=reference_backend,
+            ),
             "parity": {
                 "ok": parity_ok,
                 "comparisons": comparisons,
@@ -876,8 +962,50 @@ def benchmark_constant_kernel_backends(
                 backend: float(result.chi2)
                 for backend, result in results.items()
             },
+            "solver_facts": {
+                backend: _benchmark_solver_facts(result)
+                for backend, result in results.items()
+            },
+            "cpu_thread_environment": {
+                name: os.environ.get(name)
+                for name in (
+                    "OMP_NUM_THREADS",
+                    "OPENBLAS_NUM_THREADS",
+                    "MKL_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS",
+                    "BLIS_NUM_THREADS",
+                )
+            },
             "saved": saved,
         }
+        if solver == "spatial-als":
+            assert als_config is not None
+            summary["spatial_als"] = {
+                "spatial_degree": als_config.spatial_degree,
+                "spatial_terms": [
+                    list(term) for term in reference_result.spatial_terms
+                ],
+                "background_terms": [
+                    list(term) for term in reference_result.background_terms
+                ],
+                "coordinate_order": "y,x",
+                "term_degree_order": "x,y",
+                "coordinate_normalization": (
+                    "fitted image axes recorded in image_shape (the crop "
+                    "when a crop is applied) mapped to [-1,1]"
+                ),
+                "line_basis_normalization": (
+                    "unit-sum reference and unit-L2 corrections"
+                ),
+                "max_iterations": als_config.max_iterations,
+                "tolerance": als_config.tolerance,
+                "regularization": als_config.regularization,
+                "flux_conserve": als_config.flux_conserve,
+            }
+            summary["kernel_sample_positions_yx"] = [
+                list(position)
+                for position in _representative_kernel_positions(target.shape)
+            ]
         _write_json(run_dir / "summary.json", summary)
         return WorkflowResult(run_dir=run_dir, summary=summary)
     except Exception:
@@ -1216,6 +1344,154 @@ def _normalize_backend_list(
     return unique
 
 
+def _solve_benchmark_model(
+    *,
+    solver: str,
+    reference: np.ndarray,
+    target: np.ndarray,
+    components: list[GaussianBasisComponent],
+    kernel_shape: tuple[int, int],
+    variance: np.ndarray | None,
+    fit_mask: np.ndarray | None,
+    background_degree: int,
+    flux_conserve: bool,
+    backend: str,
+    als_config: SpatialALSConfig | None,
+) -> ConstantKernelFitResult | SpatialALSFitResult:
+    if solver == "constant":
+        return solve_constant_kernel(
+            reference,
+            target,
+            components,
+            kernel_shape=kernel_shape,
+            variance=variance,
+            fit_mask=fit_mask,
+            background_degree=background_degree,
+            flux_conserve=flux_conserve,
+            backend=backend,
+        )
+    return solve_spatial_als(
+        reference,
+        target,
+        components,
+        kernel_shape=kernel_shape,
+        variance=variance,
+        fit_mask=fit_mask,
+        config=als_config,
+        backend=backend,
+    )
+
+
+def _resolve_spatial_als_config(
+    solver: str,
+    *,
+    background_degree: int,
+    flux_conserve: bool,
+    spatial_degree: int | None,
+    als_iterations: int | None,
+    als_tolerance: float | None,
+    als_regularization: float | None,
+) -> SpatialALSConfig | None:
+    """Build the spatial ALS config, rejecting its options for other solvers.
+
+    ``None`` options resolve to the :class:`SpatialALSConfig` defaults so the
+    dataclass remains the single source of those values.
+    """
+
+    spatial_options = {
+        "spatial_degree": spatial_degree,
+        "max_iterations": als_iterations,
+        "tolerance": als_tolerance,
+        "regularization": als_regularization,
+    }
+    if solver != "spatial-als":
+        if any(value is not None for value in spatial_options.values()):
+            raise ValueError(
+                "spatial ALS options require solver='spatial-als'"
+            )
+        return None
+    return SpatialALSConfig(
+        background_degree=background_degree,
+        flux_conserve=flux_conserve,
+        **{
+            key: value
+            for key, value in spatial_options.items()
+            if value is not None
+        },
+    )
+
+
+def _time_benchmark_solve(
+    backend: str,
+    solve: Callable[[], ConstantKernelFitResult | SpatialALSFitResult],
+) -> tuple[
+    ConstantKernelFitResult | SpatialALSFitResult,
+    dict[str, float],
+]:
+    _sync_backend(backend)
+    memory_before = _cupy_memory_snapshot(backend, suffix="before")
+    events = _cupy_timing_events(backend)
+    start = time.perf_counter()
+    if events is not None:
+        try:
+            events[0].record()
+        except Exception:
+            events = None
+    result = solve()
+    if events is not None:
+        try:
+            events[1].record()
+        except Exception:
+            events = None
+    _sync_backend(backend)
+    row = {"solve_seconds": float(time.perf_counter() - start)}
+    row.update(memory_before)
+    row.update(_cupy_memory_snapshot(backend, suffix="after"))
+    if events is not None:
+        try:
+            import cupy as cp
+
+            row["cuda_event_seconds"] = float(
+                cp.cuda.get_elapsed_time(*events) / 1000.0
+            )
+        except Exception:
+            pass
+    return result, row
+
+
+def _cupy_memory_snapshot(
+    backend: str,
+    *,
+    suffix: str,
+) -> dict[str, float]:
+    if backend != "cupy":
+        return {}
+    try:
+        import cupy as cp
+
+        free_bytes, total_bytes = cp.cuda.runtime.memGetInfo()
+        pool = cp.get_default_memory_pool()
+        return {
+            f"gpu_free_bytes_{suffix}": float(free_bytes),
+            f"gpu_total_bytes_{suffix}": float(total_bytes),
+            f"cupy_pool_used_bytes_{suffix}": float(pool.used_bytes()),
+            f"cupy_pool_reserved_bytes_{suffix}": float(pool.total_bytes()),
+        }
+    except Exception:
+        return {}
+
+
+def _cupy_timing_events(backend: str) -> tuple[Any, Any] | None:
+    if backend != "cupy":
+        return None
+    try:
+        import cupy as cp
+
+        return cp.cuda.Event(), cp.cuda.Event()
+    except Exception:
+        return None
+
+
 def _sync_backend(backend: str) -> None:
     if backend == "numba-cuda":
         from numba import cuda
@@ -1227,7 +1503,7 @@ def _sync_backend(backend: str) -> None:
 
     import cupy as cp
 
-    cp.cuda.Stream.null.synchronize()
+    cp.cuda.get_current_stream().synchronize()
 
 
 def _artifact_label(value: str) -> str:
@@ -1245,21 +1521,74 @@ def _save_benchmark_result_artifacts(
     artifacts_dir: Path,
     *,
     backend: str,
-    result,
+    result: ConstantKernelFitResult | SpatialALSFitResult,
 ) -> dict[str, str]:
     saved: dict[str, str] = {}
     label = _artifact_label(backend)
-    for name, array in (
-        ("kernel", result.kernel),
+    arrays: list[tuple[str, np.ndarray]] = [
         ("matched", result.matched),
         ("residual", result.residual),
         ("fit_mask", result.fit_mask),
         ("background", result.background),
-    ):
+    ]
+    if isinstance(result, ConstantKernelFitResult):
+        arrays.insert(0, ("kernel", result.kernel))
+    else:
+        sample_positions = np.asarray(
+            _representative_kernel_positions(result.image_shape),
+            dtype=np.float64,
+        )
+        realized_kernels = np.stack(
+            [result.kernel_at(y, x) for y, x in sample_positions]
+        )
+        arrays.extend(
+            [
+                ("horizontal_reference", result.horizontal_reference),
+                ("horizontal_basis", result.horizontal_basis),
+                (
+                    "horizontal_coefficients",
+                    result.horizontal_coefficients,
+                ),
+                ("vertical_reference", result.vertical_reference),
+                ("vertical_basis", result.vertical_basis),
+                ("vertical_coefficients", result.vertical_coefficients),
+                ("background_coefficients", result.background_coefficients),
+                (
+                    "flux_scale",
+                    np.asarray([result.flux_scale], dtype=np.float64),
+                ),
+                ("objective_history", result.objective_history),
+                (
+                    "spatial_terms",
+                    np.asarray(result.spatial_terms, dtype=np.int64),
+                ),
+                (
+                    "background_terms",
+                    np.asarray(result.background_terms, dtype=np.int64),
+                ),
+                ("kernel_sample_positions_yx", sample_positions),
+                ("realized_kernels", realized_kernels),
+            ]
+        )
+    for name, array in arrays:
         path = artifacts_dir / f"{label}_{name}.npy"
         _save_array(path, array)
         saved[f"{label}_{name}"] = str(path.relative_to(artifacts_dir.parent))
     return saved
+
+
+def _representative_kernel_positions(
+    image_shape: tuple[int, int],
+) -> tuple[tuple[float, float], ...]:
+    max_y = float(image_shape[0] - 1)
+    max_x = float(image_shape[1] - 1)
+    return (
+        (0.0, 0.0),
+        (0.0, max_x),
+        (max_y / 2.0, max_x / 2.0),
+        (max_y, 0.0),
+        (max_y, max_x),
+    )
 
 
 def _summarize_timing_rows(
@@ -1275,8 +1604,101 @@ def _summarize_timing_rows(
         "std": float(np.std(values)),
         "min": float(np.min(values)),
         "max": float(np.max(values)),
+        "median": float(np.median(values)),
         "best": float(np.min(values)),
     }
+
+
+def _summarize_backend_timing_rows(
+    rows: list[dict[str, float]],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = _summarize_timing_rows(
+        rows,
+        "solve_seconds",
+    )
+    event_rows = [row for row in rows if "cuda_event_seconds" in row]
+    if event_rows:
+        summary["cuda_event"] = _summarize_timing_rows(
+            event_rows,
+            "cuda_event_seconds",
+        )
+    return summary
+
+
+def _median_speedups(
+    timings: dict[str, dict[str, Any] | None],
+    *,
+    reference_backend: str,
+) -> dict[str, float | None]:
+    reference = timings[reference_backend]
+    if reference is None:
+        return {backend: None for backend in timings}
+    reference_median = float(reference["median"])
+    return {
+        backend: (
+            reference_median / float(item["median"])
+            if item is not None and float(item["median"]) > 0.0
+            else None
+        )
+        for backend, item in timings.items()
+    }
+
+
+def _benchmark_solver_facts(
+    result: ConstantKernelFitResult | SpatialALSFitResult,
+) -> dict[str, Any]:
+    facts: dict[str, Any] = {
+        "resolved_backend": result.backend,
+        "fit_pixel_count": int(result.fit_pixel_count),
+        "chi2": float(result.chi2),
+        "dof": int(result.dof),
+    }
+    if isinstance(result, SpatialALSFitResult):
+        facts["flux_scale"] = float(result.flux_scale)
+    for name in (
+        "unique_fit_pixel_count",
+        "iterations",
+        "converged",
+        "condition_number",
+        "design_chunk_size",
+    ):
+        value = getattr(result, name, None)
+        if value is None:
+            continue
+        if isinstance(value, (bool, np.bool_)):
+            facts[name] = bool(value)
+        elif isinstance(value, (int, np.integer)):
+            facts[name] = int(value)
+        else:
+            facts[name] = float(value)
+    return facts
+
+
+def _compare_benchmark_results(
+    solver: str,
+    reference: ConstantKernelFitResult | SpatialALSFitResult,
+    candidate: ConstantKernelFitResult | SpatialALSFitResult,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    if solver == "constant":
+        assert isinstance(reference, ConstantKernelFitResult)
+        assert isinstance(candidate, ConstantKernelFitResult)
+        return _compare_constant_kernel_results(
+            reference,
+            candidate,
+            atol=atol,
+            rtol=rtol,
+        )
+    assert isinstance(reference, SpatialALSFitResult)
+    assert isinstance(candidate, SpatialALSFitResult)
+    return _compare_spatial_als_results(
+        reference,
+        candidate,
+        atol=atol,
+        rtol=rtol,
+    )
 
 
 def _compare_constant_kernel_results(
@@ -1321,6 +1743,149 @@ def _compare_constant_kernel_results(
         "chi2_ok": chi2_ok,
         "dof_equal": dof_equal,
         "fit_pixel_count_equal": fit_pixel_count_equal,
+    }
+
+
+def _compare_spatial_als_results(
+    reference: SpatialALSFitResult,
+    candidate: SpatialALSFitResult,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    positions = _representative_kernel_positions(reference.image_shape)
+    reference_kernels = np.stack(
+        [reference.kernel_at(y, x) for y, x in positions]
+    )
+    candidate_kernels = np.stack(
+        [candidate.kernel_at(y, x) for y, x in positions]
+    )
+    array_pairs = {
+        name: (getattr(reference, name), getattr(candidate, name))
+        for name in (
+            "horizontal_reference",
+            "horizontal_basis",
+            "horizontal_coefficients",
+            "vertical_reference",
+            "vertical_basis",
+            "vertical_coefficients",
+            "background_coefficients",
+            "background",
+            "matched",
+            "residual",
+        )
+    }
+    array_pairs["realized_kernels"] = (
+        reference_kernels,
+        candidate_kernels,
+    )
+    array_comparisons = {
+        name: _compare_arrays(
+            reference_array,
+            candidate_array,
+            atol=atol,
+            rtol=rtol,
+        )
+        for name, (reference_array, candidate_array) in array_pairs.items()
+    }
+    scalar_comparisons = {
+        name: _compare_scalars(
+            getattr(reference, name),
+            getattr(candidate, name),
+            atol=atol,
+            rtol=rtol,
+        )
+        for name in (
+            "flux_scale",
+            "chi2",
+            "regularization",
+        )
+    }
+    exact_comparisons = {
+        name: bool(getattr(reference, name) == getattr(candidate, name))
+        for name in (
+            "spatial_terms",
+            "background_terms",
+            "image_shape",
+            "dof",
+            "fit_pixel_count",
+            "unique_fit_pixel_count",
+            "flux_conserve",
+        )
+    }
+    diagnostic_comparisons = {
+        "objective_history": _compare_arrays(
+            reference.objective_history,
+            candidate.objective_history,
+            atol=atol,
+            rtol=rtol,
+        ),
+        "condition_number": _compare_scalars(
+            reference.condition_number,
+            candidate.condition_number,
+            atol=atol,
+            rtol=rtol,
+        ),
+        "iterations_equal": bool(
+            reference.iterations == candidate.iterations
+        ),
+        "converged_equal": bool(reference.converged == candidate.converged),
+        "reference_iterations": int(reference.iterations),
+        "candidate_iterations": int(candidate.iterations),
+        "reference_converged": bool(reference.converged),
+        "candidate_converged": bool(candidate.converged),
+    }
+    fit_mask_mismatch_count = int(
+        np.count_nonzero(reference.fit_mask != candidate.fit_mask)
+    )
+    ok = bool(
+        all(item["ok"] for item in array_comparisons.values())
+        and all(item["ok"] for item in scalar_comparisons.values())
+        and all(exact_comparisons.values())
+        and fit_mask_mismatch_count == 0
+    )
+    return {
+        "ok": ok,
+        "arrays": array_comparisons,
+        "scalars": scalar_comparisons,
+        "exact": exact_comparisons,
+        "diagnostics": diagnostic_comparisons,
+        "fit_mask_mismatch_count": fit_mask_mismatch_count,
+        "kernel_sample_positions_yx": [
+            list(position) for position in positions
+        ],
+    }
+
+
+def _compare_scalars(
+    reference: float,
+    candidate: float,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    reference_value = float(reference)
+    candidate_value = float(candidate)
+    ok = bool(
+        np.isclose(
+            reference_value,
+            candidate_value,
+            atol=atol,
+            rtol=rtol,
+            equal_nan=True,
+        )
+    )
+    if np.isfinite(reference_value) and np.isfinite(candidate_value):
+        abs_diff: float | None = abs(reference_value - candidate_value)
+    elif ok:
+        abs_diff = 0.0
+    else:
+        abs_diff = None
+    return {
+        "ok": ok,
+        "reference": reference_value,
+        "candidate": candidate_value,
+        "abs_diff": abs_diff,
     }
 
 

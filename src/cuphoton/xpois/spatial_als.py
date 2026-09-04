@@ -21,11 +21,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+from . import ois
 from .ois import (
     GaussianBasisComponent,
     _build_line_basis,
@@ -36,6 +37,8 @@ from .ois import (
 )
 
 _DESIGN_CHUNK_SIZE = 4096
+_GPU_MAX_DESIGN_CHUNK_SIZE = 65536
+_GPU_SCRATCH_BUDGET_BYTES = 256 * 1024**2
 _CONDITION_LIMIT = 1.0e14
 
 
@@ -54,10 +57,10 @@ class SpatialALSConfig:
         Noisy flux-conserving fits typically need 10 to 25 sweeps to reach
         the default tolerance.
     tolerance
-        Relative penalized-objective change used for convergence.
-        Zero still permits convergence when the finite objective repeats
-        exactly or reaches the floating-point floor; it does not force all
-        ``max_iterations`` sweeps to run.
+        Relative penalized-objective change used for convergence. ``0``
+        disables the relative-change stop: only the numerical objective
+        floor can end iterations before ``max_iterations``, and
+        ``converged`` is otherwise false.
     regularization
         Non-negative ridge penalty applied to spatial line coefficients. The
         global photometric scale and background are not regularized. The
@@ -194,6 +197,13 @@ class SpatialALSFitResult:
     condition_number
         Larger condition number of the two diagonally scaled block normal
         matrices from the final sweep.
+    design_chunk_size
+        Row-batch cap used to build normal equations and
+        reconstruction products; the final batch may be smaller. The
+        CPU backend uses a fixed cap, while the CuPy backend derives it
+        from free device memory and the model dimensions. Runs with
+        different caps accumulate in different orders and agree only to
+        floating-point rounding.
     backend
         Backend that ran the fit.
     """
@@ -223,6 +233,7 @@ class SpatialALSFitResult:
     regularization: float
     flux_conserve: bool
     condition_number: float
+    design_chunk_size: int
     backend: str = "cpu"
 
     def horizontal_at(self, y: float, x: float) -> np.ndarray:
@@ -278,6 +289,7 @@ def solve_spatial_als(
     fit_mask: np.ndarray | None = None,
     sample_positions: np.ndarray | None = None,
     config: SpatialALSConfig | None = None,
+    backend: str = "auto",
 ) -> SpatialALSFitResult:
     """Fit a spatially varying separable kernel from reference to target.
 
@@ -300,10 +312,15 @@ def solve_spatial_als(
         Optional integer ``(row, 2)`` array of ``(y, x)`` fit positions.
         Repeated positions are retained as multiplicity weights. Specify this
         or ``fit_mask``, never both. Fit row counts and degrees of freedom
-        include repeated positions. If neither selector is supplied, all valid
-        pixels in the centered-kernel interior are fitted.
+        include repeated positions. Every explicitly selected row must have a
+        finite target, variance, and source footprint. If neither selector is
+        supplied, all valid pixels in the centered-kernel interior are fitted.
     config
         Spatial model, convergence, regularization, and flux configuration.
+    backend
+        Numerical backend. ``auto`` uses CuPy when a CUDA device is available
+        and otherwise uses NumPy. Explicit ``cupy`` requests fail rather than
+        silently falling back to the CPU.
 
     Returns
     -------
@@ -322,6 +339,7 @@ def solve_spatial_als(
     """
 
     resolved_config = config or SpatialALSConfig()
+    resolved_backend = _resolve_spatial_backend(backend)
     source_arr = np.asarray(reference, dtype=np.float64)
     target_arr = np.asarray(target, dtype=np.float64)
     _validate_image_pair(source_arr, target_arr)
@@ -334,12 +352,13 @@ def solve_spatial_als(
         kernel_shape,
         source_arr.shape,
     )
-    variance_arr = np.ascontiguousarray(
-        _coerce_variance(target_arr.shape, variance)
+    variance_arr = (
+        None
+        if variance is None
+        else np.ascontiguousarray(
+            _coerce_variance(target_arr.shape, variance)
+        )
     )
-    target_flat = target_arr.ravel()
-    variance_flat = variance_arr.ravel()
-
     raw_horizontal = _build_line_basis(kernel_width, components)
     raw_vertical = _build_line_basis(kernel_height, components)
     _validate_line_basis_length(raw_horizontal, kernel_width, axis="width")
@@ -359,22 +378,156 @@ def solve_spatial_als(
     background_terms = tuple(
         triangular_degree_pairs(resolved_config.background_degree)
     )
-    sample_indices, effective_fit_mask = _resolve_fit_samples(
-        source_arr,
-        target_arr,
-        variance_arr,
-        (kernel_height, kernel_width),
-        fit_mask=fit_mask,
-        sample_positions=sample_positions,
-    )
-    fit_sample_count = int(sample_indices.size)
-    unique_fit_pixel_count = int(effective_fit_mask.sum())
     parameter_count = (
         horizontal_basis.shape[0] * len(spatial_terms)
         + vertical_basis.shape[0] * len(spatial_terms)
         + 1
         + len(background_terms)
     )
+    kernel_shape = (kernel_height, kernel_width)
+    if resolved_backend == "cpu":
+        variance_cpu = (
+            np.ones(target_arr.shape, dtype=np.float64)
+            if variance_arr is None
+            else variance_arr
+        )
+        sample_indices, effective_fit_mask = _resolve_fit_samples(
+            source_arr,
+            target_arr,
+            variance_cpu,
+            kernel_shape,
+            fit_mask=fit_mask,
+            sample_positions=sample_positions,
+        )
+        design_chunk_size = _DESIGN_CHUNK_SIZE
+        return _solve_spatial_als_engine(
+            source_arr,
+            target_arr,
+            variance_cpu,
+            sample_indices,
+            effective_fit_mask,
+            spatial_terms,
+            background_terms,
+            horizontal_reference,
+            horizontal_basis,
+            vertical_reference,
+            vertical_basis,
+            resolved_config,
+            parameter_count=parameter_count,
+            kernel_shape=kernel_shape,
+            design_chunk_size=design_chunk_size,
+            xp=np,
+            backend="cpu",
+        )
+
+    fit_mask_arr, candidate_indices = _prepare_gpu_sample_selection(
+        source_arr.shape,
+        kernel_shape,
+        fit_mask=fit_mask,
+        sample_positions=sample_positions,
+    )
+    cp = _load_cupy()
+    source_device = cp.asarray(source_arr, dtype=cp.float64)
+    target_device = cp.asarray(target_arr, dtype=cp.float64)
+    variance_device = (
+        None
+        if variance_arr is None
+        else cp.asarray(variance_arr, dtype=cp.float64)
+    )
+    horizontal_reference_device = cp.asarray(
+        horizontal_reference,
+        dtype=cp.float64,
+    )
+    horizontal_basis_device = cp.asarray(horizontal_basis, dtype=cp.float64)
+    vertical_reference_device = cp.asarray(
+        vertical_reference,
+        dtype=cp.float64,
+    )
+    vertical_basis_device = cp.asarray(vertical_basis, dtype=cp.float64)
+    (
+        sample_indices_device,
+        effective_fit_mask_device,
+        reconstruction_indices_device,
+    ) = _resolve_fit_samples_cupy(
+        cp,
+        source_device,
+        target_device,
+        variance_device,
+        kernel_shape,
+        fit_mask=fit_mask_arr,
+        candidate_indices=candidate_indices,
+    )
+    design_chunk_size = _gpu_design_chunk_size(
+        cp,
+        row_count=max(
+            int(sample_indices_device.size),
+            int(reconstruction_indices_device.size),
+        ),
+        kernel_shape=kernel_shape,
+        spatial_term_count=len(spatial_terms),
+        background_term_count=len(background_terms),
+        horizontal_basis_count=horizontal_basis.shape[0],
+        vertical_basis_count=vertical_basis.shape[0],
+    )
+    return _solve_spatial_als_engine(
+        source_device,
+        target_device,
+        variance_device,
+        sample_indices_device,
+        effective_fit_mask_device,
+        spatial_terms,
+        background_terms,
+        horizontal_reference_device,
+        horizontal_basis_device,
+        vertical_reference_device,
+        vertical_basis_device,
+        resolved_config,
+        parameter_count=parameter_count,
+        kernel_shape=kernel_shape,
+        design_chunk_size=design_chunk_size,
+        xp=cp,
+        backend="cupy",
+        source_host=source_arr,
+        target_host=target_arr,
+        horizontal_reference_host=horizontal_reference,
+        horizontal_basis_host=horizontal_basis,
+        vertical_reference_host=vertical_reference,
+        vertical_basis_host=vertical_basis,
+        reconstruction_indices=reconstruction_indices_device,
+    )
+
+
+def _solve_spatial_als_engine(
+    source,
+    target,
+    variance,
+    sample_indices,
+    effective_fit_mask,
+    spatial_terms: tuple[tuple[int, int], ...],
+    background_terms: tuple[tuple[int, int], ...],
+    horizontal_reference,
+    horizontal_basis,
+    vertical_reference,
+    vertical_basis,
+    config: SpatialALSConfig,
+    *,
+    parameter_count: int,
+    kernel_shape: tuple[int, int],
+    design_chunk_size: int,
+    xp,
+    backend: str,
+    source_host: np.ndarray | None = None,
+    target_host: np.ndarray | None = None,
+    horizontal_reference_host: np.ndarray | None = None,
+    horizontal_basis_host: np.ndarray | None = None,
+    vertical_reference_host: np.ndarray | None = None,
+    vertical_basis_host: np.ndarray | None = None,
+    reconstruction_indices=None,
+) -> SpatialALSFitResult:
+    """Run the common NumPy/CuPy ALS engine on already prepared arrays."""
+
+    fit_sample_count = int(sample_indices.size)
+    unique_fit_pixel_count = int(effective_fit_mask.sum())
     # Repeated sample rows add weight but no rank, so the guard must count
     # distinct pixels; otherwise the ridge turns a rank-deficient system into
     # an exact interpolation reported with a large nominal dof.
@@ -384,17 +537,18 @@ def solve_spatial_als(
             f"{unique_fit_pixel_count} unique pixels ({fit_sample_count} "
             f"sample rows) for {parameter_count} coefficients"
         )
-
-    patch_view = sliding_window_view(
-        source_arr,
-        (kernel_height, kernel_width),
+    patch_view = xp.lib.stride_tricks.sliding_window_view(
+        source,
+        kernel_shape,
     )
+    target_flat = target.ravel()
+    variance_flat = None if variance is None else variance.ravel()
     # Every prediction accumulates one product per kernel pixel plus the
     # background terms. Allow rounding proportional to that length before
     # squaring for the objective. Scale only with weighted data energy: a
     # sample-count baseline would make convergence depend on image units.
     accumulation_length = float(
-        kernel_height * kernel_width + len(background_terms)
+        kernel_shape[0] * kernel_shape[1] + len(background_terms)
     )
     base_objective_floor = (
         np.finfo(np.float64).eps ** 2
@@ -403,27 +557,29 @@ def solve_spatial_als(
             target_flat,
             variance_flat,
             sample_indices,
+            xp=xp,
+            chunk_size=design_chunk_size,
         )
     )
 
-    horizontal_coefficients = np.zeros(
+    horizontal_coefficients = xp.zeros(
         (horizontal_basis.shape[0], len(spatial_terms)),
-        dtype=np.float64,
+        dtype=xp.float64,
     )
-    vertical_coefficients = np.zeros(
+    vertical_coefficients = xp.zeros(
         (vertical_basis.shape[0], len(spatial_terms)),
-        dtype=np.float64,
+        dtype=xp.float64,
     )
-    background_coefficients = np.zeros(
+    background_coefficients = xp.zeros(
         len(background_terms),
-        dtype=np.float64,
+        dtype=xp.float64,
     )
-    flux_scale = 1.0
+    flux_scale = xp.asarray(1.0, dtype=xp.float64)
     objective_values: list[float] = []
     converged = False
     condition_number = 0.0
 
-    for _ in range(resolved_config.max_iterations):
+    for _ in range(config.max_iterations):
         # The vertical block carries the global flux scale. Solving it first
         # fits the amplitude before any profile shape is adjusted; starting
         # with the horizontal block instead fits shapes against a model whose
@@ -434,7 +590,7 @@ def solve_spatial_als(
             sample_indices,
             target_flat,
             variance_flat,
-            source_arr.shape,
+            source.shape,
             spatial_terms,
             background_terms,
             horizontal_reference,
@@ -442,10 +598,12 @@ def solve_spatial_als(
             horizontal_coefficients,
             vertical_reference,
             vertical_basis,
-            regularization=resolved_config.regularization,
-            kernel_shape=(kernel_height, kernel_width),
+            regularization=config.regularization,
+            kernel_shape=kernel_shape,
+            xp=xp,
+            chunk_size=design_chunk_size,
         )
-        flux_scale = float(b_coefficients[0])
+        flux_scale = b_coefficients[0]
         vertical_count = vertical_coefficients.size
         vertical_coefficients = b_coefficients[
             1 : 1 + vertical_count
@@ -457,7 +615,7 @@ def solve_spatial_als(
             sample_indices,
             target_flat,
             variance_flat,
-            source_arr.shape,
+            source.shape,
             spatial_terms,
             background_terms,
             horizontal_reference,
@@ -466,8 +624,10 @@ def solve_spatial_als(
             vertical_basis,
             vertical_coefficients,
             flux_scale,
-            regularization=resolved_config.regularization,
-            kernel_shape=(kernel_height, kernel_width),
+            regularization=config.regularization,
+            kernel_shape=kernel_shape,
+            xp=xp,
+            chunk_size=design_chunk_size,
         )
         horizontal_count = horizontal_coefficients.size
         horizontal_coefficients = a_coefficients[:horizontal_count].reshape(
@@ -481,7 +641,7 @@ def solve_spatial_als(
             sample_indices,
             target_flat,
             variance_flat,
-            source_arr.shape,
+            source.shape,
             spatial_terms,
             background_terms,
             horizontal_reference,
@@ -492,11 +652,13 @@ def solve_spatial_als(
             vertical_coefficients,
             flux_scale,
             background_coefficients,
-            kernel_shape=(kernel_height, kernel_width),
+            kernel_shape=kernel_shape,
+            xp=xp,
+            chunk_size=design_chunk_size,
         )
-        objective = chi2 + resolved_config.regularization * float(
-            np.sum(horizontal_coefficients**2)
-            + np.sum(vertical_coefficients**2)
+        objective = chi2 + config.regularization * _scalar_to_float(
+            xp.sum(horizontal_coefficients**2)
+            + xp.sum(vertical_coefficients**2)
         )
         objective_values.append(objective)
         objective_floor = base_objective_floor * max(condition_number, 1.0)
@@ -510,17 +672,17 @@ def solve_spatial_als(
             if _objective_has_converged(
                 objective_values[-2],
                 objective,
-                tolerance=resolved_config.tolerance,
+                tolerance=config.tolerance,
                 objective_floor=objective_floor,
             ):
                 converged = True
                 break
 
-    matched, residual, background = _reconstruct_images(
-        source_arr,
-        target_arr,
-        variance_arr,
-        (kernel_height, kernel_width),
+    matched, background = _reconstruct_images(
+        source,
+        target,
+        variance,
+        kernel_shape,
         spatial_terms,
         background_terms,
         horizontal_reference,
@@ -531,25 +693,58 @@ def solve_spatial_als(
         vertical_coefficients,
         flux_scale,
         background_coefficients,
+        xp=xp,
+        chunk_size=design_chunk_size,
+        valid_indices=reconstruction_indices,
     )
     dof = fit_sample_count - parameter_count
 
+    if backend == "cupy":
+        xp.cuda.get_current_stream().synchronize()
+        matched_host = xp.asnumpy(matched)
+        background_host = xp.asnumpy(background)
+        effective_fit_mask_host = xp.asnumpy(effective_fit_mask)
+        horizontal_coefficients_host = xp.asnumpy(horizontal_coefficients)
+        vertical_coefficients_host = xp.asnumpy(vertical_coefficients)
+        background_coefficients_host = xp.asnumpy(background_coefficients)
+        assert source_host is not None
+        assert target_host is not None
+        assert horizontal_reference_host is not None
+        assert horizontal_basis_host is not None
+        assert vertical_reference_host is not None
+        assert vertical_basis_host is not None
+    else:
+        source_host = source
+        target_host = target
+        matched_host = matched
+        background_host = background
+        effective_fit_mask_host = effective_fit_mask
+        horizontal_reference_host = horizontal_reference
+        horizontal_basis_host = horizontal_basis
+        vertical_reference_host = vertical_reference
+        vertical_basis_host = vertical_basis
+        horizontal_coefficients_host = horizontal_coefficients
+        vertical_coefficients_host = vertical_coefficients
+        background_coefficients_host = background_coefficients
+    residual_host = target_host - matched_host
+    flux_scale_host = _scalar_to_float(flux_scale)
+
     return SpatialALSFitResult(
-        matched=matched,
-        residual=residual,
-        fit_mask=effective_fit_mask,
-        background=background,
-        horizontal_reference=horizontal_reference,
-        vertical_reference=vertical_reference,
-        horizontal_basis=horizontal_basis,
-        vertical_basis=vertical_basis,
-        horizontal_coefficients=horizontal_coefficients,
-        vertical_coefficients=vertical_coefficients,
-        background_coefficients=background_coefficients,
-        flux_scale=flux_scale,
+        matched=matched_host,
+        residual=residual_host,
+        fit_mask=effective_fit_mask_host,
+        background=background_host,
+        horizontal_reference=horizontal_reference_host,
+        vertical_reference=vertical_reference_host,
+        horizontal_basis=horizontal_basis_host,
+        vertical_basis=vertical_basis_host,
+        horizontal_coefficients=horizontal_coefficients_host,
+        vertical_coefficients=vertical_coefficients_host,
+        background_coefficients=background_coefficients_host,
+        flux_scale=flux_scale_host,
         spatial_terms=spatial_terms,
         background_terms=background_terms,
-        image_shape=source_arr.shape,
+        image_shape=source_host.shape,
         objective_history=np.asarray(objective_values, dtype=np.float64),
         chi2=chi2,
         dof=dof,
@@ -557,10 +752,210 @@ def solve_spatial_als(
         unique_fit_pixel_count=unique_fit_pixel_count,
         iterations=len(objective_values),
         converged=converged,
-        regularization=resolved_config.regularization,
-        flux_conserve=resolved_config.flux_conserve,
+        regularization=config.regularization,
+        flux_conserve=config.flux_conserve,
         condition_number=condition_number,
+        design_chunk_size=design_chunk_size,
+        backend=backend,
     )
+
+
+def _resolve_spatial_backend(backend: str) -> str:
+    normalized = str(backend).strip().lower()
+    if normalized not in {"auto", "cpu", "cupy"}:
+        raise ValueError("backend must be one of: auto, cpu, cupy")
+    if normalized == "auto":
+        return "cupy" if _cupy_is_available() else "cpu"
+    return normalized
+
+
+def _cupy_is_available() -> bool:
+    return ois._backend_available("cupy")
+
+
+def _load_cupy() -> Any:
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        raise ImportError(
+            "backend='cupy' requires CuPy; run 'uv sync --extra gpu' for "
+            "development or install 'cuphoton[gpu]'"
+        ) from exc
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        raise RuntimeError(
+            "backend='cupy' requires a usable CUDA device"
+        ) from exc
+    if device_count < 1:
+        raise RuntimeError("backend='cupy' requires a usable CUDA device")
+    return cp
+
+
+def _prepare_gpu_sample_selection(
+    image_shape: tuple[int, int],
+    kernel_shape: tuple[int, int],
+    *,
+    fit_mask: np.ndarray | None,
+    sample_positions: np.ndarray | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Validate a fit selection without constructing dense host indices."""
+
+    if fit_mask is not None and sample_positions is not None:
+        raise ValueError(
+            "specify either fit_mask or sample_positions, not both"
+        )
+    if sample_positions is not None:
+        return None, _validate_sample_positions(
+            sample_positions,
+            image_shape,
+            kernel_shape,
+        )
+
+    if fit_mask is None:
+        return None, None
+
+    return _coerce_fit_mask(fit_mask, image_shape), None
+
+
+def _resolve_fit_samples_cupy(
+    cp,
+    source,
+    target,
+    variance,
+    kernel_shape: tuple[int, int],
+    *,
+    fit_mask: np.ndarray | None,
+    candidate_indices: np.ndarray | None,
+):
+    """Resolve valid fit and reconstruction rows once on the current GPU."""
+
+    source_finite = cp.isfinite(source)
+    finite_patch_view = cp.lib.stride_tricks.sliding_window_view(
+        source_finite,
+        kernel_shape,
+    )
+    width = source.shape[1]
+    margin_y = kernel_shape[0] // 2
+    margin_x = kernel_shape[1] // 2
+    height = source.shape[0]
+    interior_slice = (
+        slice(margin_y, height - margin_y),
+        slice(margin_x, width - margin_x),
+    )
+    valid_interior = finite_patch_view.all(axis=(-2, -1))
+    valid_interior &= cp.isfinite(target[interior_slice])
+    if variance is not None:
+        valid_interior &= cp.isfinite(variance[interior_slice])
+
+    valid_offsets = cp.flatnonzero(valid_interior.ravel())
+    reconstruction_indices = _interior_offsets_to_flat_indices(
+        cp,
+        valid_offsets,
+        image_shape=source.shape,
+        kernel_shape=kernel_shape,
+    )
+    if candidate_indices is not None:
+        candidate_device = cp.asarray(candidate_indices, dtype=cp.int64)
+        sample_y, sample_x = cp.divmod(candidate_device, width)
+        selected = valid_interior[
+            sample_y - margin_y,
+            sample_x - margin_x,
+        ]
+        if not bool(cp.all(selected).item()):
+            raise ValueError(
+                "sample_positions must reference finite target and variance "
+                "values with finite source footprints"
+            )
+        sample_indices = candidate_device
+    elif fit_mask is not None:
+        selected_interior = cp.asarray(
+            fit_mask[interior_slice],
+            dtype=cp.bool_,
+        )
+        selected_interior &= valid_interior
+        selected_offsets = cp.flatnonzero(selected_interior.ravel())
+        sample_indices = _interior_offsets_to_flat_indices(
+            cp,
+            selected_offsets,
+            image_shape=source.shape,
+            kernel_shape=kernel_shape,
+        )
+    else:
+        sample_indices = reconstruction_indices
+    if int(sample_indices.size) == 0:
+        raise ValueError("no finite samples remain inside the fit region")
+    effective_mask = cp.zeros(source.shape, dtype=cp.bool_)
+    effective_mask.ravel()[sample_indices] = True
+    return sample_indices, effective_mask, reconstruction_indices
+
+
+def _interior_offsets_to_flat_indices(
+    xp,
+    offsets,
+    *,
+    image_shape: tuple[int, int],
+    kernel_shape: tuple[int, int],
+):
+    """Map compact interior offsets to flat full-image indices."""
+
+    width = image_shape[1]
+    margin_y = kernel_shape[0] // 2
+    margin_x = kernel_shape[1] // 2
+    interior_width = width - 2 * margin_x
+    row_offsets = offsets // interior_width
+    return (
+        offsets + row_offsets * (2 * margin_x) + margin_y * width + margin_x
+    )
+
+
+def _gpu_design_chunk_size(
+    cp,
+    *,
+    row_count: int,
+    kernel_shape: tuple[int, int],
+    spatial_term_count: int,
+    background_term_count: int,
+    horizontal_basis_count: int,
+    vertical_basis_count: int,
+) -> int:
+    """Choose a bounded chunk from free memory and model dimensions."""
+
+    horizontal_columns = (
+        horizontal_basis_count * spatial_term_count + background_term_count
+    )
+    vertical_columns = (
+        1 + vertical_basis_count * spatial_term_count + background_term_count
+    )
+    maximum_columns = max(horizontal_columns, vertical_columns)
+    kernel_height, kernel_width = kernel_shape
+    scratch_values_per_row = (
+        kernel_height * kernel_width
+        + 2 * maximum_columns
+        + 3 * spatial_term_count
+        + background_term_count
+        + 2 * (kernel_height + kernel_width)
+        + horizontal_basis_count
+        + vertical_basis_count
+        + 16
+    )
+    bytes_per_row = max(8, 8 * scratch_values_per_row)
+    free_bytes, _ = cp.cuda.runtime.memGetInfo()
+    scratch_budget = min(
+        _GPU_SCRATCH_BUDGET_BYTES,
+        max(bytes_per_row, int(free_bytes) // 4),
+    )
+    memory_rows = max(1, scratch_budget // bytes_per_row)
+    return max(
+        1,
+        min(row_count or 1, _GPU_MAX_DESIGN_CHUNK_SIZE, memory_rows),
+    )
+
+
+def _scalar_to_float(value) -> float:
+    if hasattr(value, "item"):
+        return float(value.item())
+    return float(value)
 
 
 def _validate_kernel_shape(
@@ -663,33 +1058,11 @@ def _resolve_fit_samples(
     )
 
     if sample_positions is not None:
-        positions = np.asarray(sample_positions)
-        if positions.ndim != 2 or positions.shape[1] != 2:
-            raise ValueError("sample_positions must have shape (row, 2)")
-        if positions.shape[0] == 0:
-            raise ValueError("sample_positions must not be empty")
-        if not (
-            np.issubdtype(positions.dtype, np.integer)
-            or np.issubdtype(positions.dtype, np.floating)
-        ):
-            raise ValueError("sample_positions must contain numeric values")
-        if not np.isfinite(positions).all():
-            raise ValueError("sample_positions must not contain NaN or inf")
-        if not np.equal(positions, np.floor(positions)).all():
-            raise ValueError("sample_positions must contain integer values")
-        positions = positions.astype(np.int64)
-        sample_y = positions[:, 0]
-        sample_x = positions[:, 1]
-        if np.any(
-            (sample_y < margin_y)
-            | (sample_y >= height - margin_y)
-            | (sample_x < margin_x)
-            | (sample_x >= width - margin_x)
-        ):
-            raise ValueError(
-                "sample_positions must lie inside the valid kernel interior"
-            )
-        sample_indices = sample_y * width + sample_x
+        sample_indices = _validate_sample_positions(
+            sample_positions,
+            source.shape,
+            kernel_shape,
+        )
         if not np.all(valid.ravel()[sample_indices]):
             raise ValueError(
                 "sample_positions must reference finite target and variance "
@@ -709,6 +1082,45 @@ def _resolve_fit_samples(
     return sample_indices, effective_mask
 
 
+def _validate_sample_positions(
+    sample_positions: np.ndarray,
+    image_shape: tuple[int, int],
+    kernel_shape: tuple[int, int],
+) -> np.ndarray:
+    """Return flat ``int64`` indices for validated interior sample rows."""
+
+    positions = np.asarray(sample_positions)
+    if positions.ndim != 2 or positions.shape[1] != 2:
+        raise ValueError("sample_positions must have shape (row, 2)")
+    if positions.shape[0] == 0:
+        raise ValueError("sample_positions must not be empty")
+    if not (
+        np.issubdtype(positions.dtype, np.integer)
+        or np.issubdtype(positions.dtype, np.floating)
+    ):
+        raise ValueError("sample_positions must contain numeric values")
+    if not np.isfinite(positions).all():
+        raise ValueError("sample_positions must not contain NaN or inf")
+    if not np.equal(positions, np.floor(positions)).all():
+        raise ValueError("sample_positions must contain integer values")
+    positions = positions.astype(np.int64)
+    height, width = image_shape
+    margin_y = kernel_shape[0] // 2
+    margin_x = kernel_shape[1] // 2
+    sample_y = positions[:, 0]
+    sample_x = positions[:, 1]
+    if np.any(
+        (sample_y < margin_y)
+        | (sample_y >= height - margin_y)
+        | (sample_x < margin_x)
+        | (sample_x >= width - margin_x)
+    ):
+        raise ValueError(
+            "sample_positions must lie inside the valid kernel interior"
+        )
+    return np.ascontiguousarray(sample_y * width + sample_x)
+
+
 def _coerce_fit_mask(
     fit_mask: np.ndarray,
     image_shape: tuple[int, int],
@@ -720,31 +1132,33 @@ def _coerce_fit_mask(
 
 
 def _chebyshev_design(
-    sample_y: np.ndarray,
-    sample_x: np.ndarray,
+    sample_y,
+    sample_x,
     image_shape: tuple[int, int],
     terms: tuple[tuple[int, int], ...],
-) -> np.ndarray:
+    *,
+    xp=np,
+):
     height, width = image_shape
-    normalized_x = _normalized_coordinate(sample_x, width)
-    normalized_y = _normalized_coordinate(sample_y, height)
+    normalized_x = _normalized_coordinate(sample_x, width, xp=xp)
+    normalized_y = _normalized_coordinate(sample_y, height, xp=xp)
     max_degree = max(max(pair) for pair in terms)
-    tx = _chebyshev_values(normalized_x, max_degree)
-    ty = _chebyshev_values(normalized_y, max_degree)
-    return np.stack(
+    tx = _chebyshev_values(normalized_x, max_degree, xp=xp)
+    ty = _chebyshev_values(normalized_y, max_degree, xp=xp)
+    return xp.stack(
         [tx[:, degree_x] * ty[:, degree_y] for degree_x, degree_y in terms],
         axis=1,
     )
 
 
-def _normalized_coordinate(values: np.ndarray, length: int) -> np.ndarray:
+def _normalized_coordinate(values, length: int, *, xp=np):
     if length == 1:
-        return np.zeros(values.size, dtype=np.float64)
-    return 2.0 * values.astype(np.float64) / (length - 1) - 1.0
+        return xp.zeros(values.size, dtype=xp.float64)
+    return 2.0 * values.astype(xp.float64) / (length - 1) - 1.0
 
 
-def _chebyshev_values(values: np.ndarray, degree: int) -> np.ndarray:
-    output = np.empty((values.size, degree + 1), dtype=np.float64)
+def _chebyshev_values(values, degree: int, *, xp=np):
+    output = xp.empty((values.size, degree + 1), dtype=xp.float64)
     output[:, 0] = 1.0
     if degree >= 1:
         output[:, 1] = values
@@ -773,53 +1187,48 @@ def _terms_at(
 
 
 def _profiles(
-    reference: np.ndarray,
-    basis: np.ndarray,
-    coefficients: np.ndarray,
-    spatial_design: np.ndarray,
+    reference,
+    basis,
+    coefficients,
+    spatial_design,
     *,
     reference_scale: float = 1.0,
-) -> np.ndarray:
-    output = np.broadcast_to(
+    xp=np,
+):
+    output = xp.broadcast_to(
         reference_scale * reference,
         (spatial_design.shape[0], reference.size),
     ).copy()
     if basis.shape[0]:
-        output += np.einsum(
-            "is,ps,iu->pu",
-            coefficients,
-            spatial_design,
-            basis,
-            optimize=True,
-        )
+        coefficient_fields = spatial_design @ coefficients.T
+        output += coefficient_fields @ basis
     return output
 
 
 def _contract_patches(
-    patches: np.ndarray,
-    vertical: np.ndarray,
-    horizontal: np.ndarray,
-) -> np.ndarray:
-    return np.einsum(
-        "pvu,pv,pu->p",
-        patches,
-        vertical[:, ::-1],
-        horizontal[:, ::-1],
-        optimize=True,
-    )
+    patches,
+    vertical,
+    horizontal,
+    *,
+    xp=np,
+):
+    collapsed = xp.matmul(vertical[:, None, ::-1], patches)[:, 0, :]
+    return xp.sum(collapsed * horizontal[:, ::-1], axis=1)
 
 
 def _patch_chunk(
-    patch_view: np.ndarray,
-    sample_indices: np.ndarray,
+    patch_view,
+    sample_indices,
     start: int,
     stop: int,
     image_shape: tuple[int, int],
     kernel_shape: tuple[int, int],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    *,
+    xp=np,
+):
     margin_y = kernel_shape[0] // 2
     margin_x = kernel_shape[1] // 2
-    sample_y, sample_x = np.divmod(
+    sample_y, sample_x = xp.divmod(
         sample_indices[start:stop],
         image_shape[1],
     )
@@ -831,32 +1240,34 @@ def _patch_chunk(
 
 
 def _solve_horizontal_block(
-    patch_view: np.ndarray,
-    sample_indices: np.ndarray,
-    target_flat: np.ndarray,
-    variance_flat: np.ndarray,
+    patch_view,
+    sample_indices,
+    target_flat,
+    variance_flat,
     image_shape: tuple[int, int],
     spatial_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
-    horizontal_reference: np.ndarray,
-    horizontal_basis: np.ndarray,
-    vertical_reference: np.ndarray,
-    vertical_basis: np.ndarray,
-    vertical_coefficients: np.ndarray,
-    flux_scale: float,
+    horizontal_reference,
+    horizontal_basis,
+    vertical_reference,
+    vertical_basis,
+    vertical_coefficients,
+    flux_scale,
     *,
     regularization: float,
     kernel_shape: tuple[int, int],
-) -> tuple[np.ndarray, float]:
+    xp=np,
+    chunk_size: int = _DESIGN_CHUNK_SIZE,
+):
     horizontal_column_count = horizontal_basis.shape[0] * len(spatial_terms)
     column_count = horizontal_column_count + len(background_terms)
-    ridge_mask = np.zeros(column_count, dtype=bool)
+    ridge_mask = xp.zeros(column_count, dtype=xp.bool_)
     ridge_mask[:horizontal_column_count] = True
 
     def rows(
         start: int,
         stop: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[Any, Any, Any | None]:
         patches, sample_y, sample_x = _patch_chunk(
             patch_view,
             sample_indices,
@@ -864,18 +1275,21 @@ def _solve_horizontal_block(
             stop,
             image_shape,
             kernel_shape,
+            xp=xp,
         )
         spatial = _chebyshev_design(
             sample_y,
             sample_x,
             image_shape,
             spatial_terms,
+            xp=xp,
         )
         background = _chebyshev_design(
             sample_y,
             sample_x,
             image_shape,
             background_terms,
+            xp=xp,
         )
         vertical = _profiles(
             vertical_reference,
@@ -883,34 +1297,18 @@ def _solve_horizontal_block(
             vertical_coefficients,
             spatial,
             reference_scale=flux_scale,
+            xp=xp,
         )
-        horizontal_ref = np.broadcast_to(
-            horizontal_reference,
-            (stop - start, horizontal_reference.size),
-        )
-        baseline = _contract_patches(
-            patches,
-            vertical,
-            horizontal_ref,
-        )
+        collapsed = xp.matmul(vertical[:, None, ::-1], patches)[:, 0, :]
+        baseline = collapsed @ horizontal_reference[::-1]
         if horizontal_basis.shape[0]:
-            response = np.stack(
-                [
-                    _contract_patches(
-                        patches,
-                        vertical,
-                        np.broadcast_to(row, horizontal_ref.shape),
-                    )
-                    for row in horizontal_basis
-                ],
-                axis=1,
-            )
+            response = collapsed @ horizontal_basis[:, ::-1].T
             kernel_rows = (
                 response[:, :, None] * spatial[:, None, :]
             ).reshape(stop - start, -1)
         else:
-            kernel_rows = np.empty((stop - start, 0))
-        design = np.concatenate(
+            kernel_rows = xp.empty((stop - start, 0), dtype=xp.float64)
+        design = xp.concatenate(
             (kernel_rows, background),
             axis=1,
         )
@@ -918,7 +1316,7 @@ def _solve_horizontal_block(
         return (
             design,
             target_flat[flat_indices] - baseline,
-            variance_flat[flat_indices],
+            (None if variance_flat is None else variance_flat[flat_indices]),
         )
 
     return _solve_weighted_system(
@@ -927,35 +1325,39 @@ def _solve_horizontal_block(
         rows,
         ridge_mask,
         regularization=regularization,
+        xp=xp,
+        chunk_size=chunk_size,
     )
 
 
 def _solve_vertical_block(
-    patch_view: np.ndarray,
-    sample_indices: np.ndarray,
-    target_flat: np.ndarray,
-    variance_flat: np.ndarray,
+    patch_view,
+    sample_indices,
+    target_flat,
+    variance_flat,
     image_shape: tuple[int, int],
     spatial_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
-    horizontal_reference: np.ndarray,
-    horizontal_basis: np.ndarray,
-    horizontal_coefficients: np.ndarray,
-    vertical_reference: np.ndarray,
-    vertical_basis: np.ndarray,
+    horizontal_reference,
+    horizontal_basis,
+    horizontal_coefficients,
+    vertical_reference,
+    vertical_basis,
     *,
     regularization: float,
     kernel_shape: tuple[int, int],
-) -> tuple[np.ndarray, float]:
+    xp=np,
+    chunk_size: int = _DESIGN_CHUNK_SIZE,
+):
     vertical_column_count = vertical_basis.shape[0] * len(spatial_terms)
     column_count = 1 + vertical_column_count + len(background_terms)
-    ridge_mask = np.zeros(column_count, dtype=bool)
+    ridge_mask = xp.zeros(column_count, dtype=xp.bool_)
     ridge_mask[1 : 1 + vertical_column_count] = True
 
     def rows(
         start: int,
         stop: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[Any, Any, Any | None]:
         patches, sample_y, sample_x = _patch_chunk(
             patch_view,
             sample_indices,
@@ -963,52 +1365,39 @@ def _solve_vertical_block(
             stop,
             image_shape,
             kernel_shape,
+            xp=xp,
         )
         spatial = _chebyshev_design(
             sample_y,
             sample_x,
             image_shape,
             spatial_terms,
+            xp=xp,
         )
         background = _chebyshev_design(
             sample_y,
             sample_x,
             image_shape,
             background_terms,
+            xp=xp,
         )
         horizontal = _profiles(
             horizontal_reference,
             horizontal_basis,
             horizontal_coefficients,
             spatial,
+            xp=xp,
         )
-        vertical_ref = np.broadcast_to(
-            vertical_reference,
-            (stop - start, vertical_reference.size),
-        )
-        reference_response = _contract_patches(
-            patches,
-            vertical_ref,
-            horizontal,
-        )
+        collapsed = xp.matmul(patches, horizontal[:, ::-1, None])[:, :, 0]
+        reference_response = collapsed @ vertical_reference[::-1]
         if vertical_basis.shape[0]:
-            response = np.stack(
-                [
-                    _contract_patches(
-                        patches,
-                        np.broadcast_to(row, vertical_ref.shape),
-                        horizontal,
-                    )
-                    for row in vertical_basis
-                ],
-                axis=1,
-            )
+            response = collapsed @ vertical_basis[:, ::-1].T
             kernel_rows = (
                 response[:, :, None] * spatial[:, None, :]
             ).reshape(stop - start, -1)
         else:
-            kernel_rows = np.empty((stop - start, 0))
-        design = np.concatenate(
+            kernel_rows = xp.empty((stop - start, 0), dtype=xp.float64)
+        design = xp.concatenate(
             (
                 reference_response[:, None],
                 kernel_rows,
@@ -1020,7 +1409,7 @@ def _solve_vertical_block(
         return (
             design,
             target_flat[flat_indices],
-            variance_flat[flat_indices],
+            (None if variance_flat is None else variance_flat[flat_indices]),
         )
 
     return _solve_weighted_system(
@@ -1029,6 +1418,8 @@ def _solve_vertical_block(
         rows,
         ridge_mask,
         regularization=regularization,
+        xp=xp,
+        chunk_size=chunk_size,
     )
 
 
@@ -1036,68 +1427,79 @@ def _solve_weighted_system(
     row_count: int,
     column_count: int,
     row_builder,
-    ridge_mask: np.ndarray,
+    ridge_mask,
     *,
     regularization: float,
-) -> tuple[np.ndarray, float]:
+    xp=np,
+    chunk_size: int = _DESIGN_CHUNK_SIZE,
+):
+    row_count = int(row_count)
     if row_count < column_count:
         raise ValueError(
             "fit region is underdetermined for an ALS block: "
             f"{row_count} equations for {column_count} coefficients"
         )
-    gram = np.zeros((column_count, column_count), dtype=np.float64)
-    rhs = np.zeros(column_count, dtype=np.float64)
-    for start in range(0, row_count, _DESIGN_CHUNK_SIZE):
-        stop = min(start + _DESIGN_CHUNK_SIZE, row_count)
+    gram = xp.zeros((column_count, column_count), dtype=xp.float64)
+    rhs = xp.zeros(column_count, dtype=xp.float64)
+    for start in range(0, row_count, chunk_size):
+        stop = min(start + chunk_size, row_count)
         design, values, variance = row_builder(start, stop)
-        weights = 1.0 / np.sqrt(variance)
-        weighted_design = design * weights[:, None]
-        weighted_values = values * weights
-        gram += weighted_design.T @ weighted_design
-        rhs += weighted_design.T @ weighted_values
+        if variance is None:
+            gram += design.T @ design
+            rhs += design.T @ values
+        else:
+            weights = 1.0 / xp.sqrt(variance)
+            weighted_design = design * weights[:, None]
+            weighted_values = values * weights
+            gram += weighted_design.T @ weighted_design
+            rhs += weighted_design.T @ weighted_values
     system = gram.copy()
     if regularization:
-        diagonal = np.diag_indices_from(system)
+        diagonal = xp.diag_indices_from(system)
         system[diagonal] += regularization * ridge_mask
     # The Gram matrix mixes kernel columns in weighted squared data units
     # with unit-scale Chebyshev columns, so its raw condition number follows
     # the image units. Gate and solve the diagonally scaled system D G D with
     # D = diag(1 / sqrt(diag(G))) instead, then unscale the coefficients.
-    diagonal_values = np.diag(system)
-    if not np.all(np.isfinite(diagonal_values)) or np.any(
-        diagonal_values <= 0.0
+    diagonal_values = xp.diag(system)
+    if not bool(xp.all(xp.isfinite(diagonal_values))) or bool(
+        xp.any(diagonal_values <= 0.0)
     ):
         raise ValueError("spatial ALS design is singular or ill-conditioned")
-    scale = 1.0 / np.sqrt(diagonal_values)
+    scale = 1.0 / xp.sqrt(diagonal_values)
     scaled_system = system * scale[:, None] * scale[None, :]
-    condition_number = float(np.linalg.cond(scaled_system))
+    condition_number = _scalar_to_float(xp.linalg.cond(scaled_system))
     if (
         not np.isfinite(condition_number)
         or condition_number > _CONDITION_LIMIT
     ):
         raise ValueError("spatial ALS design is singular or ill-conditioned")
     try:
-        coefficients = scale * np.linalg.solve(scaled_system, scale * rhs)
-    except np.linalg.LinAlgError as exc:
+        coefficients = scale * xp.linalg.solve(scaled_system, scale * rhs)
+    except getattr(xp.linalg, "LinAlgError", np.linalg.LinAlgError) as exc:
         raise ValueError("spatial ALS block could not be solved") from exc
     return coefficients, condition_number
 
 
 def _weighted_target_energy(
-    target_flat: np.ndarray,
-    variance_flat: np.ndarray,
-    sample_indices: np.ndarray,
+    target_flat,
+    variance_flat,
+    sample_indices,
+    *,
+    xp=np,
+    chunk_size: int = _DESIGN_CHUNK_SIZE,
 ) -> float:
-    energy = 0.0
-    for start in range(0, sample_indices.size, _DESIGN_CHUNK_SIZE):
-        stop = min(start + _DESIGN_CHUNK_SIZE, sample_indices.size)
+    energy = xp.asarray(0.0, dtype=xp.float64)
+    for start in range(0, int(sample_indices.size), chunk_size):
+        stop = min(start + chunk_size, int(sample_indices.size))
         chunk_indices = sample_indices[start:stop]
-        energy += float(
-            np.sum(
+        if variance_flat is None:
+            energy += xp.sum(target_flat[chunk_indices] ** 2)
+        else:
+            energy += xp.sum(
                 target_flat[chunk_indices] ** 2 / variance_flat[chunk_indices]
             )
-        )
-    return energy
+    return _scalar_to_float(energy)
 
 
 def _objective_has_converged(
@@ -1113,46 +1515,55 @@ def _objective_has_converged(
         return True
     if current > prior:
         return False
+    if current <= objective_floor:
+        return True
+    if tolerance == 0.0:
+        return False
     improvement = prior - current
-    return current <= objective_floor or improvement <= tolerance * max(
+    return improvement <= tolerance * max(
         abs(prior),
         objective_floor,
     )
 
 
 def _predict_chunk(
-    patches: np.ndarray,
-    sample_y: np.ndarray,
-    sample_x: np.ndarray,
+    patches,
+    sample_y,
+    sample_x,
     image_shape: tuple[int, int],
     spatial_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
-    horizontal_reference: np.ndarray,
-    horizontal_basis: np.ndarray,
-    horizontal_coefficients: np.ndarray,
-    vertical_reference: np.ndarray,
-    vertical_basis: np.ndarray,
-    vertical_coefficients: np.ndarray,
-    flux_scale: float,
-    background_coefficients: np.ndarray,
-) -> np.ndarray:
+    horizontal_reference,
+    horizontal_basis,
+    horizontal_coefficients,
+    vertical_reference,
+    vertical_basis,
+    vertical_coefficients,
+    flux_scale,
+    background_coefficients,
+    *,
+    xp=np,
+):
     spatial = _chebyshev_design(
         sample_y,
         sample_x,
         image_shape,
         spatial_terms,
+        xp=xp,
     )
     background = _chebyshev_design(
         sample_y,
         sample_x,
         image_shape,
         background_terms,
+        xp=xp,
     )
     horizontal = _profiles(
         horizontal_reference,
         horizontal_basis,
         horizontal_coefficients,
         spatial,
+        xp=xp,
     )
     vertical = _profiles(
         vertical_reference,
@@ -1160,39 +1571,43 @@ def _predict_chunk(
         vertical_coefficients,
         spatial,
         reference_scale=flux_scale,
+        xp=xp,
     )
     return (
         _contract_patches(
             patches,
             vertical,
             horizontal,
+            xp=xp,
         )
         + background @ background_coefficients
     )
 
 
 def _sample_chi2(
-    patch_view: np.ndarray,
-    sample_indices: np.ndarray,
-    target_flat: np.ndarray,
-    variance_flat: np.ndarray,
+    patch_view,
+    sample_indices,
+    target_flat,
+    variance_flat,
     image_shape: tuple[int, int],
     spatial_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
-    horizontal_reference: np.ndarray,
-    horizontal_basis: np.ndarray,
-    horizontal_coefficients: np.ndarray,
-    vertical_reference: np.ndarray,
-    vertical_basis: np.ndarray,
-    vertical_coefficients: np.ndarray,
-    flux_scale: float,
-    background_coefficients: np.ndarray,
+    horizontal_reference,
+    horizontal_basis,
+    horizontal_coefficients,
+    vertical_reference,
+    vertical_basis,
+    vertical_coefficients,
+    flux_scale,
+    background_coefficients,
     *,
     kernel_shape: tuple[int, int],
+    xp=np,
+    chunk_size: int = _DESIGN_CHUNK_SIZE,
 ) -> float:
-    chi2 = 0.0
-    for start in range(0, sample_indices.size, _DESIGN_CHUNK_SIZE):
-        stop = min(start + _DESIGN_CHUNK_SIZE, sample_indices.size)
+    chi2 = xp.asarray(0.0, dtype=xp.float64)
+    for start in range(0, int(sample_indices.size), chunk_size):
+        stop = min(start + chunk_size, int(sample_indices.size))
         patches, sample_y, sample_x = _patch_chunk(
             patch_view,
             sample_indices,
@@ -1200,6 +1615,7 @@ def _sample_chi2(
             stop,
             image_shape,
             kernel_shape,
+            xp=xp,
         )
         predictions = _predict_chunk(
             patches,
@@ -1216,91 +1632,134 @@ def _sample_chi2(
             vertical_coefficients,
             flux_scale,
             background_coefficients,
+            xp=xp,
         )
         chunk_indices = sample_indices[start:stop]
         residual = target_flat[chunk_indices] - predictions
-        chi2 += float(np.sum((residual**2) / variance_flat[chunk_indices]))
-    return chi2
+        if variance_flat is None:
+            chi2 += xp.sum(residual**2)
+        else:
+            chi2 += xp.sum((residual**2) / variance_flat[chunk_indices])
+    return _scalar_to_float(chi2)
 
 
 def _reconstruct_images(
-    source: np.ndarray,
-    target: np.ndarray,
-    variance: np.ndarray,
+    source,
+    target,
+    variance,
     kernel_shape: tuple[int, int],
     spatial_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
-    horizontal_reference: np.ndarray,
-    horizontal_basis: np.ndarray,
-    horizontal_coefficients: np.ndarray,
-    vertical_reference: np.ndarray,
-    vertical_basis: np.ndarray,
-    vertical_coefficients: np.ndarray,
-    flux_scale: float,
-    background_coefficients: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    horizontal_reference,
+    horizontal_basis,
+    horizontal_coefficients,
+    vertical_reference,
+    vertical_basis,
+    vertical_coefficients,
+    flux_scale,
+    background_coefficients,
+    *,
+    xp=np,
+    chunk_size: int = _DESIGN_CHUNK_SIZE,
+    valid_indices=None,
+):
     height, width = source.shape
     margin_y = kernel_shape[0] // 2
     margin_x = kernel_shape[1] // 2
-    patch_view = sliding_window_view(source, kernel_shape)
-    matched = np.full(source.shape, np.nan, dtype=np.float64)
+    patch_view = xp.lib.stride_tricks.sliding_window_view(
+        source,
+        kernel_shape,
+    )
+    matched = xp.full(source.shape, xp.nan, dtype=xp.float64)
     matched_flat = matched.ravel()
     target_flat = target.ravel()
-    variance_flat = variance.ravel()
-    interior_height = height - 2 * margin_y
-    interior_width = width - 2 * margin_x
-    interior_size = interior_height * interior_width
-    for start in range(0, interior_size, _DESIGN_CHUNK_SIZE):
-        stop = min(start + _DESIGN_CHUNK_SIZE, interior_size)
-        interior_offsets = np.arange(start, stop)
-        output_y, output_x = np.divmod(interior_offsets, interior_width)
-        output_y += margin_y
-        output_x += margin_x
-        output_indices = output_y * width + output_x
-        patches = patch_view[
-            output_y - margin_y,
-            output_x - margin_x,
-        ]
-        valid = (
-            np.isfinite(patches).all(axis=(-2, -1))
-            & np.isfinite(target_flat[output_indices])
-            & np.isfinite(variance_flat[output_indices])
-        )
-        if not np.any(valid):
-            continue
-        predictions = _predict_chunk(
-            patches[valid],
-            output_y[valid],
-            output_x[valid],
-            source.shape,
-            spatial_terms,
-            background_terms,
-            horizontal_reference,
-            horizontal_basis,
-            horizontal_coefficients,
-            vertical_reference,
-            vertical_basis,
-            vertical_coefficients,
-            flux_scale,
-            background_coefficients,
-        )
-        matched_flat[output_indices[valid]] = predictions
-    residual = target - matched
+    variance_flat = None if variance is None else variance.ravel()
+    if valid_indices is not None:
+        for start in range(0, int(valid_indices.size), chunk_size):
+            stop = min(start + chunk_size, int(valid_indices.size))
+            patches, output_y, output_x = _patch_chunk(
+                patch_view,
+                valid_indices,
+                start,
+                stop,
+                source.shape,
+                kernel_shape,
+                xp=xp,
+            )
+            predictions = _predict_chunk(
+                patches,
+                output_y,
+                output_x,
+                source.shape,
+                spatial_terms,
+                background_terms,
+                horizontal_reference,
+                horizontal_basis,
+                horizontal_coefficients,
+                vertical_reference,
+                vertical_basis,
+                vertical_coefficients,
+                flux_scale,
+                background_coefficients,
+                xp=xp,
+            )
+            matched_flat[valid_indices[start:stop]] = predictions
+    else:
+        interior_height = height - 2 * margin_y
+        interior_width = width - 2 * margin_x
+        interior_size = interior_height * interior_width
+        for start in range(0, interior_size, chunk_size):
+            stop = min(start + chunk_size, interior_size)
+            interior_offsets = xp.arange(start, stop)
+            output_y, output_x = xp.divmod(interior_offsets, interior_width)
+            output_y += margin_y
+            output_x += margin_x
+            output_indices = output_y * width + output_x
+            patches = patch_view[
+                output_y - margin_y,
+                output_x - margin_x,
+            ]
+            valid = xp.isfinite(patches).all(axis=(-2, -1)) & xp.isfinite(
+                target_flat[output_indices]
+            )
+            if variance_flat is not None:
+                valid &= xp.isfinite(variance_flat[output_indices])
+            if not xp.any(valid):
+                continue
+            predictions = _predict_chunk(
+                patches[valid],
+                output_y[valid],
+                output_x[valid],
+                source.shape,
+                spatial_terms,
+                background_terms,
+                horizontal_reference,
+                horizontal_basis,
+                horizontal_coefficients,
+                vertical_reference,
+                vertical_basis,
+                vertical_coefficients,
+                flux_scale,
+                background_coefficients,
+                xp=xp,
+            )
+            matched_flat[output_indices[valid]] = predictions
 
-    background = np.empty(source.shape, dtype=np.float64)
+    background = xp.empty(source.shape, dtype=xp.float64)
     background_flat = background.ravel()
-    for start in range(0, background.size, _DESIGN_CHUNK_SIZE):
-        stop = min(start + _DESIGN_CHUNK_SIZE, background.size)
-        output_indices = np.arange(start, stop)
-        output_y, output_x = np.divmod(output_indices, width)
+    for start in range(0, int(background.size), chunk_size):
+        stop = min(start + chunk_size, int(background.size))
+        output_indices = xp.arange(start, stop)
+        output_y, output_x = xp.divmod(output_indices, width)
         design = _chebyshev_design(
             output_y,
             output_x,
             source.shape,
             background_terms,
+            xp=xp,
         )
         background_flat[start:stop] = design @ background_coefficients
-    return matched, residual, background
+    return matched, background
 
 
 __all__ = [

@@ -9,6 +9,7 @@ import importlib.util
 import json
 import logging
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -135,12 +136,12 @@ def test_run_constant_kernel_fit_uses_workflow_prefix_and_name(
     assert result.run_dir.name == "subtract-run"
 
 
-def test_run_constant_kernel_fit_rejects_spatial_als_gpu_backend(
+def test_run_constant_kernel_fit_rejects_spatial_als_unsupported_backend(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(
         ValueError,
-        match="spatial-als.*only the CPU backend",
+        match="spatial-als.*only auto, cpu, and cupy",
     ):
         workflows.run_constant_kernel_fit(
             reference_path=tmp_path / "missing-reference.npy",
@@ -155,7 +156,7 @@ def test_run_constant_kernel_fit_rejects_spatial_als_gpu_backend(
             fit_mask_path=None,
             background_degree=0,
             flux_conserve=True,
-            backend="cupy",
+            backend="numba-cuda",
             solver="spatial-als",
         )
 
@@ -368,6 +369,7 @@ def test_run_spatial_als_cleans_failed_run_dir(tmp_path: Path) -> None:
             crop_width=21,
             background_degree=2,
             flux_conserve=True,
+            backend="cpu",
             solver="spatial-als",
         )
 
@@ -483,6 +485,226 @@ def test_benchmark_constant_kernel_backends_writes_parity_artifacts(
         result.run_dir / result.summary["saved"]["comparisons_json"]
     ).exists()
     assert (result.run_dir / result.summary["saved"]["cpu_kernel"]).exists()
+
+
+def test_benchmark_spatial_als_writes_portable_parity_artifacts(
+    tmp_path: Path,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path)
+
+    result = workflows.benchmark_constant_kernel_backends(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path / "runs",
+        name="spatial-backend-benchmark",
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(5, 5),
+        components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+        variance_path=None,
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=True,
+        backends=["cpu"],
+        reference_backend="cpu",
+        repeats=2,
+        warmup=1,
+        solver="spatial-als",
+        spatial_degree=1,
+        als_iterations=12,
+        als_tolerance=1e-9,
+        als_regularization=1e-8,
+    )
+
+    summary = result.summary
+    assert summary["solver"] == "spatial-als"
+    assert summary["runtimes"]["cpu"]["device"] == "cpu"
+    assert summary["timings"]["cpu"]["count"] == 2
+    assert summary["timings"]["cpu"]["median"] >= 0.0
+    assert summary["first_solve_timings"]["cpu"]["solve_seconds"] >= 0.0
+    assert summary["warm_timings"]["cpu"]["count"] == 2
+    assert summary["median_speedup_vs_reference"]["cpu"] == pytest.approx(1.0)
+    assert summary["warm_median_speedup_vs_reference"][
+        "cpu"
+    ] == pytest.approx(1.0)
+    assert summary["parity"]["ok"] is True
+    comparison = summary["parity"]["comparisons"]["cpu"]
+    assert comparison["arrays"]["horizontal_coefficients"]["ok"] is True
+    assert comparison["diagnostics"]["objective_history"]["ok"] is True
+    assert comparison["arrays"]["realized_kernels"]["ok"] is True
+    facts = summary["solver_facts"]["cpu"]
+    assert facts["resolved_backend"] == "cpu"
+    assert facts["iterations"] >= 1
+    assert facts["unique_fit_pixel_count"] > 0
+    assert facts["design_chunk_size"] > 0
+    assert summary["spatial_als"]["coordinate_order"] == "y,x"
+    assert summary["spatial_als"]["term_degree_order"] == "x,y"
+    assert len(summary["kernel_sample_positions_yx"]) == 5
+    for name in (
+        "cpu_horizontal_reference",
+        "cpu_horizontal_basis",
+        "cpu_horizontal_coefficients",
+        "cpu_vertical_reference",
+        "cpu_vertical_basis",
+        "cpu_vertical_coefficients",
+        "cpu_background_coefficients",
+        "cpu_flux_scale",
+        "cpu_objective_history",
+        "cpu_kernel_sample_positions_yx",
+        "cpu_realized_kernels",
+    ):
+        assert name in summary["saved"]
+        assert (result.run_dir / summary["saved"][name]).exists()
+
+
+def test_benchmark_spatial_als_rejects_unsupported_backend_before_run(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="spatial-als.*unsupported: numba-cuda",
+    ):
+        workflows.benchmark_constant_kernel_backends(
+            reference_path=tmp_path / "missing-reference.npy",
+            target_path=tmp_path / "missing-target.npy",
+            output_root=tmp_path / "runs",
+            name="spatial-unsupported-backend",
+            reference_hdu=None,
+            target_hdu=None,
+            kernel_shape=(5, 5),
+            components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+            variance_path=None,
+            backends=["cpu", "numba-cuda"],
+            solver="spatial-als",
+        )
+
+    assert not (tmp_path / "runs" / "spatial-unsupported-backend").exists()
+
+
+def test_benchmark_reports_unusable_gpu_backend_before_solving(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference, target = _write_spatial_als_inputs(tmp_path)
+    solves: list[str] = []
+    original_solve = workflows._solve_benchmark_model
+
+    def tracked_solve(**kwargs):
+        solves.append(kwargs["backend"])
+        return original_solve(**kwargs)
+
+    def failing_sync(backend: str) -> None:
+        if backend == "cupy":
+            raise RuntimeError("cudaErrorNoDevice: no CUDA-capable device")
+
+    monkeypatch.setattr(workflows, "_solve_benchmark_model", tracked_solve)
+    monkeypatch.setattr(workflows, "_sync_backend", failing_sync)
+
+    with pytest.raises(
+        RuntimeError,
+        match="backend='cupy' requires a usable CUDA device",
+    ):
+        workflows.benchmark_constant_kernel_backends(
+            reference_path=reference,
+            target_path=target,
+            output_root=tmp_path / "runs",
+            name="spatial-no-device",
+            reference_hdu=None,
+            target_hdu=None,
+            kernel_shape=(5, 5),
+            components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+            variance_path=None,
+            backends=["cupy", "cpu"],
+            reference_backend="cpu",
+            repeats=1,
+            warmup=0,
+            solver="spatial-als",
+        )
+
+    assert solves == []
+    assert not (tmp_path / "runs" / "spatial-no-device").exists()
+
+
+def test_spatial_parity_keeps_optimizer_diagnostics_non_gating(
+    tmp_path: Path,
+) -> None:
+    reference_path, target_path = _write_spatial_als_inputs(tmp_path)
+    source = np.load(reference_path, allow_pickle=False)
+    target = np.load(target_path, allow_pickle=False)
+    reference = workflows.solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=0.9, degree=1)],
+        kernel_shape=(5, 5),
+        backend="cpu",
+    )
+    candidate = replace(
+        reference,
+        objective_history=np.append(reference.objective_history, 1.0),
+        condition_number=reference.condition_number + 100.0,
+        iterations=reference.iterations + 1,
+        converged=not reference.converged,
+    )
+
+    comparison = workflows._compare_spatial_als_results(
+        reference,
+        candidate,
+        atol=1.0e-9,
+        rtol=1.0e-8,
+    )
+
+    assert comparison["ok"] is True
+    assert comparison["diagnostics"]["objective_history"]["ok"] is False
+    assert comparison["diagnostics"]["condition_number"]["ok"] is False
+    assert comparison["diagnostics"]["iterations_equal"] is False
+    assert comparison["diagnostics"]["converged_equal"] is False
+
+
+def test_benchmark_spatial_als_cupy_matches_cpu(tmp_path: Path) -> None:
+    cp = pytest.importorskip("cupy")
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    if device_count < 1:
+        pytest.skip("CuPy CUDA runtime has no visible device")
+
+    reference, target = _write_spatial_als_inputs(tmp_path)
+    result = workflows.benchmark_constant_kernel_backends(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path / "runs",
+        name="spatial-cupy-benchmark",
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(5, 5),
+        components=[GaussianBasisComponent(sigma=0.9, degree=1)],
+        variance_path=None,
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=True,
+        backends=["cpu", "cupy"],
+        reference_backend="cpu",
+        repeats=1,
+        warmup=1,
+        solver="spatial-als",
+        spatial_degree=1,
+        als_iterations=12,
+        als_tolerance=1e-9,
+        als_regularization=1e-8,
+    )
+
+    summary = result.summary
+    assert summary["parity"]["ok"] is True
+    assert summary["runtimes"]["cupy"]["backend"] == "cupy"
+    first_solve = summary["first_solve_timings"]["cupy"]
+    assert "cuda_event_seconds" in first_solve
+    assert "gpu_total_bytes_after" in first_solve
+    assert "cupy_pool_reserved_bytes_after" in first_solve
+    assert "cuda_event" in summary["timings"]["cupy"]
+    assert summary["median_speedup_vs_reference"]["cupy"] > 0.0
+    assert summary["solver_facts"]["cupy"]["resolved_backend"] == "cupy"
+    assert summary["solver_facts"]["cupy"]["design_chunk_size"] > 0
 
 
 def test_run_constant_kernel_fit_auto_stamp_mask_records_metadata(

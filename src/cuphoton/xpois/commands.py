@@ -397,31 +397,12 @@ class _KernelSolveCommand(_KernelSolveOptionsCommand):
         _default = None
 
 
-class _FitCommand(_KernelSolveCommand):
-    backend = None
-    no_review = None
+class _SpatialSolverCommand(_KernelSolveCommand):
     solver = None
     spatial_degree = None
     als_iterations = None
     als_tolerance = None
     als_regularization = None
-
-    class NoReviewArg(BoolInvariant):
-        _arg = "--no-review"
-        _help = "Skip review metadata and HTML; retain fitted artifacts."
-        _mandatory = False
-        _default = False
-
-    class BackendArg(SetInvariant):
-        _arg = "--backend"
-        _help = (
-            "Fit backend. Constant-solver auto tries cupy, then numba-cuda, "
-            "then cpu; spatial-als accepts only auto or cpu. "
-            "[default: %default]"
-        )
-        _mandatory = False
-        _default = "auto"
-        _set = set(SUPPORTED_BACKENDS)
 
     class SolverArg(SetInvariant):
         _arg = "--solver"
@@ -468,7 +449,8 @@ class _FitCommand(_KernelSolveCommand):
     class AlsToleranceArg(FloatInvariant):
         _arg = "--als-tolerance"
         _help = (
-            "Spatial ALS relative objective tolerance. "
+            "Spatial ALS relative objective tolerance; 0 disables the "
+            "relative-change stop. "
             f"[default: {SpatialALSConfig.tolerance}]"
         )
         _mandatory = False
@@ -484,6 +466,28 @@ class _FitCommand(_KernelSolveCommand):
         _mandatory = False
         _default = None
         _min = 0.0
+
+
+class _FitCommand(_SpatialSolverCommand):
+    backend = None
+    no_review = None
+
+    class NoReviewArg(BoolInvariant):
+        _arg = "--no-review"
+        _help = "Skip review metadata and HTML; retain fitted artifacts."
+        _mandatory = False
+        _default = False
+
+    class BackendArg(SetInvariant):
+        _arg = "--backend"
+        _help = (
+            "Fit backend. Constant-solver auto tries cupy, then numba-cuda, "
+            "then cpu; spatial-als auto tries cupy, then cpu. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
+        _set = set(SUPPORTED_BACKENDS)
 
 
 class FitKernelCommand(_FitCommand):
@@ -820,13 +824,12 @@ class FitBatchCommand(_KernelSolveOptionsCommand):
                 )
 
 
-class BenchmarkBackendsCommand(_KernelSolveCommand):
-    """Benchmark constant-kernel CPU/CuPy backends and parity.
+class BenchmarkBackendsCommand(_SpatialSolverCommand):
+    """Benchmark CPU/GPU kernel solvers and numerical parity.
 
-    This command isolates the constant-kernel solve/application path. It loads
-    the input arrays once, repeats `solve_constant_kernel` for each backend,
-    and persists timing plus numerical comparison artifacts under the run
-    directory.
+    This command loads the input arrays once, repeats the selected solver for
+    each backend, and persists timing plus numerical comparison artifacts
+    under the run directory.
     """
 
     backends = None
@@ -901,6 +904,11 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
             warmup=self.warmup,
             atol=self.atol,
             rtol=self.rtol,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
         )
         self._emit_json(result.summary)
 
