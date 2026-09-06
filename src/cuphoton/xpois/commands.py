@@ -175,7 +175,7 @@ class _KernelSolveCommand(XPOISCommand):
 
     class VarianceArg(PathSpecInvariant):
         _arg = "--variance"
-        _help = "Optional variance image path (.fits or .npy)."
+        _help = "Optional target variance image path (.fits or .npy)."
         _mandatory = False
         _default = None
 
@@ -400,7 +400,7 @@ class FitKernelCommand(_FitCommand):
     This is the main source-backed OIS workflow entrypoint. It supports:
 
     - raw FITS or `.npy` image inputs
-    - optional variance images / variance HDUs
+    - optional target variance images / variance HDUs
     - optional input-mask policies and explicit mask HDUs
     - optional rectangular workflow crops
     - explicit fit masks or auto-selected compact-source stamp masks

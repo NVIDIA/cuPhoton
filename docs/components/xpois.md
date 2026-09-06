@@ -24,9 +24,10 @@ explicit experimental backend and is not selected by `auto`.
 
 ## Input and output contract
 
-The reference and target are same-shaped 2D FITS or NPY images. Optional
-variance and mask inputs must align with them. Kernels and auto-selected stamps
-use odd dimensions. See [Data and artifact contracts](../data-artifacts.md#xpois-image-pairs).
+The reference and target are same-shaped 2D FITS or NPY images. The optional
+CLI variance is target variance and must align with them. Optional masks must
+also align. Kernels and auto-selected stamps use odd dimensions. See
+[Data and artifact contracts](../data-artifacts.md#xpois-image-pairs).
 
 A successful run persists `kernel.npy`, `matched.npy`, `residual.npy`,
 `fit_mask.npy`, and `background.npy` plus `summary.json`. Auto-stamp fitting
@@ -107,3 +108,29 @@ print(fit.converged, fit.iterations, fit.kernel.shape)
 `solve_constant_kernel`, Gaussian-basis builders, background helpers, stamp
 helpers, and the result dataclasses are also exported from
 `cuphoton.xpois`.
+
+## Fixed-kernel marginal noise diagnostics
+
+The survey-neutral Python API can propagate a reference variance plane through
+an already fitted constant kernel and combine it with target variance:
+
+```python
+from cuphoton.xpois import standardize_constant_kernel_residual
+
+noise = standardize_constant_kernel_residual(
+    fit.residual,
+    kernel=fit.kernel,
+    target_variance=target_variance,
+    reference_variance=reference_variance,
+    valid_mask=evaluation_mask,
+)
+standardized = noise.standardized_residual
+```
+
+This is a fixed-kernel marginal-diagonal calculation. The reference variance
+is convolved with `kernel**2`; a non-unit kernel sum therefore applies its own
+photometric scaling. It does not change fit weights or chi-square and does not
+represent neighboring-pixel covariance, reference-target covariance,
+resampling covariance, or fitted-kernel uncertainty. The standardized residual
+is a descriptive diagnostic, not a whitened residual or calibrated
+significance image. Prefer held-out pixels when assessing fit quality.

@@ -7,6 +7,10 @@
 from cuphoton import __version__
 
 from .data import inspect_hsc_data_tree, load_image_array
+from .noise import (
+    ConstantKernelNoiseResult,
+    standardize_constant_kernel_residual,
+)
 from .ois import (
     AutoStampMaskResult,
     BasisTerm,
@@ -30,6 +34,7 @@ __all__ = [
     "AutoStampMaskResult",
     "BasisTerm",
     "ConstantKernelFitResult",
+    "ConstantKernelNoiseResult",
     "GaussianBasisComponent",
     "SeparableKernelFitResult",
     "background_design",
@@ -44,5 +49,6 @@ __all__ = [
     "simple_difference_stamp",
     "solve_constant_kernel",
     "solve_separable_kernel",
+    "standardize_constant_kernel_residual",
     "triangular_degree_pairs",
 ]
