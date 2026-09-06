@@ -78,6 +78,46 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
     ]
 
 
+def test_xpois_device_api_is_additive_and_legacy_signature_is_stable() -> (
+    None
+):
+    expected = {
+        "ConstantKernelFitResult",
+        "DeviceConstantKernelFitResult",
+        "solve_constant_kernel",
+        "solve_constant_kernel_device",
+    }
+
+    assert expected <= set(xpois.__all__)
+    assert list(
+        inspect.signature(xpois.solve_constant_kernel).parameters
+    ) == [
+        "reference",
+        "target",
+        "components",
+        "kernel_shape",
+        "variance",
+        "fit_mask",
+        "background_degree",
+        "flux_conserve",
+        "flux_reference_index",
+        "backend",
+    ]
+    assert list(
+        inspect.signature(xpois.solve_constant_kernel_device).parameters
+    ) == [
+        "reference",
+        "target",
+        "components",
+        "kernel_shape",
+        "variance",
+        "fit_mask",
+        "background_degree",
+        "flux_conserve",
+        "flux_reference_index",
+    ]
+
+
 def test_xrep_additions_do_not_expand_existing_dataclasses() -> None:
     assert [field.name for field in fields(ReprojectionSpec)] == [
         "mapping",
@@ -193,6 +233,23 @@ def test_cli_first_package_roots_do_not_import_torch() -> None:
             (
                 "import sys; import cuphoton.xscan, cuphoton.xray; "
                 "raise SystemExit('torch' in sys.modules)"
+            ),
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_xpois_device_api_does_not_eagerly_import_cupy() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from cuphoton import xpois; "
+                "assert callable(xpois.solve_constant_kernel_device); "
+                "raise SystemExit('cupy' in sys.modules)"
             ),
         ],
         check=False,
