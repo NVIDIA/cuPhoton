@@ -66,6 +66,22 @@ applies one mask or variance plane to every channel of each candidate. If the
 batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
+An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
+form its weighted 8-by-8 normal equations without materializing an iteration
+Jacobian. The backend is opt-in, requires the `cuphoton[cutile]` extra on
+Linux with Python 3.12 or 3.13, and is not selected by `auto`. Final rank and
+covariance diagnostics still use the analytic Jacobian and a singular-value
+factorization. Sampled-stamp fits stay on the NumPy or CuPy backends. The Tile
+backend rejects finite-difference fitting rather than reporting Tile
+provenance for the generic CuPy path.
+
+Compare warmed end-to-end Gaussian fits with:
+
+```bash
+uv run --locked --python 3.12 --extra gpu --extra cutile \
+  python examples/xfit/benchmark_gaussian.py --dtype float64
+```
+
 Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
 the reported split-mode covariance is therefore not statistically calibrated

@@ -56,18 +56,40 @@ class JacobianFunction(Protocol):
     ) -> BackendArray: ...
 
 
+class NormalEquationsFunction(Protocol):
+    """Backend-specialized gradient and positive-semidefinite Hessian.
+
+    The caller validates shapes; symmetry and positive semidefiniteness are
+    the callback author's responsibility.
+    """
+
+    def __call__(
+        self,
+        parameters: BackendArray,
+        residuals: BackendArray,
+        *,
+        indices: BackendArray,
+    ) -> tuple[BackendArray, BackendArray]: ...
+
+
 @dataclass(frozen=True, init=False)
 class BatchedLeastSquaresProblem:
     """Residual and Jacobian functions for independent batched problems.
 
     The residual function returns ``(batch, observations)``. The optional
-    Jacobian returns ``(batch, parameters, observations)``. Both functions
-    receive the current batch rows plus ``indices`` identifying their rows in
-    the original problem.
+    Jacobian returns ``(batch, parameters, observations)``. An optional
+    normal-equations callback may return the gradient and Gauss--Newton
+    Hessian directly as ``(batch, parameters)`` and
+    ``(batch, parameters, parameters)``. It requires an analytic Jacobian for
+    final diagnostics. When :attr:`LMConfig.use_finite_difference` is set the
+    solver ignores ``normal_equations`` and differences the residual instead.
+    Callbacks receive the current batch rows plus ``indices`` identifying
+    their rows in the original problem.
     """
 
     residual: ResidualFunction
     jacobian: JacobianFunction | None
+    normal_equations: NormalEquationsFunction | None
 
     def __init__(
         self,
@@ -76,6 +98,7 @@ class BatchedLeastSquaresProblem:
         *,
         F: ResidualFunction | None = None,
         J: JacobianFunction | None = None,
+        normal_equations: NormalEquationsFunction | None = None,
     ) -> None:
         residual_fn = residual if residual is not None else F
         jacobian_fn = jacobian if jacobian is not None else J
@@ -85,8 +108,11 @@ class BatchedLeastSquaresProblem:
             raise TypeError("pass residual or F, not both")
         if jacobian is not None and J is not None:
             raise TypeError("pass jacobian or J, not both")
+        if normal_equations is not None and jacobian_fn is None:
+            raise TypeError("normal_equations requires an analytic Jacobian")
         object.__setattr__(self, "residual", residual_fn)
         object.__setattr__(self, "jacobian", jacobian_fn)
+        object.__setattr__(self, "normal_equations", normal_equations)
 
     @property
     def F(self) -> ResidualFunction:
@@ -266,11 +292,23 @@ def _call_jacobian(
     return problem.jacobian(x, indices=indices)
 
 
+def _call_normal_equations(
+    problem: BatchedLeastSquaresProblem,
+    x: BackendArray,
+    residual: BackendArray,
+    indices: BackendArray,
+) -> tuple[BackendArray, BackendArray]:
+    if problem.normal_equations is None:
+        raise TypeError("the problem does not provide normal equations")
+    return problem.normal_equations(x, residual, indices=indices)
+
+
 def _finite_difference_jacobian(
     problem: BatchedLeastSquaresProblem,
     x: BackendArray,
     residual: BackendArray,
     indices: BackendArray,
+    evaluations: BackendArray,
     ap: ModuleType,
     step_scale: float,
 ) -> BackendArray:
@@ -278,12 +316,18 @@ def _finite_difference_jacobian(
     m = residual.shape[1]
     jacobian = ap.empty((batch, n, m), dtype=x.dtype)
     trial = x.copy()
-    for parameter in range(n):
-        step = step_scale * ap.maximum(1.0, ap.abs(x[:, parameter]))
-        trial[:] = x
-        trial[:, parameter] += step
-        perturbed = _call_residual(problem, trial, indices)
-        jacobian[:, parameter, :] = (perturbed - residual) / step[:, None]
+    completed = 0
+    try:
+        for parameter in range(n):
+            step = step_scale * ap.maximum(1.0, ap.abs(x[:, parameter]))
+            trial[:] = x
+            trial[:, parameter] += step
+            perturbed = _call_residual(problem, trial, indices)
+            completed += 1
+            jacobian[:, parameter, :] = (perturbed - residual) / step[:, None]
+    finally:
+        if completed:
+            evaluations[indices] += completed
     return jacobian
 
 
@@ -292,6 +336,7 @@ def _final_jacobian(
     x: BackendArray,
     residual: BackendArray,
     indices: BackendArray,
+    evaluations: BackendArray,
     ap: ModuleType,
     settings: _Settings,
 ) -> BackendArray:
@@ -302,10 +347,35 @@ def _final_jacobian(
         x,
         residual,
         indices,
+        evaluations,
         ap,
         settings.finite_difference_step,
     )
     return result
+
+
+def _factorize_jacobians(
+    jacobians: BackendArray, ap: ModuleType
+) -> tuple[BackendArray, BackendArray]:
+    """Return left singular vectors and values for covariance diagnostics."""
+
+    batch, parameters, observations = jacobians.shape
+    module_name = type(jacobians).__module__.split(".", maxsplit=1)[0]
+    if module_name == "cupy" and batch > 1 and observations > 2 * parameters:
+        # For a tall J.T = Q R, the small R.T has the same singular values and
+        # left singular vectors as J. Avoid cuSOLVER's expensive batched SVD
+        # setup for the wide parameter-major Jacobians used by image fits.
+        reduced = ap.linalg.qr(
+            jacobians.transpose(0, 2, 1), mode="r"
+        ).transpose(0, 2, 1)
+        left_vectors, singular_values, _ = ap.linalg.svd(
+            reduced, full_matrices=False
+        )
+        return left_vectors, singular_values
+    left_vectors, singular_values, _ = ap.linalg.svd(
+        jacobians, full_matrices=False
+    )
+    return left_vectors, singular_values
 
 
 def batched_levenberg_marquardt(
@@ -363,6 +433,15 @@ def batched_levenberg_marquardt(
     identity = ap.eye(n, dtype=dtype)[None, :, :]
     jacobians = ap.full((k, n, m), ap.nan, dtype=dtype)
     jacobian_current = ap.zeros(k, dtype=bool)
+    # Rows whose latest normal equations describe the current parameters.
+    # They mirror ``jacobian_current`` so the final diagnostics of the
+    # specialized path match the plain analytic path row by row.
+    diagnostics_current = ap.zeros(k, dtype=bool)
+    use_normal_equations = (
+        problem.normal_equations is not None
+        and problem.jacobian is not None
+        and not settings.use_finite_difference
+    )
 
     while _bool((status == int(LMStatus.ACTIVE)).any()):
         active_indices = indices[status == int(LMStatus.ACTIVE)]
@@ -381,42 +460,76 @@ def batched_levenberg_marquardt(
 
         x_active = x[active_indices]
         residual_active = residuals[active_indices]
-        if (
-            problem.jacobian is not None
-            and not settings.use_finite_difference
-        ):
-            jacobian = _call_jacobian(problem, x_active, active_indices)
-        else:
-            jacobian = _finite_difference_jacobian(
+        if use_normal_equations:
+            gradient, hessian = _call_normal_equations(
                 problem,
                 x_active,
                 residual_active,
                 active_indices,
-                ap,
-                settings.finite_difference_step,
             )
-            evaluations[active_indices] += n
-        expected_shape = (active_indices.shape[0], n, m)
-        if jacobian.shape != expected_shape:
-            raise ValueError(
-                "jacobian must return shape (batch, parameters, observations)"
+            expected_gradient_shape = (active_indices.shape[0], n)
+            expected_hessian_shape = (active_indices.shape[0], n, n)
+            if gradient.shape != expected_gradient_shape:
+                raise ValueError(
+                    "normal-equation gradient must have shape "
+                    "(batch, parameters)"
+                )
+            if hessian.shape != expected_hessian_shape:
+                raise ValueError(
+                    "normal-equation Hessian must have shape "
+                    "(batch, parameters, parameters)"
+                )
+            valid_normal_equations = finite_rows(gradient) & finite_rows(
+                hessian
             )
+            status[active_indices[~valid_normal_equations]] = int(
+                LMStatus.INVALID_RESIDUAL
+            )
+            active_indices = active_indices[valid_normal_equations]
+            if active_indices.shape[0] == 0:
+                continue
+            x_active = x_active[valid_normal_equations]
+            residual_active = residual_active[valid_normal_equations]
+            gradient = gradient[valid_normal_equations]
+            hessian = hessian[valid_normal_equations]
+            diagnostics_current[active_indices] = True
+        else:
+            if (
+                problem.jacobian is not None
+                and not settings.use_finite_difference
+            ):
+                jacobian = _call_jacobian(problem, x_active, active_indices)
+            else:
+                jacobian = _finite_difference_jacobian(
+                    problem,
+                    x_active,
+                    residual_active,
+                    active_indices,
+                    evaluations,
+                    ap,
+                    settings.finite_difference_step,
+                )
+            expected_shape = (active_indices.shape[0], n, m)
+            if jacobian.shape != expected_shape:
+                raise ValueError(
+                    "jacobian must return shape "
+                    "(batch, parameters, observations)"
+                )
 
-        valid_jacobian = finite_rows(jacobian)
-        status[active_indices[~valid_jacobian]] = int(
-            LMStatus.INVALID_RESIDUAL
-        )
-        active_indices = active_indices[valid_jacobian]
-        if active_indices.shape[0] == 0:
-            continue
-        x_active = x_active[valid_jacobian]
-        residual_active = residual_active[valid_jacobian]
-        jacobian = jacobian[valid_jacobian]
-        jacobians[active_indices] = jacobian
-        jacobian_current[active_indices] = True
-
-        gradient = ap.einsum("knm,km->kn", jacobian, residual_active)
-        hessian = ap.einsum("knm,kpm->knp", jacobian, jacobian)
+            valid_jacobian = finite_rows(jacobian)
+            status[active_indices[~valid_jacobian]] = int(
+                LMStatus.INVALID_RESIDUAL
+            )
+            active_indices = active_indices[valid_jacobian]
+            if active_indices.shape[0] == 0:
+                continue
+            x_active = x_active[valid_jacobian]
+            residual_active = residual_active[valid_jacobian]
+            jacobian = jacobian[valid_jacobian]
+            jacobians[active_indices] = jacobian
+            jacobian_current[active_indices] = True
+            gradient = ap.einsum("knm,km->kn", jacobian, residual_active)
+            hessian = ap.einsum("knm,kpm->knp", jacobian, jacobian)
         diagonal = ap.maximum(ap.diagonal(hessian, axis1=1, axis2=2), eps)
         scaled_gradient = ap.max(ap.abs(gradient) / ap.sqrt(diagonal), axis=1)
         residual_norm = ap.linalg.norm(residual_active, axis=1)
@@ -481,6 +594,7 @@ def batched_levenberg_marquardt(
             residuals[accepted_indices] = trial_residual[accepted]
             jacobians[accepted_indices] = ap.nan
             jacobian_current[accepted_indices] = False
+            diagnostics_current[accepted_indices] = False
             damping[accepted_indices] = ap.maximum(
                 eps,
                 damping[accepted_indices] * settings.damping_decrease,
@@ -519,50 +633,149 @@ def batched_levenberg_marquardt(
     hessians = ap.full((k, n, n), ap.nan, dtype=dtype)
     covariance = ap.full((k, n, n), ap.nan, dtype=dtype)
     rank = ap.full(k, -1, dtype=np.int32)
+    status_host = as_numpy(status)
+    jacobian_current_host = as_numpy(jacobian_current)
+    diagnostics_current_host = as_numpy(diagnostics_current)
+    evaluations_host = as_numpy(evaluations)
+    finite_difference = (
+        problem.jacobian is None or settings.use_finite_difference
+    )
+    diagnostic_rows: list[int] = []
+    refresh_rows: list[int] = []
     for row in range(k):
-        if _int(status[row]) == int(LMStatus.INVALID_RESIDUAL):
+        if int(status_host[row]) == int(LMStatus.INVALID_RESIDUAL):
             continue
-        index = indices[row : row + 1]
+        if bool(jacobian_current_host[row]):
+            diagnostic_rows.append(row)
+            continue
+        if bool(diagnostics_current_host[row]):
+            # The specialized path never stored this row's Jacobian, but the
+            # analytic callback reproduces it without residual evaluations.
+            # As with jacobian_current, current diagnostics remain available
+            # for non-converged rows; uncertainty validity is checked later.
+            refresh_rows.append(row)
+            continue
+        if int(status_host[row]) not in {
+            int(value) for value in _CONVERGED_STATUSES
+        }:
+            continue
+        if (
+            finite_difference
+            and int(evaluations_host[row]) + n > settings.max_evaluations
+        ):
+            continue
+        refresh_rows.append(row)
+
+    if refresh_rows:
+        refresh_indices = ap.asarray(refresh_rows, dtype=np.int64)
         try:
-            if _bool(jacobian_current[row]):
-                jacobian = jacobians[row : row + 1]
-            else:
-                if _int(status[row]) not in {
-                    int(value) for value in _CONVERGED_STATUSES
-                }:
-                    continue
-                finite_difference = (
-                    problem.jacobian is None or settings.use_finite_difference
-                )
-                if finite_difference:
-                    if _int(evaluations[row]) + n > settings.max_evaluations:
-                        continue
-                    evaluations[row] += n
-                jacobian = _final_jacobian(
-                    problem,
-                    x[row : row + 1],
-                    residuals[row : row + 1],
-                    index,
-                    ap,
-                    settings,
-                )
-            if jacobian.shape != (1, n, m) or not _finite(jacobian, ap):
-                continue
-            jacobians[row] = jacobian[0]
-            gradients[row] = jacobian[0] @ residuals[row]
-            hessians[row] = jacobian[0] @ jacobian[0].T
-            left_vectors, singular_values, _ = ap.linalg.svd(
-                jacobian[0], full_matrices=False
+            refreshed = _final_jacobian(
+                problem,
+                x[refresh_indices],
+                residuals[refresh_indices],
+                refresh_indices,
+                evaluations,
+                ap,
+                settings,
             )
-            tolerance = max(n, m) * eps * ap.max(singular_values)
-            rank[row] = ap.sum(singular_values > tolerance)
-            if _int(rank[row]) == n:
-                inverse_squared = 1.0 / (singular_values * singular_values)
-                covariance[row] = (
-                    left_vectors * inverse_squared[None, :]
-                ) @ left_vectors.T
+            if refreshed.shape != (len(refresh_rows), n, m):
+                raise ValueError("final Jacobian has an unexpected shape")
+            valid_refresh = as_numpy(finite_rows(refreshed))
+            valid_rows = [
+                row
+                for row, valid in zip(
+                    refresh_rows, valid_refresh, strict=True
+                )
+                if bool(valid)
+            ]
+            if valid_rows:
+                valid_indices = ap.asarray(valid_rows, dtype=np.int64)
+                jacobians[valid_indices] = refreshed[
+                    ap.asarray(valid_refresh, dtype=bool)
+                ]
+                diagnostic_rows.extend(valid_rows)
         except Exception:
-            continue
+            # Retry row by row so one failing callback does not discard the
+            # diagnostics of every row in the batch. The finite-difference
+            # helper already charged the perturbations it completed, so a
+            # retry must still fit the remaining residual budget.
+            evaluations_host = as_numpy(evaluations)
+            for row in refresh_rows:
+                if (
+                    finite_difference
+                    and int(evaluations_host[row]) + n
+                    > settings.max_evaluations
+                ):
+                    continue
+                try:
+                    jacobian = _final_jacobian(
+                        problem,
+                        x[row : row + 1],
+                        residuals[row : row + 1],
+                        indices[row : row + 1],
+                        evaluations,
+                        ap,
+                        settings,
+                    )
+                    if jacobian.shape != (1, n, m) or not _finite(
+                        jacobian, ap
+                    ):
+                        continue
+                    jacobians[row] = jacobian[0]
+                    diagnostic_rows.append(row)
+                except Exception:
+                    continue
+
+    if diagnostic_rows:
+        diagnostic_indices = ap.asarray(diagnostic_rows, dtype=np.int64)
+        diagnostic_jacobians = jacobians[diagnostic_indices]
+        diagnostic_residuals = residuals[diagnostic_indices]
+        try:
+            gradients[diagnostic_indices] = ap.einsum(
+                "knm,km->kn", diagnostic_jacobians, diagnostic_residuals
+            )
+            hessians[diagnostic_indices] = ap.einsum(
+                "knm,kpm->knp", diagnostic_jacobians, diagnostic_jacobians
+            )
+            left_vectors, singular_values = _factorize_jacobians(
+                diagnostic_jacobians, ap
+            )
+            tolerance = max(n, m) * eps * ap.max(singular_values, axis=1)
+            rank_values = ap.sum(singular_values > tolerance[:, None], axis=1)
+            rank[diagnostic_indices] = rank_values
+            full_rank = rank_values == n
+            full_rank_indices = diagnostic_indices[full_rank]
+            if full_rank_indices.shape[0] > 0:
+                full_rank_vectors = left_vectors[full_rank]
+                full_rank_singular_values = singular_values[full_rank]
+                inverse_squared = 1.0 / (
+                    full_rank_singular_values * full_rank_singular_values
+                )
+                covariance[full_rank_indices] = (
+                    full_rank_vectors * inverse_squared[:, None, :]
+                ) @ full_rank_vectors.transpose(0, 2, 1)
+        except Exception:
+            # Preserve row-level failure isolation if a backend cannot perform
+            # one of the batched linear-algebra operations.
+            for row in diagnostic_rows:
+                try:
+                    jacobian = jacobians[row]
+                    gradients[row] = jacobian @ residuals[row]
+                    hessians[row] = jacobian @ jacobian.T
+                    left_vectors, singular_values, _ = ap.linalg.svd(
+                        jacobian, full_matrices=False
+                    )
+                    tolerance = max(n, m) * eps * ap.max(singular_values)
+                    rank[row] = ap.sum(singular_values > tolerance)
+                    if _int(rank[row]) == n:
+                        inverse_squared = 1.0 / (
+                            singular_values * singular_values
+                        )
+                        covariance[row] = (
+                            left_vectors * inverse_squared[None, :]
+                        ) @ left_vectors.T
+                except Exception:
+                    continue
 
     residual_norm = ap.linalg.norm(residuals, axis=1)
     converged = ap.zeros(k, dtype=bool)
@@ -589,6 +802,7 @@ __all__ = [
     "LMConfig",
     "LMResult",
     "LMStatus",
+    "NormalEquationsFunction",
     "ResidualFunction",
     "batched_levenberg_marquardt",
 ]
