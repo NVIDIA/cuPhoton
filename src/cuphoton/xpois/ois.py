@@ -31,7 +31,11 @@ _SUPPORTED_BACKENDS_SET = frozenset(SUPPORTED_BACKENDS)
 _NUMBA_MAX_COLUMNS = 64
 _NUMBA_THREADS_PER_BLOCK = 256
 _NUMBA_ROWS_PER_BLOCK = 1024
-_CUTILE_ROWS_PER_TILE = 256
+_CUTILE_MMA_SMALL_ROWS_PER_TILE = 32
+_CUTILE_MMA_LARGE_ROWS_PER_TILE = 128
+# Fits with at least this many rows use the 128-row tile specialization.
+_CUTILE_MMA_LARGE_ROW_THRESHOLD = 1 << 20
+_CUTILE_MMA_K_TILE = 16
 _NUMBA_ACCUMULATE_KERNEL: Any | None = None
 ct: Any | None = None
 
@@ -1639,7 +1643,7 @@ def _load_cutile() -> tuple[Any, Any]:
 
 
 @lru_cache(maxsize=1)
-def _cutile_design_rhs_kernel() -> Any:
+def _cutile_mma_normal_equations_kernel() -> Any:
     _, ct = _load_cutile()
 
     @ct.kernel
@@ -1649,142 +1653,126 @@ def _cutile_design_rhs_kernel() -> Any:
         variance,
         y_indices,
         x_indices,
-        basis_kernels,
+        padded_basis,
         background_terms,
-        partial_rhs,
-        row_count: ct.Constant[int],
+        partial_normal,
+        # A runtime row count lets masks of any size share one compiled
+        # kernel; only structural parameters are compile-time constants.
+        row_count,
         rows_per_tile: ct.Constant[int],
+        k_tile: ct.Constant[int],
+        normal_width: ct.Constant[int],
+        column_count: ct.Constant[int],
         basis_count: ct.Constant[int],
         kernel_height: ct.Constant[int],
         kernel_width: ct.Constant[int],
+        k_tile_count: ct.Constant[int],
     ):
         block = ct.bid(0)
-        column = ct.bid(1)
-        row_number = block * rows_per_tile + ct.arange(
-            rows_per_tile,
-            dtype=ct.int32,
-        )
-        valid = row_number < row_count
+        local_row = ct.arange(rows_per_tile, dtype=ct.int32)
+        row_number = block * rows_per_tile + local_row
+        valid_row = row_number < row_count
         y = ct.gather(y_indices, row_number, padding_value=0)
         x = ct.gather(x_indices, row_number, padding_value=0)
+        y_column = ct.reshape(y, (rows_per_tile, 1))
+        x_column = ct.reshape(x, (rows_per_tile, 1))
+        valid_row_column = ct.reshape(valid_row, (rows_per_tile, 1))
         margin_y = kernel_height // 2
         margin_x = kernel_width // 2
-        basis_value = ct.full((rows_per_tile,), 0.0, dtype=ct.float64)
-        for ky in range(kernel_height):
-            ref_y = y + ky - margin_y
-            basis_y = kernel_height - 1 - ky
-            for kx in range(kernel_width):
-                ref_x = x + kx - margin_x
-                basis_x = kernel_width - 1 - kx
-                reference_value = ct.gather(
-                    reference,
-                    (ref_y, ref_x),
-                    padding_value=0.0,
-                )
-                kernel_value = ct.gather(
-                    basis_kernels,
-                    (column, basis_y, basis_x),
-                    padding_value=0.0,
-                )
-                basis_value += reference_value * kernel_value
+        kernel_size = kernel_height * kernel_width
+        # Project each image patch onto every basis column once. The former
+        # kernel repeated this convolution for every Gram-matrix pair.
+        design = ct.zeros(
+            (rows_per_tile, normal_width),
+            dtype=ct.float64,
+        )
 
-        background_index = column - basis_count
-        background_value = ct.gather(
+        for tile_k in range(k_tile_count):
+            flat_kernel_index = tile_k * k_tile + ct.arange(
+                k_tile,
+                dtype=ct.int32,
+            )
+            kernel_y = flat_kernel_index // kernel_width
+            kernel_x = flat_kernel_index - kernel_y * kernel_width
+            ref_y = y_column + ct.reshape(kernel_y, (1, k_tile)) - margin_y
+            ref_x = x_column + ct.reshape(kernel_x, (1, k_tile)) - margin_x
+            valid_kernel = flat_kernel_index < kernel_size
+            gather_mask = valid_row_column & ct.reshape(
+                valid_kernel,
+                (1, k_tile),
+            )
+            patch = ct.gather(
+                reference,
+                (ref_y, ref_x),
+                mask=gather_mask,
+                padding_value=0.0,
+            )
+            basis_tile = ct.load(
+                padded_basis,
+                index=(tile_k, 0),
+                shape=(k_tile, normal_width),
+            )
+            design = ct.mma(patch, basis_tile, design)
+
+        columns = ct.arange(normal_width, dtype=ct.int32)
+        column_row = ct.reshape(columns, (1, normal_width))
+        background_index = column_row - basis_count
+        background = ct.gather(
             background_terms,
-            (background_index, y, x),
+            (background_index, y_column, x_column),
             padding_value=0.0,
         )
-        design = ct.where(column < basis_count, basis_value, background_value)
-        target_value = ct.gather(target, (y, x), padding_value=0.0)
-        variance_value = ct.gather(variance, (y, x), padding_value=1.0)
-        term = design * target_value / variance_value
-        total = ct.sum(ct.where(valid, term, 0.0))
-        ct.scatter(partial_rhs, (block, column), total)
-
-    return kernel
-
-
-@lru_cache(maxsize=1)
-def _cutile_design_gram_kernel() -> Any:
-    _, ct = _load_cutile()
-
-    @ct.kernel
-    def kernel(
-        reference,
-        variance,
-        y_indices,
-        x_indices,
-        basis_kernels,
-        background_terms,
-        partial_gram,
-        row_count: ct.Constant[int],
-        rows_per_tile: ct.Constant[int],
-        basis_count: ct.Constant[int],
-        kernel_height: ct.Constant[int],
-        kernel_width: ct.Constant[int],
-    ):
-        block = ct.bid(0)
-        left = ct.bid(1)
-        right = ct.bid(2)
-        row_number = block * rows_per_tile + ct.arange(
-            rows_per_tile,
-            dtype=ct.int32,
-        )
-        valid = row_number < row_count
-        y = ct.gather(y_indices, row_number, padding_value=0)
-        x = ct.gather(x_indices, row_number, padding_value=0)
-        margin_y = kernel_height // 2
-        margin_x = kernel_width // 2
-        left_basis = ct.full((rows_per_tile,), 0.0, dtype=ct.float64)
-        right_basis = ct.full((rows_per_tile,), 0.0, dtype=ct.float64)
-        for ky in range(kernel_height):
-            ref_y = y + ky - margin_y
-            basis_y = kernel_height - 1 - ky
-            for kx in range(kernel_width):
-                ref_x = x + kx - margin_x
-                basis_x = kernel_width - 1 - kx
-                reference_value = ct.gather(
-                    reference,
-                    (ref_y, ref_x),
-                    padding_value=0.0,
-                )
-                left_kernel = ct.gather(
-                    basis_kernels,
-                    (left, basis_y, basis_x),
-                    padding_value=0.0,
-                )
-                right_kernel = ct.gather(
-                    basis_kernels,
-                    (right, basis_y, basis_x),
-                    padding_value=0.0,
-                )
-                left_basis += reference_value * left_kernel
-                right_basis += reference_value * right_kernel
-
-        left_background = ct.gather(
-            background_terms,
-            (left - basis_count, y, x),
+        design = ct.where(column_row < basis_count, design, background)
+        target_value = ct.gather(
+            target,
+            (y_column, x_column),
             padding_value=0.0,
         )
-        right_background = ct.gather(
-            background_terms,
-            (right - basis_count, y, x),
-            padding_value=0.0,
+        design = ct.where(column_row == column_count, target_value, design)
+        design = ct.where(
+            column_row <= column_count,
+            design,
+            ct.zeros(
+                (rows_per_tile, normal_width),
+                dtype=ct.float64,
+            ),
         )
-        left_design = ct.where(
-            left < basis_count,
-            left_basis,
-            left_background,
+        variance_value = ct.gather(
+            variance,
+            (y_column, x_column),
+            padding_value=1.0,
         )
-        right_design = ct.where(
-            right < basis_count,
-            right_basis,
-            right_background,
+        weighted = design / ct.sqrt(variance_value)
+        weighted = ct.where(
+            valid_row_column,
+            weighted,
+            ct.zeros(
+                (rows_per_tile, normal_width),
+                dtype=ct.float64,
+            ),
         )
-        variance_value = ct.gather(variance, (y, x), padding_value=1.0)
-        term = left_design * right_design / variance_value
-        total = ct.sum(ct.where(valid, term, 0.0))
-        ct.scatter(partial_gram, (block, left, right), total)
+        # Appending the weighted target makes one MMA produce both D.T @ D
+        # and D.T @ y. Padded rows and columns are explicitly zero.
+        normal = ct.mma(
+            ct.transpose(weighted),
+            weighted,
+            ct.zeros((normal_width, normal_width), dtype=ct.float64),
+        )
+        normal_rows = ct.reshape(
+            ct.arange(normal_width, dtype=ct.int32),
+            (normal_width, 1),
+        )
+        normal_columns = ct.reshape(
+            ct.arange(normal_width, dtype=ct.int32),
+            (1, normal_width),
+        )
+        ct.scatter(
+            partial_normal,
+            (block, normal_rows, normal_columns),
+            normal,
+            mask=(normal_rows < column_count)
+            & (normal_columns <= column_count),
+        )
 
     return kernel
 
@@ -1796,21 +1784,23 @@ def _accumulate_normal_equations_cutile(
     mask: np.ndarray,
     basis_kernels: np.ndarray,
     background_terms: np.ndarray,
-    *,
-    rows_per_tile: int = _CUTILE_ROWS_PER_TILE,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     cp, ct = _load_cutile()
     reference_gpu = cp.asarray(reference, dtype=cp.float64)
     target_gpu = cp.asarray(target, dtype=cp.float64)
     variance_gpu = cp.asarray(variance, dtype=cp.float64)
     mask_gpu = cp.asarray(mask, dtype=cp.bool_)
-    basis_gpu = cp.asarray(basis_kernels, dtype=cp.float64)
     background_gpu = cp.asarray(background_terms, dtype=cp.float64)
     ys, xs = cp.nonzero(mask_gpu)
     ys = ys.astype(cp.int32, copy=False)
     xs = xs.astype(cp.int32, copy=False)
     row_count = int(ys.size)
     column_count = int(basis_kernels.shape[0] + background_terms.shape[0])
+    rows_per_tile = (
+        _CUTILE_MMA_LARGE_ROWS_PER_TILE
+        if row_count >= _CUTILE_MMA_LARGE_ROW_THRESHOLD
+        else _CUTILE_MMA_SMALL_ROWS_PER_TILE
+    )
     block_count = math.ceil(row_count / rows_per_tile)
     if block_count == 0:
         return (
@@ -1819,51 +1809,49 @@ def _accumulate_normal_equations_cutile(
             0,
         )
 
-    partial_gram = cp.empty(
-        (block_count, column_count, column_count),
+    kernel_height, kernel_width = basis_kernels.shape[1:]
+    # cuda.tile MMA dimensions are powers of two. Reserve the next column
+    # after the design for the weighted target.
+    normal_width = 1 << column_count.bit_length()
+    kernel_size = int(kernel_height * kernel_width)
+    k_tile = _CUTILE_MMA_K_TILE
+    k_tile_count = math.ceil(kernel_size / k_tile)
+    padded_basis_host = np.zeros(
+        (k_tile_count * k_tile, normal_width),
+        dtype=np.float64,
+    )
+    padded_basis_host[:kernel_size, : basis_kernels.shape[0]] = (
+        basis_kernels[:, ::-1, ::-1].reshape(basis_kernels.shape[0], -1).T
+    )
+    padded_basis = cp.asarray(padded_basis_host)
+    partial_normal = cp.empty(
+        (block_count, column_count, column_count + 1),
         dtype=cp.float64,
     )
-    partial_rhs = cp.empty((block_count, column_count), dtype=cp.float64)
-    kernel_height, kernel_width = basis_kernels.shape[1:]
     stream = cp.cuda.get_current_stream()
     try:
         ct.launch(
             stream,
-            (block_count, column_count, column_count),
-            _cutile_design_gram_kernel(),
-            (
-                reference_gpu,
-                variance_gpu,
-                ys,
-                xs,
-                basis_gpu,
-                background_gpu,
-                partial_gram,
-                row_count,
-                int(rows_per_tile),
-                int(basis_kernels.shape[0]),
-                int(kernel_height),
-                int(kernel_width),
-            ),
-        )
-        ct.launch(
-            stream,
-            (block_count, column_count, 1),
-            _cutile_design_rhs_kernel(),
+            (block_count, 1, 1),
+            _cutile_mma_normal_equations_kernel(),
             (
                 reference_gpu,
                 target_gpu,
                 variance_gpu,
                 ys,
                 xs,
-                basis_gpu,
+                padded_basis,
                 background_gpu,
-                partial_rhs,
+                partial_normal,
                 row_count,
                 int(rows_per_tile),
+                int(k_tile),
+                int(normal_width),
+                int(column_count),
                 int(basis_kernels.shape[0]),
                 int(kernel_height),
                 int(kernel_width),
+                int(k_tile_count),
             ),
         )
     except Exception as exc:
@@ -1871,8 +1859,9 @@ def _accumulate_normal_equations_cutile(
             "backend='cutile' failed to compile or launch its cuda.tile "
             "accumulator; check that cuda-tile and tileiras versions match"
         ) from exc
-    gram_matrix = cp.asnumpy(partial_gram.sum(axis=0))
-    rhs_vector = cp.asnumpy(partial_rhs.sum(axis=0))
+    normal = partial_normal.sum(axis=0)
+    gram_matrix = cp.asnumpy(normal[:, :column_count])
+    rhs_vector = cp.asnumpy(normal[:, column_count])
     return gram_matrix, rhs_vector, row_count
 
 
