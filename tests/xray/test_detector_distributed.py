@@ -433,6 +433,7 @@ def test_merge_detector_artifact_shards(tmp_path):
     assert manifest["artifact_role"] == "merged-shards"
     assert manifest["roi_lower"] == [0, 0]
     assert manifest["roi_dim"] == [5, 2]
+    assert manifest["batched_tiles"] == 2
     assert manifest["raw_fits"] == 4
     assert "path" not in manifest["merged_from_shards"][0]
     assert "manifest_path" not in manifest["merged_from_shards"][0]
@@ -794,6 +795,7 @@ def _write_shard(
         "hdf5_reader_workers": 2,
         "max_tiles": None,
         "processed_tiles": 1,
+        "batched_tiles": 1,
         "raw_fits": 2,
         "failures": 0,
         "skipped_fits": 0,

@@ -461,6 +461,66 @@ def test_synthetic_trace_batch_shape_and_variation():
     assert not np.allclose(traces[0], traces[1])
 
 
+def test_batched_p1_preserves_per_row_model_order():
+    cupy = pytest.importorskip("cupy")
+    try:
+        if cupy.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except cupy.cuda.runtime.CUDARuntimeError as exc:
+        pytest.skip(f"CUDA runtime unavailable: {exc}")
+
+    time = np.linspace(0.0, 4.0, 32, dtype=np.float64)
+    traces = np.stack(
+        [
+            np.exp(-0.1 * time) * np.cos(1.7 * time),
+            np.exp(-0.1 * time) * np.cos(1.7 * time)
+            + 0.4 * np.exp(-0.03 * time) * np.cos(3.1 * time + 0.2),
+            np.exp(-0.1 * time) * np.cos(1.7 * time)
+            + 0.4 * np.exp(-0.03 * time) * np.cos(3.1 * time + 0.2)
+            + 0.2 * np.exp(-0.2 * time) * np.cos(4.7 * time - 0.3),
+        ]
+    )
+    gpu_time = cupy.asarray(time)
+    gpu_traces = cupy.asarray(traces)
+
+    serial = lp._linear_prediction_p1_cupy_serial(
+        gpu_time,
+        gpu_traces,
+        n_components=10,
+    )
+    batched = lp._linear_prediction_p1_cupy_batched(
+        gpu_time,
+        gpu_traces,
+        n_components=10,
+    )
+
+    assert serial.selected_model_order == (2, 4, 6)
+    assert batched.selected_model_order == serial.selected_model_order
+    np.testing.assert_allclose(
+        cupy.asnumpy(batched.singular_values),
+        cupy.asnumpy(serial.singular_values),
+        rtol=1e-13,
+        atol=1e-13,
+    )
+    np.testing.assert_allclose(
+        cupy.asnumpy(batched.coefficients),
+        cupy.asnumpy(serial.coefficients),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    for actual, expected in zip(
+        cupy.asnumpy(batched.eigenvalues),
+        cupy.asnumpy(serial.eigenvalues),
+        strict=True,
+    ):
+        np.testing.assert_allclose(
+            lp._sort_complex(actual),
+            lp._sort_complex(expected),
+            rtol=1e-11,
+            atol=1e-11,
+        )
+
+
 def test_synthetic_prediction_coefficients_shape():
     coefficients = synthetic_prediction_coefficients(
         samples=32,
@@ -1282,7 +1342,8 @@ def test_variable_artifacts_benchmark_runs_gpu_path_when_available():
     assert result.max_abs_chi2_diff < 1e-12
 
 
-def test_public_variable_artifacts_cupy_batched_matches_cpu_reference():
+@pytest.mark.parametrize("solver", ["grouped-pinv", "serial-lstsq"])
+def test_public_variable_artifacts_cupy_batched_matches_cpu_reference(solver):
     cupy = pytest.importorskip("cupy")
     try:
         if cupy.cuda.runtime.getDeviceCount() < 1:
@@ -1319,7 +1380,7 @@ def test_public_variable_artifacts_cupy_batched_matches_cpu_reference():
         modes.decay,
         modes.angular_frequency,
         modes.mode_counts,
-        solver="grouped-pinv",
+        solver=solver,
         window_length=7,
         polyorder=3,
     )
@@ -1424,6 +1485,136 @@ def test_public_variable_artifacts_cupy_batched_matches_cpu_reference():
         np.testing.assert_allclose(
             cupy.asnumpy(actual[9]),
             cupy.asnumpy(expected[9]),
+            atol=1e-12,
+        )
+
+
+def test_batched_pinv_cutoff_uses_each_rows_active_mode_count():
+    cupy = pytest.importorskip("cupy")
+    try:
+        if cupy.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except cupy.cuda.runtime.CUDARuntimeError as exc:
+        pytest.skip(f"CUDA runtime unavailable: {exc}")
+
+    time = cupy.arange(8, dtype=cupy.float64)
+    decay = cupy.zeros((2, 64), dtype=cupy.float64)
+    omega = cupy.broadcast_to(
+        cupy.arange(1, 65, dtype=cupy.float64), (2, 64)
+    ).copy()
+    omega[0, 0] = 1e-14
+    traces = cupy.stack((cupy.sin(time * omega[0, 0]), cupy.cos(time)))
+    counts = cupy.asarray([1, 64])
+    design, _ = lp._p2_design_matrix(
+        cupy, time, decay[0, :1], omega[0, :1], dtype=cupy.float64
+    )
+    reference = lp._p2_lstsq(
+        cupy, design, traces[0], p2_ridge_alpha=0.0, diagnostics=False
+    ).coefficients
+
+    # Padding for the other row must not discard this row's small, active
+    # sine mode. Its singular value lies between the active and padded
+    # matrix cutoffs.
+    _, _, coefficients = lp._variable_p2_coefficients_cupy_batched_pinv(
+        time, traces, decay, omega, counts
+    )
+    assert float(reference[1]) < -0.9
+    np.testing.assert_allclose(
+        float(coefficients[0, 1]),
+        float(reference[1]),
+        rtol=1e-3,
+        atol=1e-12,
+    )
+
+
+def test_batched_pinv_cutoff_matches_lstsq_on_near_degenerate_design():
+    cupy = pytest.importorskip("cupy")
+    try:
+        if cupy.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except cupy.cuda.runtime.CUDARuntimeError as exc:
+        pytest.skip(f"CUDA runtime unavailable: {exc}")
+
+    time, trace = synthetic_trace(96)
+    gpu_time = cupy.asarray(time)
+    gpu_trace = cupy.asarray(trace)
+    # A near-duplicate mode leaves the smallest singular value between
+    # CuPy's default pinv cutoff (1e-15) and the eps * max(M, N) cutoff of
+    # lstsq(rcond=None), so only an aligned cutoff reproduces the serial
+    # production solve.
+    decay = cupy.asarray([[0.09, 0.03, 0.09]])
+    omega = cupy.asarray([[2.4, 0.9, 2.4 + 1e-14]])
+    mode_counts = cupy.asarray([3])
+    design, _fit_time = lp._p2_design_matrix(
+        cupy,
+        gpu_time,
+        decay[0],
+        omega[0],
+        dtype=cupy.float64,
+    )
+    singular_values = cupy.asnumpy(cupy.linalg.svd(design, compute_uv=False))
+    ratio = float(singular_values.min() / singular_values.max())
+    cutoff = np.finfo(np.float64).eps * max(design.shape)
+    assert 1e-15 < ratio <= cutoff, ratio
+
+    reference = cupy.asnumpy(
+        lp._p2_lstsq(
+            cupy,
+            design,
+            gpu_trace,
+            p2_ridge_alpha=0.0,
+            diagnostics=False,
+        ).coefficients
+    )
+    default_pinv = cupy.asnumpy(cupy.linalg.pinv(design) @ gpu_trace)
+    aligned_pinv = cupy.asnumpy(
+        cupy.linalg.pinv(design, rcond=cutoff) @ gpu_trace
+    )
+    assert np.max(np.abs(default_pinv - reference)) > 1e-6
+    np.testing.assert_allclose(aligned_pinv, reference, atol=1e-12)
+
+    _fit_time, _active, coefficients = (
+        lp._variable_p2_coefficients_cupy_batched_pinv(
+            gpu_time,
+            gpu_trace[None, :],
+            decay,
+            omega,
+            mode_counts,
+        )
+    )
+    np.testing.assert_allclose(
+        cupy.asnumpy(coefficients[0]),
+        reference,
+        atol=1e-12,
+    )
+
+    _filtered, serial = linear_prediction_variable_artifacts_cupy_batched(
+        gpu_time,
+        gpu_trace[None, :],
+        decay,
+        omega,
+        mode_counts,
+        solver="serial-lstsq",
+    )
+    for solver in ("pinv", "grouped-pinv"):
+        _filtered, batched = (
+            linear_prediction_variable_artifacts_cupy_batched(
+                gpu_time,
+                gpu_trace[None, :],
+                decay,
+                omega,
+                mode_counts,
+                solver=solver,
+            )
+        )
+        np.testing.assert_allclose(
+            cupy.asnumpy(batched.coefficients),
+            cupy.asnumpy(serial.coefficients),
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            cupy.asnumpy(batched.amplitude),
+            cupy.asnumpy(serial.amplitude),
             atol=1e-12,
         )
 

@@ -886,14 +886,18 @@ def linear_prediction_variable_artifacts_cupy_batched(
     many entries in each row are active. Passing ``window_length`` and
     ``polyorder`` applies the same axis-wise Savitzky-Golay filtering used by
     the accepted variable-artifact workbench before the batched P2 solve.
+    ``serial-lstsq`` retains the production row-wise least-squares solve while
+    batching the artifact construction that follows it.
     """
 
     if (window_length is None) != (polyorder is None):
         raise ValueError(
             "window_length and polyorder must be provided together"
         )
-    if solver not in ("pinv", "grouped-pinv"):
-        raise ValueError("solver must be 'pinv' or 'grouped-pinv'")
+    if solver not in ("pinv", "grouped-pinv", "serial-lstsq"):
+        raise ValueError(
+            "solver must be 'pinv', 'grouped-pinv', or 'serial-lstsq'"
+        )
 
     try:
         import cupy as cp
@@ -1275,8 +1279,10 @@ def benchmark_linear_prediction_p1_batch(
     """Benchmark serial P1 against a batched CuPy P1 prototype.
 
     P1 is the SVD + companion-eigenvalue phase that dominates the reference
-    fit path. The production app still runs one detector row at a time; this
-    benchmark tests whether the expensive fixed-shape part can be batched.
+    fit path. The production app still runs P1 (SVD and companion roots) one
+    detector row at a time even where it batches the artifact work that
+    follows; this benchmark tests whether that expensive fixed-shape part
+    can be batched.
     """
 
     if repeat < 1:
@@ -3630,30 +3636,47 @@ def _linear_prediction_p1_cupy_batched(time, traces, n_components):
         cp.isfinite(singular_values),
         singular_values > max_s[:, None] * 1e-12,
     )
-    valid_components = int(cp.min(cp.count_nonzero(valid, axis=1)).get())
-    selected_model_order = min(int(n_components), rows, m, valid_components)
-    if selected_model_order <= 0:
+    valid_components = cp.asnumpy(cp.count_nonzero(valid, axis=1))
+    selected_model_orders = np.minimum(
+        valid_components,
+        min(int(n_components), rows, m),
+    ).astype(np.int64, copy=False)
+    if np.any(selected_model_orders <= 0):
         raise ValueError("insufficient finite singular values")
 
-    v = cp.swapaxes(vh.conj(), -2, -1)[:, :, :selected_model_order]
-    u_h = cp.swapaxes(u.conj(), -2, -1)[:, :selected_model_order, :]
     xvector = signals[:, :rows]
-    projected = cp.matmul(u_h, xvector[:, :, None])[:, :, 0]
-    scaled = projected / singular_values[:, :selected_model_order]
-    coefficients = cp.matmul(v, scaled[:, :, None])[:, :, 0]
+    coefficients = cp.empty((signals.shape[0], m), dtype=signals.dtype)
+    for selected_model_order in np.unique(selected_model_orders):
+        row_indices = cp.asarray(
+            np.flatnonzero(selected_model_orders == selected_model_order)
+        )
+        v = cp.swapaxes(vh[row_indices].conj(), -2, -1)[
+            :, :, :selected_model_order
+        ]
+        u_h = cp.swapaxes(u[row_indices].conj(), -2, -1)[
+            :, :selected_model_order, :
+        ]
+        projected = cp.matmul(
+            u_h,
+            xvector[row_indices, :, None],
+        )[:, :, 0]
+        scaled = (
+            projected / singular_values[row_indices, :selected_model_order]
+        )
+        coefficients[row_indices] = cp.matmul(
+            v,
+            scaled[:, :, None],
+        )[:, :, 0]
 
-    companion = cp.zeros(
-        (signals.shape[0], m, m),
-        dtype=coefficients.dtype,
-    )
-    companion[:, :-1, 1:] = cp.eye(m - 1, dtype=companion.dtype)
-    companion[:, -1, :] = cp.flip(coefficients, axis=1)
+    companion = _batched_companion_matrix(cp, coefficients)
     eigenvalues = cp.linalg.eigvals(companion)
     return _P1Result(
         singular_values=singular_values,
         coefficients=coefficients,
         eigenvalues=eigenvalues,
-        selected_model_order=int(selected_model_order),
+        selected_model_order=tuple(
+            int(value) for value in selected_model_orders
+        ),
     )
 
 
@@ -4022,13 +4045,17 @@ def _p2_artifacts_from_coefficients_batched(
         safe_ww = ww
 
     reconstruction = reconstruction + coefficients[:, -1:]
+    # Build the spectral grid the way the row path's
+    # ``linspace(0, stop, 1000)`` does for an array ``stop``: scale the
+    # sample index by ``stop / 999`` and pin the endpoint. Scaling a unit
+    # ``linspace`` instead rounds twice and shifts grid points by an ULP,
+    # which is enough to move ``frequency_centers`` off the serial fit.
+    grid_stop = 1.5 * xp.where(mode_counts > 0, max_w, 1e-5) / (2 * xp.pi)
     frequency = (
-        xp.linspace(0, 1, 1000, dtype=signals.dtype)[None, :]
-        * (1.5 * xp.where(mode_counts > 0, max_w, 1e-5) / (2 * xp.pi))[
-            :,
-            None,
-        ]
+        xp.arange(1000, dtype=signals.dtype)[None, :]
+        * (grid_stop / 999)[:, None]
     )
+    frequency[:, -1] = grid_stop
     spectrum_components = xp.zeros(
         (row_count, frequency.shape[1], max_modes),
         dtype=signals.dtype,
@@ -4770,7 +4797,17 @@ def _variable_p2_artifacts_cupy_batched_solver(
             angular_frequency,
             mode_counts,
         )
-    raise ValueError("solver must be 'pinv' or 'grouped-pinv'")
+    if solver == "serial-lstsq":
+        return _variable_p2_artifacts_cupy_serial_lstsq(
+            time,
+            traces,
+            decay,
+            angular_frequency,
+            mode_counts,
+        )
+    raise ValueError(
+        "solver must be 'pinv', 'grouped-pinv', or 'serial-lstsq'"
+    )
 
 
 def _variable_p2_coefficients_cupy_batched_pinv(
@@ -4827,8 +4864,15 @@ def _variable_p2_coefficients_cupy_batched_pinv(
         active = cp.zeros((signals.shape[0], 0), dtype=cp.bool_)
     xbar[:, :, -1] = 1
 
+    # Match ``cp.linalg.lstsq(..., rcond=None)`` in the serial fit. CuPy's
+    # pseudoinverse otherwise defaults to a smaller fixed cutoff and can
+    # retain near-null columns that the production least-squares path drops.
+    rcond = np.finfo(np.float64).eps * cp.maximum(
+        int(xbar.shape[-2]),
+        2 * mode_counts + 1,
+    )
     coefficients = cp.matmul(
-        cp.linalg.pinv(xbar),
+        cp.linalg.pinv(xbar, rcond=rcond),
         signals[:, :, None],
     )[:, :, 0]
     return fit_time, active, coefficients
@@ -4996,6 +5040,75 @@ def _variable_p2_artifacts_cupy_grouped_pinv(
                 : mode_count * 2,
             ]
         coefficients[row_indices, -1] = group_coefficients[:, -1]
+
+    return _p2_artifacts_from_coefficients_batched(
+        cp,
+        fit_time=fit_time,
+        signals=signals,
+        decay=decay,
+        angular_frequency=angular_frequency,
+        coefficients=coefficients,
+        mode_counts=mode_counts,
+    )
+
+
+def _variable_p2_artifacts_cupy_serial_lstsq(
+    time,
+    traces,
+    decay,
+    angular_frequency,
+    mode_counts,
+):
+    """Preserve row-wise ``lstsq`` while batching artifact construction."""
+
+    import cupy as cp
+
+    bins = cp.asarray(time, dtype=cp.float64)
+    signals = cp.asarray(traces, dtype=cp.float64)
+    decay = cp.asarray(decay, dtype=cp.float64)
+    angular_frequency = cp.asarray(angular_frequency, dtype=cp.float64)
+    mode_counts = cp.asarray(mode_counts, dtype=cp.int64)
+    if bins.ndim != 1 or signals.ndim != 2:
+        raise ValueError("time must be 1D and traces must be 2D")
+    if signals.shape[1] != bins.shape[0]:
+        raise ValueError("traces must have one row per time sample")
+    if decay.shape != angular_frequency.shape:
+        raise ValueError("decay and angular_frequency must have same shape")
+    if decay.ndim != 2 or decay.shape[0] != signals.shape[0]:
+        raise ValueError("mode arrays must have one row per trace")
+    if mode_counts.shape != (signals.shape[0],):
+        raise ValueError("mode_counts must have one item per trace")
+
+    row_count = int(signals.shape[0])
+    max_modes = int(decay.shape[1])
+    coefficients = cp.zeros(
+        (row_count, max_modes * 2 + 1),
+        dtype=signals.dtype,
+    )
+    fit_time = _fit_time_from_bins(cp, bins)
+    for row, mode_count_item in enumerate(cp.asnumpy(mode_counts)):
+        mode_count = int(mode_count_item)
+        if mode_count < 0 or mode_count > max_modes:
+            raise ValueError("mode_counts entries must fit padded modes")
+        design, _row_fit_time = _p2_design_matrix(
+            cp,
+            bins,
+            decay[row, :mode_count],
+            angular_frequency[row, :mode_count],
+            dtype=signals.dtype,
+        )
+        row_coefficients = _p2_lstsq(
+            cp,
+            design,
+            signals[row],
+            p2_ridge_alpha=0.0,
+            diagnostics=False,
+        ).coefficients
+        if mode_count:
+            coefficients[row, : mode_count * 2] = row_coefficients[
+                : mode_count * 2
+            ]
+        coefficients[row, -1] = row_coefficients[-1]
 
     return _p2_artifacts_from_coefficients_batched(
         cp,

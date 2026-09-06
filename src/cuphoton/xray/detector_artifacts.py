@@ -26,7 +26,12 @@ from .detector_mask import (
     format_y_ranges,
 )
 from .hdf5 import probe_hdf5_file
-from .linear_prediction import linear_prediction_cupy
+from .linear_prediction import (
+    _linear_prediction_p1_impl,
+    linear_prediction_cupy,
+    linear_prediction_mode_batch_from_roots_cupy,
+    linear_prediction_variable_artifacts_cupy_batched,
+)
 from .zero_offset import find_value_drop_position
 
 DETECTOR_ARRAYS = (
@@ -107,7 +112,9 @@ class DetectorArtifactResult:
 
     ``shape`` is ``(roi_y, roi_x, spectral_bins)`` for emitted detector
     arrays, ``roi_lower`` and ``roi_dim`` use ``(x, y)`` ordering in detector
-    pixels, and ``elapsed_s`` is wall time in seconds. Output paths own the
+    pixels, and ``elapsed_s`` is wall time in seconds. ``batched_tiles``
+    counts the processed tiles whose fitted rows went through the batched
+    artifact path rather than the row-by-row fallback. Output paths own the
     persisted arrays; this result contains metadata only.
     """
 
@@ -120,6 +127,7 @@ class DetectorArtifactResult:
     zero_offset_index: int
     zero_offset_status: str
     processed_tiles: int
+    batched_tiles: int
     raw_fits: int
     failures: int
     skipped_fits: int
@@ -526,6 +534,45 @@ def build_detector_artifacts_cupy(
                     delay[fit_start : sample_count - fit_trailing_drop],
                     dtype=cp.float64,
                 )
+                active_local_rows = tuple(
+                    row for row, skip in enumerate(skip_rows) if not skip
+                )
+                batched_rows: dict[int, dict[str, Any] | None] = {}
+                if (
+                    fit_diagnostics == "none"
+                    and p2_ridge_alpha == 0.0
+                    and roots_backend == "eigvals"
+                    and len(active_local_rows) > 1
+                ):
+                    active_indices_gpu = cp.asarray(
+                        active_local_rows,
+                        dtype=cp.int64,
+                    )
+                    active_traces_gpu = cp.ascontiguousarray(
+                        filtered_gpu[
+                            fit_start : sample_count - fit_trailing_drop
+                        ].T[active_indices_gpu]
+                    )
+                    try:
+                        rows = _fit_detector_rows_batched(
+                            cp=cp,
+                            time_gpu=fit_time_gpu,
+                            traces_gpu=active_traces_gpu,
+                            components=components,
+                            padded_length=padded_length,
+                        )
+                    except fit_error_types:
+                        # Preserve row-local failure accounting when a tile
+                        # cannot use the optimized batch path.
+                        pass
+                    else:
+                        batched_rows = dict(
+                            zip(active_local_rows, rows, strict=True)
+                        )
+                        if any(
+                            row is not None for row in batched_rows.values()
+                        ):
+                            stats.batched_tiles += 1
                 for local_row, skip in enumerate(skip_rows):
                     output_y = y0 + local_row - roi_y
                     output_x = slice(x0 - roi_x, x1 - roi_x)
@@ -543,41 +590,43 @@ def build_detector_artifacts_cupy(
                             detector_y=y0 + local_row,
                         )
                         continue
-                    trace_gpu = filtered_gpu[
-                        fit_start : sample_count - fit_trailing_drop,
-                        local_row,
-                    ]
-                    try:
-                        row = _fit_detector_row(
-                            cp=cp,
-                            time_gpu=fit_time_gpu,
-                            trace_gpu=trace_gpu,
-                            components=components,
-                            p2_ridge_alpha=p2_ridge_alpha,
-                            roots_backend=roots_backend,
-                            padded_length=padded_length,
-                            fit_diagnostics=fit_diagnostics,
-                        )
-                    except fit_error_types as exc:
-                        fit_status[output_y, output_x] = FIT_STATUS_FAILED
-                        stats.failures += 1
-                        _append_non_ok_fit_diagnostic(
-                            diagnostics_writer,
-                            level=fit_diagnostics,
-                            fit_status=FIT_STATUS_FAILED,
-                            x0=x0,
-                            x1=x1,
-                            y0=y0,
-                            y1=y1,
-                            detector_y=y0 + local_row,
-                        )
-                        if stats.failures > max_fit_failures:
-                            raise RuntimeError(
-                                "detector artifact generation had "
-                                f"{stats.failures} fit failures; allowed "
-                                f"{max_fit_failures}"
-                            ) from exc
-                        continue
+                    row = batched_rows.get(local_row)
+                    if row is None:
+                        trace_gpu = filtered_gpu[
+                            fit_start : sample_count - fit_trailing_drop,
+                            local_row,
+                        ]
+                        try:
+                            row = _fit_detector_row(
+                                cp=cp,
+                                time_gpu=fit_time_gpu,
+                                trace_gpu=trace_gpu,
+                                components=components,
+                                p2_ridge_alpha=p2_ridge_alpha,
+                                roots_backend=roots_backend,
+                                padded_length=padded_length,
+                                fit_diagnostics=fit_diagnostics,
+                            )
+                        except fit_error_types as exc:
+                            fit_status[output_y, output_x] = FIT_STATUS_FAILED
+                            stats.failures += 1
+                            _append_non_ok_fit_diagnostic(
+                                diagnostics_writer,
+                                level=fit_diagnostics,
+                                fit_status=FIT_STATUS_FAILED,
+                                x0=x0,
+                                x1=x1,
+                                y0=y0,
+                                y1=y1,
+                                detector_y=y0 + local_row,
+                            )
+                            if stats.failures > max_fit_failures:
+                                raise RuntimeError(
+                                    "detector artifact generation had "
+                                    f"{stats.failures} fit failures; allowed "
+                                    f"{max_fit_failures}"
+                                ) from exc
+                            continue
                     _write_row_outputs(
                         freq_all,
                         amp_all,
@@ -686,6 +735,7 @@ def build_detector_artifacts_cupy(
         "hdf5_reader_workers": int(hdf5_reader_workers),
         "max_tiles": None if max_tiles is None else int(max_tiles),
         "processed_tiles": int(stats.processed_tiles),
+        "batched_tiles": int(stats.batched_tiles),
         "raw_fits": int(stats.raw_fits),
         "failures": int(stats.failures),
         "skipped_fits": int(stats.skipped_fits),
@@ -750,6 +800,7 @@ def build_detector_artifacts_cupy(
             else str(zero_result_payload.get("status", "cache"))
         ),
         processed_tiles=stats.processed_tiles,
+        batched_tiles=stats.batched_tiles,
         raw_fits=stats.raw_fits,
         failures=stats.failures,
         skipped_fits=stats.skipped_fits,
@@ -1097,6 +1148,12 @@ def merge_detector_artifact_shards(
                     for item in shards
                 )
             ),
+            "batched_tiles": int(
+                sum(
+                    int(item["manifest"].get("batched_tiles", 0))
+                    for item in shards
+                )
+            ),
             "raw_fits": int(
                 sum(
                     int(item["manifest"].get("raw_fits", 0))
@@ -1406,6 +1463,7 @@ def _detector_artifact_axis_value(
 @dataclass
 class _RunStats:
     processed_tiles: int = 0
+    batched_tiles: int = 0
     raw_fits: int = 0
     failures: int = 0
     skipped_fits: int = 0
@@ -1906,6 +1964,89 @@ def _fit_detector_row(
     return row
 
 
+def _fit_detector_rows_batched(
+    *,
+    cp,
+    time_gpu,
+    traces_gpu,
+    components: int,
+    padded_length: int,
+) -> tuple[dict[str, np.ndarray] | None, ...]:
+    """Batch row artifacts and FFTs without changing P1/P2 solve semantics.
+
+    P1 (SVD and companion roots) and the P2 least-squares solve still run
+    one row at a time. A row whose P1 raises a fit error is returned as
+    ``None`` so the caller can refit it serially and keep row-local failure
+    accounting; the remaining rows stay on the batched artifact path.
+    """
+
+    fit_error_types = _fit_error_types(cp)
+    row_count = int(traces_gpu.shape[0])
+    rows: list[dict[str, np.ndarray] | None] = [None] * row_count
+    survivors: list[int] = []
+    p1_rows = []
+    for row in range(row_count):
+        try:
+            p1 = _linear_prediction_p1_impl(
+                xp=cp,
+                time=time_gpu,
+                trace=traces_gpu[row],
+                n_components=components,
+            )
+        except fit_error_types:
+            continue
+        survivors.append(row)
+        p1_rows.append(p1)
+    if not survivors:
+        return tuple(rows)
+    if len(survivors) < row_count:
+        traces_gpu = traces_gpu[cp.asarray(survivors, dtype=cp.int64)]
+
+    modes = linear_prediction_mode_batch_from_roots_cupy(
+        time_gpu,
+        tuple(item.eigenvalues for item in p1_rows),
+        tuple(item.singular_values for item in p1_rows),
+    )
+    _filtered, artifacts = linear_prediction_variable_artifacts_cupy_batched(
+        time_gpu,
+        traces_gpu,
+        modes.decay,
+        modes.angular_frequency,
+        modes.mode_counts,
+        solver="serial-lstsq",
+    )
+    fft_frequency, fft_value = _tdsfft_cupy(cp, time_gpu, traces_gpu)
+
+    output_gpu = cp.zeros(
+        (len(survivors), 4, padded_length),
+        dtype=cp.float64,
+    )
+    mode_count = min(
+        padded_length,
+        int(artifacts.frequency_centers.shape[1]),
+    )
+    if mode_count:
+        output_gpu[:, 0, :mode_count] = cp.abs(
+            artifacts.frequency_centers[:, :mode_count]
+        )
+        output_gpu[:, 1, :mode_count] = cp.abs(
+            artifacts.amplitude[:, :mode_count]
+        )
+    fft_count = min(padded_length, int(fft_value.shape[-1]))
+    if fft_count:
+        output_gpu[:, 2, :fft_count] = cp.abs(fft_value[:, :fft_count])
+        output_gpu[:, 3, :fft_count] = cp.abs(fft_frequency[None, :fft_count])
+    output = cp.asnumpy(output_gpu)
+    for row, values in zip(survivors, output, strict=True):
+        rows[row] = {
+            "freq": values[0],
+            "amp": values[1],
+            "fft": values[2],
+            "fft_freq": values[3],
+        }
+    return tuple(rows)
+
+
 def _linear_prediction_fit_diagnostics(
     *,
     cp,
@@ -2012,10 +2153,10 @@ def _tdsfft_cupy(cp, time, trace):
     if len(time) < 2:
         raise ValueError("FFT requires at least two time samples")
     dt = time[1] - time[0]
-    n = len(trace)
+    n = int(trace.shape[-1])
     stop = (n + 1) // 2
     frequency = cp.fft.fftfreq(n, d=dt)[:stop]
-    value = cp.fft.fft(trace, n)[:stop] / n
+    value = cp.fft.fft(trace, n, axis=-1)[..., :stop] / n
     return frequency, value
 
 
