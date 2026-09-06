@@ -55,7 +55,9 @@ def test_xpois_noise_signature_is_explicit() -> None:
 def test_xfit_curated_exports_and_fit_signature() -> None:
     expected = {
         "BatchedLeastSquaresProblem",
+        "DeviceDipoleFitResult",
         "DipoleFitResult",
+        "DipoleFitUncertaintyReason",
         "GaussianDipoleModel",
         "LMConfig",
         "LMResult",
@@ -63,6 +65,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "StampDipoleModel",
         "batched_levenberg_marquardt",
         "fit_dipoles",
+        "fit_dipoles_device",
     }
 
     assert expected <= set(xfit.__all__)
@@ -75,6 +78,41 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mode",
         "backend",
         "config",
+    ]
+    assert list(inspect.signature(xfit.fit_dipoles_device).parameters) == [
+        "images",
+        "model",
+        "initial",
+        "mask",
+        "variance",
+        "mode",
+        "config",
+    ]
+    assert [field.name for field in fields(xfit.DipoleFitResult)] == [
+        "parameters",
+        "parameter_names",
+        "status",
+        "converged",
+        "evaluations",
+        "residual_norm",
+        "chi_square",
+        "valid_pixel_count",
+        "valid_pixel_fraction",
+        "null_chi_square",
+        "delta_chi_square",
+        "fractional_null_improvement",
+        "degrees_of_freedom",
+        "reduced_chi_square",
+        "covariance",
+        "standard_errors",
+        "uncertainty_valid",
+        "uncertainty_reason",
+        "residuals",
+        "backend",
+        "device",
+        "dtype",
+        "model",
+        "mode",
     ]
 
 
@@ -249,6 +287,23 @@ def test_xpois_device_api_does_not_eagerly_import_cupy() -> None:
             (
                 "import sys; from cuphoton import xpois; "
                 "assert callable(xpois.solve_constant_kernel_device); "
+                "raise SystemExit('cupy' in sys.modules)"
+            ),
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_xfit_device_api_does_not_eagerly_import_cupy() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from cuphoton import xfit; "
+                "assert callable(xfit.fit_dipoles_device); "
                 "raise SystemExit('cupy' in sys.modules)"
             ),
         ],

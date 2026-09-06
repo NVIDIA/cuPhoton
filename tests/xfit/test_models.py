@@ -4,16 +4,25 @@
 
 from __future__ import annotations
 
+import gc
+import pickle
+from dataclasses import FrozenInstanceError, replace
 from typing import get_args, get_type_hints
 
 import numpy as np
 import pytest
 
+import cuphoton.xfit.api as xfit_api
+import cuphoton.xfit.solver as xfit_solver
 from cuphoton.xfit import (
+    DeviceDipoleFitResult,
+    DipoleFitUncertaintyReason,
     GaussianDipoleModel,
     LMConfig,
+    LMStatus,
     StampDipoleModel,
     fit_dipoles,
+    fit_dipoles_device,
 )
 
 
@@ -25,6 +34,58 @@ def _gaussian_truth(dtype=np.float64) -> np.ndarray:
         ],
         dtype=dtype,
     )
+
+
+def _require_cupy_device(*, minimum_count: int = 1):
+    cp = pytest.importorskip("cupy")
+    try:
+        count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    if count < minimum_count:
+        pytest.skip(
+            f"test requires {minimum_count} visible CUDA device(s); "
+            f"got {count}"
+        )
+    return cp
+
+
+def test_device_fit_numeric_codes_and_host_reasons_are_stable() -> None:
+    assert {status.name: int(status) for status in LMStatus} == {
+        "ACTIVE": 0,
+        "CONVERGED_F_TOL": 1,
+        "CONVERGED_X_TOL": 2,
+        "CONVERGED_G_TOL": 3,
+        "MAX_EVALUATIONS": 4,
+        "INVALID_RESIDUAL": 5,
+        "SINGULAR": 6,
+        "NO_PROGRESS": 7,
+    }
+    assert {
+        reason.name: int(reason) for reason in DipoleFitUncertaintyReason
+    } == {
+        "VALID": 0,
+        "FIT_NOT_CONVERGED": 1,
+        "INSUFFICIENT_DEGREES_OF_FREEDOM": 2,
+        "FINAL_JACOBIAN_UNAVAILABLE": 3,
+        "RANK_DEFICIENT_JACOBIAN": 4,
+        "COVARIANCE_NOT_FINITE": 5,
+        "COVARIANCE_DIAGONAL_INVALID": 6,
+    }
+    codes = np.arange(7, dtype=np.int8)
+    status = np.full(7, "max_evaluations", dtype="U32")
+
+    assert xfit_api._uncertainty_reasons(codes, status) == (
+        "",
+        "fit did not converge: max_evaluations",
+        "insufficient degrees of freedom",
+        "final Jacobian is unavailable",
+        "rank-deficient Jacobian",
+        "covariance is not finite",
+        "covariance diagonal is invalid",
+    )
+    with pytest.raises(ValueError, match="unknown.*reason code 7"):
+        xfit_api._uncertainty_reasons(np.asarray([7]), status[:1])
 
 
 @pytest.mark.parametrize("mode", ["difference", "split"])
@@ -578,6 +639,456 @@ def test_stamp_multi_mode_basis_requires_explicit_weights() -> None:
     basis = np.stack((_sampled_basis(), _sampled_basis()))
     with pytest.raises(ValueError, match="basis_weights is required"):
         StampDipoleModel(basis, image_shape=(9, 9))
+
+
+@pytest.mark.parametrize("field", ["status_codes", "converged"])
+def test_backend_result_owns_solver_status_arrays(
+    field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    solver_results = []
+    original_solver = xfit_api.batched_levenberg_marquardt
+
+    def capture_solver_result(*args, **kwargs):
+        result = original_solver(*args, **kwargs)
+        solver_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        xfit_api, "batched_levenberg_marquardt", capture_solver_result
+    )
+    truth = _gaussian_truth()
+    model = GaussianDipoleModel((11, 15), dtype=np.float64)
+    result = xfit_api._fit_dipoles_backend(
+        model.evaluate(truth),
+        model=model,
+        initial=truth,
+        mask=None,
+        variance=None,
+        mode="difference",
+        resolved=xfit_api.resolve_backend("numpy"),
+        config=None,
+    )
+    values = getattr(result, field)
+    expected = values.copy()
+    solver_field = "status" if field == "status_codes" else field
+    original = getattr(solver_results[0], solver_field)
+    original[...] = ~original if field == "converged" else -1
+
+    np.testing.assert_array_equal(values, expected)
+    assert not np.shares_memory(values, original)
+
+
+def test_portable_result_owns_all_materialized_arrays() -> None:
+    truth = _gaussian_truth()
+    model = GaussianDipoleModel((11, 15), dtype=np.float64)
+    backend_result = xfit_api._fit_dipoles_backend(
+        model.evaluate(truth),
+        model=model,
+        initial=truth,
+        mask=None,
+        variance=None,
+        mode="difference",
+        resolved=xfit_api.resolve_backend("numpy"),
+        config=None,
+    )
+    result = xfit_api._materialize_dipole_fit_result(backend_result)
+    for name, values in vars(result).items():
+        if not isinstance(values, np.ndarray) or name == "status":
+            continue
+        original = getattr(backend_result, name)
+        expected = values.copy()
+        original[...] = ~original if original.dtype == bool else -123
+        np.testing.assert_array_equal(values, expected, err_msg=name)
+        assert not np.shares_memory(values, original), name
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_fit_dipoles_device_matches_portable_result_without_bulk_d2h(
+    dtype,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = _require_cupy_device()
+    truth = _gaussian_truth(dtype)
+    model = GaussianDipoleModel((11, 15), dtype=dtype)
+    images = cp.asarray(model.evaluate(truth))
+    initial = cp.asarray(
+        truth
+        + np.asarray(
+            [0.2, 0.1, -0.1, 0.03, 0.1, -0.1, -0.1, 0.1],
+            dtype=dtype,
+        )
+    )
+    images_before = images.copy()
+    initial_before = initial.copy()
+    batch_size = images.shape[0]
+    original_api_as_numpy = xfit_api.as_numpy
+    original_solver_as_numpy = xfit_solver.as_numpy
+
+    def scalar_only_as_numpy(value):
+        if isinstance(value, cp.ndarray) and value.ndim != 0:
+            pytest.fail("device fit materialized a result array on the host")
+        return original_api_as_numpy(value)
+
+    def bookkeeping_only_solver_as_numpy(value):
+        if isinstance(value, cp.ndarray) and value.ndim != 0:
+            # Final diagnostics inspect per-fit status (int8), evaluation
+            # counts (int32), and boolean current/refresh masks on the host.
+            # A failed batched refresh may read evaluation counts again.
+            # This allowance is only for solver control data: API result
+            # materialization remains scalar-only below.
+            is_bookkeeping = value.ndim == 1 and (
+                (
+                    value.dtype in (cp.int8, cp.int32)
+                    and value.shape == (batch_size,)
+                )
+                or (value.dtype == cp.bool_ and value.size <= batch_size)
+            )
+            if not is_bookkeeping:
+                pytest.fail("solver materialized a fit array on the host")
+        return original_solver_as_numpy(value)
+
+    with monkeypatch.context() as context:
+        context.setattr(xfit_api, "as_numpy", scalar_only_as_numpy)
+        context.setattr(
+            xfit_solver, "as_numpy", bookkeeping_only_solver_as_numpy
+        )
+        device = fit_dipoles_device(
+            images,
+            model=model,
+            initial=initial,
+        )
+
+        # Keep the guards effective for numerical results of every rank,
+        # including per-fit vectors, and for integer/bool API result fields.
+        for value in (
+            device.parameters,
+            device.covariance,
+            device.residuals,
+            device.chi_square,
+            device.evaluations,
+        ):
+            with pytest.raises(pytest.fail.Exception, match="fit array"):
+                xfit_solver.as_numpy(value)
+        for value in (
+            device.parameters,
+            device.status_codes,
+            device.converged,
+            device.evaluations,
+        ):
+            with pytest.raises(pytest.fail.Exception, match="result array"):
+                xfit_api.as_numpy(value)
+
+    assert cp.array_equal(images, images_before).item()
+    assert cp.array_equal(initial, initial_before).item()
+
+    portable = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="cupy",
+    )
+
+    assert isinstance(device, DeviceDipoleFitResult)
+    assert device.schema == "cuphoton.xfit.device-fit-result/v1"
+    assert device.solver == "levenberg-marquardt"
+    assert device.backend == "cupy"
+    assert device.result_location == "device"
+    assert device.device_id == int(images.device.id)
+    assert device.dtype == np.dtype(dtype).name
+    assert device.model == "gaussian"
+    assert device.mode == "difference"
+    for name in (
+        "parameters",
+        "status_codes",
+        "converged",
+        "evaluations",
+        "residual_norm",
+        "chi_square",
+        "valid_pixel_count",
+        "valid_pixel_fraction",
+        "null_chi_square",
+        "delta_chi_square",
+        "fractional_null_improvement",
+        "degrees_of_freedom",
+        "reduced_chi_square",
+        "covariance",
+        "standard_errors",
+        "uncertainty_valid",
+        "uncertainty_reason_codes",
+        "residuals",
+    ):
+        value = getattr(device, name)
+        assert isinstance(value, cp.ndarray)
+        assert int(value.device.id) == device.device_id
+    for name in (
+        "parameters",
+        "residual_norm",
+        "chi_square",
+        "null_chi_square",
+        "delta_chi_square",
+        "covariance",
+        "standard_errors",
+        "residuals",
+    ):
+        assert getattr(device, name).dtype == cp.dtype(dtype)
+    for name in (
+        "valid_pixel_fraction",
+        "fractional_null_improvement",
+        "reduced_chi_square",
+    ):
+        assert getattr(device, name).dtype == cp.float64
+    assert device.status_codes.dtype == cp.int8
+    assert device.evaluations.dtype == cp.int64
+    assert device.valid_pixel_count.dtype == cp.int64
+    assert device.degrees_of_freedom.dtype == cp.int64
+    assert device.converged.dtype == cp.bool_
+    assert device.uncertainty_valid.dtype == cp.bool_
+    assert device.uncertainty_reason_codes.dtype == cp.int8
+
+    status = np.asarray(
+        [
+            LMStatus(int(code)).name.lower()
+            for code in cp.asnumpy(device.status_codes)
+        ]
+    )
+    assert np.array_equal(status, portable.status)
+    assert device.parameter_names == portable.parameter_names
+    assert portable.uncertainty_reason == xfit_api._uncertainty_reasons(
+        cp.asnumpy(device.uncertainty_reason_codes), status
+    )
+    exact_fields = (
+        "converged",
+        "evaluations",
+        "valid_pixel_count",
+        "degrees_of_freedom",
+        "uncertainty_valid",
+    )
+    for name in exact_fields:
+        assert np.array_equal(
+            cp.asnumpy(getattr(device, name)), getattr(portable, name)
+        )
+    float_fields = (
+        "parameters",
+        "residual_norm",
+        "chi_square",
+        "valid_pixel_fraction",
+        "null_chi_square",
+        "delta_chi_square",
+        "fractional_null_improvement",
+        "reduced_chi_square",
+        "covariance",
+        "standard_errors",
+        "residuals",
+    )
+    for name in float_fields:
+        assert np.allclose(
+            cp.asnumpy(getattr(device, name)),
+            getattr(portable, name),
+            rtol=0.0,
+            atol=0.0,
+            equal_nan=True,
+        )
+
+    with pytest.raises(FrozenInstanceError):
+        device.device_id = device.device_id + 1  # type: ignore[misc]
+    for name, value in (
+        ("schema", "other"),
+        ("solver", "other"),
+        ("backend", "numpy"),
+        ("result_location", "host"),
+    ):
+        with pytest.raises(ValueError):
+            replace(device, **{name: value})
+    with pytest.raises(ValueError, match="CUDA device"):
+        replace(device, device_id=device.device_id + 1)
+    with pytest.raises(TypeError, match=device.dtype):
+        other_dtype = cp.float64 if dtype is np.float32 else cp.float32
+        replace(device, parameters=device.parameters.astype(other_dtype))
+    with pytest.raises(TypeError, match="cannot be pickled"):
+        pickle.dumps(device, protocol=pickle.HIGHEST_PROTOCOL)
+
+    residual_sum = float(cp.sum(device.residuals).item())
+    del images, initial, images_before, initial_before, model
+    gc.collect()
+    assert float(cp.sum(device.residuals).item()) == residual_sum
+
+
+@pytest.mark.parametrize(
+    "argument_name", ["images", "initial", "mask", "variance"]
+)
+def test_fit_dipoles_device_rejects_wrong_device_arrays_before_compute(
+    argument_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = _require_cupy_device(minimum_count=2)
+    active_device_id = int(cp.cuda.runtime.getDevice())
+    other_device_id = next(
+        device_id
+        for device_id in range(int(cp.cuda.runtime.getDeviceCount()))
+        if device_id != active_device_id
+    )
+    try:
+        with cp.cuda.Device(other_device_id):
+            wrong_device_values = {
+                "images": cp.ones((1, 7, 9), dtype=cp.float64),
+                "initial": cp.ones((1, 8), dtype=cp.float64),
+                "mask": cp.ones((1, 7, 9), dtype=cp.bool_),
+                "variance": cp.ones((1, 7, 9), dtype=cp.float64),
+            }
+    except Exception as exc:
+        pytest.skip(f"second CUDA device is not usable: {exc}")
+    arguments = {
+        "images": cp.ones((1, 7, 9), dtype=cp.float64),
+        "initial": cp.ones((1, 8), dtype=cp.float64),
+        "mask": cp.ones((1, 7, 9), dtype=cp.bool_),
+        "variance": cp.ones((1, 7, 9), dtype=cp.float64),
+    }
+    arguments[argument_name] = wrong_device_values[argument_name]
+    monkeypatch.setattr(
+        xfit_api,
+        "_fit_dipoles_backend",
+        lambda *_args, **_kwargs: pytest.fail(
+            "wrong-device input reached backend conversion"
+        ),
+    )
+
+    with pytest.raises(ValueError, match=argument_name):
+        fit_dipoles_device(
+            arguments["images"],
+            model="gaussian",
+            initial=arguments["initial"],
+            mask=arguments["mask"],
+            variance=arguments["variance"],
+        )
+    assert int(cp.cuda.runtime.getDevice()) == active_device_id
+
+
+def test_fit_dipoles_device_rejects_wrong_device_stamp_model_before_compute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = _require_cupy_device(minimum_count=2)
+    active_device_id = int(cp.cuda.runtime.getDevice())
+    other_device_id = next(
+        device_id
+        for device_id in range(int(cp.cuda.runtime.getDeviceCount()))
+        if device_id != active_device_id
+    )
+    try:
+        with cp.cuda.Device(other_device_id):
+            model = StampDipoleModel(
+                _sampled_basis(),
+                image_shape=(9, 13),
+                backend="cupy",
+            )
+    except Exception as exc:
+        pytest.skip(f"second CUDA device is not usable: {exc}")
+    monkeypatch.setattr(
+        xfit_api,
+        "_fit_dipoles_backend",
+        lambda *_args, **_kwargs: pytest.fail(
+            "wrong-device model reached backend conversion"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="model"):
+        fit_dipoles_device(np.ones((1, 9, 13)), model=model)
+    assert int(cp.cuda.runtime.getDevice()) == active_device_id
+
+
+def test_fit_dipoles_device_reuses_same_device_stamp_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = _require_cupy_device()
+    model = StampDipoleModel(
+        _sampled_basis(),
+        image_shape=(9, 13),
+        backend="cupy",
+        dtype=np.float64,
+    )
+    truth = cp.asarray([[-2.0, 0.0, 2.0, 0.0, 5.0]])
+    images = model.evaluate(truth, mode="split")
+    monkeypatch.setattr(
+        model,
+        "to_backend",
+        lambda *_args, **_kwargs: pytest.fail(
+            "same-device model was unnecessarily converted"
+        ),
+    )
+
+    result = fit_dipoles_device(
+        images,
+        model=model,
+        initial=truth,
+        mode="split",
+        config=LMConfig(max_evaluations=1),
+    )
+
+    assert result.model == "stamp"
+    assert result.mode == "split"
+    assert result.residuals.shape == images.shape
+    assert cp.array_equal(result.parameters, truth).item()
+
+
+@pytest.mark.parametrize(
+    ("model_dtype", "image_dtype"),
+    [(np.float32, np.float64), (np.float64, np.float32)],
+)
+def test_fit_dipoles_device_rejects_stamp_model_dtype_conversion(
+    model_dtype,
+    image_dtype,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = _require_cupy_device()
+    model = StampDipoleModel(
+        _sampled_basis(),
+        image_shape=(9, 13),
+        backend="cupy",
+        dtype=model_dtype,
+    )
+    images = cp.ones((1, 9, 13), dtype=image_dtype)
+    monkeypatch.setattr(
+        model,
+        "to_backend",
+        lambda *_args, **_kwargs: pytest.fail(
+            "device API attempted a host-mediated model conversion"
+        ),
+    )
+    monkeypatch.setattr(
+        xfit_api,
+        "_fit_dipoles_backend",
+        lambda *_args, **_kwargs: pytest.fail(
+            "mismatched model dtype reached solver setup"
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="StampDipoleModel dtype.*must match",
+    ):
+        fit_dipoles_device(images, model=model)
+
+
+def test_fit_dipoles_device_reports_no_visible_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeRuntime:
+        @staticmethod
+        def getDeviceCount() -> int:
+            return 0
+
+    class FakeCuda:
+        runtime = FakeRuntime()
+
+    class FakeCupy:
+        cuda = FakeCuda()
+
+    monkeypatch.setattr(xfit_api, "_load_cupy", lambda: FakeCupy())
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires at least one visible CUDA device",
+    ):
+        fit_dipoles_device(np.ones((1, 7, 9)), model="gaussian")
 
 
 def test_cupy_fit_matches_numpy_when_cuda_is_available() -> None:
