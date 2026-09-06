@@ -18,6 +18,10 @@ from cuphoton.xpois.noise import (
     standardize_constant_kernel_residual,
 )
 from cuphoton.xpois.ois import ConstantKernelFitResult
+from cuphoton.xpois.spatial_gaussian_polynomial import (
+    SpatialGaussianPolynomialKernelFitResult,
+    solve_spatial_gaussian_polynomial_kernel,
+)
 from cuphoton.xray.linear_prediction import LinearPredictionResult
 from cuphoton.xrep.geometry import MaskedReprojectionResult, ReprojectionSpec
 from cuphoton.xrep.mapping import PreparedReprojection
@@ -52,6 +56,20 @@ def test_xpois_noise_signature_is_explicit() -> None:
         "reference_variance",
         "valid_mask",
     ]
+
+
+def test_research_solver_requires_module_qualified_import() -> None:
+    assert callable(solve_spatial_gaussian_polynomial_kernel)
+    assert "solve_spatial_gaussian_polynomial_kernel" not in xpois.__all__
+    assert "SpatialGaussianPolynomialKernelConfig" not in xpois.__all__
+    assert "SpatialGaussianPolynomialKernelFitResult" not in xpois.__all__
+    assert "SpatialGaussianPolynomialKernelFitSamples" not in xpois.__all__
+    assert "SpatialKernelDomain" not in xpois.__all__
+    assert not hasattr(xpois, "solve_spatial_gaussian_polynomial_kernel")
+    assert not hasattr(xpois, "SpatialGaussianPolynomialKernelConfig")
+    assert not hasattr(xpois, "SpatialGaussianPolynomialKernelFitResult")
+    assert not hasattr(xpois, "SpatialGaussianPolynomialKernelFitSamples")
+    assert not hasattr(xpois, "SpatialKernelDomain")
 
 
 def test_xfit_curated_exports_and_fit_signature() -> None:
@@ -211,6 +229,7 @@ def test_xrep_existing_function_signatures_remain_stable() -> None:
         (ConstantKernelNoiseResult, "marginal diagonal"),
         (xpois.SeparableKernelFitResult, "target - matched"),
         (xpois.SpatialALSFitResult, "target - matched"),
+        (SpatialGaussianPolynomialKernelFitResult, "target - matched"),
         (PreparedReprojection, "d(source pixel)/d(destination pixel)"),
         (StampDataset, "do not alias the memory-mapped files"),
         (LinearPredictionResult, "radians per input time unit"),

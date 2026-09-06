@@ -212,6 +212,93 @@ The CuPy backend accelerates one spatial fit on one GPU. MPI and Dragon are
 separate whole-item orchestration layers; enabling this backend does not shard
 one fit or add the spatial solver to those batch paths.
 
+## Spatial Gaussian-polynomial research API
+
+`solve_spatial_gaussian_polynomial_kernel` is an experimental CPU reference for
+a less restrictive model than rank-one ALS. It uses fixed two-dimensional
+Gaussian-polynomial basis kernels in the spatial-kernel lineage of
+[Alard (2000)](https://arxiv.org/abs/astro-ph/9903111), with independently
+controlled photometric-scale, kernel-shape, and background fields as described
+by [Bramich et al. (2013)](https://arxiv.org/abs/1210.2926). This identifies the
+model family without claiming compatibility with a legacy or survey pipeline.
+While experimental, import it from its defining submodule rather than the
+curated `cuphoton.xpois` root API:
+
+```python
+from cuphoton.xpois.spatial_gaussian_polynomial import (
+    SpatialKernelDomain,
+    SpatialGaussianPolynomialKernelConfig,
+    solve_spatial_gaussian_polynomial_kernel,
+)
+
+fit = solve_spatial_gaussian_polynomial_kernel(
+    reference,
+    target,
+    components,
+    variance=target_variance,
+    source_variance=reference_variance,
+    fit_mask=fit_mask,
+    spatial_domain=SpatialKernelDomain(
+        array_origin_yx=(crop_y0, crop_x0),
+        normalization_bbox=(0, detector_height, 0, detector_width),
+    ),
+    config=SpatialGaussianPolynomialKernelConfig(
+        shape_degree=2,
+        photometric_degree=0,
+        background_degree=1,
+    ),
+)
+local_kernel = fit.kernel_at_local(local_y, local_x)
+parent_kernel = fit.kernel_at_parent(detector_y, detector_x)
+```
+
+`SpatialGaussianPolynomialKernelFitSamples` can replace `fit_mask` when an
+upstream source or
+stamp-selection stage needs to preserve exact pixel rows. It accepts local
+`(y, x)` positions and optional positive `relative_precision`; duplicate pixels
+are rejected because repeating one measurement does not create independent
+information. The result reports `fit_objective`, the weighted residual sum
+under the named `fit_weighting` policy, rather than a `chi2` field; it equals
+a chi-square only under `target_variance` weighting.
+
+Precisely, the minimized objective is
+`J = sum_i relative_precision_i * residual_i**2 / target_variance_i`, with
+each omitted factor set to one. Relative precision is not normalized, source
+variance remains diagnostic-only, and the nominal degrees of freedom are the
+number of unique fitted pixels minus the number of fitted parameters.
+
+The model fits all fixed two-dimensional Gaussian-polynomial basis terms
+jointly in one convex weighted linear solve. The first, unit-sum basis carries
+the photometric-scale field; every remaining basis has zero sum and describes
+kernel shape. This prevents shape variation from silently changing the kernel
+sum. A block QR reduction avoids forming normal equations in the CPU reference,
+and ill-conditioned fits fail rather than acquiring an implicit ridge model.
+Basis kernels or design columns that cancel to rounding noise, such as a
+duplicated component, are rejected before the solve because the column-scaled
+condition number cannot detect them.
+Chebyshev fields are evaluated in an explicit parent pixel-coordinate domain.
+If no domain is supplied, the complete input array spans `[-1, 1]` on both
+axes. Supplying the crop origin and half-open parent bounding box gives fitted
+coefficients the same coordinate interpretation across cutouts; it does not
+identify a detector or WCS. Result methods distinguish local-array from parent
+pixel coordinates explicitly: local-frame evaluation is limited to the fitted
+array, while parent-frame evaluation is defined anywhere inside
+`normalization_bbox`, so for a cutout it extrapolates the fitted fields beyond
+the array.
+
+This experimental Python API has no CLI selector or GPU backend.
+
+`variance` supplies target-only weights for the fit objective. When
+`source_variance` is also supplied, the result propagates independent source
+pixel variances through each position-dependent fitted kernel and reports
+`propagated_source_variance`, `marginal_residual_variance`, and
+`marginal_standardized_residual`. Source variance is diagnostic-only: missing
+source-variance footprints do not alter the fitted coefficients, but the
+corresponding diagnostic pixels are NaN. These products do not include fit
+uncertainty or cross-pixel covariance. The residual therefore remains an
+ordinary correlated difference image, not a proper-difference or calibrated
+detection-significance image. This API does not decorrelate the residual.
+
 ## Fixed-kernel marginal noise diagnostics
 
 The survey-neutral Python API can propagate a reference variance plane through
