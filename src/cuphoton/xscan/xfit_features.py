@@ -11,9 +11,9 @@ import math
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Literal, Mapping, Sequence, cast
 
 import numpy as np
 import pyarrow as pa
@@ -21,6 +21,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from cuphoton.core.artifacts import array_sha256, file_sha256
+from cuphoton.xfit import DeviceDipoleFitResult, DipoleFitResult
 
 from .types import (
     MissingPolicy,
@@ -239,6 +240,77 @@ class XFitFeatureMatrix:
 
     def __getitem__(self, index: int) -> np.ndarray:
         return self.values[index]
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceXFitFeatures:
+    """Canonical XScan xFit features retained on one CUDA device.
+
+    ``values`` owns a contiguous ``(batch, 17)`` float32 CuPy array. The
+    result is an in-process device object, not an interprocess payload or an
+    artifact, and cannot be pickled. Consume it on the CuPy stream used for
+    transformation, or initiate a stream-aware DLPack handoff while that
+    stream is current. This result does not retain a stream or completion
+    event for unordered direct consumption on another stream.
+    """
+
+    values: Any
+    device_id: int
+    model: XFitModel
+    image_shape: tuple[int, int]
+    variance_present: bool
+    feature_names: tuple[str, ...] = field(init=False, default=FEATURE_NAMES)
+    schema: Literal["cuphoton.xscan.device-xfit-features/v1"] = field(
+        init=False,
+        default="cuphoton.xscan.device-xfit-features/v1",
+    )
+    backend: Literal["cupy"] = field(init=False, default="cupy")
+    result_location: Literal["device"] = field(
+        init=False,
+        default="device",
+    )
+
+    def __post_init__(self) -> None:
+        if isinstance(self.device_id, bool) or not isinstance(
+            self.device_id, (int, np.integer)
+        ):
+            raise TypeError(
+                "device_id must be an integer CUDA device ordinal"
+            )
+        if self.device_id < 0:
+            raise ValueError("device_id must be non-negative")
+        if self.model not in {"gaussian", "stamp"}:
+            raise ValueError("model must be 'gaussian' or 'stamp'")
+        _validate_live_feature_metadata(
+            image_shape=self.image_shape,
+            variance_present=self.variance_present,
+        )
+        cp = _load_cupy()
+        if not isinstance(self.values, cp.ndarray):
+            raise TypeError("values must be a CuPy array")
+        if int(self.values.device.id) != int(self.device_id):
+            raise ValueError(
+                f"values are on CUDA device {int(self.values.device.id)}, "
+                f"expected {int(self.device_id)}"
+            )
+        if self.values.ndim != 2 or self.values.shape[1] != len(
+            FEATURE_NAMES
+        ):
+            raise ValueError(
+                f"values must have shape (batch, {len(FEATURE_NAMES)})"
+            )
+        if self.values.shape[0] < 1:
+            raise ValueError("values must contain at least one feature row")
+        if np.dtype(self.values.dtype) != np.dtype(np.float32):
+            raise TypeError("values must have float32 dtype")
+        if not self.values.flags.c_contiguous:
+            raise ValueError("values must be C-contiguous")
+
+    def __reduce_ex__(self, protocol: int) -> Any:
+        raise TypeError(
+            "DeviceXFitFeatures cannot be pickled; keep device features "
+            "inside the producing process"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -924,7 +996,7 @@ def _separation_error(
     return math.sqrt(variance)
 
 
-def _feature_row(
+def _canonical_feature_row(
     columns: Mapping[str, np.ndarray],
     row_index: int,
     covariance: np.ndarray,
@@ -1068,6 +1140,519 @@ def _feature_row(
                 1.0,
             )
     return feature.astype(np.float32)
+
+
+def _validate_live_feature_metadata(
+    *,
+    image_shape: tuple[int, int],
+    variance_present: bool,
+) -> None:
+    if (
+        not isinstance(image_shape, tuple)
+        or len(image_shape) != 2
+        or any(isinstance(value, bool) for value in image_shape)
+        or any(not isinstance(value, int) for value in image_shape)
+        or any(value <= 0 for value in image_shape)
+    ):
+        raise ValueError("image_shape must contain two positive integers")
+    if not isinstance(variance_present, bool):
+        raise TypeError("variance_present must be a boolean")
+
+
+def _validate_live_feature_source(
+    result: DipoleFitResult | DeviceDipoleFitResult,
+) -> tuple[str, ...]:
+    if result.mode != "difference":
+        raise ValueError("XScan xFit features require difference-mode fits")
+    if result.model not in {"gaussian", "stamp"}:
+        raise ValueError("xFit result model must be 'gaussian' or 'stamp'")
+    expected_parameters = (
+        _GAUSSIAN_PARAMETERS
+        if result.model == "gaussian"
+        else _STAMP_PARAMETERS
+    )
+    parameter_names = tuple(result.parameter_names)
+    if parameter_names != expected_parameters:
+        raise ValueError(
+            f"xFit result parameter_names do not match the {result.model} "
+            "model"
+        )
+    return parameter_names
+
+
+def transform_xfit_result_features(
+    result: DipoleFitResult,
+    *,
+    image_shape: tuple[int, int],
+    variance_present: bool,
+) -> np.ndarray:
+    """Transform a portable xFit result into canonical XScan features.
+
+    This live-result adapter calls the same row transform used by
+    :func:`build_xfit_feature_bundle`. Residual images are neither required
+    nor inspected.
+    """
+
+    parameter_names = _validate_live_feature_source(result)
+    _validate_live_feature_metadata(
+        image_shape=image_shape,
+        variance_present=variance_present,
+    )
+
+    parameters = np.asarray(result.parameters)
+    standard_errors = np.asarray(result.standard_errors)
+    covariance = np.asarray(result.covariance)
+    if parameters.ndim != 2 or parameters.shape[1] != len(parameter_names):
+        raise ValueError("xFit result parameters have an inconsistent shape")
+    batch_size = parameters.shape[0]
+    if standard_errors.shape != parameters.shape:
+        raise ValueError(
+            "xFit result standard_errors have an inconsistent shape"
+        )
+    if covariance.shape != (
+        batch_size,
+        len(parameter_names),
+        len(parameter_names),
+    ):
+        raise ValueError("xFit result covariance has an inconsistent shape")
+
+    columns: dict[str, np.ndarray] = {}
+    for name in (
+        "converged",
+        "degrees_of_freedom",
+        "valid_pixel_fraction",
+        "fractional_null_improvement",
+        "delta_chi_square",
+        "reduced_chi_square",
+        "uncertainty_valid",
+    ):
+        values = np.asarray(getattr(result, name))
+        if values.shape != (batch_size,):
+            raise ValueError(f"xFit result {name} has an inconsistent shape")
+        columns[name] = values
+    for parameter_index, parameter_name in enumerate(parameter_names):
+        columns[parameter_name] = parameters[:, parameter_index]
+        columns[f"{parameter_name}_standard_error"] = standard_errors[
+            :, parameter_index
+        ]
+
+    features = np.empty((batch_size, len(FEATURE_NAMES)), dtype=np.float32)
+    for row_index in range(batch_size):
+        features[row_index] = _canonical_feature_row(
+            columns,
+            row_index,
+            covariance[row_index],
+            model=result.model,
+            parameter_names=parameter_names,
+            image_shape=image_shape,
+            variance_present=variance_present,
+        )
+    return features
+
+
+def _load_cupy() -> Any:
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        raise ImportError(
+            "transform_xfit_result_features_device requires CuPy; run "
+            "'uv sync --extra gpu' for development or install "
+            "'cuphoton[gpu]'"
+        ) from exc
+    return cp
+
+
+def _active_cupy_device_id(cp: Any) -> int:
+    message = (
+        "transform_xfit_result_features_device requires at least one "
+        "visible CUDA device"
+    )
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+    if device_count < 1:
+        raise RuntimeError(message)
+    try:
+        return int(cp.cuda.runtime.getDevice())
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+
+
+def _validate_device_feature_source(
+    result: DeviceDipoleFitResult,
+    *,
+    cp: Any,
+    active_device_id: int,
+    image_shape: tuple[int, int],
+) -> tuple[str, ...]:
+    if result.schema != "cuphoton.xfit.device-fit-result/v1":
+        raise ValueError("xFit device result schema is unsupported")
+    if result.solver != "levenberg-marquardt":
+        raise ValueError("xFit device result solver is unsupported")
+    if result.backend != "cupy" or result.result_location != "device":
+        raise ValueError("xFit result must be a CuPy device result")
+    parameter_names = _validate_live_feature_source(result)
+    if int(result.device_id) != active_device_id:
+        raise ValueError(
+            f"xFit result is on CUDA device {int(result.device_id)}, "
+            f"but active device is {active_device_id}"
+        )
+
+    arrays = {
+        "parameters": result.parameters,
+        "converged": result.converged,
+        "degrees_of_freedom": result.degrees_of_freedom,
+        "valid_pixel_fraction": result.valid_pixel_fraction,
+        "fractional_null_improvement": result.fractional_null_improvement,
+        "delta_chi_square": result.delta_chi_square,
+        "reduced_chi_square": result.reduced_chi_square,
+        "uncertainty_valid": result.uncertainty_valid,
+        "standard_errors": result.standard_errors,
+        "covariance": result.covariance,
+        "residuals": result.residuals,
+    }
+    for name, value in arrays.items():
+        if not isinstance(value, cp.ndarray):
+            raise TypeError(f"xFit result {name} must be a CuPy array")
+        if int(value.device.id) != active_device_id:
+            raise ValueError(
+                f"xFit result {name} is on CUDA device "
+                f"{int(value.device.id)}, expected {active_device_id}"
+            )
+
+    parameters = result.parameters
+    batch_size = int(parameters.shape[0]) if parameters.ndim == 2 else -1
+    parameter_count = len(parameter_names)
+    if parameters.shape != (batch_size, parameter_count) or batch_size < 1:
+        raise ValueError("xFit result parameters have an inconsistent shape")
+    if result.standard_errors.shape != parameters.shape:
+        raise ValueError(
+            "xFit result standard_errors have an inconsistent shape"
+        )
+    if result.covariance.shape != (
+        batch_size,
+        parameter_count,
+        parameter_count,
+    ):
+        raise ValueError("xFit result covariance has an inconsistent shape")
+    for name in (
+        "converged",
+        "degrees_of_freedom",
+        "valid_pixel_fraction",
+        "fractional_null_improvement",
+        "delta_chi_square",
+        "reduced_chi_square",
+        "uncertainty_valid",
+    ):
+        if arrays[name].shape != (batch_size,):
+            raise ValueError(f"xFit result {name} has an inconsistent shape")
+    if result.residuals.ndim != 3 or result.residuals.shape[0] != batch_size:
+        raise ValueError(
+            "xFit result residuals must have shape (batch, height, width)"
+        )
+    if tuple(result.residuals.shape[-2:]) != image_shape:
+        raise ValueError("image_shape does not match xFit result residuals")
+    compute_dtype = np.dtype(result.dtype)
+    if compute_dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
+        raise ValueError("xFit result dtype must be 'float32' or 'float64'")
+    for name in (
+        "parameters",
+        "delta_chi_square",
+        "standard_errors",
+        "covariance",
+        "residuals",
+    ):
+        if np.dtype(arrays[name].dtype) != compute_dtype:
+            raise TypeError(
+                f"xFit result {name} must have {result.dtype} dtype"
+            )
+    expected_dtypes = {
+        "converged": np.dtype(bool),
+        "degrees_of_freedom": np.dtype(np.int64),
+        "valid_pixel_fraction": np.dtype(np.float64),
+        "fractional_null_improvement": np.dtype(np.float64),
+        "reduced_chi_square": np.dtype(np.float64),
+        "uncertainty_valid": np.dtype(bool),
+    }
+    for name, expected_dtype in expected_dtypes.items():
+        if np.dtype(arrays[name].dtype) != expected_dtype:
+            raise TypeError(
+                f"xFit result {name} must have {expected_dtype.name} dtype"
+            )
+    return parameter_names
+
+
+def _device_scaled_log(
+    values: Any, valid: Any, scale: float, *, cp: Any
+) -> Any:
+    transformed = cp.log1p(cp.where(valid, values, 0.0)) / scale
+    return cp.where(
+        valid & cp.isfinite(transformed),
+        cp.clip(transformed, 0.0, 1.0),
+        0.0,
+    )
+
+
+def transform_xfit_result_features_device(
+    result: DeviceDipoleFitResult,
+    *,
+    image_shape: tuple[int, int],
+    variance_present: bool,
+) -> DeviceXFitFeatures:
+    """Transform a device xFit result without crossing the host boundary.
+
+    Array-valued inputs remain borrowed on the active CUDA device. The
+    returned feature array is newly allocated and retains its own storage.
+    Call on the same current CuPy stream that produced ``result`` and consume
+    or export the features before leaving that stream's context. Retain
+    ``result`` until transformation has finished reading its arrays.
+    """
+
+    if not isinstance(result, DeviceDipoleFitResult):
+        raise TypeError("result must be a DeviceDipoleFitResult")
+    _validate_live_feature_metadata(
+        image_shape=image_shape,
+        variance_present=variance_present,
+    )
+    cp = _load_cupy()
+    active_device_id = _active_cupy_device_id(cp)
+    parameter_names = _validate_device_feature_source(
+        result,
+        cp=cp,
+        active_device_id=active_device_id,
+        image_shape=image_shape,
+    )
+
+    batch_size = int(result.parameters.shape[0])
+    values = cp.zeros((batch_size, len(FEATURE_NAMES)), dtype=cp.float64)
+    index = {name: position for position, name in enumerate(FEATURE_NAMES)}
+    parameters = result.parameters.astype(cp.float64, copy=False)
+    standard_errors = result.standard_errors.astype(cp.float64, copy=False)
+    covariance = result.covariance.astype(cp.float64, copy=False)
+    parameter_index = {
+        name: position for position, name in enumerate(parameter_names)
+    }
+
+    height, width = image_shape
+    half_width = (width - 1) / 2.0
+    half_height = (height - 1) / 2.0
+    stamp_diagonal = max(math.hypot(width - 1, height - 1), 1.0)
+    stamp_half_diagonal = max(stamp_diagonal / 2.0, 1.0)
+    stamp_radius = max(min(half_width, half_height), 1.0)
+
+    values[:, index["fit_present"]] = 1.0
+    values[:, index["variance_weighted"]] = float(variance_present)
+    valid_fraction = result.valid_pixel_fraction
+    values[:, index["valid_pixel_fraction"]] = cp.where(
+        cp.isfinite(valid_fraction),
+        cp.clip(valid_fraction, 0.0, 1.0),
+        0.0,
+    )
+    improvement = result.fractional_null_improvement
+    values[:, index["fractional_null_improvement"]] = cp.where(
+        cp.isfinite(improvement),
+        cp.clip(improvement, -1.0, 1.0),
+        0.0,
+    )
+    if variance_present:
+        delta_chi_square = result.delta_chi_square.astype(
+            cp.float64, copy=False
+        )
+        finite_delta_chi_square = cp.isfinite(delta_chi_square)
+        safe_delta_chi_square = cp.where(
+            finite_delta_chi_square, delta_chi_square, 0.0
+        )
+        delta_transform = (
+            cp.sign(safe_delta_chi_square)
+            * cp.log1p(cp.abs(safe_delta_chi_square))
+            / LOG_DELTA_CHI_SQUARE_SCALE
+        )
+        values[:, index["log_delta_chi_square"]] = cp.where(
+            finite_delta_chi_square & cp.isfinite(delta_transform),
+            cp.clip(delta_transform, -1.0, 1.0),
+            0.0,
+        )
+        reduced_chi_square = result.reduced_chi_square
+        valid_reduced_chi_square = cp.isfinite(reduced_chi_square) & (
+            reduced_chi_square > 0
+        )
+        safe_reduced_chi_square = cp.where(
+            valid_reduced_chi_square,
+            reduced_chi_square,
+            1.0,
+        )
+        reduced_transform = (
+            cp.log(cp.maximum(safe_reduced_chi_square, FLOAT_EPSILON))
+            / LOG_REDUCED_CHI_SQUARE_SCALE
+        )
+        values[:, index["log_reduced_chi_square"]] = cp.where(
+            valid_reduced_chi_square,
+            cp.clip(reduced_transform, -1.0, 1.0),
+            0.0,
+        )
+
+    finite_parameters = cp.all(cp.isfinite(parameters), axis=1)
+    fit_valid = (
+        result.converged & (result.degrees_of_freedom > 0) & finite_parameters
+    )
+    x_pos = parameters[:, parameter_index["x_pos"]]
+    y_pos = parameters[:, parameter_index["y_pos"]]
+    x_neg = parameters[:, parameter_index["x_neg"]]
+    y_neg = parameters[:, parameter_index["y_neg"]]
+    fit_valid &= (
+        (cp.abs(x_pos) <= half_width)
+        & (cp.abs(y_pos) <= half_height)
+        & (cp.abs(x_neg) <= half_width)
+        & (cp.abs(y_neg) <= half_height)
+    )
+    if result.model == "gaussian":
+        sigma_x = parameters[:, parameter_index["sigma_x"]]
+        sigma_y = parameters[:, parameter_index["sigma_y"]]
+        fit_valid &= (
+            (sigma_x > 0)
+            & (sigma_y > 0)
+            & (cp.maximum(sigma_x, sigma_y) <= stamp_radius)
+        )
+    values[:, index["fit_valid"]] = fit_valid
+    uncertainty_valid = fit_valid & result.uncertainty_valid
+    values[:, index["uncertainty_valid"]] = uncertainty_valid
+
+    strength_name = "amplitude" if result.model == "gaussian" else "flux"
+    strength = parameters[:, parameter_index[strength_name]]
+    strength_error = standard_errors[:, parameter_index[strength_name]]
+    safe_strength_error = cp.where(strength_error > 0, strength_error, 1.0)
+    strength_ratio = cp.abs(strength) / safe_strength_error
+    valid_strength = (
+        uncertainty_valid
+        & cp.isfinite(strength)
+        & cp.isfinite(strength_error)
+        & (strength_error > 0)
+        & cp.isfinite(strength_ratio)
+        & (strength_ratio > 0)
+    )
+    values[:, index["log_strength_snr"]] = _device_scaled_log(
+        strength_ratio,
+        valid_strength,
+        LOG_SIGNIFICANCE_SCALE,
+        cp=cp,
+    )
+
+    dx = x_pos - x_neg
+    dy = y_pos - y_neg
+    separation = cp.hypot(dx, dy)
+    values[:, index["separation_over_stamp"]] = cp.where(
+        fit_valid,
+        cp.clip(separation / stamp_diagonal, 0.0, 1.0),
+        0.0,
+    )
+    midpoint_radius = cp.hypot(
+        (x_pos + x_neg) / 2.0,
+        (y_pos + y_neg) / 2.0,
+    )
+    values[:, index["midpoint_offset_over_stamp"]] = cp.where(
+        fit_valid,
+        cp.clip(midpoint_radius / stamp_half_diagonal, 0.0, 1.0),
+        0.0,
+    )
+    edge_margin = cp.minimum(
+        cp.minimum(half_width - cp.abs(x_pos), half_height - cp.abs(y_pos)),
+        cp.minimum(half_width - cp.abs(x_neg), half_height - cp.abs(y_neg)),
+    )
+    values[:, index["edge_margin_over_stamp"]] = cp.where(
+        fit_valid,
+        cp.clip(edge_margin / stamp_radius, 0.0, 1.0),
+        0.0,
+    )
+
+    covariance_finite = cp.all(cp.isfinite(covariance), axis=(1, 2))
+    safe_separation = cp.where(separation > 0, separation, 1.0)
+    gradients = (
+        dx / safe_separation,
+        dy / safe_separation,
+        -dx / safe_separation,
+        -dy / safe_separation,
+    )
+    position_indices = tuple(
+        parameter_index[name] for name in ("x_pos", "y_pos", "x_neg", "y_neg")
+    )
+    separation_variance = cp.zeros(batch_size, dtype=cp.float64)
+    for row_position, row_gradient in zip(
+        position_indices, gradients, strict=True
+    ):
+        for column_position, column_gradient in zip(
+            position_indices, gradients, strict=True
+        ):
+            separation_variance += (
+                row_gradient
+                * covariance[:, row_position, column_position]
+                * column_gradient
+            )
+    valid_separation_error = (
+        uncertainty_valid
+        & (separation > 0)
+        & covariance_finite
+        & cp.isfinite(separation_variance)
+        & (separation_variance > 0)
+    )
+    separation_error = cp.sqrt(
+        cp.where(valid_separation_error, separation_variance, 1.0)
+    )
+    separation_ratio = separation / separation_error
+    valid_separation_ratio = (
+        valid_separation_error
+        & cp.isfinite(separation_ratio)
+        & (separation_ratio > 0)
+    )
+    values[:, index["separation_significance"]] = _device_scaled_log(
+        separation_ratio,
+        valid_separation_ratio,
+        LOG_SIGNIFICANCE_SCALE,
+        cp=cp,
+    )
+
+    if result.model == "gaussian":
+        theta = parameters[:, parameter_index["theta"]]
+        x_is_major = sigma_x >= sigma_y
+        major = cp.where(x_is_major, sigma_x, sigma_y)
+        minor = cp.where(x_is_major, sigma_y, sigma_x)
+        major_axis = cp.where(x_is_major, theta, theta + math.pi / 2.0)
+        values[:, index["gaussian_shape_available"]] = fit_valid
+        shape_product = cp.where(fit_valid, major * minor, 0.0)
+        values[:, index["size_over_stamp"]] = cp.where(
+            fit_valid,
+            cp.clip(cp.sqrt(shape_product) / stamp_radius, 0.0, 1.0),
+            0.0,
+        )
+        safe_major = cp.where(major > 0, major, 1.0)
+        values[:, index["axis_ratio"]] = cp.where(
+            fit_valid,
+            cp.clip(minor / safe_major, 0.0, 1.0),
+            0.0,
+        )
+        separation_axis = cp.arctan2(dy, dx)
+        major_minor_sum = major + minor
+        safe_major_minor_sum = cp.where(
+            major_minor_sum != 0, major_minor_sum, 1.0
+        )
+        ellipticity = (major - minor) / safe_major_minor_sum
+        aligned_ellipticity = ellipticity * cp.cos(
+            2.0 * (major_axis - separation_axis)
+        )
+        values[:, index["aligned_ellipticity"]] = cp.where(
+            fit_valid & (separation > 0),
+            cp.clip(aligned_ellipticity, -1.0, 1.0),
+            0.0,
+        )
+
+    feature_values = cp.ascontiguousarray(values.astype(cp.float32))
+    return DeviceXFitFeatures(
+        values=feature_values,
+        device_id=active_device_id,
+        model=result.model,
+        image_shape=image_shape,
+        variance_present=variance_present,
+    )
 
 
 def _json_candidate_ids(
@@ -1545,7 +2130,7 @@ def build_xfit_feature_bundle(
                 raise ValueError(
                     "fits.parquet model or mode conflicts with summary.json"
                 )
-            fit_features[fit_row] = _feature_row(
+            fit_features[fit_row] = _canonical_feature_row(
                 columns,
                 batch_row,
                 fit_arrays.covariance[array_row],
@@ -2172,8 +2757,11 @@ __all__ = [
     "FEATURE_SCHEMA_VERSION",
     "FEATURE_TRANSFORMS",
     "TRANSFORM_CONSTANTS",
+    "DeviceXFitFeatures",
     "XFitFeatureMatrix",
     "build_xfit_feature_bundle",
     "export_xfit_input",
     "load_xfit_feature_matrix",
+    "transform_xfit_result_features",
+    "transform_xfit_result_features_device",
 ]
