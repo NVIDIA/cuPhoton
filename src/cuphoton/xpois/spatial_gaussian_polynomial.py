@@ -30,7 +30,17 @@ from .ois import (
     build_gaussian_polynomial_basis,
     triangular_degree_pairs,
 )
-from .spatial_als import _coerce_fit_mask, _validate_kernel_shape
+from .spatial_als import (
+    _GPU_MAX_DESIGN_CHUNK_SIZE,
+    _GPU_SCRATCH_BUDGET_BYTES,
+    _chebyshev_values,
+    _coerce_fit_mask,
+    _load_cupy,
+    _patch_chunk,
+    _resolve_spatial_backend,
+    _scalar_to_float,
+    _validate_kernel_shape,
+)
 
 _DESIGN_CHUNK_SIZE = 4096
 # Relative Frobenius/column-norm floor below which a basis kernel or design
@@ -246,6 +256,12 @@ class SpatialGaussianPolynomialKernelFitResult:
     Each pair in ``photometric_terms``, ``shape_terms``, and
     ``background_terms`` gives ``(x_degree, y_degree)`` for the
     Chebyshev basis.
+
+    ``backend`` names the resolved numerical backend. ``design_chunk_size``
+    records the row-batch cap used for the block QR accumulation,
+    matched-image reconstruction, and source-variance propagation; the CPU
+    path uses a fixed cap, the CuPy path derives it from free device memory,
+    and the final batch may be smaller.
     """
 
     matched: np.ndarray
@@ -282,6 +298,7 @@ class SpatialGaussianPolynomialKernelFitResult:
     excluded_requested_fit_pixel_count: int
     condition_number: float
     source_variance_included: bool
+    design_chunk_size: int
     backend: str = "cpu"
 
     def photometric_scale_at_local(self, y: float, x: float) -> float:
@@ -374,6 +391,7 @@ def solve_spatial_gaussian_polynomial_kernel(
     fit_samples: SpatialGaussianPolynomialKernelFitSamples | None = None,
     spatial_domain: SpatialKernelDomain | None = None,
     config: SpatialGaussianPolynomialKernelConfig | None = None,
+    backend: str = "auto",
 ) -> SpatialGaussianPolynomialKernelFitResult:
     """Fit a spatial Gaussian-polynomial kernel from ``source`` to ``target``.
 
@@ -423,9 +441,14 @@ def solve_spatial_gaussian_polynomial_kernel(
         the full normalization domain.
     config
         Spatial degrees and numerical condition limit.
+    backend
+        Numerical backend. ``auto`` uses CuPy when a CUDA device is available
+        and otherwise uses NumPy. Explicit ``cupy`` requests fail rather than
+        silently falling back to the CPU.
     """
 
     resolved_config = config or SpatialGaussianPolynomialKernelConfig()
+    resolved_backend = _resolve_spatial_backend(backend)
     source_arr = np.asarray(source, dtype=np.float64)
     target_arr = np.asarray(target, dtype=np.float64)
     _validate_image_pair(source_arr, target_arr)
@@ -486,31 +509,189 @@ def solve_spatial_gaussian_polynomial_kernel(
         triangular_degree_pairs(resolved_config.background_degree)
     )
 
-    upper, transformed_rhs, row_count = _accumulate_qr(
-        source_model,
-        target_model,
-        variance_arr,
-        resolved_fit.sample_indices,
-        resolved_fit.relative_precision,
-        resolved_spatial_domain,
-        basis_kernels,
-        photometric_terms,
-        shape_terms,
-        background_terms,
-    )
-    if row_count < upper.shape[1]:
-        raise ValueError(
-            "fit region is underdetermined for the requested spatial model: "
-            f"{row_count} equations for {upper.shape[1]} coefficients"
-        )
     photometric_count = len(photometric_terms)
     shape_count = (basis_kernels.shape[0] - 1) * len(shape_terms)
-    coefficients, condition_number = _solve_scaled_qr(
-        upper,
-        transformed_rhs,
-        condition_limit=resolved_config.condition_limit,
-        kernel_column_count=photometric_count + shape_count,
-    )
+    column_count = photometric_count + shape_count + len(background_terms)
+    valid_output_mask = boundary_mask & ~invalid_mask
+    valid_output_indices = np.flatnonzero(valid_output_mask)
+    diagnostic_valid_mask: np.ndarray | None = None
+    if source_variance_arr is not None:
+        source_variance_valid_mask = _finite_footprint_mask(
+            source_variance_arr,
+            (kernel_height, kernel_width),
+        )
+        diagnostic_valid_mask = valid_output_mask & source_variance_valid_mask
+
+    propagated_source_variance: np.ndarray | None = None
+    if resolved_backend == "cpu":
+        design_chunk_size = _DESIGN_CHUNK_SIZE
+        upper, transformed_rhs, row_count = _accumulate_qr(
+            source_model,
+            target_model,
+            variance_arr,
+            resolved_fit.sample_indices,
+            resolved_fit.relative_precision,
+            resolved_spatial_domain,
+            basis_kernels,
+            photometric_terms,
+            shape_terms,
+            background_terms,
+            chunk_size=design_chunk_size,
+        )
+        if row_count < column_count:
+            raise ValueError(
+                "fit region is underdetermined for the requested spatial "
+                f"model: {row_count} equations for {column_count} "
+                "coefficients"
+            )
+        coefficients, condition_number = _solve_scaled_qr(
+            upper,
+            transformed_rhs,
+            condition_limit=resolved_config.condition_limit,
+            kernel_column_count=photometric_count + shape_count,
+        )
+        photometric_coefficients = coefficients[:photometric_count]
+        shape_coefficients = coefficients[
+            photometric_count : photometric_count + shape_count
+        ].reshape(basis_kernels.shape[0] - 1, len(shape_terms))
+        background_coefficients = coefficients[
+            photometric_count + shape_count :
+        ]
+        matched = _evaluate_matched_image(
+            source_model,
+            basis_kernels,
+            photometric_coefficients,
+            shape_coefficients,
+            background_coefficients,
+            photometric_terms,
+            shape_terms,
+            background_terms,
+            resolved_spatial_domain,
+            valid_output_mask,
+            chunk_size=design_chunk_size,
+        )
+        if source_variance_arr is not None:
+            assert diagnostic_valid_mask is not None
+            propagated_source_variance = _propagate_source_variance(
+                source_variance_arr,
+                basis_kernels,
+                photometric_coefficients,
+                shape_coefficients,
+                photometric_terms,
+                shape_terms,
+                resolved_spatial_domain,
+                diagnostic_valid_mask,
+                chunk_size=design_chunk_size,
+            )
+    else:
+        cp = _load_cupy()
+        source_device = cp.asarray(source_model, dtype=cp.float64)
+        target_device = cp.asarray(target_model, dtype=cp.float64)
+        variance_device = cp.asarray(variance_arr, dtype=cp.float64)
+        basis_device = cp.asarray(basis_kernels, dtype=cp.float64)
+        fit_indices_device = cp.asarray(
+            resolved_fit.sample_indices,
+            dtype=cp.int64,
+        )
+        precision_device = (
+            None
+            if resolved_fit.relative_precision is None
+            else cp.asarray(
+                resolved_fit.relative_precision,
+                dtype=cp.float64,
+            )
+        )
+        valid_output_indices_device = cp.asarray(
+            valid_output_indices,
+            dtype=cp.int64,
+        )
+        maximum_row_count = max(
+            int(resolved_fit.sample_indices.size),
+            int(valid_output_indices.size),
+            (
+                0
+                if diagnostic_valid_mask is None
+                else int(diagnostic_valid_mask.sum())
+            ),
+        )
+        design_chunk_size = _gpu_design_chunk_size(
+            cp,
+            row_count=maximum_row_count,
+            kernel_shape=(kernel_height, kernel_width),
+            basis_count=basis_kernels.shape[0],
+            photometric_term_count=len(photometric_terms),
+            shape_term_count=len(shape_terms),
+            background_term_count=len(background_terms),
+        )
+        upper, transformed_rhs, row_count = _accumulate_qr(
+            source_device,
+            target_device,
+            variance_device,
+            fit_indices_device,
+            precision_device,
+            resolved_spatial_domain,
+            basis_device,
+            photometric_terms,
+            shape_terms,
+            background_terms,
+            xp=cp,
+            chunk_size=design_chunk_size,
+        )
+        if row_count < column_count:
+            raise ValueError(
+                "fit region is underdetermined for the requested spatial "
+                f"model: {row_count} equations for {column_count} "
+                "coefficients"
+            )
+        coefficients_device, condition_number = _solve_scaled_qr(
+            upper,
+            transformed_rhs,
+            condition_limit=resolved_config.condition_limit,
+            kernel_column_count=photometric_count + shape_count,
+            xp=cp,
+        )
+        matched_device = _evaluate_matched_image_cupy(
+            source_device,
+            basis_device,
+            coefficients_device,
+            valid_output_indices_device,
+            resolved_spatial_domain,
+            photometric_terms,
+            shape_terms,
+            background_terms,
+            cp=cp,
+            chunk_size=design_chunk_size,
+        )
+        propagated_device = None
+        if source_variance_arr is not None:
+            assert diagnostic_valid_mask is not None
+            source_variance_device = cp.asarray(
+                source_variance_arr,
+                dtype=cp.float64,
+            )
+            diagnostic_indices_device = cp.asarray(
+                np.flatnonzero(diagnostic_valid_mask),
+                dtype=cp.int64,
+            )
+            propagated_device = _propagate_source_variance_cupy(
+                source_variance_device,
+                basis_device,
+                coefficients_device[:photometric_count],
+                coefficients_device[
+                    photometric_count : photometric_count + shape_count
+                ].reshape(basis_kernels.shape[0] - 1, len(shape_terms)),
+                photometric_terms,
+                shape_terms,
+                resolved_spatial_domain,
+                diagnostic_indices_device,
+                cp=cp,
+                chunk_size=design_chunk_size,
+            )
+        cp.cuda.get_current_stream().synchronize()
+        coefficients = cp.asnumpy(coefficients_device)
+        matched = cp.asnumpy(matched_device)
+        if propagated_device is not None:
+            propagated_source_variance = cp.asnumpy(propagated_device)
 
     photometric_coefficients = coefficients[:photometric_count]
     shape_coefficients = coefficients[
@@ -530,18 +711,6 @@ def solve_spatial_gaussian_polynomial_kernel(
         background_terms,
         resolved_spatial_domain,
     )
-    matched = _evaluate_matched_image(
-        source_model,
-        basis_kernels,
-        photometric_coefficients,
-        shape_coefficients,
-        background_coefficients,
-        photometric_terms,
-        shape_terms,
-        background_terms,
-        resolved_spatial_domain,
-        boundary_mask & ~invalid_mask,
-    )
     residual = target_model - matched
     output_invalid_mask = invalid_mask | ~boundary_mask
     matched[output_invalid_mask] = np.nan
@@ -558,29 +727,13 @@ def solve_spatial_gaussian_polynomial_kernel(
     if not np.isfinite(fit_objective):
         raise ValueError("fit objective is not finite")
     dof = int(row_count) - int(coefficients.size)
-    propagated_source_variance: np.ndarray | None = None
     marginal_residual_variance: np.ndarray | None = None
     marginal_standardized_residual: np.ndarray | None = None
     if variance is not None:
         marginal_residual_variance = variance_arr.copy()
         if source_variance_arr is not None:
-            source_variance_valid_mask = _finite_footprint_mask(
-                source_variance_arr,
-                (kernel_height, kernel_width),
-            )
-            diagnostic_valid_mask = (
-                boundary_mask & ~invalid_mask & source_variance_valid_mask
-            )
-            propagated_source_variance = _propagate_source_variance(
-                source_variance_arr,
-                basis_kernels,
-                photometric_coefficients,
-                shape_coefficients,
-                photometric_terms,
-                shape_terms,
-                resolved_spatial_domain,
-                diagnostic_valid_mask,
-            )
+            assert diagnostic_valid_mask is not None
+            assert propagated_source_variance is not None
             diagnostic_valid_mask &= np.isfinite(propagated_source_variance)
             propagated_source_variance[~diagnostic_valid_mask] = np.nan
             marginal_residual_variance += propagated_source_variance
@@ -627,38 +780,96 @@ def solve_spatial_gaussian_polynomial_kernel(
         ),
         condition_number=condition_number,
         source_variance_included=source_variance_arr is not None,
+        design_chunk_size=design_chunk_size,
+        backend=resolved_backend,
+    )
+
+
+def _gpu_design_chunk_size(
+    cp,
+    *,
+    row_count: int,
+    kernel_shape: tuple[int, int],
+    basis_count: int,
+    photometric_term_count: int,
+    shape_term_count: int,
+    background_term_count: int,
+) -> int:
+    """Choose a bounded chunk from free memory and model dimensions."""
+
+    column_count = (
+        photometric_term_count
+        + (basis_count - 1) * shape_term_count
+        + background_term_count
+    )
+    kernel_area = kernel_shape[0] * kernel_shape[1]
+    # Every loop rebinds its gathered (rows, kh, kw) patches, so the previous
+    # chunk's block stays live while the next one is gathered. The QR loop
+    # holds about eight design-sized blocks: the design, its weighted and
+    # stacked copies, cuSOLVER's Fortran-order input and workspace, the
+    # returned Q, the previous chunk's Q, and the shape-design broadcast
+    # intermediate. The variance loop also holds the two kernel products,
+    # their sum, and the squared flipped kernels.
+    fit_values_per_row = (
+        2 * kernel_area
+        + basis_count
+        + photometric_term_count
+        + shape_term_count
+        + background_term_count
+        + 8 * column_count
+        + 32
+    )
+    variance_values_per_row = (
+        5 * kernel_area
+        + basis_count
+        + photometric_term_count
+        + shape_term_count
+        + 32
+    )
+    bytes_per_row = 8 * max(fit_values_per_row, variance_values_per_row)
+    free_bytes, _ = cp.cuda.runtime.memGetInfo()
+    budget = min(
+        _GPU_SCRATCH_BUDGET_BYTES,
+        max(bytes_per_row, int(free_bytes) // 4),
+    )
+    memory_rows = max(1, budget // bytes_per_row)
+    return max(
+        1,
+        min(row_count or 1, _GPU_MAX_DESIGN_CHUNK_SIZE, memory_rows),
     )
 
 
 def _accumulate_qr(
-    source: np.ndarray,
-    target: np.ndarray,
-    variance: np.ndarray,
-    sample_indices: np.ndarray,
-    relative_precision: np.ndarray | None,
+    source,
+    target,
+    variance,
+    sample_indices,
+    relative_precision,
     spatial_domain: SpatialKernelDomain,
     basis_kernels: np.ndarray,
     photometric_terms: tuple[tuple[int, int], ...],
     shape_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
     *,
+    xp=np,
     chunk_size: int = _DESIGN_CHUNK_SIZE,
-) -> tuple[np.ndarray, np.ndarray, int]:
+):
     column_count = (
         len(photometric_terms)
         + (basis_kernels.shape[0] - 1) * len(shape_terms)
         + len(background_terms)
     )
-    upper = np.empty((0, column_count), dtype=np.float64)
-    transformed_rhs = np.empty(0, dtype=np.float64)
+    upper = xp.empty((0, column_count), dtype=xp.float64)
+    transformed_rhs = xp.empty(0, dtype=xp.float64)
     patches, basis_flat, margin_y, margin_x = _patch_design_inputs(
         source,
         basis_kernels,
+        xp=xp,
     )
 
-    for start in range(0, sample_indices.size, chunk_size):
-        stop = min(start + chunk_size, sample_indices.size)
-        y_chunk, x_chunk = np.divmod(
+    for start in range(0, int(sample_indices.size), chunk_size):
+        stop = min(start + chunk_size, int(sample_indices.size))
+        y_chunk, x_chunk = xp.divmod(
             sample_indices[start:stop],
             source.shape[1],
         )
@@ -675,6 +886,7 @@ def _accumulate_qr(
             photometric_terms,
             shape_terms,
             background_terms,
+            xp=xp,
         )
         chunk_precision = (
             None
@@ -684,15 +896,16 @@ def _accumulate_qr(
         row_scale = _fit_row_scale(
             variance[y_chunk, x_chunk],
             chunk_precision,
+            xp=xp,
         )
         weighted_design = design * row_scale[:, None]
         weighted_target = target[y_chunk, x_chunk] * row_scale
-        stacked_design = np.concatenate((upper, weighted_design), axis=0)
-        stacked_target = np.concatenate(
+        stacked_design = xp.concatenate((upper, weighted_design), axis=0)
+        stacked_target = xp.concatenate(
             (transformed_rhs, weighted_target),
             axis=0,
         )
-        orthogonal, upper = np.linalg.qr(stacked_design, mode="reduced")
+        orthogonal, upper = xp.linalg.qr(stacked_design, mode="reduced")
         transformed_rhs = orthogonal.T @ stacked_target
 
     return upper, transformed_rhs, int(sample_indices.size)
@@ -730,20 +943,29 @@ def _evaluate_fit_objective(
 
 
 def _fit_row_scale(
-    variance: np.ndarray,
-    relative_precision: np.ndarray | None,
-) -> np.ndarray:
-    with np.errstate(
-        over="ignore",
-        under="ignore",
-        divide="ignore",
-        invalid="ignore",
+    variance,
+    relative_precision,
+    *,
+    xp=np,
+):
+    if xp is np:
+        with np.errstate(
+            over="ignore",
+            under="ignore",
+            divide="ignore",
+            invalid="ignore",
+        ):
+            if relative_precision is None:
+                row_scale = 1.0 / np.sqrt(variance)
+            else:
+                row_scale = np.sqrt(relative_precision) / np.sqrt(variance)
+    elif relative_precision is None:
+        row_scale = 1.0 / xp.sqrt(variance)
+    else:
+        row_scale = xp.sqrt(relative_precision) / xp.sqrt(variance)
+    if bool(xp.any(~xp.isfinite(row_scale)).item()) or bool(
+        xp.any(row_scale <= 0.0).item()
     ):
-        if relative_precision is None:
-            row_scale = 1.0 / np.sqrt(variance)
-        else:
-            row_scale = np.sqrt(relative_precision) / np.sqrt(variance)
-    if np.any(~np.isfinite(row_scale)) or np.any(row_scale <= 0.0):
         raise ValueError(
             "combined fit row scales must be finite and positive"
         )
@@ -859,12 +1081,140 @@ def _propagate_source_variance(
     return propagated
 
 
+def _evaluate_matched_image_cupy(
+    source,
+    basis_kernels,
+    coefficients,
+    valid_indices,
+    spatial_domain: SpatialKernelDomain,
+    photometric_terms: tuple[tuple[int, int], ...],
+    shape_terms: tuple[tuple[int, int], ...],
+    background_terms: tuple[tuple[int, int], ...],
+    *,
+    cp,
+    chunk_size: int,
+):
+    """Reconstruct the fitted model without leaving the current GPU."""
+
+    matched = cp.full(source.shape, cp.nan, dtype=cp.float64)
+    matched_flat = matched.ravel()
+    patch_view, basis_flat, _, _ = _patch_design_inputs(
+        source,
+        basis_kernels,
+        xp=cp,
+    )
+    kernel_shape = basis_kernels.shape[1:]
+    for start in range(0, int(valid_indices.size), chunk_size):
+        stop = min(start + chunk_size, int(valid_indices.size))
+        patches, output_y, output_x = _patch_chunk(
+            patch_view,
+            valid_indices,
+            start,
+            stop,
+            source.shape,
+            kernel_shape,
+            xp=cp,
+        )
+        basis_values = patches.reshape(stop - start, -1) @ basis_flat.T
+        design = _model_design(
+            basis_values,
+            output_y,
+            output_x,
+            spatial_domain,
+            photometric_terms,
+            shape_terms,
+            background_terms,
+            xp=cp,
+        )
+        matched_flat[valid_indices[start:stop]] = design @ coefficients
+    return matched
+
+
+def _propagate_source_variance_cupy(
+    source_variance,
+    basis_kernels,
+    photometric_coefficients,
+    shape_coefficients,
+    photometric_terms: tuple[tuple[int, int], ...],
+    shape_terms: tuple[tuple[int, int], ...],
+    spatial_domain: SpatialKernelDomain,
+    valid_indices,
+    *,
+    cp,
+    chunk_size: int,
+):
+    """Propagate independent source variances on the current GPU."""
+
+    variance_model = cp.where(
+        cp.isfinite(source_variance),
+        source_variance,
+        0.0,
+    )
+    kernel_shape = basis_kernels.shape[1:]
+    variance_patches = cp.lib.stride_tricks.sliding_window_view(
+        variance_model,
+        kernel_shape,
+    )
+    propagated = cp.zeros(source_variance.shape, dtype=cp.float64)
+    propagated_flat = propagated.ravel()
+    for start in range(0, int(valid_indices.size), chunk_size):
+        stop = min(start + chunk_size, int(valid_indices.size))
+        patches, output_y, output_x = _patch_chunk(
+            variance_patches,
+            valid_indices,
+            start,
+            stop,
+            source_variance.shape,
+            kernel_shape,
+            xp=cp,
+        )
+        photometric_values = _chebyshev_design(
+            output_y,
+            output_x,
+            spatial_domain,
+            photometric_terms,
+            xp=cp,
+        )
+        shape_values = _chebyshev_design(
+            output_y,
+            output_x,
+            spatial_domain,
+            shape_terms,
+            xp=cp,
+        )
+        photometric_scale = photometric_values @ photometric_coefficients
+        shape_weights = shape_values @ shape_coefficients.T
+        kernels = photometric_scale[:, None, None] * basis_kernels[
+            0
+        ] + cp.einsum(
+            "ri,iyx->ryx",
+            shape_weights,
+            basis_kernels[1:],
+            optimize=True,
+        )
+        propagated_flat[valid_indices[start:stop]] = cp.einsum(
+            "rij,rij->r",
+            patches,
+            kernels[:, ::-1, ::-1] ** 2,
+            optimize=True,
+        )
+    return propagated
+
+
 def _patch_design_inputs(
-    source: np.ndarray,
-    basis_kernels: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
+    source,
+    basis_kernels,
+    *,
+    xp=np,
+):
     kernel_height, kernel_width = basis_kernels.shape[1:]
-    patches = sliding_window_view(source, (kernel_height, kernel_width))
+    if xp is np:
+        patches = sliding_window_view(source, (kernel_height, kernel_width))
+    else:
+        patches = xp.lib.stride_tricks.sliding_window_view(
+            source,
+            (kernel_height, kernel_width),
+        )
     basis_flat = basis_kernels[:, ::-1, ::-1].reshape(
         basis_kernels.shape[0],
         -1,
@@ -873,51 +1223,57 @@ def _patch_design_inputs(
 
 
 def _model_design(
-    basis_values: np.ndarray,
-    ys: np.ndarray,
-    xs: np.ndarray,
+    basis_values,
+    ys,
+    xs,
     spatial_domain: SpatialKernelDomain,
     photometric_terms: tuple[tuple[int, int], ...],
     shape_terms: tuple[tuple[int, int], ...],
     background_terms: tuple[tuple[int, int], ...],
-) -> np.ndarray:
+    *,
+    xp=np,
+):
     photometric_values = _chebyshev_design(
         ys,
         xs,
         spatial_domain,
         photometric_terms,
+        xp=xp,
     )
     shape_values = _chebyshev_design(
         ys,
         xs,
         spatial_domain,
         shape_terms,
+        xp=xp,
     )
     background_values = _chebyshev_design(
         ys,
         xs,
         spatial_domain,
         background_terms,
+        xp=xp,
     )
     photometric_design = basis_values[:, :1] * photometric_values
     shape_design = (
         basis_values[:, 1:, None] * shape_values[:, None, :]
     ).reshape(basis_values.shape[0], -1)
-    return np.concatenate(
+    return xp.concatenate(
         (photometric_design, shape_design, background_values),
         axis=1,
     )
 
 
 def _solve_scaled_qr(
-    upper: np.ndarray,
-    transformed_rhs: np.ndarray,
+    upper,
+    transformed_rhs,
     *,
     condition_limit: float,
     kernel_column_count: int | None = None,
-) -> tuple[np.ndarray, float]:
-    scales = np.linalg.norm(upper, axis=0)
-    if np.any(~np.isfinite(scales)):
+    xp=np,
+):
+    scales = xp.linalg.norm(upper, axis=0)
+    if bool(xp.any(~xp.isfinite(scales)).item()):
         raise ValueError(
             "spatial Gaussian-polynomial design has non-finite column "
             "norms; check the variance and relative_precision scaling"
@@ -927,8 +1283,8 @@ def _solve_scaled_qr(
         scales.size if kernel_column_count is None else kernel_column_count
     )
     for block in (scales[:split], scales[split:]):
-        if block.size and np.any(
-            block <= _NULL_TERM_RELATIVE_NORM * block.max()
+        if block.size and bool(
+            xp.any(block <= _NULL_TERM_RELATIVE_NORM * block.max()).item()
         ):
             raise ValueError(
                 "spatial Gaussian-polynomial design contains an empty or "
@@ -936,8 +1292,8 @@ def _solve_scaled_qr(
             )
     scaled_upper = upper / scales[None, :]
     try:
-        condition_number = float(np.linalg.cond(scaled_upper))
-    except np.linalg.LinAlgError as exc:
+        condition_number = _scalar_to_float(xp.linalg.cond(scaled_upper))
+    except getattr(xp.linalg, "LinAlgError", np.linalg.LinAlgError) as exc:
         raise ValueError(
             "spatial Gaussian-polynomial design matrix is singular"
         ) from exc
@@ -950,11 +1306,17 @@ def _solve_scaled_qr(
             f"condition {condition_number:.6g} exceeds {condition_limit:.6g}"
         )
     try:
-        scaled_coefficients = solve_triangular(
-            scaled_upper,
-            transformed_rhs,
-        )
-    except np.linalg.LinAlgError as exc:
+        if xp is np:
+            scaled_coefficients = solve_triangular(
+                scaled_upper,
+                transformed_rhs,
+            )
+        else:
+            scaled_coefficients = xp.linalg.solve(
+                scaled_upper,
+                transformed_rhs,
+            )
+    except getattr(xp.linalg, "LinAlgError", np.linalg.LinAlgError) as exc:
         raise ValueError(
             "spatial Gaussian-polynomial design matrix could not be solved"
         ) from exc
@@ -1067,24 +1429,44 @@ def _terms_at(
 
 
 def _chebyshev_design(
-    ys: np.ndarray,
-    xs: np.ndarray,
+    ys,
+    xs,
     spatial_domain: SpatialKernelDomain,
     terms: tuple[tuple[int, int], ...],
-) -> np.ndarray:
+    *,
+    xp=np,
+):
     max_x_degree = max(degree_x for degree_x, _ in terms)
     max_y_degree = max(degree_y for _, degree_y in terms)
     origin_y, origin_x = spatial_domain.array_origin_yx
     y0, y1, x0, x1 = spatial_domain.normalization_bbox
-    x_values = np.polynomial.chebyshev.chebvander(
-        _normalized_coordinate(xs, origin_x, x0, x1),
-        max_x_degree,
+    normalized_x = _normalized_coordinate(
+        xs,
+        origin_x,
+        x0,
+        x1,
+        xp=xp,
     )
-    y_values = np.polynomial.chebyshev.chebvander(
-        _normalized_coordinate(ys, origin_y, y0, y1),
-        max_y_degree,
+    normalized_y = _normalized_coordinate(
+        ys,
+        origin_y,
+        y0,
+        y1,
+        xp=xp,
     )
-    return np.stack(
+    if xp is np:
+        x_values = np.polynomial.chebyshev.chebvander(
+            normalized_x,
+            max_x_degree,
+        )
+        y_values = np.polynomial.chebyshev.chebvander(
+            normalized_y,
+            max_y_degree,
+        )
+    else:
+        x_values = _chebyshev_values(normalized_x, max_x_degree, xp=xp)
+        y_values = _chebyshev_values(normalized_y, max_y_degree, xp=xp)
+    return xp.stack(
         [
             x_values[:, degree_x] * y_values[:, degree_y]
             for degree_x, degree_y in terms
@@ -1094,15 +1476,17 @@ def _chebyshev_design(
 
 
 def _normalized_coordinate(
-    values: np.ndarray,
+    values,
     array_origin: int,
     lower: int,
     upper: int,
-) -> np.ndarray:
-    values_arr = np.asarray(values, dtype=np.float64)
+    *,
+    xp=np,
+):
+    values_arr = xp.asarray(values, dtype=xp.float64)
     length = upper - lower
     if length == 1:
-        return np.zeros_like(values_arr)
+        return xp.zeros_like(values_arr)
     parent_values = values_arr + array_origin
     return (2.0 * (parent_values - lower) / float(length - 1)) - 1.0
 
