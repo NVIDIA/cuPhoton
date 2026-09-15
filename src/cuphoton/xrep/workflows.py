@@ -23,7 +23,7 @@ from cuphoton.core.cli import ApplicationContext
 from cuphoton.core.runtime import runtime_metadata
 
 from .backends import SUPPORTED_BACKENDS, get_backend, resolve_backend
-from .geometry import Grid, ReprojectionSpec
+from .geometry import BBox, Grid, ReprojectionSpec
 from .io import (
     load_fits_image_with_wcs,
     load_fits_mask,
@@ -796,6 +796,8 @@ def run_reproject_stack(
     mapping_grid_step: int,
     area_scaling: bool,
     write_fits: bool,
+    target_wcs_path: Path | None = None,
+    target_hdu: int | None = None,
 ) -> WorkflowResult:
     """Reproject multiple FITS inputs onto one shared grid."""
 
@@ -803,21 +805,46 @@ def run_reproject_stack(
     backend = resolve_backend(backend)
     if not input_paths:
         raise ValueError("input_paths must not be empty")
-    first_image, first_wcs, _, _ = load_fits_image_with_wcs(
-        input_paths[0],
-        hdu=hdu,
-    )
-    grid = _resolve_grid(
-        grid_crval_ra=grid_crval_ra,
-        grid_crval_dec=grid_crval_dec,
-        pixel_scale_arcsec=pixel_scale_arcsec,
-        fallback_wcs=first_wcs,
-        image_shape=first_image.shape,
-    )
+    if target_hdu is not None and target_wcs_path is None:
+        raise ValueError("target_hdu requires target_wcs_path")
+    output_bbox = None
+    target = None
+    if target_wcs_path is not None:
+        if any(
+            value is not None
+            for value in (grid_crval_ra, grid_crval_dec, pixel_scale_arcsec)
+        ):
+            raise ValueError(
+                "--target-wcs conflicts with synthetic-grid options"
+            )
+        target_image, target_wcs, _, used_hdu = load_fits_image_with_wcs(
+            target_wcs_path, hdu=target_hdu
+        )
+        grid = Grid.from_wcs(target_wcs)
+        output_bbox = BBox(0, 0, target_image.shape[1], target_image.shape[0])
+        target = {
+            "path": str(target_wcs_path.expanduser().resolve()),
+            "hdu": used_hdu,
+            "shape": list(target_image.shape),
+            "wcs_header": grid.wcs.to_header(relax=True).tostring(),
+        }
+    else:
+        first_image, first_wcs, _, _ = load_fits_image_with_wcs(
+            input_paths[0],
+            hdu=hdu,
+        )
+        grid = _resolve_grid(
+            grid_crval_ra=grid_crval_ra,
+            grid_crval_dec=grid_crval_dec,
+            pixel_scale_arcsec=pixel_scale_arcsec,
+            fallback_wcs=first_wcs,
+            image_shape=first_image.shape,
+        )
     images, spec = build_stack_spec_from_fits(
         input_paths,
         grid=grid,
         hdu=hdu,
+        output_bbox=output_bbox,
         interpolation=interpolation,
         mapping_grid_step=mapping_grid_step,
         area_scaling=area_scaling,
@@ -878,6 +905,8 @@ def run_reproject_stack(
         "stack_shape": list(result.images.shape),
         "saved": _rewrite_saved_paths(saved, run_dir),
     }
+    if target is not None:
+        summary["target_wcs"] = target
     _write_json(run_dir / "summary.json", summary)
     return WorkflowResult(run_dir=run_dir, summary=summary)
 

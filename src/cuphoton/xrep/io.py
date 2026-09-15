@@ -87,7 +87,7 @@ def write_reprojected_fits(
 ) -> Path:
     """Write one reprojected image (and optional mask) to FITS."""
 
-    header = bbox_wcs(grid, bbox).to_header()
+    header = bbox_wcs(grid, bbox).to_header(relax=True)
     if metadata:
         for key, value in metadata.items():
             fits_key = str(key).upper()[:8]
@@ -131,7 +131,7 @@ def write_stack_fits(
 ) -> Path:
     """Write a stack of reprojected images to FITS."""
 
-    header = bbox_wcs(grid, bbox).to_header()
+    header = bbox_wcs(grid, bbox).to_header(relax=True)
     if metadata:
         for key, value in metadata.items():
             fits_key = str(key).upper()[:8]
