@@ -103,6 +103,11 @@ component ranks retain labeling order before `max_regions` truncation.
 uv run cuphoton xpois benchmark-backends \
   --reference /path/to/reference.fits \
   --target /path/to/target.fits \
+  --reference-hdu 1 --target-hdu 1 \
+  --variance /path/to/target.fits --variance-hdu 3 \
+  --mask-policy strict --reference-mask-hdu 2 --target-mask-hdu 2 \
+  --auto-stamp-mask --auto-stamp-size 31 --auto-stamp-count 5 \
+  --auto-peak-percentile 99.5 \
   --solver spatial-als \
   --backends cpu,cupy \
   --reference-backend cpu \
@@ -113,8 +118,22 @@ uv run cuphoton xpois evaluate-subtraction --run-dir /path/to/run
 uv run cuphoton xpois review-bokeh --run-dir /path/to/run
 ```
 
-Benchmark artifacts separate timings from numerical comparisons. Device work
-is synchronized for measured iterations. Bokeh review is optional and can be
+`benchmark-backends` applies the same image masks, variance, crops, and fit
+selection as `fit-kernel` and `subtract`. Explicit `--fit-mask` and
+`--auto-stamp-mask` are mutually exclusive. With a crop, an explicit NPY mask
+may have the full image shape or the cropped shape; the commands select the
+same pixels from either form.
+
+The summary records the effective `fit_pixel_count` per backend, fit-region
+selection metadata, mask policy, and HDU/crop choices. Each backend saves its
+effective fit mask as an NPY artifact. Report these settings and pixel counts
+with speedups: whole-frame and compact-source fits measure different workloads.
+
+`setup_timings.load_seconds` measures input reads and
+`setup_timings.preprocess_seconds` measures masking and selection. Neither is
+part of the repeated `solve_seconds` measurements, which include solving and
+applying the kernel. Benchmark artifacts separate timings from numerical
+comparisons. Device work is synchronized for measured iterations. Bokeh review is optional and can be
 rebuilt from the numeric run.
 
 ## Separable-kernel Python APIs

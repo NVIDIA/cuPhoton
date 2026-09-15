@@ -723,9 +723,10 @@ def preflight_image_pair_manifest(
                     f"pair {pair.item_id!r} fit_mask must be NPY"
                 )
             mask_shape = _probe_array_shape(pair.fit_mask, None, kind="image")
-            _require_matching_shape(
-                pair.item_id, "fit_mask", mask_shape, fit_shape
-            )
+            if mask_shape != reference_shape:
+                _require_matching_shape(
+                    pair.item_id, "fit_mask", mask_shape, fit_shape
+                )
             if options.auto_stamp_mask:
                 raise ValueError(
                     f"pair {pair.item_id!r} supplies fit_mask while "
@@ -767,18 +768,26 @@ def preflight_image_pair_manifest(
                 "mask_policy='none'"
             )
         if options.mask_policy != "none":
-            for label, path, hdu in (
+            for label, image_path, mask_path, hdu in (
                 (
                     "reference_mask",
-                    pair.reference_mask or pair.reference,
+                    pair.reference,
+                    pair.reference_mask,
                     pair.reference_mask_hdu,
                 ),
                 (
                     "target_mask",
-                    pair.target_mask or pair.target,
+                    pair.target,
+                    pair.target_mask,
                     pair.target_mask_hdu,
                 ),
             ):
+                if mask_path is None and image_path.suffix.lower() == ".npy":
+                    raise ValueError(
+                        f"pair {pair.item_id!r} {label} is required for NPY "
+                        "input when mask_policy is enabled"
+                    )
+                path = mask_path or image_path
                 shape = _probe_array_shape(path, hdu, kind="mask")
                 _require_matching_shape(
                     pair.item_id, label, shape, reference_shape

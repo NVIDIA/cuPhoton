@@ -1361,3 +1361,160 @@ def test_evaluate_subtraction_run_reports_zero_outliers_for_constant_field(
 
     assert evaluation["pixels_gt_3sigma"] == 0
     assert evaluation["pixels_gt_5sigma"] == 0
+
+
+@pytest.mark.parametrize("selection", ["full", "auto", "explicit", "cropped"])
+@pytest.mark.parametrize("mask_policy", ["strict", "masklite"])
+def test_benchmark_preprocessing_matches_fitting(
+    tmp_path, selection, mask_policy, monkeypatch
+):
+    from astropy.io import fits
+
+    arr = _compact_source_image((64, 64))
+    reference_mask = np.zeros(arr.shape, dtype=np.int16)
+    target_mask = reference_mask.copy()
+    reference_mask[22, 23] = 1
+    target_mask[35, 30] = 1
+    target_mask[27, 28] = 1 << 9
+    target = 1.1 * arr + 0.2
+    target[35, 30] = 1e5
+    for name, image, mask in (
+        ("reference", arr, reference_mask),
+        ("target", target, target_mask),
+    ):
+        mask_hdu = fits.ImageHDU(mask)
+        for bit, plane in enumerate(workflows._HSC_MASKLITE_PLANES):
+            mask_hdu.header[f"MP_{plane}"] = bit
+        mask_hdu.header["MP_DETECTED"] = 9
+        fits.HDUList(
+            [
+                fits.PrimaryHDU(),
+                fits.ImageHDU(image),
+                mask_hdu,
+                fits.ImageHDU(np.ones_like(arr)),
+            ]
+        ).writeto(tmp_path / f"{name}.fits")
+    options = dict(
+        reference_path=tmp_path / "reference.fits",
+        target_path=tmp_path / "target.fits",
+        reference_hdu=1,
+        target_hdu=1,
+        reference_mask_path=tmp_path / "reference.fits",
+        target_mask_path=tmp_path / "target.fits",
+        reference_mask_hdu=2,
+        target_mask_hdu=2,
+        variance_path=tmp_path / "target.fits",
+        variance_hdu=3,
+        mask_policy=mask_policy,
+        crop_y0=8,
+        crop_x0=8,
+        crop_height=48,
+        crop_width=48,
+        kernel_shape=(9, 9),
+        components=[GaussianBasisComponent(sigma=1.5, degree=0)],
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=False,
+        output_root=tmp_path,
+    )
+    if selection == "auto":
+        options.update(
+            auto_stamp_mask=True,
+            auto_stamp_size=15,
+            auto_stamp_count=2,
+            auto_peak_percentile=98.0,
+        )
+    elif selection in {"explicit", "cropped"}:
+        mask = np.zeros(arr.shape, dtype=bool)
+        mask[16:40, 16:40] = True
+        if selection == "cropped":
+            mask = mask[8:56, 8:56]
+        path = tmp_path / "selection.npy"
+        np.save(path, mask)
+        options["fit_mask_path"] = path
+    monkeypatch.setattr(
+        workflows, "write_interactive_review_artifact", lambda *a, **kw: {}
+    )
+    fitted = workflows.run_constant_kernel_fit(
+        **options, name="fit", backend="cpu"
+    )
+    benchmark = workflows.benchmark_constant_kernel_backends(
+        **options, name="benchmark", backends=["cpu"], repeats=1, warmup=0
+    )
+    for name in ("kernel", "matched", "residual", "fit_mask"):
+        expected = np.load(fitted.run_dir / fitted.summary["saved"][name])
+        actual = np.load(
+            benchmark.run_dir / benchmark.summary["saved"][f"cpu_{name}"]
+        )
+        np.testing.assert_array_equal(actual, expected)
+    mask = np.load(
+        benchmark.run_dir / benchmark.summary["saved"]["cpu_fit_mask"]
+    )
+    assert not mask[35 - 8, 30 - 8]
+    if selection in {"explicit", "cropped"}:
+        assert mask[22, 22]
+        outside = mask.copy()
+        outside[8:32, 8:32] = False
+        assert not outside.any()
+    assert mask.sum() == benchmark.summary["fit_pixel_count"]["cpu"]
+    assert benchmark.summary["fit_region"] == fitted.summary["fit_region"]
+    assert benchmark.summary["input_mask"] == fitted.summary["input_mask"]
+    assert benchmark.summary["setup_timings"]["load_seconds"] >= 0
+    assert benchmark.summary["setup_timings"]["preprocess_seconds"] > 0
+    if selection == "auto":
+        assert mask.sum() <= 2 * 15**2
+        assert "fit_mask_metadata" in benchmark.summary["saved"]
+
+
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        (
+            {"fit_mask_path": Path("mask.npy"), "auto_stamp_mask": True},
+            "either fit_mask_path",
+        ),
+        ({"reference_mask_path": Path("mask.npy")}, "non-'none'"),
+        ({"variance_hdu": 2}, "variance_hdu requires"),
+        ({"reference_mask_hdu": 2}, "FITS-backed reference"),
+        ({"mask_policy": "strict"}, "reference_mask_path is required"),
+        ({"mask_policy": "masklite"}, "reference_mask_path is required"),
+        (
+            {
+                "mask_policy": "strict",
+                "reference_mask_path": Path("reference-mask.npy"),
+            },
+            "target_mask_path is required",
+        ),
+        (
+            {
+                "mask_policy": "masklite",
+                "reference_mask_path": Path("reference-mask.fits"),
+            },
+            "target_mask_path is required",
+        ),
+        ({"crop_y0": 8}, "all crop parameters"),
+    ],
+)
+def test_benchmark_rejects_invalid_preprocessing_before_loading(
+    tmp_path, monkeypatch, options, message
+):
+    def unexpected_call(*args, **kwargs):
+        pytest.fail("invalid options must fail before loading or solving")
+
+    monkeypatch.setattr(workflows, "load_image_with_wcs", unexpected_call)
+    monkeypatch.setattr(workflows, "solve_constant_kernel", unexpected_call)
+    with pytest.raises(ValueError, match=message):
+        workflows.benchmark_constant_kernel_backends(
+            reference_path=tmp_path / "reference.npy",
+            target_path=tmp_path / "target.npy",
+            reference_hdu=None,
+            target_hdu=None,
+            variance_path=None,
+            output_root=tmp_path,
+            name="invalid",
+            kernel_shape=(9, 9),
+            components=[GaussianBasisComponent(sigma=1.5, degree=0)],
+            backends=["cpu"],
+            **options,
+        )
+    assert not (tmp_path / "invalid").exists()

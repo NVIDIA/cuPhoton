@@ -510,6 +510,100 @@ pairs:
         preflight_image_pair_manifest(manifest, _options())
 
 
+@pytest.mark.parametrize("full_image_mask", [False, True])
+def test_batch_cropped_fit_accepts_full_or_cropped_mask(
+    tmp_path, full_image_mask
+) -> None:
+    reference = np.random.default_rng(20260921).normal(size=(64, 64))
+    np.save(tmp_path / "reference.npy", reference)
+    np.save(tmp_path / "target.npy", reference)
+    full_mask = np.zeros(reference.shape, dtype=bool)
+    full_mask[20:40, 20:40] = True
+    full_mask[25, 26] = False
+    cropped_mask = full_mask[8:56, 8:56]
+    np.save(
+        tmp_path / "fit-mask.npy",
+        full_mask if full_image_mask else cropped_mask,
+    )
+    manifest_path = tmp_path / "pairs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "cuphoton.xpois.image-pairs/v1",
+                "pairs": [
+                    {
+                        "id": "cropped",
+                        "reference": "reference.npy",
+                        "target": "target.npy",
+                        "fit_mask": "fit-mask.npy",
+                    }
+                ],
+            }
+        )
+    )
+    manifest = load_image_pair_manifest(manifest_path)
+    options = _options(
+        backend="cpu",
+        crop_y0=8,
+        crop_x0=8,
+        crop_height=48,
+        crop_width=48,
+    )
+
+    preflight_image_pair_manifest(manifest, options)
+    output_dir = tmp_path / "items" / "cropped"
+    output_dir.parent.mkdir()
+    run_image_pair_item(manifest.work_items()[0], output_dir, options)
+
+    np.testing.assert_array_equal(
+        np.load(output_dir / "artifacts" / "fit_mask.npy"), cropped_mask
+    )
+    assert np.load(output_dir / "artifacts" / "residual.npy").shape == (
+        48,
+        48,
+    )
+
+
+@pytest.mark.parametrize("mask_policy", ["strict", "masklite"])
+@pytest.mark.parametrize("missing_mask", ["reference_mask", "target_mask"])
+def test_preflight_rejects_missing_npy_image_mask(
+    tmp_path, mask_policy, missing_mask, monkeypatch
+) -> None:
+    from cuphoton.xpois import batch
+
+    for name in ("reference.npy", "target.npy", "mask.npy"):
+        _write_array(tmp_path / name)
+    pair = {
+        "id": "maskless",
+        "reference": "reference.npy",
+        "target": "target.npy",
+        "reference_mask": "mask.npy",
+        "target_mask": "mask.npy",
+    }
+    del pair[missing_mask]
+    manifest_path = tmp_path / "pairs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {"schema": "cuphoton.xpois.image-pairs/v1", "pairs": [pair]}
+        )
+    )
+    manifest = load_image_pair_manifest(manifest_path)
+    mask_probes = []
+    probe = batch._probe_array_shape
+
+    def record_probe(path, hdu, *, kind):
+        if kind == "mask":
+            mask_probes.append(path.name)
+        return probe(path, hdu, kind=kind)
+
+    monkeypatch.setattr(batch, "_probe_array_shape", record_probe)
+    with pytest.raises(ValueError, match=f"{missing_mask}.*required.*NPY"):
+        preflight_image_pair_manifest(
+            manifest, _options(mask_policy=mask_policy)
+        )
+    assert set(mask_probes) <= {"mask.npy"}
+
+
 def test_batch_options_reject_unknown_backend() -> None:
     with pytest.raises(ValueError, match="unsupported fit backend"):
         _options(backend="unknown")
