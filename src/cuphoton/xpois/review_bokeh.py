@@ -15,6 +15,8 @@ from typing import Any
 
 import numpy as np
 
+from .review import _component_coordinates
+
 _REVIEW_TEMPLATE = """
 {% block preamble %}
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -232,10 +234,7 @@ def identify_mask_components(
 
     labels, count = ndimage.label(mask)
     components: list[dict[str, object]] = []
-    for label in range(1, count + 1):
-        ys, xs = np.where(labels == label)
-        if ys.size == 0:
-            continue
+    for ys, xs in _component_coordinates(labels, count):
         values = np.unique(np.asarray(mask_values)[ys, xs])
         planes: set[str] = set()
         for value in values.tolist():
