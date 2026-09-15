@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -33,6 +33,10 @@ from .linear_prediction import (
     linear_prediction_variable_artifacts_cupy_batched,
 )
 from .zero_offset import find_value_drop_position
+
+if TYPE_CHECKING:
+    from .iterative_fit import IterativeFitOptions
+
 
 DETECTOR_ARRAYS = (
     "freq_all",
@@ -55,9 +59,10 @@ HDF5_TS_FUNCWRAP_REF = "4ac0f2fca8f68abf5ea25874832274a75b0f0967"
 NORMALIZATION_MANIFEST_FILE = "normalization.json"
 NORMALIZATION_CACHE_FILE = "normalization.npz"
 DETECTOR_ARTIFACT_MANIFEST_VERSION = 2
-DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS = (1, 2)
+DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS = (1, 2, 3)
 DETECTOR_NORMALIZATION_MANIFEST_VERSION = 1
 FIT_DIAGNOSTICS_SCHEMA_VERSION = 1
+ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION = 2
 _FULL_CONTENT_HASH_LIMIT = 16 * 1024 * 1024
 _CONTENT_SAMPLE_BYTES = 64 * 1024
 
@@ -104,6 +109,77 @@ _FIT_DIAGNOSTIC_RAGGED_GROUPS = {
     "p1_singular_value_offsets": ("p1_singular_values",),
     "p2_singular_value_offsets": ("p2_singular_values",),
 }
+
+_ITERATIVE_DIAGNOSTIC_DTYPES = {
+    name: dtype
+    for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items()
+    if not name.startswith(("p1_", "p2_")) and name != "selected_model_order"
+}
+_ITERATIVE_CONVERGENCE_DTYPES = {
+    "converged": np.int8,
+    "optimizer_status": np.dtype("U32"),
+    "iterations": np.int64,
+    "cost": np.float64,
+    "gradient_norm": np.float64,
+    "offset": np.float64,
+}
+_ITERATIVE_DIAGNOSTIC_DTYPES.update(_ITERATIVE_CONVERGENCE_DTYPES)
+
+
+def validate_detector_fit_options(
+    fit_method: str,
+    iterative_options: IterativeFitOptions | None,
+    p2_ridge_alpha: float,
+) -> IterativeFitOptions | None:
+    """Validate detector method controls before probing the GPU or inputs."""
+
+    if fit_method not in {"linear-prediction", "iterative"}:
+        raise ValueError("fit_method must be linear-prediction or iterative")
+    if fit_method == "linear-prediction":
+        if iterative_options is not None:
+            raise ValueError(
+                "iterative options require fit_method='iterative'"
+            )
+        return None
+    if p2_ridge_alpha != 0.0:
+        raise ValueError(
+            "p2_ridge_alpha is only supported by linear prediction"
+        )
+    from .iterative_fit import IterativeFitOptions
+
+    options = iterative_options
+    if options is None:
+        options = IterativeFitOptions()
+    if not isinstance(options, IterativeFitOptions):
+        raise ValueError("iterative_options must be an IterativeFitOptions")
+    options.validate()
+    return options
+
+
+def _fit_diagnostic_fields(schema_version: int):
+    if schema_version == FIT_DIAGNOSTICS_SCHEMA_VERSION:
+        return (
+            _FIT_DIAGNOSTIC_DTYPES,
+            _FIT_DIAGNOSTIC_FULL_VALUE_FIELDS,
+            _FIT_DIAGNOSTIC_RAGGED_GROUPS,
+        )
+    if schema_version != ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION:
+        raise ValueError(
+            f"unsupported fit diagnostics schema: {schema_version}"
+        )
+    return (
+        _ITERATIVE_DIAGNOSTIC_DTYPES,
+        tuple(
+            name
+            for name in _FIT_DIAGNOSTIC_FULL_VALUE_FIELDS
+            if not name.startswith(("p1_", "p2_"))
+        ),
+        {
+            name: fields
+            for name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items()
+            if not name.startswith(("p1_", "p2_"))
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -208,6 +284,8 @@ def build_detector_artifacts_cupy(
     fit_trailing_drop: int = 1,
     integrate_pixels: int = 3,
     components: int = 30,
+    fit_method: str = "linear-prediction",
+    iterative_options: IterativeFitOptions | None = None,
     p2_ridge_alpha: float = 0.0,
     roots_backend: str = "eigvals",
     batch_rows: bool = True,
@@ -247,6 +325,9 @@ def build_detector_artifacts_cupy(
     _require_nonnegative("integrate_pixels", integrate_pixels)
     _require_positive("components", components)
     _require_finite_nonnegative("p2_ridge_alpha", p2_ridge_alpha)
+    iterative_options = validate_detector_fit_options(
+        fit_method, iterative_options, p2_ridge_alpha
+    )
     _require_positive("savgol_window", savgol_window)
     _require_nonnegative("savgol_polyorder", savgol_polyorder)
     _require_nonnegative("max_fit_failures", max_fit_failures)
@@ -480,7 +561,13 @@ def build_detector_artifacts_cupy(
 
             stats = _RunStats()
             diagnostics_writer = _FitDiagnosticsWriter(
-                output, fit_diagnostics
+                output,
+                fit_diagnostics,
+                schema_version=(
+                    ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION
+                    if fit_method == "iterative"
+                    else FIT_DIAGNOSTICS_SCHEMA_VERSION
+                ),
             )
             fit_error_types = _fit_error_types(cp)
             for tile_index, (x0, x1, y0, y1) in enumerate(
@@ -546,6 +633,7 @@ def build_detector_artifacts_cupy(
                 batched_rows: dict[int, dict[str, Any] | None] = {}
                 if (
                     batch_rows
+                    and fit_method == "linear-prediction"
                     and fit_diagnostics == "none"
                     and p2_ridge_alpha == 0.0
                     and roots_backend == "eigvals"
@@ -609,6 +697,8 @@ def build_detector_artifacts_cupy(
                                 time_gpu=fit_time_gpu,
                                 trace_gpu=trace_gpu,
                                 components=components,
+                                fit_method=fit_method,
+                                iterative_options=iterative_options,
                                 p2_ridge_alpha=p2_ridge_alpha,
                                 roots_backend=roots_backend,
                                 padded_length=padded_length,
@@ -621,6 +711,9 @@ def build_detector_artifacts_cupy(
                                 diagnostics_writer,
                                 level=fit_diagnostics,
                                 fit_status=FIT_STATUS_FAILED,
+                                iterative_result=getattr(
+                                    exc, "iterative_result", None
+                                ),
                                 x0=x0,
                                 x1=x1,
                                 y0=y0,
@@ -632,6 +725,11 @@ def build_detector_artifacts_cupy(
                                     "detector artifact generation had "
                                     f"{stats.failures} fit failures; allowed "
                                     f"{max_fit_failures}"
+                                    + (
+                                        f"; last iterative fit: {exc}"
+                                        if fit_method == "iterative"
+                                        else ""
+                                    )
                                 ) from exc
                             continue
                     _write_row_outputs(
@@ -697,7 +795,11 @@ def build_detector_artifacts_cupy(
     runtime = runtime_metadata(backend="cupy", dtype="float64")
     manifest = {
         "kind": "xray-detector-artifacts",
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": (
+            3
+            if fit_method == "iterative"
+            else DETECTOR_ARTIFACT_MANIFEST_VERSION
+        ),
         "package_version": runtime["package_version"],
         "backend": "cupy",
         "device": runtime["device"],
@@ -759,6 +861,12 @@ def build_detector_artifacts_cupy(
             "failed": FIT_STATUS_FAILED,
         },
     }
+    if fit_method == "iterative":
+        manifest["fit_method"] = fit_method
+        manifest["iterative_options"] = iterative_options.to_dict()
+        manifest["frequency_semantics"] = (
+            "fitted modal frequencies in cycles per delay unit"
+        )
     if shard_index is not None:
         manifest["shard"] = {
             "index": int(shard_index),
@@ -1256,7 +1364,15 @@ def _merge_fit_diagnostic_shards(
 ) -> dict[str, Any]:
     first_metadata = shards[0]["manifest"].get("fit_diagnostics") or {}
     level = _validate_fit_diagnostics(str(first_metadata.get("level")))
-    writer = _FitDiagnosticsWriter(output, level)
+    writer = _FitDiagnosticsWriter(
+        output,
+        level,
+        schema_version=int(
+            first_metadata.get(
+                "schema_version", FIT_DIAGNOSTICS_SCHEMA_VERSION
+            )
+        ),
+    )
     if level != "none":
         for shard in shards:
             metadata = shard["manifest"]["fit_diagnostics"]
@@ -1481,21 +1597,31 @@ class _RunStats:
 class _FitDiagnosticsWriter:
     """Stream deterministic, pickle-free fit diagnostics into one NPZ."""
 
-    def __init__(self, output: Path, level: FitDiagnosticsLevel) -> None:
+    def __init__(
+        self,
+        output: Path,
+        level: FitDiagnosticsLevel,
+        *,
+        schema_version: int = FIT_DIAGNOSTICS_SCHEMA_VERSION,
+    ) -> None:
         _validate_fit_diagnostics(level)
         self._output = output
         self.level = level
-        self._columns: dict[str, list[int | float]] = {
-            name: [] for name in _FIT_DIAGNOSTIC_DTYPES
+        self.schema_version = schema_version
+        self.dtypes, self.full_fields, self.ragged_groups = (
+            _fit_diagnostic_fields(schema_version)
+        )
+        self._columns: dict[str, list[int | float | str]] = {
+            name: [] for name in self.dtypes
         }
         self._offsets: dict[str, list[int]] = {
-            name: [0] for name in _FIT_DIAGNOSTIC_RAGGED_GROUPS
+            name: [0] for name in self.ragged_groups
         }
         self._raw_paths: dict[str, Path] = {}
         self._streams: dict[str, Any] = {}
         self._time: np.ndarray | None = None
         if level == "full":
-            for name in _FIT_DIAGNOSTIC_FULL_VALUE_FIELDS:
+            for name in self.full_fields:
                 path = output / f".{FIT_DIAGNOSTICS_FILE}.{name}.bin"
                 self._raw_paths[name] = path
                 self._streams[name] = path.open("wb")
@@ -1509,16 +1635,18 @@ class _FitDiagnosticsWriter:
             return
         if self.level == "full" and record.get("time") is not None:
             self._set_time(record["time"])
-        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+        for name, dtype in self.dtypes.items():
             value = record[name]
-            if np.issubdtype(dtype, np.integer):
+            if np.dtype(dtype).kind == "U":
+                self._columns[name].append(str(value))
+            elif np.issubdtype(dtype, np.integer):
                 self._columns[name].append(int(value))
             else:
                 self._columns[name].append(_optional_float(value))
         if self.level != "full":
             return
 
-        for offset_name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items():
+        for offset_name, fields in self.ragged_groups.items():
             values = [
                 np.asarray(record[name], dtype=np.float64).reshape(-1)
                 for name in fields
@@ -1541,7 +1669,7 @@ class _FitDiagnosticsWriter:
         if self.level == "none":
             return
         counts = set()
-        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+        for name, dtype in self.dtypes.items():
             values = np.asarray(source[name], dtype=dtype).reshape(-1)
             counts.add(int(values.size))
             self._columns[name].extend(values.tolist())
@@ -1555,7 +1683,7 @@ class _FitDiagnosticsWriter:
 
         self._set_time(source["time"])
 
-        for offset_name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items():
+        for offset_name, fields in self.ragged_groups.items():
             offsets = np.asarray(source[offset_name], dtype=np.int64)
             if (
                 offsets.shape != (record_count + 1,)
@@ -1583,16 +1711,15 @@ class _FitDiagnosticsWriter:
             self.close()
             return _fit_diagnostics_manifest_metadata(
                 level="none",
+                schema_version=self.schema_version,
                 source_identity_sha256=source_identity_sha256,
             )
 
         self.close()
         payload: dict[str, np.ndarray] = {
-            "schema_version": np.asarray(
-                FIT_DIAGNOSTICS_SCHEMA_VERSION, dtype=np.uint16
-            )
+            "schema_version": np.asarray(self.schema_version, dtype=np.uint16)
         }
-        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+        for name, dtype in self.dtypes.items():
             payload[name] = np.asarray(self._columns[name], dtype=dtype)
         if self.level == "full":
             if self._time is None:
@@ -1617,7 +1744,7 @@ class _FitDiagnosticsWriter:
         artifact_path = self._output / FIT_DIAGNOSTICS_FILE
         array_lengths = {
             name: int(payload[name].size)
-            for name in ("time", *_FIT_DIAGNOSTIC_FULL_VALUE_FIELDS)
+            for name in ("time", *self.full_fields)
             if name in payload
         }
         _write_npz_atomic(artifact_path, payload)
@@ -1626,6 +1753,7 @@ class _FitDiagnosticsWriter:
             path.unlink(missing_ok=True)
         return _fit_diagnostics_manifest_metadata(
             level=self.level,
+            schema_version=self.schema_version,
             source_identity_sha256=source_identity_sha256,
             artifact_path=artifact_path,
             record_count=self.record_count,
@@ -1665,10 +1793,12 @@ def _fit_diagnostics_manifest_metadata(
     artifact_path: Path | None = None,
     record_count: int = 0,
     array_lengths: dict[str, int] | None = None,
+    schema_version: int = FIT_DIAGNOSTICS_SCHEMA_VERSION,
 ) -> dict[str, Any]:
+    _, _, ragged_groups = _fit_diagnostic_fields(schema_version)
     metadata: dict[str, Any] = {
         "level": level,
-        "schema_version": FIT_DIAGNOSTICS_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "record_count": int(record_count),
         "record_semantics": (
             "one record per row in every processed detector tile, ordered "
@@ -1723,13 +1853,36 @@ def _fit_diagnostics_manifest_metadata(
         )
         metadata["ragged_serialization"] = {
             value: key
-            for key, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items()
+            for key, fields in ragged_groups.items()
             for value in fields
         }
         metadata["array_lengths"] = dict(array_lengths or {})
         metadata["time_semantics"] = (
             "one common fitted sample axis shared by every nonempty trace "
             "and reconstruction record"
+        )
+    if schema_version == ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION:
+        units = metadata["units"]
+        for name in tuple(units):
+            if (
+                name.startswith(("p1_", "p2_"))
+                or name == "selected_model_order"
+            ):
+                del units[name]
+        units.update(
+            {
+                "converged": "convergence flag: 1=yes, 0=no, -1=not run",
+                "optimizer_status": "optimizer termination reason",
+                "iterations": "optimizer iterations",
+                "cost": "optimizer objective including amplitude penalty",
+                "gradient_norm": "optimizer gradient norm",
+                "offset": "normalized trace units",
+            }
+        )
+        metadata["non_ok_semantics"] = (
+            "skipped and failed records use NaN float metrics, -1 integer "
+            "metrics, and empty full-mode arrays; optimizer termination "
+            "fields retain a nonconverged fit's final diagnostics"
         )
     metadata["fit_status_codes"] = {
         "ok": FIT_STATUS_OK,
@@ -1940,9 +2093,40 @@ def _fit_detector_row(
     components: int,
     roots_backend: str,
     padded_length: int,
+    fit_method: str = "linear-prediction",
+    iterative_options: IterativeFitOptions | None = None,
     p2_ridge_alpha: float = 0.0,
     fit_diagnostics: FitDiagnosticsLevel = "none",
 ) -> dict[str, Any]:
+    if fit_method == "iterative":
+        from .iterative_fit import iterative_fit
+
+        result = iterative_fit(
+            time_gpu,
+            trace_gpu,
+            components,
+            options=iterative_options,
+            backend="gpu",
+        )
+        if not result.converged:
+            raise _IterativeFitConvergenceError(result)
+        fft_freq, fft_value = _tdsfft_cupy(cp, time_gpu, trace_gpu)
+        row = {
+            "freq": _pad_abs(
+                result.angular_frequency / (2 * np.pi), padded_length
+            ),
+            "amp": _pad_abs(result.amplitude, padded_length),
+            "fft": _pad_abs(cp.asnumpy(fft_value), padded_length),
+            "fft_freq": _pad_abs(cp.asnumpy(fft_freq), padded_length),
+        }
+        if fit_diagnostics != "none":
+            row["diagnostics"] = _iterative_fit_diagnostics(
+                cp=cp,
+                result=result,
+                trace_gpu=trace_gpu,
+                level=fit_diagnostics,
+            )
+        return row
     result = linear_prediction_cupy(
         time_gpu,
         trace_gpu,
@@ -2055,6 +2239,51 @@ def _fit_detector_rows_batched(
     return tuple(rows)
 
 
+class _IterativeFitConvergenceError(ValueError):
+    def __init__(self, result):
+        super().__init__(f"iterative fit did not converge: {result.status}")
+        self.iterative_result = result
+
+
+def _iterative_convergence_diagnostics(result) -> dict[str, Any]:
+    return {
+        "converged": int(result.converged),
+        "optimizer_status": result.status,
+        "iterations": result.iterations,
+        "cost": result.cost,
+        "gradient_norm": result.gradient_norm,
+        "offset": result.offset,
+    }
+
+
+def _iterative_fit_diagnostics(*, cp, result, trace_gpu, level):
+    payload = {
+        "fit_status": FIT_STATUS_OK,
+        "trace_std": result.trace_std,
+        "residual_std": result.residual_std,
+        "relative_residual": result.relative_residual,
+        "chi2": result.chi2,
+        "mode_count": len(result.amplitude),
+        "max_amplitude": (
+            float(np.max(result.amplitude)) if len(result.amplitude) else 0.0
+        ),
+        **_iterative_convergence_diagnostics(result),
+    }
+    if level == "full":
+        payload.update(
+            {
+                "trace": cp.asnumpy(trace_gpu),
+                "reconstruction": result.reconstruction,
+                "time": result.time,
+                "angular_frequency": result.angular_frequency,
+                "decay": result.decay,
+                "amplitude": result.amplitude,
+                "phase": result.phase,
+            }
+        )
+    return payload
+
+
 def _linear_prediction_fit_diagnostics(
     *,
     cp,
@@ -2111,35 +2340,35 @@ def _append_non_ok_fit_diagnostic(
     y0: int,
     y1: int,
     detector_y: int,
+    iterative_result: Any = None,
 ) -> None:
     if level == "none":
         return
     payload: dict[str, Any] = {
-        "tile_x_start": x0,
-        "tile_x_stop": x1,
-        "tile_y_start": y0,
-        "tile_y_stop": y1,
-        "detector_y": detector_y,
-        "fit_status": fit_status,
-        "trace_std": None,
-        "residual_std": None,
-        "relative_residual": None,
-        "chi2": None,
-        "selected_model_order": -1,
-        "mode_count": -1,
-        "p1_rank": -1,
-        "p1_singular_value_ratio": None,
-        "p1_condition": None,
-        "p2_rank": -1,
-        "p2_singular_value_ratio": None,
-        "p2_condition": None,
-        "max_amplitude": None,
+        name: (
+            "not-run"
+            if np.dtype(dtype).kind == "U"
+            else -1
+            if np.issubdtype(dtype, np.integer)
+            else None
+        )
+        for name, dtype in writer.dtypes.items()
     }
+    payload.update(
+        {
+            "tile_x_start": x0,
+            "tile_x_stop": x1,
+            "tile_y_start": y0,
+            "tile_y_stop": y1,
+            "detector_y": detector_y,
+            "fit_status": fit_status,
+        }
+    )
+    if iterative_result is not None:
+        payload.update(_iterative_convergence_diagnostics(iterative_result))
     if level == "full":
         empty = np.empty((0,), dtype=np.float64)
-        payload.update(
-            {name: empty for name in _FIT_DIAGNOSTIC_FULL_VALUE_FIELDS}
-        )
+        payload.update({name: empty for name in writer.full_fields})
     writer.append(payload)
 
 
@@ -2862,6 +3091,29 @@ def _load_and_validate_shard_manifests(
     return shards
 
 
+def _validate_iterative_artifact_configuration(
+    manifest: dict[str, Any],
+) -> None:
+    """Validate complete iterative controls for resume and shard loading."""
+
+    from .iterative_fit import IterativeFitOptions
+
+    if manifest.get("fit_method") != "iterative":
+        raise ValueError("manifest v3 requires iterative fitting")
+    raw_options = manifest.get("iterative_options")
+    if not isinstance(raw_options, dict):
+        raise ValueError("manifest is missing iterative options")
+    try:
+        options = IterativeFitOptions(**raw_options)
+        validate_detector_fit_options(
+            "iterative", options, manifest["p2_ridge_alpha"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid iterative options in manifest") from exc
+    if options.to_dict() != raw_options:
+        raise ValueError("manifest iterative options must be complete")
+
+
 def _validate_detector_artifact_manifest_identity(
     path: Path,
     manifest: dict[str, Any],
@@ -2905,6 +3157,8 @@ def _validate_detector_artifact_manifest_identity(
         _require_finite_nonnegative(
             "p2_ridge_alpha", manifest["p2_ridge_alpha"]
         )
+    if version >= 3:
+        _validate_iterative_artifact_configuration(manifest)
     if (
         not isinstance(manifest["package_version"], str)
         or not manifest["package_version"]
@@ -2958,10 +3212,22 @@ def _validate_fit_diagnostics_artifact(
     version = int(manifest.get("manifest_schema_version", 1))
     if version == 1:
         return
+    if version >= 3:
+        _validate_iterative_artifact_configuration(manifest)
     metadata = manifest.get("fit_diagnostics")
     if not isinstance(metadata, dict):
         raise ValueError(f"missing fit diagnostics metadata: {path}")
     level = _validate_fit_diagnostics(str(metadata.get("level")))
+    schema_version = (
+        ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION
+        if version >= 3
+        else FIT_DIAGNOSTICS_SCHEMA_VERSION
+    )
+    if metadata.get("schema_version") != schema_version:
+        raise ValueError(f"fit diagnostics schema mismatch: {path}")
+    dtypes, full_fields, ragged_groups = _fit_diagnostic_fields(
+        schema_version
+    )
     expected_artifact_identity = detector_artifact_resume_identity(manifest)
     if metadata.get("artifact_resume_identity") != expected_artifact_identity:
         raise ValueError(
@@ -3015,11 +3281,11 @@ def _validate_fit_diagnostics_artifact(
     if metadata.get("artifact_sha256") != _sha256_file(artifact_path):
         raise ValueError(f"fit diagnostics hash mismatch: {artifact_path}")
     with np.load(artifact_path, allow_pickle=False) as data:
-        required = {"schema_version", *_FIT_DIAGNOSTIC_DTYPES}
+        required = {"schema_version", *dtypes}
         if level == "full":
             required.add("time")
-            required.update(_FIT_DIAGNOSTIC_FULL_VALUE_FIELDS)
-            required.update(_FIT_DIAGNOSTIC_RAGGED_GROUPS)
+            required.update(full_fields)
+            required.update(ragged_groups)
         missing = sorted(required.difference(data.files))
         if missing:
             raise ValueError(
@@ -3027,12 +3293,12 @@ def _validate_fit_diagnostics_artifact(
                 + ", ".join(missing)
             )
         if int(np.asarray(data["schema_version"]).item()) != int(
-            FIT_DIAGNOSTICS_SCHEMA_VERSION
+            schema_version
         ):
             raise ValueError(
                 f"unsupported fit diagnostics schema: {artifact_path}"
             )
-        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+        for name, dtype in dtypes.items():
             values = np.asarray(data[name])
             if values.shape != (record_count,):
                 raise ValueError(
@@ -3065,7 +3331,20 @@ def _validate_fit_diagnostics_artifact(
                     f"{artifact_path}"
                 )
         non_ok = statuses != FIT_STATUS_OK
-        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+        if schema_version == ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION:
+            converged = np.asarray(data["converged"])
+            reasons = np.asarray(data["optimizer_status"])
+            if (
+                np.any(converged[~non_ok] != 1)
+                or not set(reasons[~non_ok]).issubset(
+                    {"converged", "constant"}
+                )
+                or np.any(converged[non_ok] == 1)
+            ):
+                raise ValueError(
+                    "fit diagnostics convergence status mismatch"
+                )
+        for name, dtype in dtypes.items():
             if name in {
                 "tile_x_start",
                 "tile_x_stop",
@@ -3074,6 +3353,11 @@ def _validate_fit_diagnostics_artifact(
                 "detector_y",
                 "fit_status",
             }:
+                continue
+            if (
+                schema_version == ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION
+                and name in _ITERATIVE_CONVERGENCE_DTYPES
+            ):
                 continue
             values = np.asarray(data[name])
             if np.issubdtype(dtype, np.integer):
@@ -3095,7 +3379,7 @@ def _validate_fit_diagnostics_artifact(
                 raise ValueError(
                     f"fit diagnostics time length mismatch: {artifact_path}"
                 )
-            for name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items():
+            for name, fields in ragged_groups.items():
                 offsets = np.asarray(data[name])
                 if (
                     offsets.dtype != np.dtype(np.int64)
@@ -3169,6 +3453,9 @@ def _detector_artifact_stable_manifest_keys(
         diagnostics = manifest.get("fit_diagnostics") or {}
         payload["fit_diagnostics_level"] = diagnostics.get("level")
         payload["p2_ridge_alpha"] = manifest.get("p2_ridge_alpha")
+    if int(manifest.get("manifest_schema_version", 1)) >= 3:
+        payload["fit_method"] = manifest.get("fit_method")
+        payload["iterative_options"] = manifest.get("iterative_options")
     return payload
 
 
@@ -3261,6 +3548,9 @@ def detector_artifact_resume_identity(manifest: dict[str, Any]) -> str:
         diagnostics = manifest.get("fit_diagnostics") or {}
         payload["fit_diagnostics_level"] = diagnostics.get("level")
         payload["p2_ridge_alpha"] = manifest.get("p2_ridge_alpha")
+    if int(manifest.get("manifest_schema_version", 1)) >= 3:
+        payload["fit_method"] = manifest.get("fit_method")
+        payload["iterative_options"] = manifest.get("iterative_options")
     return _stable_json_hash(payload)
 
 

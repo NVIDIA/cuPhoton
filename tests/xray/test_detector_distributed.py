@@ -860,10 +860,15 @@ def _upgrade_shard_with_summary_diagnostics(root: Path) -> Path:
     return root
 
 
-def _upgrade_shard_with_full_diagnostics(root: Path) -> Path:
+def _upgrade_shard_with_full_diagnostics(
+    root: Path, *, iterative_options=None
+) -> Path:
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    writer = _FitDiagnosticsWriter(root, "full")
+    iterative = iterative_options is not None
+    writer = _FitDiagnosticsWriter(
+        root, "full", schema_version=2 if iterative else 1
+    )
     x0 = int(manifest["roi_lower"][0])
     x1 = x0 + int(manifest["roi_dim"][0])
     y0 = int(manifest["roi_lower"][1])
@@ -871,14 +876,24 @@ def _upgrade_shard_with_full_diagnostics(root: Path) -> Path:
     mode_count = int(manifest["shard"]["index"]) + 1
     for row, y in enumerate(range(y0, y1)):
         if row == 0:
-            writer.append(
-                _full_diagnostic_record(
-                    x0=x0,
-                    x1=x1,
-                    y=y,
-                    modes=mode_count,
-                )
+            record = _full_diagnostic_record(
+                x0=x0,
+                x1=x1,
+                y=y,
+                modes=mode_count,
             )
+            if iterative:
+                record.update(
+                    {
+                        "converged": 1,
+                        "optimizer_status": "converged",
+                        "iterations": 12,
+                        "cost": 0.02,
+                        "gradient_norm": 1e-10,
+                        "offset": 0.5,
+                    }
+                )
+            writer.append(record)
         else:
             _append_non_ok_fit_diagnostic(
                 writer,
@@ -902,7 +917,10 @@ def _upgrade_shard_with_full_diagnostics(root: Path) -> Path:
     fit_status[1:, :] = FIT_STATUS_FAILED
     np.save(root / FIT_STATUS_FILE, fit_status)
 
-    manifest["manifest_schema_version"] = 2
+    manifest["manifest_schema_version"] = 3 if iterative else 2
+    if iterative:
+        manifest["fit_method"] = "iterative"
+        manifest["iterative_options"] = iterative_options.to_dict()
     manifest["raw_fits"] = 1
     manifest["failures"] = y1 - y0 - 1
     manifest["max_fit_failures"] = y1 - y0 - 1
@@ -972,3 +990,242 @@ def _full_diagnostic_record(
         "p1_singular_values": np.arange(modes + 1, dtype=np.float64),
         "p2_singular_values": np.arange(2 * modes + 1, dtype=np.float64),
     }
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("max_iterations", 90),
+        ("tolerance", 1e-7),
+        ("amplitude_l2", 0.2),
+        ("min_frequency", 0.1),
+        ("max_frequency", 0.8),
+    ],
+)
+def test_iterative_distributed_options_change_identity_and_worker_command(
+    tmp_path, monkeypatch, name, value
+):
+    from cuphoton.xray.iterative_fit import IterativeFitOptions
+
+    request_manifests = []
+    request_manifest = detector_distributed._request_manifest_for_shard
+
+    def capture_request_manifest(**kwargs):
+        manifest = request_manifest(**kwargs)
+        request_manifests.append(manifest)
+        return manifest
+
+    monkeypatch.setattr(
+        detector_distributed,
+        "_request_manifest_for_shard",
+        capture_request_manifest,
+    )
+    _write_synthetic_hdf5_pair(tmp_path, samples=8, rows=2, cols=2)
+    common = dict(
+        h5dir=tmp_path,
+        fon="on.h5",
+        foff="off.h5",
+        output_dir=tmp_path / "out",
+        shard_count=1,
+    )
+    lp = build_detector_artifact_distributed_plan(**common)
+    default = build_detector_artifact_distributed_plan(
+        **common, detector_options={"fit_method": "iterative"}
+    )
+    configured = build_detector_artifact_distributed_plan(
+        **common,
+        detector_options={
+            "fit_method": "iterative",
+            "iterative_options": IterativeFitOptions(**{name: value}),
+        },
+    )
+    plans = (lp, default, configured)
+    assert [plan["manifest_schema_version"] for plan in plans] == [2, 3, 3]
+    for plan, request in zip(plans, request_manifests, strict=True):
+        assert (
+            request["manifest_schema_version"]
+            == plan["manifest_schema_version"]
+        )
+        assert plan["shards"][0]["resume_identity"] == (
+            detector_artifact_resume_identity(request)
+        )
+    assert (
+        len(
+            {
+                p["shards"][0]["resume_identity"]
+                for p in (lp, default, configured)
+            }
+        )
+        == 3
+    )
+    command = configured["commands"][0]
+    assert command[command.index("--fit-method") + 1] == "iterative"
+    flag = "--iterative-" + name.replace("_", "-")
+    assert command[command.index(flag) + 1] == str(value)
+    assert "--fit-method" not in lp["commands"][0]
+    assert not any(
+        arg.startswith("--iterative-") for arg in lp["commands"][0]
+    )
+    # The plan must remain directly serializable for worker handoff.
+    json.dumps(configured)
+
+
+def test_iterative_distributed_cli_preserves_controls(tmp_path, capsys):
+    _write_synthetic_hdf5_pair(tmp_path, samples=8, rows=2, cols=2)
+    assert (
+        main(
+            [
+                "detector-artifact-distributed",
+                "--h5dir",
+                str(tmp_path),
+                "--fon",
+                "on.h5",
+                "--foff",
+                "off.h5",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--fit-method",
+                "iterative",
+                "--iterative-max-iterations",
+                "75",
+                "--iterative-tolerance",
+                "1e-7",
+                "--iterative-amplitude-l2",
+                "0.01",
+                "--iterative-min-frequency",
+                "0.05",
+                "--iterative-max-frequency",
+                "0.4",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["detector_options"]["iterative_options"] == {
+        "max_iterations": 75,
+        "tolerance": 1e-7,
+        "amplitude_l2": 0.01,
+        "min_frequency": 0.05,
+        "max_frequency": 0.4,
+    }
+
+
+@pytest.mark.parametrize("different_options", [False, True, "method"])
+def test_iterative_diagnostic_shard_merge_and_option_mismatch(
+    tmp_path, different_options
+):
+    from cuphoton.xray.iterative_fit import IterativeFitOptions
+
+    left = _upgrade_shard_with_full_diagnostics(
+        _write_shard(
+            tmp_path / "left-iterative",
+            index=0,
+            count=2,
+            roi_lower=(0, 0),
+            roi_dim=(3, 2),
+            global_roi_dim=(5, 2),
+            fill=1.0,
+        ),
+        iterative_options=IterativeFitOptions(),
+    )
+    right = _upgrade_shard_with_full_diagnostics(
+        _write_shard(
+            tmp_path / "right-iterative",
+            index=1,
+            count=2,
+            roi_lower=(3, 0),
+            roi_dim=(2, 2),
+            global_roi_dim=(5, 2),
+            fill=2.0,
+        ),
+        iterative_options=(
+            None
+            if different_options == "method"
+            else IterativeFitOptions(
+                amplitude_l2=0.1 if different_options else 0
+            )
+        ),
+    )
+    output = tmp_path / "merged-iterative"
+    if different_options:
+        with pytest.raises(ValueError, match="configuration mismatch"):
+            merge_detector_artifact_shards(
+                shard_dirs=(right, left), output_dir=output
+            )
+        return
+    merge_detector_artifact_shards(
+        shard_dirs=(right, left), output_dir=output
+    )
+    assert detector_artifact_complete(output)
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["manifest_schema_version"] == 3
+    assert manifest["fit_method"] == "iterative"
+    assert manifest["fit_diagnostics"]["schema_version"] == 2
+    assert not any(
+        name.startswith(("p1_", "p2_"))
+        for name in manifest["fit_diagnostics"]["units"]
+    )
+    with np.load(output / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        assert (
+            data["optimizer_status"].tolist() == ["converged", "not-run"] * 2
+        )
+        assert data["converged"].tolist() == [1, -1] * 2
+        assert data["iterations"].tolist() == [12, -1] * 2
+        assert data["trace_offsets"].tolist() == [0, 3, 3, 6, 6]
+        assert not any(name.startswith(("p1_", "p2_")) for name in data.files)
+        assert all(not data[name].dtype.hasobject for name in data.files)
+    # Changed controls invalidate completeness without a strict NPZ scan.
+    manifest["iterative_options"]["max_iterations"] += 1
+    (output / "manifest.json").write_text(json.dumps(manifest))
+    assert not detector_artifact_complete(output)
+
+
+@pytest.mark.parametrize(
+    "invalid", ["incomplete", "invalid-options", "ridge"]
+)
+def test_iterative_completion_and_merge_reject_invalid_options(
+    tmp_path,
+    invalid,
+):
+    from cuphoton.xray.iterative_fit import IterativeFitOptions
+
+    root = _upgrade_shard_with_full_diagnostics(
+        _write_shard(
+            tmp_path / "iterative",
+            index=0,
+            count=1,
+            roi_lower=(0, 0),
+            roi_dim=(2, 2),
+            global_roi_dim=(2, 2),
+            fill=1.0,
+        ),
+        iterative_options=IterativeFitOptions(),
+    )
+    assert detector_artifact_complete(root)
+    path = root / "manifest.json"
+    manifest = json.loads(path.read_text())
+    if invalid == "incomplete":
+        manifest["iterative_options"].pop("tolerance")
+    elif invalid == "invalid-options":
+        manifest["iterative_options"]["max_iterations"] = 0
+    else:
+        manifest["p2_ridge_alpha"] = 0.1
+    # Keep identity fields internally consistent: validation must reject the
+    # incompatible configuration itself, not just a stale identity hash.
+    manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
+    manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    manifest["fit_diagnostics"]["artifact_resume_identity"] = manifest[
+        "resume_identity"
+    ]
+    manifest["fit_diagnostics"]["artifact_config_hash"] = manifest[
+        "config_hash"
+    ]
+    path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="iterative options"):
+        merge_detector_artifact_shards(
+            shard_dirs=(root,),
+            output_dir=tmp_path / "merged",
+        )
+    assert not detector_artifact_complete(root)

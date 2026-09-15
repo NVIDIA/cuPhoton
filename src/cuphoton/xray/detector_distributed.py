@@ -29,6 +29,7 @@ from .detector_artifacts import (
     detector_artifact_resume_identity,
     detector_normalization_identity,
     merge_detector_artifact_shards,
+    validate_detector_fit_options,
 )
 from .detector_mask import format_y_ranges, parse_y_ranges
 from .hdf5 import probe_hdf5_file
@@ -42,6 +43,8 @@ _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
     "fit_trailing_drop": 1,
     "integrate": 3,
     "components": 30,
+    "fit_method": "linear-prediction",
+    "iterative_options": None,
     "p2_ridge_alpha": 0.0,
     "roots_backend": "eigvals",
     "savgol_window": 5,
@@ -191,6 +194,17 @@ def build_detector_artifact_distributed_plan(
     if not np.isfinite(p2_ridge_alpha) or p2_ridge_alpha < 0:
         raise ValueError("p2_ridge_alpha must be finite and non-negative")
     options["p2_ridge_alpha"] = p2_ridge_alpha
+    iterative_options = options["iterative_options"]
+    if isinstance(iterative_options, dict):
+        from .iterative_fit import IterativeFitOptions
+
+        iterative_options = IterativeFitOptions(**iterative_options)
+    iterative_options = validate_detector_fit_options(
+        options["fit_method"], iterative_options, p2_ridge_alpha
+    )
+    options["iterative_options"] = (
+        None if iterative_options is None else iterative_options.to_dict()
+    )
     on_path = _resolve_path(h5dir_path, fon)
     off_path = _resolve_path(h5dir_path, foff)
     input_identity = detector_artifact_input_identity(on_path, off_path)
@@ -247,7 +261,11 @@ def build_detector_artifact_distributed_plan(
         "normalization_cache": (
             None if normalization_cache is None else str(normalization_cache)
         ),
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": (
+            3
+            if options["fit_method"] == "iterative"
+            else DETECTOR_ARTIFACT_MANIFEST_VERSION
+        ),
         "package_version": CUPHOTON_VERSION,
         "dtype": "float64",
         "input_identity": input_identity,
@@ -742,9 +760,13 @@ def _request_manifest_for_shard(
     detector_options: dict[str, Any],
 ) -> dict[str, Any]:
     options = detector_options
-    return {
+    manifest = {
         "kind": "xray-detector-artifacts",
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": (
+            3
+            if options.get("fit_method") == "iterative"
+            else DETECTOR_ARTIFACT_MANIFEST_VERSION
+        ),
         "package_version": CUPHOTON_VERSION,
         "backend": "cupy",
         "dtype": "float64",
@@ -809,6 +831,10 @@ def _request_manifest_for_shard(
             ],
         },
     }
+    if options.get("fit_method") == "iterative":
+        manifest["fit_method"] = "iterative"
+        manifest["iterative_options"] = options["iterative_options"]
+    return manifest
 
 
 def _plan_identity(shards: list[dict[str, Any]]) -> str:
@@ -910,6 +936,13 @@ def _append_detector_worker_options(
         cmd.extend(["--fit-diagnostics", str(options["fit_diagnostics"])])
     if float(options.get("p2_ridge_alpha", 0.0)) != 0.0:
         cmd.extend(["--p2-ridge-alpha", str(options["p2_ridge_alpha"])])
+    if options.get("fit_method", "linear-prediction") == "iterative":
+        cmd.extend(["--fit-method", "iterative"])
+        for name, value in options["iterative_options"].items():
+            if value is not None:
+                cmd.extend(
+                    ["--iterative-" + name.replace("_", "-"), str(value)]
+                )
 
 
 def _read_detector_input_spec(

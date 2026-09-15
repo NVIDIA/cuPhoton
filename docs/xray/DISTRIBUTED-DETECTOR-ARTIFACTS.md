@@ -146,6 +146,20 @@ The default diagnostic level is `none`, and the default ridge alpha is zero.
 Use full diagnostics only for bounded regions because traces and
 reconstructions can make a detector-wide sidecar large.
 
+For optional iterative fitting, pass `--fit-method iterative` and the
+`--iterative-*` settings to `detector-artifact-distributed`. The plan forwards
+them to every worker. Start with `--executor dry-run` to inspect the mode
+count, frequency bounds and iteration budget before launching workers.
+Iterative fitting uses the same CuPy worker placement as linear prediction.
+
+An iterative artifact records its method and settings in manifest version
+3. Linear-prediction artifacts retain version 2. Resume and merge checks
+include the method and iterative settings; mixed methods or changed controls
+require new fits. Iterative diagnostics use schema 2 with optimizer and
+residual fields; linear-prediction diagnostics retain schema 1 with P1/P2
+matrix diagnostics. See [Optional iterative fitting](README.md#optional-iterative-fitting)
+for model assumptions and units.
+
 Generated plans, scripts, shard directories, logs, merged arrays, and manifests
 are run artifacts. Keep them out of git. A performance report should include
 a redacted plan summary, code revision, environment, GPU/driver/runtime, input

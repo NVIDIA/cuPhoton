@@ -261,6 +261,14 @@ logs, and a merged manifest. Preserve the ROI, excluded rows, normalization,
 fit parameters, shard ranges, and package/hardware details with published
 results.
 
+XRay detector artifacts from the optional iterative fitter use manifest
+version 3, including the fitting method and iterative controls in the
+configuration and resume identity. Existing linear-prediction artifacts keep
+their version 2 representation. The numerical diagnostic sidecar also
+identifies its schema: version 1 describes linear-prediction matrices;
+version 2 describes iterative convergence and residuals. A merge requires
+matching methods and controls as well as matching data and preprocessing.
+
 ## Run-directory hygiene
 
 Run directories are generated artifacts, not source. Store them outside the

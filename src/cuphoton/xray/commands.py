@@ -2555,9 +2555,54 @@ class DetectorArtifactsCommand(_XRayCommand):
 
     class ComponentsArg(IntegerInvariant):
         _arg = "--components"
-        _help = "Linear-prediction component count."
+        _help = "LP component count or iterative damped-cosine mode count."
         _required = False
         _default = 30
+
+    fit_method = "linear-prediction"
+
+    class FitMethodArg(SetInvariant):
+        _arg = "--fit-method"
+        _help = "Detector fitting method; iterative fitting is opt-in."
+        _required = False
+        _set = {"linear-prediction", "iterative"}
+        _default = "linear-prediction"
+        _metavar = "{linear-prediction,iterative}"
+
+    iterative_max_iterations = None
+
+    class IterativeMaxIterationsArg(IntegerInvariant):
+        _arg = "--iterative-max-iterations"
+        _help = "Maximum iterative solver iterations (default: 600)."
+        _required = False
+
+    iterative_tolerance = None
+
+    class IterativeToleranceArg(FloatInvariant):
+        _arg = "--iterative-tolerance"
+        _help = "Iterative convergence tolerance (default: 1e-8)."
+        _required = False
+
+    iterative_amplitude_l2 = None
+
+    class IterativeAmplitudeL2Arg(FloatInvariant):
+        _arg = "--iterative-amplitude-l2"
+        _help = "Iterative amplitude L2 penalty (default: 0)."
+        _required = False
+
+    iterative_min_frequency = None
+
+    class IterativeMinFrequencyArg(FloatInvariant):
+        _arg = "--iterative-min-frequency"
+        _help = "Signed LM lower frequency bound in cycles per delay unit."
+        _required = False
+
+    iterative_max_frequency = None
+
+    class IterativeMaxFrequencyArg(FloatInvariant):
+        _arg = "--iterative-max-frequency"
+        _help = "Signed LM upper frequency bound (default: Nyquist)."
+        _required = False
 
     p2_ridge_alpha = 0.0
 
@@ -2905,6 +2950,51 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _arg = "--components"
         _required = False
         _default = 30
+
+    fit_method = "linear-prediction"
+
+    class FitMethodArg(SetInvariant):
+        _arg = "--fit-method"
+        _help = "Detector fitting method; iterative fitting is opt-in."
+        _required = False
+        _set = {"linear-prediction", "iterative"}
+        _default = "linear-prediction"
+        _metavar = "{linear-prediction,iterative}"
+
+    iterative_max_iterations = None
+
+    class IterativeMaxIterationsArg(IntegerInvariant):
+        _arg = "--iterative-max-iterations"
+        _help = "Maximum iterative solver iterations (default: 600)."
+        _required = False
+
+    iterative_tolerance = None
+
+    class IterativeToleranceArg(FloatInvariant):
+        _arg = "--iterative-tolerance"
+        _help = "Iterative convergence tolerance (default: 1e-8)."
+        _required = False
+
+    iterative_amplitude_l2 = None
+
+    class IterativeAmplitudeL2Arg(FloatInvariant):
+        _arg = "--iterative-amplitude-l2"
+        _help = "Iterative amplitude L2 penalty (default: 0)."
+        _required = False
+
+    iterative_min_frequency = None
+
+    class IterativeMinFrequencyArg(FloatInvariant):
+        _arg = "--iterative-min-frequency"
+        _help = "Signed LM lower frequency bound in cycles per delay unit."
+        _required = False
+
+    iterative_max_frequency = None
+
+    class IterativeMaxFrequencyArg(FloatInvariant):
+        _arg = "--iterative-max-frequency"
+        _help = "Signed LM upper frequency bound (default: Nyquist)."
+        _required = False
 
     p2_ridge_alpha = 0.0
 
@@ -3779,6 +3869,26 @@ def _extract_trace_to_npz(
     return summary
 
 
+def _iterative_options_from_args(args):
+    names = (
+        "max_iterations",
+        "tolerance",
+        "amplitude_l2",
+        "min_frequency",
+        "max_frequency",
+    )
+    values = {
+        name: getattr(args, "iterative_" + name)
+        for name in names
+        if getattr(args, "iterative_" + name) is not None
+    }
+    if not values and args.fit_method == "linear-prediction":
+        return None
+    from .iterative_fit import IterativeFitOptions
+
+    return IterativeFitOptions(**values)
+
+
 def _detector_artifacts(args):
     from .detector_artifacts import build_detector_artifacts_cupy
     from .detector_mask import parse_y_ranges
@@ -3799,6 +3909,8 @@ def _detector_artifacts(args):
         fit_trailing_drop=args.fit_trailing_drop,
         integrate_pixels=args.integrate,
         components=args.components,
+        fit_method=args.fit_method,
+        iterative_options=_iterative_options_from_args(args),
         p2_ridge_alpha=args.p2_ridge_alpha,
         roots_backend=args.roots_backend,
         savgol_window=args.savgol_window,
@@ -3889,6 +4001,8 @@ def _detector_artifact_distributed(args):
         "fit_trailing_drop": args.fit_trailing_drop,
         "integrate": args.integrate,
         "components": args.components,
+        "fit_method": args.fit_method,
+        "iterative_options": _iterative_options_from_args(args),
         "p2_ridge_alpha": args.p2_ridge_alpha,
         "roots_backend": args.roots_backend,
         "savgol_window": args.savgol_window,
