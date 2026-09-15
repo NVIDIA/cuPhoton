@@ -166,6 +166,8 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
             "--mock-storage",
             "host",
             "--skip-gds-read",
+            "--output-json",
+            "report.json",
             "first.fits",
             "second.fits",
             "first.fits",
@@ -183,6 +185,7 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
     assert received["native_batcher"] == "off"
     assert received["mock_storage_kind"] == "host"
     assert received["skip_gds_read"] is True
+    assert received["output_json"] == Path("report.json")
     assert captured.err == ""
 
 
@@ -280,3 +283,300 @@ def test_gds_read_drains_before_submit_queue_fills(monkeypatch):
     assert all(
         instance.stopped for instance in FakeNativeBatchBuilder.instances
     )
+
+
+@pytest.fixture
+def json_benchmark(monkeypatch, tmp_path):
+    import cuphoton.xdr.nvcomp_batch as nvcomp_batch
+
+    bench = _load_benchmark_module()
+    path = tmp_path / "input.fits"
+    path.write_bytes(b"synthetic payload")
+    monkeypatch.setattr(bench, "gpu_available", lambda: True)
+    monkeypatch.setattr(bench, "cp", SimpleNamespace(__version__="test-cupy"))
+    monkeypatch.setattr(
+        bench, "kvikio", SimpleNamespace(__version__="test-kvikio")
+    )
+    monkeypatch.setattr(bench, "_nvcomp_version", lambda: "test-nvcomp")
+    monkeypatch.setattr(bench.storage_cache, "_enabled", False)
+    monkeypatch.setattr(bench.storage_cache, "preload", lambda _path: None)
+    monkeypatch.setattr(bench, "cpp_helper_available", lambda: True)
+    monkeypatch.setattr(
+        nvcomp_batch,
+        "get_native_batch_builder",
+        lambda required=False: object,
+    )
+    monkeypatch.setattr(bench, "is_gds_active", lambda: True)
+    phases = []
+
+    def helper_probe():
+        assert not phases, "capture capabilities before timed phases"
+        return True
+
+    monkeypatch.setattr(bench, "cpp_helper_available", helper_probe)
+
+    def plan(paths, hdus, iterations, threads):
+        result = bench.make_result("plan_native", [1.0, 3.0], 0.5, "plan")
+        phases.append(result)
+        summary = bench.PlannedFileSummary(
+            path=paths[0],
+            file_index=0,
+            hdu_indices=tuple(hdus),
+            image_hdus=1,
+            compressed_hdus=1,
+            raw_bytes=4096,
+            data_mb=0.5,
+            spans=2,
+        )
+        return [object()], [summary], result
+
+    def read(*args, **kwargs):
+        result = bench.make_result("gds_read", [2.0, 4.0], 0.5, "read")
+        phases.append(result)
+        return result
+
+    def load(*args, **kwargs):
+        phase = (
+            "batch_to_device_stream"
+            if kwargs["use_stream"]
+            else "batch_to_device"
+        )
+        result = bench.make_result(phase, [3.0, 5.0], 0.5, "load")
+        phases.append(result)
+        return result
+
+    monkeypatch.setattr(bench, "bench_native_plan", plan)
+    monkeypatch.setattr(bench, "bench_gds_read", read)
+    monkeypatch.setattr(bench, "bench_batch_load", load)
+    return bench, path, phases
+
+
+@pytest.mark.parametrize("mode", ["real", "host", "device"])
+def test_json_report_matches_returned_and_printed_phases(
+    json_benchmark, tmp_path, mode
+):
+    import json
+    from dataclasses import asdict
+
+    bench, path, phases = json_benchmark
+    output = tmp_path / "benchmark.json"
+    printed = []
+    results = bench.run_benchmark(
+        [path, path],
+        hdu_indices=(2, 1),
+        iterations=2,
+        prefetch_depth=3,
+        decode_batch_files=2,
+        batch_queue_depth=4,
+        native_read_threads=5,
+        native_plan_threads=6,
+        native_batcher="auto",
+        mock_storage_kind=None if mode == "real" else mode,
+        skip_gds_read=(mode != "real"),
+        output_json=output,
+        out=printed.append,
+    )
+    report = json.loads(output.read_bytes())
+    assert results == phases
+    assert report["schema_version"] == 1
+    assert report["ok"] is True
+    assert report["phases"] == [asdict(phase) for phase in results]
+    assert report["storage"]["mode"] == mode
+    assert report["capabilities"] == {
+        "cpp_helper_available": True,
+        "gds_active": True,
+        "gds_probe": "cuphoton.xdr.is_gds_active",
+    }
+    assert report["options"] == {
+        "hdu_indices": [2, 1],
+        "iterations": 2,
+        "prefetch_depth": 3,
+        "decode_batch_files": 2,
+        "batch_queue_depth": 4,
+        "native_read_threads": 5,
+        "native_plan_threads": 6,
+        "native_batcher": "auto",
+        "native_batcher_enabled": mode == "real",
+        "native_batcher_error": None,
+        "skip_gds_read": mode != "real",
+        "max_files": None,
+    }
+    assert report["workload"] == {
+        "files": [str(path.resolve()), str(path.resolve())],
+        "file_count": 2,
+        "planned_file_count": 1,
+        "raw_bytes": 4096,
+        "data_mb": 0.5,
+    }
+    assert report["versions"]["cuphoton"] == bench.__version__
+    assert report["versions"]["cupy"] == "test-cupy"
+    assert report["versions"]["kvikio"] == "test-kvikio"
+    assert report["versions"]["nvcomp"] == "test-nvcomp"
+    expected_printed = []
+    bench.print_results(
+        results, env_note=printed[2][5:], out=expected_printed.append
+    )
+    assert printed == expected_printed
+    assert not list(tmp_path.glob(".benchmark.json.*"))
+
+
+@pytest.mark.parametrize("native_batcher", ["auto", "off", "on"])
+def test_json_reports_missing_helper_and_failed_phases(
+    json_benchmark, monkeypatch, tmp_path, native_batcher
+):
+    import json
+
+    import cuphoton.xdr.nvcomp_batch as nvcomp_batch
+
+    bench, path, _ = json_benchmark
+    monkeypatch.setattr(bench, "cpp_helper_available", lambda: False)
+    monkeypatch.setattr(bench, "is_gds_active", lambda: False)
+
+    def missing_builder(required=False):
+        if required:
+            raise RuntimeError("native builder unavailable")
+        return None
+
+    monkeypatch.setattr(
+        nvcomp_batch, "get_native_batch_builder", missing_builder
+    )
+
+    def failed_plan(*args):
+        return (
+            [],
+            [],
+            bench.failed_phase_from_exception(
+                "plan_native",
+                RuntimeError("native helper unavailable"),
+                note="plan",
+            ),
+        )
+
+    monkeypatch.setattr(bench, "bench_native_plan", failed_plan)
+    output = tmp_path / "failed.json"
+    results = bench.run_benchmark(
+        [path],
+        native_batcher=native_batcher,
+        output_json=output,
+        out=lambda _: None,
+    )
+    report = json.loads(output.read_bytes())
+    assert report["ok"] is False
+    assert report["capabilities"]["cpp_helper_available"] is False
+    assert report["capabilities"]["gds_active"] is False
+    assert report["phases"][0]["ok"] is False
+    assert report["phases"][0]["error"] == results[0].error
+    assert report["workload"]["planned_file_count"] == 0
+    assert report["options"]["native_batcher_enabled"] == (
+        None if native_batcher == "on" else False
+    )
+    assert report["options"]["native_batcher_error"] == (
+        "native builder unavailable" if native_batcher == "on" else None
+    )
+
+
+def test_json_reports_ambient_mock_storage(
+    json_benchmark, monkeypatch, tmp_path
+):
+    import json
+
+    bench, path, _ = json_benchmark
+    monkeypatch.setattr(bench.storage_cache, "_enabled", True)
+    monkeypatch.setattr(bench.storage_cache, "_location", "host")
+    output = tmp_path / "ambient.json"
+    printed = []
+    bench.run_benchmark(
+        [path], skip_gds_read=True, output_json=output, out=printed.append
+    )
+    report = json.loads(output.read_bytes())
+    assert report["storage"] == {
+        "mode": "host",
+        "requested_mock_storage": None,
+    }
+    assert report["options"]["native_batcher_enabled"] is False
+    assert "mock-storage=host" in printed[2]
+
+
+@pytest.mark.parametrize(
+    "destination", ["input", "directory", "missing-parent"]
+)
+def test_json_destination_is_checked_before_benchmark_phases(
+    json_benchmark, tmp_path, destination
+):
+    bench, path, phases = json_benchmark
+    output = {
+        "input": path,
+        "directory": tmp_path,
+        "missing-parent": tmp_path / "missing" / "report.json",
+    }[destination]
+    with pytest.raises((ValueError, OSError)):
+        bench.run_benchmark([path], output_json=output, out=lambda _: None)
+    assert phases == []
+    assert path.read_bytes() == b"synthetic payload"
+
+
+def test_json_is_not_published_after_preflight_failure(
+    json_benchmark, monkeypatch, tmp_path
+):
+    bench, path, phases = json_benchmark
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(bench, "gpu_available", lambda: False)
+    with pytest.raises(RuntimeError, match="GPU / kvikio"):
+        bench.run_benchmark([path], output_json=output, out=lambda _: None)
+    assert not output.exists()
+    assert phases == []
+
+
+def test_json_atomic_write_preserves_previous_report_on_exception(
+    json_benchmark, monkeypatch, tmp_path
+):
+    bench, path, phases = json_benchmark
+    output = tmp_path / "report.json"
+    output.write_text("previous report")
+
+    def preload_failure(_path):
+        raise OSError("preload failed")
+
+    monkeypatch.setattr(bench.storage_cache, "preload", preload_failure)
+    with pytest.raises(OSError, match="preload failed"):
+        bench.run_benchmark(
+            [path],
+            mock_storage_kind="host",
+            output_json=output,
+            out=lambda _: None,
+        )
+    assert output.read_text() == "previous report"
+    assert phases == []
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_benchmark_without_json_keeps_return_and_text_output(
+    json_benchmark, monkeypatch
+):
+    bench, path, phases = json_benchmark
+
+    def unexpected_metadata():
+        pytest.fail("optional report probes must not run without output_json")
+
+    monkeypatch.setattr(bench, "cpp_helper_available", unexpected_metadata)
+    printed = []
+    assert bench.run_benchmark([path], out=printed.append) == phases
+    assert any("batch_to_device_stream" in line for line in printed)
+
+
+def test_benchmark_cli_reports_invalid_json_destination(
+    json_benchmark, tmp_path, capsys
+):
+    _, path, phases = json_benchmark
+    rc = run_component(
+        "xdr",
+        [
+            "benchmark-fits",
+            "--output-json",
+            str(tmp_path / "missing" / "report.json"),
+            str(path),
+        ],
+    )
+    assert rc == 1
+    assert "No such file or directory" in capsys.readouterr().err
+    assert phases == []

@@ -109,10 +109,40 @@ Without the extension, `batch_to_device` and `batch_to_device_stream` raise a
 
 ```bash
 cuphoton xdr benchmark-fits \
-  --hdu-indices 1,2,3 /path/to/file1.fits /path/to/file2.fits
+  --hdu-indices 1,2,3 --output-json benchmark.json \
+  /path/to/file1.fits /path/to/file2.fits
 ```
 
-Use `--dir` and `--max-files` to scan directories of FITS files.
+Use `--dir` and `--max-files` to scan directories of FITS files. The benchmark
+defaults to `--native-read-threads=4`; the loading APIs default to the available
+CPU core count when `native_read_threads` is omitted.
+
+`--output-json` writes an optional report while retaining the terminal table.
+Its parent directory must exist. The report replaces its destination only after
+all phases finish; preflight or uncaught errors leave a previous report intact.
+A caught phase failure still produces a report with `ok=false` and the phase's
+error text. The Python API accepts `output_json=Path(...)` and continues
+returning `list[PhaseResult]`.
+
+The version 1 JSON report contains:
+
+- `phases`: the same full-precision measurements returned by the benchmark,
+  including per-phase `ok` and `error` fields. `elapsed_ms` is the mean over
+  that phase's iterations.
+- `versions`: cuPhoton, Python, CuPy, KvikIO, and nvCOMP package versions.
+- `capabilities`: native-helper import availability and the existing
+  `is_gds_active` capability probe. `gds_active=true` does not prove that every
+  measured read used GDS, including when storage is mocked.
+- `storage`: the effective `real`, `host`, or `device` mode, including an
+  ambient mock-storage context or environment setting.
+- `options`: HDUs, iteration count, thread/queue settings, and native-batcher
+  selection. `native_batcher_enabled=null` records an invalid forced selection
+  with the reason in `native_batcher_error`.
+- `workload`: ordered input files, counts, planned raw bytes, and decoded MiB.
+  Failed planning can leave these planned sizes at zero.
+
+Metadata and JSON writes sit outside phase timings. `--skip-gds-read` omits the
+raw-read phase; failed planning also prevents that phase from running.
 
 ### Benchmarking without storage I/O
 

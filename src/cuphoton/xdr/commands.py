@@ -22,7 +22,7 @@ from cuphoton.core.cli import (
 from .benchmark_fits import parse_hdu_indices, run_benchmark
 
 _KNOWN_COMMAND_EXCEPTIONS = (
-    FileNotFoundError,
+    OSError,
     ImportError,
     RuntimeError,
     ValueError,
@@ -67,6 +67,7 @@ class BenchmarkFitsCommand(InvariantAwareCommand):
     native_batcher = "auto"
     mock_storage: str | None = None
     skip_gds_read = False
+    output_json: str | None = None
 
     class FitsFileArg(VariablePositionalInvariant):
         _metavar = "fits_file"
@@ -139,6 +140,13 @@ class BenchmarkFitsCommand(InvariantAwareCommand):
         _arg = "--skip-gds-read"
         _help = "Skip raw NativeBatchBuilder read timing."
 
+    class OutputJsonArg(StringInvariant):
+        _arg = "--output-json"
+        _help = "Write a versioned JSON benchmark report to this path."
+        _mandatory = False
+        _default = None
+        _maxlen = 4096
+
     def run(self) -> None:
         try:
             run_benchmark(
@@ -159,6 +167,11 @@ class BenchmarkFitsCommand(InvariantAwareCommand):
                 native_batcher=self.native_batcher,
                 mock_storage_kind=self.mock_storage,
                 skip_gds_read=self.skip_gds_read,
+                output_json=(
+                    Path(self.output_json).expanduser()
+                    if self.output_json is not None
+                    else None
+                ),
                 out=self._out,
             )
         except _KNOWN_COMMAND_EXCEPTIONS as exc:

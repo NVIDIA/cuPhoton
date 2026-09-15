@@ -12,15 +12,19 @@ benchmarks HDU 1; use ``--hdu-indices 1,2,3`` for multi-extension FITS files.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import platform
 import statistics
+import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Sequence
 
-from cuphoton import xdr
+from cuphoton import __version__, xdr
 from cuphoton.xdr import (
     batch_to_device,
     batch_to_device_stream,
@@ -29,9 +33,13 @@ from cuphoton.xdr import (
     mock_storage,
     storage_cache,
 )
-from cuphoton.xdr.nvcomp_batch import get_native_batch_builder
+from cuphoton.xdr.nvcomp_batch import (
+    cpp_helper_available,
+    get_native_batch_builder,
+)
 from cuphoton.xdr.planning import plan_native_files
 from cuphoton.xdr.prefetch import (
+    _native_batch_builder_class,
     _native_file_plans,
     _planned_file_from_native_tuple,
 )
@@ -483,6 +491,41 @@ def resolve_paths(
     return paths
 
 
+@contextlib.contextmanager
+def _json_report_output(path: Path | None, inputs: Sequence[Path]):
+    if path is None:
+        yield None
+        return
+    destination = path.expanduser().resolve()
+    if destination in {item.resolve() for item in inputs}:
+        raise ValueError("output_json must not overwrite an input FITS file")
+    if destination.exists() and not destination.is_file():
+        raise ValueError("output_json must name a regular file")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            yield handle
+        temporary.replace(destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _nvcomp_version() -> str | None:
+    try:
+        return version("nvidia-nvcomp-cu13")
+    except PackageNotFoundError:
+        return None
+
+
 def run_benchmark(
     fits_files: Sequence[str | Path],
     *,
@@ -498,9 +541,14 @@ def run_benchmark(
     native_batcher: str = "auto",
     mock_storage_kind: str | None = None,
     skip_gds_read: bool = False,
+    output_json: Path | None = None,
     out: Callable[[str], None] = print,
 ) -> list[PhaseResult]:
-    """Run the FITS benchmark with already validated command values."""
+    """Run the FITS benchmark and optionally write a versioned JSON report.
+
+    ``output_json`` requires an existing parent directory. Report metadata
+    sits outside phase timings; the return value remains a list of phases.
+    """
 
     paths = resolve_paths(
         fits_files,
@@ -514,30 +562,78 @@ def run_benchmark(
     if cp is None:
         raise RuntimeError("cupy is not importable")
 
-    storage_note = (
-        f"mock-storage={mock_storage_kind}"
-        if mock_storage_kind
-        else "storage=real"
-    )
     kvikio_version = (
         getattr(kvikio, "__version__", "<unavailable>")
         if kvikio is not None
         else "<unavailable>"
     )
     package_version = getattr(xdr, "__version__", "<local>")
-    env_note = (
-        f"xdr={package_version}, "
-        f"cupy={cp.__version__}, kvikio={kvikio_version}, "
-        f"GDS={'ACTIVE' if is_gds_active() else 'COMPAT-FALLBACK'}, "
-        f"{storage_note}"
-    )
 
     ctx = (
         mock_storage(mock_storage_kind)
         if mock_storage_kind
         else contextlib.nullcontext()
     )
-    with ctx:
+    with _json_report_output(output_json, paths) as report_file, ctx:
+        storage_mode = (
+            storage_cache.location if storage_cache.active() else "real"
+        )
+        gds_active = is_gds_active()
+        storage_note = (
+            "storage=real"
+            if storage_mode == "real"
+            else f"mock-storage={storage_mode}"
+        )
+        env_note = (
+            f"xdr={package_version}, "
+            f"cupy={cp.__version__}, kvikio={kvikio_version}, "
+            f"GDS={'ACTIVE' if gds_active else 'COMPAT-FALLBACK'}, "
+            f"{storage_note}"
+        )
+        report = None
+        if report_file is not None:
+            batcher_error = None
+            try:
+                batcher_enabled = (
+                    _native_batch_builder_class(resolved_native_batcher)
+                    is not None
+                )
+            except RuntimeError as exc:
+                batcher_enabled = None
+                batcher_error = str(exc)
+            report = {
+                "schema_version": 1,
+                "versions": {
+                    "cuphoton": __version__,
+                    "python": platform.python_version(),
+                    "cupy": cp.__version__,
+                    "kvikio": kvikio_version,
+                    "nvcomp": _nvcomp_version(),
+                },
+                "capabilities": {
+                    "cpp_helper_available": cpp_helper_available(),
+                    "gds_active": gds_active,
+                    "gds_probe": "cuphoton.xdr.is_gds_active",
+                },
+                "storage": {
+                    "mode": storage_mode,
+                    "requested_mock_storage": mock_storage_kind,
+                },
+                "options": {
+                    "hdu_indices": list(hdu_indices),
+                    "iterations": iterations,
+                    "prefetch_depth": prefetch_depth,
+                    "decode_batch_files": decode_batch_files,
+                    "batch_queue_depth": batch_queue_depth,
+                    "native_read_threads": native_read_threads,
+                    "native_plan_threads": native_plan_threads,
+                    "native_batcher": native_batcher,
+                    "native_batcher_enabled": batcher_enabled,
+                    "native_batcher_error": batcher_error,
+                    "skip_gds_read": skip_gds_read,
+                    "max_files": max_files,
+                },
+            }
         if mock_storage_kind:
             for path in paths:
                 storage_cache.preload(path)
@@ -592,6 +688,19 @@ def run_benchmark(
                 data_mb=total_data_mb,
             )
         )
+
+        if report is not None:
+            report["ok"] = all(result.ok for result in results)
+            report["workload"] = {
+                "files": [str(path.resolve()) for path in paths],
+                "file_count": len(paths),
+                "planned_file_count": len(summaries),
+                "raw_bytes": sum(summary.raw_bytes for summary in summaries),
+                "data_mb": total_data_mb,
+            }
+            report["phases"] = [asdict(result) for result in results]
+            json.dump(report, report_file, indent=2, allow_nan=False)
+            report_file.write("\n")
 
     print_results(results, env_note=env_note, out=out)
     return results
