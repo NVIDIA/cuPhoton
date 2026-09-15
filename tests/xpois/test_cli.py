@@ -679,7 +679,13 @@ def test_cli_fit_kernel_supports_fits_mask_policy_crop_and_auto_stamps(
     assert summary["input_mask"]["reference_mask_fraction"] > 0.0
 
 
-def test_cli_review_bokeh_rebuilds_saved_run_case(tmp_path, capsys) -> None:
+@pytest.mark.parametrize(
+    ("command", "no_review"),
+    [("fit-kernel", False), ("fit-kernel", True), ("subtract", True)],
+)
+def test_cli_review_bokeh_rebuilds_saved_run_case(
+    tmp_path, capsys, command, no_review
+) -> None:
     pytest.importorskip("bokeh")
     import numpy as np
 
@@ -705,13 +711,25 @@ def test_cli_review_bokeh_rebuilds_saved_run_case(tmp_path, capsys) -> None:
     np.save(target, arr, allow_pickle=False)
     np.save(variance, np.ones_like(arr, dtype=np.float64), allow_pickle=False)
 
+    mask_path = tmp_path / "mask.npy"
+    mask = np.zeros(arr.shape, dtype=np.uint16)
+    mask[10, 10] = 1
+    np.save(mask_path, mask)
+
     rc = _run_cli(
         [
-            "fit-kernel",
+            command,
+            *(["--no-review"] if no_review else []),
             "--reference",
             str(reference),
             "--target",
             str(target),
+            "--reference-mask",
+            str(mask_path),
+            "--target-mask",
+            str(mask_path),
+            "--mask-policy",
+            "strict",
             "--variance",
             str(variance),
             "--kernel-height",
@@ -739,8 +757,12 @@ def test_cli_review_bokeh_rebuilds_saved_run_case(tmp_path, capsys) -> None:
     assert rc == 0
     summary = json.loads(captured.out)
     run_dir = tmp_path / "runs" / "review-source-run"
-    review_bokeh_path = run_dir / summary["saved"]["review_bokeh_html"]
-    review_bokeh_path.unlink()
+    assert summary["review_enabled"] is not no_review
+    if no_review:
+        assert not any(key.startswith("review_") for key in summary["saved"])
+    else:
+        review_bokeh_path = run_dir / summary["saved"]["review_bokeh_html"]
+        review_bokeh_path.unlink()
 
     rc = _run_cli(
         [

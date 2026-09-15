@@ -103,6 +103,7 @@ def run_constant_kernel_fit(
     background_degree: int,
     flux_conserve: bool,
     backend: str = "auto",
+    review: bool = True,
     workflow_name: str = "fit_kernel",
     run_prefix: str = "fit-kernel",
 ) -> WorkflowResult:
@@ -200,10 +201,11 @@ def run_constant_kernel_fit(
             target = apply_rectangular_cutout(target, **crop_metadata)
             if variance is not None:
                 variance = apply_rectangular_cutout(variance, **crop_metadata)
-        raw_reference = np.asarray(reference, dtype=np.float64).copy()
-        raw_target = np.asarray(target, dtype=np.float64).copy()
-        reference_bad_mask = ~np.isfinite(raw_reference)
-        target_bad_mask = ~np.isfinite(raw_target)
+        reference_bad_mask = ~np.isfinite(reference)
+        target_bad_mask = ~np.isfinite(target)
+        if review:
+            raw_reference = np.asarray(reference, dtype=np.float64).copy()
+            raw_target = np.asarray(target, dtype=np.float64).copy()
         preprocessing_metadata: dict[str, Any] | None = None
         if normalized_mask_policy != MASK_POLICY_NONE:
             reference_mask_source = reference_mask_path or reference_path
@@ -360,93 +362,104 @@ def run_constant_kernel_fit(
             result.residual,
             empty_error="no finite residual pixels remain in the saved run",
         )
-        review_metrics = {
-            "residual_mean": float(np.mean(fit_region_residual)),
-            "residual_std": float(np.std(fit_region_residual)),
-            "residual_rms": float(np.sqrt(np.mean(fit_region_residual**2))),
-            "residual_median": float(np.median(fit_region_residual)),
-            "robust_sigma": float(
-                1.4826
-                * np.median(
-                    np.abs(
-                        fit_region_residual - np.median(fit_region_residual)
-                    )
-                )
-            ),
-        }
-        review_start = time.perf_counter()
-        review_saved, hotspots = write_review_metadata(
-            artifacts_dir,
-            run_name=run_dir.name,
-            residual=result.residual,
-            review_metrics=review_metrics,
-        )
-        review_generation_and_write_sec += time.perf_counter() - review_start
-        saved.update(review_saved)
-        review_start = time.perf_counter()
-        interactive_saved = write_interactive_review_artifact(
-            artifacts_dir,
-            run_name=run_dir.name,
-            raw_reference=raw_reference,
-            raw_target=raw_target,
-            matched=result.matched,
-            residual=result.residual,
-            fit_mask_metadata=fit_mask_metadata,
-            input_mask_metadata=preprocessing_metadata,
-            reference_mask_values=reference_mask,
-            target_mask_values=target_mask,
-            reference_plane_map=reference_plane_map,
-            target_plane_map=target_plane_map,
-            hotspots=hotspots,
-            raw_gray_lo=float(
-                np.nanpercentile(
-                    np.concatenate(
-                        [
-                            raw_reference[np.isfinite(raw_reference)],
-                            raw_target[np.isfinite(raw_target)],
-                        ]
-                    ),
-                    5.0,
-                )
-            ),
-            raw_gray_hi=float(
-                np.nanpercentile(
-                    np.concatenate(
-                        [
-                            raw_reference[np.isfinite(raw_reference)],
-                            raw_target[np.isfinite(raw_target)],
-                        ]
-                    ),
-                    99.9,
-                )
-            ),
-            matched_lo=float(
-                np.nanpercentile(
-                    result.matched[np.isfinite(result.matched)], 1.0
-                )
-            ),
-            matched_hi=float(
-                np.nanpercentile(
-                    result.matched[np.isfinite(result.matched)], 99.5
-                )
-            ),
-            residual_limit=(
-                float(
-                    np.nanpercentile(
+        residual_mean = float(np.mean(fit_region_residual))
+        residual_std = float(np.std(fit_region_residual))
+        if review:
+            review_metrics = {
+                "residual_mean": residual_mean,
+                "residual_std": residual_std,
+                "residual_rms": float(
+                    np.sqrt(np.mean(fit_region_residual**2))
+                ),
+                "residual_median": float(np.median(fit_region_residual)),
+                "robust_sigma": float(
+                    1.4826
+                    * np.median(
                         np.abs(
-                            result.residual[
-                                np.isfinite(result.residual) & result.fit_mask
+                            fit_region_residual
+                            - np.median(fit_region_residual)
+                        )
+                    )
+                ),
+            }
+            review_start = time.perf_counter()
+            review_saved, hotspots = write_review_metadata(
+                artifacts_dir,
+                run_name=run_dir.name,
+                residual=result.residual,
+                review_metrics=review_metrics,
+            )
+            review_generation_and_write_sec += (
+                time.perf_counter() - review_start
+            )
+            saved.update(review_saved)
+            review_start = time.perf_counter()
+            interactive_saved = write_interactive_review_artifact(
+                artifacts_dir,
+                run_name=run_dir.name,
+                raw_reference=raw_reference,
+                raw_target=raw_target,
+                matched=result.matched,
+                residual=result.residual,
+                fit_mask_metadata=fit_mask_metadata,
+                input_mask_metadata=preprocessing_metadata,
+                reference_mask_values=reference_mask,
+                target_mask_values=target_mask,
+                reference_plane_map=reference_plane_map,
+                target_plane_map=target_plane_map,
+                hotspots=hotspots,
+                raw_gray_lo=float(
+                    np.nanpercentile(
+                        np.concatenate(
+                            [
+                                raw_reference[np.isfinite(raw_reference)],
+                                raw_target[np.isfinite(raw_target)],
                             ]
                         ),
-                        99.5,
+                        5.0,
                     )
-                )
-                if np.any(np.isfinite(result.residual) & result.fit_mask)
-                else 1.0
-            ),
-        )
-        review_generation_and_write_sec += time.perf_counter() - review_start
-        saved.update(interactive_saved)
+                ),
+                raw_gray_hi=float(
+                    np.nanpercentile(
+                        np.concatenate(
+                            [
+                                raw_reference[np.isfinite(raw_reference)],
+                                raw_target[np.isfinite(raw_target)],
+                            ]
+                        ),
+                        99.9,
+                    )
+                ),
+                matched_lo=float(
+                    np.nanpercentile(
+                        result.matched[np.isfinite(result.matched)], 1.0
+                    )
+                ),
+                matched_hi=float(
+                    np.nanpercentile(
+                        result.matched[np.isfinite(result.matched)], 99.5
+                    )
+                ),
+                residual_limit=(
+                    float(
+                        np.nanpercentile(
+                            np.abs(
+                                result.residual[
+                                    np.isfinite(result.residual)
+                                    & result.fit_mask
+                                ]
+                            ),
+                            99.5,
+                        )
+                    )
+                    if np.any(np.isfinite(result.residual) & result.fit_mask)
+                    else 1.0
+                ),
+            )
+            review_generation_and_write_sec += (
+                time.perf_counter() - review_start
+            )
+            saved.update(interactive_saved)
 
         runtime = runtime_metadata(
             backend=result.backend,
@@ -477,6 +490,7 @@ def run_constant_kernel_fit(
         }
         summary = {
             "workflow": workflow_name,
+            "review_enabled": review,
             "package_version": __version__,
             "reference_path": str(reference_path.expanduser().resolve()),
             "target_path": str(target_path.expanduser().resolve()),
@@ -500,8 +514,8 @@ def run_constant_kernel_fit(
             "chi2": result.chi2,
             "dof": result.dof,
             "kernel_sum": float(result.kernel.sum()),
-            "residual_mean": review_metrics["residual_mean"],
-            "residual_std": review_metrics["residual_std"],
+            "residual_mean": residual_mean,
+            "residual_std": residual_std,
             "all_pixels_residual_mean": float(np.mean(valid_residual)),
             "all_pixels_residual_std": float(np.std(valid_residual)),
             "fit_region": _fit_region_summary(

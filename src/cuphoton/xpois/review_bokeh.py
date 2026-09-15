@@ -684,6 +684,7 @@ def write_interactive_review_artifact(
                     (input_mask_metadata or {})
                     .get("reference_mask", {})
                     .get("masked_plane_names", [])
+                    or []
                 ),
             ),
             (
