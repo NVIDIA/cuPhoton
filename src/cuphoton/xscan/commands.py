@@ -856,6 +856,7 @@ class InferRealBogusCommand(XScanCommand):
     dataset_dir = None
     split = None
     batch_size = None
+    num_workers = None
     use_x_fit_features = None
     x_fit_feature_dir = None
 
@@ -881,6 +882,12 @@ class InferRealBogusCommand(XScanCommand):
         _mandatory = False
         _default = 32
 
+    class NumWorkersArg(NonNegativeIntegerInvariant):
+        _arg = "--num-workers"
+        _help = "Loader workers; 0 disables workers, omitted uses checkpoint."
+        _mandatory = False
+        _default = None
+
     class UseXFitFeaturesArg(BoolInvariant):
         _arg = "--use-xfit-features"
         _help = (
@@ -903,6 +910,7 @@ class InferRealBogusCommand(XScanCommand):
             dataset_dir=Path(self.dataset_dir).expanduser(),
             split=self.split,
             batch_size=self.batch_size,
+            num_workers=self.num_workers,
             use_xfit_features=bool(self.use_x_fit_features),
             xfit_feature_dir=self._path(self.x_fit_feature_dir),
         )

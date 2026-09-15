@@ -183,6 +183,16 @@ uv run cuphoton xscan evaluate-real-bogus \
   --dataset-dir /path/to/dataset
 ```
 
+For repeated inference calls, use `infer-real-bogus --num-workers 0` to avoid
+starting loader processes. Omit the option to retain the checkpoint's worker
+count, or pass a positive count for parallel loading. The override applies to
+a copy of the inference settings and leaves the checkpoint unchanged; zero
+workers also disables persistent workers. `--batch-size` controls inference
+batches independently and defaults to `32`.
+
+The inference `summary.json` records the batch size and resolved performance
+settings. Keep the batch size fixed when comparing scores across worker counts.
+
 Use fixed, group-aware splits that keep related samples from crossing train,
 validation, and test sets. Record the seed, model config, selected checkpoint,
 device, label source, and dataset summary. Do not train on smoke placeholders
