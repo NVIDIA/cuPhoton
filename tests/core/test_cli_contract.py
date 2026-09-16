@@ -75,13 +75,13 @@ def test_public_command_surface_counts_are_exact() -> None:
         ("xpois", 7, 7, 144, 1),
         ("xscan", 42, 42, 171, 1),
         ("xrep", 6, 6, 103, 1),
-        ("xray", 34, 32, 398, 1),
+        ("xray", 35, 33, 404, 1),
     ]
     assert len(per_group) == 6
-    assert sum(item[1] for item in per_group) == 93
-    assert sum(item[1] + item[4] for item in per_group) == 98
-    assert sum(item[2] for item in per_group) == 90
-    assert sum(item[3] for item in per_group) == 847
+    assert sum(item[1] for item in per_group) == 94
+    assert sum(item[1] + item[4] for item in per_group) == 99
+    assert sum(item[2] for item in per_group) == 91
+    assert sum(item[3] for item in per_group) == 853
 
 
 def test_public_registry_order_and_component_derivations() -> None:

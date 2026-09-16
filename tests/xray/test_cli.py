@@ -65,6 +65,7 @@ def test_core_command_registry_loads_xray_commands():
         "gpu-policy": "gp",
         "linear-prediction-benchmark": "lpb",
         "linear-prediction-validate": "lpv",
+        "linear-prediction-refine-benchmark": "lprb",
         "linear-prediction-fixed-stages-benchmark": "lpfsb",
         "linear-prediction-p2-benchmark": "lppb",
         "linear-prediction-profile-summary": "lpps",
@@ -299,6 +300,27 @@ def test_linear_prediction_validate_text_distinguishes_estimator_errors(
     output = capsys.readouterr().out
     assert "trials=0/2 estimator_errors=2" in output
     assert "any_mode_lost_rate=1.000" in output
+
+
+def test_linear_prediction_validate_refine_adds_a_second_estimator(capsys):
+    assert (
+        main(["lpv", "--trials", "3", "--snr-db", "30", "--refine", "--json"])
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["config"]["estimators"] == ["cpu", "cpu-refined"]
+    assert [r["estimator"] for r in payload["results"]] == [
+        "cpu",
+        "cpu-refined",
+    ]
+
+
+def test_linear_prediction_refine_benchmark_cli_cpu_only(capsys):
+    assert main(["lprb", "--traces", "4", "--no-gpu", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["traces"] == 4
+    assert payload["cupy_batched_s"] is None
+    assert payload["max_abs_theta_diff_numpy"] < 1e-6
 
 
 def test_gpu_policy(capsys):

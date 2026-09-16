@@ -30,7 +30,7 @@ uv run python examples/run_quickstarts.py --component xray --profile cpu
 | Input inspection | `data-probe`, `roi-candidates` |
 | Trace work | `extract-trace`, `trace-smoke` |
 | Linear prediction | `linear-prediction-*`, `prediction-roots-benchmark`, `model-order-sweep` |
-| Synthetic validation | `linear-prediction-validate` (`lpv`) |
+| Synthetic validation | `linear-prediction-validate` (`lpv`), `linear-prediction-refine-benchmark` (`lprb`) |
 | Detector products | `detector-mask`, `detector-artifacts`, `detector-artifact-normalize`, `detector-artifact-compare` |
 | Distributed detector work | `detector-artifact-distributed`, `detector-artifact-merge` |
 | Review | `report`, `validation-viz`, `workflow-viz`, `phonon-viz` |
@@ -208,3 +208,4 @@ See [Data and artifact contracts](../data-artifacts.md#xray-hdf5-and-trace-produ
 - [Distributed detector artifacts](DISTRIBUTED-DETECTOR-ARTIFACTS.md)
 - [Validation visualization](VALIDATION-VIZ.md)
 - [Linear prediction validation](LINEAR-PREDICTION-VALIDATION.md)
+- [Nonlinear refinement of linear-prediction modes](LINEAR-PREDICTION-REFINEMENT.md)

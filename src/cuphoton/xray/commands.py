@@ -664,6 +664,16 @@ class LinearPredictionValidateCommand(_XRayCommand):
         _required = False
         _default = None
 
+    refine = False
+
+    class RefineArg(BoolInvariant):
+        _arg = "--refine"
+        _help = (
+            "Also run the sweep with nonlinear least-squares refinement "
+            "of the linear-prediction modes."
+        )
+        _required = False
+
     output_dir = None
 
     class OutputDirArg(PathValueInvariant):
@@ -679,6 +689,53 @@ class LinearPredictionValidateCommand(_XRayCommand):
     class JsonArg(BoolInvariant):
         _arg = "--json"
         _help = "Print the summary as JSON instead of the text report."
+        _required = False
+
+
+class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
+    _description_ = (
+        "Benchmark per-trace SciPy refinement against the batched "
+        "Levenberg-Marquardt solver on NumPy and CuPy."
+    )
+    _shortname_ = "lprb"
+    _handler_name_ = "_linear_prediction_refine_benchmark"
+
+    samples = 96
+
+    class SamplesArg(IntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    traces = 256
+
+    class TracesArg(IntegerInvariant):
+        _arg = "--traces"
+        _help = "Number of traces in the batch."
+        _required = False
+        _default = 256
+
+    repeat = 3
+
+    class RepeatArg(IntegerInvariant):
+        _arg = "--repeat"
+        _help = "Timed repetitions per path; the best time is reported."
+        _required = False
+        _default = 3
+
+    no_gpu = False
+
+    class NoGpuArg(BoolInvariant):
+        _arg = "--no-gpu"
+        _help = "Skip the CuPy comparison."
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable JSON."
         _required = False
 
 
@@ -4417,6 +4474,24 @@ def _linear_prediction_validate(args):
             distortion=distortion,
         )
     ]
+    if args.refine:
+        from .mode_refinement import linear_prediction_refined
+
+        n_modes = len(sweeps[0].levels[0].modes)
+        sweeps.append(
+            validation_sweep(
+                samples=args.samples,
+                snr_db=snr,
+                trials=args.trials,
+                n_components=args.components,
+                seed=args.seed,
+                distortion=distortion,
+                estimator=lambda t, y, k: linear_prediction_refined(
+                    t, y, k, n_modes
+                ),
+                backend="cpu-refined",
+            )
+        )
     if args.output_dir is not None:
         summary = write_validation_run(args.output_dir, sweeps)
     else:
@@ -4431,6 +4506,37 @@ def _linear_prediction_validate(args):
     if args.output_dir is not None:
         for key, name in summary["artifacts"].items():
             print(f"{key}={name if name else 'not written'}")
+    return 0
+
+
+def _linear_prediction_refine_benchmark(args):
+    from .mode_refinement_batched import benchmark_refinement
+
+    result = benchmark_refinement(
+        samples=args.samples,
+        traces=args.traces,
+        run_gpu=not args.no_gpu,
+        repeat=args.repeat,
+    )
+    payload = dataclass_asdict(result)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    print(
+        f"traces={result.traces} samples={result.samples} "
+        f"repeat={result.repeat}"
+    )
+    print(f"cpu_serial_scipy_s={result.cpu_serial_scipy_s:.6g}")
+    print(f"numpy_batched_s={result.numpy_batched_s:.6g}")
+    print(f"max_abs_theta_diff_numpy={result.max_abs_theta_diff_numpy:.3g}")
+    if result.gpu_error:
+        print("gpu_status=unavailable")
+        print(f"gpu_error={result.gpu_error}")
+    elif result.cupy_batched_s is None:
+        print("gpu_status=skipped")
+    else:
+        print(f"cupy_batched_s={result.cupy_batched_s:.6g}")
+        print(f"max_abs_theta_diff_cupy={result.max_abs_theta_diff_cupy:.3g}")
     return 0
 
 
