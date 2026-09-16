@@ -676,14 +676,16 @@ def validate_linear_prediction(
     seed: int = 20260914,
     distortion: tuple[str, float] | None = None,
     output_dir: Path | str | None = None,
+    refine: bool = False,
 ) -> ValidationReport:
     """Validate linear prediction and optionally write its run artifacts.
 
     The returned report provides text and strict-JSON-compatible summaries
     of the same sweep. Set ``output_dir`` to write ``summary.json`` and,
-    when Bokeh is available, a validation figure.
+    when Bokeh is available, a validation figure. Set ``refine`` to compare
+    the experimental nonlinear estimator using the same noise realizations.
     """
-    sweeps = (
+    sweeps: tuple[ValidationSweep, ...] = (
         validation_sweep(
             samples=samples,
             snr_db=snr_db,
@@ -693,12 +695,33 @@ def validate_linear_prediction(
             distortion=distortion,
         ),
     )
+    if refine:
+        from .mode_refinement import linear_prediction_refined
+
+        n_modes = len(sweeps[0].modes)
+        sweeps += (
+            validation_sweep(
+                samples=samples,
+                snr_db=snr_db,
+                trials=trials,
+                n_components=n_components,
+                seed=seed,
+                distortion=distortion,
+                estimator=lambda time, trace, components: (
+                    linear_prediction_refined(
+                        time, trace, components, n_modes
+                    )
+                ),
+                backend="cpu-refined",
+            ),
+        )
     summary = (
         build_summary(sweeps)
         if output_dir is None
         else write_validation_run(output_dir, sweeps)
     )
     return ValidationReport(sweeps=sweeps, summary=summary)
+
 
 
 def _source_provenance() -> tuple[str | None, bool | None]:
