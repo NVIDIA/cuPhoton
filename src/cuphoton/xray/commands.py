@@ -657,6 +657,16 @@ class LinearPredictionValidateCommand(_XRayCommand):
         _required = False
         _default = None
 
+    refine = False
+
+    class RefineArg(BoolInvariant):
+        _arg = "--refine"
+        _help = (
+            "Also run the sweep with nonlinear least-squares refinement "
+            "of the linear-prediction modes."
+        )
+        _required = False
+
     output_dir = None
 
     class OutputDirArg(PathValueInvariant):
@@ -672,6 +682,53 @@ class LinearPredictionValidateCommand(_XRayCommand):
     class JsonArg(BoolInvariant):
         _arg = "--json"
         _help = "Print the summary as JSON instead of the text report."
+        _required = False
+
+
+class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
+    _description_ = (
+        "Benchmark per-trace SciPy refinement against the batched "
+        "Levenberg-Marquardt solver on NumPy and CuPy."
+    )
+    _shortname_ = "lprb"
+    _handler_name_ = "_linear_prediction_refine_benchmark"
+
+    samples = 96
+
+    class SamplesArg(IntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    traces = 256
+
+    class TracesArg(IntegerInvariant):
+        _arg = "--traces"
+        _help = "Number of traces in the batch."
+        _required = False
+        _default = 256
+
+    repeat = 3
+
+    class RepeatArg(IntegerInvariant):
+        _arg = "--repeat"
+        _help = "Timed repetitions per path; the best time is reported."
+        _required = False
+        _default = 3
+
+    no_gpu = False
+
+    class NoGpuArg(BoolInvariant):
+        _arg = "--no-gpu"
+        _help = "Skip the CuPy comparison."
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable JSON."
         _required = False
 
 
@@ -4401,14 +4458,11 @@ def _linear_prediction_smoke(args):
     return 0
 
 
-def _linear_prediction_validate(args):
-    from .synthetic_validation import validate_linear_prediction
-
-    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+def _parse_validation_distortion(value):
     distortion = None
-    if args.distortion:
+    if value:
         try:
-            kind, amount = str(args.distortion).split(":", maxsplit=1)
+            kind, amount = str(value).split(":", maxsplit=1)
             if not kind.strip():
                 raise ValueError("missing distortion kind")
             distortion = (kind.strip(), float(amount))
@@ -4417,6 +4471,14 @@ def _linear_prediction_validate(args):
                 "--distortion must be kind:amount with a numeric amount "
                 "(for example chirp:0.05)"
             ) from exc
+    return distortion
+
+
+def _linear_prediction_validate(args):
+    from .synthetic_validation import validate_linear_prediction
+
+    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+    distortion = _parse_validation_distortion(args.distortion)
     report = validate_linear_prediction(
         samples=args.samples,
         snr_db=snr,
@@ -4425,6 +4487,7 @@ def _linear_prediction_validate(args):
         seed=args.seed,
         distortion=distortion,
         output_dir=args.output_dir,
+        refine=args.refine,
     )
     args._out(
         json.dumps(
@@ -4433,6 +4496,38 @@ def _linear_prediction_validate(args):
         if args.json
         else report
     )
+    return 0
+
+
+
+def _linear_prediction_refine_benchmark(args):
+    from .mode_refinement_batched import benchmark_refinement
+
+    result = benchmark_refinement(
+        samples=args.samples,
+        traces=args.traces,
+        run_gpu=not args.no_gpu,
+        repeat=args.repeat,
+    )
+    payload = dataclass_asdict(result)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    print(
+        f"traces={result.traces} samples={result.samples} "
+        f"repeat={result.repeat}"
+    )
+    print(f"cpu_serial_scipy_s={result.cpu_serial_scipy_s:.6g}")
+    print(f"numpy_batched_s={result.numpy_batched_s:.6g}")
+    print(f"max_abs_theta_diff_numpy={result.max_abs_theta_diff_numpy:.3g}")
+    if result.gpu_error:
+        print("gpu_status=unavailable")
+        print(f"gpu_error={result.gpu_error}")
+    elif result.cupy_batched_s is None:
+        print("gpu_status=skipped")
+    else:
+        print(f"cupy_batched_s={result.cupy_batched_s:.6g}")
+        print(f"max_abs_theta_diff_cupy={result.max_abs_theta_diff_cupy:.3g}")
     return 0
 
 
