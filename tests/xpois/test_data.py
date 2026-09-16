@@ -12,10 +12,49 @@ import pytest
 from cuphoton.xpois.data import (
     apply_rectangular_cutout,
     inspect_hsc_data_tree,
+    load_fit_positions,
     load_image_with_wcs,
     load_mask_with_planes,
     load_variance_with_wcs,
 )
+
+
+def test_load_fit_positions_preserves_duplicate_yx_rows(tmp_path) -> None:
+    path = tmp_path / "positions.npy"
+    positions = np.asarray([[4, 5], [7, 8], [4, 5]], dtype=np.int32)
+    np.save(path, positions, allow_pickle=False)
+
+    loaded = load_fit_positions(
+        path,
+        image_shape=(16, 17),
+        kernel_shape=(7, 7),
+    )
+
+    assert loaded.dtype == np.int64
+    np.testing.assert_array_equal(loaded, positions)
+
+
+@pytest.mark.parametrize(
+    ("positions", "message"),
+    [
+        (np.asarray([4, 5]), "shape"),
+        (np.empty((0, 2), dtype=np.int64), "must not be empty"),
+        (np.asarray([[4.0, 5.0]]), "must contain integers"),
+        (np.asarray([[2, 5]]), "valid kernel interior"),
+    ],
+)
+def test_load_fit_positions_rejects_invalid_rows(
+    tmp_path, positions, message
+) -> None:
+    path = tmp_path / "positions.npy"
+    np.save(path, positions, allow_pickle=False)
+
+    with pytest.raises(ValueError, match=message):
+        load_fit_positions(
+            path,
+            image_shape=(16, 17),
+            kernel_shape=(7, 7),
+        )
 
 
 def test_load_image_with_wcs_rejects_hdu_for_npy(tmp_path: Path) -> None:

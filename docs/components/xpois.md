@@ -210,9 +210,10 @@ alternating updates early. A tolerance of `0` disables that stop; the fit then
 runs to `max_iterations` unless the objective reaches its numerical floor, and
 `converged` is otherwise false.
 
-The CuPy backend accelerates one spatial fit on one GPU. MPI and Dragon are
-separate whole-item orchestration layers; enabling this backend does not shard
-one fit or add the spatial solver to those batch paths.
+The CuPy backend accelerates one spatial fit on one GPU. MPI and Dragon can
+schedule those fits across complete image-pair items, but do not shard one fit
+across GPUs. Keep single-fit solver time separate from orchestration and I/O
+when comparing executors.
 
 ## Spatial Gaussian-polynomial research API
 
@@ -351,6 +352,12 @@ two required selection flags name different layers:
 | `--executor` | process placement, lifecycle, and result aggregation | `mpi`, `dragon` |
 | `--backend` | the numerical fit implementation inside each worker | `cupy`, `numba-cuda`, `cutile` |
 
+The command uses one solver and one set of fit options for every pair in a
+batch. Select either the constant-kernel workflow or the spatial ALS workflow
+for the whole run; per-pair solver overrides are not supported. For spatial
+ALS, each worker solves one complete image pair on one GPU; the coefficient
+solve is not distributed across workers.
+
 The distributed command deliberately rejects `--backend auto` and CPU
 fallback. A missing GPU package therefore cannot silently change a distributed
 run's execution mode. Executor-specific options are also rejected when used
@@ -359,9 +366,6 @@ with the other executor. Inspect the complete surface with:
 ```bash
 uv run cuphoton xpois help fit-batch
 ```
-
-This command runs the constant-kernel workflow. It is whole-image-pair
-orchestration, not a distributed implementation of the spatial ALS model.
 
 ### Runtime dependencies
 
@@ -404,7 +408,7 @@ Both executors consume the same strict JSON or YAML manifest and run the same
 XPOIS item function. Manifests use resolved filesystem paths:
 
 ```yaml
-schema: cuphoton.xpois.image-pairs/v1
+schema: cuphoton.xpois.image-pairs/v2
 pairs:
   - id: detector-0001
     reference: /shared/input/reference-0001.fits
@@ -413,7 +417,19 @@ pairs:
     target_hdu: 1
     variance: /shared/input/variance-0001.fits
     variance_hdu: 1
+    fit_positions: /shared/input/fit-positions-0001.npy
 ```
+
+`fit_positions` is optional and spatial-ALS-only. It contains post-crop
+integer `(y, x)` rows; repeated rows remain repeated so overlapping source
+stamps retain their multiplicity weighting. Version 2 adds this field; version
+1 manifests remain accepted and retain their original canonical hash.
+
+Within a spatial-ALS batch, different pairs can use `fit_mask` or
+`fit_positions`, but a pair cannot supply both. Preflight reads each position
+file to validate its dtype and coordinates before item execution; the assigned
+worker reads it again for the fit. Position arrays are not cached in the
+coordinator or sent through Dragon queues.
 
 Inputs and output roots must be visible at the same paths on every node. Every
 rank must resolve `--output-dir/--name` to the same final run directory.
@@ -430,6 +446,11 @@ Scientific arrays stay on shared storage; only compact rank or worker results
 are aggregated. Runs are immutable. Use a new `--name` for each new attempt.
 The marker-only recovery retry described below must reuse the existing
 `--name` and `--attempt-id`.
+
+Spatial ALS supports only `cupy` in this GPU-only command. Selecting
+`numba-cuda` or `cutile` with `--solver spatial-als` fails before either executor
+launches. Both executor routes accept `--solver spatial-als --spatial-degree 2`
+to select the spatial model.
 
 ### Launch with MPI
 

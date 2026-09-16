@@ -13,6 +13,9 @@ import yaml
 
 from cuphoton.xpois.batch import (
     BatchFitOptions,
+    ImagePairManifest,
+    ImagePairSpec,
+    InputFileIdentity,
     load_image_pair_manifest,
     preflight_image_pair_manifest,
     run_image_pair_item,
@@ -32,6 +35,70 @@ def _options(**overrides) -> BatchFitOptions:
 
 def _write_array(path, shape=(32, 32)) -> None:
     np.save(path, np.zeros(shape, dtype=np.float64), allow_pickle=False)
+
+
+def test_public_manifest_objects_preserve_v1_defaults(tmp_path) -> None:
+    pair = ImagePairSpec(
+        item_id="legacy",
+        reference=tmp_path / "reference.npy",
+        target=tmp_path / "target.npy",
+    )
+    manifest = ImagePairManifest(
+        source_path=tmp_path / "pairs.json",
+        pairs=(pair,),
+        input_identities=(),
+        sha256="legacy-hash",
+    )
+
+    assert manifest.schema == "cuphoton.xpois.image-pairs/v1"
+    assert "fit_positions" not in pair.to_payload()
+
+
+@pytest.mark.parametrize("schema", [None, "cuphoton.xpois.image-pairs/v1"])
+def test_programmatic_v1_manifest_rejects_fit_positions(
+    tmp_path, schema
+) -> None:
+    pair = ImagePairSpec(
+        item_id="positions",
+        reference=tmp_path / "reference.npy",
+        target=tmp_path / "target.npy",
+        fit_positions=tmp_path / "positions.npy",
+    )
+    kwargs = {} if schema is None else {"schema": schema}
+
+    with pytest.raises(ValueError, match="fit_positions require.*v2"):
+        ImagePairManifest(
+            source_path=tmp_path / "pairs.json",
+            pairs=(pair,),
+            input_identities=(),
+            sha256="unused",
+            **kwargs,
+        )
+
+
+def test_programmatic_v2_manifest_retains_fit_positions(tmp_path) -> None:
+    pair = ImagePairSpec(
+        item_id="positions",
+        reference=tmp_path / "reference.npy",
+        target=tmp_path / "target.npy",
+        fit_positions=tmp_path / "positions.npy",
+    )
+    paths = (pair.reference, pair.target, pair.fit_positions)
+    for path in paths:
+        _write_array(path)
+    manifest = ImagePairManifest(
+        source_path=tmp_path / "pairs.json",
+        pairs=(pair,),
+        input_identities=tuple(InputFileIdentity.capture(p) for p in paths),
+        sha256="unused",
+        schema="cuphoton.xpois.image-pairs/v2",
+    )
+
+    payload = manifest.canonical_payload()["pairs"][0]
+    item = manifest.work_items()[0]
+    assert payload["fit_positions"] == str(pair.fit_positions)
+    assert item.payload["fit_positions"] == str(pair.fit_positions)
+    assert item.weight_bytes == sum(path.stat().st_size for path in paths)
 
 
 def test_manifest_resolves_paths_hashes_and_preflights(tmp_path) -> None:
@@ -57,6 +124,9 @@ def test_manifest_resolves_paths_hashes_and_preflights(tmp_path) -> None:
     preflight_image_pair_manifest(manifest, _options())
 
     assert manifest.pairs[0].reference == (tmp_path / "reference.npy")
+    assert manifest.schema == "cuphoton.xpois.image-pairs/v1"
+    assert "fit_positions" not in manifest.canonical_payload()["pairs"][0]
+    assert "fit_positions" not in manifest.work_items()[0].payload
     assert len(manifest.sha256) == 64
     identity = manifest.input_identity_payload()
     assert identity["policy"] == "size-mtime-ns"
@@ -373,6 +443,35 @@ pairs:
         load_image_pair_manifest(manifest_path)
 
 
+def test_v1_manifest_rejects_fit_positions_field(tmp_path) -> None:
+    _write_array(tmp_path / "reference.npy")
+    _write_array(tmp_path / "target.npy")
+    np.save(
+        tmp_path / "positions.npy",
+        np.asarray([[4, 5]], dtype=np.int32),
+        allow_pickle=False,
+    )
+    manifest_path = tmp_path / "pairs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "cuphoton.xpois.image-pairs/v1",
+                "pairs": [
+                    {
+                        "id": "legacy",
+                        "reference": "reference.npy",
+                        "target": "target.npy",
+                        "fit_positions": "positions.npy",
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="unknown field.*fit_positions"):
+        load_image_pair_manifest(manifest_path)
+
+
 def test_preflight_rejects_shape_mismatch(tmp_path) -> None:
     _write_array(tmp_path / "reference.npy", (32, 32))
     _write_array(tmp_path / "target.npy", (16, 16))
@@ -394,6 +493,51 @@ pairs:
 def test_batch_options_reject_unknown_backend() -> None:
     with pytest.raises(ValueError, match="unsupported fit backend"):
         _options(backend="unknown")
+
+
+def test_batch_options_reject_unknown_solver() -> None:
+    with pytest.raises(ValueError, match="unsupported solver"):
+        _options(solver="unknown")
+
+
+@pytest.mark.parametrize("backend", ["cutile", "numba-cuda"])
+def test_batch_options_reject_unsupported_spatial_backend(backend) -> None:
+    with pytest.raises(ValueError, match="supports only auto, cpu, and cupy"):
+        _options(solver="spatial-als", backend=backend)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"spatial_degree": 2},
+        {"als_iterations": 30},
+        {"als_tolerance": 1e-6},
+        {"als_regularization": 1e-6},
+    ],
+)
+def test_batch_options_reject_spatial_option_for_constant_solver(
+    overrides,
+) -> None:
+    with pytest.raises(ValueError, match="require solver='spatial-als'"):
+        _options(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"spatial_degree": -1}, "non-negative"),
+        ({"spatial_degree": True}, "must be an integer"),
+        ({"als_iterations": 0}, "must be positive"),
+        ({"als_iterations": True}, "must be an integer"),
+        ({"als_tolerance": float("nan")}, "must be finite"),
+        ({"als_regularization": -1.0}, "must be non-negative"),
+    ],
+)
+def test_batch_options_reject_invalid_spatial_values(
+    overrides, message
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _options(solver="spatial-als", **overrides)
 
 
 @pytest.mark.parametrize("sigma", [float("nan"), float("inf"), float("-inf")])
@@ -431,7 +575,17 @@ def test_batch_options_accept_minimum_stamp_size(enabled, size) -> None:
 
 
 def test_batch_options_round_trip_worker_payload() -> None:
-    options = _options(crop_y0=1, crop_x0=2, crop_height=16, crop_width=17)
+    options = _options(
+        crop_y0=1,
+        crop_x0=2,
+        crop_height=16,
+        crop_width=17,
+        solver="spatial-als",
+        spatial_degree=3,
+        als_iterations=17,
+        als_tolerance=2e-7,
+        als_regularization=4e-5,
+    )
 
     assert BatchFitOptions.from_payload(options.to_payload()) == options
 
@@ -484,6 +638,131 @@ def test_image_pair_item_cpu_smoke(tmp_path) -> None:
     assert "workflow_before_summary_write_sec" not in result["timings_sec"]
     assert (output_dir / "summary.json").is_file()
     assert (output_dir / "artifacts" / "residual.npy").is_file()
+
+
+@pytest.mark.parametrize("use_defaults", [False, True])
+def test_image_pair_item_spatial_als_cpu_smoke(
+    tmp_path, use_defaults
+) -> None:
+    rng = np.random.default_rng(20260905)
+    reference = rng.normal(size=(41, 43))
+    coordinates = np.arange(9, dtype=np.float64) - 4.0
+    line = np.exp(-(coordinates**2) / (2.0 * 1.5**2))
+    line /= line.sum()
+    kernel = np.outer(line, line)
+    patches = np.lib.stride_tricks.sliding_window_view(reference, (9, 9))
+    target = np.zeros_like(reference)
+    target[4:-4, 4:-4] = np.einsum(
+        "yxvu,vu->yx",
+        patches,
+        kernel[::-1, ::-1],
+        optimize=True,
+    )
+    reference_path = tmp_path / "reference.npy"
+    target_path = tmp_path / "target.npy"
+    fit_positions_path = tmp_path / "fit-positions.npy"
+    np.save(reference_path, reference, allow_pickle=False)
+    np.save(target_path, target, allow_pickle=False)
+    crop_shape = (39, 40)
+    all_positions = np.argwhere(np.ones(crop_shape, dtype=bool))
+    interior = all_positions[
+        (all_positions[:, 0] >= 4)
+        & (all_positions[:, 0] < crop_shape[0] - 4)
+        & (all_positions[:, 1] >= 4)
+        & (all_positions[:, 1] < crop_shape[1] - 4)
+    ][::4]
+    fit_positions = np.concatenate((interior, interior[:13])).astype(np.int32)
+    np.save(fit_positions_path, fit_positions, allow_pickle=False)
+    manifest_path = tmp_path / "spatial-pairs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "cuphoton.xpois.image-pairs/v2",
+                "pairs": [
+                    {
+                        "id": "spatial-pair",
+                        "reference": str(reference_path),
+                        "target": str(target_path),
+                        "fit_positions": str(fit_positions_path),
+                    }
+                ],
+            }
+        )
+    )
+    manifest = load_image_pair_manifest(manifest_path)
+    with pytest.raises(ValueError, match="require solver='spatial-als'"):
+        preflight_image_pair_manifest(manifest, _options(backend="cpu"))
+    options = _options(
+        backend="cpu",
+        solver="spatial-als",
+        **(
+            {}
+            if use_defaults
+            else {
+                "spatial_degree": 1,
+                "als_iterations": 3,
+                "als_tolerance": 0.0,
+                "als_regularization": 4e-5,
+            }
+        ),
+        crop_y0=1,
+        crop_x0=2,
+        crop_height=crop_shape[0],
+        crop_width=crop_shape[1],
+    )
+    preflight_image_pair_manifest(manifest, options)
+    item = manifest.work_items()[0]
+    output_dir = tmp_path / "items" / "spatial-pair"
+    output_dir.parent.mkdir()
+
+    result = run_image_pair_item(
+        item,
+        output_dir,
+        options,
+    )
+
+    summary = json.loads((output_dir / "summary.json").read_text())
+    assert result["solver"] == "spatial-als"
+    assert result["backend"] == "cpu"
+    assert summary["solver"] == "spatial-als"
+    assert summary["image_shape"] == list(crop_shape)
+    assert summary["crop"] == {
+        "y0": 1,
+        "x0": 2,
+        "height": crop_shape[0],
+        "width": crop_shape[1],
+    }
+    assert summary["spatial_als"]["spatial_degree"] == (
+        2 if use_defaults else 1
+    )
+    assert summary["spatial_als"]["max_iterations"] == (
+        30 if use_defaults else 3
+    )
+    assert summary["spatial_als"]["tolerance"] == (
+        1e-6 if use_defaults else 0.0
+    )
+    assert summary["spatial_als"]["regularization"] == pytest.approx(
+        1e-6 if use_defaults else 4e-5
+    )
+    assert summary["fit_region"] == {
+        "kind": "explicit_positions",
+        "coordinate_order": "y,x",
+        "duplicates_preserved": True,
+        "row_count": fit_positions.shape[0],
+        "pixel_count": interior.shape[0],
+        "duplicate_row_count": 13,
+    }
+    assert (output_dir / "artifacts" / "kernel_center.npy").is_file()
+    assert (
+        output_dir / "artifacts" / "horizontal_coefficients.npy"
+    ).is_file()
+    np.testing.assert_array_equal(
+        np.load(
+            output_dir / "artifacts" / "fit_positions.npy",
+            allow_pickle=False,
+        ),
+        fit_positions,
+    )
 
 
 def test_item_preserves_workflow_error_and_postcheck_failure(

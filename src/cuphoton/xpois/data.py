@@ -170,6 +170,43 @@ def load_mask_array(path: Path, hdu: int | None = None) -> np.ndarray:
     return array
 
 
+def load_fit_positions(
+    path: Path,
+    *,
+    image_shape: tuple[int, int],
+    kernel_shape: tuple[int, int],
+) -> np.ndarray:
+    """Load strict post-crop ``(y, x)`` fit rows from an NPY file."""
+
+    resolved = path.expanduser().resolve()
+    if resolved.suffix.lower() != ".npy":
+        raise ValueError("fit_positions must be an NPY file")
+    positions = np.asarray(np.load(resolved, allow_pickle=False))
+    if positions.ndim != 2 or positions.shape[1] != 2:
+        raise ValueError("fit_positions must have shape (row, 2)")
+    if positions.shape[0] == 0:
+        raise ValueError("fit_positions must not be empty")
+    if positions.dtype == bool or not np.issubdtype(
+        positions.dtype, np.integer
+    ):
+        raise ValueError("fit_positions must contain integers")
+
+    margin_y = kernel_shape[0] // 2
+    margin_x = kernel_shape[1] // 2
+    sample_y = positions[:, 0]
+    sample_x = positions[:, 1]
+    if (
+        np.any(sample_y < margin_y)
+        or np.any(sample_y >= image_shape[0] - margin_y)
+        or np.any(sample_x < margin_x)
+        or np.any(sample_x >= image_shape[1] - margin_x)
+    ):
+        raise ValueError(
+            "fit_positions must lie inside the valid kernel interior"
+        )
+    return positions.astype(np.int64, copy=False)
+
+
 def load_image_with_wcs(
     path: Path,
     hdu: int | None = None,

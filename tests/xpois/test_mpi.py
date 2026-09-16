@@ -131,6 +131,7 @@ def _item_runner(
         "summary_path": str(summary),
         "requested_backend": options.backend,
         "backend": options.backend,
+        "solver": options.solver,
         "device": "cuda:0",
         "runtime": {},
         "timings_sec": {"solve": 0.1},
@@ -2650,7 +2651,12 @@ def test_terminal_record_audit_checks_execution_identity() -> None:
     }
 
     errors = mpi._terminal_record_errors(
-        "expected-run", "expected-manifest", "cupy", (shard,), (record,)
+        "expected-run",
+        "expected-manifest",
+        "cupy",
+        (shard,),
+        (record,),
+        solver="constant",
     )
 
     assert len(errors) == 1
@@ -2712,7 +2718,12 @@ def test_terminal_record_audit_reports_assignment_fields_independently(
     record[field] = value
 
     errors = mpi._terminal_record_errors(
-        "assignment", "manifest", "cupy", (shard,), (record,)
+        "assignment",
+        "manifest",
+        "cupy",
+        (shard,),
+        (record,),
+        solver="constant",
     )
 
     assert errors == [
@@ -5109,3 +5120,52 @@ def test_file_nonroot_does_not_wait_for_root_aggregation(
 
     assert result is None
     assert time.perf_counter() - start < 0.1
+
+
+@pytest.mark.parametrize("reported_solver", [None, "constant", "spatial-als"])
+def test_collective_spatial_batch_audits_reported_solver(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reported_solver: str | None,
+) -> None:
+    _mpi_environment(monkeypatch)
+    _remove_cuda_modules(monkeypatch)
+    manifest = _write_manifest(tmp_path)
+    comm = _SingletonComm()
+    monkeypatch.setattr(
+        mpi,
+        "_load_mpi_api",
+        lambda: mpi._MPIAPI(
+            SimpleNamespace(COMM_TYPE_SHARED=1), comm, "4.test", "Test MPI"
+        ),
+    )
+    monkeypatch.setattr(mpi, "_gpu_identity", lambda backend: _gpu())
+
+    def runner(item, output, options):
+        metadata = _item_runner(item, output, options)
+        if reported_solver is None:
+            metadata.pop("solver")
+        else:
+            metadata["solver"] = reported_solver
+        return metadata
+
+    monkeypatch.setattr(mpi, "run_image_pair_item", runner)
+    result = mpi.run_mpi_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "runs",
+        run_id="spatial-solver-audit",
+        aggregation_mode="mpi",
+        rank_timeout_sec=None,
+        attempt_id=None,
+        options=_options(solver="spatial-als"),
+    )
+
+    assert result is not None
+    errors = result.summary["terminal_record_errors"]
+    if reported_solver == "spatial-als":
+        assert result.status == "success"
+        assert errors == []
+    else:
+        assert result.status == "failed"
+        assert len(errors) == 1
+        assert errors[0]["message"] == "record 0 has invalid field(s): solver"

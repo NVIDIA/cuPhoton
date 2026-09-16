@@ -74,9 +74,12 @@ input masks must also match that shape. Kernels have odd height and width.
 An explicit NPY fit mask is boolean or binary and uses `True`/`1` for pixels
 included in the weighted solve.
 
-The spatial ALS Python API can instead receive an explicit `(sample, 2)`
-array of zero-based `(y, x)` positions. Duplicate positions are retained and
-therefore increase that pixel's weight. Every explicit position must reference
+The spatial ALS Python API and image-pair manifest can instead receive an
+explicit `(sample, 2)` array of zero-based `(y, x)` positions. In a v2 manifest,
+`fit_positions` names a strict integer NPY file whose coordinates refer to the
+post-crop image. Position files require `solver=spatial-als` and cannot be
+combined with a fit mask or automatic stamp selection. Duplicate positions are
+retained and therefore increase that pixel's weight. Every explicit position must reference
 a finite target, variance, and source footprint; explicit selection fails
 closed instead of silently dropping rows. Mask and default selection omit
 invalid pixels. Chebyshev coordinates are normalized over the fitted image
@@ -86,6 +89,9 @@ coordinates. These positions and all image, variance, mask, registration, PSF,
 and instrument-calibration inputs are caller-owned; cuPhoton does not bundle an
 observational calibration archive.
 
+Explicit-position summaries distinguish row count, unique pixel count, and
+duplicate row count.
+
 A successful fit writes `summary.json` and these arrays under `artifacts/`:
 
 | File | Meaning |
@@ -94,6 +100,7 @@ A successful fit writes `summary.json` and these arrays under `artifacts/`:
 | `matched.npy` | convolved reference plus fitted background |
 | `residual.npy` | target minus matched image |
 | `fit_mask.npy` | pixels used by the solve |
+| `fit_positions.npy` | ordered fit rows, including duplicates, when supplied |
 | `background.npy` | fitted differential background |
 
 Spatial ALS runs omit `kernel.npy`, because their kernel varies with image
