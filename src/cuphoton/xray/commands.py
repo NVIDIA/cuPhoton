@@ -596,6 +596,84 @@ class LinearPredictionSmokeCommand(_XRayCommand):
         _required = False
 
 
+class LinearPredictionValidateCommand(_XRayCommand):
+    _description_ = (
+        "Validate linear prediction on synthetic damped modes against "
+        "the Cramer-Rao bound."
+    )
+    _shortname_ = "lpv"
+    _handler_name_ = "_linear_prediction_validate"
+
+    samples = 96
+
+    class SamplesArg(IntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    components = 6
+
+    class ComponentsArg(IntegerInvariant):
+        _arg = "--components"
+        _help = "Number of SVD components to fit."
+        _required = False
+        _default = 6
+
+    trials = 200
+
+    class TrialsArg(IntegerInvariant):
+        _arg = "--trials"
+        _help = "Monte Carlo trials per signal-to-noise level."
+        _required = False
+        _default = 200
+
+    snr_db = "40,30,20,10"
+
+    class SnrDbArg(StringInvariant):
+        _arg = "--snr-db"
+        _help = "Comma-separated signal-to-noise levels in dB."
+        _required = False
+        _default = "40,30,20,10"
+
+    seed = 20260914
+
+    class SeedArg(IntegerInvariant):
+        _arg = "--seed"
+        _help = "Random seed for the noise draws."
+        _required = False
+        _default = 20260914
+
+    distortion = None
+
+    class DistortionArg(StringInvariant):
+        _arg = "--distortion"
+        _help = (
+            "Optional model mismatch as kind:amount, one of chirp, "
+            "gaussian_envelope, baseline_drift, clip, glitch "
+            "(for example chirp:0.05)."
+        )
+        _required = False
+        _default = None
+
+    output_dir = None
+
+    class OutputDirArg(PathValueInvariant):
+        _arg = "--output-dir"
+        _help = (
+            "Directory for summary.json and the validation figure "
+            "(created if needed; keep it outside the checkout)."
+        )
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Print the summary as JSON instead of the text report."
+        _required = False
+
+
 class LinearPredictionBenchmarkCommand(_XRayCommand):
     _description_ = "Benchmark serial and batched linear-prediction P1."
     _shortname_ = "lpb"
@@ -4317,6 +4395,70 @@ def _linear_prediction_smoke(args):
                 "rms_reconstruction_diff="
                 f"{payload['rms_reconstruction_diff']:.6g}"
             )
+    return 0
+
+
+def _print_validation_sweep(sweep):
+    print(f"estimator={sweep.backend}")
+    if sweep.distortion is not None:
+        print(f"distortion={sweep.distortion[0]}:{sweep.distortion[1]:g}")
+    for level in sweep.levels:
+        print(
+            f"snr_db={level.snr_db:g} sigma={level.noise_sigma:.4g} "
+            f"trials={level.trials_successful}/{level.trials_attempted} "
+            f"any_mode_lost_rate={level.any_mode_lost_rate:.3f} "
+            f"residual_ratio={level.residual_ratio:.2f}"
+        )
+        for m in level.modes:
+            w = m.angular_frequency
+            d = m.decay
+            print(
+                f"  mode w={w.truth:g} decay={d.truth:g}: "
+                f"freq std/crlb={w.std:.3g}/{w.crlb_std:.3g} "
+                f"({w.std_over_crlb_std:.2f}x) bias={w.bias:+.3g}; "
+                f"decay std/crlb={d.std:.3g}/{d.crlb_std:.3g} "
+                f"({d.std_over_crlb_std:.2f}x) bias={d.bias:+.3g}; "
+                f"recovered={m.recovered_trials} "
+                f"loss_rate={m.loss_rate:.3f}"
+            )
+
+
+def _linear_prediction_validate(args):
+    from .synthetic_validation import (
+        build_summary,
+        validation_sweep,
+        write_validation_run,
+    )
+
+    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+    distortion = None
+    if args.distortion:
+        kind, _, amount = str(args.distortion).partition(":")
+        distortion = (kind.strip(), float(amount))
+    sweeps = [
+        validation_sweep(
+            samples=args.samples,
+            snr_db=snr,
+            trials=args.trials,
+            n_components=args.components,
+            seed=args.seed,
+            distortion=distortion,
+        )
+    ]
+    if args.output_dir is not None:
+        summary = write_validation_run(args.output_dir, sweeps)
+    else:
+        summary = build_summary(sweeps)
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0
+    print(f"samples={sweeps[0].samples}")
+    print(f"signal_rms={sweeps[0].signal_rms:.6g}")
+    for sweep in sweeps:
+        _print_validation_sweep(sweep)
+    if args.output_dir is not None:
+        for key, name in summary["artifacts"].items():
+            print(f"{key}={name if name else 'not written'}")
     return 0
 
 
