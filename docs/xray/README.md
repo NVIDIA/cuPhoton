@@ -297,3 +297,4 @@ See [Data and artifact contracts](../data-artifacts.md#xray-hdf5-and-trace-produ
 - [Distributed detector artifacts](DISTRIBUTED-DETECTOR-ARTIFACTS.md)
 - [Validation visualization](VALIDATION-VIZ.md)
 - [Linear prediction validation](LINEAR-PREDICTION-VALIDATION.md)
+- [Linear prediction benchmarks by GPU](LINEAR-PREDICTION-BENCHMARKS.md)
