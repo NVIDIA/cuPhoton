@@ -64,6 +64,7 @@ def test_core_command_registry_loads_xray_commands():
         "extract-trace": "et",
         "gpu-policy": "gp",
         "linear-prediction-benchmark": "lpb",
+        "linear-prediction-validate": "lpv",
         "linear-prediction-fixed-stages-benchmark": "lpfsb",
         "linear-prediction-p2-benchmark": "lppb",
         "linear-prediction-profile-summary": "lpps",
@@ -203,6 +204,56 @@ def test_detector_artifacts_cli_rejects_unknown_diagnostic_level(
     )
     captured = capsys.readouterr()
     assert "invalid choice: 'verbose'" in captured.err
+
+
+def test_linear_prediction_validate_text_json_and_output_dir(
+    tmp_path, capsys
+):
+    # the optional --distortion string must be allowed to be absent
+    assert main(["lpv", "--trials", "3", "--snr-db", "30"]) == 0
+    assert "loss_rate=" in capsys.readouterr().out
+    assert (
+        main(
+            [
+                "lpv",
+                "--trials",
+                "3",
+                "--snr-db",
+                "30",
+                "--distortion",
+                "chirp:0.05",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    assert payload["results"][0]["distortion"] == {
+        "kind": "chirp",
+        "amount": 0.05,
+    }
+    assert payload["artifacts"] == {}
+    out = tmp_path / "lpv"
+    assert (
+        main(
+            [
+                "lpv",
+                "--trials",
+                "3",
+                "--snr-db",
+                "30",
+                "--output-dir",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    text = capsys.readouterr().out
+    assert "summary=summary.json" in text
+    written = json.loads((out / "summary.json").read_text())
+    assert written["results"][0]["trials"]["attempted"] == 3
+    assert written["artifacts"]["summary"] == "summary.json"
 
 
 def test_gpu_policy(capsys):
