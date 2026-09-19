@@ -53,7 +53,8 @@ within 3 percent, the difference being the freed decay and constant.
 
 A true mode is recovered in a trial when a fitted mode has an angular
 frequency within `match_tolerance` (default 0.3 rad per time unit) of it;
-fitted modes are assigned nearest-first and each is used at most once. The
+the assignment first maximizes the number of recovered modes, then minimizes
+their total frequency error. Each fitted mode is used at most once. The
 per-mode `loss_rate` is the fraction of trials in which the mode was not
 recovered. A trial is successful when the estimator returned and every true
 mode was recovered; a trial in which the estimator raised counts in
@@ -64,6 +65,8 @@ For each mode and parameter (`amplitude`, `decay`, `angular_frequency`,
 the recovered trials only, the bound (`crlb_std`, `crlb_variance`) and
 `std_over_crlb_std`. A negative fitted amplitude is folded into the phase
 and the phase error is wrapped to `[-pi, pi)`.
+Undefined statistics are written as JSON `null`: standard deviation requires
+at least two recovered trials, and bias and RMSE require at least one.
 
 Read the decay statistics of a lightly damped mode together with its
 `loss_rate`. The root filter keeps decaying roots only, so when noise pushes
@@ -74,7 +77,9 @@ labels these statistics `statistics_over: recovered_trials`.
 
 Every level also reports `residual_rms_over_sigma_median`, the median over
 trials of the rms residual of the reconstruction divided by sigma. It is
-close to 1 when the model class fits and well above 1 when it does not.
+near 1 for an accurate reconstruction at the specified noise level. A large
+value can indicate model mismatch, missed modes, or estimator error; it does
+not by itself distinguish these causes.
 
 ## Model mismatch
 
@@ -92,7 +97,7 @@ model class:
 The truth used for bias and bounds stays the undistorted mode set, so the
 statistics measure the estimator's response to the mismatch. A chirp or a
 clipped trace can return modes with a confident, biased frequency and no
-loss; the residual ratio is the number that says so.
+loss; the residual ratio supplies an additional reconstruction diagnostic.
 
 ## Summary schema
 
@@ -109,7 +114,7 @@ loss; the residual ratio is the number that says so.
   `scipy_version` and `source_revision` (the git revision of the checkout,
   or `null`).
 - `results`: one entry per sweep condition (estimator by distortion by
-  signal-to-noise level): `snr_db`, `noise_sigma`, `trials` with
+  signal-to-noise level): `snr_db`, `signal_rms`, `noise_sigma`, `trials` with
   `attempted`, `successful`, `failed` and `estimator_errors`,
   `any_mode_lost_rate`, `residual_rms_over_sigma_median`, and `modes`, each
   with `recovered_trials`, `loss_rate`, `statistics_over` and the four
@@ -119,6 +124,8 @@ loss; the residual ratio is the number that says so.
 
 The figure shows, per estimator and per parameter, the sample standard
 deviation against the bound versus signal-to-noise, and the loss rates.
+The signal RMS in `config.noise` describes the first sweep; each result
+records its own signal RMS because distortions can change it.
 
 ## Python entry points
 
@@ -129,3 +136,7 @@ deviation against the bound versus signal-to-noise, and the loss rates.
 `estimator(time, trace, n_components)` returning an object with
 `angular_frequency`, `decay`, `amplitude`, `phase` and `reconstruction`
 (NumPy or CuPy arrays), so the same sweep can compare estimators.
+`build_summary` combines sweeps with shared truth, sampling, seed, matching,
+SNR levels, trial counts and model order. It rejects incompatible settings
+instead of describing later sweeps with the first sweep's configuration.
+Write separate summaries for changes to those settings.
