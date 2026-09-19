@@ -45,6 +45,26 @@ def test_refinement_recovers_exact_modes_from_a_perturbed_start():
     assert r.residual_rms < 1e-10
 
 
+def test_lp_refinement_preserves_the_first_sample_time_origin():
+    fx = synthetic_modes_trace(96)
+    base = linear_prediction_refined(fx.time, fx.trace, 6, 2)
+    shifted_time = fx.time + 1000.0
+    shifted = linear_prediction_refined(shifted_time, fx.trace, 6, 2)
+    assert shifted.converged
+    assert shifted.residual_rms < 1e-10
+    np.testing.assert_array_equal(shifted.time, shifted_time)
+    for field in (
+        "amplitude",
+        "decay",
+        "angular_frequency",
+        "phase",
+        "reconstruction",
+    ):
+        np.testing.assert_allclose(
+            getattr(shifted, field), getattr(base, field), atol=1e-10
+        )
+
+
 def test_seed_from_residual_finds_the_missing_mode():
     fx = synthetic_modes_trace(256, duration=25.5)
     weak = 0.45 * np.exp(-0.03 * fx.time) * np.cos(0.9 * fx.time - 0.75)
