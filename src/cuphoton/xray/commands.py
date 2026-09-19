@@ -4450,7 +4450,7 @@ def _linear_prediction_validate(args):
     else:
         summary = build_summary(sweeps)
     if args.json:
-        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
         return 0
     print(f"samples={sweeps[0].samples}")
     print(f"signal_rms={sweeps[0].signal_rms:.6g}")
