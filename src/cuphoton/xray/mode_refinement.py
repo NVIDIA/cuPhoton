@@ -20,7 +20,7 @@ NumPy only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -180,12 +180,17 @@ def linear_prediction_refined(
 ) -> RefinedModes:
     """Linear prediction, then nonlinear refinement of the ``n_modes``
     strongest oscillating modes; modes the linear-prediction step did not
-    return are seeded one at a time from the residual spectrum."""
+    return are seeded one at a time from the residual spectrum.
+
+    Amplitudes and phases use the first input sample as the time origin,
+    matching linear prediction; the returned time retains the input axis.
+    """
     time = np.asarray(time, dtype=np.float64)
     trace = np.asarray(trace, dtype=np.float64)
     lp = linear_prediction_numpy(
         time, trace, n_components, roots_backend=roots_backend
     )
+    fit_time = time - time[0]
     w = np.asarray(lp.angular_frequency, dtype=float)
     d = np.asarray(lp.decay, dtype=float)
     a = np.asarray(lp.amplitude, dtype=float)
@@ -202,9 +207,9 @@ def linear_prediction_refined(
     residual = trace - np.asarray(lp.reconstruction, dtype=float)
     seeded = 0
     while len(modes) < n_modes:
-        modes.append(seed_from_residual(time, residual))
+        modes.append(seed_from_residual(fit_time, residual))
         seeded += 1
-        partial = refine_modes(time, trace, modes, constant)
+        partial = refine_modes(fit_time, trace, modes, constant)
         residual = trace - partial.reconstruction
         modes = [
             (
@@ -216,11 +221,12 @@ def linear_prediction_refined(
             for i in range(len(modes))
         ]
         constant = partial.constant
-    return refine_modes(
-        time,
+    result = refine_modes(
+        fit_time,
         trace,
         modes,
         constant,
         initial_mode_count=found,
         seeded_mode_count=seeded,
     )
+    return replace(result, time=time)
