@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -86,6 +89,41 @@ def test_single_mode_bound_matches_the_undamped_closed_form():
     assert numerical < closed * 1.03
 
 
+def test_integer_mode_parameters_have_the_same_bounds_as_floats():
+    time = np.linspace(0, 25.5, 256)
+    actual = cramer_rao_bounds((DampedMode(1, 0, 2, 0),), 0, time, 0.01)
+    expected = cramer_rao_bounds(
+        (DampedMode(1.0, 0.0, 2.0, 0.0),), 0.0, time, 0.01
+    )
+    for name in (*PARAMETERS, "constant"):
+        np.testing.assert_allclose(actual[name], expected[name])
+        assert np.all(np.isfinite(actual[name]))
+
+
+@pytest.mark.parametrize("start", [0.0, 3.0])
+def test_chirp_integrates_the_requested_frequency_ramp(start):
+    time = np.linspace(start, start + 10.0, 256)
+    # Integrating omega(t) = 2 + .04 * (t - start) gives this phase.
+    expected = np.cos(2 * time + 0.02 * (time - start) ** 2 + 0.3)
+    actual = distort_trace(time, (DampedMode(1, 0, 2, 0.3),), 0, "chirp", 0.2)
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_matching_recovers_close_modes_independent_of_truth_order():
+    modes = (DampedMode(1, 0, 1.0), DampedMode(1, 0, 1.15))
+    fitted = np.array([1.05, 0.85])
+    decay = np.zeros(2)
+    assert match_modes(modes, fitted, decay, tolerance=0.2) == [1, 0]
+    assert match_modes(modes[::-1], fitted, decay, tolerance=0.2) == [0, 1]
+    assert match_modes(modes, fitted[:1], decay[:1], tolerance=0.2) == [
+        0,
+        None,
+    ]
+    assert match_modes(
+        modes, np.array([np.nan]), decay[:1], tolerance=0.2
+    ) == [None, None]
+
+
 def test_validation_sweep_reports_bound_ratios_and_loss_rates():
     sweep = validation_sweep(snr_db=(40.0, 20.0), trials=40, seed=1)
     assert len(sweep.levels) == 2
@@ -158,6 +196,52 @@ def test_summary_schema_and_run_artifacts(tmp_path):
     assert figure is None or (out / figure).exists()
     with pytest.raises(ValueError):
         build_summary([])
+
+
+@pytest.mark.parametrize("trials", [1, 2])
+def test_small_sweeps_write_strict_json_and_two_trials_have_std(
+    tmp_path, trials
+):
+    sweep = validation_sweep(snr_db=(30.0,), trials=trials, seed=3)
+    summary = write_validation_run(tmp_path, [sweep])
+    encoded = json.dumps(summary, allow_nan=False)
+    assert json.loads(encoded) == json.loads(
+        (tmp_path / "summary.json").read_text()
+    )
+    strong = summary["results"][0]["modes"][0]
+    assert strong["recovered_trials"] == trials
+    assert (strong["angular_frequency"]["std"] is None) == (trials == 1)
+
+
+def test_failed_sweep_statistics_are_null_in_summary():
+    def broken(t, y, k):
+        raise RuntimeError("no fit")
+
+    sweep = validation_sweep(snr_db=(30.0,), trials=2, estimator=broken)
+    summary = build_summary([sweep])
+    json.dumps(summary, allow_nan=False)
+    result = summary["results"][0]
+    assert result["residual_rms_over_sigma_median"] is None
+    assert result["modes"][0]["angular_frequency"]["bias"] is None
+
+
+@pytest.mark.parametrize(
+    "change", [{"samples": 192}, {"seed": 77}, {"match_tolerance": 0.1}]
+)
+def test_summary_rejects_incompatible_sweep_provenance(change):
+    sweep = validation_sweep(snr_db=(30.0,), trials=2)
+    with pytest.raises(ValueError, match="summary sweeps must share"):
+        build_summary([sweep, replace(sweep, **change)])
+
+
+def test_summary_preserves_distortion_signal_scale():
+    sweep = validation_sweep(snr_db=(30.0,), trials=2)
+    distorted = replace(
+        sweep, backend="other", distortion=("clip", 0.5), signal_rms=0.1
+    )
+    summary = build_summary([sweep, distorted])
+    assert summary["results"][0]["signal_rms"] == sweep.signal_rms
+    assert summary["results"][1]["signal_rms"] == 0.1
 
 
 def test_invalid_inputs_are_rejected():
