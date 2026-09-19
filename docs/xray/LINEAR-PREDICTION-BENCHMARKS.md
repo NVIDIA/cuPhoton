@@ -11,13 +11,15 @@ run used.
 (`lppb`) and `linear-prediction-savgol-benchmark` (`lpsb`) share one
 procedure:
 
-- The synthetic trace (`synthetic_trace`, 96 samples by default) is
-  replicated `--traces` times on the host.
-- CPU: the serial NumPy path over the rows, best of `--repeat` runs
-  (default 3) by `perf_counter`.
+- `synthetic_trace_batch` generates `--traces` rows on the host, with 96
+  samples by default and varying frequencies, phases and offsets by row.
+- CPU: P1 and P2 use a serial NumPy loop over the rows; Savitzky-Golay
+  calls SciPy once on the full two-dimensional batch along the sample axis.
+  Timings are the best of `--repeat` runs (default 3) by `perf_counter`.
 - GPU: the time axis and the trace rows are copied to the device once,
-  before any timing, so host-to-device and device-to-host transfers are not
-  included. One untimed warm-up call of each GPU path runs first. Each
+  before any timing. Bulk input uploads and final result downloads are
+  excluded; internal scalar transfers and synchronization remain included.
+  One untimed warm-up call of each GPU path runs first. Each
   repeat is bracketed by `cupy.cuda.Stream.null.synchronize()` and the best
   of `--repeat` runs is reported for the serial (one call per trace) and the
   batched (one call for all traces) paths.
@@ -33,23 +35,29 @@ Host: Intel Core i9-13900H, WSL2 Ubuntu 24.04 on Windows 11, Linux
 6.18.33.2-microsoft-standard-WSL2, driver 596.49, CUDA runtime 13.2, CuPy
 14.1.1, Python 3.12, cuPhoton main 9e91835, `uv sync --locked --extra dev
 --extra gpu`. WSL memory cap 5 GB, 4 processors. Best of 3 repeats, command
-defaults except where stated.
+defaults except where stated. These benchmark paths use float64.
 
 ```bash
-uv run cuphoton xray lpb --traces 16 --json
-uv run cuphoton xray lpb --traces 256 --json
-uv run cuphoton xray lpb --traces 2048 --json
+uv run cuphoton xray lpb --traces 16 --components 8 --json
+uv run cuphoton xray lpb --traces 256 --components 8 --json
+uv run cuphoton xray lpb --traces 2048 --components 8 --json
 uv run cuphoton xray lppb --traces 16 --json
 uv run cuphoton xray lpsb --traces 16 --json
 ```
 
-| Benchmark | traces | CPU serial best (s) | GPU serial best (s) | GPU batched best (s) | GPU serial / GPU batched | CPU serial / GPU batched |
+| Benchmark | traces | CPU best (s) | GPU serial best (s) | GPU batched best (s) | GPU serial / GPU batched | CPU / GPU batched |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1, SVD and roots (`lpb`, 6 components) | 16 | 0.0142 | 0.235 | 0.214 | 1.10 | 0.066 |
-| P1, SVD and roots (`lpb`, 6 components) | 256 | 0.239 | 3.61 | 3.55 | 1.02 | 0.067 |
-| P1, SVD and roots (`lpb`, 6 components) | 2048 | 1.83 | 31.4 | 29.0 | 1.08 | 0.063 |
+| P1, SVD and roots (`lpb`, CPU serial) | 16 | 0.0142 | 0.235 | 0.214 | 1.10 | 0.066 |
+| P1, SVD and roots (`lpb`, CPU serial) | 256 | 0.239 | 3.61 | 3.55 | 1.02 | 0.067 |
+| P1, SVD and roots (`lpb`, CPU serial) | 2048 | 1.83 | 31.4 | 29.0 | 1.08 | 0.063 |
 | P2, fixed-shape fit (`lppb`, 2 modes, 8 components) | 16 | 0.00097 | 0.0527 | 0.00334 | 15.8 | 0.29 |
-| Savitzky-Golay (`lpsb`, window 11, order 3) | 16 | 0.00028 | 0.0643 | 0.0039 | 16.5 | 0.072 |
+| Savitzky-Golay (`lpsb`, CPU batched, window 11, order 3) | 16 | 0.00028 | 0.0643 | 0.0039 | 16.5 | 0.072 |
+
+The commands above explicitly request the source default of eight P1
+components. The original timing notes labeled P1 as six components but
+supplied commands with the default; raw command output was not retained
+with this page, so the requested order for these measurements is unverified.
+Rerun the explicit commands before making an order-specific timing comparison.
 
 CPU and GPU coefficients agree to 3e-15 and eigenvalues to 2e-13 in every P1
 run; P2 reconstructions and Savitzky-Golay filters agree to 3e-15 and 7e-15.
@@ -60,6 +68,11 @@ Same machine and revision, `lpb --traces 256`, with `cProfile` around the
 benchmark function and `cupyx.profiler.benchmark` (3 repeats after a
 warm-up) on arrays of the real sizes: Hankel matrices 24 x 71 and companion
 matrices 71 x 71, batch of 256.
+
+The exact profiling script and raw outputs are not included. The call counts
+below match one timed repeat plus warm-up for each P1 path, rather than the
+three repeats used by the main table. Treat these as separate reported
+observations until the original profile invocation is available.
 
 | Stage, batch of 256 | GPU, batched 3-D call | GPU, serial Python loop | NumPy serial |
 | --- | --- | --- | --- |
@@ -89,8 +102,9 @@ over by 1024 samples on this card. On both sides the cost is the O(m^3)
 eigenproblem of a companion matrix whose order tracks the trace length
 while only a handful of poles are wanted. Options, in order of effort:
 route P1 to the CPU for short traces and keep the GPU for P2 and
-Savitzky-Golay, which batch well; replace the companion-matrix root finding
-with a matrix-pencil pole estimate (Hua and Sarkar, 1990), where the k
+Savitzky-Golay, which batch well; evaluate the existing experimental
+`subspace-benchmark` and `subspace-acceptance` matrix-pencil implementation
+(Hua and Sarkar, 1990), where the k
 signal poles are the eigenvalues of a k x k matrix built from the SVD
 subspace, so the large general eigenproblem and its spurious roots
 disappear; or batch the small eigenproblems with a custom kernel if the
