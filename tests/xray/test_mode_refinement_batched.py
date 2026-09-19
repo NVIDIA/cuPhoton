@@ -58,6 +58,51 @@ def test_batched_refinement_rejects_bad_shapes():
         )
 
 
+def test_batched_refinement_accepts_an_exact_start_without_improvement():
+    fx = synthetic_modes_trace(96)
+    truth = modes_to_theta(fx.modes, fx.constant)
+    result = refine_modes_batched(
+        np, fx.time, fx.trace[None, :], truth[None, :], 2
+    )
+    assert result.converged.tolist() == [True]
+    assert result.iterations == 1
+    assert result.residual_rms[0] < 1e-14
+
+
+def test_zero_amplitude_start_does_not_abort_other_rows():
+    fx = synthetic_modes_trace(96)
+    truth = modes_to_theta(fx.modes, fx.constant)
+    starts = np.stack([truth, truth])
+    starts[1, 4] = 0.0
+    traces = np.stack([fx.trace, fx.trace])
+    result = refine_modes_batched(np, fx.time, traces, starts, 2)
+    assert result.converged.tolist() == [True, True]
+    np.testing.assert_allclose(
+        result.theta, np.stack([truth, truth]), atol=1e-7
+    )
+    assert np.all(result.residual_rms < 1e-8)
+
+
+def test_large_damping_does_not_make_a_nonstationary_start_converged():
+    fx = synthetic_modes_trace(96)
+    start = modes_to_theta(fx.modes, fx.constant)[None, :]
+    start[0, -1] += 1.0
+    result = refine_modes_batched(
+        np, fx.time, fx.trace[None, :], start, 2, lambda0=1e30, max_iter=1
+    )
+    assert result.converged.tolist() == [False]
+
+
+@pytest.mark.parametrize("lambda0", [0.0, -1.0, np.nan, np.inf])
+def test_batched_refinement_requires_positive_finite_damping(lambda0):
+    fx = synthetic_modes_trace(96)
+    truth = modes_to_theta(fx.modes, fx.constant)[None, :]
+    with pytest.raises(ValueError, match="lambda0"):
+        refine_modes_batched(
+            np, fx.time, fx.trace[None, :], truth, 2, lambda0=lambda0
+        )
+
+
 def test_benchmark_runs_on_cpu_and_reports_agreement():
     r = benchmark_refinement(traces=8, run_gpu=False)
     assert r.traces == 8
