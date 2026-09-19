@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from cuphoton.core.runtime import runtime_metadata
 
@@ -85,7 +86,8 @@ def modes_to_theta(
             for m in modes
             for v in (m.amplitude, m.decay, m.angular_frequency, m.phase)
         ]
-        + [constant]
+        + [constant],
+        dtype=np.float64,
     )
 
 
@@ -141,21 +143,27 @@ def distort_trace(
     clipped above ``amount``. ``glitch``: one sample at mid-record is
     offset by ``amount``. These are outside the model class on purpose:
     the sweep reports how the fit responds and the residual-to-noise ratio
-    that should flag them.
+    that can help diagnose them.
     """
     if kind not in DISTORTIONS:
         raise ValueError(f"unknown distortion {kind!r}")
     span = float(time[-1] - time[0])
     out = np.full(time.shape, float(constant))
     for k, m in enumerate(modes):
-        w = m.angular_frequency
+        phase = m.angular_frequency * time + m.phase
         if kind == "chirp":
-            w = w * (1.0 + amount * (time - time[0]) / span)
+            phase = phase + (
+                0.5
+                * m.angular_frequency
+                * amount
+                * (time - time[0]) ** 2
+                / span
+            )
         if kind == "gaussian_envelope" and k == 0:
             env = np.exp(-((time / amount) ** 2))
         else:
             env = np.exp(-m.decay * time)
-        out = out + m.amplitude * env * np.cos(w * time + m.phase)
+        out = out + m.amplitude * env * np.cos(phase)
     if kind == "baseline_drift":
         out = out + amount * (time - time[0]) / span
     elif kind == "clip":
@@ -223,22 +231,28 @@ def match_modes(
     """For each true mode, the index of the fitted mode within ``tolerance``
     (rad per time unit) or ``None``.
     """
-    out: list[int | None] = []
-    used: set[int] = set()
-    for m in modes:
-        if angular_frequency.size == 0:
-            out.append(None)
-            continue
-        err = np.abs(angular_frequency - m.angular_frequency)
-        for idx in np.argsort(err):
-            if idx in used:
-                continue
-            if err[idx] <= tolerance:
-                out.append(int(idx))
-                used.add(int(idx))
-                break
-        else:
-            out.append(None)
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
+    out: list[int | None] = [None] * len(modes)
+    if not modes or angular_frequency.size == 0:
+        return out
+    err = np.abs(
+        np.array([m.angular_frequency for m in modes])[:, None]
+        - angular_frequency[None, :]
+    )
+    # A missing match costs more than every valid distance combined:
+    # maximize recovered modes first, then minimize total frequency error.
+    missing_cost = len(modes) + 1
+    cost = np.full(
+        (len(modes), angular_frequency.size + len(modes)), float(missing_cost)
+    )
+    cost[:, : angular_frequency.size] = np.where(
+        err <= tolerance, err / (tolerance or 1.0), np.inf
+    )
+    rows, columns = linear_sum_assignment(cost)
+    for row, column in zip(rows, columns):
+        if column < angular_frequency.size:
+            out[int(row)] = int(column)
     return out
 
 
@@ -340,7 +354,7 @@ def _stats(
         err = _wrap_phase(err)
     n = err.size
     bias = float(err.mean()) if n else float("nan")
-    std = float(err.std(ddof=1)) if n > 2 else float("nan")
+    std = float(err.std(ddof=1)) if n > 1 else float("nan")
     rmse = float(np.sqrt(np.mean(err**2))) if n else float("nan")
     return ParameterStats(
         truth=float(truth),
@@ -392,8 +406,8 @@ def validation_sweep(
     ``distortion`` = (kind, amount) replaces the clean trace with one from
     :func:`distort_trace`, outside the model class; ``residual_ratio`` is
     then the median rms residual of the reconstruction divided by the
-    noise sigma. It is close to 1 when the model fits and well above 1
-    when the trace is not a sum of damped sinusoids.
+    noise sigma. Large values can reflect model mismatch, missed modes or
+    estimator error; this ratio alone does not distinguish those causes.
     """
     if trials < 1:
         raise ValueError("trials must be at least 1")
@@ -530,6 +544,34 @@ def build_summary(
     if not sweeps:
         raise ValueError("at least one sweep is required")
     first = sweeps[0]
+    shared_fields = (
+        "samples",
+        "duration",
+        "modes",
+        "constant",
+        "seed",
+        "match_tolerance",
+    )
+    first_levels = [
+        (level.snr_db, level.trials_attempted, level.n_components)
+        for level in first.levels
+    ]
+    for sweep in sweeps[1:]:
+        if (
+            any(
+                getattr(sweep, name) != getattr(first, name)
+                for name in shared_fields
+            )
+            or [
+                (level.snr_db, level.trials_attempted, level.n_components)
+                for level in sweep.levels
+            ]
+            != first_levels
+        ):
+            raise ValueError(
+                "summary sweeps must share truth, sampling, seed, "
+                "matching and trial settings"
+            )
     dt = first.duration / (first.samples - 1)
     config = {
         "model": (
@@ -568,7 +610,8 @@ def build_summary(
             "criterion": (
                 "a true mode is recovered when a fitted mode lies within "
                 "the tolerance of its angular frequency; fitted modes are "
-                "assigned nearest-first and each is used at most once"
+                "assigned to maximize matches, then minimize total frequency "
+                "error, and each is used at most once"
             ),
             "tolerance_rad_per_time": first.match_tolerance,
         },
@@ -611,6 +654,7 @@ def build_summary(
                         else None
                     ),
                     "snr_db": lvl.snr_db,
+                    "signal_rms": sweep.signal_rms,
                     "noise_sigma": lvl.noise_sigma,
                     "trials": {
                         "attempted": lvl.trials_attempted,
@@ -619,14 +663,23 @@ def build_summary(
                         "estimator_errors": lvl.estimator_errors,
                     },
                     "any_mode_lost_rate": lvl.any_mode_lost_rate,
-                    "residual_rms_over_sigma_median": lvl.residual_ratio,
+                    "residual_rms_over_sigma_median": (
+                        lvl.residual_ratio
+                        if np.isfinite(lvl.residual_ratio)
+                        else None
+                    ),
                     "modes": [
                         {
                             "recovered_trials": m.recovered_trials,
                             "loss_rate": m.loss_rate,
                             "statistics_over": "recovered_trials",
                             **{
-                                name: asdict(getattr(m, name))
+                                name: {
+                                    key: value if np.isfinite(value) else None
+                                    for key, value in asdict(
+                                        getattr(m, name)
+                                    ).items()
+                                }
                                 for name in PARAMETERS
                             },
                         }
@@ -742,6 +795,6 @@ def write_validation_run(
     }
     summary = build_summary(sweeps, command=command, artifacts=artifacts)
     with open(out / "summary.json", "w", encoding="utf-8", newline="\n") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+        json.dump(summary, f, indent=2, sort_keys=True, allow_nan=False)
         f.write("\n")
     return summary
