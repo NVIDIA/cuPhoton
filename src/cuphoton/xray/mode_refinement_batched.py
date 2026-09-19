@@ -84,7 +84,11 @@ def refine_modes_batched(
     ``theta0`` (B, 4K+1). Damping is per trace: a step that lowers the
     cost is accepted and its damping divided by 3, otherwise the damping
     is multiplied by 5 and the trace keeps its parameters. Iteration
-    stops when every trace has converged or ``max_iter`` is reached."""
+    stops when every trace has converged or ``max_iter`` is reached.
+    A scaled gradient check recognizes stationary starts independently of
+    step acceptance. Diagonal damping has a positive floor so an initially
+    zero-amplitude mode does not make the whole batch singular.
+    """
     t = xp.asarray(time, dtype=xp.float64)
     y = xp.asarray(traces, dtype=xp.float64)
     theta = xp.asarray(theta0, dtype=xp.float64).copy()
@@ -92,6 +96,8 @@ def refine_modes_batched(
         raise ValueError("traces must be (B, N) and theta0 (B, 4K+1)")
     if theta.shape[1] != 4 * n_modes + 1:
         raise ValueError("theta0 must have 4 * n_modes + 1 columns")
+    if not np.isfinite(lambda0) or lambda0 <= 0:
+        raise ValueError("lambda0 must be finite and positive")
     _sync(xp)
     start = perf_counter()
     b = y.shape[0]
@@ -105,7 +111,15 @@ def refine_modes_batched(
     for iterations in range(1, max_iter + 1):
         jtj = xp.einsum("bnp,bnq->bpq", jac, jac)
         jtr = xp.einsum("bnp,bn->bp", jac, resid)
-        diag = jtj * eye
+        diagonal = xp.maximum(xp.diagonal(jtj, axis1=1, axis2=2), 1.0)
+        gradient_scale = (
+            xp.sqrt(diagonal) * xp.maximum(xp.sqrt(cost), 1.0)[:, None]
+        )
+        stationary = xp.max(xp.abs(jtr) / gradient_scale, axis=1) <= tol
+        converged = converged | stationary
+        if bool(xp.all(converged)):
+            break
+        diag = diagonal[:, :, None] * eye
         step = -xp.linalg.solve(
             jtj + lam[:, None, None] * diag, jtr[:, :, None]
         )[:, :, 0]
