@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence, cast
 
@@ -1385,6 +1386,40 @@ def _device_scaled_log(
     )
 
 
+@lru_cache(maxsize=2)
+def _device_float_cast_kernel(to_float32: bool) -> Any:
+    cp = _load_cupy()
+    # CuPy appends -ftz=true even after a caller requests --ftz=false:
+    # https://github.com/cupy/cupy/issues/9576
+    # Explicit PTX without .ftz preserves subnormals on both boundaries;
+    # .rn keeps NumPy's round-to-nearest-even behavior when narrowing.
+    if to_float32:
+        return cp.ElementwiseKernel(
+            "float64 x",
+            "float32 y",
+            'asm("cvt.rn.f32.f64 %0, %1;" : "=f"(y) : "d"(x));',
+            "xscan_preserve_float32",
+        )
+    return cp.ElementwiseKernel(
+        "float32 x",
+        "float64 y",
+        'asm("cvt.f64.f32 %0, %1;" : "=d"(y) : "f"(x));',
+        "xscan_preserve_float64",
+    )
+
+
+def _device_float_cast(values: Any, dtype: Any) -> Any:
+    """Cast on the current device stream without flushing float32 values."""
+
+    source_dtype = np.dtype(values.dtype)
+    target_dtype = np.dtype(dtype)
+    if source_dtype == np.float64 and target_dtype == np.float32:
+        return _device_float_cast_kernel(True)(values)
+    if source_dtype == np.float32 and target_dtype == np.float64:
+        return _device_float_cast_kernel(False)(values)
+    return values.astype(dtype, copy=False)
+
+
 def transform_xfit_result_features_device(
     result: DeviceDipoleFitResult,
     *,
@@ -1420,9 +1455,9 @@ def transform_xfit_result_features_device(
     batch_size = int(result.parameters.shape[0])
     values = cp.zeros((batch_size, len(FEATURE_NAMES)), dtype=cp.float64)
     index = {name: position for position, name in enumerate(FEATURE_NAMES)}
-    parameters = result.parameters.astype(cp.float64, copy=False)
-    standard_errors = result.standard_errors.astype(cp.float64, copy=False)
-    covariance = result.covariance.astype(cp.float64, copy=False)
+    parameters = _device_float_cast(result.parameters, cp.float64)
+    standard_errors = _device_float_cast(result.standard_errors, cp.float64)
+    covariance = _device_float_cast(result.covariance, cp.float64)
     parameter_index = {
         name: position for position, name in enumerate(parameter_names)
     }
@@ -1449,8 +1484,8 @@ def transform_xfit_result_features_device(
         0.0,
     )
     if variance_present:
-        delta_chi_square = result.delta_chi_square.astype(
-            cp.float64, copy=False
+        delta_chi_square = _device_float_cast(
+            result.delta_chi_square, cp.float64
         )
         finite_delta_chi_square = cp.isfinite(delta_chi_square)
         safe_delta_chi_square = cp.where(
@@ -1638,7 +1673,9 @@ def transform_xfit_result_features_device(
             0.0,
         )
 
-    feature_values = cp.ascontiguousarray(values.astype(cp.float32))
+    feature_values = cp.ascontiguousarray(
+        _device_float_cast(values, cp.float32)
+    )
     return DeviceXFitFeatures(
         values=feature_values,
         device_id=active_device_id,

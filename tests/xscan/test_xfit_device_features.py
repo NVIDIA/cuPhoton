@@ -319,6 +319,82 @@ def test_device_features_match_host_oracle_without_array_transfers(
         )
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_device_features_preserve_subnormal_values(
+    dtype: type[np.float32] | type[np.float64],
+) -> None:
+    cp = _require_cupy_device()
+    portable, device = _make_results(cp, model="gaussian", dtype=dtype)
+    parameters = portable.parameters.copy()
+    parameters[0, _GAUSSIAN_PARAMETERS.index("sigma_x")] = (
+        0.0005541826174853382
+    )
+    parameters[0, _GAUSSIAN_PARAMETERS.index("sigma_y")] = (
+        3.704983671705392e-43
+    )
+    smallest = float(np.finfo(np.float32).smallest_subnormal)
+    normal = float(np.finfo(np.float32).tiny)
+    # Positive subnormal widths remain valid and can give a normal ratio.
+    parameters[8, _GAUSSIAN_PARAMETERS.index("sigma_x")] = 4 * smallest
+    parameters[8, _GAUSSIAN_PARAMETERS.index("sigma_y")] = 2 * smallest
+    improvement = np.asarray(
+        [
+            0.0,
+            -0.0,
+            smallest,
+            -smallest,
+            smallest / 2,
+            -smallest / 2,
+            normal - smallest,
+            smallest - normal,
+            normal,
+            -normal,
+            normal + smallest,
+            -normal - smallest,
+        ],
+        dtype=np.float64,
+    )
+    # Keep subnormal deltas observable after the log feature's division by 10.
+    delta_chi_square = (10 * improvement).astype(dtype)
+    portable = replace(
+        portable,
+        parameters=parameters,
+        fractional_null_improvement=improvement,
+        delta_chi_square=delta_chi_square,
+    )
+    device = replace(
+        device,
+        parameters=cp.asarray(parameters),
+        fractional_null_improvement=cp.asarray(improvement),
+        delta_chi_square=cp.asarray(delta_chi_square),
+    )
+    expected = transform_xfit_result_features(
+        portable, image_shape=_IMAGE_SHAPE, variance_present=True
+    )
+    features = transform_xfit_result_features_device(
+        device, image_shape=_IMAGE_SHAPE, variance_present=True
+    )
+    actual = cp.asnumpy(features.values)
+    for name in ("fit_valid", "gaussian_shape_available"):
+        column = FEATURE_NAMES.index(name)
+        np.testing.assert_array_equal(expected[[0, 8], column], 1.0)
+        np.testing.assert_array_equal(actual[[0, 8], column], 1.0)
+    axis_ratio = FEATURE_NAMES.index("axis_ratio")
+    assert actual[8, axis_ratio] == expected[8, axis_ratio] == 0.5
+    assert 0 < expected[0, axis_ratio] < np.finfo(np.float32).tiny
+    assert actual[0, axis_ratio].view(np.uint32) == expected[
+        0, axis_ratio
+    ].view(np.uint32)
+    column = FEATURE_NAMES.index("log_delta_chi_square")
+    assert 0 < expected[2, column] < np.finfo(np.float32).tiny
+    for name in ("fractional_null_improvement", "log_delta_chi_square"):
+        column = FEATURE_NAMES.index(name)
+        np.testing.assert_array_equal(
+            actual[:, column].view(np.uint32),
+            expected[:, column].view(np.uint32),
+        )
+
+
 def test_device_features_ignore_residual_values() -> None:
     cp = _require_cupy_device()
     _, first = _make_results(cp, model="gaussian", dtype=np.float64)
