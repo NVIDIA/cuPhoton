@@ -37,7 +37,7 @@ test:
 	$(UV_RUN) $(CPU_EXTRAS) pytest
 
 test-cpu:
-	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) pytest
+	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) pytest -rs
 
 test-core:
 	$(UV_RUN) $(CORE_EXTRAS) pytest tests/core

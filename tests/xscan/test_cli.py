@@ -497,6 +497,27 @@ def write_fake_hsc_fits_products(root: Path) -> Path:
     return fits_root
 
 
+def _build_hsc_registry(
+    fits_root: Path, hsc_npy: Path, output_path: Path
+) -> int:
+    # write_fake_hsc_fits_products writes empty FITS files, so the registry
+    # builder warns once per file while recording fits_header_status=failed.
+    with pytest.warns(
+        RuntimeWarning, match="could not read lightweight FITS header"
+    ):
+        return _run_cli(
+            [
+                "data-build-hsc-registry",
+                "--fits-root",
+                str(fits_root),
+                "--hsc-npy-dir",
+                str(hsc_npy),
+                "--output-path",
+                str(output_path),
+            ]
+        )
+
+
 def write_fake_lsstcomcam_fits(
     path: Path,
     values: np.ndarray,
@@ -2013,17 +2034,7 @@ def test_cli_build_hsc_registry_and_registry_backed_manifest(
     fits_root = write_fake_hsc_fits_products(tmp_path / "data")
     registry_path = tmp_path / "hsc_registry.parquet"
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
@@ -2056,17 +2067,7 @@ def test_cli_build_hsc_registry_and_registry_backed_manifest(
         json.dumps(sidecar_payload) + "\n",
         encoding="utf-8",
     )
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     preserved_sidecar = json.loads(
         collections_path.read_text(encoding="utf-8")
@@ -2218,17 +2219,7 @@ def test_cli_build_hsc_registry_includes_uppercase_fits_suffix(
     warp_path.rename(warp_path.with_suffix(".FITS"))
     registry_path = tmp_path / "hsc_uppercase_suffix_registry.parquet"
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
@@ -2250,16 +2241,8 @@ def test_cli_build_hsc_registry_rejects_unexpected_hsc_npy_layout(
         allow_pickle=False,
     )
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(tmp_path / "bad-layout-registry.parquet"),
-        ]
+    rc = _build_hsc_registry(
+        fits_root, hsc_npy, tmp_path / "bad-layout-registry.parquet"
     )
     captured = capsys.readouterr()
 
@@ -2287,17 +2270,7 @@ def test_cli_build_hsc_registry_assigns_exposure_index_per_band(
         ).write_bytes(b"")
     registry_path = tmp_path / "hsc_multiband_registry.parquet"
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     registry = pd.read_parquet(registry_path)
