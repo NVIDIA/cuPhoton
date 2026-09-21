@@ -11,6 +11,7 @@ import pickle
 import subprocess
 import sys
 import weakref
+from dataclasses import asdict
 from typing import Any
 
 import pytest
@@ -150,6 +151,113 @@ def test_training_import_does_not_eagerly_import_cupy() -> None:
         check=False,
     )
     assert result.returncode == 0
+
+
+def test_checkpoint_performance_override_replaces_saved_policy(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_performance = PerformanceConfig(
+        amp_dtype="bf16",
+        allow_tf32=True,
+        cudnn_benchmark=True,
+        compile=True,
+    )
+    checkpoint_model = _FusionModel()
+    with torch.no_grad():
+        checkpoint_model.scale.fill_(2.5)
+        checkpoint_model.offset.fill_(-0.75)
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    torch.save(
+        {
+            "model_config": {},
+            "model_state": checkpoint_model.state_dict(),
+            "train_config": {"performance": asdict(saved_performance)},
+        },
+        checkpoint_path,
+    )
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    monkeypatch.setattr(training, "build_model", lambda **_: _FusionModel())
+    events: list[tuple[str, PerformanceConfig]] = []
+
+    def record_compile(model: Any, *, performance: PerformanceConfig) -> Any:
+        events.append(("compile", performance))
+        return model, {"enabled": False}
+
+    monkeypatch.setattr(training, "maybe_compile_model", record_compile)
+    monkeypatch.setattr(
+        training,
+        "configure_runtime",
+        lambda *, performance, device: events.append(
+            ("runtime", performance)
+        ),
+    )
+
+    default_model, _, default_policy = training.load_model_from_checkpoint(
+        tmp_path, device=torch.device("cpu")
+    )
+    assert asdict(default_policy) == asdict(saved_performance)
+    assert events == [("compile", default_policy)]
+
+    override = PerformanceConfig(pin_memory=True, non_blocking_transfers=True)
+    original_override = asdict(override)
+    model, checkpoint, policy = training.load_model_from_checkpoint(
+        tmp_path,
+        device=torch.device("cpu"),
+        performance_override=override,
+    )
+    assert asdict(policy) == asdict(PerformanceConfig())
+    assert asdict(override) == original_override
+    assert events == [
+        ("compile", default_policy),
+        ("runtime", policy),
+        ("compile", policy),
+    ]
+    assert checkpoint["train_config"]["performance"] == asdict(
+        saved_performance
+    )
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+    assert model.training is False
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, checkpoint_model.state_dict()[name])
+        torch.testing.assert_close(value, default_model.state_dict()[name])
+    images = torch.ones((2, 2, 3, 3))
+    torch.testing.assert_close(model(images), default_model(images))
+
+
+@pytest.mark.parametrize(
+    ("override", "exception", "message"),
+    [
+        ({}, TypeError, "performance_override must be a PerformanceConfig"),
+        (
+            PerformanceConfig(compile_threads=0),
+            ValueError,
+            "compile_threads must be positive",
+        ),
+        (
+            PerformanceConfig(worker_start_method="invalid"),
+            ValueError,
+            "worker_start_method must be one of",
+        ),
+    ],
+)
+def test_checkpoint_override_rejected_before_loading(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    override: Any,
+    exception: type[Exception],
+    message: str,
+) -> None:
+    def unexpected_load(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("invalid override must fail before checkpoint loading")
+
+    monkeypatch.setattr(torch, "load", unexpected_load)
+    with pytest.raises(exception, match=message):
+        training.load_model_from_checkpoint(
+            tmp_path,
+            device=torch.device("cpu"),
+            performance_override=override,
+        )
 
 
 def test_predict_tensors_is_transfer_free_and_device_resident(

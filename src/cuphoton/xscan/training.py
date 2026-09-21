@@ -1430,7 +1430,27 @@ def load_model_from_checkpoint(
     run_dir: Path,
     *,
     device: torch.device | None = None,
+    performance_override: PerformanceConfig | None = None,
 ) -> tuple[torch.nn.Module, dict[str, Any], PerformanceConfig]:
+    """Load a checkpoint with an optional inference performance policy.
+
+    By default, retain the saved training policy. An explicit override is
+    validated before loading and replaces that policy without changing the
+    checkpoint. Its runtime settings apply before optional model compilation.
+    On CUDA this updates process-wide TF32 and cuDNN settings; it does not
+    enable PyTorch's deterministic-algorithm mode.
+    """
+
+    target_device = device or torch.device("cpu")
+    performance = None
+    if performance_override is not None:
+        if not isinstance(performance_override, PerformanceConfig):
+            raise TypeError(
+                "performance_override must be a PerformanceConfig"
+            )
+        performance = normalize_performance_config(
+            performance_override, device=target_device
+        )
     checkpoint = torch.load(
         run_dir / "checkpoint.pt",
         map_location=device or "cpu",
@@ -1438,16 +1458,17 @@ def load_model_from_checkpoint(
     )
     model = build_model(**checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state"])
-    target_device = device or torch.device("cpu")
     model.to(target_device)
     performance_payload = checkpoint.get("train_config", {}).get(
         "performance", {}
     )
-    performance = PerformanceConfig(**(performance_payload or {}))
-    performance = normalize_performance_config(
-        performance,
-        device=target_device,
-    )
+    if performance is None:
+        performance = normalize_performance_config(
+            PerformanceConfig(**(performance_payload or {})),
+            device=target_device,
+        )
+    else:
+        configure_runtime(performance=performance, device=target_device)
     model, _compile_info = maybe_compile_model(
         model,
         performance=performance,
