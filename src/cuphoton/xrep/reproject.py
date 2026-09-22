@@ -434,6 +434,7 @@ def build_stack_spec_from_fits(
     *,
     grid: Grid | None = None,
     hdu: int | None = None,
+    output_bbox: BBox | None = None,
     interpolation: str = "lanczos3",
     mapping_grid_step: int = 100,
     area_scaling: bool = True,
@@ -448,6 +449,8 @@ def build_stack_spec_from_fits(
         Destination grid; derived from the first image when omitted.
     hdu
         Explicit image HDU used for every input.
+    output_bbox
+        Explicit destination region; source-footprint union when omitted.
     interpolation
         Interpolation kernel for every member.
     mapping_grid_step
@@ -471,28 +474,29 @@ def build_stack_spec_from_fits(
     if grid is None:
         grid = _default_grid_from_wcs(payloads[0][1], payloads[0][0].shape)
 
-    bboxes = []
-    for image, source_wcs, _, _ in payloads:
-        bboxes.append(
-            estimate_source_bbox_on_grid(
-                source_wcs,
-                shape=image.shape,
-                grid=grid,
-            )
+    if output_bbox is None:
+        output_bbox = bbox_union(
+            [
+                estimate_source_bbox_on_grid(
+                    source_wcs,
+                    shape=image.shape,
+                    grid=grid,
+                )
+                for image, source_wcs, _, _ in payloads
+            ]
         )
-    union_bbox = bbox_union(bboxes)
 
     members = []
     for _, source_wcs, _, _ in payloads:
         mapping = make_grid_mapping(
             source_wcs,
             grid=grid,
-            output_bbox=union_bbox,
+            output_bbox=output_bbox,
         )
         members.append(
             ReprojectionSpec(
                 mapping=mapping,
-                output_bbox=union_bbox,
+                output_bbox=output_bbox,
                 interpolation=interpolation,
                 mapping_grid_step=mapping_grid_step,
                 area_scaling=area_scaling,
@@ -502,7 +506,7 @@ def build_stack_spec_from_fits(
         [payload[0] for payload in payloads],
         StackReprojectionSpec(
             grid=grid,
-            output_bbox=union_bbox,
+            output_bbox=output_bbox,
             members=tuple(members),
         ),
     )

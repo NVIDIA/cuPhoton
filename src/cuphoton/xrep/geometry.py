@@ -11,35 +11,69 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from astropy.wcs import WCS
+from astropy import units as u
+from astropy.wcs import WCS, Sip
 
 MappingFn = Callable[[np.ndarray], np.ndarray]
 
 
 @dataclass(slots=True)
 class Grid:
-    """A fixed north-up sky grid.
+    """A shared celestial pixel grid, north-up unless constructed from a WCS.
 
     Attributes
     ----------
     crval
-        ``(right ascension, declination)`` reference in ICRS-like degrees.
+        Reference world coordinates in degrees, in WCS axis order.
+        North-up grids use ``(right ascension, declination)``.
     pixel_scale_arcsec
         Pixel scale in arcseconds per pixel.
     wcs
-        Derived two-dimensional TAN world-coordinate system.
+        Two-dimensional celestial world-coordinate system.
     """
 
     crval: tuple[float, float]
     pixel_scale_arcsec: float
-    wcs: WCS = field(init=False, repr=False)
+    wcs: WCS | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        self.wcs = make_north_up_wcs(
-            self.crval,
-            shape=(1, 1),
-            pixel_scale_arcsec=self.pixel_scale_arcsec,
-            crpix=(1.0, 1.0),
+        if self.wcs is None:
+            self.wcs = make_north_up_wcs(
+                self.crval,
+                shape=(1, 1),
+                pixel_scale_arcsec=self.pixel_scale_arcsec,
+                crpix=(1.0, 1.0),
+            )
+
+    @classmethod
+    def from_wcs(cls, wcs: WCS) -> Grid:
+        """Copy a two-dimensional celestial WCS, retaining SIP distortion.
+
+        Lookup-table distortions cannot be represented in the output header
+        and are rejected. The scalar pixel scale summarizes the linear WCS;
+        reprojection uses the complete WCS.
+        """
+        if wcs.pixel_n_dim != 2 or not wcs.has_celestial:
+            raise ValueError(
+                "target WCS must be two-dimensional and celestial"
+            )
+        if any(
+            item is not None
+            for item in (wcs.cpdis1, wcs.cpdis2, wcs.det2im1, wcs.det2im2)
+        ):
+            raise ValueError(
+                "target WCS lookup-table distortions are unsupported"
+            )
+        to_degrees = np.asarray(
+            [u.Unit(unit).to(u.deg) for unit in wcs.wcs.cunit]
+        )
+        scale_matrix = wcs.pixel_scale_matrix * to_degrees[:, None]
+        return cls(
+            crval=tuple(float(value) for value in wcs.wcs.crval * to_degrees),
+            pixel_scale_arcsec=float(
+                np.sqrt(abs(np.linalg.det(scale_matrix))) * 3600.0
+            ),
+            wcs=wcs.deepcopy(),
         )
 
 
@@ -305,12 +339,13 @@ def bbox_wcs(grid: Grid, bbox: BBox) -> WCS:
         WCS whose local pixel coordinates align with the shared grid.
     """
 
-    return make_north_up_wcs(
-        grid.crval,
-        shape=bbox.shape,
-        pixel_scale_arcsec=grid.pixel_scale_arcsec,
-        crpix=(1.0 - bbox.min_x, 1.0 - bbox.min_y),
-    )
+    wcs = grid.wcs.deepcopy()
+    wcs.wcs.crpix -= bbox.origin
+    if wcs.sip is not None:
+        sip = wcs.sip
+        wcs.sip = Sip(sip.a, sip.b, sip.ap, sip.bp, sip.crpix - bbox.origin)
+    wcs.array_shape = bbox.shape
+    return wcs
 
 
 def bbox_union(boxes: list[BBox] | tuple[BBox, ...]) -> BBox:

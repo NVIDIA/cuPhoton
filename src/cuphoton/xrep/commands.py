@@ -329,11 +329,25 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
     """Reproject multiple FITS inputs onto one shared grid."""
 
     inputs = None
+    target_wcs = None
+    target_hdu = None
 
     class InputsArg(CsvPathInvariant):
         _arg = "--inputs"
         _help = "Comma-separated FITS image paths."
         _mandatory = True
+
+    class TargetWcsArg(ExistingPathSpecInvariant):
+        _arg = "--target-wcs"
+        _help = "Optional FITS image defining the destination WCS and shape."
+        _mandatory = False
+        _default = None
+
+    class TargetHduArg(NonNegativeIntegerInvariant):
+        _arg = "--target-hdu"
+        _help = "Explicit image HDU index for --target-wcs."
+        _mandatory = False
+        _default = None
 
     def run(self) -> None:
         result = self._call(
@@ -342,6 +356,8 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
             output_root=self._path(self.output_dir),
             name=self.name,
             hdu=self.hdu,
+            target_wcs_path=self._path(self.target_wcs),
+            target_hdu=self.target_hdu,
             backend=self.backend,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
