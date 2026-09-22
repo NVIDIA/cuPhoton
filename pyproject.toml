@@ -46,6 +46,7 @@ torch = [
 viz = [
   "bokeh>=3.9",
   "pillow>=10.4",
+  "tornado>=6.5.10",
 ]
 gpu = [
   "cupy-cuda13x[ctk]>=14,<15; platform_system == 'Linux'",
