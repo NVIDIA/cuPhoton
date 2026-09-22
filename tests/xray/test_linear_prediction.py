@@ -1455,7 +1455,7 @@ def test_public_variable_artifacts_cupy_batched_matches_cpu_reference(solver):
             cupy.asarray(trace_rows),
             tuple(cupy.asarray(item.eigenvalues) for item in p1_rows),
             tuple(cupy.asarray(item.singular_values) for item in p1_rows),
-            solver="grouped-pinv",
+            solver=solver,
             window_length=7,
             polyorder=3,
         )
