@@ -52,7 +52,7 @@ orders are:
 
 | Component | Automatic order |
 | --- | --- |
-| xDataReader | FITS: KvikIO, nvCOMP, and CuPy on CUDA 13; HDF5: Legate |
+| xDataReader | KvikIO, nvCOMP, and CuPy on CUDA 13 |
 | xFit | CuPy, then NumPy |
 | XPOIS | CuPy, Numba-CUDA, then CPU |
 | XScan | PyTorch CUDA, then PyTorch CPU |

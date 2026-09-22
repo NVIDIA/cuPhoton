@@ -66,7 +66,6 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "cutile",
         "dev",
         "gpu",
-        "hdf5",
         "torch",
         "viz",
     }
@@ -129,7 +128,7 @@ def test_cli_help_and_version_do_not_import_optional_gpu_packages(
 import importlib.abc
 import sys
 
-BLOCKED = ("cupy", "kvikio", "legate", "numba", "torch")
+BLOCKED = ("cupy", "kvikio", "numba", "torch")
 
 class BlockOptional(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):

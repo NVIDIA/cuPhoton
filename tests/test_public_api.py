@@ -123,7 +123,7 @@ def test_public_contract_docstrings_are_specific(
     [
         (
             "xdr",
-            "xDataReader: GPU-native FITS and HDF5 metadata loading.",
+            "xDataReader: GPU-native FITS loading.",
         ),
         (
             "xfit",

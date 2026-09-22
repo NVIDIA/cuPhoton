@@ -58,9 +58,6 @@ gpu = [
   "pybind11>=2.12,<4; platform_system == 'Linux'",
   "torch>=2.13,<3; platform_system == 'Linux'",
 ]
-hdf5 = [
-  "legate>=25.1,<27; platform_system == 'Linux'",
-]
 cutile = [
   "cuda-tile>=1.4; python_version >= '3.12' and python_version < '3.14' and platform_system == 'Linux'",
   "cupy-cuda13x[ctk]>=14,<15; python_version >= '3.12' and python_version < '3.14' and platform_system == 'Linux'",

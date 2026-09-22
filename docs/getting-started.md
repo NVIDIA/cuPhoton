@@ -4,9 +4,8 @@
 
 cuPhoton supports Python 3.11 through 3.14 on Linux for the base, GPU, CPU
 PyTorch, and visualization profiles. CPU workflows do not require CUDA. The
-GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. The locked
-Legate-backed HDF5 profile is unavailable on Python 3.14. Python 3.12 or 3.13
-is required for the experimental cuTile profile.
+GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. Python
+3.12 or 3.13 is required for the experimental cuTile profile.
 
 Install [uv](https://docs.astral.sh/uv/) before working from a checkout. uv is
 the supported environment and lock-file tool; editable pip installation is
@@ -45,7 +44,6 @@ The extras are composable:
 | `dev` | pytest, Ruff, pre-commit, and packaging checks |
 | `torch` | CPU-capable PyTorch |
 | `gpu` | CUDA 13 PyTorch, CuPy, and Numba-CUDA |
-| `hdf5` | Legate-backed HDF5 dataset loading |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `viz` | Bokeh and Pillow |
 
