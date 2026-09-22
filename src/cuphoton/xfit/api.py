@@ -555,7 +555,7 @@ def _validate_cupy_model_device(
 ) -> None:
     if not isinstance(model, (GaussianDipoleModel, StampDipoleModel)):
         return
-    if model.backend != "cupy":
+    if model.backend == "numpy":
         return
     if model.device != f"cuda:{active_device_id}":
         raise ValueError(
