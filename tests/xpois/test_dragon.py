@@ -424,7 +424,7 @@ def test_shard_result_audit_requires_strict_integral_totals(
     assert audit["mismatched_shards"] == [{"worker_id": 0, "fields": [field]}]
 
 
-def test_shard_result_audit_rejects_reported_failure() -> None:
+def test_shard_result_audit_accepts_honest_reported_failure() -> None:
     shard = (WorkItem("zero", {}, 10),)
     placements = _test_placements(1)
     result = _valid_shard_result(shard, placements[0])
@@ -439,10 +439,9 @@ def test_shard_result_audit_rejects_reported_failure() -> None:
         backend="cupy",
     )
 
-    assert audit["ok"] is False
-    assert audit["mismatched_shards"] == [
-        {"worker_id": 0, "fields": ["failed_count", "status"]}
-    ]
+    assert audit["ok"] is True
+    assert audit["mismatched_shards"] == []
+    assert audit["write_failed_shards"] == []
 
 
 def test_shard_result_audit_cross_checks_terminal_status_counts() -> None:
@@ -465,7 +464,7 @@ def test_shard_result_audit_cross_checks_terminal_status_counts() -> None:
     ]
 
 
-def test_shard_result_audit_rejects_record_write_errors() -> None:
+def test_shard_result_audit_separates_record_write_errors() -> None:
     shard = (WorkItem("zero", {}, 10),)
     placements = _test_placements(1)
     result = _valid_shard_result(shard, placements[0])
@@ -481,6 +480,32 @@ def test_shard_result_audit_rejects_record_write_errors() -> None:
     )
 
     assert audit["ok"] is False
+    assert audit["mismatched_shards"] == []
+    assert audit["write_failed_shards"] == [
+        {"worker_id": 0, "record_write_errors": [{"item_id": "zero"}]}
+    ]
+
+
+@pytest.mark.parametrize("value", [None, {"item_id": "zero"}, ["zero"]])
+def test_shard_result_audit_rejects_malformed_record_write_errors(
+    value,
+) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["record_write_errors"] = value
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["write_failed_shards"] == []
     assert audit["mismatched_shards"] == [
         {"worker_id": 0, "fields": ["record_write_errors"]}
     ]
@@ -1247,6 +1272,36 @@ def _fake_inconsistent_shard_worker(
     results_queue.put(result)
 
 
+def _fake_record_write_failure_shard_worker(
+    run_id,
+    run_dir_raw,
+    placement_payload,
+    item_payloads,
+    options_payload,
+    results_queue,
+    allow_loopback_alias,
+):
+    local_results = _FakeQueue()
+    _fake_worker(
+        run_id,
+        run_dir_raw,
+        placement_payload,
+        item_payloads,
+        options_payload,
+        local_results,
+        allow_loopback_alias,
+    )
+    result = local_results.get_nowait()
+    result["record_write_errors"] = [
+        {
+            "item_id": item_payloads[0]["item_id"],
+            "type": "OSError",
+            "message": "injected record write failure",
+        }
+    ]
+    results_queue.put(result)
+
+
 def _write_fake_manifest(tmp_path, *, item_ids=("one",)):
     reference = tmp_path / "reference.npy"
     target = tmp_path / "target.npy"
@@ -1440,9 +1495,53 @@ def test_coordinator_rejects_failed_shard_with_successful_records(
     assert result.status == "failed"
     assert result.summary["terminal_record_audit"]["ok"] is True
     assert result.summary["shard_result_audit"]["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["failed_count", "success_count"]}
+    ]
+
+
+def test_coordinator_rejects_declared_record_write_errors(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(
+        dragon_module,
+        "_dragon_shard_worker",
+        _fake_record_write_failure_shard_worker,
+    )
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "write-failed-shard-runs",
+        run_id="fake-write-failed-shard",
+        max_workers=1,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    shard_audit = result.summary["shard_result_audit"]
+    assert shard_audit["ok"] is False
+    assert shard_audit["mismatched_shards"] == []
+    assert shard_audit["write_failed_shards"] == [
         {
             "worker_id": 0,
-            "fields": ["failed_count", "status", "success_count"],
+            "record_write_errors": [
+                {
+                    "item_id": "one",
+                    "type": "OSError",
+                    "message": "injected record write failure",
+                }
+            ],
         }
     ]
 

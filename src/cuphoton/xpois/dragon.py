@@ -748,12 +748,8 @@ def _hostnames_match(
 def _collect_gpu_identity(backend: str) -> dict[str, Any]:
     """Initialize the selected backend only after singleton placement."""
 
-    if backend in {"auto", "cupy", "cutile"}:
-        try:
-            return _collect_cupy_identity()
-        except (ImportError, OSError, RuntimeError):
-            if backend != "auto":
-                raise
+    if backend in {"cupy", "cutile"}:
+        return _collect_cupy_identity()
     return _collect_numba_identity()
 
 
@@ -972,6 +968,7 @@ def _audit_shard_results(
                 record.get("status")
             )
     mismatched: list[dict[str, Any]] = []
+    write_failed: list[dict[str, Any]] = []
     physical_identities: list[
         tuple[int, str, frozenset[tuple[str, str]]]
     ] = []
@@ -1054,10 +1051,6 @@ def _audit_shard_results(
             fields.add("success_count")
         if failed_count is not None and failed_count != terminal_failed_count:
             fields.add("failed_count")
-        if status != "success":
-            fields.add("status")
-        if failed_count != 0:
-            fields.add("failed_count")
         placement = placement_by_worker.get(worker_id)
         provenance = result.get("provenance")
         if placement is None or not _valid_shard_provenance(
@@ -1082,7 +1075,12 @@ def _audit_shard_results(
         ):
             fields.add("record_write_errors")
         elif record_write_errors:
-            fields.add("record_write_errors")
+            write_failed.append(
+                {
+                    "worker_id": worker_id,
+                    "record_write_errors": record_write_errors,
+                }
+            )
         try:
             _validated_timings(
                 result.get("timings_sec"),
@@ -1127,6 +1125,7 @@ def _audit_shard_results(
         and not duplicates
         and not unexpected
         and not mismatched
+        and not write_failed
         and not invalid_results,
         "expected_count": worker_count,
         "observed_count": len(shard_results),
@@ -1137,6 +1136,7 @@ def _audit_shard_results(
             duplicate_physical_gpu_worker_ids
         ),
         "mismatched_shards": mismatched,
+        "write_failed_shards": write_failed,
         "invalid_results": invalid_results,
     }
 

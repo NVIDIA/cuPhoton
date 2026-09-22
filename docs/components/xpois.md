@@ -222,7 +222,10 @@ Every attempt uses a new, immutable run directory. Each item has an atomic
 terminal record under `records/`; an ordinary item error does not prevent
 the remaining items in its shard from running. The final `summary.json`
 checks for missing, duplicate, unexpected, malformed, or assignment-inconsistent
-item and worker results, as well as nonzero worker exits. Worker wall time
+item and worker results, as well as nonzero worker exits. A worker that could
+not write a terminal record still fails the run, but its declared errors are
+reported under `shard_result_audit.write_failed_shards` rather than as an
+evidence mismatch. Worker wall time
 defaults to one hour. The coordinator attempts bounded stop and close cleanup
 after failed starts or joins.
 
