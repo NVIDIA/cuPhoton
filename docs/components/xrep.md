@@ -76,7 +76,9 @@ Lookup-table distortions are unsupported. `--grid-crval-ra`,
 Interpolation and relative-area scaling use their existing settings; pixels
 outside each source footprint retain the normal NaN fill and invalid mask.
 `--mapping-grid-step 1` evaluates the WCS mapping at every pixel; larger values
-retain the existing coarse-grid approximation.
+retain the existing coarse-grid approximation, which interpolates the target's
+SIP distortion, so the workflow emits a `RuntimeWarning` when a SIP target is
+combined with a step above 1.
 
 The summary records the selected target HDU, dimensions, and serialized WCS
 header. FITS output retains that WCS, including SIP coefficients. Read the

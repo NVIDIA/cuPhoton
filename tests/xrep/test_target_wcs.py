@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -243,6 +244,25 @@ def test_target_rejects_lookup_table_distortion():
     )
     with pytest.raises(ValueError, match="lookup-table"):
         Grid.from_wcs(wcs)
+
+
+def test_target_sip_with_coarse_grid_warns(tmp_path):
+    image = np.ones((17, 21), dtype=np.float64)
+    source = _write_image(tmp_path / "source.fits", image, _wcs())
+    target = _write_image(tmp_path / "target.fits", image, _sip(_wcs()))
+    with pytest.warns(RuntimeWarning, match="SIP distortion"):
+        _run(tmp_path, source, target, mapping_grid_step=4)
+
+
+@pytest.mark.parametrize("sip, step", [(True, 1), (False, 4)])
+def test_target_exact_or_undistorted_grid_does_not_warn(tmp_path, sip, step):
+    image = np.ones((17, 21), dtype=np.float64)
+    source = _write_image(tmp_path / "source.fits", image, _wcs())
+    target_wcs = _sip(_wcs()) if sip else _wcs()
+    target = _write_image(tmp_path / "target.fits", image, target_wcs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        _run(tmp_path, source, target, mapping_grid_step=step)
 
 
 @pytest.mark.parametrize("backend", ["torch", "cupy"])

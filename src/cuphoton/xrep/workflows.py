@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -821,6 +822,15 @@ def run_reproject_stack(
             target_wcs_path, hdu=target_hdu
         )
         grid = Grid.from_wcs(target_wcs)
+        if grid.wcs.sip is not None and mapping_grid_step > 1:
+            warnings.warn(
+                "target WCS carries SIP distortion but mapping_grid_step is "
+                f"{mapping_grid_step}; the coarse mapping grid interpolates "
+                "the distortion. Use --mapping-grid-step 1 for an exact "
+                "mapping.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         output_bbox = BBox(0, 0, target_image.shape[1], target_image.shape[0])
         target = {
             "path": str(target_wcs_path.expanduser().resolve()),
