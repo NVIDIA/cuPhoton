@@ -32,21 +32,17 @@ def _load_xdr_build_helpers():
 
 
 def _get_ext_modules():
-    mode = os.environ.get("CUPHOTON_XDR_BUILD_EXT", "auto").lower()
+    mode = os.environ.get("CUPHOTON_XDR_BUILD_EXT", "0").strip().lower()
     if mode in _FALSE_VALUES:
         return []
 
-    try:
-        return _load_xdr_build_helpers().get_extensions()
-    except Exception as exc:
-        if mode in _TRUE_VALUES:
-            raise
-        print(
-            "WARNING: xDataReader native extension build skipped: "
-            f"{type(exc).__name__}: {exc}",
-            file=sys.stderr,
+    if mode not in _TRUE_VALUES:
+        raise RuntimeError(
+            "CUPHOTON_XDR_BUILD_EXT must be one of: "
+            + ", ".join(sorted(_FALSE_VALUES | _TRUE_VALUES))
         )
-        return []
+
+    return _load_xdr_build_helpers().get_extensions()
 
 
 setup(ext_modules=_get_ext_modules())

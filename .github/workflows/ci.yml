@@ -24,9 +24,9 @@ env:
 
 jobs:
   lint:
+    timeout-minutes: 15
     name: lint
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -40,12 +40,56 @@ jobs:
       - run: make ci-lint
 
   test-cpu:
-    name: tests / linux-x64 / py3.11
-    runs-on: ubuntu-24.04
     timeout-minutes: 30
+    name: tests / ${{ matrix.name }} / py${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            python: "3.11"
+          - name: linux-x64
+            runner: ubuntu-24.04
+            python: "3.12"
+          - name: linux-x64
+            runner: ubuntu-24.04
+            python: "3.13"
+          - name: linux-x64
+            runner: ubuntu-24.04
+            python: "3.14"
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            python: "3.11"
+    runs-on: ${{ matrix.runner }}
     env:
       CUPHOTON_XREP_TORCH_DEVICE: cpu
       CUDA_VISIBLE_DEVICES: ""
+      PYTHON_VERSION: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - run: uv python install "${PYTHON_VERSION}"
+      - run: >-
+          uv sync --locked --python "${PYTHON_VERSION}"
+          --extra dev --extra torch --extra viz
+      - run: make ci-test-cpu
+      - name: Run synthetic CPU quickstarts
+        if: matrix.name == 'linux-x64' && matrix.python == '3.11'
+        run: >-
+          uv run --locked --extra dev --extra torch --extra viz
+          python examples/run_quickstarts.py --profile cpu
+          --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+
+  package:
+    timeout-minutes: 30
+    name: build / metadata / install smoke
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -55,19 +99,133 @@ jobs:
           version: "0.12.1"
           enable-cache: true
       - run: uv python install 3.11
-      - run: >-
-          uv sync --locked --python 3.11
-          --extra dev --extra torch --extra viz
-      - run: make ci-test-cpu
-      - name: Run synthetic CPU quickstarts
-        run: >-
-          uv run --locked --extra dev --extra torch --extra viz
-          python examples/run_quickstarts.py --profile cpu
-          --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - run: uv sync --locked --extra dev --python 3.11
+      - run: make package-check
+      - name: Verify the distribution contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import tarfile
+          import zipfile
+
+          def is_shared_library(name):
+              filename = Path(name).name.lower()
+              return filename.endswith((".dll", ".dylib", ".pyd", ".so")) or (
+                  re.search(r"\.so(?:\.[0-9]+)+\Z", filename) is not None
+              )
+
+
+          dist = Path("dist")
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+
+          wheel = wheels[0]
+          assert wheel.name.endswith("-py3-none-any.whl"), wheel.name
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+              shared_libraries = [
+                  name
+                  for name in names
+                  if is_shared_library(name)
+              ]
+              assert not shared_libraries, shared_libraries
+              metadata_name = next(
+                  name for name in names if name.endswith(".dist-info/WHEEL")
+              )
+              metadata = archive.read(metadata_name).decode("utf-8")
+              assert "Root-Is-Purelib: true" in metadata
+              assert "Tag: py3-none-any" in metadata
+
+          required_native_sources = {
+              "build.sh",
+              "io.cpp",
+              "memory_manager.cpp",
+              "nvcomp_batch_ext.cpp",
+              "nvcomp_batch_ext.h",
+          }
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              names = archive.getnames()
+              source_names = {
+                  Path(name).name
+                  for name in names
+                  if "/src/cuphoton/xdr/src/" in name
+              }
+              shared_libraries = [
+                  name
+                  for name in names
+                  if is_shared_library(name)
+              ]
+          assert required_native_sources <= source_names, source_names
+          assert not shared_libraries, shared_libraries
+          PY
+      - run: uv venv --seed --python 3.11 .wheel-venv
+      - run: .wheel-venv/bin/python -m pip install dist/*.whl
+      - run: .wheel-venv/bin/python -m pip check
+      - run: uv venv --seed --python 3.11 .sdist-venv
+      - run: .sdist-venv/bin/python -m pip install dist/*.tar.gz
+      - run: .sdist-venv/bin/python -m pip check
+      - name: Smoke-test installed distributions and CLIs
+        run: |
+          for environment in .wheel-venv .sdist-venv; do
+            "${environment}"/bin/python -c \
+              "import cuphoton; import cuphoton.xdr; import cuphoton.xfit; import cuphoton.xpois; import cuphoton.xscan; import cuphoton.xrep; import cuphoton.xray; print(cuphoton.__version__)"
+            "${environment}"/bin/cuphoton --help >/dev/null
+            "${environment}"/bin/cuphoton --version
+            for group in xdr xfit xpois xscan xrep xray; do
+              "${environment}"/bin/cuphoton "${group}" --help >/dev/null
+            done
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  package-compatibility:
+    timeout-minutes: 20
+    name: install smoke / py${{ matrix.python }}
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    runs-on: ubuntu-24.04
+    env:
+      PYTHON_VERSION: ${{ matrix.python }}
+    steps:
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+      - run: uv python install "${PYTHON_VERSION}"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-distributions
+          path: dist
+      - run: uv venv --seed --python "${PYTHON_VERSION}" .wheel-venv
+      - run: .wheel-venv/bin/python -m pip install dist/*.whl
+      - run: .wheel-venv/bin/python -m pip check
+      - run: uv venv --seed --python "${PYTHON_VERSION}" .sdist-venv
+      - run: .sdist-venv/bin/python -m pip install dist/*.tar.gz
+      - run: .sdist-venv/bin/python -m pip check
+      - name: Smoke-test installed distributions and CLIs
+        run: |
+          for environment in .wheel-venv .sdist-venv; do
+            "${environment}"/bin/python -c \
+              "import cuphoton; import cuphoton.xdr; import cuphoton.xfit; import cuphoton.xpois; import cuphoton.xscan; import cuphoton.xrep; import cuphoton.xray; print(cuphoton.__version__)"
+            "${environment}"/bin/cuphoton --help >/dev/null
+            "${environment}"/bin/cuphoton --version
+            for group in xdr xfit xpois xscan xrep xray; do
+              "${environment}"/bin/cuphoton "${group}" --help >/dev/null
+            done
+          done
 
   ci-required:
     name: ci-required
-    needs: [lint, test-cpu]
+    needs: [lint, test-cpu, package, package-compatibility]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -76,9 +234,13 @@ jobs:
         env:
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          COMPATIBILITY_RESULT: ${{ needs.package-compatibility.result }}
         run: |
-          if [[ "${LINT_RESULT}" != success || "${CPU_RESULT}" != success ]]; then
-            printf 'Required CI jobs did not succeed: lint=%s, test-cpu=%s\n' \
-              "${LINT_RESULT}" "${CPU_RESULT}"
-            exit 1
-          fi
+          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${COMPATIBILITY_RESULT}"; do
+            if [[ "${result}" != success ]]; then
+              printf 'Required CI jobs did not succeed: lint=%s, tests=%s, package=%s, compatibility=%s\n' \
+                "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${COMPATIBILITY_RESULT}"
+              exit 1
+            fi
+          done

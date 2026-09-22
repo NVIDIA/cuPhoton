@@ -44,11 +44,11 @@ The native extension also needs CUDA toolkit headers, cuFile headers, and a
 thread-safe CFITSIO development install visible through `pkg-config cfitsio` or
 `CUPHOTON_XDR_CFITSIO_ROOT`.
 
-Normal installation attempts to build the native extension and falls back to
-the pure Python package when native prerequisites are unavailable. Set
-`CUPHOTON_XDR_BUILD_EXT=1` to require the extension or
-`CUPHOTON_XDR_BUILD_EXT=0` to skip it explicitly. Only CUDA 13
-dependency variants are supported.
+Normal PEP 517 and pip builds produce the pure Python package without probing
+native prerequisites. Building the extension requires an explicit
+`CUPHOTON_XDR_BUILD_EXT=1` source build, as performed by `build.sh` above.
+`CUPHOTON_XDR_BUILD_EXT=0` explicitly selects the default pure Python build.
+Only CUDA 13 dependency variants are supported.
 
 ### Native extension availability
 
@@ -89,13 +89,14 @@ library in `lib` or `lib64`. `--disable-curl` removes CFITSIO's optional URL
 support; local FITS loading does not require it. Keep `--enable-reentrant`
 for concurrent native planning and reads.
 
-Wheels built from this repository are pure Python (`py3-none-any`) and never
-contain `cuphoton.xdr._nvcomp_batch_ext`; the extension is built only from a
-source checkout. The build intentionally runs without PEP 517 build isolation
-(as `build.sh` does with `--no-build-isolation`) because pybind11 and the
-KvikIO, nvCOMP, and CFITSIO headers and libraries are resolved from the
-installed `gpu` environment — this is also why `pybind11` is not listed in
-`[build-system].requires`. Verify the extension after building:
+Official release wheels are pure Python (`py3-none-any`) and do not contain
+`cuphoton.xdr._nvcomp_batch_ext`. An explicit native source build runs without
+PEP 517 build isolation (as `build.sh` does with `--no-build-isolation`)
+because pybind11, KvikIO and nvCOMP are resolved from the installed `gpu`
+environment. CFITSIO headers and libraries come from
+`CUPHOTON_XDR_CFITSIO_ROOT` or `pkg-config cfitsio`, as described above.
+This is also why `pybind11` is not listed in `[build-system].requires`.
+Verify the extension after building:
 
 ```bash
 uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
