@@ -1436,17 +1436,24 @@ def _validate_image_pair(reference: np.ndarray, target: np.ndarray) -> None:
         raise ValueError("reference and target must share the same shape")
 
 
+def _coerce_variance_impl(
+    xp: Any, image_shape: tuple[int, int], variance: Any | None
+) -> Any:
+    if variance is None:
+        return xp.ones(image_shape, dtype=xp.float64)
+    variance_arr = xp.asarray(variance, dtype=xp.float64)
+    if variance_arr.shape != image_shape:
+        raise ValueError("variance must match the image shape")
+    invalid = xp.isfinite(variance_arr) & (variance_arr <= 0)
+    if bool(xp.any(invalid).item()):
+        raise ValueError("variance must be strictly positive")
+    return variance_arr
+
+
 def _coerce_variance(
     image_shape: tuple[int, int], variance: np.ndarray | None
 ) -> np.ndarray:
-    if variance is None:
-        return np.ones(image_shape, dtype=np.float64)
-    variance_arr = np.asarray(variance, dtype=np.float64)
-    if variance_arr.shape != image_shape:
-        raise ValueError("variance must match the image shape")
-    if np.any(np.isfinite(variance_arr) & (variance_arr <= 0)):
-        raise ValueError("variance must be strictly positive")
-    return variance_arr
+    return _coerce_variance_impl(np, image_shape, variance)
 
 
 def _coerce_variance_cupy(
@@ -1455,15 +1462,7 @@ def _coerce_variance_cupy(
     *,
     cp: Any,
 ) -> Any:
-    if variance is None:
-        return cp.ones(image_shape, dtype=cp.float64)
-    variance_arr = cp.asarray(variance, dtype=cp.float64)
-    if variance_arr.shape != image_shape:
-        raise ValueError("variance must match the image shape")
-    invalid = cp.isfinite(variance_arr) & (variance_arr <= 0)
-    if bool(cp.any(invalid).item()):
-        raise ValueError("variance must be strictly positive")
-    return variance_arr
+    return _coerce_variance_impl(cp, image_shape, variance)
 
 
 def _coerce_mask(
@@ -1583,19 +1582,25 @@ def _normalized_coordinates(
     return y_coords, x_coords
 
 
-def _default_fit_mask(
-    image_shape: tuple[int, int], kernel_shape: tuple[int, int]
-) -> np.ndarray:
+def _default_fit_mask_impl(
+    xp: Any, image_shape: tuple[int, int], kernel_shape: tuple[int, int]
+) -> Any:
     height, width = image_shape
     kernel_height, kernel_width = kernel_shape
     margin_y = kernel_height // 2
     margin_x = kernel_width // 2
-    mask = np.zeros(image_shape, dtype=bool)
+    mask = xp.zeros(image_shape, dtype=xp.bool_)
     mask[
         margin_y : height - margin_y,
         margin_x : width - margin_x,
     ] = True
     return mask
+
+
+def _default_fit_mask(
+    image_shape: tuple[int, int], kernel_shape: tuple[int, int]
+) -> np.ndarray:
+    return _default_fit_mask_impl(np, image_shape, kernel_shape)
 
 
 def _default_fit_mask_cupy(
@@ -1604,16 +1609,7 @@ def _default_fit_mask_cupy(
     *,
     cp: Any,
 ) -> Any:
-    height, width = image_shape
-    kernel_height, kernel_width = kernel_shape
-    margin_y = kernel_height // 2
-    margin_x = kernel_width // 2
-    mask = cp.zeros(image_shape, dtype=cp.bool_)
-    mask[
-        margin_y : height - margin_y,
-        margin_x : width - margin_x,
-    ] = True
-    return mask
+    return _default_fit_mask_impl(cp, image_shape, kernel_shape)
 
 
 def _invalid_input_mask(
