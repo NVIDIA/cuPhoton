@@ -75,6 +75,14 @@ factorization. Sampled-stamp fits stay on the NumPy or CuPy backends. The Tile
 backend rejects finite-difference fitting rather than reporting Tile
 provenance for the generic CuPy path.
 
+The `cutile` extra installs cuTile's Python package. Execution also needs
+`tileiras` and its companion CUDA compiler libraries, supplied by a compatible
+CUDA Toolkit or cuTile's optional `tileiras` extra. When using compiler wheels,
+keep `nvidia-cuda-tileiras`, `nvidia-cuda-nvcc` and `nvidia-nvvm` on the same
+CUDA major/minor release; mismatches make cuTile fall back to the system
+compiler. See the [cuTile 1.4 installation guide](https://github.com/NVIDIA/cutile-python/blob/v1.4.0/docs/source/quickstart.rst#L25-L49)
+for compiler setup. GPU support depends on the compiler version.
+
 Compare warmed end-to-end Gaussian fits with:
 
 ```bash
