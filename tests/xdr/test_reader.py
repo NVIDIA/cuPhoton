@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cuphoton.xdr import reader
 from cuphoton.xdr.reader import GpuCompImageReader, _validate_comp_geometry
 
 
@@ -70,6 +71,47 @@ def test_comp_reader_keeps_input_alive_until_non_null_stream_finishes(
     assert result == "decoded"
     assert keepalives == [["device-input"]]
     assert stream.synchronize_calls == 1
+
+
+def test_inflate_device_heap_uses_native_pool_for_event_keepalive(
+    monkeypatch,
+):
+    class NullStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    captured = {}
+
+    def decompress(*args, **kwargs):
+        captured.update(kwargs)
+        return "pixels", "offsets"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            cuda=SimpleNamespace(Stream=SimpleNamespace(null=NullStream()))
+        ),
+    )
+    monkeypatch.setattr(reader, "gpu_gzip_decompress_batch", decompress)
+    keepalive = []
+
+    result = GpuCompImageReader.inflate_device_heap(
+        "device-bytes",
+        [0],
+        lengths=[20],
+        out_bytes=[1],
+        keepalive=keepalive,
+        header_sizes=[10],
+    )
+
+    assert result == ("pixels", "offsets")
+    assert captured["header_sizes"] == [10]
+    assert captured["use_native_pool"] is True
+    assert captured["keepalive"] is keepalive
 
 
 @pytest.mark.parametrize(

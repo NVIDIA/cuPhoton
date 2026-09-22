@@ -404,6 +404,7 @@ class GpuCompImageReader:
         out_bytes,
         stream=None,
         keepalive=None,
+        header_sizes=None,
     ):
         """Run batched nvCOMP inflate for gzip tiles resident on the device.
 
@@ -424,6 +425,7 @@ class GpuCompImageReader:
                 gzip_wrapped=True,
                 use_native_pool=keepalive is not None,
                 keepalive=keepalive,
+                header_sizes=header_sizes,
             )
 
     @staticmethod

@@ -9,9 +9,9 @@ gzip-compressed tile payloads plus per-tile (offset, length) tables, and
 produces a contiguous device buffer holding the decompressed tiles plus the
 out-offsets table.
 
-No host roundtrip on the compressed-data path. The only host cost is parsing
-the per-tile gzip headers, which requires a small peek of the first ~16 bytes
-of each tile — done via a single batched D2H (`N * 16` bytes).
+No host roundtrip on the compressed-data path except gzip header parsing.
+Fixed and variable prefixes are gathered in bounded batches; uncommon
+variable headers are extended geometrically up to a fixed safety limit.
 """
 
 from __future__ import annotations
@@ -34,6 +34,9 @@ _FALLBACK_WARNED = False
 _NVCOMP_LIB_ENV = "CUPHOTON_XDR_NVCOMP_LIB_DIR"
 _KVIKIO_LIB_ENV = "CUPHOTON_XDR_KVIKIO_LIB_DIR"
 _RAPIDS_LOGGER_LIB_ENV = "CUPHOTON_XDR_RAPIDS_LOGGER_LIB_DIR"
+_MAX_GZIP_HEADER_BYTES = 1 << 20
+# Each individual header must fit within one aggregate gather group.
+_MAX_GZIP_PROBE_GATHER_BYTES = _MAX_GZIP_HEADER_BYTES
 
 
 def _load_shared_library(path: Path | str) -> None:
@@ -452,21 +455,28 @@ def _warn_python_fallback_once() -> None:
     warnings.warn(msg, RuntimeWarning, stacklevel=3)
 
 
-def _parse_gzip_header_len(head: bytes) -> int:
-    """Return the length of a gzip RFC 1952 header given its first ~16 bytes.
+class _TruncatedGzipHeader(ValueError):
+    """The supplied prefix ends before its gzip header does."""
+
+
+def _parse_gzip_header_len(head: bytes | memoryview) -> int:
+    """Return the length of a gzip RFC 1952 header within ``head``.
 
     Raises ValueError if the magic bytes are wrong. Handles FEXTRA / FNAME /
-    FCOMMENT / FHCRC flags. Most FITS producers (astropy, cfitsio/fpack) emit
-    a minimal 10-byte header (FLG=0), but we parse for correctness.
+    FCOMMENT / FHCRC flags. Callers must bound the view before the trailer.
     """
     if len(head) < 10 or head[0] != 0x1F or head[1] != 0x8B:
         raise ValueError("not a gzip stream (wrong magic)")
+    if head[2] != 0x08:
+        raise ValueError("gzip stream does not use DEFLATE compression")
     flg = head[3]
+    if flg & 0xE0:
+        raise ValueError("gzip stream uses reserved header flags")
     pos = 10
 
     def require(count: int) -> None:
         if pos + count > len(head):
-            raise ValueError("truncated gzip header")
+            raise _TruncatedGzipHeader("truncated gzip header")
 
     def skip_c_string() -> int:
         nonlocal pos
@@ -493,47 +503,230 @@ def _parse_gzip_header_len(head: bytes) -> int:
     return pos
 
 
+def _integer_values_as_int64(values: np.ndarray, name: str) -> np.ndarray:
+    """Return integer-valued metadata in an int64 array."""
+    if values.dtype.kind in "iu":
+        if values.dtype.kind == "u" and np.any(
+            values > np.iinfo(np.int64).max
+        ):
+            raise ValueError(
+                f"{name} must contain int64-representable values"
+            )
+        return values.astype(np.int64, copy=False)
+    if values.dtype.kind == "f":
+        if np.any(~np.isfinite(values)) or np.any(values != np.trunc(values)):
+            raise ValueError(f"{name} must contain integer-valued numbers")
+        # At this boundary adjacent integers can map to the same float.
+        consecutive_limit = 1 << (np.finfo(values.dtype).nmant + 1)
+        if np.any(np.abs(values) >= consecutive_limit):
+            raise ValueError(
+                f"{name} floating-point values exceed consecutive integer "
+                "precision"
+            )
+        int64_limit = np.float64(1 << 63)
+        if np.any(values < -int64_limit) or np.any(values >= int64_limit):
+            raise ValueError(
+                f"{name} must contain int64-representable values"
+            )
+        return values.astype(np.int64)
+    raise ValueError(f"{name} must contain integer-valued numbers")
+
+
+def _validate_tile_ranges(
+    rel_offsets,
+    lengths,
+    span_nbytes: int,
+    *,
+    minimum_length: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return safe 1D int64 tile ranges within one containing buffer."""
+    rel_offsets = np.asarray(rel_offsets)
+    lengths = np.asarray(lengths)
+    if rel_offsets.ndim != 1 or lengths.ndim != 1:
+        raise ValueError("tile offsets and lengths must be 1D")
+    if rel_offsets.size != lengths.size:
+        raise ValueError("tile offsets and lengths must have the same size")
+    rel_offsets = _integer_values_as_int64(rel_offsets, "tile offsets")
+    lengths = _integer_values_as_int64(lengths, "tile lengths")
+    if np.any(rel_offsets < 0) or np.any(lengths < 0):
+        raise ValueError("tile offsets and lengths must be nonnegative")
+    if minimum_length and np.any(lengths < minimum_length):
+        raise ValueError(
+            "gzip tile is too short to contain a header, DEFLATE payload, "
+            "and trailer"
+        )
+    span_nbytes = int(span_nbytes)
+    if span_nbytes < 0:
+        raise ValueError("tile containing buffer size is negative")
+    if np.any(rel_offsets > span_nbytes) or np.any(
+        lengths > span_nbytes - rel_offsets
+    ):
+        raise ValueError("tile range exceeds containing buffer")
+    return rel_offsets, lengths
+
+
 def _compute_header_sizes_from_device(
-    d_concat, rel_offsets: np.ndarray, lengths: np.ndarray
+    d_concat,
+    rel_offsets: np.ndarray,
+    lengths: np.ndarray,
+    *,
+    _ranges_validated: bool = False,
 ) -> np.ndarray:
     """Parse the gzip header length for each tile.
 
-    Does a single D2H of the first 16 bytes of each tile (N_tiles × 16 bytes),
-    then parses each header on host. Fast for any realistic tile count.
+    Reads fixed prefixes in bounded D2H batches. Tiles with optional fields
+    use geometrically growing prefix reads, capped at one MiB per header and
+    one MiB of gathered data per transfer.
     """
-    rel_offsets = np.asarray(rel_offsets, dtype=np.int64)
-    lengths = np.asarray(lengths, dtype=np.int64)
-    n = rel_offsets.size
-    peek_len = 16
-    if lengths.size != n:
-        raise ValueError("gzip tile offsets and lengths must have same size")
-    buffer_size = int(d_concat.size)
-    invalid_probe = (
-        (lengths < peek_len)
-        | (rel_offsets < 0)
-        | (rel_offsets > buffer_size - peek_len)
-    )
-    if np.any(invalid_probe):
-        raise ValueError(
-            "gzip tile header probe exceeds tile or device buffer"
+    if _ranges_validated:
+        rel_offsets = np.asarray(rel_offsets, dtype=np.int64)
+        lengths = np.asarray(lengths, dtype=np.int64)
+    else:
+        rel_offsets, lengths = _validate_tile_ranges(
+            rel_offsets,
+            lengths,
+            int(d_concat.size),
+            minimum_length=20,
         )
+    n = rel_offsets.size
+    if n == 0:
+        return np.empty(0, dtype=np.int64)
 
     import cupy as cp
 
-    # Gather first `peek_len` bytes of each tile into one contiguous host buf.
-    # Indexing by a CuPy index array is a single kernel launch + D2H.
-    idx = np.repeat(rel_offsets.astype(np.int64), peek_len) + np.tile(
-        np.arange(peek_len, dtype=np.int64), n
-    )
-    peeks_d = d_concat[cp.asarray(idx)]
-    peeks = cp.asnumpy(peeks_d).reshape(n, peek_len).tobytes()
-
-    header_sizes = np.empty(n, dtype=np.int64)
-    for i in range(n):
-        header_sizes[i] = _parse_gzip_header_len(
-            peeks[i * peek_len : (i + 1) * peek_len]
+    def gather_prefixes(indices, probe_lengths):
+        """Gather bounded tile prefixes into one contiguous host buffer."""
+        total = int(np.sum(probe_lengths, dtype=np.int64))
+        if total > _MAX_GZIP_PROBE_GATHER_BYTES:
+            raise RuntimeError("internal gzip probe byte budget exceeded")
+        starts = rel_offsets[np.asarray(indices, dtype=np.int64)]
+        segment_starts = (
+            np.cumsum(probe_lengths, dtype=np.int64) - probe_lengths
         )
+        probe_indices = np.repeat(starts - segment_starts, probe_lengths)
+        probe_indices += np.arange(total, dtype=np.int64)
+        return cp.asnumpy(d_concat[cp.asarray(probe_indices)]).tobytes()
+
+    def bounded_groups(probe_lengths):
+        """Yield slices whose aggregate gather stays within the byte cap."""
+        cumulative = np.empty(len(probe_lengths) + 1, dtype=np.int64)
+        cumulative[0] = 0
+        np.cumsum(probe_lengths, dtype=np.int64, out=cumulative[1:])
+        start = 0
+        while start < len(probe_lengths):
+            limit = int(cumulative[start]) + _MAX_GZIP_PROBE_GATHER_BYTES
+            stop = int(np.searchsorted(cumulative, limit, side="right")) - 1
+            if stop <= start:
+                raise RuntimeError(
+                    "gzip header probe exceeds aggregate byte budget"
+                )
+            yield slice(start, stop)
+            start = stop
+
+    # Gather each fixed RFC 1952 prefix into bounded contiguous host buffers.
+    # Indexing by a CuPy index array is one kernel launch + D2H per group.
+    peek_len = 10
+    header_sizes = np.empty(n, dtype=np.int64)
+    pending: list[int] = []
+    all_indices = np.arange(n, dtype=np.int64)
+    fixed_lengths = np.full(n, peek_len, dtype=np.int64)
+    for group in bounded_groups(fixed_lengths):
+        group_indices = all_indices[group]
+        peeks = gather_prefixes(group_indices, fixed_lengths[group])
+        for cursor, index in enumerate(group_indices):
+            head = peeks[cursor * peek_len : (cursor + 1) * peek_len]
+            try:
+                header_sizes[index] = _parse_gzip_header_len(head)
+            except _TruncatedGzipHeader:
+                pending.append(int(index))
+
+    # Neither the trailer nor a valid two-byte DEFLATE stream can contain
+    # header bytes. Re-gather still-truncated tiles in bounded groups per
+    # growth step so producers that always set FNAME avoid an O(N) sync storm.
+    probe_limit = 64
+    while pending:
+        pending_array = np.asarray(pending, dtype=np.int64)
+        tile_header_limits = lengths[pending_array] - 10
+        max_lengths = np.minimum(tile_header_limits, _MAX_GZIP_HEADER_BYTES)
+        probe_lengths = np.minimum(probe_limit, max_lengths)
+        next_pending: list[int] = []
+        for group in bounded_groups(probe_lengths):
+            group_indices = pending_array[group]
+            group_probe_lengths = probe_lengths[group]
+            prefixes = gather_prefixes(group_indices, group_probe_lengths)
+            cursor = 0
+            entries = enumerate(group_indices, start=group.start)
+            for position, index in entries:
+                probe_length = int(probe_lengths[position])
+                max_length = int(max_lengths[position])
+                stop = cursor + probe_length
+                try:
+                    header_sizes[index] = _parse_gzip_header_len(
+                        prefixes[cursor:stop]
+                    )
+                except _TruncatedGzipHeader:
+                    if probe_length == max_length:
+                        if int(tile_header_limits[position]) > max_length:
+                            raise ValueError(
+                                "gzip header exceeds "
+                                f"{_MAX_GZIP_HEADER_BYTES}-byte safety limit"
+                            ) from None
+                        raise
+                    next_pending.append(int(index))
+                cursor = stop
+        pending = next_pending
+        probe_limit *= 4
     return header_sizes
+
+
+def _validate_gzip_header_sizes(
+    header_sizes,
+    lengths: np.ndarray,
+) -> np.ndarray:
+    """Return safe one-dimensional gzip header lengths."""
+    raw_values = np.asarray(header_sizes)
+    if raw_values.ndim != 1:
+        raise ValueError("header_sizes must be a 1D array")
+    if raw_values.size != lengths.size:
+        raise ValueError("header_sizes must have one entry per gzip tile")
+    values = _integer_values_as_int64(raw_values, "header_sizes")
+    if np.any(values > _MAX_GZIP_HEADER_BYTES):
+        raise ValueError(
+            f"gzip header exceeds {_MAX_GZIP_HEADER_BYTES}-byte safety limit"
+        )
+    if np.any(values < 10):
+        raise ValueError("header_sizes must be at least 10 bytes")
+    if np.any(lengths < 20):
+        raise ValueError(
+            "gzip tile is too short to contain a header, DEFLATE payload, "
+            "and trailer"
+        )
+    if np.any(values > lengths - 10):
+        raise ValueError(
+            "header_sizes leave fewer than 2 DEFLATE payload bytes"
+        )
+    return values
+
+
+def _checked_output_offsets(
+    uncompressed_sizes: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Return per-tile offsets after checking the aggregate size."""
+    total = sum(int(size) for size in uncompressed_sizes)
+    if total > np.iinfo(np.int64).max:
+        raise ValueError(
+            "aggregate uncompressed size exceeds the int64 offset range"
+        )
+
+    offsets = np.empty(uncompressed_sizes.size, dtype=np.int64)
+    if offsets.size:
+        offsets[0] = 0
+        np.cumsum(
+            uncompressed_sizes[:-1],
+            dtype=np.int64,
+            out=offsets[1:],
+        )
+    return offsets, total
 
 
 def gpu_gzip_decompress_batch(
@@ -546,6 +739,7 @@ def gpu_gzip_decompress_batch(
     use_cpp_helper: str | bool = "auto",
     use_native_pool: bool = False,
     keepalive: list | None = None,
+    header_sizes=None,
 ):
     """Batch-decompress gzip tiles already resident on the device.
 
@@ -568,6 +762,10 @@ def gpu_gzip_decompress_batch(
     keepalive : list or None
         Optional owner list that keeps pooled scratch alive until the caller's
         stream event says the decode/scatter work has completed.
+    header_sizes : array-like of int64 or None
+        Optional precomputed per-tile gzip header lengths. When provided,
+        the blocking device-to-host header probe is skipped. Only valid when
+        ``gzip_wrapped=True``.
 
     Returns
     -------
@@ -578,17 +776,40 @@ def gpu_gzip_decompress_batch(
     """
     import cupy as cp
 
-    rel_offsets = np.asarray(rel_offsets, dtype=np.int64)
-    lengths = np.asarray(lengths, dtype=np.int64)
-    uncompressed_sizes = np.asarray(uncompressed_sizes, dtype=np.int64)
+    concat_size = int(d_concat.size)
+    rel_offsets, lengths = _validate_tile_ranges(
+        rel_offsets,
+        lengths,
+        concat_size,
+        minimum_length=20 if gzip_wrapped else 0,
+    )
     n = rel_offsets.size
+    uncompressed_sizes = np.asarray(uncompressed_sizes)
+    if uncompressed_sizes.ndim != 1:
+        raise ValueError("uncompressed_sizes must be 1D")
+    if uncompressed_sizes.size != n:
+        raise ValueError(
+            "uncompressed_sizes must have one entry per compressed tile"
+        )
+    uncompressed_sizes = _integer_values_as_int64(
+        uncompressed_sizes, "uncompressed_sizes"
+    )
+    if np.any(uncompressed_sizes < 0):
+        raise ValueError("uncompressed_sizes must be nonnegative")
 
     if gzip_wrapped:
-        header_sizes = _compute_header_sizes_from_device(
-            d_concat, rel_offsets, lengths
-        )
+        if header_sizes is None:
+            header_sizes = _compute_header_sizes_from_device(
+                d_concat,
+                rel_offsets,
+                lengths,
+                _ranges_validated=True,
+            )
+        header_sizes = _validate_gzip_header_sizes(header_sizes, lengths)
         trailer_sizes = np.full(n, 8, dtype=np.int64)
     else:
+        if header_sizes is not None:
+            raise ValueError("header_sizes requires gzip_wrapped=True")
         header_sizes = np.zeros(n, dtype=np.int64)
         trailer_sizes = np.zeros(n, dtype=np.int64)
 
@@ -598,6 +819,8 @@ def gpu_gzip_decompress_batch(
         raise ValueError(
             "negative DEFLATE payload length — malformed gzip tile?"
         )
+
+    out_offsets, total = _checked_output_offsets(uncompressed_sizes)
 
     # Pick the backend.
     if use_cpp_helper is True:
@@ -609,6 +832,9 @@ def gpu_gzip_decompress_batch(
                 "Run `bash src/cuphoton/xdr/src/build.sh` first. "
                 f"Import error: {_CPP_EXT_IMPORT_ERROR}"
             )
+    elif n == 0:
+        # No backend work is needed, so an automatic fallback is not useful.
+        ext = None
     elif use_cpp_helper is False:
         ext = None
     else:
@@ -616,16 +842,17 @@ def gpu_gzip_decompress_batch(
         if ext is None:
             _warn_python_fallback_once()
 
+    if n == 0:
+        return cp.empty(0, dtype=cp.uint8), out_offsets
+
     # Allocate one concatenated output buffer and slice it per tile.
-    out_offsets = np.concatenate(
-        ([0], np.cumsum(uncompressed_sizes)[:-1])
-    ).astype(np.int64)
-    total = int(uncompressed_sizes.sum())
     d_out = (
         _native_device_empty_uint8(total, ext=ext)
         if use_native_pool and ext is not None
         else cp.empty(total, dtype=cp.uint8)
     )
+    if keepalive is not None:
+        keepalive.append(d_out)
 
     if ext is not None:
         # C++ path: device pointers + length arrays, no per-tile Python loop.
