@@ -1210,6 +1210,7 @@ def _write_xfit_input_archive(
     difference: np.ndarray,
     row_indices: Sequence[int],
     auxiliary: Mapping[str, np.ndarray],
+    source_hashes: Sequence[tuple[Path, str]],
 ) -> None:
     created = False
     try:
@@ -1226,6 +1227,12 @@ def _write_xfit_input_archive(
             for name, values in auxiliary.items():
                 _write_indexed_image_member(
                     archive, values, row_indices, name=f"{name}.npy"
+                )
+        for source_path, expected_hash in source_hashes:
+            if file_sha256(source_path) != expected_hash:
+                raise ValueError(
+                    "xFit input source changed during export: "
+                    f"{source_path.name}"
                 )
     except BaseException:
         if created:
@@ -1281,6 +1288,7 @@ def export_xfit_input(
             raise ValueError("image_unit must be a nonempty string")
         image_unit = image_unit.strip()
     auxiliary = {}
+    source_paths = {"images": difference_path}
     sources = {
         "images": {
             "name": difference_path.name,
@@ -1311,6 +1319,7 @@ def export_xfit_input(
                 f"{difference.shape}"
             )
         auxiliary[name] = values
+        source_paths[name] = resolved
         sources[name] = {
             "name": resolved.name,
             "sha256": file_sha256(resolved),
@@ -1370,6 +1379,10 @@ def export_xfit_input(
         difference=difference,
         row_indices=unique_rows,
         auxiliary=auxiliary,
+        source_hashes=[
+            (path, sources[name]["sha256"])
+            for name, path in source_paths.items()
+        ],
     )
     images_shape = (len(unique_rows), *difference.shape[1:])
     return {

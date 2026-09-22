@@ -95,6 +95,45 @@ def test_export_preserves_auxiliary_rows_and_dtypes(tmp_path, planes):
     )
 
 
+@pytest.mark.parametrize("source", ["images", "variance", "mask"])
+def test_export_rejects_sources_changed_during_archive_copy(
+    tmp_path, monkeypatch, source
+):
+    root, images = _dataset(tmp_path)
+    variance_path, mask_path, _, _ = _planes(tmp_path, images)
+    source_path = {
+        "images": root / "difference.npy",
+        "variance": variance_path,
+        "mask": mask_path,
+    }[source]
+    source_hash = file_sha256(source_path)
+    write_member = xfit_features._write_indexed_image_member
+
+    def mutate_before_copy(
+        archive, values, row_indices, *, name="images.npy"
+    ):
+        if name == f"{source}.npy":
+            changed = np.load(source_path, mmap_mode="r+", allow_pickle=False)
+            changed[1, 1, 1] += 1
+            changed.flush()
+            del changed
+            assert file_sha256(source_path) != source_hash
+        write_member(archive, values, row_indices, name=name)
+
+    monkeypatch.setattr(
+        xfit_features, "_write_indexed_image_member", mutate_before_copy
+    )
+    output = tmp_path / "input.npz"
+    with pytest.raises(ValueError, match="source changed during export"):
+        export_xfit_input(
+            dataset_dir=root,
+            output_path=output,
+            variance_path=variance_path,
+            mask_path=mask_path,
+        )
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("plane", ["variance", "mask"])
 def test_export_rejects_conflicting_duplicate_planes(tmp_path, plane):
     root, images = _dataset(tmp_path)
