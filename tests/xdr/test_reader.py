@@ -7,13 +7,73 @@ from __future__ import annotations
 import gc
 import sys
 import weakref
+from contextlib import nullcontext
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from cuphoton.xdr import prefetch, reader
 from cuphoton.xdr.gds import HeapReadHandle
 from cuphoton.xdr.reader import GpuCompImageReader, _validate_comp_geometry
+
+
+@pytest.mark.parametrize("use_loader", [False, True])
+@pytest.mark.parametrize("contiguous", [False, True])
+def test_image_reader_validates_output_before_io(
+    monkeypatch, use_loader, contiguous
+):
+    output = np.zeros((2, 4), dtype=np.int16)
+    if not contiguous:
+        output = np.zeros((2, 8), dtype=np.int16)[:, ::2]
+    calls = []
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            dtype=np.dtype,
+            cuda=SimpleNamespace(Stream=SimpleNamespace(null=nullcontext())),
+        ),
+    )
+
+    def pread(out, *, size, file_offset):
+        assert out is output
+        assert size == output.nbytes
+        assert file_offset == 2880
+        calls.append("pread")
+        return SimpleNamespace(get=lambda: calls.append("wait"))
+
+    monkeypatch.setattr(
+        reader,
+        "pread_to_device",
+        lambda path, offset, size, out: pread(
+            out, size=size, file_offset=offset
+        ).get(),
+    )
+    monkeypatch.setattr(
+        reader, "byteswap_inplace", lambda *args: calls.append("byteswap")
+    )
+    image_reader = reader.GpuImageReader(
+        SimpleNamespace(
+            header={"NAXIS": 2, "BITPIX": 16, "NAXIS1": 4, "NAXIS2": 2},
+            _file=SimpleNamespace(name="image.fits"),
+            _data_offset=2880,
+        )
+    )
+    loader = (
+        SimpleNamespace(_file=lambda: SimpleNamespace(pread=pread))
+        if use_loader
+        else None
+    )
+    if contiguous:
+        assert image_reader.read(out=output, loader=loader) is output
+        assert calls == ["pread", "wait", "byteswap"]
+    else:
+        with pytest.raises(
+            ValueError, match="out buffer must be C-contiguous"
+        ):
+            image_reader.read(out=output, loader=loader)
+        assert calls == []
 
 
 @pytest.mark.parametrize("decode_fails", [False, True])

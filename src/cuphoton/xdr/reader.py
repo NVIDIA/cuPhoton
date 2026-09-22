@@ -116,6 +116,8 @@ class GpuImageReader:
                     f"{self.shape} {native_dtype}, got "
                     f"{out.shape} {out.dtype}"
                 )
+            if not out.flags.c_contiguous:
+                raise ValueError("out buffer must be C-contiguous")
 
         with stream or cp.cuda.Stream.null:
             if loader is not None:
