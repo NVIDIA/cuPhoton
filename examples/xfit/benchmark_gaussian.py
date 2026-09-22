@@ -55,6 +55,8 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repeat", type=int, default=5)
     args = parser.parse_args()
+    if args.repeat <= 0:
+        parser.error("--repeat must be positive")
     backends = args.backend or ["cupy", "cutile"]
     batches = args.batch or [1, 16, 256, 4096]
     dtype = np.dtype(args.dtype)
