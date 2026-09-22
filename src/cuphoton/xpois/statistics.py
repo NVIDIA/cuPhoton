@@ -145,9 +145,10 @@ def summarize_standardized_residuals(
 
     ``radius3_rho_rms`` averages 24 noisy per-lag estimates without
     weighting, so its white-noise floor grows as per-lag pair counts shrink:
-    about 0.47 at the 4-by-4 minimum, where the corner lags rest on a single
-    pair, 0.16 at 8-by-8, and 0.03 at 32-by-32 for a complete stamp. Judge
-    radius-3 structure only against an appropriate white-noise baseline.
+    Gaussian white-noise simulations give about 0.47 at the 4-by-4 minimum,
+    where the corner lags rest on a single pair, 0.16 at 8-by-8, and 0.03
+    at 32-by-32 for a complete stamp. Judge radius-3 structure only against
+    an appropriate white-noise baseline.
     For many complete, independent white-noise stamps with ``N`` pixels
     each, per-stamp centering makes pooled lag correlations approach
     ``-1 / (N - 1)``. Pooling more stamps does not remove that contribution
@@ -353,15 +354,21 @@ def _pair_statistics(
         (product_sum, first_square_sum, second_square_sum)
     ).all():
         raise ValueError(f"{context} endpoint products must be finite")
-    if first_square_sum <= 0.0 or second_square_sum <= 0.0:
-        raise ValueError(
-            f"{context} has zero endpoint energy; correlation is undefined"
-        )
-
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+    with np.errstate(over="ignore", invalid="ignore"):
         # The mean endpoint energy is symmetric in the two endpoints, so
         # pooled lag sets do not depend on which endpoint is labelled first.
         denominator = 0.5 * (first_square_sum + second_square_sum)
+    if (
+        first_square_sum < 0.0
+        or second_square_sum < 0.0
+        or denominator <= 0.0
+    ):
+        raise ValueError(
+            f"{context} has invalid mean endpoint energy; "
+            "correlation is undefined"
+        )
+
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         rho = product_sum / denominator
         covariance = product_sum / pair_count
     if not np.isfinite((denominator, rho, covariance)).all():

@@ -375,9 +375,10 @@ diagnostics for each stamp and for all valid pixels pooled together. The
 pooled summary weights stamps by their valid pixels or lag-endpoint pairs; use
 `per_stamp` when an equal-stamp aggregation is required. `radius3_rho_rms` is
 an unweighted RMS of 24 noisy per-lag correlations, so white noise does not
-drive it to zero. For a complete stamp its floor is roughly 0.47 at the
-4-by-4 minimum (where the corner lags rest on a single pair), 0.16 at 8-by-8,
-and 0.03 at 32-by-32. For large stamps the sampling contribution is about
+drive it to zero. Gaussian white-noise simulations give a complete-stamp
+floor of roughly 0.47 at the 4-by-4 minimum (where the corner lags rest on a
+single pair), 0.16 at 8-by-8, and 0.03 at 32-by-32. For large stamps the
+sampling contribution is about
 `sqrt(mean(1 / N_lag))` over the per-lag pair counts. Per-stamp centering
 also induces negative correlations: pooling many complete, independent
 white-noise stamps with `N` pixels each makes each lag correlation approach

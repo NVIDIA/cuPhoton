@@ -226,6 +226,38 @@ def test_incomplete_stamps_use_pairs_with_two_valid_endpoints() -> None:
     )
 
 
+def test_one_zero_endpoint_energy_matches_symmetric_oracle() -> None:
+    stamps = np.array([0, *range(1, 15), -105], dtype=float).reshape(1, 4, 4)
+    masks = np.ones(stamps.shape, dtype=bool)
+    assert stamps.mean() == 0.0
+    assert _reference_pair_statistics(stamps, masks, ((3, 3),)) == (
+        0.0,
+        0.0,
+        1,
+    )
+
+    for transformed in (
+        stamps,
+        stamps[:, :, ::-1],
+        stamps[:, ::-1, :],
+        stamps.transpose(0, 2, 1),
+    ):
+        expected = _reference_summary(transformed, masks)
+        result = summarize_standardized_residuals(transformed)
+        _assert_summary_matches_reference(result.pixel_pooled, expected)
+        _assert_summary_matches_reference(result.per_stamp[0], expected)
+
+
+def test_zero_mean_endpoint_energy_remains_undefined() -> None:
+    stamps = np.array([0, *range(1, 14), -91, 0], dtype=float).reshape(
+        1, 4, 4
+    )
+    assert stamps.mean() == 0.0
+
+    with pytest.raises(ValueError, match="endpoint energy.*undefined"):
+        summarize_standardized_residuals(stamps)
+
+
 def test_lag_statistics_are_invariant_to_reflection_and_transpose() -> None:
     generator = np.random.default_rng(20260915)
     stamps = generator.normal(size=(2, 7, 9))
