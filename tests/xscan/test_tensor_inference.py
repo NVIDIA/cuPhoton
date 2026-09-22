@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import pickle
 import subprocess
 import sys
@@ -223,6 +224,56 @@ def test_checkpoint_performance_override_replaces_saved_policy(
         torch.testing.assert_close(value, default_model.state_dict()[name])
     images = torch.ones((2, 2, 3, 3))
     torch.testing.assert_close(model(images), default_model(images))
+
+
+@pytest.mark.parametrize("use_override", [False, True])
+def test_checkpoint_compile_uses_selected_policy_environment(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    use_override: bool,
+) -> None:
+    saved_policy = PerformanceConfig(
+        compile=True,
+        compile_threads=3,
+        compile_worker_start_method="fork",
+    )
+    override = PerformanceConfig(
+        compile=True,
+        compile_threads=5,
+        compile_worker_start_method=" SPAWN ",
+    )
+    torch.save(
+        {
+            "model_config": {},
+            "model_state": _FusionModel().state_dict(),
+            "train_config": {"performance": asdict(saved_policy)},
+        },
+        tmp_path / "checkpoint.pt",
+    )
+    monkeypatch.setattr(training, "build_model", lambda **_: _FusionModel())
+    monkeypatch.setenv("TORCHINDUCTOR_COMPILE_THREADS", "97")
+    monkeypatch.setenv("TORCHINDUCTOR_WORKER_START", "subprocess")
+    compile_environment: list[tuple[str, str]] = []
+
+    def compile_model(model: Any, **kwargs: Any) -> Any:
+        compile_environment.append(
+            (
+                os.environ["TORCHINDUCTOR_COMPILE_THREADS"],
+                os.environ["TORCHINDUCTOR_WORKER_START"],
+            )
+        )
+        return model
+
+    monkeypatch.setattr(torch, "compile", compile_model)
+    training.load_model_from_checkpoint(
+        tmp_path,
+        device=torch.device("cpu"),
+        performance_override=override if use_override else None,
+    )
+
+    assert compile_environment == [
+        ("5", "spawn") if use_override else ("3", "fork")
+    ]
 
 
 @pytest.mark.parametrize(

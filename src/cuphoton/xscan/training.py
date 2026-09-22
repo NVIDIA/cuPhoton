@@ -1469,6 +1469,7 @@ def load_model_from_checkpoint(
         )
     else:
         configure_runtime(performance=performance, device=target_device)
+    configure_compile_environment(performance)
     model, _compile_info = maybe_compile_model(
         model,
         performance=performance,
