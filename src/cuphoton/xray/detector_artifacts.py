@@ -12,13 +12,14 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
 from cuphoton import __version__ as CUPHOTON_VERSION
 from cuphoton.core.runtime import runtime_metadata
 
+from ._types import FIT_DIAGNOSTICS_LEVELS, FitDiagnosticsLevel
 from .detector_mask import (
     AxisRange,
     excluded_row_mask,
@@ -36,6 +37,7 @@ DETECTOR_ARRAYS = (
     "amp_all_sum_filtered",
 )
 FIT_STATUS_FILE = "fit_status.npy"
+FIT_DIAGNOSTICS_FILE = "fit_diagnostics.npz"
 FIT_STATUS_UNPROCESSED = 0
 FIT_STATUS_OK = 1
 FIT_STATUS_SKIPPED = 2
@@ -47,9 +49,56 @@ HDF5_TS_FUNCWRAP_BRANCH = "ts_funcwrap_1"
 HDF5_TS_FUNCWRAP_REF = "4ac0f2fca8f68abf5ea25874832274a75b0f0967"
 NORMALIZATION_MANIFEST_FILE = "normalization.json"
 NORMALIZATION_CACHE_FILE = "normalization.npz"
-DETECTOR_ARTIFACT_MANIFEST_VERSION = 1
+DETECTOR_ARTIFACT_MANIFEST_VERSION = 2
+DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS = (1, 2)
+DETECTOR_NORMALIZATION_MANIFEST_VERSION = 1
+FIT_DIAGNOSTICS_SCHEMA_VERSION = 1
 _FULL_CONTENT_HASH_LIMIT = 16 * 1024 * 1024
 _CONTENT_SAMPLE_BYTES = 64 * 1024
+
+_FIT_DIAGNOSTIC_DTYPES = {
+    "tile_x_start": np.int64,
+    "tile_x_stop": np.int64,
+    "tile_y_start": np.int64,
+    "tile_y_stop": np.int64,
+    "detector_y": np.int64,
+    "fit_status": np.uint8,
+    "trace_std": np.float64,
+    "residual_std": np.float64,
+    "relative_residual": np.float64,
+    "chi2": np.float64,
+    "selected_model_order": np.int64,
+    "mode_count": np.int64,
+    "p1_rank": np.int64,
+    "p1_singular_value_ratio": np.float64,
+    "p1_condition": np.float64,
+    "p2_rank": np.int64,
+    "p2_singular_value_ratio": np.float64,
+    "p2_condition": np.float64,
+    "max_amplitude": np.float64,
+}
+_FIT_DIAGNOSTIC_FULL_VALUE_FIELDS = (
+    "trace",
+    "reconstruction",
+    "angular_frequency",
+    "decay",
+    "amplitude",
+    "phase",
+    "p1_singular_values",
+    "p2_singular_values",
+)
+_FIT_DIAGNOSTIC_RAGGED_GROUPS = {
+    "trace_offsets": ("trace",),
+    "reconstruction_offsets": ("reconstruction",),
+    "mode_offsets": (
+        "angular_frequency",
+        "decay",
+        "amplitude",
+        "phase",
+    ),
+    "p1_singular_value_offsets": ("p1_singular_values",),
+    "p2_singular_value_offsets": ("p2_singular_values",),
+}
 
 
 @dataclass(frozen=True)
@@ -151,6 +200,7 @@ def build_detector_artifacts_cupy(
     fit_trailing_drop: int = 1,
     integrate_pixels: int = 3,
     components: int = 30,
+    p2_ridge_alpha: float = 0.0,
     roots_backend: str = "eigvals",
     savgol_window: int = 5,
     savgol_polyorder: int = 3,
@@ -160,6 +210,7 @@ def build_detector_artifacts_cupy(
     hdf5_reader_workers: int = 2,
     max_tiles: int | None = None,
     normalization_cache: Path | str | None = None,
+    fit_diagnostics: FitDiagnosticsLevel = "none",
     shard_index: int | None = None,
     shard_count: int | None = None,
     global_roi_lower: tuple[int, int] | None = None,
@@ -181,11 +232,13 @@ def build_detector_artifacts_cupy(
     _require_nonnegative("fit_trailing_drop", fit_trailing_drop)
     _require_nonnegative("integrate_pixels", integrate_pixels)
     _require_positive("components", components)
+    _require_finite_nonnegative("p2_ridge_alpha", p2_ridge_alpha)
     _require_positive("savgol_window", savgol_window)
     _require_nonnegative("savgol_polyorder", savgol_polyorder)
     _require_nonnegative("max_fit_failures", max_fit_failures)
     _require_positive("hdf5_reader_workers", hdf5_reader_workers)
     _validate_hdf5_reader(hdf5_reader, hdf5_reader_workers)
+    _validate_fit_diagnostics(fit_diagnostics)
     if savgol_window % 2 != 1:
         raise ValueError("savgol_window must be odd")
     if savgol_polyorder >= savgol_window:
@@ -412,6 +465,9 @@ def build_detector_artifacts_cupy(
             )
 
             stats = _RunStats()
+            diagnostics_writer = _FitDiagnosticsWriter(
+                output, fit_diagnostics
+            )
             fit_error_types = _fit_error_types(cp)
             for tile_index, (x0, x1, y0, y1) in enumerate(
                 _iter_tiles(
@@ -476,6 +532,16 @@ def build_detector_artifacts_cupy(
                     if skip:
                         fit_status[output_y, output_x] = FIT_STATUS_SKIPPED
                         stats.skipped_fits += 1
+                        _append_non_ok_fit_diagnostic(
+                            diagnostics_writer,
+                            level=fit_diagnostics,
+                            fit_status=FIT_STATUS_SKIPPED,
+                            x0=x0,
+                            x1=x1,
+                            y0=y0,
+                            y1=y1,
+                            detector_y=y0 + local_row,
+                        )
                         continue
                     trace_gpu = filtered_gpu[
                         fit_start : sample_count - fit_trailing_drop,
@@ -487,12 +553,24 @@ def build_detector_artifacts_cupy(
                             time_gpu=fit_time_gpu,
                             trace_gpu=trace_gpu,
                             components=components,
+                            p2_ridge_alpha=p2_ridge_alpha,
                             roots_backend=roots_backend,
                             padded_length=padded_length,
+                            fit_diagnostics=fit_diagnostics,
                         )
                     except fit_error_types as exc:
                         fit_status[output_y, output_x] = FIT_STATUS_FAILED
                         stats.failures += 1
+                        _append_non_ok_fit_diagnostic(
+                            diagnostics_writer,
+                            level=fit_diagnostics,
+                            fit_status=FIT_STATUS_FAILED,
+                            x0=x0,
+                            x1=x1,
+                            y0=y0,
+                            y1=y1,
+                            detector_y=y0 + local_row,
+                        )
                         if stats.failures > max_fit_failures:
                             raise RuntimeError(
                                 "detector artifact generation had "
@@ -511,6 +589,17 @@ def build_detector_artifacts_cupy(
                     )
                     fit_status[output_y, output_x] = FIT_STATUS_OK
                     stats.raw_fits += 1
+                    if fit_diagnostics != "none":
+                        diagnostics_writer.append(
+                            {
+                                "tile_x_start": x0,
+                                "tile_x_stop": x1,
+                                "tile_y_start": y0,
+                                "tile_y_stop": y1,
+                                "detector_y": y0 + local_row,
+                                **row["diagnostics"],
+                            }
+                        )
                     if np.any(
                         (row["amp"] > amp_threshold) & (row["amp"] < 1e6)
                     ):
@@ -544,6 +633,9 @@ def build_detector_artifacts_cupy(
                 amp_threshold=amp_threshold,
             )
             amp_sum.flush()
+            fit_diagnostics_metadata = diagnostics_writer.finalize(
+                source_identity_sha256=_stable_json_hash(input_identity)
+            )
 
     elapsed = perf_counter() - start_time
     runtime = runtime_metadata(backend="cupy", dtype="float64")
@@ -580,6 +672,7 @@ def build_detector_artifacts_cupy(
         "exclude_y": format_y_ranges(exclude_y),
         "integrate_pixels": int(integrate_pixels),
         "components": int(components),
+        "p2_ridge_alpha": float(p2_ridge_alpha),
         "roots_backend": roots_backend,
         "savgol_window": int(savgol_window),
         "savgol_polyorder": int(savgol_polyorder),
@@ -598,6 +691,7 @@ def build_detector_artifacts_cupy(
         "skipped_fits": int(stats.skipped_fits),
         "filtered_fits": int(stats.filtered_fits),
         "elapsed_s": float(elapsed),
+        "fit_diagnostics": fit_diagnostics_metadata,
         "arrays": [f"{name}.npy" for name in DETECTOR_ARRAYS]
         + [FIT_STATUS_FILE],
         "fit_status_codes": {
@@ -625,6 +719,12 @@ def build_detector_artifacts_cupy(
         }
     manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
     manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    manifest["fit_diagnostics"]["artifact_resume_identity"] = manifest[
+        "resume_identity"
+    ]
+    manifest["fit_diagnostics"]["artifact_config_hash"] = manifest[
+        "config_hash"
+    ]
     manifest_path = output / "manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -800,7 +900,7 @@ def write_detector_artifact_normalization(
     )
     manifest = {
         "kind": "xray-detector-artifact-normalization",
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": DETECTOR_NORMALIZATION_MANIFEST_VERSION,
         "package_version": runtime["package_version"],
         "backend": "numpy",
         "device": runtime["device"],
@@ -972,6 +1072,14 @@ def merge_detector_artifact_shards(
     for array in arrays.values():
         array.flush()
 
+    fit_diagnostics_metadata = None
+    if int(first.get("manifest_schema_version", 1)) >= 2:
+        fit_diagnostics_metadata = _merge_fit_diagnostic_shards(
+            shards=shards,
+            output=output,
+            input_identity=first["input_identity"],
+        )
+
     shard_elapsed = float(
         sum(float(item["manifest"].get("elapsed_s", 0.0)) for item in shards)
     )
@@ -1046,8 +1154,17 @@ def merge_detector_artifact_shards(
             "shard_count": int(len(shards)),
         }
     )
+    if fit_diagnostics_metadata is not None:
+        manifest["fit_diagnostics"] = fit_diagnostics_metadata
     manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
     manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+    if fit_diagnostics_metadata is not None:
+        manifest["fit_diagnostics"]["artifact_resume_identity"] = manifest[
+            "resume_identity"
+        ]
+        manifest["fit_diagnostics"]["artifact_config_hash"] = manifest[
+            "config_hash"
+        ]
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -1063,6 +1180,26 @@ def merge_detector_artifact_shards(
         roi_lower=global_roi_lower,
         roi_dim=global_roi_dim,
         elapsed_s=float(merge_elapsed),
+    )
+
+
+def _merge_fit_diagnostic_shards(
+    *,
+    shards: list[dict[str, Any]],
+    output: Path,
+    input_identity: dict[str, Any],
+) -> dict[str, Any]:
+    first_metadata = shards[0]["manifest"].get("fit_diagnostics") or {}
+    level = _validate_fit_diagnostics(str(first_metadata.get("level")))
+    writer = _FitDiagnosticsWriter(output, level)
+    if level != "none":
+        for shard in shards:
+            metadata = shard["manifest"]["fit_diagnostics"]
+            artifact_path = shard["path"] / str(metadata["file"])
+            with np.load(artifact_path, allow_pickle=False) as source:
+                writer.extend(source)
+    return writer.finalize(
+        source_identity_sha256=_stable_json_hash(input_identity)
     )
 
 
@@ -1082,24 +1219,20 @@ def detector_artifact_complete(
         and manifest.get("resume_identity") != expected_resume_identity
     ):
         return False
-    output_shape = manifest.get("output_shape")
-    roi_dim = manifest.get("roi_dim")
-    if output_shape is None or roi_dim is None:
+    if manifest.get("kind") != "xray-detector-artifacts":
         return False
-    expected_3d = tuple(int(value) for value in output_shape)
-    expected_2d = (int(roi_dim[1]), int(roi_dim[0]))
-    for name in ("freq_all", "amp_all", "fft_all", "fft_freq_all"):
-        array_path = path / f"{name}.npy"
-        if not array_path.exists():
-            return False
-        if tuple(np.load(array_path, mmap_mode="r").shape) != expected_3d:
-            return False
-    for name in ("amp_all_sum_filtered.npy", FIT_STATUS_FILE):
-        array_path = path / name
-        if not array_path.exists():
-            return False
-        if tuple(np.load(array_path, mmap_mode="r").shape) != expected_2d:
-            return False
+    if manifest.get("manifest_schema_version", 1) not in (
+        DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS
+    ):
+        return False
+    try:
+        _validate_artifact_files(
+            path,
+            manifest,
+            strict_diagnostics=False,
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
     return True
 
 
@@ -1277,6 +1410,287 @@ class _RunStats:
     failures: int = 0
     skipped_fits: int = 0
     filtered_fits: int = 0
+
+
+class _FitDiagnosticsWriter:
+    """Stream deterministic, pickle-free fit diagnostics into one NPZ."""
+
+    def __init__(self, output: Path, level: FitDiagnosticsLevel) -> None:
+        _validate_fit_diagnostics(level)
+        self._output = output
+        self.level = level
+        self._columns: dict[str, list[int | float]] = {
+            name: [] for name in _FIT_DIAGNOSTIC_DTYPES
+        }
+        self._offsets: dict[str, list[int]] = {
+            name: [0] for name in _FIT_DIAGNOSTIC_RAGGED_GROUPS
+        }
+        self._raw_paths: dict[str, Path] = {}
+        self._streams: dict[str, Any] = {}
+        self._time: np.ndarray | None = None
+        if level == "full":
+            for name in _FIT_DIAGNOSTIC_FULL_VALUE_FIELDS:
+                path = output / f".{FIT_DIAGNOSTICS_FILE}.{name}.bin"
+                self._raw_paths[name] = path
+                self._streams[name] = path.open("wb")
+
+    @property
+    def record_count(self) -> int:
+        return len(self._columns["detector_y"])
+
+    def append(self, record: dict[str, Any]) -> None:
+        if self.level == "none":
+            return
+        if self.level == "full" and record.get("time") is not None:
+            self._set_time(record["time"])
+        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+            value = record[name]
+            if np.issubdtype(dtype, np.integer):
+                self._columns[name].append(int(value))
+            else:
+                self._columns[name].append(_optional_float(value))
+        if self.level != "full":
+            return
+
+        for offset_name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items():
+            values = [
+                np.asarray(record[name], dtype=np.float64).reshape(-1)
+                for name in fields
+            ]
+            lengths = {int(value.size) for value in values}
+            if len(lengths) != 1:
+                raise RuntimeError(
+                    f"fit diagnostic {offset_name} arrays differ in length"
+                )
+            length = lengths.pop()
+            for name, value in zip(fields, values, strict=True):
+                value.tofile(self._streams[name])
+            self._offsets[offset_name].append(
+                self._offsets[offset_name][-1] + length
+            )
+
+    def extend(self, source: Any) -> None:
+        """Append one already-validated NPZ payload during shard merging."""
+
+        if self.level == "none":
+            return
+        counts = set()
+        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+            values = np.asarray(source[name], dtype=dtype).reshape(-1)
+            counts.add(int(values.size))
+            self._columns[name].extend(values.tolist())
+        if len(counts) != 1:
+            raise ValueError(
+                "fit diagnostic summary columns differ in length"
+            )
+        record_count = counts.pop()
+        if self.level != "full":
+            return
+
+        self._set_time(source["time"])
+
+        for offset_name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items():
+            offsets = np.asarray(source[offset_name], dtype=np.int64)
+            if (
+                offsets.shape != (record_count + 1,)
+                or int(offsets[0]) != 0
+                or np.any(np.diff(offsets) < 0)
+            ):
+                raise ValueError(
+                    f"invalid fit diagnostic offsets: {offset_name}"
+                )
+            total = int(offsets[-1])
+            for name in fields:
+                values = np.asarray(source[name], dtype=np.float64).reshape(
+                    -1
+                )
+                if int(values.size) != total:
+                    raise ValueError(
+                        f"fit diagnostic {name} does not match {offset_name}"
+                    )
+                values.tofile(self._streams[name])
+            base = self._offsets[offset_name][-1]
+            self._offsets[offset_name].extend((offsets[1:] + base).tolist())
+
+    def finalize(self, *, source_identity_sha256: str) -> dict[str, Any]:
+        if self.level == "none":
+            self.close()
+            return _fit_diagnostics_manifest_metadata(
+                level="none",
+                source_identity_sha256=source_identity_sha256,
+            )
+
+        self.close()
+        payload: dict[str, np.ndarray] = {
+            "schema_version": np.asarray(
+                FIT_DIAGNOSTICS_SCHEMA_VERSION, dtype=np.uint16
+            )
+        }
+        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+            payload[name] = np.asarray(self._columns[name], dtype=dtype)
+        if self.level == "full":
+            if self._time is None:
+                raise RuntimeError(
+                    "full fit diagnostics require a common fitted time axis"
+                )
+            payload["time"] = self._time
+            for name, values in self._offsets.items():
+                payload[name] = np.asarray(values, dtype=np.int64)
+            for name, path in self._raw_paths.items():
+                count = int(
+                    path.stat().st_size // np.dtype(np.float64).itemsize
+                )
+                payload[name] = (
+                    np.memmap(
+                        path, mode="r", dtype=np.float64, shape=(count,)
+                    )
+                    if count
+                    else np.empty((0,), dtype=np.float64)
+                )
+
+        artifact_path = self._output / FIT_DIAGNOSTICS_FILE
+        array_lengths = {
+            name: int(payload[name].size)
+            for name in ("time", *_FIT_DIAGNOSTIC_FULL_VALUE_FIELDS)
+            if name in payload
+        }
+        _write_npz_atomic(artifact_path, payload)
+        payload.clear()
+        for path in self._raw_paths.values():
+            path.unlink(missing_ok=True)
+        return _fit_diagnostics_manifest_metadata(
+            level=self.level,
+            source_identity_sha256=source_identity_sha256,
+            artifact_path=artifact_path,
+            record_count=self.record_count,
+            array_lengths=array_lengths,
+        )
+
+    def close(self) -> None:
+        for stream in self._streams.values():
+            if not stream.closed:
+                stream.close()
+
+    def _set_time(self, value: Any) -> None:
+        time = np.asarray(value, dtype=np.float64).reshape(-1)
+        if self._time is None:
+            self._time = time.copy()
+            return
+        if self._time.shape != time.shape or not np.array_equal(
+            self._time, time
+        ):
+            raise ValueError(
+                "fit diagnostic records do not share a common fitted "
+                "time axis"
+            )
+
+    def __del__(self) -> None:
+        self.close()
+
+
+def _optional_float(value: Any) -> float:
+    return np.nan if value is None else float(value)
+
+
+def _fit_diagnostics_manifest_metadata(
+    *,
+    level: FitDiagnosticsLevel,
+    source_identity_sha256: str,
+    artifact_path: Path | None = None,
+    record_count: int = 0,
+    array_lengths: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "level": level,
+        "schema_version": FIT_DIAGNOSTICS_SCHEMA_VERSION,
+        "record_count": int(record_count),
+        "record_semantics": (
+            "one record per row in every processed detector tile, ordered "
+            "by tile x, tile y, then detector y; unprocessed rows have no "
+            "record"
+        ),
+        "non_ok_semantics": (
+            "skipped and failed records use NaN float metrics, -1 integer "
+            "metrics, and empty full-mode ragged arrays"
+        ),
+        "coordinate_semantics": (
+            "tile bounds are half-open absolute detector pixel coordinates; "
+            "detector_y is an absolute detector row"
+        ),
+        "source_identity_sha256": source_identity_sha256,
+        "optional_float_encoding": "IEEE-754 NaN",
+        "units": {
+            "tile_x_start": "detector pixel index",
+            "tile_x_stop": "detector pixel index",
+            "tile_y_start": "detector pixel index",
+            "tile_y_stop": "detector pixel index",
+            "detector_y": "detector pixel index",
+            "fit_status": "execution status code",
+            "trace_std": "normalized trace units",
+            "residual_std": "normalized trace units",
+            "relative_residual": "dimensionless",
+            "chi2": "squared normalized trace units",
+            "selected_model_order": "count",
+            "mode_count": "count",
+            "p1_rank": "count",
+            "p1_singular_value_ratio": "dimensionless",
+            "p1_condition": "dimensionless",
+            "p2_rank": "count",
+            "p2_singular_value_ratio": "dimensionless",
+            "p2_condition": "dimensionless",
+            "max_amplitude": "normalized trace units",
+        },
+    }
+    if level == "full":
+        metadata["units"].update(
+            {
+                "trace": "normalized trace units",
+                "reconstruction": "normalized trace units",
+                "time": "delay units",
+                "angular_frequency": "radians per delay unit",
+                "decay": "inverse delay unit",
+                "amplitude": "normalized trace units",
+                "phase": "radians",
+                "p1_singular_values": "normalized trace units",
+                "p2_singular_values": "design-matrix units",
+            }
+        )
+        metadata["ragged_serialization"] = {
+            value: key
+            for key, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items()
+            for value in fields
+        }
+        metadata["array_lengths"] = dict(array_lengths or {})
+        metadata["time_semantics"] = (
+            "one common fitted sample axis shared by every nonempty trace "
+            "and reconstruction record"
+        )
+    metadata["fit_status_codes"] = {
+        "ok": FIT_STATUS_OK,
+        "skipped": FIT_STATUS_SKIPPED,
+        "failed": FIT_STATUS_FAILED,
+    }
+    if artifact_path is not None:
+        metadata.update(
+            {
+                "file": artifact_path.name,
+                "format": "numpy-npz",
+                "allow_pickle": False,
+                "artifact_size_bytes": int(artifact_path.stat().st_size),
+                "artifact_sha256": _sha256_file(artifact_path),
+            }
+        )
+    else:
+        metadata.update(
+            {
+                "file": None,
+                "format": None,
+                "allow_pickle": False,
+                "artifact_size_bytes": None,
+                "artifact_sha256": None,
+            }
+        )
+    return metadata
 
 
 class _SerialHdf5BlockReader:
@@ -1460,24 +1874,124 @@ def _fit_detector_row(
     components: int,
     roots_backend: str,
     padded_length: int,
-) -> dict[str, np.ndarray]:
+    p2_ridge_alpha: float = 0.0,
+    fit_diagnostics: FitDiagnosticsLevel = "none",
+) -> dict[str, Any]:
     result = linear_prediction_cupy(
         time_gpu,
         trace_gpu,
         components,
         roots_backend=roots_backend,
+        p2_ridge_alpha=p2_ridge_alpha,
+        fit_diagnostics=fit_diagnostics != "none",
     )
     frequency_centers = _frequency_centers(
         result.frequency,
         result.spectrum_components,
     )
     fft_freq, fft_value = _tdsfft_cupy(cp, time_gpu, trace_gpu)
-    return {
+    row = {
         "freq": _pad_abs(frequency_centers, padded_length),
         "amp": _pad_abs(result.amplitude, padded_length),
         "fft": _pad_abs(cp.asnumpy(fft_value), padded_length),
         "fft_freq": _pad_abs(cp.asnumpy(fft_freq), padded_length),
     }
+    if fit_diagnostics != "none":
+        row["diagnostics"] = _linear_prediction_fit_diagnostics(
+            cp=cp,
+            result=result,
+            trace_gpu=trace_gpu,
+            level=fit_diagnostics,
+        )
+    return row
+
+
+def _linear_prediction_fit_diagnostics(
+    *,
+    cp,
+    result,
+    trace_gpu,
+    level: FitDiagnosticsLevel,
+) -> dict[str, Any]:
+    diagnostics = getattr(result, "diagnostics", None)
+    if diagnostics is None:
+        raise RuntimeError(
+            "fit diagnostics were requested, but linear prediction did not "
+            "return diagnostic fields"
+        )
+    payload: dict[str, Any] = {
+        "fit_status": FIT_STATUS_OK,
+        "trace_std": diagnostics.trace_std,
+        "residual_std": diagnostics.residual_std,
+        "relative_residual": diagnostics.relative_residual,
+        "chi2": diagnostics.chi2,
+        "selected_model_order": diagnostics.selected_model_order,
+        "mode_count": diagnostics.mode_count,
+        "p1_rank": diagnostics.p1_rank,
+        "p1_singular_value_ratio": diagnostics.p1_singular_value_ratio,
+        "p1_condition": diagnostics.p1_condition,
+        "p2_rank": diagnostics.p2_rank,
+        "p2_singular_value_ratio": diagnostics.p2_singular_value_ratio,
+        "p2_condition": diagnostics.p2_condition,
+        "max_amplitude": diagnostics.max_amplitude,
+    }
+    if level == "full":
+        payload.update(
+            {
+                "trace": cp.asnumpy(trace_gpu),
+                "reconstruction": result.reconstruction,
+                "time": result.time,
+                "angular_frequency": result.angular_frequency,
+                "decay": result.decay,
+                "amplitude": result.amplitude,
+                "phase": result.phase,
+                "p1_singular_values": result.singular_values,
+                "p2_singular_values": diagnostics.p2_singular_values,
+            }
+        )
+    return payload
+
+
+def _append_non_ok_fit_diagnostic(
+    writer: _FitDiagnosticsWriter,
+    *,
+    level: FitDiagnosticsLevel,
+    fit_status: int,
+    x0: int,
+    x1: int,
+    y0: int,
+    y1: int,
+    detector_y: int,
+) -> None:
+    if level == "none":
+        return
+    payload: dict[str, Any] = {
+        "tile_x_start": x0,
+        "tile_x_stop": x1,
+        "tile_y_start": y0,
+        "tile_y_stop": y1,
+        "detector_y": detector_y,
+        "fit_status": fit_status,
+        "trace_std": None,
+        "residual_std": None,
+        "relative_residual": None,
+        "chi2": None,
+        "selected_model_order": -1,
+        "mode_count": -1,
+        "p1_rank": -1,
+        "p1_singular_value_ratio": None,
+        "p1_condition": None,
+        "p2_rank": -1,
+        "p2_singular_value_ratio": None,
+        "p2_condition": None,
+        "max_amplitude": None,
+    }
+    if level == "full":
+        empty = np.empty((0,), dtype=np.float64)
+        payload.update(
+            {name: empty for name in _FIT_DIAGNOSTIC_FULL_VALUE_FIELDS}
+        )
+    writer.append(payload)
 
 
 def _frequency_centers(
@@ -2082,7 +2596,7 @@ def _validate_detector_normalization_cache(
     if manifest.get("kind") != "xray-detector-artifact-normalization":
         raise ValueError("normalization cache has an unsupported kind")
     expected = {
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": DETECTOR_NORMALIZATION_MANIFEST_VERSION,
         "package_version": CUPHOTON_VERSION,
         "dtype": "float64",
         "input_identity": input_identity,
@@ -2223,13 +2737,24 @@ def _validate_detector_artifact_manifest_identity(
             f"shard manifest is missing identity fields at {path.name}: "
             + ", ".join(missing)
         )
-    if (
-        manifest["manifest_schema_version"]
-        != DETECTOR_ARTIFACT_MANIFEST_VERSION
-    ):
+    version = manifest["manifest_schema_version"]
+    if version not in DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS:
         raise ValueError(
-            f"unsupported shard manifest schema at {path.name}: "
-            f"{manifest['manifest_schema_version']!r}"
+            f"unsupported shard manifest schema at {path.name}: {version!r}"
+        )
+    if version >= 2:
+        fit_diagnostics = manifest.get("fit_diagnostics")
+        if not isinstance(fit_diagnostics, dict):
+            raise ValueError(
+                f"shard manifest is missing fit diagnostics at {path.name}"
+            )
+        _validate_fit_diagnostics(str(fit_diagnostics.get("level")))
+        if "p2_ridge_alpha" not in manifest:
+            raise ValueError(
+                f"shard manifest is missing p2_ridge_alpha at {path.name}"
+            )
+        _require_finite_nonnegative(
+            "p2_ridge_alpha", manifest["p2_ridge_alpha"]
         )
     if (
         not isinstance(manifest["package_version"], str)
@@ -2247,7 +2772,12 @@ def _validate_detector_artifact_manifest_identity(
         raise ValueError(f"shard config_hash mismatch at {path.name}")
 
 
-def _validate_artifact_files(path: Path, manifest: dict[str, Any]) -> None:
+def _validate_artifact_files(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    strict_diagnostics: bool = True,
+) -> None:
     output_shape = tuple(int(value) for value in manifest["output_shape"])
     roi_dim = tuple(int(value) for value in manifest["roi_dim"])
     expected_2d = (roi_dim[1], roi_dim[0])
@@ -2263,6 +2793,186 @@ def _validate_artifact_files(path: Path, manifest: dict[str, Any]) -> None:
             raise ValueError(f"missing shard array: {array_path}")
         if tuple(np.load(array_path, mmap_mode="r").shape) != expected_2d:
             raise ValueError(f"shard array shape mismatch: {array_path}")
+    _validate_fit_diagnostics_artifact(
+        path,
+        manifest,
+        strict=strict_diagnostics,
+    )
+
+
+def _validate_fit_diagnostics_artifact(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    strict: bool = True,
+) -> None:
+    version = int(manifest.get("manifest_schema_version", 1))
+    if version == 1:
+        return
+    metadata = manifest.get("fit_diagnostics")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"missing fit diagnostics metadata: {path}")
+    level = _validate_fit_diagnostics(str(metadata.get("level")))
+    expected_artifact_identity = detector_artifact_resume_identity(manifest)
+    if metadata.get("artifact_resume_identity") != expected_artifact_identity:
+        raise ValueError(
+            f"fit diagnostics artifact resume identity mismatch: {path}"
+        )
+    expected_config_hash = _detector_artifact_config_hash(manifest)
+    if metadata.get("artifact_config_hash") != expected_config_hash:
+        raise ValueError(
+            f"fit diagnostics artifact config hash mismatch: {path}"
+        )
+    expected_source = _stable_json_hash(manifest.get("input_identity"))
+    if metadata.get("source_identity_sha256") != expected_source:
+        raise ValueError(f"fit diagnostics source identity mismatch: {path}")
+    if level == "none":
+        if metadata.get("file") is not None:
+            raise ValueError(
+                f"none fit diagnostics unexpectedly declare a file: {path}"
+            )
+        if int(metadata.get("record_count", -1)) != 0:
+            raise ValueError(
+                f"none fit diagnostics declare records unexpectedly: {path}"
+            )
+        return
+
+    filename = metadata.get("file")
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or Path(filename).name != filename
+    ):
+        raise ValueError(f"invalid fit diagnostics filename: {path}")
+    artifact_path = path / filename
+    if not artifact_path.exists():
+        raise ValueError(f"missing fit diagnostics artifact: {artifact_path}")
+    if int(metadata.get("artifact_size_bytes", -1)) != int(
+        artifact_path.stat().st_size
+    ):
+        raise ValueError(f"fit diagnostics size mismatch: {artifact_path}")
+
+    record_count = int(metadata.get("record_count", -1))
+    expected_records = sum(
+        int(manifest.get(name, -record_count - 1))
+        for name in ("raw_fits", "skipped_fits", "failures")
+    )
+    if record_count != expected_records:
+        raise ValueError(
+            f"fit diagnostics record count mismatch: {artifact_path}"
+        )
+    if not strict:
+        return
+    if metadata.get("artifact_sha256") != _sha256_file(artifact_path):
+        raise ValueError(f"fit diagnostics hash mismatch: {artifact_path}")
+    with np.load(artifact_path, allow_pickle=False) as data:
+        required = {"schema_version", *_FIT_DIAGNOSTIC_DTYPES}
+        if level == "full":
+            required.add("time")
+            required.update(_FIT_DIAGNOSTIC_FULL_VALUE_FIELDS)
+            required.update(_FIT_DIAGNOSTIC_RAGGED_GROUPS)
+        missing = sorted(required.difference(data.files))
+        if missing:
+            raise ValueError(
+                f"fit diagnostics arrays missing at {artifact_path}: "
+                + ", ".join(missing)
+            )
+        if int(np.asarray(data["schema_version"]).item()) != int(
+            FIT_DIAGNOSTICS_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                f"unsupported fit diagnostics schema: {artifact_path}"
+            )
+        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+            values = np.asarray(data[name])
+            if values.shape != (record_count,):
+                raise ValueError(
+                    f"fit diagnostics column shape mismatch: {name}"
+                )
+            if values.dtype != np.dtype(dtype):
+                raise ValueError(
+                    f"fit diagnostics column dtype mismatch: {name}"
+                )
+        statuses = np.asarray(data["fit_status"], dtype=np.uint8)
+        allowed_statuses = {
+            FIT_STATUS_OK,
+            FIT_STATUS_SKIPPED,
+            FIT_STATUS_FAILED,
+        }
+        if not set(np.unique(statuses)).issubset(allowed_statuses):
+            raise ValueError(
+                "fit diagnostics contain invalid execution status: "
+                f"{artifact_path}"
+            )
+        expected_status_counts = {
+            FIT_STATUS_OK: int(manifest.get("raw_fits", -1)),
+            FIT_STATUS_SKIPPED: int(manifest.get("skipped_fits", -1)),
+            FIT_STATUS_FAILED: int(manifest.get("failures", -1)),
+        }
+        for status, expected_count in expected_status_counts.items():
+            if int(np.count_nonzero(statuses == status)) != expected_count:
+                raise ValueError(
+                    "fit diagnostics execution status count mismatch: "
+                    f"{artifact_path}"
+                )
+        non_ok = statuses != FIT_STATUS_OK
+        for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items():
+            if name in {
+                "tile_x_start",
+                "tile_x_stop",
+                "tile_y_start",
+                "tile_y_stop",
+                "detector_y",
+                "fit_status",
+            }:
+                continue
+            values = np.asarray(data[name])
+            if np.issubdtype(dtype, np.integer):
+                valid_sentinel = np.all(values[non_ok] == -1)
+            else:
+                valid_sentinel = np.all(np.isnan(values[non_ok]))
+            if not valid_sentinel:
+                raise ValueError(
+                    f"fit diagnostics non-OK sentinel mismatch: {name}"
+                )
+        if level == "full":
+            time = np.asarray(data["time"])
+            if time.dtype != np.dtype(np.float64) or time.ndim != 1:
+                raise ValueError(
+                    f"fit diagnostics time axis invalid: {artifact_path}"
+                )
+            array_lengths = metadata.get("array_lengths") or {}
+            if int(array_lengths.get("time", -1)) != int(time.size):
+                raise ValueError(
+                    f"fit diagnostics time length mismatch: {artifact_path}"
+                )
+            for name, fields in _FIT_DIAGNOSTIC_RAGGED_GROUPS.items():
+                offsets = np.asarray(data[name])
+                if (
+                    offsets.dtype != np.dtype(np.int64)
+                    or offsets.shape != (record_count + 1,)
+                    or int(offsets[0]) != 0
+                    or np.any(np.diff(offsets) < 0)
+                ):
+                    raise ValueError(
+                        f"fit diagnostics offsets invalid: {name}"
+                    )
+                lengths = np.diff(offsets)
+                if np.any(lengths[non_ok] != 0):
+                    raise ValueError(
+                        f"non-OK fit diagnostics contain ragged data: {name}"
+                    )
+                if name in {"trace_offsets", "reconstruction_offsets"} and (
+                    np.any(lengths[~non_ok] != time.size)
+                ):
+                    raise ValueError(
+                        f"fit diagnostics sample length mismatch: {name}"
+                    )
+                for field in fields:
+                    if int(array_lengths.get(field, -1)) != int(offsets[-1]):
+                        raise ValueError(
+                            f"fit diagnostics array length mismatch: {field}"
+                        )
 
 
 def _detector_artifact_stable_manifest_keys(
@@ -2302,7 +3012,12 @@ def _detector_artifact_stable_manifest_keys(
         "hdf5_reader_workers",
         "max_tiles",
     )
-    return {key: manifest.get(key) for key in keys}
+    payload = {key: manifest.get(key) for key in keys}
+    if int(manifest.get("manifest_schema_version", 1)) >= 2:
+        diagnostics = manifest.get("fit_diagnostics") or {}
+        payload["fit_diagnostics_level"] = diagnostics.get("level")
+        payload["p2_ridge_alpha"] = manifest.get("p2_ridge_alpha")
+    return payload
 
 
 def _detector_artifact_config_hash(manifest: dict[str, Any]) -> str:
@@ -2386,7 +3101,12 @@ def detector_artifact_resume_identity(manifest: dict[str, Any]) -> str:
         "max_tiles",
         "shard",
     )
-    return _stable_json_hash({key: manifest.get(key) for key in keys})
+    payload = {key: manifest.get(key) for key in keys}
+    if int(manifest.get("manifest_schema_version", 1)) >= 2:
+        diagnostics = manifest.get("fit_diagnostics") or {}
+        payload["fit_diagnostics_level"] = diagnostics.get("level")
+        payload["p2_ridge_alpha"] = manifest.get("p2_ridge_alpha")
+    return _stable_json_hash(payload)
 
 
 def _safe_file_identity(path: Path) -> dict[str, Any]:
@@ -2437,6 +3157,7 @@ def _clear_detector_artifact_outputs(output: Path) -> None:
     for name in DETECTOR_ARRAYS:
         (output / f"{name}.npy").unlink(missing_ok=True)
     (output / FIT_STATUS_FILE).unlink(missing_ok=True)
+    (output / FIT_DIAGNOSTICS_FILE).unlink(missing_ok=True)
     (output / "manifest.json").unlink(missing_ok=True)
 
 
@@ -2462,8 +3183,32 @@ def _publish_detector_artifact_outputs(source: Path, target: Path) -> None:
             str(source / f"{name}.npy"),
             str(target / f"{name}.npy"),
         )
-    for name in (FIT_STATUS_FILE, "manifest.json"):
-        shutil.move(str(source / name), str(target / name))
+    shutil.move(str(source / FIT_STATUS_FILE), str(target / FIT_STATUS_FILE))
+    diagnostics_path = source / FIT_DIAGNOSTICS_FILE
+    if diagnostics_path.exists():
+        shutil.move(str(diagnostics_path), str(target / FIT_DIAGNOSTICS_FILE))
+    # The manifest is the completeness marker and is published last.
+    shutil.move(str(source / "manifest.json"), str(target / "manifest.json"))
+
+
+def _write_npz_atomic(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        with temporary.open("wb") as stream:
+            np.savez(stream, **arrays)
+            stream.flush()
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _resolve_path(root: Path, value: str) -> Path:
@@ -2482,6 +3227,21 @@ def _validate_hdf5_reader(hdf5_reader: str, hdf5_reader_workers: int) -> None:
         raise ValueError(
             "hdf5_reader_workers must be at least 2 for threaded HDF5 readers"
         )
+
+
+def _validate_fit_diagnostics(level: str) -> FitDiagnosticsLevel:
+    if level not in FIT_DIAGNOSTICS_LEVELS:
+        raise ValueError(
+            "fit_diagnostics must be one of: "
+            + ", ".join(FIT_DIAGNOSTICS_LEVELS)
+        )
+    return cast(FitDiagnosticsLevel, level)
+
+
+def _require_finite_nonnegative(name: str, value: float) -> None:
+    numeric = float(value)
+    if not np.isfinite(numeric) or numeric < 0:
+        raise ValueError(f"{name} must be finite and non-negative")
 
 
 def _require_positive(name: str, value: int) -> None:

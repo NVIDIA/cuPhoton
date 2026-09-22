@@ -17,6 +17,45 @@ _CUPY_INSTALL_HINT = (
 
 
 @dataclass(frozen=True)
+class LinearPredictionDiagnostics:
+    """Numerical quality metrics for one linear-prediction fit.
+
+    ``trace_std`` and ``residual_std`` retain the input trace's units, while
+    ``relative_residual`` is their dimensionless ratio. ``residual_std`` is
+    the standard deviation of the same residual samples that ``chi2`` sums,
+    which exclude the final sample. Detector artifacts
+    normalize traces before fitting, so their manifests label these fields as
+    normalized trace units. The ratio is ``None`` when the input trace has
+    zero standard deviation. ``chi2`` retains the historical
+    squared-trace-units definition used by :class:`LinearPredictionResult`.
+
+    ``p1_rank`` is the numerical rank of the full P1 Hankel matrix using the
+    same relative ``1e-12`` singular-value cutoff as model-order selection;
+    it is distinct from ``selected_model_order``. ``p2_rank`` and the P2
+    singular values describe the unregularized P2 design, including when the
+    fitted coefficients came from the augmented ridge system. Matrix condition
+    numbers and singular-value ratios are dimensionless. A nonempty spectrum
+    containing a zero or nonfinite singular value has infinite condition
+    number; an empty spectrum has no ratio or condition number.
+    """
+
+    trace_std: float
+    residual_std: float
+    relative_residual: float | None
+    chi2: float
+    selected_model_order: int
+    mode_count: int
+    max_amplitude: float
+    p1_rank: int
+    p1_singular_value_ratio: float | None
+    p1_condition: float | None
+    p2_rank: int
+    p2_singular_values: np.ndarray
+    p2_singular_value_ratio: float | None
+    p2_condition: float | None
+
+
+@dataclass(frozen=True)
 class LinearPredictionResult:
     """One fitted linear-prediction trace and its modal decomposition.
 
@@ -56,6 +95,9 @@ class LinearPredictionResult:
         Optional root-solver execution metadata.
     elapsed_s
         End-to-end fit time in seconds.
+    diagnostics
+        Numerical fit diagnostics, or ``None`` unless the fit was run with
+        ``fit_diagnostics=True``.
     """
 
     backend: str
@@ -75,6 +117,7 @@ class LinearPredictionResult:
     singular_values: np.ndarray
     roots_stats: PredictionRootsStats | None
     elapsed_s: float
+    diagnostics: LinearPredictionDiagnostics | None = None
 
 
 @dataclass(frozen=True)
@@ -430,6 +473,13 @@ class _P2Result:
 
 
 @dataclass(frozen=True)
+class _P2LstsqResult:
+    coefficients: Any
+    rank: Any
+    singular_values: Any
+
+
+@dataclass(frozen=True)
 class LinearPredictionP2Artifacts:
     coefficients: Any
     amplitude: Any
@@ -526,6 +576,7 @@ def amplitudes_and_phases_cupy(a0: Any, a1: Any):
 
 __all__ = [
     "LinearPredictionComparison",
+    "LinearPredictionDiagnostics",
     "LinearPredictionFixedStagesBenchmark",
     "LinearPredictionFitStats",
     "LinearPredictionModeGroup",
@@ -646,8 +697,18 @@ def linear_prediction_numpy(
     n_components: int,
     *,
     roots_backend: str = "eigvals",
+    p2_ridge_alpha: float = 0.0,
+    fit_diagnostics: bool = False,
 ):
-    """Run the linear-prediction fit on NumPy arrays."""
+    """Run the linear-prediction fit on NumPy arrays.
+
+    ``p2_ridge_alpha`` must be finite and non-negative; a positive value
+    applies a dimensionless ridge penalty to the fitted cosine and sine
+    coefficients, while the fitted intercept is never penalized. Invalid
+    values raise :class:`ValueError`. Pass ``fit_diagnostics=True`` to
+    populate ``result.diagnostics`` with a
+    :class:`LinearPredictionDiagnostics`; it is ``None`` otherwise.
+    """
 
     start = perf_counter()
     result = _linear_prediction_impl(
@@ -657,6 +718,8 @@ def linear_prediction_numpy(
         trace=trace,
         n_components=n_components,
         roots_backend=roots_backend,
+        p2_ridge_alpha=p2_ridge_alpha,
+        fit_diagnostics=fit_diagnostics,
     )
     return _with_elapsed(result, perf_counter() - start)
 
@@ -667,8 +730,18 @@ def linear_prediction_cupy(
     n_components: int,
     *,
     roots_backend: str = "eigvals",
+    p2_ridge_alpha: float = 0.0,
+    fit_diagnostics: bool = False,
 ):
-    """Run the CuPy linear-prediction fit and return NumPy output."""
+    """Run the CuPy linear-prediction fit and return NumPy output.
+
+    ``p2_ridge_alpha`` must be finite and non-negative; a positive value
+    applies a dimensionless ridge penalty to the fitted cosine and sine
+    coefficients, while the fitted intercept is never penalized. Invalid
+    values raise :class:`ValueError`. Pass ``fit_diagnostics=True`` to
+    populate ``result.diagnostics`` with a
+    :class:`LinearPredictionDiagnostics`; it is ``None`` otherwise.
+    """
 
     try:
         import cupy as cp
@@ -685,6 +758,8 @@ def linear_prediction_cupy(
         trace=trace,
         n_components=n_components,
         roots_backend=roots_backend,
+        p2_ridge_alpha=p2_ridge_alpha,
+        fit_diagnostics=fit_diagnostics,
     )
     cp.cuda.Stream.null.synchronize()
     return _with_elapsed(result, perf_counter() - start)
@@ -771,12 +846,16 @@ def linear_prediction_p2_artifacts_numpy(
     trace,
     decay,
     angular_frequency,
+    *,
+    p2_ridge_alpha: float = 0.0,
 ) -> LinearPredictionP2Artifacts:
     """Run production P2 artifact construction on NumPy arrays.
 
     The caller supplies the already-selected decay and angular-frequency
     modes. This keeps root/model-order behavior identical to the caller's P1
     path while exposing the P2 artifact surface used for production parity.
+    A positive ``p2_ridge_alpha`` applies a dimensionless ridge penalty to the
+    cosine and sine coefficients without penalizing the intercept.
     """
 
     return _linear_prediction_p2_artifacts_impl(
@@ -785,6 +864,7 @@ def linear_prediction_p2_artifacts_numpy(
         trace=trace,
         decay=decay,
         angular_frequency=angular_frequency,
+        p2_ridge_alpha=p2_ridge_alpha,
     )
 
 
@@ -3281,7 +3361,10 @@ def _linear_prediction_impl(
     trace,
     n_components,
     roots_backend,
+    p2_ridge_alpha=0.0,
+    fit_diagnostics=False,
 ):
+    p2_ridge_alpha = _validate_p2_ridge_alpha(p2_ridge_alpha)
     bins, signal = _validate_inputs(xp, time, trace, n_components)
     nbins = bins.shape[0]
     delta_t = bins[1] - bins[0]
@@ -3336,7 +3419,14 @@ def _linear_prediction_impl(
     xbar[:, 1:-1:2] = (-exp_bt * sin_wt).T
     xbar[:, -1] = 1
 
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    p2_solve = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=p2_ridge_alpha,
+        diagnostics=fit_diagnostics,
+    )
+    coefficients = p2_solve.coefficients
     a0 = coefficients[: nw * 2 : 2]
     a1 = coefficients[1 : nw * 2 : 2]
     amplitude, phase = _amplitudes_and_phases_backend(xp, a0, a1)
@@ -3360,6 +3450,49 @@ def _linear_prediction_impl(
     residual = reconstruction[:-1] - signal[:-1]
     chi2 = xp.sum(residual**2) / (n - 1)
 
+    singular_values_numpy = _to_numpy(xp, singular_values)
+    chi2_float = float(_to_numpy(xp, chi2))
+    diagnostics = None
+    if fit_diagnostics:
+        if p2_solve.singular_values is None:
+            p2_singular_values_numpy = np.asarray([], dtype=np.float64)
+        else:
+            p2_singular_values_numpy = _to_numpy(xp, p2_solve.singular_values)
+        p1_ratio, p1_condition = _singular_value_ratio_and_condition(
+            singular_values_numpy
+        )
+        p2_ratio, p2_condition = _singular_value_ratio_and_condition(
+            p2_singular_values_numpy
+        )
+        trace_std = float(_to_numpy(xp, xp.std(signal)))
+        residual_std = float(_to_numpy(xp, xp.std(residual)))
+        relative_residual = (
+            None if trace_std == 0 else residual_std / trace_std
+        )
+        mode_count = int(nw)
+        max_amplitude = (
+            float(_to_numpy(xp, xp.max(amplitude))) if mode_count else 0.0
+        )
+        diagnostics = LinearPredictionDiagnostics(
+            trace_std=trace_std,
+            residual_std=residual_std,
+            relative_residual=relative_residual,
+            chi2=chi2_float,
+            selected_model_order=int(selected_model_order),
+            mode_count=mode_count,
+            max_amplitude=max_amplitude,
+            p1_rank=_numerical_rank_from_singular_values(
+                singular_values_numpy,
+                relative_tolerance=1e-12,
+            ),
+            p1_singular_value_ratio=p1_ratio,
+            p1_condition=p1_condition,
+            p2_rank=_scalar_int(p2_solve.rank),
+            p2_singular_values=np.asarray(p2_singular_values_numpy),
+            p2_singular_value_ratio=p2_ratio,
+            p2_condition=p2_condition,
+        )
+
     return LinearPredictionResult(
         backend=backend,
         time=_to_numpy(xp, fit_time),
@@ -3372,12 +3505,13 @@ def _linear_prediction_impl(
         decay=_to_numpy(xp, decay),
         amplitude=_to_numpy(xp, amplitude),
         phase=_to_numpy(xp, phase),
-        chi2=float(_to_numpy(xp, chi2)),
+        chi2=chi2_float,
         selected_model_order=int(selected_model_order),
         decaying_root_count=modes.decaying_root_count,
-        singular_values=_to_numpy(xp, singular_values),
+        singular_values=singular_values_numpy,
         roots_stats=roots_result.stats,
         elapsed_s=0.0,
+        diagnostics=diagnostics,
     )
 
 
@@ -3523,6 +3657,63 @@ def _linear_prediction_p1_cupy_batched(time, traces, n_components):
     )
 
 
+def _p2_lstsq(
+    xp,
+    design,
+    signal,
+    *,
+    p2_ridge_alpha: float,
+    diagnostics: bool,
+) -> _P2LstsqResult:
+    """Solve P2 directly or by intercept-excluding ridge augmentation."""
+
+    if p2_ridge_alpha == 0 or int(design.shape[1]) <= 1:
+        coefficients, _residuals, rank, singular_values = xp.linalg.lstsq(
+            design,
+            signal,
+            rcond=None,
+        )
+        return _P2LstsqResult(
+            coefficients=coefficients,
+            rank=rank,
+            singular_values=singular_values,
+        )
+
+    modal_count = int(design.shape[1]) - 1
+    modal_design = design[:, :modal_count]
+    penalty_scale = float(
+        _to_numpy(xp, xp.mean(xp.sum(modal_design**2, axis=0)))
+    )
+    penalty_weight = p2_ridge_alpha * penalty_scale
+    if not np.isfinite(penalty_scale) or not np.isfinite(penalty_weight):
+        raise ValueError("p2_ridge_alpha produces a nonfinite scaled penalty")
+    penalty_rows = xp.zeros(
+        (modal_count, int(design.shape[1])),
+        dtype=design.dtype,
+    )
+    penalty_rows[:, :modal_count] = xp.eye(
+        modal_count, dtype=design.dtype
+    ) * xp.sqrt(penalty_weight)
+    augmented_design = xp.concatenate((design, penalty_rows), axis=0)
+    augmented_signal = xp.concatenate(
+        (signal, xp.zeros(modal_count, dtype=signal.dtype))
+    )
+    coefficients, _residuals, rank, singular_values = xp.linalg.lstsq(
+        augmented_design,
+        augmented_signal,
+        rcond=None,
+    )
+    if diagnostics:
+        _unregularized_coefficients, _residuals, rank, singular_values = (
+            xp.linalg.lstsq(design, signal, rcond=None)
+        )
+    return _P2LstsqResult(
+        coefficients=coefficients,
+        rank=rank,
+        singular_values=singular_values,
+    )
+
+
 def _linear_prediction_p2_impl(
     *,
     xp,
@@ -3530,6 +3721,7 @@ def _linear_prediction_p2_impl(
     trace,
     decay,
     angular_frequency,
+    p2_ridge_alpha: float = 0.0,
 ) -> _P2Result:
     bins = xp.asarray(time, dtype=xp.float64)
     signal = xp.asarray(trace, dtype=xp.float64)
@@ -3553,7 +3745,13 @@ def _linear_prediction_p2_impl(
         angular_frequency,
         dtype=signal.dtype,
     )
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    coefficients = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=_validate_p2_ridge_alpha(p2_ridge_alpha),
+        diagnostics=False,
+    ).coefficients
     reconstruction = _p2_reconstruction(
         xp,
         fit_time=fit_time,
@@ -3574,7 +3772,9 @@ def _linear_prediction_p2_artifacts_impl(
     trace,
     decay,
     angular_frequency,
+    p2_ridge_alpha=0.0,
 ) -> _P2Artifacts:
+    p2_ridge_alpha = _validate_p2_ridge_alpha(p2_ridge_alpha)
     bins = xp.asarray(time, dtype=xp.float64)
     signal = xp.asarray(trace, dtype=xp.float64)
     decay = xp.asarray(decay, dtype=xp.float64)
@@ -3597,7 +3797,13 @@ def _linear_prediction_p2_artifacts_impl(
         angular_frequency,
         dtype=signal.dtype,
     )
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    coefficients = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=p2_ridge_alpha,
+        diagnostics=False,
+    ).coefficients
     mode_counts = xp.asarray((int(decay.shape[0]),), dtype=xp.int64)
     artifacts = _p2_artifacts_from_coefficients_batched(
         xp,
@@ -3651,9 +3857,15 @@ def _linear_prediction_p2_cupy_batched(
     traces,
     decay,
     angular_frequency,
+    p2_ridge_alpha: float = 0.0,
 ):
     import cupy as cp
 
+    if _validate_p2_ridge_alpha(p2_ridge_alpha) != 0:
+        raise ValueError(
+            "batched CuPy P2 fitting does not support a nonzero "
+            "p2_ridge_alpha"
+        )
     bins = cp.asarray(time, dtype=cp.float64)
     signals = cp.asarray(traces, dtype=cp.float64)
     decay = cp.asarray(decay, dtype=cp.float64)
@@ -5027,6 +5239,18 @@ def _validate_inputs(xp, time, trace, n_components):
     return bins, signal
 
 
+def _validate_p2_ridge_alpha(value: float) -> float:
+    try:
+        alpha = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "p2_ridge_alpha must be a finite nonnegative number"
+        ) from exc
+    if not np.isfinite(alpha) or alpha < 0:
+        raise ValueError("p2_ridge_alpha must be a finite nonnegative number")
+    return alpha
+
+
 def _component_count(xp, singular_values, *, requested: int, limit: int):
     components = min(int(requested), int(limit))
     if components <= 0:
@@ -5041,6 +5265,49 @@ def _component_count(xp, singular_values, *, requested: int, limit: int):
     if components <= 0:
         raise ValueError("insufficient finite singular values")
     return components
+
+
+def _numerical_rank_from_singular_values(
+    singular_values,
+    *,
+    relative_tolerance: float,
+) -> int:
+    """Return rank under an explicit relative singular-value cutoff."""
+
+    values = np.abs(np.asarray(singular_values, dtype=np.float64).reshape(-1))
+    if values.size == 0:
+        return 0
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 0
+    maximum = float(np.max(finite_values))
+    if maximum <= 0:
+        return 0
+    return int(
+        np.count_nonzero(
+            np.isfinite(values) & (values > maximum * relative_tolerance)
+        )
+    )
+
+
+def _singular_value_ratio_and_condition(
+    singular_values,
+) -> tuple[float | None, float | None]:
+    """Return smallest/largest singular ratio and its reciprocal."""
+
+    values = np.abs(np.asarray(singular_values, dtype=np.float64).reshape(-1))
+    if values.size == 0:
+        return None, None
+    if not np.all(np.isfinite(values)):
+        return None, float("inf")
+    maximum = float(np.max(values))
+    minimum = float(np.min(values))
+    if maximum == 0 or minimum == 0:
+        return 0.0, float("inf")
+    ratio = minimum / maximum
+    if ratio == 0:
+        return 0.0, float("inf")
+    return ratio, 1.0 / ratio
 
 
 def _prediction_roots_result(
@@ -5333,6 +5600,7 @@ def _with_elapsed(result: LinearPredictionResult, elapsed_s: float):
         singular_values=result.singular_values,
         roots_stats=result.roots_stats,
         elapsed_s=elapsed_s,
+        diagnostics=result.diagnostics,
     )
 
 

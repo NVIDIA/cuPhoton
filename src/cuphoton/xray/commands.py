@@ -26,6 +26,7 @@ from cuphoton.core.cli import (
     VariablePositionalInvariant,
 )
 
+from ._types import FIT_DIAGNOSTICS_LEVELS
 from .doctor import (
     collect_doctor_report,
     format_doctor_json,
@@ -2558,6 +2559,14 @@ class DetectorArtifactsCommand(_XRayCommand):
         _required = False
         _default = 30
 
+    p2_ridge_alpha = 0.0
+
+    class P2RidgeAlphaArg(FloatInvariant):
+        _arg = "--p2-ridge-alpha"
+        _help = "P2 ridge penalty; zero preserves unregularized fitting."
+        _required = False
+        _default = 0.0
+
     roots_backend = "eigvals"
 
     class RootsBackendArg(SetInvariant):
@@ -2599,6 +2608,16 @@ class DetectorArtifactsCommand(_XRayCommand):
         _help = "Maximum row-fit failures allowed before the command fails."
         _required = False
         _default = 0
+
+    fit_diagnostics = "none"
+
+    class FitDiagnosticsArg(SetInvariant):
+        _arg = "--fit-diagnostics"
+        _help = "Retain no, summary, or full per-fit diagnostics."
+        _required = False
+        _set = set(FIT_DIAGNOSTICS_LEVELS)
+        _default = "none"
+        _metavar = "{none,summary,full}"
 
     hdf5_reader = "h5py"
 
@@ -2887,6 +2906,14 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _required = False
         _default = 30
 
+    p2_ridge_alpha = 0.0
+
+    class P2RidgeAlphaArg(FloatInvariant):
+        _arg = "--p2-ridge-alpha"
+        _help = "P2 ridge penalty; zero preserves unregularized fitting."
+        _required = False
+        _default = 0.0
+
     roots_backend = "eigvals"
 
     class RootsBackendArg(SetInvariant):
@@ -2923,6 +2950,16 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _arg = "--max-fit-failures"
         _required = False
         _default = 0
+
+    fit_diagnostics = "none"
+
+    class FitDiagnosticsArg(SetInvariant):
+        _arg = "--fit-diagnostics"
+        _help = "Retain no, summary, or full per-fit diagnostics."
+        _required = False
+        _set = set(FIT_DIAGNOSTICS_LEVELS)
+        _default = "none"
+        _metavar = "{none,summary,full}"
 
     hdf5_reader = "h5py"
 
@@ -3762,6 +3799,7 @@ def _detector_artifacts(args):
         fit_trailing_drop=args.fit_trailing_drop,
         integrate_pixels=args.integrate,
         components=args.components,
+        p2_ridge_alpha=args.p2_ridge_alpha,
         roots_backend=args.roots_backend,
         savgol_window=args.savgol_window,
         savgol_polyorder=args.savgol_polyorder,
@@ -3771,6 +3809,7 @@ def _detector_artifacts(args):
         hdf5_reader_workers=args.hdf5_reader_workers,
         max_tiles=args.max_tiles,
         normalization_cache=args.normalization_cache,
+        fit_diagnostics=args.fit_diagnostics,
         shard_index=args.shard_index,
         shard_count=args.shard_count,
         global_roi_lower=(
@@ -3849,11 +3888,13 @@ def _detector_artifact_distributed(args):
         "fit_trailing_drop": args.fit_trailing_drop,
         "integrate": args.integrate,
         "components": args.components,
+        "p2_ridge_alpha": args.p2_ridge_alpha,
         "roots_backend": args.roots_backend,
         "savgol_window": args.savgol_window,
         "savgol_polyorder": args.savgol_polyorder,
         "amp_threshold": args.amp_threshold,
         "max_fit_failures": args.max_fit_failures,
+        "fit_diagnostics": args.fit_diagnostics,
         "hdf5_reader": args.hdf5_reader,
         "hdf5_reader_workers": args.hdf5_reader_workers,
         "max_tiles": args.max_tiles,
