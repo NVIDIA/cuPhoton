@@ -4,12 +4,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from scipy.signal import fftconvolve
 
 from cuphoton.xpois.ois import (
     GaussianBasisComponent,
+    _accumulate_normal_equations,
+    _accumulate_normal_equations_cutile,
+    _default_fit_mask,
+    background_design,
     build_compact_source_stamp_mask,
     build_gaussian_polynomial_basis,
     make_stamp_mask,
@@ -337,6 +343,157 @@ def test_solve_constant_kernel_cutile_matches_cpu() -> None:
     cpu = _solve_parity_fixture_backend("cpu")
     gpu = _solve_parity_fixture_backend("cutile")
     _assert_constant_kernel_matches_cpu(cpu, gpu, backend="cutile")
+
+
+_SPARSE_ROWS_COMPONENTS = (
+    GaussianBasisComponent(sigma=1.5, degree=2),
+    GaussianBasisComponent(sigma=3.0, degree=1),
+    GaussianBasisComponent(sigma=6.0, degree=0),
+)
+
+
+def _require_cutile() -> Any:
+    cp = pytest.importorskip("cupy")
+    try:
+        import cuda.tile as ct
+    except Exception as exc:
+        pytest.skip(f"cuda.tile is not usable: {exc}")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    return ct
+
+
+def _sparse_rows_fixture(
+    *,
+    component_count: int,
+    background_degree: int,
+    constant_basis: bool = False,
+) -> tuple[np.ndarray, ...]:
+    rng = np.random.default_rng(1219)
+    shape = (97, 91)
+    kernel_shape = (15, 15)
+    reference = rng.normal(size=shape)
+    target = rng.normal(size=shape)
+    variance = rng.uniform(0.25, 2.0, size=shape)
+    mask = _default_fit_mask(shape, kernel_shape)
+    mask &= rng.random(size=shape) < 0.61
+    basis, _ = build_gaussian_polynomial_basis(
+        kernel_shape,
+        (GaussianBasisComponent(sigma=1.5, degree=0),)
+        if constant_basis
+        else _SPARSE_ROWS_COMPONENTS[:component_count],
+    )
+    background = background_design(shape, degree=background_degree)
+    return reference, target, variance, mask, basis, background
+
+
+@pytest.mark.parametrize(
+    "large_tiles",
+    [False, True],
+    ids=["rows32", "rows128"],
+)
+@pytest.mark.parametrize(
+    ("component_count", "background_degree", "column_count"),
+    [
+        pytest.param(1, 0, 2, id="width4"),
+        pytest.param(3, 0, 11, id="width16"),
+        pytest.param(2, 2, 15, id="width16-full"),
+        pytest.param(3, 2, 16, id="width32"),
+    ],
+)
+def test_cutile_mma_normal_equations_match_cpu_for_sparse_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    component_count: int,
+    background_degree: int,
+    column_count: int,
+    large_tiles: bool,
+) -> None:
+    _require_cutile()
+    if large_tiles:
+        # Force the 128-row specialization; the fixture row count is not a
+        # multiple of either tile size, so the last tile is always partial.
+        monkeypatch.setattr(
+            "cuphoton.xpois.ois._CUTILE_MMA_LARGE_ROW_THRESHOLD",
+            0,
+        )
+    reference, target, variance, mask, basis, background = (
+        _sparse_rows_fixture(
+            component_count=component_count,
+            background_degree=background_degree,
+            constant_basis=column_count == 2,
+        )
+    )
+    assert basis.shape[0] + background.shape[0] == column_count
+
+    expected_gram, expected_rhs, expected_rows = _accumulate_normal_equations(
+        reference,
+        target,
+        variance,
+        mask,
+        basis,
+        background,
+    )
+    gram, rhs, rows = _accumulate_normal_equations_cutile(
+        reference,
+        target,
+        variance,
+        mask,
+        basis,
+        background,
+    )
+
+    assert rows == expected_rows
+    assert np.allclose(gram, expected_gram, rtol=2e-12, atol=1e-8)
+    assert np.allclose(rhs, expected_rhs, rtol=2e-12, atol=1e-9)
+
+
+def test_cutile_mma_kernel_signature_ignores_row_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ct = _require_cutile()
+    reference, target, variance, mask, basis, background = (
+        _sparse_rows_fixture(component_count=3, background_degree=0)
+    )
+    launches: list[tuple[Any, tuple[Any, ...]]] = []
+    real_launch = ct.launch
+
+    def recording_launch(stream, grid, kernel, kernel_args):
+        launches.append((kernel, kernel_args))
+        return real_launch(stream, grid, kernel, kernel_args)
+
+    monkeypatch.setattr(ct, "launch", recording_launch)
+    # Drop one fit pixel so only the row count changes. Neither count is a
+    # multiple of 16, so cuda.tile's array-length divisibility
+    # specialization does not apply to the index arrays.
+    ys, xs = np.nonzero(mask)
+    smaller_mask = mask.copy()
+    smaller_mask[ys[0], xs[0]] = False
+    assert int(mask.sum()) % 16 != 0
+    assert int(smaller_mask.sum()) % 16 != 0
+    for fit_mask in (mask, smaller_mask):
+        _accumulate_normal_equations_cutile(
+            reference,
+            target,
+            variance,
+            fit_mask,
+            basis,
+            background,
+        )
+
+    convention = ct.compilation.CallingConvention.cutile_python_v1()
+    signatures = [
+        ct.compilation.KernelSignature.from_kernel_args(
+            kernel,
+            kernel_args,
+            convention,
+        )
+        for kernel, kernel_args in launches
+    ]
+    assert len(signatures) == 2
+    assert signatures[0].parameters == signatures[1].parameters
 
 
 def test_solve_constant_kernel_rejects_unknown_backend() -> None:
