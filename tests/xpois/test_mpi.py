@@ -4764,6 +4764,7 @@ def test_late_file_rank_cannot_mutate_terminal_run(
     started_at = mpi.timestamp_utc()
     root = mpi._RankContext(0, 0, 2, "host", "test", launch_id="test-launch")
     peer = mpi._RankContext(1, 1, 2, "host", "test", launch_id="test-launch")
+    setup_timeout = 2.0
     timeout = 0.2
 
     def prepare(context: mpi._RankContext):
@@ -4772,10 +4773,11 @@ def test_late_file_rank_cannot_mutate_terminal_run(
             run_dir,
             run_id,
             attempt_id,
-            timeout,
+            setup_timeout,
             started_at,
             manifest,
             options,
+            rank_timeout_sec=timeout,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -4818,6 +4820,7 @@ def test_late_file_rank_cannot_mutate_terminal_run(
         timeout,
         started_at,
         time.perf_counter(),
+        rank_setup_timeout_sec=setup_timeout,
     )
     assert result is not None and result.status == "failed"
     attempt_marker = mpi._attempt_path(run_dir, run_id, attempt_id)
