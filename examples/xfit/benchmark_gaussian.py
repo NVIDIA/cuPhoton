@@ -57,6 +57,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.repeat <= 0:
         parser.error("--repeat must be positive")
+    if args.batch and any(batch <= 0 for batch in args.batch):
+        parser.error("--batch must be positive")
+    if args.warmup < 0:
+        parser.error("--warmup must be nonnegative")
     backends = args.backend or ["cupy", "cutile"]
     batches = args.batch or [1, 16, 256, 4096]
     dtype = np.dtype(args.dtype)
