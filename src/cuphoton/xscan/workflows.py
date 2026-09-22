@@ -65,6 +65,7 @@ from .training import (
     XFIT_COVERAGE_MISMATCH_THRESHOLD,
     check_training_label_provenance,
     load_model_from_checkpoint,
+    normalize_performance_config,
     predict_dataset,
     resolve_device,
     train_classifier,
@@ -931,9 +932,12 @@ def infer_workflow(
     dataset_dir: Path,
     split: str,
     batch_size: int = 32,
+    num_workers: int | None = None,
     xfit_feature_dir: Path | None = None,
     use_xfit_features: bool = False,
 ) -> WorkflowResult:
+    if num_workers is not None and num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
     device = resolve_device("auto")
     run_dir = run_dir.expanduser().resolve()
     dataset_dir = dataset_dir.expanduser().resolve()
@@ -943,6 +947,10 @@ def infer_workflow(
         run_dir,
         device=device,
     )
+    if num_workers is not None:
+        performance = normalize_performance_config(
+            replace(performance, num_workers=num_workers), device=device
+        )
     xfit_feature_matrix = _checkpoint_xfit_feature_matrix(
         checkpoint=checkpoint,
         dataset_dir=dataset_dir,
@@ -976,6 +984,8 @@ def infer_workflow(
         "run_dir": str(run_dir),
         "dataset_dir": str(dataset_dir),
         "split": split,
+        "batch_size": batch_size,
+        "performance": asdict(performance),
         "xfit_features": {
             "enabled": use_xfit_features,
             "feature_dir": (
