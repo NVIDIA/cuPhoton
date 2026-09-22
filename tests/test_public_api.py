@@ -13,6 +13,10 @@ import pytest
 
 from cuphoton import xfit, xpois, xrep
 from cuphoton.core.cli import ComponentSpec
+from cuphoton.xpois.noise import (
+    ConstantKernelNoiseResult,
+    standardize_constant_kernel_residual,
+)
 from cuphoton.xpois.ois import ConstantKernelFitResult
 from cuphoton.xray.linear_prediction import LinearPredictionResult
 from cuphoton.xrep.geometry import MaskedReprojectionResult, ReprojectionSpec
@@ -27,6 +31,25 @@ def test_curated_root_exports_are_real_objects() -> None:
     assert callable(xrep.build_stack_spec_from_fits)
     assert callable(xpois.inspect_hsc_data_tree)
     assert callable(xpois.load_image_array)
+    assert xpois.ConstantKernelNoiseResult is ConstantKernelNoiseResult
+    assert (
+        xpois.standardize_constant_kernel_residual
+        is standardize_constant_kernel_residual
+    )
+
+
+def test_xpois_noise_signature_is_explicit() -> None:
+    assert list(
+        inspect.signature(
+            xpois.standardize_constant_kernel_residual
+        ).parameters
+    ) == [
+        "residual",
+        "kernel",
+        "target_variance",
+        "reference_variance",
+        "valid_mask",
+    ]
 
 
 def test_xfit_curated_exports_and_fit_signature() -> None:
@@ -102,6 +125,7 @@ def test_xrep_existing_function_signatures_remain_stable() -> None:
     ("obj", "required_text"),
     [
         (ConstantKernelFitResult, "target - matched"),
+        (ConstantKernelNoiseResult, "marginal diagonal"),
         (xpois.SeparableKernelFitResult, "target - matched"),
         (PreparedReprojection, "d(source pixel)/d(destination pixel)"),
         (StampDataset, "do not alias the memory-mapped files"),

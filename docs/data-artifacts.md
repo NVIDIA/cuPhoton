@@ -69,9 +69,10 @@ repository.
 ## XPOIS image pairs
 
 `reference` and `target` are two-dimensional arrays with the same shape. An
-optional variance image and input masks must also match that shape. Kernels
-have odd height and width. An explicit NPY fit mask is boolean or binary and
-uses `True`/`1` for pixels included in the weighted solve.
+optional target variance image, used for fit weights and chi-square, and
+input masks must also match that shape. Kernels have odd height and width.
+An explicit NPY fit mask is boolean or binary and uses `True`/`1` for pixels
+included in the weighted solve.
 
 A successful fit writes `summary.json` and these arrays under `artifacts/`:
 

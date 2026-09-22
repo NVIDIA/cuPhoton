@@ -1121,16 +1121,18 @@ def _coerce_mask(
     return mask_arr
 
 
-def _coerce_boolean_mask(mask: np.ndarray) -> np.ndarray:
+def _coerce_boolean_mask(
+    mask: np.ndarray, *, name: str = "fit_mask"
+) -> np.ndarray:
     mask_arr = np.asarray(mask)
     if mask_arr.dtype == bool:
         return mask_arr
     if not np.issubdtype(mask_arr.dtype, np.number):
-        raise ValueError("fit_mask array must be boolean or binary numeric")
+        raise ValueError(f"{name} array must be boolean or binary numeric")
     if not np.isfinite(mask_arr).all():
-        raise ValueError("fit_mask array must not contain NaN or inf values")
+        raise ValueError(f"{name} array must not contain NaN or inf values")
     if not np.all((mask_arr == 0) | (mask_arr == 1)):
-        raise ValueError("fit_mask array must contain only 0/1 values")
+        raise ValueError(f"{name} array must contain only 0/1 values")
     return mask_arr.astype(bool)
 
 
