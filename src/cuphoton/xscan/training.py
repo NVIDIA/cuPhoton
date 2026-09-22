@@ -1436,7 +1436,8 @@ def load_model_from_checkpoint(
 
     By default, retain the saved training policy. An explicit override is
     validated before loading and replaces that policy without changing the
-    checkpoint. Its runtime settings apply before optional model compilation.
+    checkpoint. The selected policy's runtime settings apply before optional
+    model compilation.
     On CUDA this updates process-wide TF32 and cuDNN settings; it does not
     enable PyTorch's deterministic-algorithm mode.
     """
@@ -1467,8 +1468,7 @@ def load_model_from_checkpoint(
             PerformanceConfig(**(performance_payload or {})),
             device=target_device,
         )
-    else:
-        configure_runtime(performance=performance, device=target_device)
+    configure_runtime(performance=performance, device=target_device)
     configure_compile_environment(performance)
     model, _compile_info = maybe_compile_model(
         model,
