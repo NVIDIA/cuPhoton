@@ -21,7 +21,9 @@ class LinearPredictionDiagnostics:
     """Numerical quality metrics for one linear-prediction fit.
 
     ``trace_std`` and ``residual_std`` retain the input trace's units, while
-    ``relative_residual`` is their dimensionless ratio. Detector artifacts
+    ``relative_residual`` is their dimensionless ratio. ``residual_std`` is
+    the standard deviation of the same residual samples that ``chi2`` sums,
+    which exclude the final sample. Detector artifacts
     normalize traces before fitting, so their manifests label these fields as
     normalized trace units. The ratio is ``None`` when the input trace has
     zero standard deviation. ``chi2`` retains the historical
@@ -3463,11 +3465,9 @@ def _linear_prediction_impl(
             p2_singular_values_numpy
         )
         trace_std = float(_to_numpy(xp, xp.std(signal)))
-        full_residual_std = float(
-            _to_numpy(xp, xp.std(reconstruction - signal))
-        )
+        residual_std = float(_to_numpy(xp, xp.std(residual)))
         relative_residual = (
-            None if trace_std == 0 else full_residual_std / trace_std
+            None if trace_std == 0 else residual_std / trace_std
         )
         mode_count = int(nw)
         max_amplitude = (
@@ -3475,7 +3475,7 @@ def _linear_prediction_impl(
         )
         diagnostics = LinearPredictionDiagnostics(
             trace_std=trace_std,
-            residual_std=full_residual_std,
+            residual_std=residual_std,
             relative_residual=relative_residual,
             chi2=chi2_float,
             selected_model_order=int(selected_model_order),
@@ -3721,6 +3721,7 @@ def _linear_prediction_p2_impl(
     trace,
     decay,
     angular_frequency,
+    p2_ridge_alpha: float = 0.0,
 ) -> _P2Result:
     bins = xp.asarray(time, dtype=xp.float64)
     signal = xp.asarray(trace, dtype=xp.float64)
@@ -3744,7 +3745,13 @@ def _linear_prediction_p2_impl(
         angular_frequency,
         dtype=signal.dtype,
     )
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    coefficients = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=_validate_p2_ridge_alpha(p2_ridge_alpha),
+        diagnostics=False,
+    ).coefficients
     reconstruction = _p2_reconstruction(
         xp,
         fit_time=fit_time,
@@ -3850,9 +3857,15 @@ def _linear_prediction_p2_cupy_batched(
     traces,
     decay,
     angular_frequency,
+    p2_ridge_alpha: float = 0.0,
 ):
     import cupy as cp
 
+    if _validate_p2_ridge_alpha(p2_ridge_alpha) != 0:
+        raise ValueError(
+            "batched CuPy P2 fitting does not support a nonzero "
+            "p2_ridge_alpha"
+        )
     bins = cp.asarray(time, dtype=cp.float64)
     signals = cp.asarray(traces, dtype=cp.float64)
     decay = cp.asarray(decay, dtype=cp.float64)

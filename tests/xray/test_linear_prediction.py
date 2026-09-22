@@ -115,7 +115,7 @@ def test_linear_prediction_numpy_reports_fit_diagnostics():
 
     diagnostics = result.diagnostics
     assert diagnostics is not None
-    residual = result.reconstruction - trace
+    residual = (result.reconstruction - trace)[:-1]
     assert diagnostics.trace_std == pytest.approx(np.std(trace))
     assert diagnostics.residual_std == pytest.approx(np.std(residual))
     assert diagnostics.relative_residual == pytest.approx(
@@ -1830,3 +1830,50 @@ def test_cupy_roots_helpers_preserve_complex_coefficients():
 
     np.testing.assert_allclose(serial, baseline, atol=1e-12)
     np.testing.assert_allclose(batched, baseline, atol=1e-12)
+
+
+def test_p2_impl_applies_ridge_through_shared_solver():
+    time, trace = synthetic_trace(samples=48)
+    first = linear_prediction_numpy(time, trace, n_components=4)
+    decay = first.decay
+    angular_frequency = first.angular_frequency
+    design, _fit_time = lp._p2_design_matrix(
+        np,
+        np.asarray(time, dtype=np.float64),
+        np.asarray(decay, dtype=np.float64),
+        np.asarray(angular_frequency, dtype=np.float64),
+        dtype=np.float64,
+    )
+    for alpha in (0.0, 0.25):
+        result = lp._linear_prediction_p2_impl(
+            xp=np,
+            time=time,
+            trace=trace,
+            decay=decay,
+            angular_frequency=angular_frequency,
+            p2_ridge_alpha=alpha,
+        )
+        expected = lp._p2_lstsq(
+            np,
+            design,
+            np.asarray(trace, dtype=np.float64),
+            p2_ridge_alpha=alpha,
+            diagnostics=False,
+        ).coefficients
+        np.testing.assert_allclose(result.coefficients, expected)
+    unregularized = lp._linear_prediction_p2_impl(
+        xp=np,
+        time=time,
+        trace=trace,
+        decay=decay,
+        angular_frequency=angular_frequency,
+    )
+    ridged = lp._linear_prediction_p2_impl(
+        xp=np,
+        time=time,
+        trace=trace,
+        decay=decay,
+        angular_frequency=angular_frequency,
+        p2_ridge_alpha=0.25,
+    )
+    assert not np.allclose(unregularized.coefficients, ridged.coefficients)
