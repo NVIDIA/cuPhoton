@@ -61,6 +61,12 @@ a subtraction.
 
 ## Compare and review
 
+Residual-hotspot and mask-component summaries group labeled foreground
+pixels once, avoiding a full-image scan for every component. Component
+statistics retain raster order and the input residual dtype, including
+`mean_residual`. Equal peaks select the first pixel in raster order; equal
+component ranks retain labeling order before `max_regions` truncation.
+
 ```bash
 uv run cuphoton xpois benchmark-backends \
   --reference /path/to/reference.fits \

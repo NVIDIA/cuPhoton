@@ -7,9 +7,29 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
+
+
+def _component_coordinates(
+    labels: np.ndarray, count: int
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Group labeled pixels while retaining raster order within each group."""
+
+    ys, xs = np.nonzero(labels)
+    if count == 1:
+        yield ys, xs
+        return
+    foreground_labels = labels[ys, xs]
+    order = np.argsort(foreground_labels, kind="stable")
+    ys, xs = ys[order], xs[order]
+    stops = np.cumsum(np.bincount(foreground_labels, minlength=count + 1)[1:])
+    start = 0
+    for stop in stops:
+        yield ys[start:stop], xs[start:stop]
+        start = stop
 
 
 def write_review_metadata(
@@ -75,10 +95,7 @@ def identify_residual_hotspots(
         return []
     labels, count = ndimage.label(mask)
     hotspots: list[dict[str, object]] = []
-    for label in range(1, count + 1):
-        ys, xs = np.where(labels == label)
-        if ys.size == 0:
-            continue
+    for ys, xs in _component_coordinates(labels, count):
         local_sigma = sigma[ys, xs]
         local_residual = residual[ys, xs]
         peak_index = int(np.argmax(local_sigma))
