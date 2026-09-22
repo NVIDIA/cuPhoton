@@ -702,5 +702,5 @@ def run_benchmark(
             json.dump(report, report_file, indent=2, allow_nan=False)
             report_file.write("\n")
 
-    print_results(results, env_note=env_note, out=out)
+        print_results(results, env_note=env_note, out=out)
     return results

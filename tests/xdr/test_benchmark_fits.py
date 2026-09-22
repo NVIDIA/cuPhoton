@@ -550,6 +550,24 @@ def test_json_atomic_write_preserves_previous_report_on_exception(
     assert not list(tmp_path.glob(".report.json.*"))
 
 
+def test_json_preserves_previous_report_when_terminal_output_fails(
+    json_benchmark, tmp_path
+):
+    bench, path, phases = json_benchmark
+    output = tmp_path / "report.json"
+    output.write_text("previous report")
+
+    def closed_output(_line):
+        raise BrokenPipeError("terminal output closed")
+
+    with pytest.raises(BrokenPipeError, match="terminal output closed"):
+        bench.run_benchmark([path], output_json=output, out=closed_output)
+
+    assert len(phases) == 4
+    assert output.read_text() == "previous report"
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
 def test_benchmark_without_json_keeps_return_and_text_output(
     json_benchmark, monkeypatch
 ):
