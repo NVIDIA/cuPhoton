@@ -70,10 +70,10 @@ clean-dist:
 	rm -rf dist
 
 build: clean-dist
-	uv build
+	CUPHOTON_XDR_BUILD_EXT=0 uv build
 
 package-check: build
-	uvx --isolated --from twine==6.2.0 twine check dist/*
+	uvx --isolated --from twine==6.2.0 twine check --strict dist/*
 
 release-check:
 	$(MAKE) lock-check

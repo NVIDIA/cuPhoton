@@ -4,7 +4,34 @@
 
 from __future__ import annotations
 
+import importlib.util
+import runpy
 from pathlib import Path
+
+import setuptools
+
+
+def test_setup_defaults_to_pure_python(monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    setup_arguments = {}
+
+    def capture_setup(**kwargs):
+        setup_arguments.update(kwargs)
+
+    def reject_native_helper_load(*args, **kwargs):
+        raise AssertionError("the default build loaded the native XDR helper")
+
+    monkeypatch.delenv("CUPHOTON_XDR_BUILD_EXT", raising=False)
+    monkeypatch.setattr(setuptools, "setup", capture_setup)
+    monkeypatch.setattr(
+        importlib.util,
+        "spec_from_file_location",
+        reject_native_helper_load,
+    )
+
+    runpy.run_path(str(root / "setup.py"), run_name="__main__")
+
+    assert setup_arguments["ext_modules"] == []
 
 
 def test_xdr_uses_cuphoton_namespace():
