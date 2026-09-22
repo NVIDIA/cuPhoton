@@ -325,6 +325,11 @@ class BatchFitOptions:
             or self.auto_stamp_size % 2 == 0
         ):
             raise ValueError("auto_stamp_size must be a positive odd integer")
+        if self.auto_stamp_mask and self.auto_stamp_size < 3:
+            raise ValueError(
+                "auto_stamp_size must be at least 3 "
+                "when auto_stamp_mask is enabled"
+            )
         if (
             isinstance(self.auto_stamp_count, bool)
             or not isinstance(self.auto_stamp_count, int)
@@ -335,10 +340,11 @@ class BatchFitOptions:
             isinstance(self.auto_peak_percentile, bool)
             or not isinstance(self.auto_peak_percentile, (int, float))
             or not math.isfinite(self.auto_peak_percentile)
-            or not 0 <= self.auto_peak_percentile <= 100
+            or not 0 < self.auto_peak_percentile < 100
         ):
             raise ValueError(
-                "auto_peak_percentile must be a finite number from 0 to 100"
+                "auto_peak_percentile must be a finite number "
+                "strictly between 0 and 100"
             )
         if self.mask_policy not in _MASK_POLICIES:
             raise ValueError(f"unsupported mask policy: {self.mask_policy}")

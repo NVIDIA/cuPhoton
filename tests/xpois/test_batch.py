@@ -202,10 +202,13 @@ def test_batch_options_reject_nonfinite_basis_sigmas(sigma) -> None:
     [
         ({"auto_stamp_size": 30}, "positive odd integer"),
         ({"auto_stamp_size": True}, "positive odd integer"),
+        ({"auto_stamp_mask": True, "auto_stamp_size": 1}, "at least 3"),
         ({"auto_stamp_count": 0}, "positive integer"),
         ({"auto_stamp_count": True}, "positive integer"),
         ({"auto_peak_percentile": float("nan")}, "finite number"),
         ({"auto_peak_percentile": 101.0}, "finite number"),
+        ({"auto_stamp_mask": True, "auto_peak_percentile": 0}, "strictly"),
+        ({"auto_stamp_mask": True, "auto_peak_percentile": 100}, "strictly"),
     ],
 )
 def test_batch_options_reject_invalid_auto_stamp_values(
@@ -213,6 +216,13 @@ def test_batch_options_reject_invalid_auto_stamp_values(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         _options(**overrides)
+
+
+@pytest.mark.parametrize("enabled, size", [(False, 1), (True, 3)])
+def test_batch_options_accept_minimum_stamp_size(enabled, size) -> None:
+    options = _options(auto_stamp_mask=enabled, auto_stamp_size=size)
+
+    assert BatchFitOptions.from_payload(options.to_payload()) == options
 
 
 def test_batch_options_round_trip_worker_payload() -> None:
