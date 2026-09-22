@@ -468,7 +468,15 @@ def test_shard_result_audit_separates_record_write_errors() -> None:
     shard = (WorkItem("zero", {}, 10),)
     placements = _test_placements(1)
     result = _valid_shard_result(shard, placements[0])
-    result["record_write_errors"] = [{"item_id": "zero"}]
+    errors = [
+        {"item_id": "zero", "type": "OSError", "message": "write failed"}
+    ]
+    result.update(
+        status="failed",
+        success_count=0,
+        failed_count=1,
+        record_write_errors=errors,
+    )
 
     audit = _audit_shard_results(
         (shard,),
@@ -482,7 +490,7 @@ def test_shard_result_audit_separates_record_write_errors() -> None:
     assert audit["ok"] is False
     assert audit["mismatched_shards"] == []
     assert audit["write_failed_shards"] == [
-        {"worker_id": 0, "record_write_errors": [{"item_id": "zero"}]}
+        {"worker_id": 0, "record_write_errors": errors}
     ]
 
 
@@ -1292,6 +1300,9 @@ def _fake_record_write_failure_shard_worker(
         allow_loopback_alias,
     )
     result = local_results.get_nowait()
+    result["status"] = "failed"
+    result["success_count"] -= 1
+    result["failed_count"] += 1
     result["record_write_errors"] = [
         {
             "item_id": item_payloads[0]["item_id"],
@@ -1809,3 +1820,121 @@ def test_coordinator_requires_explicit_gpu_backend(
             worker_timeout_sec=30.0,
             options=_options(backend=backend),
         )
+
+
+@pytest.mark.parametrize("visible_status", [None, "success", "failed"])
+def test_shard_result_audit_separates_declared_write_failure(
+    visible_status,
+) -> None:
+    shard = (WorkItem("first", {}, 10), WorkItem("second", {}, 20))
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    errors = [
+        {
+            "item_id": "first",
+            "type": "OSError",
+            "message": "[Errno 28] No space left on device",
+        }
+    ]
+    result.update(
+        status="failed",
+        success_count=1,
+        failed_count=1,
+        record_write_errors=errors,
+    )
+    records = [{"item_id": "second", "status": "success"}]
+    if visible_status is not None:
+        records.append({"item_id": "first", "status": visible_status})
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        records,
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == []
+    assert audit["write_failed_shards"] == [
+        {"worker_id": 0, "record_write_errors": errors}
+    ]
+
+
+@pytest.mark.parametrize(
+    "errors",
+    [
+        None,
+        {},
+        ["not an error mapping"],
+        [{"type": "OSError", "message": "write failed"}],
+        [{"item_id": "other", "type": "OSError", "message": "failed"}],
+        [{"item_id": "first", "type": "OSError"}],
+        [
+            {"item_id": "first", "type": "OSError", "message": "failed"},
+            {"item_id": "first", "type": "OSError", "message": "failed"},
+        ],
+    ],
+)
+def test_shard_result_audit_rejects_invalid_write_failure_evidence(
+    errors,
+) -> None:
+    shard = (WorkItem("first", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["record_write_errors"] = errors
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "first", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["record_write_errors"]}
+    ]
+    assert audit["write_failed_shards"] == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "mismatch"),
+    [
+        ({"status": "success"}, "status"),
+        ({"failed_count": 0}, "failed_count"),
+        ({"success_count": 2, "failed_count": 0}, "success_count"),
+    ],
+)
+def test_declared_write_failure_does_not_hide_inconsistent_counts(
+    overrides, mismatch
+) -> None:
+    shard = (WorkItem("first", {}, 10), WorkItem("second", {}, 20))
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result.update(
+        status="failed",
+        success_count=1,
+        failed_count=1,
+        record_write_errors=[
+            {"item_id": "first", "type": "OSError", "message": "failed"}
+        ],
+    )
+    result.update(overrides)
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "second", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert len(audit["mismatched_shards"]) == 1
+    assert mismatch in audit["mismatched_shards"][0]["fields"]
+    assert len(audit["write_failed_shards"]) == 1

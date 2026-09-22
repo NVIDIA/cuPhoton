@@ -1034,14 +1034,46 @@ def _audit_shard_results(
             expected_status = "success" if failed_count == 0 else "failed"
             if status != expected_status:
                 fields.add("status")
+        record_write_errors = result.get("record_write_errors")
+        write_error_ids: set[str] = set()
+        write_errors_valid = isinstance(record_write_errors, list)
+        if write_errors_valid:
+            shard_item_ids = {item.item_id for item in shard}
+            for error in record_write_errors:
+                if (
+                    not isinstance(error, Mapping)
+                    or not isinstance(error.get("item_id"), str)
+                    or error["item_id"] not in shard_item_ids
+                    or error["item_id"] in write_error_ids
+                    or not isinstance(error.get("type"), str)
+                    or not error["type"]
+                    or not isinstance(error.get("message"), str)
+                ):
+                    write_errors_valid = False
+                    break
+                write_error_ids.add(error["item_id"])
+        if not write_errors_valid:
+            fields.add("record_write_errors")
+            write_error_ids.clear()
+        elif write_error_ids:
+            write_failed.append(
+                {
+                    "worker_id": worker_id,
+                    "record_write_errors": record_write_errors,
+                }
+            )
+        # Directory fsync can fail after a record becomes visible. The
+        # worker counts that item as a failed write, not a durable outcome.
         terminal_success_count = sum(
             status == "success"
             for item in shard
+            if item.item_id not in write_error_ids
             for status in terminal_statuses.get(item.item_id, ())
         )
-        terminal_failed_count = sum(
+        terminal_failed_count = len(write_error_ids) + sum(
             status == "failed"
             for item in shard
+            if item.item_id not in write_error_ids
             for status in terminal_statuses.get(item.item_id, ())
         )
         if (
@@ -1068,18 +1100,6 @@ def _audit_shard_results(
             assert physical_identity is not None
             physical_identities.append(
                 (worker_id, placement.host, physical_identity)
-            )
-        record_write_errors = result.get("record_write_errors")
-        if not isinstance(record_write_errors, list) or any(
-            not isinstance(error, Mapping) for error in record_write_errors
-        ):
-            fields.add("record_write_errors")
-        elif record_write_errors:
-            write_failed.append(
-                {
-                    "worker_id": worker_id,
-                    "record_write_errors": record_write_errors,
-                }
             )
         try:
             _validated_timings(
