@@ -258,8 +258,10 @@ stamp-selection stage needs to preserve exact pixel rows. It accepts local
 `(y, x)` positions and optional positive `relative_precision`; duplicate pixels
 are rejected because repeating one measurement does not create independent
 information. The result reports `fit_objective`, the weighted residual sum
-under the named `fit_weighting` policy, rather than a `chi2` field; it equals
-a chi-square only under `target_variance` weighting.
+under the named `fit_weighting` policy, rather than a `chi2` field.
+`target_variance` weighting gives a chi-square-form objective; statistical
+calibration also requires valid target variances and applicable model
+assumptions.
 
 Precisely, the minimized objective is
 `J = sum_i relative_precision_i * residual_i**2 / target_variance_i`, with

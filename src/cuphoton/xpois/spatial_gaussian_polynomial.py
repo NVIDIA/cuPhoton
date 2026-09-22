@@ -496,14 +496,15 @@ def solve_spatial_gaussian_polynomial_kernel(
             "fit region is underdetermined for the requested spatial model: "
             f"{row_count} equations for {upper.shape[1]} coefficients"
         )
+    photometric_count = len(photometric_terms)
+    shape_count = (basis_kernels.shape[0] - 1) * len(shape_terms)
     coefficients, condition_number = _solve_scaled_qr(
         upper,
         transformed_rhs,
         condition_limit=resolved_config.condition_limit,
+        kernel_column_count=photometric_count + shape_count,
     )
 
-    photometric_count = len(photometric_terms)
-    shape_count = (basis_kernels.shape[0] - 1) * len(shape_terms)
     photometric_coefficients = coefficients[:photometric_count]
     shape_coefficients = coefficients[
         photometric_count : photometric_count + shape_count
@@ -906,6 +907,7 @@ def _solve_scaled_qr(
     transformed_rhs: np.ndarray,
     *,
     condition_limit: float,
+    kernel_column_count: int | None = None,
 ) -> tuple[np.ndarray, float]:
     scales = np.linalg.norm(upper, axis=0)
     if np.any(~np.isfinite(scales)):
@@ -913,11 +915,18 @@ def _solve_scaled_qr(
             "spatial Gaussian-polynomial design has non-finite column "
             "norms; check the variance and relative_precision scaling"
         )
-    if np.any(scales <= _NULL_TERM_RELATIVE_NORM * scales.max()):
-        raise ValueError(
-            "spatial Gaussian-polynomial design contains an empty or "
-            "numerically null column"
-        )
+    # Kernel columns scale with image units; background columns do not.
+    split = (
+        scales.size if kernel_column_count is None else kernel_column_count
+    )
+    for block in (scales[:split], scales[split:]):
+        if block.size and np.any(
+            block <= _NULL_TERM_RELATIVE_NORM * block.max()
+        ):
+            raise ValueError(
+                "spatial Gaussian-polynomial design contains an empty or "
+                "numerically null column"
+            )
     scaled_upper = upper / scales[None, :]
     try:
         condition_number = float(np.linalg.cond(scaled_upper))

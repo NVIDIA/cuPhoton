@@ -109,9 +109,21 @@ def _spatial_target(
     return target
 
 
-def test_spatial_model_recovers_decoupled_spatial_fields() -> None:
+@pytest.mark.parametrize(
+    ("flux_scale", "variance_scale"),
+    [
+        (1.0, 1.0),
+        (1.0e-12, 1.0),
+        (1.0e11, 1.0),
+        (1.0e-12, 1.0e-24),
+        (1.0e11, 1.0e22),
+    ],
+)
+def test_spatial_model_recovers_decoupled_spatial_fields(
+    flux_scale: float, variance_scale: float
+) -> None:
     shape = (60, 64)
-    source = _random_source(shape, seed=11)
+    source = flux_scale * _random_source(shape, seed=11)
     components = [GaussianBasisComponent(sigma=1.2, degree=1)]
     basis, _ = build_gaussian_polynomial_basis(
         (7, 7),
@@ -125,7 +137,7 @@ def test_spatial_model_recovers_decoupled_spatial_fields() -> None:
             [-0.01, 0.002, 0.001],
         ]
     )
-    background_coefficients = np.array([0.1, 0.03, -0.02])
+    background_coefficients = flux_scale * np.array([0.1, 0.03, -0.02])
     target = _spatial_target(
         source,
         basis,
@@ -137,7 +149,7 @@ def test_spatial_model_recovers_decoupled_spatial_fields() -> None:
         background_degree=1,
     )
     variance = 0.5 + np.linspace(0.0, 0.4, shape[1])[None, :]
-    variance = np.broadcast_to(variance, shape).copy()
+    variance = variance_scale * np.broadcast_to(variance, shape).copy()
 
     result = solve_spatial_gaussian_polynomial_kernel(
         source,
@@ -171,12 +183,15 @@ def test_spatial_model_recovers_decoupled_spatial_fields() -> None:
         atol=1.0e-11,
     )
     assert np.allclose(
-        result.background_coefficients,
-        background_coefficients,
+        result.background_coefficients / flux_scale,
+        background_coefficients / flux_scale,
         atol=1.0e-11,
     )
-    assert np.max(np.abs(result.residual[result.fit_mask])) < 1.0e-12
-    assert result.fit_objective < 1.0e-20
+    assert (
+        np.max(np.abs(result.residual[result.fit_mask])) / flux_scale
+        < 1.0e-12
+    )
+    assert result.fit_objective * variance_scale / flux_scale**2 < 1.0e-20
 
     y, x = 17.5, 22.25
     kernel = result.kernel_at_local(y, x)
@@ -1673,17 +1688,20 @@ def test_spatial_model_fails_closed_at_condition_limit() -> None:
         solve(0.999 * baseline.condition_number)
 
 
-def test_spatial_model_fails_closed_on_degenerate_designs() -> None:
+@pytest.mark.parametrize("flux_scale", [1.0e-12, 1.0, 1.0e11])
+def test_spatial_model_fails_closed_on_degenerate_designs(
+    flux_scale: float,
+) -> None:
     shape = (40, 44)
     components = [GaussianBasisComponent(sigma=1.2, degree=1)]
 
     # A constant source makes the photometric and background fields exactly
     # collinear, so the default condition limit must reject the model.
-    constant_source = np.ones(shape)
+    constant_source = flux_scale * np.ones(shape)
     with pytest.raises(ValueError, match="ill-conditioned"):
         solve_spatial_gaussian_polynomial_kernel(
             constant_source,
-            constant_source + 0.1,
+            constant_source + 0.1 * flux_scale,
             [GaussianBasisComponent(sigma=1.2, degree=0)],
             kernel_shape=(7, 7),
             config=SpatialGaussianPolynomialKernelConfig(
@@ -1697,7 +1715,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs() -> None:
     with pytest.raises(ValueError, match="empty or numerically null column"):
         solve_spatial_gaussian_polynomial_kernel(
             constant_source,
-            constant_source + 0.1,
+            constant_source + 0.1 * flux_scale,
             components,
             kernel_shape=(7, 7),
             config=SpatialGaussianPolynomialKernelConfig(
@@ -1711,7 +1729,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs() -> None:
     with pytest.raises(ValueError, match="empty or numerically null column"):
         solve_spatial_gaussian_polynomial_kernel(
             zero_source,
-            zero_source + 0.1,
+            zero_source + 0.1 * flux_scale,
             components,
             kernel_shape=(7, 7),
             config=SpatialGaussianPolynomialKernelConfig(
