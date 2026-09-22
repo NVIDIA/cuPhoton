@@ -370,6 +370,7 @@ def _sparse_rows_fixture(
     *,
     component_count: int,
     background_degree: int,
+    constant_basis: bool = False,
 ) -> tuple[np.ndarray, ...]:
     rng = np.random.default_rng(1219)
     shape = (97, 91)
@@ -381,7 +382,9 @@ def _sparse_rows_fixture(
     mask &= rng.random(size=shape) < 0.61
     basis, _ = build_gaussian_polynomial_basis(
         kernel_shape,
-        _SPARSE_ROWS_COMPONENTS[:component_count],
+        (GaussianBasisComponent(sigma=1.5, degree=0),)
+        if constant_basis
+        else _SPARSE_ROWS_COMPONENTS[:component_count],
     )
     background = background_design(shape, degree=background_degree)
     return reference, target, variance, mask, basis, background
@@ -395,6 +398,7 @@ def _sparse_rows_fixture(
 @pytest.mark.parametrize(
     ("component_count", "background_degree", "column_count"),
     [
+        pytest.param(1, 0, 2, id="width4"),
         pytest.param(3, 0, 11, id="width16"),
         pytest.param(2, 2, 15, id="width16-full"),
         pytest.param(3, 2, 16, id="width32"),
@@ -419,6 +423,7 @@ def test_cutile_mma_normal_equations_match_cpu_for_sparse_rows(
         _sparse_rows_fixture(
             component_count=component_count,
             background_degree=background_degree,
+            constant_basis=column_count == 2,
         )
     )
     assert basis.shape[0] + background.shape[0] == column_count
