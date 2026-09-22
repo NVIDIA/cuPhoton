@@ -471,7 +471,8 @@ def test_cli_fit_kernel_supports_fits_mask_policy_crop_and_auto_stamps(
             ("MP_NOT_DEBLENDED", 10),
             ("MP_UNMASKEDNAN", 11),
         ):
-            mask_hdu.header[key] = bit
+            header_key = f"HIERARCH {key}" if len(key) > 8 else key
+            mask_hdu.header[header_key] = bit
         variance_hdu = fits.ImageHDU(variance, name="VARIANCE")
         fits.HDUList(
             [fits.PrimaryHDU(), image_hdu, mask_hdu, variance_hdu]

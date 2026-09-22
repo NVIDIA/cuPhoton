@@ -50,7 +50,7 @@ def test_load_mask_with_planes_prefers_named_mask_extension(
         name="MASK",
     )
     mask_hdu.header["MP_BAD"] = 0
-    mask_hdu.header["MP_DETECTED"] = 5
+    mask_hdu.header["HIERARCH MP_DETECTED"] = 5
     fits.HDUList(
         [
             fits.PrimaryHDU(np.ones((8, 8), dtype=np.float64)),
