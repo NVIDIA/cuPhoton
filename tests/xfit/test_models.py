@@ -1298,6 +1298,50 @@ def test_cutile_gaussian_fit_matches_cupy(mode, dtype) -> None:
     )
 
 
+@pytest.mark.parametrize("mode", ["difference", "split"])
+def test_cutile_gaussian_normal_equations_match_noisy_float32(mode) -> None:
+    from cuphoton.xfit._cutile import gaussian_normal_equations
+
+    cp = _require_cutile()
+    rng = np.random.default_rng(1219)
+    physical = cp.asarray(_gaussian_truth(np.float32))
+    parameters = physical.copy()
+    parameters[:, 1:3] = cp.log(physical[:, 1:3])
+    model = GaussianDipoleModel((11, 15), backend="cupy", dtype=np.float32)
+    prediction = model.evaluate(physical, mode=mode)
+    images = prediction + cp.asarray(
+        rng.normal(scale=0.2, size=prediction.shape), dtype=cp.float32
+    )
+    weights = cp.asarray(
+        rng.uniform(0.25, 2.0, size=prediction.shape), dtype=cp.float32
+    )
+    weights.reshape(2, -1)[:, ::7] = 0
+    residuals = ((prediction - images) * weights).reshape(2, -1)
+
+    jacobian = model.jacobian(physical, mode=mode)
+    # The solver uses log-sigma coordinates and weighted residuals.
+    chain_shape = (2, 2) + (1,) * (jacobian.ndim - 2)
+    jacobian[:, 1:3] *= physical[:, 1:3].reshape(chain_shape)
+    jacobian = (jacobian * weights[:, None, ...]).reshape(2, 8, -1)
+    jacobian = jacobian.transpose(0, 2, 1)
+    expected_hessian = cp.einsum("bij,bik->bjk", jacobian, jacobian)
+    expected_gradient = cp.einsum("bij,bi->bj", jacobian, residuals)
+
+    gradient, hessian = gaussian_normal_equations(
+        parameters,
+        residuals,
+        weights.reshape(2, -1),
+        image_shape=(11, 15),
+        mode=mode,
+    )
+
+    assert bool(cp.any(residuals != 0).item())
+    assert cp.allclose(
+        gradient, expected_gradient, rtol=3e-5, atol=3e-5
+    ).item()
+    assert cp.allclose(hessian, expected_hessian, rtol=3e-5, atol=3e-5).item()
+
+
 def test_cutile_weighting_and_compacted_indices_match_cupy() -> None:
     _require_cutile()
     split_weights = (1.0, 0.25, 1.75)
