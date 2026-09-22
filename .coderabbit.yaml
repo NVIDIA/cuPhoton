@@ -10,6 +10,17 @@ reviews:
   fail_commit_status: true
   in_progress_fortune: false
   poem: false
+  suggested_labels: false
+  suggested_reviewers: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: "off"
+    description:
+      mode: "off"
   auto_review:
     enabled: false
     labels:
