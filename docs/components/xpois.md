@@ -278,15 +278,18 @@ and ill-conditioned fits fail rather than acquiring an implicit ridge model.
 Basis kernels or design columns that cancel to rounding noise, such as a
 duplicated component, are rejected before the solve because the column-scaled
 condition number cannot detect them.
-Chebyshev fields are evaluated in an explicit parent pixel-coordinate domain.
-If no domain is supplied, the complete input array spans `[-1, 1]` on both
-axes. Supplying the crop origin and half-open parent bounding box gives fitted
-coefficients the same coordinate interpretation across cutouts; it does not
-identify a detector or WCS. Result methods distinguish local-array from parent
-pixel coordinates explicitly: local-frame evaluation is limited to the fitted
-array, while parent-frame evaluation is defined anywhere inside
-`normalization_bbox`, so for a cutout it extrapolates the fitted fields beyond
-the array.
+Chebyshev fields are evaluated in an explicit parent pixel-coordinate
+domain. If no domain is supplied, each non-singleton input axis spans `[-1,
+1]`; a singleton axis maps to `0`. Supplying the crop origin and half-open
+parent bounding box gives fitted coefficients the same coordinate
+interpretation across cutouts; it does not identify a detector or WCS.
+Result methods distinguish local-array from parent pixel coordinates
+explicitly: local-frame evaluation is limited to the fitted array, while
+parent-frame evaluation accepts coordinates between the first and last
+pixel centers of `normalization_bbox`, inclusive. For a bounding box `(y0,
+y1, x0, x1)`, this means `y0 <= y <= y1 - 1` and `x0 <= x <= x1 - 1`,
+including fractional positions between centers. For a cutout it
+extrapolates the fitted fields beyond the array within these bounds.
 
 This experimental Python API has no CLI selector or GPU backend.
 

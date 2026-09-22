@@ -216,9 +216,9 @@ class SpatialGaussianPolynomialKernelFitResult:
     footprint are represented by NaN. The kernel is position-dependent; use
     :meth:`kernel_at_local` or :meth:`kernel_at_parent` to evaluate it without
     an implicit coordinate-frame choice. The local methods accept only points
-    inside the fitted array; the parent methods accept any point inside
-    ``spatial_domain.normalization_bbox`` and extrapolate the fitted fields
-    beyond the array.
+    inside the fitted array; the parent methods accept coordinates between
+    the first and last pixel centers of ``spatial_domain.normalization_bbox``,
+    inclusive, and extrapolate the fitted fields beyond the array.
 
     ``fit_selection_kind`` records how fit rows were chosen: ``all_valid``
     (every valid kernel-interior pixel), ``mask`` (the caller's ``fit_mask``),
@@ -292,9 +292,10 @@ class SpatialGaussianPolynomialKernelFitResult:
     def photometric_scale_at_parent(self, y: float, x: float) -> float:
         """Evaluate the kernel sum at parent pixel coordinate ``y,x``.
 
-        Any point inside ``spatial_domain.normalization_bbox`` is accepted;
-        for a cutout this includes parent positions outside the fitted array,
-        where the Chebyshev field is extrapolated.
+        For ``normalization_bbox=(y0, y1, x0, x1)``, coordinates must satisfy
+        ``y0 <= y <= y1 - 1`` and ``x0 <= x <= x1 - 1``; fractional positions
+        between pixel centers are accepted. For a cutout this includes parent
+        positions outside the fitted array, where the field is extrapolated.
         """
 
         _validate_parent_coordinate(y, x, self.spatial_domain)
@@ -313,9 +314,10 @@ class SpatialGaussianPolynomialKernelFitResult:
     def kernel_at_parent(self, y: float, x: float) -> np.ndarray:
         """Evaluate the matching kernel at parent pixel coordinate ``y,x``.
 
-        Any point inside ``spatial_domain.normalization_bbox`` is accepted;
-        for a cutout this includes parent positions outside the fitted array,
-        where the Chebyshev fields are extrapolated.
+        For ``normalization_bbox=(y0, y1, x0, x1)``, coordinates must satisfy
+        ``y0 <= y <= y1 - 1`` and ``x0 <= x <= x1 - 1``; fractional positions
+        between pixel centers are accepted. For a cutout this includes parent
+        positions outside the fitted array, where the fields are extrapolated.
         """
 
         _validate_parent_coordinate(y, x, self.spatial_domain)
