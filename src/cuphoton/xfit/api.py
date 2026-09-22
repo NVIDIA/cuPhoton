@@ -814,7 +814,7 @@ def _fit_dipoles_backend(
 
     status_codes = low_level.status.astype(np.int8, copy=True)
     converged = low_level.converged.astype(bool, copy=True)
-    rank = low_level.rank.astype(np.int64, copy=False)
+    rank = low_level.rank.astype(np.int64)
     jacobian_available = ap.isfinite(low_level.jacobian).all(axis=(1, 2))
     base_covariance = low_level.covariance
     if gaussian_model:
