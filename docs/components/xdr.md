@@ -52,6 +52,43 @@ dependency variants are supported.
 
 ### Native extension availability
 
+`build.sh` requires `uv` on `PATH` and prints the interpreter it selects.
+Selection order is `PYTHON`, the active `VIRTUAL_ENV`, the checkout's
+`.venv/bin/python`, then `python3` or `python` on `PATH`. An invalid explicit
+interpreter or active environment fails before installation. To select the
+interpreter running a command, use:
+
+```bash
+PYTHON="$(uv run python -c 'import sys; print(sys.executable)')" \
+  bash src/cuphoton/xdr/src/build.sh
+```
+
+For a bare CUDA 13 development container, install a C/C++ compiler, `make`,
+`pkg-config`, zlib development headers, and the CUDA/cuFile development headers.
+If the system CFITSIO package lacks thread support, build a reentrant copy
+from the [CFITSIO source distribution](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/):
+
+```bash
+# Run in a writable build directory outside the checkout.
+export CUPHOTON_XDR_CFITSIO_ROOT="$PWD/cfitsio-install"
+curl -fLO https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-4.7.0.tar.gz
+tar -xzf cfitsio-4.7.0.tar.gz
+(
+  cd cfitsio-4.7.0
+  ./configure --prefix="$CUPHOTON_XDR_CFITSIO_ROOT" \
+    --enable-reentrant --disable-curl
+  make -j4
+  make check
+  make install
+)
+```
+
+Return to the checkout and run `build.sh` in the same shell so the prefix
+remains exported. The prefix must contain `include/fitsio.h` and the CFITSIO
+library in `lib` or `lib64`. `--disable-curl` removes CFITSIO's optional URL
+support; local FITS loading does not require it. Keep `--enable-reentrant`
+for concurrent native planning and reads.
+
 Wheels built from this repository are pure Python (`py3-none-any`) and never
 contain `cuphoton.xdr._nvcomp_batch_ext`; the extension is built only from a
 source checkout. The build intentionally runs without PEP 517 build isolation
