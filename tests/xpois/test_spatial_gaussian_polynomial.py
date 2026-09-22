@@ -180,6 +180,7 @@ def _spatial_target(
     return target
 
 
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
 @pytest.mark.parametrize(
     ("flux_scale", "variance_scale"),
     [
@@ -191,8 +192,10 @@ def _spatial_target(
     ],
 )
 def test_spatial_model_recovers_decoupled_spatial_fields(
-    flux_scale: float, variance_scale: float
+    flux_scale: float, variance_scale: float, backend: str
 ) -> None:
+    if backend == "cupy":
+        _cupy_device_or_skip()
     shape = (60, 64)
     source = flux_scale * _random_source(shape, seed=11)
     components = [GaussianBasisComponent(sigma=1.2, degree=1)]
@@ -233,11 +236,21 @@ def test_spatial_model_recovers_decoupled_spatial_fields(
             photometric_degree=1,
             background_degree=1,
         ),
-        backend="cpu",
+        backend=backend,
     )
 
-    assert result.backend == "cpu"
-    assert result.design_chunk_size == spatial_model_module._DESIGN_CHUNK_SIZE
+    assert result.backend == backend
+    if backend == "cpu":
+        assert (
+            result.design_chunk_size
+            == spatial_model_module._DESIGN_CHUNK_SIZE
+        )
+    else:
+        assert (
+            1
+            <= result.design_chunk_size
+            <= spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE
+        )
     assert result.fit_selection_kind == "all_valid"
     assert result.fit_weighting == "target_variance"
     assert result.explicit_fit_samples is None
@@ -2174,10 +2187,14 @@ def test_spatial_model_fails_closed_at_condition_limit() -> None:
         solve(0.999 * baseline.condition_number)
 
 
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
 @pytest.mark.parametrize("flux_scale", [1.0e-12, 1.0, 1.0e11])
 def test_spatial_model_fails_closed_on_degenerate_designs(
     flux_scale: float,
+    backend: str,
 ) -> None:
+    if backend == "cupy":
+        _cupy_device_or_skip()
     shape = (40, 44)
     components = [GaussianBasisComponent(sigma=1.2, degree=1)]
 
@@ -2195,6 +2212,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs(
                 photometric_degree=1,
                 background_degree=1,
             ),
+            backend=backend,
         )
     # With zero-sum shape bases the same source also yields rounding-level
     # shape columns, which the null-column guard rejects first.
@@ -2209,6 +2227,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs(
                 photometric_degree=0,
                 background_degree=0,
             ),
+            backend=backend,
         )
     # A zero source leaves every kernel column exactly empty.
     zero_source = np.zeros(shape)
@@ -2223,7 +2242,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs(
                 photometric_degree=0,
                 background_degree=0,
             ),
-            backend="cpu",
+            backend=backend,
         )
 
 
