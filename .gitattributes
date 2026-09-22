@@ -13,8 +13,6 @@
 /.gitlab export-ignore
 /.gitlab/** export-ignore
 /.gitlab-ci.yml export-ignore
-/scripts export-ignore
-/scripts/** export-ignore
 /AGENTS.md export-ignore
 /CLAUDE.md export-ignore
 /CHANGELOG.md export-ignore
