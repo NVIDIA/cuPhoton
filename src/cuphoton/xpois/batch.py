@@ -336,6 +336,16 @@ class ImagePairManifest:
     schema: str = IMAGE_PAIR_MANIFEST_SCHEMA
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.schema, str)
+            or self.schema not in _SUPPORTED_MANIFEST_SCHEMAS
+        ):
+            raise ValueError(
+                "manifest schema must be one of: "
+                + ", ".join(
+                    repr(item) for item in sorted(_SUPPORTED_MANIFEST_SCHEMAS)
+                )
+            )
         if self.schema != IMAGE_PAIR_MANIFEST_SCHEMA_V2 and any(
             pair.fit_positions is not None for pair in self.pairs
         ):

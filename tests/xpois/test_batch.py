@@ -54,6 +54,26 @@ def test_public_manifest_objects_preserve_v1_defaults(tmp_path) -> None:
     assert "fit_positions" not in pair.to_payload()
 
 
+@pytest.mark.parametrize("schema", ["unsupported", None, []])
+def test_programmatic_manifest_rejects_unsupported_schema(
+    tmp_path, schema
+) -> None:
+    pair = ImagePairSpec(
+        item_id="pair",
+        reference=tmp_path / "reference.npy",
+        target=tmp_path / "target.npy",
+    )
+
+    with pytest.raises(ValueError, match="manifest schema must be one of"):
+        ImagePairManifest(
+            source_path=tmp_path / "pairs.json",
+            pairs=(pair,),
+            input_identities=(),
+            sha256="unused",
+            schema=schema,
+        )
+
+
 @pytest.mark.parametrize("schema", [None, "cuphoton.xpois.image-pairs/v1"])
 def test_programmatic_v1_manifest_rejects_fit_positions(
     tmp_path, schema
