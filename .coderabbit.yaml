@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  profile: chill
+  high_level_summary: false
+  request_changes_workflow: false
+  fail_commit_status: true
+  in_progress_fortune: false
+  poem: false
+  suggested_labels: false
+  suggested_reviewers: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: "off"
+    description:
+      mode: "off"
+  auto_review:
+    enabled: false
+    labels:
+      - ai-review
+    base_branches:
+      - "^codex/013-.*$"
+    auto_incremental_review: true
+  path_instructions:
+    - path: "**"
+      instructions: >-
+        Prioritize correctness, numerical contracts, resource ownership,
+        compatibility, and actionable CI failures. Keep proposed fixes within
+        the pull request's scope. Distinguish reproducible defects from optional
+        refactoring and style preferences. Do not propose unrelated redesigns.
+  finishing_touches:
+    autofix:
+      enabled: false
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    fix_ci:
+      enabled: false
