@@ -13,6 +13,17 @@ Current scope:
 - explicit `NotImplementedError` for compression formats that do not have a GPU
   path
 
+## HDF5 migration
+
+`cuphoton.xdr.load_hdf5` and the `hdf5` installation extra have been removed.
+For general HDF5 access, use `h5py` directly; it is a base dependency. Remove
+`hdf5` from installation extras, for example by replacing `cuphoton[hdf5]`
+with `cuphoton`.
+
+For supported XRay detector inputs, see the [single-node HDF5
+workflow](../xray/README.md#single-node-hdf5-workflow), which uses the `h5py`
+reader by default.
+
 ## Install
 
 Install the CUDA 13 development profile:
