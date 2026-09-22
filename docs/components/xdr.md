@@ -92,9 +92,11 @@ for concurrent native planning and reads.
 Official release wheels are pure Python (`py3-none-any`) and do not contain
 `cuphoton.xdr._nvcomp_batch_ext`. An explicit native source build runs without
 PEP 517 build isolation (as `build.sh` does with `--no-build-isolation`)
-because pybind11 and the KvikIO, nvCOMP, and CFITSIO headers and libraries are
-resolved from the installed `gpu` environment — this is also why `pybind11` is
-not listed in `[build-system].requires`. Verify the extension after building:
+because pybind11, KvikIO and nvCOMP are resolved from the installed `gpu`
+environment. CFITSIO headers and libraries come from
+`CUPHOTON_XDR_CFITSIO_ROOT` or `pkg-config cfitsio`, as described above.
+This is also why `pybind11` is not listed in `[build-system].requires`.
+Verify the extension after building:
 
 ```bash
 uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
