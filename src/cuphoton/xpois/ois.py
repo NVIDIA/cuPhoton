@@ -1847,56 +1847,18 @@ def _accumulate_normal_equations_cupy(
     chunk_size: int = 65536,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     cp, _ = _load_cupy()
-    try:
-        cupy_sliding_window_view = cp.lib.stride_tricks.sliding_window_view
-    except AttributeError as exc:
-        raise ImportError(
-            "backend='cupy' requires a CuPy build with "
-            "cp.lib.stride_tricks.sliding_window_view"
-        ) from exc
-
-    reference_gpu = cp.asarray(reference, dtype=cp.float64)
-    target_gpu = cp.asarray(target, dtype=cp.float64)
-    variance_gpu = cp.asarray(variance, dtype=cp.float64)
-    mask_gpu = cp.asarray(mask, dtype=cp.bool_)
-    basis_gpu = cp.asarray(basis_kernels, dtype=cp.float64)
-    background_gpu = cp.asarray(background_terms, dtype=cp.float64)
-
-    kernel_height, kernel_width = basis_kernels.shape[1:]
-    margin_y = kernel_height // 2
-    margin_x = kernel_width // 2
-    basis_flat = basis_gpu[:, ::-1, ::-1].reshape(basis_gpu.shape[0], -1)
-    patch_view = cupy_sliding_window_view(
-        reference_gpu,
-        (kernel_height, kernel_width),
-    )
-    ys, xs = cp.nonzero(mask_gpu)
-    column_count = int(basis_gpu.shape[0] + background_gpu.shape[0])
-    gram_matrix = cp.zeros((column_count, column_count), dtype=cp.float64)
-    rhs_vector = cp.zeros(column_count, dtype=cp.float64)
-    row_count = 0
-
-    for start in range(0, int(ys.size), chunk_size):
-        stop = min(start + chunk_size, int(ys.size))
-        y_chunk = ys[start:stop]
-        x_chunk = xs[start:stop]
-        patch_chunk = patch_view[
-            y_chunk - margin_y,
-            x_chunk - margin_x,
-        ].reshape(stop - start, -1)
-        basis_chunk = patch_chunk @ basis_flat.T
-        background_chunk = background_gpu[:, y_chunk, x_chunk].T
-        design_chunk = cp.concatenate(
-            (basis_chunk, background_chunk),
-            axis=1,
+    gram_matrix, rhs_vector, row_count = (
+        _accumulate_normal_equations_cupy_device(
+            cp.asarray(reference, dtype=cp.float64),
+            cp.asarray(target, dtype=cp.float64),
+            cp.asarray(variance, dtype=cp.float64),
+            cp.asarray(mask, dtype=cp.bool_),
+            cp.asarray(basis_kernels, dtype=cp.float64),
+            cp.asarray(background_terms, dtype=cp.float64),
+            cp=cp,
+            chunk_size=chunk_size,
         )
-        weights = 1.0 / cp.sqrt(variance_gpu[y_chunk, x_chunk])
-        weighted_design = design_chunk * weights[:, None]
-        weighted_target = target_gpu[y_chunk, x_chunk] * weights
-        gram_matrix += weighted_design.T @ weighted_design
-        rhs_vector += weighted_design.T @ weighted_target
-        row_count += int(y_chunk.size)
-
+    )
     return cp.asnumpy(gram_matrix), cp.asnumpy(rhs_vector), row_count
 
 
