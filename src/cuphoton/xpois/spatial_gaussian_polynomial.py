@@ -241,6 +241,10 @@ class SpatialGaussianPolynomialKernelFitResult:
     Optional source variance is propagated through each realized local kernel,
     assuming independent input pixels; cross-pixel covariance and fit
     uncertainty are not represented.
+
+    Each pair in ``photometric_terms``, ``shape_terms``, and
+    ``background_terms`` gives ``(x_degree, y_degree)`` for the
+    Chebyshev basis.
     """
 
     matched: np.ndarray
