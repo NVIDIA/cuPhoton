@@ -7,13 +7,12 @@
 *.yaml text eol=lf
 *.md text eol=lf
 
+# GitHub community files and workflows are public release inputs. The release
+# controller enforces their exact allowlist before export.
 # Keep internal development and release-process files out of public exports.
-/.github export-ignore
-/.github/** export-ignore
 /.gitlab export-ignore
 /.gitlab/** export-ignore
-/scripts export-ignore
-/scripts/** export-ignore
+/.gitlab-ci.yml export-ignore
 /AGENTS.md export-ignore
 /CLAUDE.md export-ignore
 /CHANGELOG.md export-ignore
