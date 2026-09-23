@@ -678,22 +678,6 @@ def batched_levenberg_marquardt(
                 ap,
                 settings,
             )
-            if refreshed.shape != (len(refresh_rows), n, m):
-                raise ValueError("final Jacobian has an unexpected shape")
-            valid_refresh = as_numpy(finite_rows(refreshed))
-            valid_rows = [
-                row
-                for row, valid in zip(
-                    refresh_rows, valid_refresh, strict=True
-                )
-                if bool(valid)
-            ]
-            if valid_rows:
-                valid_indices = ap.asarray(valid_rows, dtype=np.int64)
-                jacobians[valid_indices] = refreshed[
-                    ap.asarray(valid_refresh, dtype=bool)
-                ]
-                diagnostic_rows.extend(valid_rows)
         except Exception:
             # Retry row by row so one failing callback does not discard the
             # diagnostics of every row in the batch. The finite-difference
@@ -717,14 +701,37 @@ def batched_levenberg_marquardt(
                         ap,
                         settings,
                     )
-                    if jacobian.shape != (1, n, m) or not _finite(
-                        jacobian, ap
-                    ):
-                        continue
-                    jacobians[row] = jacobian[0]
-                    diagnostic_rows.append(row)
                 except Exception:
                     continue
+                if jacobian.shape != (1, n, m):
+                    raise ValueError(
+                        "jacobian must return shape "
+                        "(batch, parameters, observations)"
+                    )
+                if not _finite(jacobian, ap):
+                    continue
+                jacobians[row] = jacobian[0]
+                diagnostic_rows.append(row)
+        else:
+            if refreshed.shape != (len(refresh_rows), n, m):
+                raise ValueError(
+                    "jacobian must return shape "
+                    "(batch, parameters, observations)"
+                )
+            valid_refresh = as_numpy(finite_rows(refreshed))
+            valid_rows = [
+                row
+                for row, valid in zip(
+                    refresh_rows, valid_refresh, strict=True
+                )
+                if bool(valid)
+            ]
+            if valid_rows:
+                valid_indices = ap.asarray(valid_rows, dtype=np.int64)
+                jacobians[valid_indices] = refreshed[
+                    ap.asarray(valid_refresh, dtype=bool)
+                ]
+                diagnostic_rows.extend(valid_rows)
 
     if diagnostic_rows:
         diagnostic_indices = ap.asarray(diagnostic_rows, dtype=np.int64)

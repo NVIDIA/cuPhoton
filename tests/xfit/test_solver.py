@@ -302,6 +302,41 @@ def test_specialized_normal_equation_shapes_are_validated(
         )
 
 
+@pytest.mark.parametrize(
+    "fail_batch", [False, True], ids=["batch", "row-retry"]
+)
+def test_specialized_final_jacobian_shape_is_validated(
+    fail_batch: bool,
+) -> None:
+    seen_indices: list[tuple[int, ...]] = []
+
+    def residual(x, *, indices):
+        del indices
+        return x.copy()
+
+    def jacobian(x, *, indices):
+        seen_indices.append(tuple(int(value) for value in indices))
+        if fail_batch and x.shape[0] > 1:
+            raise RuntimeError("batched callback failed")
+        return np.ones((x.shape[0], 2, 1))
+
+    def normal_equations(x, residuals, *, indices):
+        del indices
+        return residuals.copy(), np.ones((x.shape[0], 1, 1))
+
+    with pytest.raises(ValueError, match="jacobian must return shape"):
+        batched_levenberg_marquardt(
+            BatchedLeastSquaresProblem(
+                residual,
+                jacobian,
+                normal_equations=normal_equations,
+            ),
+            np.zeros((2, 1)),
+        )
+
+    assert seen_indices == ([(0, 1), (0,)] if fail_batch else [(0, 1)])
+
+
 def test_finite_difference_configuration_bypasses_normal_equations() -> None:
     target = np.asarray([[2.0]])
 
