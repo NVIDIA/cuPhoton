@@ -903,12 +903,13 @@ def _dragon_device_pipeline_worker(
 
 
 def _finite_nonnegative(value: Any) -> bool:
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and math.isfinite(value)
-        and value >= 0
-    )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        # JSON integers need not fit the float conversion used by isfinite.
+        return False
 
 
 def _success_record_problems(

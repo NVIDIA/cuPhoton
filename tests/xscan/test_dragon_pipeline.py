@@ -581,6 +581,22 @@ class _CorruptingSummaryGroup(_FakeGroup):
         )
 
 
+class _OverflowingRuntimeRecordGroup(_FakeGroup):
+    def start(self) -> None:
+        super().start()
+        descriptor_path = Path(self.templates[0].args[1])
+        run_dir = descriptor_path.parent.parent
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        item_id = descriptor["items"][0]["item_id"]
+        record_path = run_dir / "records" / f"{item_id}.json"
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["runtime"]["context_load_seconds"] = 10**1000
+        record_path.write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+
 class _CorruptingRecordDeviceGroup(_FakeGroup):
     def start(self) -> None:
         super().start()
@@ -1143,8 +1159,19 @@ def test_publish_rejects_rehashed_evidence_not_bound_to_config(
     assert not item_dir.exists()
 
 
+@pytest.mark.parametrize(
+    ("group_type", "invalid_field"),
+    [
+        (_CorruptingSummaryGroup, "device_pipeline"),
+        (_OverflowingRuntimeRecordGroup, "runtime"),
+    ],
+    ids=["corrupt-summary", "overflowing-runtime"],
+)
 def test_coordinator_revalidates_file_backed_v2_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    group_type: type[_FakeGroup],
+    invalid_field: str,
 ) -> None:
     config = _config(tmp_path)
     item = _item(tmp_path, "pair-0")
@@ -1162,7 +1189,7 @@ def test_coordinator_revalidates_file_backed_v2_result(
     _install_fake_dragon(
         monkeypatch,
         context_type=FakeContext,
-        group_type=_CorruptingSummaryGroup,
+        group_type=group_type,
     )
     monkeypatch.setattr(
         dragon_pipeline,
@@ -1187,9 +1214,15 @@ def test_coordinator_revalidates_file_backed_v2_result(
         {
             "item_id": item.item_id,
             "type": "InvalidTerminalRecord",
-            "message": "record 0 has invalid field(s): device_pipeline",
+            "message": f"record 0 has invalid field(s): {invalid_field}",
         }
     ]
+    persisted = json.loads(result.summary_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "failed"
+    assert (
+        persisted["terminal_record_errors"]
+        == result.summary["terminal_record_errors"]
+    )
 
 
 def test_coordinator_rejects_record_device_mismatch(
