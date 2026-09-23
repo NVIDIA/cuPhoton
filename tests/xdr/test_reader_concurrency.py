@@ -510,9 +510,13 @@ def test_stream_none_preserves_control_signal_cleanup(
     with pytest.raises(error_type) as caught:
         first.read()
     assert caught.value is error
-    assert first.loader.closed is True
+    assert first.loader.closed is (error_stage == "decode")
     assert first.stream.synchronize_calls == 0
-    assert read_runtime.quarantine == []
+    assert len(read_runtime.quarantine) == 1
+    completion = read_runtime.quarantine[0]
+    assert first.loader in completion.keepalive
+    assert first.output in completion.keepalive
+    assert completion.actively_awaited is False
 
 
 def test_stream_none_retains_locked_io_wait(monkeypatch, read_runtime):

@@ -207,8 +207,9 @@ def test_comp_reader_retains_buffers_through_completion(
     ],
 )
 @pytest.mark.parametrize("owns_loader", [False, True])
+@pytest.mark.parametrize("use_stream", [False, True])
 def test_comp_reader_early_failure_quarantines_without_waiting(
-    monkeypatch, error_type, error_stage, owns_loader
+    monkeypatch, error_type, error_stage, owns_loader, use_stream
 ):
     error = error_type("failed during " + error_stage)
     quarantine = []
@@ -314,7 +315,8 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
     )
 
     def decode(*args, **kwargs):
-        kwargs["keepalive"].append(decode_scratch)
+        if kwargs.get("keepalive") is not None:
+            kwargs["keepalive"].append(decode_scratch)
         maybe_fail("decode")
         return output
 
@@ -324,7 +326,9 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
     comp_reader = object.__new__(GpuCompImageReader)
     comp_reader.path = "test.fits"
     kwargs = dict(
-        loader=None if owns_loader else loader, stream=stream, out=output
+        loader=None if owns_loader else loader,
+        stream=stream if use_stream else None,
+        out=output,
     )
 
     with pytest.raises(error_type) as exc_info:
@@ -345,7 +349,8 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
         assert handle in completion.keepalive
     if error_stage == "decode":
         assert device_input in completion.keepalive
-        assert decode_scratch in completion.keepalive
+        if use_stream:
+            assert decode_scratch in completion.keepalive
     if error_stage == "load":
         assert len(partial_owner_refs) == 1
         assert partial_owner_refs[0]() is not None
@@ -378,7 +383,7 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
 
     assert comp_reader.read(**kwargs) is output
     assert load_count() == 2
-    assert stream.synchronize_calls == 1
+    assert stream.synchronize_calls == int(use_stream)
     assert quarantine == []
 
 

@@ -639,23 +639,15 @@ class GpuCompImageReader:
         )
 
         try:
-            if stream is None:
-                # This path has no completion owner. Keep its I/O wait locked.
-                with _gpu_submission_guard(), cp.cuda.Stream.null:
-                    handle = loader.load_tiles_async(
-                        plan["sel_abs_offsets"], plan["sel_lengths"]
-                    )
-                    d_concat, rel_offsets = handle.wait()
-                    return GpuCompImageReader.decode_from_device_heap(
-                        d_concat, rel_offsets, plan, out=out, stream=stream
-                    )
-
             keepalive = [loader, out]
-            io_completion = _ReadCompletion(stream)
+            completion_stream = (
+                stream if stream is not None else cp.cuda.Stream.null
+            )
+            io_completion = _ReadCompletion(completion_stream)
             completion = _GpuBatchHandle(
                 event=io_completion,
                 keepalive=keepalive,
-                stream=stream,
+                stream=completion_stream,
                 device_id=int(cp.cuda.Device().id),
             )
             submission_error = None
@@ -670,15 +662,36 @@ class GpuCompImageReader:
                     unresolved = True
                     io_completion.handle = handle
                     io_completion.abandoned = True
-                    if handle is None:
-                        # Keep partial load locals even if callers clear the
-                        # exception's own traceback reference.
+                    if handle is None or stream is None:
+                        # Retain partial I/O or streamless decode locals even
+                        # if callers clear the exception's traceback.
                         keepalive.append(error.__traceback__)
                     _quarantine_gpu_batches([completion])
                     _mark_gpu_batches_unresolved([completion])
                     if not io_completion.io_complete:
                         # CuFile.close can wait for pending I/O.
                         owns_loader = False
+
+            if stream is None:
+                # Keep I/O locked and null-stream decode asynchronous.
+                # Its normal allocations are stream-ordered; abandoned I/O
+                # still needs durable owners before the submission gate opens.
+                with _gpu_submission_guard(), completion_stream:
+                    try:
+                        handle = loader.load_tiles_async(
+                            plan["sel_abs_offsets"], plan["sel_lengths"]
+                        )
+                        keepalive.append(handle)
+                        io_completion.handle = handle
+                        d_concat, rel_offsets = handle.wait()
+                        io_completion.io_complete = True
+                        keepalive.append(d_concat)
+                        return GpuCompImageReader.decode_from_device_heap(
+                            d_concat, rel_offsets, plan, out=out, stream=None
+                        )
+                    except BaseException as error:
+                        abandon(error)
+                        raise
 
             started = False
             try:
