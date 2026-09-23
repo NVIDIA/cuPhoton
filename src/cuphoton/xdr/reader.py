@@ -40,6 +40,29 @@ _BITPIX_TO_DTYPE = {
 }
 
 
+class _ReadCompletion:
+    """Require both GDS and CUDA completion before releasing read owners."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.handle = None
+        self.io_complete = False
+        self.abandoned = False
+
+    @property
+    def done(self):
+        # Failure before load_tiles_async returns leaves partial I/O unknown.
+        # Its traceback owners must remain quarantined until process exit.
+        if not self.io_complete:
+            # KvikIO futures cannot be polled concurrently with their get().
+            # A live reader owns its wait; only probe after it abandons I/O.
+            if not self.abandoned:
+                return False
+            if self.handle is None or not self.handle.done:
+                return False
+        return bool(self.stream.done)
+
+
 def _hdu_path(hdu) -> str:
     f = getattr(hdu, "_file", None)
     if f is None or not hasattr(f, "name"):
@@ -93,6 +116,8 @@ class GpuImageReader:
                     f"{self.shape} {native_dtype}, got "
                     f"{out.shape} {out.dtype}"
                 )
+            if not out.flags.c_contiguous:
+                raise ValueError("out buffer must be C-contiguous")
 
         with stream or cp.cuda.Stream.null:
             if loader is not None:
@@ -450,7 +475,7 @@ class GpuCompImageReader:
             )
         )
         if keepalive is not None:
-            keepalive.append(d_scatter_target)
+            keepalive.extend([out, d_scatter_target])
 
         with stream or cp.cuda.Stream.null:
             d_tile_offsets = cp.asarray(tile_byte_offsets_np)
@@ -467,6 +492,8 @@ class GpuCompImageReader:
                     if use_native_pool
                     else cp.empty_like(d_pixels)
                 )
+                if keepalive is not None:
+                    keepalive.append(d_inter)
                 unshuffle_gzip2_tiles(
                     d_pixels,
                     d_inter,
@@ -475,8 +502,6 @@ class GpuCompImageReader:
                     plan["itemsize"],
                 )
                 d_pixels = d_inter
-                if keepalive is not None:
-                    keepalive.append(d_inter)
 
             # 2. Byteswap (FITS on-disk is big-endian, host is little-endian).
             if plan["itemsize"] > 1:
@@ -552,6 +577,8 @@ class GpuCompImageReader:
         start offset of tile i inside `d_concat`. This is what the prefetch
         consumer calls after staging its pinned host heap to device.
         """
+        if keepalive is not None:
+            keepalive.append(d_concat)
         d_pixels, tile_byte_offsets_np = (
             GpuCompImageReader.inflate_device_heap(
                 d_concat,
@@ -563,7 +590,7 @@ class GpuCompImageReader:
             )
         )
         if keepalive is not None:
-            keepalive.extend([d_concat, d_pixels])
+            keepalive.append(d_pixels)
         return GpuCompImageReader.postprocess_decoded_tiles(
             d_pixels,
             tile_byte_offsets_np,
@@ -581,7 +608,16 @@ class GpuCompImageReader:
         loader : GdsHeapLoader or None
             Reuse an existing persistent loader (avoids the ~22 ms
             kvikio `CompatModeManager` setup per HDU). If `None`, a fresh
-            loader is created and closed within this call.
+            loader is created for this call. Closure is deferred if
+            failure leaves its I/O completion unknown.
+
+        With an explicit stream, independent reads can submit while this call
+        waits for GDS I/O. Reads without a stream retain the submission lock.
+
+        Control signals and I/O errors propagate without another CUDA wait.
+        Owners remain quarantined until I/O and CUDA completion are known.
+        Failure before an I/O handle is returned leaves completion unknown and
+        requires a process restart before further GPU submissions.
         """
         import cupy as cp
 
@@ -591,23 +627,135 @@ class GpuCompImageReader:
         if owns_loader:
             loader = GdsHeapLoader(self.path)
 
-        keepalive = [] if stream is not None else None
-        with stream or cp.cuda.Stream.null:
-            handle = loader.load_tiles_async(
-                plan["sel_abs_offsets"], plan["sel_lengths"]
-            )
-            d_concat, rel_offsets = handle.wait()
-            out = GpuCompImageReader.decode_from_device_heap(
-                d_concat,
-                rel_offsets,
-                plan,
-                out=out,
-                stream=stream,
-                keepalive=keepalive,
-            )
-        if stream is not None:
-            stream.synchronize()
+        # Use the same completion guard as batched reads. A decode error may
+        # follow queued work, so its buffers must survive error cleanup too.
+        from .prefetch import (
+            _UNRESOLVED_GPU_BATCHES_LOCK,
+            _gpu_submission_guard,
+            _GpuBatchHandle,
+            _mark_gpu_batches_unresolved,
+            _quarantine_gpu_batches,
+            _synchronize_gpu_batch,
+        )
 
-        if owns_loader:
-            loader.close()
+        try:
+            keepalive = [loader, out]
+            completion_stream = (
+                stream if stream is not None else cp.cuda.Stream.null
+            )
+            io_completion = _ReadCompletion(completion_stream)
+            completion = _GpuBatchHandle(
+                event=io_completion,
+                keepalive=keepalive,
+                stream=completion_stream,
+                device_id=int(cp.cuda.Device().id),
+            )
+            submission_error = None
+            handle = None
+            unresolved = False
+
+            def abandon(error):
+                nonlocal owns_loader, unresolved
+                # The wait and second gate's entry can fail outside the guard.
+                # Publish abandonment atomically with respect to submissions.
+                with _UNRESOLVED_GPU_BATCHES_LOCK:
+                    unresolved = True
+                    io_completion.handle = handle
+                    io_completion.abandoned = True
+                    if handle is None or stream is None:
+                        # Retain partial I/O or streamless decode locals even
+                        # if callers clear the exception's traceback.
+                        keepalive.append(error.__traceback__)
+                    _quarantine_gpu_batches([completion])
+                    _mark_gpu_batches_unresolved([completion])
+                    if not io_completion.io_complete:
+                        # CuFile.close can wait for pending I/O.
+                        owns_loader = False
+
+            if stream is None:
+                # Keep I/O locked and null-stream decode asynchronous.
+                # Its normal allocations are stream-ordered; abandoned I/O
+                # still needs durable owners before the submission gate opens.
+                with _gpu_submission_guard(), completion_stream:
+                    try:
+                        handle = loader.load_tiles_async(
+                            plan["sel_abs_offsets"], plan["sel_lengths"]
+                        )
+                        keepalive.append(handle)
+                        io_completion.handle = handle
+                        d_concat, rel_offsets = handle.wait()
+                        io_completion.io_complete = True
+                        keepalive.append(d_concat)
+                        return GpuCompImageReader.decode_from_device_heap(
+                            d_concat, rel_offsets, plan, out=out, stream=None
+                        )
+                    except BaseException as error:
+                        abandon(error)
+                        raise
+
+            started = False
+            try:
+                with _gpu_submission_guard():
+                    started = True
+                    try:
+                        with stream:
+                            handle = loader.load_tiles_async(
+                                plan["sel_abs_offsets"], plan["sel_lengths"]
+                            )
+                        keepalive.append(handle)
+                        io_completion.handle = handle
+                        _quarantine_gpu_batches(
+                            [completion], actively_awaited=True
+                        )
+                    except BaseException as error:
+                        abandon(error)
+                        raise
+
+                # Keep the caller's stream context, but let independent reads
+                # enter the submission gate while these GDS futures wait.
+                with stream:
+                    d_concat, rel_offsets = handle.wait()
+                io_completion.io_complete = True
+                keepalive.append(d_concat)
+                # Another read may have become unresolved during our I/O wait.
+                # Catch entry failure as well as errors from the guarded body.
+                with _gpu_submission_guard():
+                    try:
+                        with stream:
+                            out = GpuCompImageReader.decode_from_device_heap(
+                                d_concat,
+                                rel_offsets,
+                                plan,
+                                out=out,
+                                stream=stream,
+                                keepalive=keepalive,
+                            )
+                    except (KeyboardInterrupt, SystemExit) as error:
+                        abandon(error)
+                        raise
+                    except BaseException as error:
+                        submission_error = error
+                    finally:
+                        if not unresolved:
+                            _quarantine_gpu_batches(
+                                [completion], actively_awaited=True
+                            )
+                try:
+                    _synchronize_gpu_batch(
+                        completion, synchronize_stream=True
+                    )
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException:
+                    if submission_error is None:
+                        raise
+            except BaseException as error:
+                if started and not unresolved:
+                    abandon(error)
+                raise
+            if submission_error is not None:
+                raise submission_error
+        finally:
+            if owns_loader:
+                loader.close()
         return out

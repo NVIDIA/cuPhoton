@@ -16,9 +16,12 @@ Entry points for the FITS reader:
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Sequence
+
+_KVIKIO_DEFAULTS_LOCK = threading.Lock()
 
 
 def available_cpu_cores() -> int:
@@ -37,7 +40,11 @@ def configure_kvikio_parallelism() -> int:
     import kvikio.defaults as defaults
 
     num_threads = available_cpu_cores()
-    defaults.set("num_threads", num_threads)
+    # Setting even the current size resets the pool and waits for active I/O.
+    # Keep concurrent callers from acting on a stale pool size.
+    with _KVIKIO_DEFAULTS_LOCK:
+        if defaults.get("num_threads") != num_threads:
+            defaults.set("num_threads", num_threads)
     return num_threads
 
 
@@ -105,6 +112,11 @@ class HeapReadHandle:
             self._waited = True
             self._futures = None  # drop refs so kvikio can release resources
         return self.d_buf, self.rel_offsets
+
+    @property
+    def done(self) -> bool:
+        """Report I/O completion without waiting on any read."""
+        return self._waited or all(fut.done() for fut in self._futures)
 
 
 class GdsHeapLoader:
