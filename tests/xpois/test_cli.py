@@ -1324,8 +1324,9 @@ def test_cli_fit_kernel_supports_auto_stamp_mask(tmp_path, capsys) -> None:
     assert "fit_mask_metadata" in summary["saved"]
 
 
+@pytest.mark.parametrize("command", ["fit-kernel", "benchmark-backends"])
 def test_cli_fit_kernel_supports_fits_mask_policy_crop_and_auto_stamps(
-    tmp_path, capsys
+    tmp_path, capsys, command
 ) -> None:
     import numpy as np
     from astropy.io import fits
@@ -1381,7 +1382,7 @@ def test_cli_fit_kernel_supports_fits_mask_policy_crop_and_auto_stamps(
 
     rc = _run_cli(
         [
-            "fit-kernel",
+            command,
             "--reference",
             str(reference),
             "--target",
@@ -1424,6 +1425,11 @@ def test_cli_fit_kernel_supports_fits_mask_policy_crop_and_auto_stamps(
             "--name",
             "fits-auto-mask-run",
         ]
+        + (
+            ["--backends", "cpu", "--repeats", "1", "--warmup", "0"]
+            if command == "benchmark-backends"
+            else []
+        )
     )
     captured = capsys.readouterr()
 
