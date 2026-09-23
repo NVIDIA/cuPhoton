@@ -101,10 +101,11 @@ uses the unregularized least-squares path. Treat a nonzero value as an
 experiment configuration that requires independent validation, not as a
 general-purpose default.
 
-Detector artifact manifests are now version 2 and record the diagnostics level
-and ridge alpha in the resume identity. Version 1 manifests still load, but
-shards written before this change no longer match the resume identity, so a
-resumed run recomputes them once and rewrites them as version 2.
+For linear prediction, detector artifact manifests use version 2 and record
+the diagnostics level and ridge alpha in the resume identity. Version 1 manifests
+still load, but shards written before this change no longer match the resume
+identity, so a resumed linear-prediction run recomputes them once and rewrites
+them as version 2. Iterative fitting uses manifest version 3.
 
 ## Optional iterative fitting
 
