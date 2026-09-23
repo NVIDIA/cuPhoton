@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from scipy.signal import fftconvolve
 
+import cuphoton.xpois.spatial_als as spatial_als_module
 import cuphoton.xpois.spatial_gaussian_polynomial as spatial_model_module
 from cuphoton.xpois import (
     GaussianBasisComponent,
@@ -29,6 +30,76 @@ from cuphoton.xpois.spatial_gaussian_polynomial import (
 
 def _random_source(shape: tuple[int, int], *, seed: int) -> np.ndarray:
     return np.random.default_rng(seed).normal(size=shape)
+
+
+def _cupy_device_or_skip():
+    cp = pytest.importorskip("cupy")
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    if device_count < 1:
+        pytest.skip("CuPy CUDA runtime has no visible device")
+    return cp
+
+
+def _assert_cupy_matches_cpu(cpu, gpu) -> None:
+    assert gpu.backend == "cupy"
+    assert (
+        1
+        <= gpu.design_chunk_size
+        <= spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE
+    )
+    assert np.array_equal(gpu.fit_mask, cpu.fit_mask)
+    for name in (
+        "photometric_coefficients",
+        "shape_coefficients",
+        "background_coefficients",
+        "basis_kernels",
+        "photometric_scale",
+        "background",
+        "matched",
+        "residual",
+        "propagated_source_variance",
+        "marginal_residual_variance",
+        "marginal_standardized_residual",
+    ):
+        cpu_value = getattr(cpu, name)
+        gpu_value = getattr(gpu, name)
+        if cpu_value is None:
+            assert gpu_value is None
+        else:
+            np.testing.assert_allclose(
+                gpu_value,
+                cpu_value,
+                rtol=2.0e-8,
+                atol=2.0e-9,
+                equal_nan=True,
+            )
+    np.testing.assert_allclose(
+        [gpu.fit_objective, gpu.condition_number],
+        [cpu.fit_objective, cpu.condition_number],
+        rtol=2.0e-8,
+        atol=2.0e-9,
+    )
+    for name in (
+        "basis_terms",
+        "photometric_terms",
+        "shape_terms",
+        "background_terms",
+        "image_shape",
+        "spatial_domain",
+        "explicit_fit_samples",
+        "fit_selection_kind",
+        "fit_weighting",
+        "dof",
+        "fit_pixel_count",
+        "unique_fit_pixel_count",
+        "requested_fit_pixel_count",
+        "excluded_requested_fit_pixel_count",
+        "source_variance_included",
+    ):
+        assert getattr(gpu, name) == getattr(cpu, name)
 
 
 def _chebyshev_field(
@@ -109,6 +180,7 @@ def _spatial_target(
     return target
 
 
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
 @pytest.mark.parametrize(
     ("flux_scale", "variance_scale"),
     [
@@ -120,8 +192,10 @@ def _spatial_target(
     ],
 )
 def test_spatial_model_recovers_decoupled_spatial_fields(
-    flux_scale: float, variance_scale: float
+    flux_scale: float, variance_scale: float, backend: str
 ) -> None:
+    if backend == "cupy":
+        _cupy_device_or_skip()
     shape = (60, 64)
     source = flux_scale * _random_source(shape, seed=11)
     components = [GaussianBasisComponent(sigma=1.2, degree=1)]
@@ -162,9 +236,21 @@ def test_spatial_model_recovers_decoupled_spatial_fields(
             photometric_degree=1,
             background_degree=1,
         ),
+        backend=backend,
     )
 
-    assert result.backend == "cpu"
+    assert result.backend == backend
+    if backend == "cpu":
+        assert (
+            result.design_chunk_size
+            == spatial_model_module._DESIGN_CHUNK_SIZE
+        )
+    else:
+        assert (
+            1
+            <= result.design_chunk_size
+            <= spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE
+        )
     assert result.fit_selection_kind == "all_valid"
     assert result.fit_weighting == "target_variance"
     assert result.explicit_fit_samples is None
@@ -317,6 +403,7 @@ def test_spatial_model_uses_explicit_parent_spatial_domain() -> None:
             photometric_degree=1,
             background_degree=1,
         ),
+        backend="cpu",
     )
 
     assert result.spatial_domain == domain
@@ -379,6 +466,7 @@ def test_spatial_model_resolves_default_spatial_domain() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     assert result.spatial_domain == SpatialKernelDomain(
@@ -443,6 +531,7 @@ def test_spatial_model_degree_zero_matches_constant_solver() -> None:
             photometric_degree=0,
             background_degree=1,
         ),
+        backend="cpu",
     )
 
     assert spatial.fit_objective > 1.0
@@ -620,6 +709,7 @@ def test_spatial_model_represents_rank_two_kernel_that_als_cannot() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
     als = solve_spatial_als(
         source,
@@ -673,6 +763,7 @@ def test_spatial_model_excludes_invalid_inputs_and_respects_mask() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     assert not result.fit_mask[20, 21]
@@ -769,6 +860,7 @@ def test_spatial_model_explicit_samples_match_equivalent_mask() -> None:
         fit_mask=fit_mask,
         spatial_domain=domain,
         config=config,
+        backend="cpu",
     )
     explicit = solve_spatial_gaussian_polynomial_kernel(
         source,
@@ -779,6 +871,7 @@ def test_spatial_model_explicit_samples_match_equivalent_mask() -> None:
         fit_samples=samples,
         spatial_domain=domain,
         config=config,
+        backend="cpu",
     )
 
     assert np.array_equal(samples.positions_yx, expected_positions)
@@ -850,6 +943,7 @@ def test_relative_precision_matches_adjusted_variance() -> None:
         variance=variance,
         fit_samples=weighted_samples,
         config=config,
+        backend="cpu",
     )
     adjusted = solve_spatial_gaussian_polynomial_kernel(
         source,
@@ -859,6 +953,7 @@ def test_relative_precision_matches_adjusted_variance() -> None:
         variance=adjusted_variance,
         fit_samples=unit_samples,
         config=config,
+        backend="cpu",
     )
     relative_only = solve_spatial_gaussian_polynomial_kernel(
         source,
@@ -867,6 +962,7 @@ def test_relative_precision_matches_adjusted_variance() -> None:
         kernel_shape=(7, 7),
         fit_samples=weighted_samples,
         config=config,
+        backend="cpu",
     )
 
     assert weighted.fit_weighting == "target_variance_relative_precision"
@@ -968,6 +1064,7 @@ def test_spatial_model_reports_target_only_noise_diagnostics() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     valid = np.isfinite(result.residual)
@@ -1007,6 +1104,7 @@ def test_spatial_model_omits_noise_diagnostics_without_variance() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     assert not result.source_variance_included
@@ -1064,6 +1162,7 @@ def test_spatial_model_propagates_source_variance() -> None:
             photometric_degree=1,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     assert result.source_variance_included
@@ -1105,6 +1204,7 @@ def test_source_variance_invalidates_only_affected_diagnostics() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
     result = solve_spatial_gaussian_polynomial_kernel(
         source,
@@ -1118,6 +1218,7 @@ def test_source_variance_invalidates_only_affected_diagnostics() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     affected = np.s_[17:24, 18:25]
@@ -1140,6 +1241,7 @@ def test_source_variance_invalidates_only_affected_diagnostics() -> None:
     assert np.isnan(result.marginal_standardized_residual[affected]).all()
 
 
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
 @pytest.mark.parametrize(
     ("scale", "target_variance", "propagation_overflows"),
     [(2.0, 1.0, True), (1.0, 1.0e308, False)],
@@ -1149,7 +1251,10 @@ def test_source_variance_overflow_invalidates_only_noise_diagnostics(
     scale: float,
     target_variance: float,
     propagation_overflows: bool,
+    backend: str,
 ) -> None:
+    if backend == "cupy":
+        _cupy_device_or_skip()
     rng = np.random.default_rng(20260920)
     source = rng.normal(size=(9, 9))
     target = scale * source + rng.normal(scale=0.1, size=source.shape)
@@ -1169,6 +1274,7 @@ def test_source_variance_overflow_invalidates_only_noise_diagnostics(
         kernel_shape=(1, 1),
         variance=variance,
         config=config,
+        backend=backend,
     )
     with np.errstate(over="ignore"):
         result = solve_spatial_gaussian_polynomial_kernel(
@@ -1179,8 +1285,10 @@ def test_source_variance_overflow_invalidates_only_noise_diagnostics(
             variance=variance,
             source_variance=source_variance,
             config=config,
+            backend=backend,
         )
 
+    assert result.backend == backend
     assert np.array_equal(result.fit_mask, baseline.fit_mask)
     assert np.array_equal(result.matched, baseline.matched)
     assert np.array_equal(result.residual, baseline.residual)
@@ -1219,6 +1327,7 @@ def test_spatial_model_rejects_invalid_source_variance() -> None:
             source.copy(),
             components,
             source_variance=np.ones(shape),
+            backend="cpu",
         )
     with pytest.raises(ValueError, match="match the image shape"):
         solve_spatial_gaussian_polynomial_kernel(
@@ -1227,6 +1336,7 @@ def test_spatial_model_rejects_invalid_source_variance() -> None:
             components,
             variance=np.ones(shape),
             source_variance=np.ones((31, 34)),
+            backend="cpu",
         )
     invalid = np.ones(shape)
     invalid[12, 13] = -1.0
@@ -1237,6 +1347,7 @@ def test_spatial_model_rejects_invalid_source_variance() -> None:
             components,
             variance=np.ones(shape),
             source_variance=invalid,
+            backend="cpu",
         )
 
 
@@ -1344,6 +1455,7 @@ def test_spatial_model_accepts_array_on_spatial_domain_edges() -> None:
             photometric_degree=0,
             background_degree=0,
         ),
+        backend="cpu",
     )
 
     assert result.spatial_domain == domain
@@ -1375,6 +1487,7 @@ def test_spatial_model_rejects_array_outside_spatial_domain(
             source.copy(),
             components,
             spatial_domain=domain,
+            backend="cpu",
         )
 
 
@@ -1435,6 +1548,7 @@ def test_spatial_model_rejects_conflicting_fit_selectors() -> None:
             [GaussianBasisComponent(sigma=1.0, degree=0)],
             fit_mask=np.ones(shape, dtype=bool),
             fit_samples=samples,
+            backend="cpu",
         )
 
 
@@ -1452,6 +1566,7 @@ def test_spatial_model_rejects_samples_outside_kernel_interior() -> None:
             [GaussianBasisComponent(sigma=1.0, degree=0)],
             kernel_shape=(7, 7),
             fit_samples=samples,
+            backend="cpu",
         )
 
 
@@ -1481,6 +1596,7 @@ def test_spatial_model_rejects_samples_with_invalid_inputs(
             kernel_shape=(7, 7),
             variance=variance,
             fit_samples=samples,
+            backend="cpu",
         )
 
 
@@ -1581,7 +1697,316 @@ def test_spatial_model_precision_does_not_increase_dof() -> None:
                 photometric_degree=0,
                 background_degree=0,
             ),
+            backend="cpu",
         )
+
+
+def test_spatial_model_auto_falls_back_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        spatial_als_module,
+        "_cupy_is_available",
+        lambda: False,
+    )
+    shape = (15, 17)
+    source = _random_source(shape, seed=71)
+    components = [GaussianBasisComponent(sigma=1.0, degree=0)]
+    basis, _ = build_gaussian_polynomial_basis(
+        (3, 3),
+        components,
+        flux_conserve=True,
+    )
+    target = fftconvolve(source, basis[0], mode="same") + 0.02
+
+    result = solve_spatial_gaussian_polynomial_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(3, 3),
+        config=SpatialGaussianPolynomialKernelConfig(
+            shape_degree=0,
+            photometric_degree=0,
+            background_degree=0,
+        ),
+        backend="auto",
+    )
+
+    assert result.backend == "cpu"
+    assert result.design_chunk_size == spatial_model_module._DESIGN_CHUNK_SIZE
+
+
+def test_spatial_model_auto_prefers_cupy_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        spatial_als_module,
+        "_cupy_is_available",
+        lambda: True,
+    )
+
+    assert spatial_model_module._resolve_spatial_backend("auto") == "cupy"
+
+
+def test_spatial_model_explicit_cupy_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable():
+        raise ImportError("test CuPy failure")
+
+    monkeypatch.setattr(spatial_model_module, "_load_cupy", unavailable)
+    image = np.ones((9, 9), dtype=np.float64)
+
+    with pytest.raises(ImportError, match="test CuPy failure"):
+        solve_spatial_gaussian_polynomial_kernel(
+            image,
+            image,
+            [GaussianBasisComponent(sigma=1.0, degree=0)],
+            kernel_shape=(3, 3),
+            backend="cupy",
+        )
+
+
+def test_spatial_model_rejects_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="auto, cpu, cupy"):
+        solve_spatial_gaussian_polynomial_kernel(
+            np.ones((9, 9)),
+            np.ones((9, 9)),
+            [GaussianBasisComponent(sigma=1.0, degree=0)],
+            kernel_shape=(3, 3),
+            backend="numba-cuda",
+        )
+
+
+def _fake_cupy(free_bytes: int):
+    class Runtime:
+        @staticmethod
+        def memGetInfo() -> tuple[int, int]:
+            return (free_bytes, 80 * 1024**3)
+
+    class Cuda:
+        runtime = Runtime()
+
+    class FakeCupy:
+        cuda = Cuda()
+
+    return FakeCupy()
+
+
+@pytest.mark.parametrize("row_count", [1, 500, 10_000_000])
+@pytest.mark.parametrize(
+    (
+        "kernel_shape",
+        "basis_count",
+        "photometric_terms",
+        "shape_terms",
+        "background_terms",
+    ),
+    [((21, 21), 12, 6, 6, 3), ((3, 3), 6, 10, 10, 10), ((3, 3), 1, 1, 1, 1)],
+)
+def test_spatial_model_gpu_design_chunk_size_is_memory_bounded(
+    row_count: int,
+    kernel_shape: tuple[int, int],
+    basis_count: int,
+    photometric_terms: int,
+    shape_terms: int,
+    background_terms: int,
+) -> None:
+    free_bytes = [1, 64 * 1024**2, 1024**3, 80 * 1024**3]
+    chunks = [
+        spatial_model_module._gpu_design_chunk_size(
+            _fake_cupy(available),
+            row_count=row_count,
+            kernel_shape=kernel_shape,
+            basis_count=basis_count,
+            photometric_term_count=photometric_terms,
+            shape_term_count=shape_terms,
+            background_term_count=background_terms,
+        )
+        for available in free_bytes
+    ]
+
+    cap = min(row_count, spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE)
+    assert all(1 <= chunk <= cap for chunk in chunks)
+    assert chunks == sorted(chunks)
+    assert chunks[0] == 1
+    # More free memory cannot increase the chunk past the scratch budget.
+    assert chunks[-1] == chunks[-2]
+    if row_count == 10_000_000:
+        assert chunks[-1] > chunks[1]
+
+
+def test_spatial_model_cupy_matches_rank_two_parent_domain_cpu_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _cupy_device_or_skip()
+    # Force multiple chunks independently of the memory-sizing heuristic.
+    monkeypatch.setattr(
+        spatial_model_module,
+        "_gpu_design_chunk_size",
+        lambda *args, **kwargs: 37,
+    )
+    shape = (38, 42)
+    source_parent = _random_source((76, 84), seed=73)
+    source = source_parent[::2, ::2]
+    assert not source.flags.c_contiguous
+    components = [GaussianBasisComponent(sigma=1.2, degree=2)]
+    basis, _ = build_gaussian_polynomial_basis(
+        (7, 7),
+        components,
+        flux_conserve=True,
+    )
+    photometric_coefficients = np.array([1.03, 0.02, -0.015])
+    shape_coefficients = np.zeros((basis.shape[0] - 1, 6))
+    shape_coefficients[0] = [0.12, 0.01, -0.008, 0.004, -0.003, 0.002]
+    shape_coefficients[3] = [-0.08, -0.006, 0.009, -0.003, 0.002, -0.001]
+    background_coefficients = np.array([0.04, -0.01, 0.006])
+    domain = SpatialKernelDomain(
+        array_origin_yx=(112, 518),
+        normalization_bbox=(100, 180, 500, 596),
+    )
+    target = _spatial_target(
+        source,
+        basis,
+        photometric_coefficients,
+        shape_coefficients,
+        background_coefficients,
+        photometric_degree=1,
+        shape_degree=2,
+        background_degree=1,
+        domain=domain,
+    )
+    variance = 0.4 + np.linspace(0.0, 0.3, source.size).reshape(shape)
+    source[9, 10] = np.nan
+    target[20, 22] = np.nan
+    variance[25, 26] = np.nan
+    config = SpatialGaussianPolynomialKernelConfig(
+        shape_degree=2,
+        photometric_degree=1,
+        background_degree=1,
+    )
+
+    cpu = solve_spatial_gaussian_polynomial_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(7, 7),
+        variance=variance,
+        spatial_domain=domain,
+        config=config,
+        backend="cpu",
+    )
+    gpu = solve_spatial_gaussian_polynomial_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(7, 7),
+        variance=variance,
+        spatial_domain=domain,
+        config=config,
+        backend="cupy",
+    )
+
+    assert np.linalg.matrix_rank(cpu.kernel_at_local(19, 21)) == 2
+    _assert_cupy_matches_cpu(cpu, gpu)
+    assert gpu.design_chunk_size == 37
+    assert not gpu.fit_mask[9, 10]
+    assert not gpu.fit_mask[20, 22]
+    assert not gpu.fit_mask[25, 26]
+    for parent_y, parent_x in ((115.5, 521.25), (131.5, 539.25), (148, 558)):
+        np.testing.assert_allclose(
+            gpu.kernel_at_parent(parent_y, parent_x),
+            cpu.kernel_at_parent(parent_y, parent_x),
+            rtol=2.0e-8,
+            atol=2.0e-9,
+        )
+
+
+def test_spatial_model_cupy_matches_weighting_and_source_variance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _cupy_device_or_skip()
+    # 29 divides neither the 182 fit rows nor the 847 diagnostic rows, so
+    # the QR, reconstruction, and variance-propagation loops all span
+    # several chunks with a short final chunk.
+    # Force multiple chunks independently of the memory-sizing heuristic.
+    monkeypatch.setattr(
+        spatial_model_module,
+        "_gpu_design_chunk_size",
+        lambda *args, **kwargs: 29,
+    )
+    shape = (34, 38)
+    source = _random_source(shape, seed=79)
+    components = [GaussianBasisComponent(sigma=1.1, degree=1)]
+    basis, _ = build_gaussian_polynomial_basis(
+        (7, 7),
+        components,
+        flux_conserve=True,
+    )
+    photometric_coefficients = np.array([1.02, 0.015, -0.01])
+    shape_coefficients = np.array(
+        [
+            [0.03, 0.004, -0.003],
+            [-0.02, -0.002, 0.003],
+        ]
+    )
+    background_coefficients = np.array([0.05])
+    noise = np.random.default_rng(83).normal(scale=0.01, size=shape)
+    target = _spatial_target(
+        source,
+        basis,
+        photometric_coefficients,
+        shape_coefficients,
+        background_coefficients,
+        photometric_degree=1,
+        shape_degree=1,
+        background_degree=0,
+    )
+    target += noise
+    target_variance = 0.3 + np.linspace(0.0, 0.2, source.size).reshape(shape)
+    source_variance = 0.5 + np.linspace(0.0, 0.3, source.size).reshape(shape)
+    source_variance[17, 19] = np.nan
+    fit_mask = np.zeros(shape, dtype=bool)
+    fit_mask[4:-4:2, 5:-5:2] = True
+    positions = np.column_stack(np.nonzero(fit_mask))
+    samples = SpatialGaussianPolynomialKernelFitSamples(
+        positions_yx=positions[::-1],
+        relative_precision=np.linspace(0.5, 2.0, positions.shape[0]),
+    )
+    config = SpatialGaussianPolynomialKernelConfig(
+        shape_degree=1,
+        photometric_degree=1,
+        background_degree=0,
+    )
+
+    cpu = solve_spatial_gaussian_polynomial_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(7, 7),
+        variance=target_variance,
+        source_variance=source_variance,
+        fit_samples=samples,
+        config=config,
+        backend="cpu",
+    )
+    gpu = solve_spatial_gaussian_polynomial_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(7, 7),
+        variance=target_variance,
+        source_variance=source_variance,
+        fit_samples=samples,
+        config=config,
+        backend="cupy",
+    )
+
+    _assert_cupy_matches_cpu(cpu, gpu)
+    assert gpu.design_chunk_size == 29
+    assert gpu.fit_pixel_count == 182
+    assert np.isfinite(gpu.propagated_source_variance).sum() == 847
+    assert gpu.explicit_fit_samples is samples
 
 
 @pytest.mark.parametrize(
@@ -1750,10 +2175,14 @@ def test_spatial_model_fails_closed_at_condition_limit() -> None:
         solve(0.999 * baseline.condition_number)
 
 
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
 @pytest.mark.parametrize("flux_scale", [1.0e-12, 1.0, 1.0e11])
 def test_spatial_model_fails_closed_on_degenerate_designs(
     flux_scale: float,
+    backend: str,
 ) -> None:
+    if backend == "cupy":
+        _cupy_device_or_skip()
     shape = (40, 44)
     components = [GaussianBasisComponent(sigma=1.2, degree=1)]
 
@@ -1771,6 +2200,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs(
                 photometric_degree=1,
                 background_degree=1,
             ),
+            backend=backend,
         )
     # With zero-sum shape bases the same source also yields rounding-level
     # shape columns, which the null-column guard rejects first.
@@ -1785,6 +2215,7 @@ def test_spatial_model_fails_closed_on_degenerate_designs(
                 photometric_degree=0,
                 background_degree=0,
             ),
+            backend=backend,
         )
     # A zero source leaves every kernel column exactly empty.
     zero_source = np.zeros(shape)
@@ -1799,4 +2230,27 @@ def test_spatial_model_fails_closed_on_degenerate_designs(
                 photometric_degree=0,
                 background_degree=0,
             ),
+            backend=backend,
+        )
+
+
+def test_spatial_model_cupy_fails_closed_at_condition_limit() -> None:
+    _cupy_device_or_skip()
+    shape = (40, 44)
+    source = _random_source(shape, seed=31)
+    components = [GaussianBasisComponent(sigma=1.2, degree=1)]
+
+    with pytest.raises(ValueError, match="ill-conditioned"):
+        solve_spatial_gaussian_polynomial_kernel(
+            source,
+            source.copy(),
+            components,
+            kernel_shape=(7, 7),
+            config=SpatialGaussianPolynomialKernelConfig(
+                shape_degree=0,
+                photometric_degree=0,
+                background_degree=0,
+                condition_limit=1.01,
+            ),
+            backend="cupy",
         )

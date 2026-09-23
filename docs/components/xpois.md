@@ -4,7 +4,8 @@
 then subtracts a matched reference from a target image. It implements
 Alard-Lupton-style Gaussian-polynomial bases for constant two-dimensional
 kernels, a global separable alternating solver, and a spatially varying
-separable ALS model. Its CLI group is `cuphoton xpois`.
+separable ALS model. An experimental research API jointly fits a spatial
+Gaussian-polynomial kernel model. Its CLI group is `cuphoton xpois`.
 
 ## Install and smoke test
 
@@ -23,7 +24,8 @@ Backend selection is solver-specific. For the constant solver, `auto` prefers
 CuPy, then Numba-CUDA, then CPU; cuTile remains explicit and experimental. For
 spatial ALS, `auto` prefers CuPy when it has a usable CUDA device and otherwise
 uses the CPU reference implementation. Explicit `cupy` selection fails instead
-of falling back when its runtime is unavailable.
+of falling back when its runtime is unavailable. The spatial
+Gaussian-polynomial research API follows the spatial-ALS rule.
 
 ## Input and output contract
 
@@ -214,9 +216,12 @@ one fit or add the spatial solver to those batch paths.
 
 ## Spatial Gaussian-polynomial research API
 
-`solve_spatial_gaussian_polynomial_kernel` is an experimental CPU reference for
-a less restrictive model than rank-one ALS. It uses fixed two-dimensional
-Gaussian-polynomial basis kernels in the spatial-kernel lineage of
+`solve_spatial_gaussian_polynomial_kernel` is an experimental CPU and CuPy
+implementation of a spatial Gaussian-polynomial kernel model. Its fixed
+Gaussian-polynomial basis, built from isotropic Gaussian envelopes, can
+represent nonseparable kernel modes that rank-one ALS cannot, while the ALS
+outer-product family can represent kernels outside this fixed basis. It
+follows the spatial-kernel lineage of
 [Alard (2000)](https://arxiv.org/abs/astro-ph/9903111), with independently
 controlled photometric-scale, kernel-shape, and background fields as described
 by [Bramich et al. (2013)](https://arxiv.org/abs/1210.2926). This identifies the
@@ -247,6 +252,7 @@ fit = solve_spatial_gaussian_polynomial_kernel(
         photometric_degree=0,
         background_degree=1,
     ),
+    backend="cupy",
 )
 local_kernel = fit.kernel_at_local(local_y, local_x)
 parent_kernel = fit.kernel_at_parent(detector_y, detector_x)
@@ -273,8 +279,9 @@ The model fits all fixed two-dimensional Gaussian-polynomial basis terms
 jointly in one convex weighted linear solve. The first, unit-sum basis carries
 the photometric-scale field; every remaining basis has zero sum and describes
 kernel shape. This prevents shape variation from silently changing the kernel
-sum. A block QR reduction avoids forming normal equations in the CPU reference,
-and ill-conditioned fits fail rather than acquiring an implicit ridge model.
+sum. Both backends use the same block QR reduction without forming normal
+equations, and ill-conditioned fits fail rather than acquiring an implicit
+ridge model.
 Basis kernels or design columns that cancel to rounding noise, such as a
 duplicated component, are rejected before the solve because the column-scaled
 condition number cannot detect them.
@@ -291,7 +298,10 @@ y1, x0, x1)`, this means `y0 <= y <= y1 - 1` and `x0 <= x <= x1 - 1`,
 including fractional positions between centers. For a cutout it
 extrapolates the fitted fields beyond the array within these bounds.
 
-This experimental Python API has no CLI selector or GPU backend.
+This experimental Python API has no CLI selector. The CPU path
+is the same-model numerical reference; `backend="cupy"` executes the same
+two-dimensional basis contraction and FP64 QR solve on one GPU, while
+`backend="auto"` chooses CuPy only when a usable CUDA device is available.
 
 `variance` supplies target-only weights for the fit objective. When
 `source_variance` is also supplied, the result propagates independent source
