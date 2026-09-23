@@ -9,6 +9,7 @@ import inspect
 import pickle
 import subprocess
 import sys
+import weakref
 from dataclasses import FrozenInstanceError, replace
 from typing import Any
 
@@ -339,6 +340,31 @@ def test_device_features_ignore_residual_values() -> None:
     ).item()
 
 
+@pytest.mark.parametrize("model", ["gaussian", "stamp"])
+def test_device_features_accept_result_without_residuals(model: str) -> None:
+    cp = _require_cupy_device()
+    portable, full_result = _make_results(cp, model=model, dtype=np.float64)
+    residual_ref = weakref.ref(full_result.residuals)
+    result = replace(full_result, residuals=None)
+    del full_result
+    gc.collect()
+    assert residual_ref() is None
+
+    expected = transform_xfit_result_features(
+        portable,
+        image_shape=_IMAGE_SHAPE,
+        variance_present=True,
+    )
+    features = transform_xfit_result_features_device(
+        result,
+        image_shape=_IMAGE_SHAPE,
+        variance_present=True,
+    )
+
+    assert np.allclose(cp.asnumpy(features.values), expected, rtol=2e-6)
+    assert features.image_shape == _IMAGE_SHAPE
+
+
 def test_device_features_accept_actual_device_fit_result() -> None:
     cp = _require_cupy_device()
     truth = np.asarray(
@@ -454,12 +480,6 @@ def test_device_feature_transform_rejects_invalid_source_contracts() -> None:
         transform_xfit_result_features_device(  # type: ignore[arg-type]
             object(),
             image_shape=_IMAGE_SHAPE,
-            variance_present=True,
-        )
-    with pytest.raises(ValueError, match="does not match"):
-        transform_xfit_result_features_device(
-            source,
-            image_shape=(9, 13),
             variance_present=True,
         )
 

@@ -95,6 +95,9 @@ class DeviceDipoleFitResult:
     ``uncertainty_reason_codes`` contains
     :class:`DipoleFitUncertaintyReason` values. Floating-point compute arrays
     use ``dtype``; portable fractions and reduced chi-square remain float64.
+    Fitting returns residual arrays. Callers that no longer need them may
+    use ``dataclasses.replace(result, residuals=None)`` and release the
+    original result before transforming XScan features.
     """
 
     parameters: Any
@@ -115,7 +118,7 @@ class DeviceDipoleFitResult:
     standard_errors: Any
     uncertainty_valid: Any
     uncertainty_reason_codes: Any
-    residuals: Any
+    residuals: Any | None
     device_id: int
     dtype: FloatDType
     model: ModelName
@@ -175,6 +178,8 @@ class DeviceDipoleFitResult:
             "uncertainty_reason_codes": self.uncertainty_reason_codes,
             "residuals": self.residuals,
         }
+        if self.residuals is None:
+            del arrays["residuals"]
         for name, value in arrays.items():
             if not isinstance(value, cp.ndarray):
                 raise TypeError(f"{name} must be a CuPy array")
@@ -221,18 +226,23 @@ class DeviceDipoleFitResult:
             raise ValueError(
                 "standard_errors must align with the parameter array"
             )
-        if self.residuals.shape[0] != batch:
-            raise ValueError("residuals must align with the parameter batch")
-        if self.mode == "difference" and self.residuals.ndim != 3:
-            raise ValueError(
-                "difference residuals must have shape (batch, height, width)"
-            )
-        if self.mode == "split" and (
-            self.residuals.ndim != 4 or self.residuals.shape[1] != 3
-        ):
-            raise ValueError(
-                "split residuals must have shape (batch, 3, height, width)"
-            )
+        if self.residuals is not None:
+            if self.residuals.shape[0] != batch:
+                raise ValueError(
+                    "residuals must align with the parameter batch"
+                )
+            if self.mode == "difference" and self.residuals.ndim != 3:
+                raise ValueError(
+                    "difference residuals must have shape "
+                    "(batch, height, width)"
+                )
+            if self.mode == "split" and (
+                self.residuals.ndim != 4 or self.residuals.shape[1] != 3
+            ):
+                raise ValueError(
+                    "split residuals must have shape "
+                    "(batch, 3, height, width)"
+                )
 
         compute_float_arrays = (
             "parameters",
@@ -245,6 +255,8 @@ class DeviceDipoleFitResult:
             "residuals",
         )
         for name in compute_float_arrays:
+            if name == "residuals" and self.residuals is None:
+                continue
             if np.dtype(arrays[name].dtype) != np.dtype(self.dtype):
                 raise TypeError(f"{name} must have {self.dtype} dtype")
         for name in (

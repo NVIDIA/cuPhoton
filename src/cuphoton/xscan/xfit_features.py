@@ -1284,7 +1284,6 @@ def _validate_device_feature_source(
     *,
     cp: Any,
     active_device_id: int,
-    image_shape: tuple[int, int],
 ) -> tuple[str, ...]:
     if result.schema != "cuphoton.xfit.device-fit-result/v1":
         raise ValueError("xFit device result schema is unsupported")
@@ -1310,7 +1309,6 @@ def _validate_device_feature_source(
         "uncertainty_valid": result.uncertainty_valid,
         "standard_errors": result.standard_errors,
         "covariance": result.covariance,
-        "residuals": result.residuals,
     }
     for name, value in arrays.items():
         if not isinstance(value, cp.ndarray):
@@ -1347,12 +1345,6 @@ def _validate_device_feature_source(
     ):
         if arrays[name].shape != (batch_size,):
             raise ValueError(f"xFit result {name} has an inconsistent shape")
-    if result.residuals.ndim != 3 or result.residuals.shape[0] != batch_size:
-        raise ValueError(
-            "xFit result residuals must have shape (batch, height, width)"
-        )
-    if tuple(result.residuals.shape[-2:]) != image_shape:
-        raise ValueError("image_shape does not match xFit result residuals")
     compute_dtype = np.dtype(result.dtype)
     if compute_dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
         raise ValueError("xFit result dtype must be 'float32' or 'float64'")
@@ -1361,7 +1353,6 @@ def _validate_device_feature_source(
         "delta_chi_square",
         "standard_errors",
         "covariance",
-        "residuals",
     ):
         if np.dtype(arrays[name].dtype) != compute_dtype:
             raise TypeError(
@@ -1402,6 +1393,9 @@ def transform_xfit_result_features_device(
 ) -> DeviceXFitFeatures:
     """Transform a device xFit result without crossing the host boundary.
 
+    ``image_shape`` supplies the stamp geometry, as in the host adapter.
+    Residual images are neither required nor inspected.
+
     Array-valued inputs remain borrowed on the active CUDA device. The
     returned feature array is newly allocated and retains its own storage.
     Call on the same current CuPy stream that produced ``result`` and consume
@@ -1421,7 +1415,6 @@ def transform_xfit_result_features_device(
         result,
         cp=cp,
         active_device_id=active_device_id,
-        image_shape=image_shape,
     )
 
     batch_size = int(result.parameters.shape[0])
