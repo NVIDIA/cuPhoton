@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import cuphoton.xpois.spatial_als as spatial_als_module
-from cuphoton.xpois.ois import GaussianBasisComponent
+from cuphoton.xpois.ois import GaussianBasisComponent, solve_separable_kernel
 from cuphoton.xpois.spatial_als import (
     SpatialALSConfig,
     SpatialALSFitResult,
@@ -272,6 +272,76 @@ def test_exact_fit_converges_at_machine_precision_floor(
     assert result.iterations < 40
     assert np.all(np.diff(result.objective_history) <= 0.0)
     assert result.objective_history[-1] <= objective_floor
+
+
+def test_degree_zero_matches_separable_solver() -> None:
+    from scipy.signal import fftconvolve
+
+    generator = np.random.default_rng(825)
+    source = generator.normal(size=(25, 27))
+    axis = np.arange(-2, 3, dtype=float)
+    gaussian = np.exp(-(axis**2) / (2.0 * 1.1**2))
+    horizontal = gaussian * (1.0 + 0.09 * axis + 0.04 * axis**2)
+    horizontal /= horizontal.sum()
+    vertical = gaussian * (1.0 - 0.08 * axis + 0.02 * axis**2)
+    vertical *= 1.3 / vertical.sum()
+    y_grid, x_grid = np.indices(source.shape)
+    target = (
+        fftconvolve(source, np.outer(vertical, horizontal), mode="same")
+        + 0.15
+        + 0.003 * x_grid
+        - 0.005 * y_grid
+        + 0.002 * generator.normal(size=source.shape)
+    )
+    variance = 0.7 + 0.02 * x_grid + 0.01 * y_grid
+    fit_mask = np.ones(source.shape, dtype=bool)
+    fit_mask[7:10, 12:16] = False
+    components = [GaussianBasisComponent(sigma=1.1, degree=2)]
+
+    spatial = solve_spatial_als(
+        source,
+        target,
+        components,
+        kernel_shape=(5, 5),
+        variance=variance,
+        fit_mask=fit_mask,
+        config=SpatialALSConfig(
+            spatial_degree=0,
+            background_degree=1,
+            max_iterations=50,
+            tolerance=1.0e-12,
+            regularization=0.0,
+            flux_conserve=False,
+        ),
+    )
+    separable = solve_separable_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(5, 5),
+        variance=variance,
+        fit_mask=fit_mask,
+        background_degree=1,
+        max_iterations=50,
+        tolerance=1.0e-12,
+        flux_conserve=False,
+    )
+
+    assert spatial.converged and separable.converged
+    np.testing.assert_array_equal(spatial.fit_mask, separable.fit_mask)
+    for y, x in ((2, 2), (12, 13), (22, 24)):
+        np.testing.assert_allclose(
+            spatial.kernel_at(y, x), separable.kernel, rtol=0.0, atol=2e-9
+        )
+    for field in ("matched", "residual", "background"):
+        np.testing.assert_allclose(
+            getattr(spatial, field),
+            getattr(separable, field),
+            rtol=0.0,
+            atol=2e-9,
+            equal_nan=True,
+        )
+    assert spatial.chi2 == pytest.approx(separable.chi2, rel=1.0e-9)
 
 
 def test_exact_fit_converges_with_a_single_sweep_budget() -> None:

@@ -9,6 +9,12 @@ arrays and an optional fit region, builds separable Gaussian-polynomial line
 bases, and fits Chebyshev coefficient fields for both line profiles. Survey
 data preparation, camera calibration, source selection, and PSF measurement
 remain caller or adapter responsibilities.
+
+Each pixel has one line profile per axis, so its kernel has rank at most one
+even when the basis contains multiple Gaussian widths. This cannot generally
+represent a sum of distinct circular Gaussians or a rotated anisotropic PSF;
+it does not have the same kernel-shape expressivity as the nonseparable
+constant-kernel model.
 """
 
 from __future__ import annotations
@@ -49,6 +55,9 @@ class SpatialALSConfig:
         the default tolerance.
     tolerance
         Relative penalized-objective change used for convergence.
+        Zero still permits convergence when the finite objective repeats
+        exactly or reaches the floating-point floor; it does not force all
+        ``max_iterations`` sweeps to run.
     regularization
         Non-negative ridge penalty applied to spatial line coefficients. The
         global photometric scale and background are not regularized. The

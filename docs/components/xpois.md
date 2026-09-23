@@ -138,7 +138,11 @@ helpers, and the result dataclasses are also exported from
 
 `solve_spatial_als` fits a different model. At pixel `p`, its kernel is the
 outer product `K_p(v, u) = V_p(v) H_p(u)`, with Chebyshev coefficient fields
-for both line profiles. The returned result therefore exposes
+for both line profiles. There is only one profile per axis, even with
+multiple Gaussian widths, so each realized kernel has rank at most one. A
+sum of distinct circular Gaussians or a rotated anisotropic PSF is generally
+not representable; the kernel-shape expressivity differs from the
+nonseparable `solve_constant_kernel` model. The returned result exposes
 `kernel_at(y, x)` rather than claiming one kernel represents the full image:
 
 ```python
@@ -180,6 +184,10 @@ evaluate `kernel_at(y, x)` for the local kernel sum. Near dependence between
 reference and correction profiles can cause poor conditioning or slow
 convergence. Use `--flux-conserve` (or `flux_conserve=True`) for the spatial
 model unless a position-dependent kernel sum is required.
+
+Setting `tolerance=0` still allows convergence when the finite objective
+repeats exactly or reaches its floating-point floor; it does not require the
+full `max_iterations` budget.
 
 ## Fixed-kernel marginal noise diagnostics
 
