@@ -173,8 +173,10 @@ For detector artifacts, add these options to the HDF5 example above:
 --iterative-max-iterations 600 --fit-diagnostics full
 ```
 
-Detector fitting uses CuPy and the existing normalization and smoothing
-pipeline. The iterative method returns modal center frequencies directly.
+Detector normalization, smoothing and FFTs use CuPy. Sequential iterative
+row fits run on the CPU to avoid per-iteration GPU synchronization; this
+does not change the standalone API's explicit GPU option. The iterative
+method returns modal center frequencies directly.
 The amplitude threshold still controls the displayed signal selection.
 Failed convergence counts against the detector's fit-failure budget.
 Use a bounded region and inspect reconstructions and recovered modes before

@@ -29,10 +29,13 @@ class IterativeFitOptions:
 
     ``max_frequency=None`` uses the sampling Nyquist frequency. ``tolerance``
     bounds the gradient divided by Jacobian-column norms, relative to
-    ``max(1, residual norm)``. It describes numerical stationarity, not fit
-    quality or science acceptance. Regularization defaults to zero. A negative
-    ``min_frequency`` moves the lower optimizer boundary below zero; FFT
-    scouting still uses nonnegative frequencies and outputs are sign-folded.
+    ``max(1, residual norm)``. A stalled finite fit also counts as converged
+    when that scaled gradient is within ``sqrt(float64 eps)``: smaller cost
+    decreases may be lost to rounding. This describes numerical stationarity,
+    not fit quality or science acceptance. Regularization defaults to zero.
+    A negative ``min_frequency`` moves the lower optimizer boundary below
+    zero; FFT scouting still uses nonnegative frequencies and outputs are
+    sign-folded.
     """
 
     max_iterations: int = 600
@@ -393,10 +396,11 @@ def iterative_fit(
         scaled_gradient = xp.abs(gradient) / xp.maximum(
             xp.sqrt(xp.diag(normal)), np.finfo(float).tiny
         )
-        threshold = options.tolerance * max(
+        residual_scale = max(
             1.0, float(xp.linalg.norm(values - device_trace))
         )
-        if float(xp.max(scaled_gradient)) <= threshold:
+        gradient_max = float(xp.max(scaled_gradient))
+        if gradient_max <= options.tolerance * residual_scale:
             status = "converged"
             break
         if iteration == options.max_iterations:
@@ -451,6 +455,10 @@ def iterative_fit(
                 if candidate_finite and np.isfinite(candidate_cost)
                 else "nonfinite"
             )
+            if status == "stalled" and gradient_max <= (
+                np.sqrt(np.finfo(float).eps) * residual_scale
+            ):
+                status = "converged"
             break
         else:
             damping = min(1e10, damping * 10.0)

@@ -1500,8 +1500,11 @@ def test_iterative_detector_dispatch_and_convergence_diagnostics(
         gradient_norm=1e-8,
     )
     captured = {}
+    trace = np.cos(time)
 
     def fit(time_arg, trace_arg, components, **kwargs):
+        assert time_arg is time
+        assert trace_arg is trace
         captured.update(kwargs, components=components)
         return result
 
@@ -1511,12 +1514,18 @@ def test_iterative_detector_dispatch_and_convergence_diagnostics(
         "_tdsfft_cupy",
         lambda *args: (np.asarray([0, 1]), np.asarray([2, 3])),
     )
-    cp = SimpleNamespace(asnumpy=np.asarray)
+    time_gpu = SimpleNamespace(host=time)
+    trace_gpu = SimpleNamespace(host=trace)
+    cp = SimpleNamespace(
+        asnumpy=lambda value: (
+            value.host if hasattr(value, "host") else np.asarray(value)
+        )
+    )
     options = solver.IterativeFitOptions(max_iterations=20)
     args = dict(
         cp=cp,
-        time_gpu=time,
-        trace_gpu=np.cos(time),
+        time_gpu=time_gpu,
+        trace_gpu=trace_gpu,
         components=1,
         roots_backend="eigvals",
         padded_length=4,
@@ -1557,7 +1566,7 @@ def test_iterative_detector_dispatch_and_convergence_diagnostics(
             iterative_result=raised.value.iterative_result,
         )
     metadata = writer.finalize(source_identity_sha256="a" * 64)
-    assert captured == {"options": options, "backend": "gpu", "components": 1}
+    assert captured == {"options": options, "backend": "cpu", "components": 1}
     assert metadata["schema_version"] == 2
     with np.load(tmp_path / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
         assert data["converged"].tolist() == [int(converged)]

@@ -59,7 +59,12 @@ HDF5_TS_FUNCWRAP_REF = "4ac0f2fca8f68abf5ea25874832274a75b0f0967"
 NORMALIZATION_MANIFEST_FILE = "normalization.json"
 NORMALIZATION_CACHE_FILE = "normalization.npz"
 DETECTOR_ARTIFACT_MANIFEST_VERSION = 2
-DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS = (1, 2, 3)
+DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION = 3
+DETECTOR_ARTIFACT_SUPPORTED_MANIFEST_VERSIONS = (
+    1,
+    DETECTOR_ARTIFACT_MANIFEST_VERSION,
+    DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION,
+)
 DETECTOR_NORMALIZATION_MANIFEST_VERSION = 1
 FIT_DIAGNOSTICS_SCHEMA_VERSION = 1
 ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION = 2
@@ -796,7 +801,7 @@ def build_detector_artifacts_cupy(
     manifest = {
         "kind": "xray-detector-artifacts",
         "manifest_schema_version": (
-            3
+            DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
             if fit_method == "iterative"
             else DETECTOR_ARTIFACT_MANIFEST_VERSION
         ),
@@ -2101,12 +2106,14 @@ def _fit_detector_row(
     if fit_method == "iterative":
         from .iterative_fit import iterative_fit
 
+        # Sequential small-row solves run on the host to avoid synchronizing
+        # the GPU for every LM convergence check and damping decision.
         result = iterative_fit(
-            time_gpu,
-            trace_gpu,
+            cp.asnumpy(time_gpu),
+            cp.asnumpy(trace_gpu),
             components,
             options=iterative_options,
-            backend="gpu",
+            backend="cpu",
         )
         if not result.converged:
             raise _IterativeFitConvergenceError(result)
@@ -3157,7 +3164,7 @@ def _validate_detector_artifact_manifest_identity(
         _require_finite_nonnegative(
             "p2_ridge_alpha", manifest["p2_ridge_alpha"]
         )
-    if version >= 3:
+    if version >= DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION:
         _validate_iterative_artifact_configuration(manifest)
     if (
         not isinstance(manifest["package_version"], str)
@@ -3212,7 +3219,7 @@ def _validate_fit_diagnostics_artifact(
     version = int(manifest.get("manifest_schema_version", 1))
     if version == 1:
         return
-    if version >= 3:
+    if version >= DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION:
         _validate_iterative_artifact_configuration(manifest)
     metadata = manifest.get("fit_diagnostics")
     if not isinstance(metadata, dict):
@@ -3220,7 +3227,7 @@ def _validate_fit_diagnostics_artifact(
     level = _validate_fit_diagnostics(str(metadata.get("level")))
     schema_version = (
         ITERATIVE_FIT_DIAGNOSTICS_SCHEMA_VERSION
-        if version >= 3
+        if version >= DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
         else FIT_DIAGNOSTICS_SCHEMA_VERSION
     )
     if metadata.get("schema_version") != schema_version:
@@ -3453,7 +3460,10 @@ def _detector_artifact_stable_manifest_keys(
         diagnostics = manifest.get("fit_diagnostics") or {}
         payload["fit_diagnostics_level"] = diagnostics.get("level")
         payload["p2_ridge_alpha"] = manifest.get("p2_ridge_alpha")
-    if int(manifest.get("manifest_schema_version", 1)) >= 3:
+    if (
+        int(manifest.get("manifest_schema_version", 1))
+        >= DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
+    ):
         payload["fit_method"] = manifest.get("fit_method")
         payload["iterative_options"] = manifest.get("iterative_options")
     return payload
@@ -3548,7 +3558,10 @@ def detector_artifact_resume_identity(manifest: dict[str, Any]) -> str:
         diagnostics = manifest.get("fit_diagnostics") or {}
         payload["fit_diagnostics_level"] = diagnostics.get("level")
         payload["p2_ridge_alpha"] = manifest.get("p2_ridge_alpha")
-    if int(manifest.get("manifest_schema_version", 1)) >= 3:
+    if (
+        int(manifest.get("manifest_schema_version", 1))
+        >= DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
+    ):
         payload["fit_method"] = manifest.get("fit_method")
         payload["iterative_options"] = manifest.get("iterative_options")
     return _stable_json_hash(payload)

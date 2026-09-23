@@ -22,6 +22,7 @@ import numpy as np
 from cuphoton import __version__ as CUPHOTON_VERSION
 
 from .detector_artifacts import (
+    DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION,
     DETECTOR_ARTIFACT_MANIFEST_VERSION,
     FIT_DIAGNOSTICS_LEVELS,
     detector_artifact_complete,
@@ -262,7 +263,7 @@ def build_detector_artifact_distributed_plan(
             None if normalization_cache is None else str(normalization_cache)
         ),
         "manifest_schema_version": (
-            3
+            DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
             if options["fit_method"] == "iterative"
             else DETECTOR_ARTIFACT_MANIFEST_VERSION
         ),
@@ -763,7 +764,7 @@ def _request_manifest_for_shard(
     manifest = {
         "kind": "xray-detector-artifacts",
         "manifest_schema_version": (
-            3
+            DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
             if options.get("fit_method") == "iterative"
             else DETECTOR_ARTIFACT_MANIFEST_VERSION
         ),

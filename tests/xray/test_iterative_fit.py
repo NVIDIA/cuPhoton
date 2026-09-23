@@ -278,6 +278,40 @@ def test_rejected_zero_steps_do_not_claim_convergence(monkeypatch):
     assert result.gradient_norm > 0
 
 
+def test_noisy_stationary_fit_converges_at_float64_cost_resolution():
+    time, _trace, parameters = _fixture()
+    values, jacobian = _evaluate(np, time, parameters, 2, 0.0, np.pi)
+    orthogonal, _ = np.linalg.qr(jacobian)
+    noise = np.random.default_rng(4).normal(size=time.shape)
+    noise -= orthogonal @ (orthogonal.T @ noise)
+    noise *= 2.0 / np.linalg.norm(noise)
+    # Start just above the requested gradient tolerance, with a decrease
+    # smaller than float64 can reliably distinguish from the noisy cost.
+    trace = values + noise + 2.0 * 1.05e-8 / np.sqrt(len(time))
+    normal, gradient, _cost = _normal_equations(
+        np, jacobian, values - trace, parameters, 0.0
+    )
+    relative_gradient = np.max(
+        np.abs(gradient) / np.sqrt(np.diag(normal))
+    ) / np.linalg.norm(values - trace)
+    assert 1e-8 < relative_gradient < np.sqrt(np.finfo(float).eps)
+
+    result = iterative_fit(
+        time,
+        trace,
+        2,
+        options=IterativeFitOptions(max_frequency=0.5),
+        initial_parameters=parameters,
+    )
+
+    assert result.converged
+    assert result.status == "converged"
+    assert result.cost == pytest.approx(2.0, abs=2e-15)
+    assert result.cost == pytest.approx(
+        0.5 * np.sum((result.reconstruction - trace) ** 2)
+    )
+
+
 def test_nonfinite_frequency_transform_is_not_accepted(monkeypatch):
     time = np.arange(16, dtype=float) * 0.5
     trace = np.exp(-0.05 * time) * np.cos(2.0 * np.pi * time)
