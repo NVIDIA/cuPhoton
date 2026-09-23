@@ -29,10 +29,10 @@ See [xDataReader](components/xdr.md).
 
 ## xFit: `cuphoton xfit`
 
-`data-inspect` and `data-validate` check pickle-free NPZ dipole batches whose
-arrays are numeric or Unicode;
-`fit-dipoles` fits sampled-stamp or analytic Gaussian models and writes
-portable fit and uncertainty artifacts. See [xFit](components/xfit.md).
+`data-inspect` and `data-validate` check pickle-free NPZ dipole batches
+whose arrays are numeric or Unicode; `fit-dipoles` fits sampled-stamp or
+analytic Gaussian models and writes portable fit and uncertainty artifacts.
+See [xFit](components/xfit.md).
 
 ## XPOIS: `cuphoton xpois`
 
@@ -83,20 +83,19 @@ pair in the batch; each complete spatial solve runs on one GPU.
 
 ## XScan: `cuphoton xscan`
 
-XScan has command families for dataset building and validation, pair or triplet
-training, inference and evaluation, review queues and annotations, and
-controlled reproduction studies. `data-build-xfit-features` creates the
+XScan has command families for dataset building and validation, pair or
+triplet training, inference and evaluation, review queues and annotations,
+and controlled reproduction studies. `data-build-xfit-features` creates the
 candidate-keyed scalar sidecar used by optional xFit late fusion;
 `data-export-xfit-input` creates its dtype-preserving xFit input. Fused
 inference and evaluation require the explicit `--use-xfit-features` switch
 and a separate `--xfit-feature-dir` location. Evaluation rejects a material
 evaluated/validation-split `fit_present` coverage mismatch unless the narrow
 `--allow-xfit-coverage-mismatch` calibration override is selected. The
-standalone raw-comparison and
-Alard--Lupton review servers are available as `review-raw-compare` (`rrc`) and
-`review-alard-lupton` (`ral`). Use `cuphoton xscan --help`, then `cuphoton
-xscan help <command>` for command-specific contracts. See
-[XScan](components/xscan.md).
+standalone raw-comparison and Alard--Lupton review servers are available as
+`review-raw-compare` (`rrc`) and `review-alard-lupton` (`ral`). Use
+`cuphoton xscan --help`, then `cuphoton xscan help <command>` for
+command-specific contracts. See [XScan](components/xscan.md).
 
 ## xRep: `cuphoton xrep`
 

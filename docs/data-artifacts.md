@@ -104,23 +104,22 @@ A successful fit writes `summary.json` and these arrays under `artifacts/`:
 
 Spatial ALS runs save their position-dependent kernel as horizontal and
 vertical reference profiles and bases, both coefficient matrices, and a
-center-evaluated preview in `kernel_center.npy`. They also save the background
-coefficients and objective history. The summary records the solver, term
-order, coordinate normalization, convergence,
-regularization, reference-profile scale, center kernel sum, and fit counts
-needed to interpret them, plus `design_chunk_size`, the row-batch cap used for
-normal equations and reconstruction. That cap is fixed on CPU and derived from
-free device memory on CuPy; different caps can produce floating-point rounding
+center-evaluated preview in `kernel_center.npy`. They also save the
+background coefficients and objective history. The summary records the
+solver, term order, coordinate normalization, convergence, regularization,
+reference-profile scale, center kernel sum, and fit counts needed to
+interpret them, plus `design_chunk_size`, the row-batch cap used for normal
+equations and reconstruction. That cap is fixed on CPU and derived from free
+device memory on CuPy; different caps can produce floating-point rounding
 differences. The `vertical_reference_scale` field is always saved because it
-multiplies the vertical reference when the factors are
-evaluated. With flux conservation enabled, the summary also records it as
-`flux_scale`, the position-independent signed kernel sum. With flux
-conservation disabled, the summary stores the multiplier as
-`vertical_reference_scale`, and the local photometric scale comes from the
-sum of `kernel_at(y, x)`. The center kernel sum is recorded in either case.
-Spatial ALS `dof` is the nominal fit-row count minus parameter count.
-Estimating effective degrees of freedom for this regularized nonlinear fit
-requires a separate statistical analysis.
+multiplies the vertical reference when the factors are evaluated. With flux
+conservation enabled, the summary also records it as `flux_scale`, the
+position-independent signed kernel sum. With flux conservation disabled, the
+summary stores the multiplier as `vertical_reference_scale`, and the local
+photometric scale comes from the sum of `kernel_at(y, x)`. The center kernel
+sum is recorded in either case. Spatial ALS `dof` is the nominal fit-row
+count minus parameter count. Estimating effective degrees of freedom for
+this regularized nonlinear fit requires a separate statistical analysis.
 
 Auto-stamp selection also writes metadata describing the selected regions.
 
@@ -129,20 +128,19 @@ result arrays as `<backend>_<name>.npy`. Constant-kernel benchmarks save the
 kernel, matched, residual, fit-mask, and background images. Spatial ALS
 benchmarks save the matched, residual, fit-mask, and background images, plus
 the line references and bases, both coefficient fields, the background
-coefficients, `flux_scale`, the objective history, the spatial and background
-term tables,
-`kernel_sample_positions_yx` (the four image corners and the center), and
-`realized_kernels` evaluated there; the kernels are reproducible from the
-saved factors. With flux conservation enabled, `flux_scale` is the signed
-kernel sum; otherwise it is the vertical reference multiplier, and local
-kernel sums must be evaluated from the saved factors. The summary separates
-first-solve from warm timings, states each timing boundary, and reports median
-speedups against the reference
-backend, per-backend solver facts including `design_chunk_size`, and the CPU
-thread environment. CuPy timing rows add CUDA-event intervals and memory-pool
-observations. `parity.ok` gates arrays, scalars, exact fields, and fit masks;
-the objective history, condition number, iteration count, and convergence
-flag are reported as non-gating diagnostics.
+coefficients, `flux_scale`, the objective history, the spatial and
+background term tables, `kernel_sample_positions_yx` (the four image corners
+and the center), and `realized_kernels` evaluated there; the kernels are
+reproducible from the saved factors. With flux conservation enabled,
+`flux_scale` is the signed kernel sum; otherwise it is the vertical
+reference multiplier, and local kernel sums must be evaluated from the saved
+factors. The summary separates first-solve from warm timings, states each
+timing boundary, and reports median speedups against the reference backend,
+per-backend solver facts including `design_chunk_size`, and the CPU thread
+environment. CuPy timing rows add CUDA-event intervals and memory-pool
+observations. `parity.ok` gates arrays, scalars, exact fields, and fit
+masks; the objective history, condition number, iteration count, and
+convergence flag are reported as non-gating diagnostics.
 
 ## XScan datasets
 

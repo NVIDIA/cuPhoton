@@ -114,11 +114,10 @@ The portable xFit-to-XScan workflow uses an artifact boundary. XScan
 validates a difference-mode xFit run, joins candidates by `candidate_id`,
 verifies each fit against the exact difference-stamp hash, and writes a
 versioned numeric feature bundle before training or inference. This keeps
-the classifier coupled to a feature contract and stable candidate IDs.
-XScan can export a pickle-free input archive of numeric and Unicode arrays
-for xFit, revalidates
-stamp hashes whenever a feature bundle is loaded, and pins the bundle identity
-in fusion checkpoints.
+the classifier coupled to a feature contract and stable candidate IDs. XScan
+can export a pickle-free input archive of numeric and Unicode arrays for
+xFit, revalidates stamp hashes whenever a feature bundle is loaded, and pins
+the bundle identity in fusion checkpoints.
 
 ## Data movement and execution
 
@@ -158,10 +157,11 @@ comparing runs.
 
 ## Configuration and artifacts
 
-Commands accept either explicit options or a YAML configuration, depending on
-the workflow. Replace paths in example YAML files with your local data paths.
-A persisted run normally contains an effective configuration, `summary.json`, and an `artifacts/` directory. Some components
-add traces, evaluations, checkpoints, or standalone HTML review files.
+Commands accept either explicit options or a YAML configuration, depending
+on the workflow. Replace paths in example YAML files with your local data
+paths. A persisted run normally contains an effective configuration,
+`summary.json`, and an `artifacts/` directory. Some components add traces,
+evaluations, checkpoints, or standalone HTML review files.
 
 Structured numeric and JSON artifacts are the reproducible interface. HTML
 views and contact sheets are review aids derived from the numeric run.

@@ -1,8 +1,9 @@
 # xRep (xReproject)
 
 `cuphoton.xrep` reprojects two-dimensional images onto celestial WCS grids.
-It can derive a north-up grid or use an existing image as the destination. It supports bilinear and Lanczos-3 interpolation, optional mask
-propagation, relative-area scaling, and shared-grid stacks. Its CLI group is
+It can derive a north-up grid or use an existing image as the destination.
+It supports bilinear and Lanczos-3 interpolation, optional mask propagation,
+relative-area scaling, and shared-grid stacks. Its CLI group is
 `cuphoton xrep`.
 
 ## Install and smoke test

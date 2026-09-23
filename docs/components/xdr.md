@@ -143,9 +143,9 @@ raw-read phase; failed planning also prevents that phase from running.
 
 `benchmark-fits --mock-storage {device,host}` serves repeat reads of each
 file from an in-memory cache, so runs measure decode and kernel cost
-independent of disk throughput. `device` replays from GPU memory
-at HBM bandwidth, isolating decompression cost and modeling an ideally fast
-GDS path; `host` replays from pinned host memory over PCIe, modeling what a
+independent of disk throughput. `device` replays from GPU memory at HBM
+bandwidth, isolating decompression cost and modeling an ideally fast GDS
+path; `host` replays from pinned host memory over PCIe, modeling what a
 properly working GDS path would deliver on the same hardware. The same
 behavior is available programmatically through the
 `cuphoton.xdr.mock_storage` context manager, or transparently by setting

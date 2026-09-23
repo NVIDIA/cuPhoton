@@ -68,11 +68,11 @@ explicit `(1, 3, y, x)` shape for per-plane values.
 
 An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
 form its weighted 8-by-8 normal equations directly. Select this backend
-explicitly and install the `cuphoton[cutile]` extra on Linux with Python 3.12
-or 3.13. Final rank and covariance diagnostics use the analytic Jacobian and a
-singular-value factorization. Sampled-stamp fits stay on the NumPy or CuPy
-backends. The Tile
-backend requires analytic derivatives and rejects finite-difference fitting.
+explicitly and install the `cuphoton[cutile]` extra on Linux with Python
+3.12 or 3.13. Final rank and covariance diagnostics use the analytic
+Jacobian and a singular-value factorization. Sampled-stamp fits stay on the
+NumPy or CuPy backends. The Tile backend requires analytic derivatives and
+rejects finite-difference fitting.
 
 The `cutile` extra installs cuTile's Python package. Execution also needs
 `tileiras` and its companion CUDA compiler libraries, supplied by a compatible
@@ -124,14 +124,14 @@ and optional residuals. Confirm that the underlying data and metadata are cleare
 for release before publishing these artifacts.
 
 For the sampled-stamp model, choose `--stamp-evaluation bilinear`,
-`bilinear-vignetted`, or `finite-volume` and provide `stamp_basis` in the input
-archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
+`bilinear-vignetted`, or `finite-volume` and provide `stamp_basis` in the
+input archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
 `--max-evaluations`, and `--use-finite-difference`. Gaussian fits use their
-analytic Jacobian unless finite differences are requested; sampled-stamp fits
-always use finite differences and record that resolved choice in the effective
-configuration.
-`--x-tol` is an absolute step-norm tolerance, so its convergence criterion stays
-consistent when a periodic parameter drifts to a large equivalent value.
+analytic Jacobian unless finite differences are requested; sampled-stamp
+fits always use finite differences and record that resolved choice in the
+effective configuration. `--x-tol` is an absolute step-norm tolerance, so
+its convergence criterion stays consistent when a periodic parameter drifts
+to a large equivalent value.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
 or `float64` to run the solver at an explicit precision while preserving the

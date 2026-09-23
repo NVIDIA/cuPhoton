@@ -1,8 +1,9 @@
 # Distributed detector artifacts
 
-`cuphoton xray detector-artifact-distributed` divides a detector ROI into x-axis shards
-and either plans or launches the same `detector-artifacts` worker command for
-each shard. It supports local GPU assignment and Slurm array scripts.
+`cuphoton xray detector-artifact-distributed` divides a detector ROI into
+x-axis shards and either plans or launches the same `detector-artifacts`
+worker command for each shard. It supports local GPU assignment and Slurm
+array scripts.
 
 ## Inspect an in-memory dry run
 
@@ -127,10 +128,10 @@ fingerprints, manifest and package versions, schema and dataset names, dtype,
 normalization source, and detector configuration. Shards from different input
 pairs are rejected even when their array shapes match.
 
-Artifact manifests identify input files with path digests, size and mtime, and
-a full or sampled content digest.
-Changing an input file, normalization cache, or detector option changes the
-resume identity and forces the affected shard to run again.
+Artifact manifests identify input files with path digests, size and mtime,
+and a full or sampled content digest. Changing an input file, normalization
+cache, or detector option changes the resume identity and forces the
+affected shard to run again.
 
 ## Fit diagnostics
 

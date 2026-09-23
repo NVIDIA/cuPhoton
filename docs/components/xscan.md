@@ -90,13 +90,13 @@ uv run cuphoton xscan data-export-xfit-input \
 ```
 
 Variance must describe the exported images in their squared units. If images
-have been rescaled by a factor, rescale their variance by the factor squared.
-`--image-unit` labels the existing values; the JSON summary
-records that label, the corresponding variance unit, source filenames and
-SHA-256 hashes, and the output archive hash. Supplying variance enables xFit's
+have been rescaled by a factor, rescale their variance by the factor
+squared. `--image-unit` labels the existing values; the JSON summary records
+that label, the corresponding variance unit, source filenames and SHA-256
+hashes, and the output archive hash. Supplying variance enables xFit's
 variance-weighted chi-square and the two variance-dependent scalar features.
-Supply variance estimates and convert instrument bit masks to inclusion masks
-before export.
+Supply variance estimates and convert instrument bit masks to inclusion
+masks before export.
 
 By default, the exporter re-hashes each source after copying and removes its
 new archive if a source changed. For large inputs guaranteed to remain
@@ -122,23 +122,21 @@ The builder accepts difference-mode xFit runs and joins `fits.parquet` to
 XScan metadata by `candidate_id`. It also verifies that each fit row was
 computed from the exact `difference.npy` stamp, including dtype and shape,
 and validates the hashes recorded by the xFit run. Pair and triplet XScan
-models can both consume this
-same difference-fit sidecar. The new output directory contains
-standalone `candidate-id.npy`, `features.npy`, and
+models can both consume this same difference-fit sidecar. The new output
+directory contains standalone `candidate-id.npy`, `features.npy`, and
 `input-image-sha256.npy` arrays plus `schema.json`. The arrays are
-pickle-free and memory-mappable; the schema records their hashes, the ordered
-feature names, transforms, and join diagnostics. The default
+pickle-free and memory-mappable; the schema records their hashes, the
+ordered feature names, transforms, and join diagnostics. The default
 `--missing-policy error` rejects an incomplete join. Use
 `--missing-policy indicator` only when missing fits are expected: affected
 rows have every feature set to zero, including `fit_present` and run-level
-indicators such as `variance_weighted`. Present but invalid fits retain valid
-run-level diagnostics, set validity gates to zero, and zero fit-parameter
-features.
-The feature bundle retains row hashes and is rebound to the current
-`difference.npy` every time it is loaded. Converting float32 stamps to float64
-or changing a pixel after bundle construction is rejected. Repeated candidate
-IDs may reuse one fit only when their difference stamps, split, and split
-group are identical.
+indicators such as `variance_weighted`. Present but invalid fits retain
+valid run-level diagnostics, set validity gates to zero, and zero
+fit-parameter features. The feature bundle retains row hashes and is rebound
+to the current `difference.npy` every time it is loaded. Converting float32
+stamps to float64 or changing a pixel after bundle construction is rejected.
+Repeated candidate IDs may reuse one fit only when their difference stamps,
+split, and split group are identical.
 
 Features use versioned, fixed bounded transforms for fit validity, residual
 improvement, uncertainty, dipole geometry, and Gaussian shape. These transforms

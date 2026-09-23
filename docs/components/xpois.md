@@ -199,23 +199,24 @@ smaller kernels with a message naming the first failing axis, its length,
 and the number of basis functions.
 
 ALS means alternating linear least squares. The solver alternates linear
-updates to the horizontal and vertical profiles using NumPy or CuPy.
-Callers supply already registered images and an optional variance image. A fit
-mask or explicit `(y, x)` sample positions can select the fit region; when neither is supplied, all valid pixels in the
-centered-kernel interior are fitted. Repeated positions are retained as
-multiplicity weights. Explicit positions raise an error if any requested
-target, variance, or source footprint is non-finite; mask and default selection
-use valid pixels. The calling pipeline supplies camera calibration, PSF
-measurement, source selection, astrometric registration, and unit
-interpretation, including calibration-derived masks, variances, or fit samples.
-Flux conservation is opt-in, matching the existing XPOIS CLI convention. When
-enabled, spatial basis corrections are zero-sum and the signed kernel sum is
-one fitted, position-independent scale. With flux conservation disabled,
-`flux_scale` is the vertical reference multiplier; evaluate `kernel_at(y, x)`
-for the local kernel sum and photometric scale. Near dependence between
-reference and correction profiles can cause poor conditioning or slow
-convergence. Use `--flux-conserve` (or `flux_conserve=True`) for the spatial
-model unless a position-dependent kernel sum is required.
+updates to the horizontal and vertical profiles using NumPy or CuPy. Callers
+supply already registered images and an optional variance image. A fit mask
+or explicit `(y, x)` sample positions can select the fit region; when
+neither is supplied, all valid pixels in the centered-kernel interior are
+fitted. Repeated positions are retained as multiplicity weights. Explicit
+positions raise an error if any requested target, variance, or source
+footprint is non-finite; mask and default selection use valid pixels. The
+calling pipeline supplies camera calibration, PSF measurement, source
+selection, astrometric registration, and unit interpretation, including
+calibration-derived masks, variances, or fit samples. Flux conservation is
+opt-in, matching the existing XPOIS CLI convention. When enabled, spatial
+basis corrections are zero-sum and the signed kernel sum is one fitted,
+position-independent scale. With flux conservation disabled, `flux_scale` is
+the vertical reference multiplier; evaluate `kernel_at(y, x)` for the local
+kernel sum and photometric scale. Near dependence between reference and
+correction profiles can cause poor conditioning or slow convergence. Use
+`--flux-conserve` (or `flux_conserve=True`) for the spatial model unless a
+position-dependent kernel sum is required.
 
 `SpatialALSConfig.tolerance` (`--als-tolerance`) is the relative
 penalized-objective change that stops the alternating updates early. A
@@ -523,9 +524,9 @@ launcher, before any shell or Python process.
 Rank zero opens and validates every manifest input before execution. Other
 ranks load the manifest and stat its inputs to agree on the same digest and
 assignment through metadata checks. Collective consensus broadcasts the
-root-validated digest; file mode publishes it in the ready
-marker. A root preflight failure prevents either mode from starting work.
-Each rank still verifies input identity when executing its assigned items.
+root-validated digest; file mode publishes it in the ready marker. A root
+preflight failure prevents either mode from starting work. Each rank still
+verifies input identity when executing its assigned items.
 
 Collective startup errors are exchanged before rank-context setup, and every
 rank verifies a root-written nonce through the resolved run directory before
@@ -559,32 +560,32 @@ CUPHOTON_MPI_LAUNCH_ID="$(python -c 'import uuid; print(uuid.uuid4().hex)')" \
 ```
 
 Use one shared token per launch. Launch ownership isolates rank staging and
-preflight records. `--rank-timeout-sec` applies to file aggregation, defaults
-to 3600 seconds, and must also be identical on every rank. It bounds rank zero's wait for peer completion markers after rank
-zero finishes its own shard, so size it above the worst expected completion
-skew between rank zero and the slowest peer. The default aggregation mode is
-`mpi`; select `files` explicitly for file aggregation. Rank zero claims the
-attempt identity atomically and rejects reused IDs. Recovery supports an
-exact retry after `summary.json` committed but the terminal attempt-marker
-write failed. Rank
-zero validates the regular marker, ready record, run record, summary, manifest,
-options, topology, and timeouts, then repairs only that marker and directs the
-operator to the existing immutable summary. Interrupted attempts without a
-committed summary are retained for inspection; restart with a new `--name` and
-`--attempt-id`. Operators control cleanup of this retained evidence.
-The output root's `.mpi-attempts/` directory holds the atomic attempt marker
-and retained per-rank preflight, staging, and completion evidence outside the
-immutable run directory. File-mode ranks publish their completion marker last.
-Before any promotion, the coordinator requires consistent completion and rank
-status, regular JSON evidence, and real local output trees for successful
-items; symlinks and missing success artifacts stay in staging and fail the run.
-In both executors, a failed item can retain partial output under `items/`.
-Consumers must check its terminal record before using that output.
-The coordinator promotes artifacts from a completed, validated rank into the immutable
-run directory before writing its summary. Results arriving after the timeout
-remain outside the audited run. If a shared-filesystem rename fails
-mid-promotion, the failed summary records `PartialRankPromotion` and lists the
-paths already published.
+preflight records. `--rank-timeout-sec` applies to file aggregation,
+defaults to 3600 seconds, and must also be identical on every rank. It
+bounds rank zero's wait for peer completion markers after rank zero finishes
+its own shard, so size it above the worst expected completion skew between
+rank zero and the slowest peer. The default aggregation mode is `mpi`;
+select `files` explicitly for file aggregation. Rank zero claims the attempt
+identity atomically and rejects reused IDs. Recovery supports an exact retry
+after `summary.json` committed but the terminal attempt-marker write failed.
+Rank zero validates the regular marker, ready record, run record, summary,
+manifest, options, topology, and timeouts, then repairs only that marker and
+directs the operator to the existing immutable summary. Interrupted attempts
+without a committed summary are retained for inspection; restart with a new
+`--name` and `--attempt-id`. Operators control cleanup of this retained
+evidence. The output root's `.mpi-attempts/` directory holds the atomic
+attempt marker and retained per-rank preflight, staging, and completion
+evidence outside the immutable run directory. File-mode ranks publish their
+completion marker last. Before any promotion, the coordinator requires
+consistent completion and rank status, regular JSON evidence, and real local
+output trees for successful items; symlinks and missing success artifacts
+stay in staging and fail the run. In both executors, a failed item can
+retain partial output under `items/`. Consumers must check its terminal
+record before using that output. The coordinator promotes artifacts from a
+completed, validated rank into the immutable run directory before writing
+its summary. Results arriving after the timeout remain outside the audited
+run. If a shared-filesystem rename fails mid-promotion, the failed summary
+records `PartialRankPromotion` and lists the paths already published.
 
 With file aggregation, rank zero owns the evidence timeout, terminal batch
 status, and authoritative launcher exit code. Nonzero ranks return zero after
@@ -651,23 +652,22 @@ retaining `-t tcp -o tcp` to select TCP transport.
 ### Results and limits
 
 Both routes print a compact result containing the executor, run ID, run
-directory, summary path, and terminal status. Durable per-item records and the
-final summary audit missing, duplicate, unexpected, malformed, failed, and
-assignment-inconsistent results. After an ordinary item error, the worker
-continues with the remaining items in its shard. Any item, rank, worker, or
-audit failure makes the batch command return nonzero after evidence is
-persisted.
-Declared worker record-write errors still fail the run and are reported
-under `shard_result_audit.write_failed_shards`, separately from evidence
-mismatches.
-The MPI rank-result audit reports trustworthy workload and setup failures in
-separate fields, apart from malformed or identity-inconsistent rank evidence.
-Valid record-write failures appear in `rank_result_audit.write_failed_ranks`
-and fail the run even when a record became visible before durability failed.
-GPU identity comparison prefers UUID when both peers report one and otherwise
-uses PCI identity only on the same host. Partial lookup failures are retained
-as warnings when a stable identifier survives, while an incomparable
-same-host pair still fails closed.
+directory, summary path, and terminal status. Durable per-item records and
+the final summary audit missing, duplicate, unexpected, malformed, failed,
+and assignment-inconsistent results. After an ordinary item error, the
+worker continues with the remaining items in its shard. Any item, rank,
+worker, or audit failure makes the batch command return nonzero after
+evidence is persisted. Declared worker record-write errors still fail the
+run and are reported under `shard_result_audit.write_failed_shards`,
+separately from evidence mismatches. The MPI rank-result audit reports
+trustworthy workload and setup failures in separate fields, apart from
+malformed or identity-inconsistent rank evidence. Valid record-write
+failures appear in `rank_result_audit.write_failed_ranks` and fail the run
+even when a record became visible before durability failed. GPU identity
+comparison prefers UUID when both peers report one and otherwise uses PCI
+identity only on the same host. Partial lookup failures are retained as
+warnings when a stable identifier survives, while an incomparable same-host
+pair still fails closed.
 
 For an MPI/Dragon comparison, stage one immutable manifest before timing and
 hold the allocation, filesystem, cache policy, cuPhoton revision, numerical
