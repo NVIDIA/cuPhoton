@@ -184,6 +184,26 @@ def test_complete_stamps_match_oracle_and_center_separately() -> None:
     assert result.pixel_pooling == "valid_pixels_and_lag_endpoint_pairs"
 
 
+def test_white_noise_floor_and_pooled_centering_bias() -> None:
+    stamps = np.random.default_rng(20260923).normal(size=(4096, 4, 4))
+
+    result = summarize_standardized_residuals(stamps)
+
+    # The minimum-size stamp has a simulated, rather than asymptotic,
+    # radius-3 floor. These tolerances allow finite Monte Carlo variation.
+    mean_floor = np.mean(
+        [summary.radius3_rho_rms for summary in result.per_stamp]
+    )
+    assert mean_floor == pytest.approx(0.47, abs=0.01)
+    expected_bias = -1.0 / (stamps.shape[1] * stamps.shape[2] - 1)
+    pooled = result.pixel_pooled
+    assert pooled.cardinal_lag1_rho == pytest.approx(expected_bias, abs=0.01)
+    assert pooled.diagonal_lag1_rho == pytest.approx(expected_bias, abs=0.01)
+    assert pooled.radius3_rho_rms == pytest.approx(
+        abs(expected_bias), abs=0.01
+    )
+
+
 def test_incomplete_stamps_use_pairs_with_two_valid_endpoints() -> None:
     generator = np.random.default_rng(20260908)
     stamps = generator.normal(size=(2, 8, 9))
