@@ -572,6 +572,8 @@ def test_stream_none_retains_locked_io_wait(monkeypatch, read_runtime):
 def test_concurrent_kvikio_configuration_does_not_reset_active_io(
     monkeypatch,
 ):
+    monkeypatch.setattr(gds, "_KVIKIO_NUM_THREADS", None)
+    monkeypatch.delenv("KVIKIO_NTHREADS", raising=False)
     configured_threads = 1
     pending = False
     resets = []
