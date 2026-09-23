@@ -3,7 +3,7 @@
 cuPhoton provides one Python console entry point, `cuphoton`. The same
 interface is available from a checkout as `uv run python -m cuphoton`.
 Installations also include the low-level `cuphoton-openmpi-rank-exec` helper
-used to bind Open MPI ranks before Python starts; it is not a component CLI.
+used to bind Open MPI ranks before Python starts.
 
 ```bash
 uv run cuphoton --help
@@ -13,10 +13,8 @@ uv run cuphoton xpois --help
 uv run cuphoton xpois help fit-kernel
 ```
 
-The fixed command groups are `xdr`, `xfit`, `xpois`, `xscan`, `xrep`, and
-`xray`.
-Component-level executables and component-level
-`python -m` entry points are not provided.
+Access each component through the fixed command groups: `xdr`, `xfit`, `xpois`,
+`xscan`, `xrep`, and `xray`.
 
 ## xDataReader: `cuphoton xdr`
 
@@ -77,11 +75,11 @@ assigns each image-pair fit to one explicitly placed GPU worker:
 
 For single-image spatial ALS commands, `--backend auto` prefers CuPy when a
 usable CUDA device is available and otherwise uses the CPU reference
-implementation. Explicit `--backend cupy` fails instead of falling back. The
-CPU and CuPy paths use the same FP64 model and require no external calibration
-archive. The batch command requires `--backend cupy` for spatial ALS
-and rejects `auto`. One solver configuration applies to every pair in the
-batch; each complete spatial solve runs on one GPU.
+implementation. Explicit `--backend cupy` requires a usable CUDA device and
+fails if one is unavailable. The CPU and CuPy paths fit the same FP64 model
+from the supplied image pair. The batch command requires `--backend cupy`
+for spatial ALS and rejects `auto`. One solver configuration applies to every
+pair in the batch; each complete spatial solve runs on one GPU.
 
 ## XScan: `cuphoton xscan`
 
@@ -126,9 +124,9 @@ See [XRay](xray/README.md).
 All groups share command discovery, invariant validation, logging, help,
 version plumbing, and XDG path behavior through `cuphoton.core.cli`. Core also
 owns the parser backends needed to preserve each command family's established
-help and error behavior; component packages only declare invariants.
-Workflow-specific YAML `--config` options remain where they describe
-scientific work; there is no shared INI configuration option.
+help and error behavior; component packages declare invariants.
+Workflow-specific YAML `--config` options configure the scientific work within
+each component.
 
 Component configuration, state, and data live under a common product root:
 

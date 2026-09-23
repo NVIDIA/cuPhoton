@@ -23,9 +23,9 @@ uv run python examples/run_quickstarts.py \
 Backend selection is solver-specific. For the constant solver, `auto` prefers
 CuPy, then Numba-CUDA, then CPU; cuTile remains explicit and experimental. For
 spatial ALS, `auto` prefers CuPy when it has a usable CUDA device and otherwise
-uses the CPU reference implementation. Explicit `cupy` selection fails instead
-of falling back when its runtime is unavailable. The spatial
-Gaussian-polynomial research API follows the spatial-ALS rule.
+uses the CPU reference implementation. Explicit `cupy` selection requires a
+usable CuPy runtime and raises an error when that requirement is unmet. The
+spatial Gaussian-polynomial research API follows the spatial-ALS rule.
 
 ## Input and output contract
 
@@ -66,10 +66,10 @@ names. `--solver constant` remains the default. Use `--fit-mask` for a
 reviewed binary NPY selection, or `--auto-stamp-mask` with an odd stamp size
 for compact-source selection.
 
-Spatial ALS runs that reach the sweep budget still persist their artifacts
-and exit with status 0, but the command prints a warning and `summary.json`
-and `evaluation.json` record `converged: false`; do not accept such a run
-without raising `--als-iterations` or enabling `--flux-conserve`.
+Spatial ALS runs that reach the sweep budget persist their artifacts and
+exit with status 0. The command prints a warning, and `summary.json` and
+`evaluation.json` record `converged: false`. Raise `--als-iterations` or enable
+`--flux-conserve`, then verify convergence before accepting the fit.
 
 Optional polynomial backgrounds and a flux-conserving basis rewrite are
 available from the CLI. Inspect the fitted kernel sum (`kernel_sum_center`
@@ -138,8 +138,8 @@ rebuilt from the numeric run.
 
 ## Separable-kernel Python APIs
 
-The separable solver is available from the curated Python API even though the
-constant CLI model is a full two-dimensional kernel:
+The curated Python API provides a separable solver. The constant CLI model
+uses a full two-dimensional kernel:
 
 ```python
 from cuphoton.xpois import GaussianBasisComponent, solve_separable_kernel
@@ -163,12 +163,11 @@ helpers, and the result dataclasses are also exported from
 
 `solve_spatial_als` fits a different model. At pixel `p`, its kernel is the
 outer product `K_p(v, u) = V_p(v) H_p(u)`, with Chebyshev coefficient fields
-for both line profiles. There is only one profile per axis, even with
-multiple Gaussian widths, so each realized kernel has rank at most one. A
-sum of distinct circular Gaussians or a rotated anisotropic PSF is generally
-not representable; the kernel-shape expressivity differs from the
-nonseparable `solve_constant_kernel` model. The returned result exposes
-`kernel_at(y, x)` rather than claiming one kernel represents the full image:
+for both line profiles. Each axis has one profile, including when the basis
+uses multiple Gaussian widths, so each realized kernel has rank at most one.
+Shapes such as a sum of distinct circular Gaussians or a rotated anisotropic
+PSF generally require a nonseparable model such as `solve_constant_kernel`.
+The returned result exposes the local kernel through `kernel_at(y, x)`:
 
 ```python
 from cuphoton.xpois import SpatialALSConfig, solve_spatial_als
@@ -199,35 +198,30 @@ functions; the CLI default basis has six, so the spatial model needs
 smaller kernels with a message naming the first failing axis, its length,
 and the number of basis functions.
 
-ALS means alternating linear least squares. This model is unrelated to
-Levenberg-Marquardt fitting and does not use the third-party `lmfit` package.
-The solver is instrument-neutral. Callers supply already registered images and
-an optional variance image. A fit mask or explicit `(y, x)` sample positions
-can select the fit region; when neither is supplied, all valid pixels in the
+ALS means alternating linear least squares. The solver alternates linear
+updates to the horizontal and vertical profiles using NumPy or CuPy.
+Callers supply already registered images and an optional variance image. A fit
+mask or explicit `(y, x)` sample positions can select the fit region; when neither is supplied, all valid pixels in the
 centered-kernel interior are fitted. Repeated positions are retained as
-multiplicity weights. Explicit positions fail closed if any requested target,
-variance, or source footprint is non-finite; mask and default selection omit
-invalid pixels. Camera calibration, PSF measurement, source selection,
-astrometric registration, and unit interpretation remain responsibilities of
-the calling pipeline. The solver embeds no camera calibration or observational
-data; callers provide any calibration-derived masks, variances, or fit samples.
+multiplicity weights. Explicit positions raise an error if any requested
+target, variance, or source footprint is non-finite; mask and default selection
+use valid pixels. The calling pipeline supplies camera calibration, PSF
+measurement, source selection, astrometric registration, and unit
+interpretation, including calibration-derived masks, variances, or fit samples.
 Flux conservation is opt-in, matching the existing XPOIS CLI convention. When
 enabled, spatial basis corrections are zero-sum and the signed kernel sum is
-one fitted, position-independent scale. Without it, `flux_scale` is the
-vertical reference multiplier rather than a standalone photometric scale;
-evaluate `kernel_at(y, x)` for the local kernel sum. Near dependence between
+one fitted, position-independent scale. With flux conservation disabled,
+`flux_scale` is the vertical reference multiplier; evaluate `kernel_at(y, x)`
+for the local kernel sum and photometric scale. Near dependence between
 reference and correction profiles can cause poor conditioning or slow
 convergence. Use `--flux-conserve` (or `flux_conserve=True`) for the spatial
 model unless a position-dependent kernel sum is required.
 
-Setting `tolerance=0` disables the relative-change stopping criterion.
-Only the numerical objective floor can end iterations before the full
-`max_iterations` budget.
-`SpatialALSConfig.tolerance`
-(`--als-tolerance`) is the relative penalized-objective change that stops the
-alternating updates early. A tolerance of `0` disables that stop; the fit then
-runs to `max_iterations` unless the objective reaches its numerical floor, and
-`converged` is otherwise false.
+`SpatialALSConfig.tolerance` (`--als-tolerance`) is the relative
+penalized-objective change that stops the alternating updates early. A
+tolerance of `0` disables that stop: the fit runs to `max_iterations` or stops
+at the numerical objective floor. Reaching that floor sets `converged` to
+true; exhausting the iteration budget sets it to false.
 
 The CuPy backend accelerates one spatial fit on one GPU. MPI and Dragon can
 schedule those fits across complete image-pair items, but do not shard one fit
@@ -238,16 +232,15 @@ when comparing executors.
 
 `solve_spatial_gaussian_polynomial_kernel` is an experimental CPU and CuPy
 implementation of a spatial Gaussian-polynomial kernel model. Its fixed
-Gaussian-polynomial basis, built from isotropic Gaussian envelopes, can
-represent nonseparable kernel modes that rank-one ALS cannot, while the ALS
-outer-product family can represent kernels outside this fixed basis. It
-follows the spatial-kernel lineage of
+Gaussian-polynomial basis, built from isotropic Gaussian envelopes,
+represents nonseparable kernel modes. The ALS outer-product family also
+represents kernels outside this fixed basis. The model follows the
+spatial-kernel lineage of
 [Alard (2000)](https://arxiv.org/abs/astro-ph/9903111), with independently
 controlled photometric-scale, kernel-shape, and background fields as described
-by [Bramich et al. (2013)](https://arxiv.org/abs/1210.2926). This identifies the
-model family without claiming compatibility with a legacy or survey pipeline.
-While experimental, import it from its defining submodule rather than the
-curated `cuphoton.xpois` root API:
+by [Bramich et al. (2013)](https://arxiv.org/abs/1210.2926). Integrations use the
+array, coordinate, and weighting contracts described below. Import this
+experimental API from its defining submodule:
 
 ```python
 from cuphoton.xpois.spatial_gaussian_polynomial import (
@@ -279,37 +272,35 @@ parent_kernel = fit.kernel_at_parent(detector_y, detector_x)
 ```
 
 `SpatialGaussianPolynomialKernelFitSamples` can replace `fit_mask` when an
-upstream source or
-stamp-selection stage needs to preserve exact pixel rows. It accepts local
-`(y, x)` positions and optional positive `relative_precision`; duplicate pixels
-are rejected because repeating one measurement does not create independent
-information. The result reports `fit_objective`, the weighted residual sum
-under the named `fit_weighting` policy, rather than a `chi2` field.
+upstream source or stamp-selection stage needs to preserve exact pixel rows.
+It accepts local `(y, x)` positions and optional positive
+`relative_precision`. Each measurement must appear once; duplicate pixels
+raise an error. The result reports `fit_objective`, the weighted residual sum
+under the named `fit_weighting` policy.
 `target_variance` weighting gives a chi-square-form objective; statistical
 calibration also requires valid target variances and applicable model
 assumptions.
 
 Precisely, the minimized objective is
 `J = sum_i relative_precision_i * residual_i**2 / target_variance_i`, with
-each omitted factor set to one. Relative precision is not normalized, source
-variance remains diagnostic-only, and the nominal degrees of freedom are the
-number of unique fitted pixels minus the number of fitted parameters.
+each omitted factor set to one. Relative precision enters at its supplied
+scale. Source variance contributes to diagnostics, and the nominal degrees of
+freedom are the number of unique fitted pixels minus the number of fitted
+parameters.
 
 The model fits all fixed two-dimensional Gaussian-polynomial basis terms
 jointly in one convex weighted linear solve. The first, unit-sum basis carries
 the photometric-scale field; every remaining basis has zero sum and describes
-kernel shape. This prevents shape variation from silently changing the kernel
-sum. Both backends use the same block QR reduction without forming normal
-equations, and ill-conditioned fits fail rather than acquiring an implicit
-ridge model.
-Basis kernels or design columns that cancel to rounding noise, such as a
-duplicated component, are rejected before the solve because the column-scaled
-condition number cannot detect them.
+kernel shape, preserving the kernel sum during shape variation. Both
+backends use the same unregularized block QR reduction and raise an error for
+ill-conditioned fits. Before the solve, a separate check rejects basis
+kernels or design columns that cancel to rounding noise, such as a duplicated
+component; this check complements the column-scaled condition number.
 Chebyshev fields are evaluated in an explicit parent pixel-coordinate
-domain. If no domain is supplied, each non-singleton input axis spans `[-1,
-1]`; a singleton axis maps to `0`. Supplying the crop origin and half-open
-parent bounding box gives fitted coefficients the same coordinate
-interpretation across cutouts; it does not identify a detector or WCS.
+domain. By default, each non-singleton input axis spans `[-1, 1]`; a singleton
+axis maps to `0`. Supplying the crop origin and half-open parent bounding box
+gives fitted coefficients the same coordinate interpretation across cutouts.
+Callers associate this pixel domain with their detector and WCS metadata.
 Result methods distinguish local-array from parent pixel coordinates
 explicitly: local-frame evaluation is limited to the fitted array, while
 parent-frame evaluation accepts coordinates between the first and last
@@ -318,21 +309,22 @@ y1, x0, x1)`, this means `y0 <= y <= y1 - 1` and `x0 <= x <= x1 - 1`,
 including fractional positions between centers. For a cutout it
 extrapolates the fitted fields beyond the array within these bounds.
 
-This experimental Python API has no CLI selector. The CPU path
-is the same-model numerical reference; `backend="cupy"` executes the same
+Access this experimental model through the Python API. The CPU path is the
+same-model numerical reference; `backend="cupy"` executes the same
 two-dimensional basis contraction and FP64 QR solve on one GPU, while
-`backend="auto"` chooses CuPy only when a usable CUDA device is available.
+`backend="auto"` chooses CuPy when a usable CUDA device is available and CPU
+otherwise.
 
 `variance` supplies target-only weights for the fit objective. When
 `source_variance` is also supplied, the result propagates independent source
 pixel variances through each position-dependent fitted kernel and reports
 `propagated_source_variance`, `marginal_residual_variance`, and
-`marginal_standardized_residual`. Source variance is diagnostic-only: missing
-source-variance footprints do not alter the fitted coefficients, but the
-corresponding diagnostic pixels are NaN. These products do not include fit
-uncertainty or cross-pixel covariance. The residual therefore remains an
-ordinary correlated difference image, not a proper-difference or calibrated
-detection-significance image. This API does not decorrelate the residual.
+`marginal_standardized_residual`. These diagnostics use the coefficients from
+the target-weighted fit and report NaN wherever a source-variance footprint is
+missing. They describe marginal pixel variance for a fixed fitted model. The
+residual retains cross-pixel correlations; a proper-difference or calibrated
+detection-significance analysis requires additional treatment of those
+correlations and fit uncertainty.
 
 ## Fixed-kernel marginal noise diagnostics
 
@@ -362,11 +354,13 @@ print(statistics.pixel_pooled.cardinal_lag1_rho)
 
 This is a fixed-kernel marginal-diagonal calculation. The reference variance
 is convolved with `kernel**2`; a non-unit kernel sum therefore applies its own
-photometric scaling. It does not change fit weights or chi-square and does not
-represent neighboring-pixel covariance, reference-target covariance,
-resampling covariance, or fitted-kernel uncertainty. The standardized residual
-is a descriptive diagnostic, not a whitened residual or calibrated
-significance image. Prefer held-out pixels when assessing fit quality.
+photometric scaling. The calculation uses the completed fit's residual and
+leaves its weights and chi-square unchanged. The standardized residual
+describes marginal noise under a fixed-kernel, independent-pixel model.
+Whitening or calibrated significance requires additional treatment of
+neighboring-pixel covariance, reference-target covariance, resampling
+covariance, and fitted-kernel uncertainty. Prefer held-out pixels when
+assessing fit quality.
 
 `summarize_standardized_residuals` reports the RMS, the demeaned standard
 deviation (the population root mean square of residuals centered on each
@@ -391,8 +385,8 @@ acceptance thresholds, or calibrate statistical significance.
 ## Distributed image-pair batches
 
 `fit-batch` assigns complete, independent reference/target pairs to GPU
-workers. It does not split one image or one kernel solve across devices. The
-two required selection flags name different layers:
+workers. Each worker performs the complete kernel solve for its assigned pair
+on one GPU. The two required selection flags name different layers:
 
 | Flag | Selects | Values |
 | --- | --- | --- |
@@ -405,10 +399,9 @@ for the whole run; per-pair solver overrides are not supported. For spatial
 ALS, each worker solves one complete image pair on one GPU; the coefficient
 solve is not distributed across workers.
 
-The distributed command deliberately rejects `--backend auto` and CPU
-fallback. A missing GPU package therefore cannot silently change a distributed
-run's execution mode. Executor-specific options are also rejected when used
-with the other executor. Inspect the complete surface with:
+The distributed command requires an explicit GPU backend from the table and
+its runtime dependencies. `--backend auto`, CPU fallback, and options for a
+different executor raise errors. Inspect the complete surface with:
 
 ```bash
 uv run cuphoton xpois help fit-batch
@@ -418,9 +411,9 @@ uv run cuphoton xpois help fit-batch
 
 The Dragon executor requires [DragonHPC](https://dragonhpc.github.io/dragon/doc/_build/html/index.html)
 (Python distribution `dragonhpc`, import `dragon`) in the same Python
-environment as cuPhoton on every participating node. Installing cuPhoton,
-including its `gpu` extra, does not install DragonHPC. DragonHPC is installed
-separately and is not included in cuPhoton's dependency lock or wheel.
+environment as cuPhoton on every participating node. Install DragonHPC
+separately alongside cuPhoton's `gpu` extra and manage its version as an
+external runtime dependency.
 
 For example, install the released DragonHPC 0.14.2 package into a CUDA 13
 cuPhoton environment:
@@ -432,8 +425,7 @@ uv pip install --python .venv/bin/python "dragonhpc==0.14.2"
 
 The [DragonHPC 0.14.2 wheels](https://pypi.org/project/dragonhpc/0.14.2/#files)
 support CPython 3.11 through 3.13 on Linux x86-64 and AArch64 with glibc 2.28
-or newer. Use one of those Python versions for this installation; a CPython
-3.14 wheel is not published for this DragonHPC release.
+or newer. Use one of those Python versions for this installation.
 
 Use the installed `.venv/bin/dragon` launcher with the examples below.
 `uv sync` removes packages outside the project lock, so repeat the DragonHPC
@@ -445,9 +437,9 @@ for licensing and installation details.
 
 The MPI executor uses an external MPI or scheduler launcher. Collective
 aggregation (`--aggregation-mode mpi`) also requires `mpi4py` built for the
-selected MPI implementation. Shared-file aggregation does not import
-`mpi4py`. Install the runtimes required by the selected executor on each node;
-the MPI executor does not require DragonHPC.
+selected MPI implementation. Shared-file aggregation exchanges results
+through the filesystem, with the external launcher managing its processes.
+Install the runtimes required by the selected executor on each node.
 
 ### Manifest and storage contract
 
@@ -484,9 +476,9 @@ Loading a manifest captures each unique input's resolved path, byte size, and
 nanosecond modification time. That identity is checked during preflight and
 before and after each item. The manifest SHA-256 binds both the canonical pair
 entries and this captured identity, and MPI ranks require the same digest
-before run setup. It avoids reading multi-gigabyte inputs solely to hash them,
-but is not a content checksum: use an immutable dataset version or an external
-checksum when content identity matters.
+before run setup. This metadata-based identity check scales to multi-gigabyte
+inputs. Use an immutable dataset version or an external content checksum to
+bind the run to exact input contents.
 
 Work is assigned as deterministic input-byte-balanced whole-item shards.
 Scientific arrays stay on shared storage; only compact rank or worker results
@@ -525,65 +517,61 @@ mpirun -n 4 \
 The parent visibility mask must enumerate the allocation in local-rank order.
 The helper validates that mask and Open MPI's local rank metadata, preserves
 the allocation in `CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES`, selects one token,
-and only then executes the requested command. Do not place another shell or
-Python process before the helper.
+then executes the requested command. Place the helper immediately after the
+launcher, before any shell or Python process.
 
 Rank zero opens and validates every manifest input before execution. Other
 ranks load the manifest and stat its inputs to agree on the same digest and
-assignment, without repeating the full input preflight. Collective consensus
-broadcasts the root-validated digest; file mode publishes it in the ready
+assignment through metadata checks. Collective consensus broadcasts the
+root-validated digest; file mode publishes it in the ready
 marker. A root preflight failure prevents either mode from starting work.
 Each rank still verifies input identity when executing its assigned items.
 
 Collective startup errors are exchanged before rank-context setup, and every
 rank verifies a root-written nonce through the resolved run directory before
-GPU work starts. A rank that cannot import or initialize MPI has no
-communicator through which cuPhoton can report its failure. The launcher must
-therefore terminate the remaining collective ranks when any task exits; with
+GPU work starts. The launcher owns termination for MPI import and
+initialization failures as well as later process exits. Configure it to
+terminate the remaining collective ranks when any task exits; with
 Slurm use `srun --kill-on-bad-exit=1` (or the site's equivalent) for
 `--aggregation-mode mpi`. Open MPI must retain its fail-fast policy for a
-nonzero or lost rank. cuPhoton deliberately leaves job-wide termination to
-the launcher: a Python exception hook cannot handle signals, process aborts,
-or a rank that never initializes MPI.
+nonzero or lost rank. The launcher also handles signals, process aborts, and
+failures before MPI initialization.
 
 `--aggregation-mode mpi` requires a compatible `mpi4py` installation.
 `--rank-setup-timeout-sec` bounds shared-filesystem metadata handoffs: setup
 markers, collective rank/record visibility before terminal audit, and staged
 file-rank visibility before promotion. It applies to both aggregation modes,
-defaults to 600 seconds, and must be identical on every rank. It does not bound
-MPI collectives themselves; retain the launcher's fail-fast policy described
-above. Each metadata phase has one shared absolute budget; the timeout is not
-restarted for every rank or artifact.
+defaults to 600 seconds, and must be identical on every rank. The launcher's
+fail-fast policy governs MPI collectives. Each metadata phase has one shared
+absolute budget covering all ranks and artifacts.
 
 `--aggregation-mode files` instead exchanges rank metadata through the shared
 output filesystem; give every rank the same explicit `--name` and one unique
 shared `--attempt-id` for that launch. File-mode ownership additionally binds
 ranks to the launcher's PMIx namespace or direct Slurm job and numeric step.
-A nested `mpirun` uses its PMIx namespace, not the surrounding Slurm allocation.
-For a launcher without these identifiers, set a fresh token **before** each
-launcher invocation and propagate it unchanged to every rank:
+A nested `mpirun` uses its PMIx namespace. For other launchers, set a fresh
+token before each launcher invocation and propagate it unchanged to every
+rank:
 
 ```bash
 CUPHOTON_MPI_LAUNCH_ID="$(python -c 'import uuid; print(uuid.uuid4().hex)')" \
   mpirun -x CUPHOTON_MPI_LAUNCH_ID ...
 ```
 
-Do not generate this token separately in each rank or reuse it across launches.
-Competing launches cannot publish into each other's rank staging or preflight
-records. `--rank-timeout-sec` applies only to
-file aggregation, defaults to 3600 seconds, and must also be identical on
-every rank. It bounds rank zero's wait for peer completion markers after rank
+Use one shared token per launch. Launch ownership isolates rank staging and
+preflight records. `--rank-timeout-sec` applies to file aggregation, defaults
+to 3600 seconds, and must also be identical on every rank. It bounds rank zero's wait for peer completion markers after rank
 zero finishes its own shard, so size it above the worst expected completion
 skew between rank zero and the slowest peer. The default aggregation mode is
-`mpi`; there is no silent fallback to file aggregation. Rank zero claims the
-attempt identity atomically, so a reused ID is rejected instead of overwriting
-another launch. The only recovery exception is an exact retry after
-`summary.json` committed but the terminal attempt-marker write failed. Rank
+`mpi`; select `files` explicitly for file aggregation. Rank zero claims the
+attempt identity atomically and rejects reused IDs. Recovery supports an
+exact retry after `summary.json` committed but the terminal attempt-marker
+write failed. Rank
 zero validates the regular marker, ready record, run record, summary, manifest,
 options, topology, and timeouts, then repairs only that marker and directs the
 operator to the existing immutable summary. Interrupted attempts without a
 committed summary are retained for inspection; restart with a new `--name` and
-`--attempt-id`. They are never reclaimed automatically.
+`--attempt-id`. Operators control cleanup of this retained evidence.
 The output root's `.mpi-attempts/` directory holds the atomic attempt marker
 and retained per-rank preflight, staging, and completion evidence outside the
 immutable run directory. File-mode ranks publish their completion marker last.
@@ -592,11 +580,11 @@ status, regular JSON evidence, and real local output trees for successful
 items; symlinks and missing success artifacts stay in staging and fail the run.
 In both executors, a failed item can retain partial output under `items/`.
 Consumers must check its terminal record before using that output.
-It promotes artifacts only from a completed, validated rank into the immutable
-run directory before writing its summary, so a rank that finishes after a
-timeout cannot change the audited run. If a shared-filesystem rename fails
-mid-promotion, the failed summary records `PartialRankPromotion` with the paths
-already published; it never claims an all-or-nothing rank publication.
+The coordinator promotes artifacts from a completed, validated rank into the immutable
+run directory before writing its summary. Results arriving after the timeout
+remain outside the audited run. If a shared-filesystem rename fails
+mid-promotion, the failed summary records `PartialRankPromotion` and lists the
+paths already published.
 
 With file aggregation, rank zero owns the evidence timeout, terminal batch
 status, and authoritative launcher exit code. Nonzero ranks return zero after
@@ -604,12 +592,12 @@ publishing their completion markers, even when their local shard failed, so
 rank zero can finish collecting and persisting the launch-wide failure
 evidence. With collective aggregation, rank zero broadcasts the terminal
 decision and a failed batch raises consistently on every rank.
-Do not add collective fail-fast launch policy to file aggregation: nonzero
-ranks intentionally publish their evidence and return so rank zero can finish
-the audit. A file-mode evidence timeout does not cancel peers or release
-their GPUs. Configure a scheduler wall-time limit or use job-level cancellation
-for hung ranks; rank zero cannot safely terminate remote launcher-owned
-processes. A launcher may wait for those ranks after rank zero has exited.
+File aggregation requires a launch policy that lets rank zero finish the
+audit after peers publish their evidence and return. Peer processes and their
+GPU allocations remain active after a file-mode evidence timeout. Configure a
+scheduler wall-time limit or use job-level cancellation for hung ranks; the
+launcher owns remote-process termination and may wait for those ranks after
+rank zero has exited.
 
 When Slurm already gives each task singleton GPU visibility, it can launch the
 unified command directly:
@@ -630,8 +618,8 @@ srun --nodes=2 \
   --attempt-id fixed-32-mpi16-attempt-1
 ```
 
-The manifest must contain at least one image pair per task. XPOIS rejects idle
-MPI ranks instead of launching ranks with empty shards.
+The manifest must contain at least one image pair per task. An empty MPI shard
+raises an error before execution.
 
 ### Launch with Dragon
 
@@ -665,11 +653,12 @@ retaining `-t tcp -o tcp` to select TCP transport.
 Both routes print a compact result containing the executor, run ID, run
 directory, summary path, and terminal status. Durable per-item records and the
 final summary audit missing, duplicate, unexpected, malformed, failed, and
-assignment-inconsistent results. An ordinary item error does not prevent the
-remaining items in its shard from running, but any item, rank, worker, or audit
-failure makes the batch command return nonzero after evidence is persisted.
+assignment-inconsistent results. After an ordinary item error, the worker
+continues with the remaining items in its shard. Any item, rank, worker, or
+audit failure makes the batch command return nonzero after evidence is
+persisted.
 Declared worker record-write errors still fail the run and are reported
-under `shard_result_audit.write_failed_shards` rather than as evidence
+under `shard_result_audit.write_failed_shards`, separately from evidence
 mismatches.
 The MPI rank-result audit reports trustworthy workload and setup failures in
 separate fields, apart from malformed or identity-inconsistent rank evidence.
@@ -686,7 +675,7 @@ backend, and fit options constant. Rotate launch order and compare exact output
 artifacts, exactly-once records, GPU placement, clean exits, complete launcher
 wall time, coordinator or rank work time, and per-item phase timings.
 
-This interface does not retry failed work, resume after a dead process,
-split one image across GPUs, or select a launcher automatically. Start a
-new run after a failed attempt and inspect the terminal status before
-consuming its outputs.
+Select and configure the launcher before each batch. Each GPU processes
+complete image pairs. After failed work or a dead process, start a new run
+and inspect its terminal status before consuming outputs. The exact
+marker-recovery retry described above reuses a completed run's summary.

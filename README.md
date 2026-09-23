@@ -3,13 +3,8 @@
 cuPhoton is a collection of GPU-accelerated reference workflows for
 astronomical imaging and X-ray trace analysis. It is intended for research
 teams that want working implementations they can run, inspect, and adapt to
-their own instruments and data products. It is not a stable application
-framework, and the scientific assumptions in each workflow must be checked
-against the target use case.
-
-cuPhoton releases are currently alpha-quality. The curated Python exports
-and structured run artifacts are the intended integration points, but
-interfaces may evolve as additional institutions adapt the workflows.
+their own instruments and data products. The curated Python exports and
+structured run artifacts provide integration points for those workflows.
 
 ## Choose a workflow
 
@@ -54,7 +49,7 @@ uv sync --locked --extra dev --extra torch --extra viz
 uv run python examples/run_quickstarts.py --profile cpu
 ```
 
-Use `--require-gpu` when a CPU fallback should be an error. See
+Use `--require-gpu` to require GPU execution. See
 [Quickstarts](docs/quickstarts.md) for individual components and output
 contracts.
 
@@ -90,8 +85,8 @@ XPOIS (`cuphoton.xpois`) starts with aligned reference and target images. It
 fits a convolution kernel and background correction to match their blur,
 brightness scale, and background, then subtracts the matched reference.
 Unchanged sources should largely cancel, leaving a difference image for
-candidate detection. Residuals can also come from alignment errors, bad
-pixels, or a poor fit, so the saved matching model and diagnostics matter.
+candidate detection. Use the saved matching model and diagnostics to assess
+alignment, pixel quality, and the fit alongside candidate residuals.
 
 ### xFit: turn a candidate's shape into measurements
 
@@ -107,10 +102,10 @@ can optionally become inputs to an XScan classifier.
 XScan (`cuphoton.xscan`) trains and evaluates real/bogus classifiers and runs
 inference on candidate stamps. Models use search and template images,
 optionally a difference image, and explicitly selected xFit features.
-Real/bogus scores help prioritize plausible detections over artifacts;
-they do not identify an object's astrophysical type. XScan also produces
-review material for inspecting predictions and collecting labels. Training
-requires reviewed labels and suitable train/validation/test splits.
+Real/bogus scores help prioritize plausible detections over artifacts for
+further scientific classification. XScan also produces review material for
+inspecting predictions and collecting labels. Training requires reviewed
+labels and suitable train/validation/test splits.
 
 ### XRay: measure oscillations in detector signals
 
@@ -134,8 +129,8 @@ The base install contains the shared CPU data and scientific stack. Optional
 extras are deliberately separated by purpose:
 
 Python 3.11 through 3.14 is supported on Linux for the base, GPU, CPU PyTorch,
-and visualization profiles. The experimental cuTile profile remains limited
-to Python 3.12 and 3.13.
+and visualization profiles. The experimental cuTile profile supports Python
+3.12 and 3.13.
 
 | Extra | Use |
 | --- | --- |
@@ -164,8 +159,8 @@ uv sync --locked --python 3.12 --extra dev --extra gpu --extra cutile
 
 Only CUDA 13 dependency variants are supported by this release.
 
-xDataReader's GPU FITS path additionally needs a natively built extension
-that is not included in prebuilt wheels. Build it from a source checkout with
+xDataReader's GPU FITS path uses a native extension built from source.
+From a source checkout, build the extension with
 `bash src/cuphoton/xdr/src/build.sh` (see
 [docs/components/xdr.md](docs/components/xdr.md)).
 
@@ -192,15 +187,15 @@ The same interface is available through `python -m cuphoton`.
 
 Installations also include `cuphoton-openmpi-rank-exec`, a low-level launch
 helper that binds one Open MPI rank to one visible GPU before Python starts.
-It is invoked by `mpirun`, not used as a component CLI.
+Invoke it through `mpirun`.
 
 ## Data boundary
 
 cuPhoton works with caller-supplied local files. Depending on the component,
-these may include FITS, HDF5, NumPy, CSV, or Parquet products. The package
-does not authenticate to observatory services, acquire data rights, or install
-survey pipeline stacks. Keep credentials, restricted datasets, trained
-weights, and generated runs outside the repository.
+these may include FITS, HDF5, NumPy, CSV, or Parquet products. Applications
+handle observatory access, data permissions, and survey-specific preparation,
+then pass local products into cuPhoton. Store credentials, datasets, trained
+weights, and generated runs in application-managed locations.
 
 See [Data and artifact contracts](docs/data-artifacts.md) before adapting a
 workflow to new products.

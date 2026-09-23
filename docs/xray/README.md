@@ -87,19 +87,18 @@ the batch-versus-row regression cases; `fft_all` can differ by rounding from
 the batched cuFFT plan (the normalized-trace tests use `atol=1e-15`).
 
 `--fit-diagnostics summary` writes one status-aware record for each processed
-tile row, without duplicating records across the tile's x pixels. The summary
-includes the scale-free residual ratio and P1/P2 conditioning. `full` also
+tile row, covering all of that row's x pixels. The summary includes the
+scale-free residual ratio and P1/P2 conditioning. `full` also
 retains the fitted time axis, traces, reconstructions, and flattened modal
-arrays; use it only for bounded studies. `fit_status.npy` remains an execution
-status product, and no diagnostic ratio is interpreted as a scientific
-acceptance threshold by the command. P2 rank, singular values, and condition
-describe the unregularized P2 design even when the recorded fit uses ridge;
-they do not describe the augmented ridge system.
+arrays; size the study region to fit the resulting sidecar in memory and
+storage. `fit_status.npy` records execution status. Choose scientific
+acceptance thresholds for the diagnostic ratios as part of the study.
+P2 rank, singular values, and condition describe the unregularized P2 design,
+including when the recorded fit uses ridge.
 
 P2 ridge fitting is opt-in through `--p2-ridge-alpha`; its default of zero
-uses the unregularized least-squares path. Treat a nonzero value as an
-experiment configuration that requires independent validation, not as a
-general-purpose default.
+uses the unregularized least-squares path. Validate a nonzero value
+independently for the experiment's data and acceptance criteria.
 
 For linear prediction, detector artifact manifests use version 2 and record
 the diagnostics level and ridge alpha in the resume identity. Version 1 manifests
@@ -190,8 +189,8 @@ modes for each experiment.
 
 ## Input and artifact boundary
 
-Pass HDF5, trace NPZ, detector-array, and output paths explicitly. The package
-does not select a data root. Keep source datasets, detector dumps, generated
+Pass HDF5, trace NPZ, detector-array, and output paths explicitly to select
+the data locations for each run. Keep source datasets, detector dumps, generated
 reports, dashboards, and benchmark logs outside the repository.
 
 Before a long run, use `data-probe` to confirm the HDF5 schema and on/off shape

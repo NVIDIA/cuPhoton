@@ -10,8 +10,7 @@ Current scope:
 - `GZIP_1` and `GZIP_2` compressed image HDUs
 - batched multi-file loading with `batch_to_device`
 - pipelined loading with `batch_to_device_stream`
-- explicit `NotImplementedError` for compression formats that do not have a GPU
-  path
+- explicit `NotImplementedError` for unsupported compression formats
 
 ## HDF5 migration
 
@@ -32,9 +31,9 @@ Install the CUDA 13 development profile:
 uv sync --locked --extra dev --extra gpu
 ```
 
-The base package remains importable without GPU dependencies. xDataReader's
-loading paths require the `gpu` extra. To require a local build of its native
-extension after syncing the GPU environment, run:
+The base package supports imports in CPU environments. xDataReader's loading
+paths require the `gpu` extra. To build its native extension after syncing
+the GPU environment, run:
 
 ```bash
 bash src/cuphoton/xdr/src/build.sh
@@ -44,11 +43,10 @@ The native extension also needs CUDA toolkit headers, cuFile headers, and a
 thread-safe CFITSIO development install visible through `pkg-config cfitsio` or
 `CUPHOTON_XDR_CFITSIO_ROOT`.
 
-Normal PEP 517 and pip builds produce the pure Python package without probing
-native prerequisites. Building the extension requires an explicit
-`CUPHOTON_XDR_BUILD_EXT=1` source build, as performed by `build.sh` above.
+Normal PEP 517 and pip builds produce the pure Python package. Set
+`CUPHOTON_XDR_BUILD_EXT=1` for a native source build, as `build.sh` does above.
 `CUPHOTON_XDR_BUILD_EXT=0` explicitly selects the default pure Python build.
-Only CUDA 13 dependency variants are supported.
+The supported dependency variants target CUDA 13.
 
 ### Native extension availability
 
@@ -86,24 +84,21 @@ tar -xzf cfitsio-4.7.0.tar.gz
 Return to the checkout and run `build.sh` in the same shell so the prefix
 remains exported. The prefix must contain `include/fitsio.h` and the CFITSIO
 library in `lib` or `lib64`. `--disable-curl` removes CFITSIO's optional URL
-support; local FITS loading does not require it. Keep `--enable-reentrant`
-for concurrent native planning and reads.
+support. Keep `--enable-reentrant` for concurrent native planning and reads.
 
-Official release wheels are pure Python (`py3-none-any`) and do not contain
-`cuphoton.xdr._nvcomp_batch_ext`. An explicit native source build runs without
-PEP 517 build isolation (as `build.sh` does with `--no-build-isolation`)
-because pybind11, KvikIO and nvCOMP are resolved from the installed `gpu`
-environment. CFITSIO headers and libraries come from
+Official release wheels are pure Python (`py3-none-any`). Build
+`cuphoton.xdr._nvcomp_batch_ext` from source using the installed `gpu`
+environment: `build.sh` passes `--no-build-isolation` to resolve pybind11,
+KvikIO, and nvCOMP from that environment. CFITSIO headers and libraries come from
 `CUPHOTON_XDR_CFITSIO_ROOT` or `pkg-config cfitsio`, as described above.
-This is also why `pybind11` is not listed in `[build-system].requires`.
 Verify the extension after building:
 
 ```bash
 uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
 ```
 
-Without the extension, `batch_to_device` and `batch_to_device_stream` raise a
-`RuntimeError` that names the missing module and the build command.
+If the extension is missing, `batch_to_device` and `batch_to_device_stream`
+raise a `RuntimeError` that names the missing module and the build command.
 
 ## Benchmark
 
@@ -144,15 +139,14 @@ The version 1 JSON report contains:
 Metadata and JSON writes sit outside phase timings. `--skip-gds-read` omits the
 raw-read phase; failed planning also prevents that phase from running.
 
-### Benchmarking without storage I/O
+### Benchmarking with cached input
 
 `benchmark-fits --mock-storage {device,host}` serves repeat reads of each
-file from an in-memory cache instead of storage, so runs measure decode and
-kernel cost independent of disk throughput. `device` replays from GPU memory
+file from an in-memory cache, so runs measure decode and kernel cost
+independent of disk throughput. `device` replays from GPU memory
 at HBM bandwidth, isolating decompression cost and modeling an ideally fast
 GDS path; `host` replays from pinned host memory over PCIe, modeling what a
 properly working GDS path would deliver on the same hardware. The same
 behavior is available programmatically through the
 `cuphoton.xdr.mock_storage` context manager, or transparently by setting
-`CUPHOTON_XDR_MOCK_STORAGE=device` or `host` for benchmarks that do not
-select it explicitly.
+`CUPHOTON_XDR_MOCK_STORAGE=device` or `host` to set the benchmark's default.

@@ -7,7 +7,7 @@ explains the scientific operations.
 
 For a view across components, read
 [how the science components fit together](architecture.md#how-the-science-components-fit-together)
-and [what an exposure contains](architecture.md#an-exposure-is-more-than-pixels).
+and [what an exposure contains](architecture.md#what-an-exposure-contains).
 Then run a synthetic quickstart and read the contract for the component you
 intend to adapt.
 

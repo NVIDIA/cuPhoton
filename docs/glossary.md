@@ -2,7 +2,7 @@
 
 **Artifact**
 : A persisted numeric, tabular, configuration, metric, or review product from
-  a workflow run. Generated artifacts are not source files.
+  a workflow run.
 
 **Backend**
 : The numerical implementation selected for an operation, such as CPU NumPy,
@@ -38,7 +38,7 @@
 
 **HSC**
 : Hyper Suprime-Cam. Some data adapters use array layouts derived from local
-  HSC products; they do not require an online service.
+  HSC products and operate on caller-supplied files.
 
 **Kernel**
 : In image matching, an array of convolution weights: each output pixel is
@@ -47,8 +47,7 @@
 
 **LSST**
 : The Legacy Survey of Space and Time conducted by Vera C. Rubin Observatory.
-  cuPhoton consumes local products and does not install the survey pipeline
-  stack.
+  cuPhoton consumes caller-supplied local survey products.
 
 **OIS**
 : Optimal image subtraction: estimate a convolution kernel and differential
@@ -64,8 +63,8 @@
 
 **Real/bogus**
 : A classification of plausible astronomical detections versus artifacts under
-  a dataset's labeling policy. It does not identify an object's astrophysical
-  type.
+  a dataset's labeling policy, used to prioritize candidates for further
+  scientific classification.
 
 **Reference/template image**
 : The image convolved or otherwise matched to the target/search image before

@@ -1,9 +1,9 @@
 # Core
 
 `cuphoton.core` owns the command-line, context, path, logging, and invariant
-framework shared by every cuPhoton component. It is infrastructure rather than
-a science workflow; component algorithms, datasets, validation, and output
-formatting remain in their owning `cuphoton.*` namespaces.
+framework shared by every cuPhoton component. Component algorithms, datasets,
+scientific validation, and output formatting remain in their owning
+`cuphoton.*` namespaces.
 
 ## What it provides
 
@@ -20,8 +20,7 @@ command aliases, and 754 declared arguments. Five groups also support a
 component-level `version` command, for 94 commands when those built-ins are
 included; xDataReader is the exception.
 
-Workflow-specific YAML `--config` options remain component concerns. Core does
-not define a process-wide INI configuration option.
+Workflow-specific YAML `--config` options belong to each component.
 
 ## Public facade
 
@@ -41,8 +40,8 @@ directly in that component's `commands` module. Imported, private, and
 abstract classes are excluded; duplicate command names or aliases are errors.
 
 `build_component_cli` and `run_component` also accept an external
-`ComponentSpec` directly. This builds and runs the external component without
-registering it in the public root CLI.
+`ComponentSpec` directly. This builds and runs the external component while
+preserving the public root CLI's fixed registry.
 
 ## Common CLI behavior
 
@@ -54,13 +53,13 @@ uv run cuphoton xrep --help
 uv run cuphoton xrep help reproject-image
 ```
 
-The equivalent module invocation is `uv run python -m cuphoton`. Individual
-component packages are not module entry points.
+The equivalent module invocation is `uv run python -m cuphoton`, followed by
+the component and command names.
 
 Run-producing commands normally use the component directory beneath
 `$XDG_STATE_HOME/cuphoton` when no explicit output root is supplied. Runs and
 logs are separated into `runs/` and `logs/`. Pass an explicit output path in
-automation when the artifact location must not depend on the environment.
+automation to keep artifact locations consistent across environments.
 
 ## Extending a component CLI
 

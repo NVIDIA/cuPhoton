@@ -56,8 +56,8 @@ masks and variances select and weight fitted pixels. Results include fit
 status, evaluation counts, valid-pixel coverage, fitted and zero-signal
 chi-square statistics, covariance, standard errors, and an explicit
 uncertainty-validity reason. Nonfinite image or variance values are accepted
-only where the mask excludes that pixel; residual entries for excluded
-nonfinite image values are not meaningful.
+only where the mask excludes that pixel. Interpret residual entries at pixels
+with finite image values.
 
 Python inputs may be NumPy arrays, CuPy arrays, or array-like values accepted
 by the resolved backend. `backend="auto"` can therefore transfer a host input
@@ -67,13 +67,12 @@ batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
 An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
-form its weighted 8-by-8 normal equations without materializing an iteration
-Jacobian. The backend is opt-in, requires the `cuphoton[cutile]` extra on
-Linux with Python 3.12 or 3.13, and is not selected by `auto`. Final rank and
-covariance diagnostics still use the analytic Jacobian and a singular-value
-factorization. Sampled-stamp fits stay on the NumPy or CuPy backends. The Tile
-backend rejects finite-difference fitting rather than reporting Tile
-provenance for the generic CuPy path.
+form its weighted 8-by-8 normal equations directly. Select this backend
+explicitly and install the `cuphoton[cutile]` extra on Linux with Python 3.12
+or 3.13. Final rank and covariance diagnostics use the analytic Jacobian and a
+singular-value factorization. Sampled-stamp fits stay on the NumPy or CuPy
+backends. The Tile
+backend requires analytic derivatives and rejects finite-difference fitting.
 
 The `cutile` extra installs cuTile's Python package. Execution also needs
 `tileiras` and its companion CUDA compiler libraries, supplied by a compatible
@@ -92,11 +91,10 @@ uv run --locked --python 3.12 --extra gpu --extra cutile \
 
 Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
-the reported split-mode covariance is therefore not statistically calibrated
-unless the caller's weighting model accounts for that dependence. The XScan
-feature adapter accepts difference-mode xFit runs only.
-`uncertainty_valid` establishes numerical and rank validity; it does not
-override this split-plane calibration caveat.
+statistical calibration of the reported covariance requires a caller-supplied
+weighting model that accounts for that dependence. `uncertainty_valid` reports
+numerical and rank validity. The XScan feature adapter requires difference-mode
+xFit runs.
 
 ## CLI and artifacts
 
@@ -120,11 +118,10 @@ and pickle-backed inputs are rejected. A successful fit writes
 `fit-arrays.npz`; residuals remain numeric arrays within the NPZ
 archive.
 
-These inputs and outputs are data-bearing, not privacy-sanitized. Input
-archives contain candidate identifiers and exact image pixels; fit artifacts
-contain identifiers, hashes, parameters, uncertainties, covariance, and
-optional residuals. Do not publish them unless the underlying data and
-metadata are cleared for release.
+Input archives contain candidate identifiers and exact image pixels. Fit
+artifacts contain identifiers, hashes, parameters, uncertainties, covariance,
+and optional residuals. Confirm that the underlying data and metadata are cleared
+for release before publishing these artifacts.
 
 For the sampled-stamp model, choose `--stamp-evaluation bilinear`,
 `bilinear-vignetted`, or `finite-volume` and provide `stamp_basis` in the input
@@ -133,13 +130,12 @@ archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
 analytic Jacobian unless finite differences are requested; sampled-stamp fits
 always use finite differences and record that resolved choice in the effective
 configuration.
-`--x-tol` is an absolute step-norm tolerance; unlike a parameter-relative
-criterion, it cannot declare convergence merely because a periodic parameter
-has drifted to a large equivalent value.
+`--x-tol` is an absolute step-norm tolerance, so its convergence criterion stays
+consistent when a periodic parameter drifts to a large equivalent value.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
-or `float64` to run the solver at an explicit precision without changing the
-input arrays or their recorded per-candidate hashes. Float64 is preferable for
+or `float64` to run the solver at an explicit precision while preserving the
+input arrays and their recorded per-candidate hashes. Float64 is preferable for
 ill-conditioned observational fits when the additional compute cost is
 acceptable.
 
@@ -148,8 +144,8 @@ for the stable shapes and output fields.
 
 ## Opt-in observational-data checks
 
-No observational fixture is committed. The external checks read caller-owned
-FITS files and create every injection in memory.
+The observational checks read caller-supplied FITS files and create every
+injection in memory.
 
 The public ZTF check uses an independently shifted empirical difference PSF
 on quiet regions of a real subtraction image. Download the two products from
@@ -191,5 +187,5 @@ An optional Rubin check accepts a Parquet candidate inventory through
 `CUPHOTON_XFIT_RUBIN_METADATA`. Each row must identify a local difference
 FITS path, pixel center, stamp size, and pipeline `candidate_isDipole` value.
 The check reads `IMAGE`, `MASK`, and `VARIANCE` directly from FITS. That
-pipeline flag is useful for a dipole smoke test, but is not a human-reviewed
-real/bogus label and must not be treated as training truth.
+pipeline flag supports dipole smoke tests. Real/bogus training requires
+human-reviewed labels.
