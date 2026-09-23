@@ -6,18 +6,25 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import stat
 import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_PCI_BUS_ID = re.compile(
+    r"(?P<domain>[0-9A-Fa-f]{4}|[0-9A-Fa-f]{8}):"
+    r"(?P<bus>[0-9A-Fa-f]{2}):(?P<device>[0-9A-Fa-f]{2})\."
+    r"(?P<function>[0-7])"
+)
 
 
 @dataclass(frozen=True)
@@ -166,8 +173,10 @@ def audit_terminal_records(
     }
 
 
-def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    """Atomically replace one JSON mapping with a trailing newline."""
+def atomic_write_json(
+    path: Path, payload: Mapping[str, Any], *, overwrite: bool = True
+) -> None:
+    """Atomically publish JSON; optionally require a new destination."""
 
     normalized = json_mapping(payload, field=f"payload for {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +190,10 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
             )
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        if overwrite:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         directory_fd = os.open(path.parent, directory_flags)
         try:
@@ -240,6 +252,62 @@ def timestamp_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def numba_pci_bus_id(device: Any) -> str:
+    """Return a normalized PCI address from Numba CUDA device attributes."""
+
+    components = (
+        (device.PCI_DOMAIN_ID, "PCI domain", 0xFFFFFFFF, 8),
+        (device.PCI_BUS_ID, "PCI bus", 0xFF, 2),
+        (device.PCI_DEVICE_ID, "PCI device", 0x1F, 2),
+    )
+    normalized: list[str] = []
+    for value, field, maximum, width in components:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RuntimeError(f"{field} must be non-negative")
+        if value > maximum:
+            raise RuntimeError(f"{field} is outside the PCI address range")
+        normalized.append(f"{value:0{width}X}")
+    return normalize_pci_bus_id(
+        f"{normalized[0]}:{normalized[1]}:{normalized[2]}.0"
+    )
+
+
+def normalize_pci_bus_id(value: Any) -> str:
+    """Return one canonical CUDA/NVML PCI bus identifier."""
+
+    if not isinstance(value, str) or not (
+        match := _PCI_BUS_ID.fullmatch(value.strip())
+    ):
+        raise ValueError("PCI bus ID must use domain:bus:device.function")
+    return (
+        f"{int(match['domain'], 16):08X}:"
+        f"{int(match['bus'], 16):02X}:"
+        f"{int(match['device'], 16):02X}."
+        f"{int(match['function'], 16):X}"
+    )
+
+
+def classify_physical_gpu_pair(
+    first: Mapping[str, str],
+    second: Mapping[str, str],
+    *,
+    same_host: bool,
+) -> Literal["distinct", "duplicate", "incomparable"]:
+    """Classify two stable GPU identities without conflating MIG devices."""
+
+    first_uuid = first.get("uuid")
+    second_uuid = second.get("uuid")
+    if first_uuid is not None and second_uuid is not None:
+        return "duplicate" if first_uuid == second_uuid else "distinct"
+    if not same_host:
+        return "distinct"
+    first_pci = first.get("pci_bus_id")
+    second_pci = second.get("pci_bus_id")
+    if first_pci is None or second_pci is None:
+        return "incomparable"
+    return "duplicate" if first_pci == second_pci else "distinct"
+
+
 def error_payload(exc: BaseException) -> dict[str, str]:
     """Return a compact structured exception description."""
 
@@ -260,11 +328,115 @@ __all__ = [
     "WorkItem",
     "atomic_write_json",
     "audit_terminal_records",
+    "classify_physical_gpu_pair",
     "error_payload",
     "json_mapping",
     "new_run_id",
+    "normalize_pci_bus_id",
+    "numba_pci_bus_id",
     "partition_byte_balanced",
     "read_json_mapping",
     "timestamp_utc",
     "validate_identifier",
 ]
+
+
+def collect_gpu_identity(backend: str) -> dict[str, Any]:
+    """Collect stable device identity after caller-established placement."""
+
+    if backend in {"auto", "cupy", "cutile"}:
+        try:
+            return _collect_cupy_identity()
+        except (ImportError, OSError, RuntimeError):
+            if backend != "auto":
+                raise
+    return _collect_numba_identity()
+
+
+def _collect_cupy_identity() -> dict[str, Any]:
+    import cupy as cp
+
+    device_index = int(cp.cuda.runtime.getDevice())
+    properties = cp.cuda.runtime.getDeviceProperties(device_index)
+    name = properties.get("name", "unknown")
+    if isinstance(name, bytes):
+        name = name.decode(errors="replace")
+    uuid_value = properties.get("uuid")
+    if isinstance(uuid_value, bytes):
+        uuid_value = uuid_value.hex()
+    elif uuid_value is not None and not isinstance(uuid_value, str):
+        uuid_value = str(uuid_value)
+    identity_warnings: list[str] = []
+    try:
+        pci_bus_id = normalize_pci_bus_id(
+            cp.cuda.runtime.deviceGetPCIBusId(device_index)
+        )
+    except Exception as exc:  # pragma: no cover - runtime-specific
+        pci_bus_id = None
+        identity_warnings.append(f"pci_bus_id: {type(exc).__name__}: {exc}")
+    identity_error = (
+        "; ".join(identity_warnings) or "no stable GPU identity was available"
+        if uuid_value is None and pci_bus_id is None
+        else None
+    )
+    return {
+        "backend": "cupy",
+        "device_index": device_index,
+        "name": str(name),
+        "uuid": uuid_value,
+        "pci_bus_id": pci_bus_id,
+        "identity_error": identity_error,
+        "identity_warnings": identity_warnings,
+    }
+
+
+def _collect_numba_identity() -> dict[str, Any]:
+    from numba import cuda
+
+    device = cuda.get_current_device()
+    name = getattr(device, "name", "unknown")
+    if isinstance(name, bytes):
+        name = name.decode(errors="replace")
+    identity_warnings: list[str] = []
+    try:
+        raw_uuid = device.uuid
+        uuid_value = None if raw_uuid is None else str(raw_uuid) or None
+    except Exception as exc:  # pragma: no cover - runtime-specific
+        uuid_value = None
+        identity_warnings.append(f"uuid: {type(exc).__name__}: {exc}")
+    try:
+        pci_bus_id = numba_pci_bus_id(device)
+    except Exception as exc:  # pragma: no cover - runtime-specific
+        pci_bus_id = None
+        identity_warnings.append(f"pci_bus_id: {type(exc).__name__}: {exc}")
+    identity_error = (
+        "; ".join(identity_warnings) or "no stable GPU identity was available"
+        if uuid_value is None and pci_bus_id is None
+        else None
+    )
+    return {
+        "backend": "numba-cuda",
+        "device_index": int(getattr(device, "id", 0)),
+        "name": str(name),
+        "uuid": uuid_value,
+        "pci_bus_id": pci_bus_id,
+        "identity_error": identity_error,
+        "identity_warnings": identity_warnings,
+    }
+
+
+def regular_file(path: Path) -> bool:
+    """Return whether the path itself is a regular file, never a symlink."""
+
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
+def item_ids_sha256(items: Sequence[WorkItem]) -> str:
+    """Hash ordered work-item identities for shard provenance."""
+
+    return hashlib.sha256(
+        "\n".join(item.item_id for item in items).encode()
+    ).hexdigest()

@@ -43,13 +43,16 @@ def _project_metadata() -> dict:
         return tomllib.load(handle)
 
 
-def test_distribution_exposes_only_the_cuphoton_console_script():
+def test_distribution_exposes_console_script_and_mpi_launch_helper():
     metadata = _project_metadata()
 
     assert metadata["project"]["dynamic"] == ["version"]
     assert metadata["project"]["scripts"] == {
         "cuphoton": "cuphoton.core.cli:main"
     }
+    assert metadata["tool"]["setuptools"]["script-files"] == [
+        "scripts/cuphoton-openmpi-rank-exec"
+    ]
 
 
 @pytest.mark.parametrize("namespace", PUBLIC_NAMESPACES)

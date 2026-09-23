@@ -120,7 +120,7 @@ from cuphoton.xpois import solve_separable_kernel
 from cuphoton.xrep import ReprojectionSpec, reproject_array
 ```
 
-cuPhoton installs one executable:
+cuPhoton provides one Python console entry point:
 
 ```text
 cuphoton
@@ -129,6 +129,10 @@ cuphoton
 Run `cuphoton --help` for the component list, `cuphoton <group> --help` for a
 group's commands, and `cuphoton <group> help <command>` for detailed options.
 The same interface is available through `python -m cuphoton`.
+
+Installations also include `cuphoton-openmpi-rank-exec`, a low-level launch
+helper that binds one Open MPI rank to one visible GPU before Python starts.
+It is invoked by `mpirun`, not used as a component CLI.
 
 ## Data boundary
 

@@ -10,6 +10,7 @@ exclude RELEASING.md
 prune .github
 prune .gitlab
 prune scripts
+include scripts/cuphoton-openmpi-rank-exec
 include LICENSE
 include CITATION.cff
 include Makefile

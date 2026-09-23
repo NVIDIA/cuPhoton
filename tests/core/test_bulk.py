@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +16,10 @@ from cuphoton.core.bulk import (
     WorkItem,
     atomic_write_json,
     audit_terminal_records,
+    classify_physical_gpu_pair,
+    collect_gpu_identity,
+    normalize_pci_bus_id,
+    numba_pci_bus_id,
     partition_byte_balanced,
 )
 
@@ -138,3 +144,263 @@ def test_atomic_write_json_replaces_complete_mapping(
 def test_work_item_rejects_non_json_payload() -> None:
     with pytest.raises(ValueError, match="JSON-compatible"):
         WorkItem("item", {"bad": object()})
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_atomic_write_json_can_preserve_existing_destination(
+    tmp_path, symlink
+):
+    path = tmp_path / "record.json"
+    if symlink:
+        target = tmp_path / "target.json"
+        atomic_write_json(target, {"owner": "first"})
+        path.symlink_to(target)
+    else:
+        atomic_write_json(path, {"owner": "first"}, overwrite=False)
+    with pytest.raises(FileExistsError):
+        atomic_write_json(path, {"owner": "second"}, overwrite=False)
+    assert json.loads(path.read_text()) == {"owner": "first"}
+    assert path.is_symlink() is symlink
+    assert list(tmp_path.glob(".*.tmp-*")) == []
+
+
+def test_numba_pci_bus_id_normalizes_cuda_attributes() -> None:
+    device = SimpleNamespace(
+        PCI_DOMAIN_ID=0,
+        PCI_BUS_ID=0xC1,
+        PCI_DEVICE_ID=0,
+    )
+
+    assert numba_pci_bus_id(device) == "00000000:C1:00.0"
+
+
+def test_numba_pci_bus_id_accepts_extended_domain() -> None:
+    device = SimpleNamespace(
+        PCI_DOMAIN_ID=0x10000,
+        PCI_BUS_ID=0xC1,
+        PCI_DEVICE_ID=0,
+    )
+
+    assert numba_pci_bus_id(device) == "00010000:C1:00.0"
+
+
+@pytest.mark.parametrize("value", ["0000:c1:00.0", "00000000:C1:00.0"])
+def test_normalize_pci_bus_id_accepts_cuda_and_nvml_forms(value: str) -> None:
+    assert normalize_pci_bus_id(value) == "00000000:C1:00.0"
+
+
+@pytest.mark.parametrize("value", [None, "c1:00.0", "0000:GG:00.0"])
+def test_normalize_pci_bus_id_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValueError, match="domain:bus:device.function"):
+        normalize_pci_bus_id(value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("PCI_DOMAIN_ID", True, "PCI domain must be non-negative"),
+        ("PCI_DOMAIN_ID", 0x100000000, "PCI domain is outside"),
+        ("PCI_BUS_ID", -1, "PCI bus must be non-negative"),
+        ("PCI_DEVICE_ID", 0x20, "PCI device is outside"),
+    ],
+)
+def test_numba_pci_bus_id_rejects_invalid_components(
+    field, value, message
+) -> None:
+    values = {
+        "PCI_DOMAIN_ID": 0,
+        "PCI_BUS_ID": 1,
+        "PCI_DEVICE_ID": 0,
+    }
+    values[field] = value
+
+    with pytest.raises(RuntimeError, match=message):
+        numba_pci_bus_id(SimpleNamespace(**values))
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "same_host", "expected"),
+    [
+        (
+            {"uuid": "mig-a", "pci_bus_id": "pci"},
+            {"uuid": "mig-b", "pci_bus_id": "pci"},
+            True,
+            "distinct",
+        ),
+        (
+            {"uuid": "gpu", "pci_bus_id": "pci-a"},
+            {"uuid": "gpu", "pci_bus_id": "pci-b"},
+            False,
+            "duplicate",
+        ),
+        (
+            {"pci_bus_id": "pci"},
+            {"uuid": "gpu", "pci_bus_id": "pci"},
+            True,
+            "duplicate",
+        ),
+        (
+            {"uuid": "gpu"},
+            {"pci_bus_id": "pci"},
+            True,
+            "incomparable",
+        ),
+        (
+            {"uuid": "gpu"},
+            {"pci_bus_id": "pci"},
+            False,
+            "distinct",
+        ),
+    ],
+)
+def test_classify_physical_gpu_pair(
+    first, second, same_host, expected
+) -> None:
+    assert (
+        classify_physical_gpu_pair(
+            first,
+            second,
+            same_host=same_host,
+        )
+        == expected
+    )
+
+
+def test_numba_gpu_identity_uses_normalized_pci_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device = SimpleNamespace(
+        id=0,
+        name=b"test GPU",
+        uuid=None,
+        PCI_DOMAIN_ID=0,
+        PCI_BUS_ID=0xC1,
+        PCI_DEVICE_ID=0,
+    )
+    fake_cuda = SimpleNamespace(get_current_device=lambda: device)
+    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
+
+    identity = collect_gpu_identity("numba-cuda")
+
+    assert identity == {
+        "backend": "numba-cuda",
+        "device_index": 0,
+        "name": "test GPU",
+        "uuid": None,
+        "pci_bus_id": "00000000:C1:00.0",
+        "identity_error": None,
+        "identity_warnings": [],
+    }
+
+
+@pytest.mark.parametrize("broken_field", ["uuid", "pci_bus_id"])
+def test_numba_gpu_identity_preserves_partial_identity(
+    monkeypatch: pytest.MonkeyPatch, broken_field: str
+) -> None:
+    class PartialIdentity:
+        id = 0
+        name = b"test GPU"
+        PCI_BUS_ID = 1
+        PCI_DEVICE_ID = 0
+
+        @property
+        def uuid(self):
+            if broken_field == "uuid":
+                raise RuntimeError("uuid unavailable")
+            return "GPU-one"
+
+        @property
+        def PCI_DOMAIN_ID(self):
+            if broken_field == "pci_bus_id":
+                raise RuntimeError("pci unavailable")
+            return 0
+
+    fake_cuda = SimpleNamespace(get_current_device=PartialIdentity)
+    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
+
+    identity = collect_gpu_identity("numba-cuda")
+
+    assert identity["identity_error"] is None
+    assert len(identity["identity_warnings"]) == 1
+    assert identity["identity_warnings"][0].startswith(broken_field)
+    assert identity["uuid"] is not None or identity["pci_bus_id"] is not None
+
+
+def test_numba_gpu_identity_fails_without_stable_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenIdentity:
+        id = 0
+        name = b"test GPU"
+
+        @property
+        def uuid(self):
+            raise RuntimeError("uuid unavailable")
+
+        @property
+        def PCI_DOMAIN_ID(self):
+            raise RuntimeError("pci unavailable")
+
+    fake_cuda = SimpleNamespace(get_current_device=BrokenIdentity)
+    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
+
+    identity = collect_gpu_identity("numba-cuda")
+
+    assert identity["uuid"] is None
+    assert identity["pci_bus_id"] is None
+    assert identity["identity_error"] == "; ".join(
+        identity["identity_warnings"]
+    )
+
+
+def test_cupy_gpu_identity_uses_normalized_pci_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(
+        getDevice=lambda: 0,
+        getDeviceProperties=lambda index: {
+            "name": b"test GPU",
+            "uuid": "GPU-one",
+        },
+        deviceGetPCIBusId=lambda index: "0000:c1:00.0",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(cuda=SimpleNamespace(runtime=runtime)),
+    )
+
+    identity = collect_gpu_identity("cupy")
+
+    assert identity["pci_bus_id"] == "00000000:C1:00.0"
+    assert identity["identity_warnings"] == []
+
+
+def test_cupy_gpu_identity_preserves_uuid_on_pci_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(index: int) -> str:
+        raise RuntimeError("pci unavailable")
+
+    runtime = SimpleNamespace(
+        getDevice=lambda: 0,
+        getDeviceProperties=lambda index: {
+            "name": b"test GPU",
+            "uuid": "GPU-one",
+        },
+        deviceGetPCIBusId=unavailable,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(cuda=SimpleNamespace(runtime=runtime)),
+    )
+
+    identity = collect_gpu_identity("cupy")
+
+    assert identity["uuid"] == "GPU-one"
+    assert identity["pci_bus_id"] is None
+    assert identity["identity_error"] is None
+    assert identity["identity_warnings"] == [
+        "pci_bus_id: RuntimeError: pci unavailable"
+    ]

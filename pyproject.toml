@@ -80,6 +80,7 @@ cuphoton = "cuphoton.core.cli:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = false
+script-files = ["scripts/cuphoton-openmpi-rank-exec"]
 
 [tool.setuptools.dynamic]
 version = { attr = "cuphoton.__version__" }
