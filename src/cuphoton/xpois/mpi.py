@@ -176,7 +176,9 @@ def run_mpi_image_pair_batch(
         assert run_id is not None
         effective_run_id = run_id
 
-    manifest, manifest_error = _manifest_preflight(manifest_path, options)
+    manifest, manifest_error = _manifest_preflight(
+        manifest_path, options, validate_inputs=context.rank == 0
+    )
     run_dir = None
     run_dir_error = None
     try:
@@ -500,11 +502,12 @@ def _validate_arguments(
 
 
 def _manifest_preflight(
-    path: Path, options: BatchFitOptions
+    path: Path, options: BatchFitOptions, *, validate_inputs: bool = True
 ) -> tuple[ImagePairManifest | None, dict[str, str] | None]:
     try:
         manifest = load_image_pair_manifest(path)
-        preflight_image_pair_manifest(manifest, options)
+        if validate_inputs:
+            preflight_image_pair_manifest(manifest, options)
         return manifest, None
     except Exception as exc:
         return None, error_payload(exc)
@@ -635,12 +638,17 @@ def _mpi_manifest_consensus(
                 for item in records
             ):
                 message = "MPI setup timeouts differ across MPI ranks"
-        decision = {"error": message}
+        decision = {
+            "error": message,
+            "manifest_sha256": manifest.sha256 if manifest else None,
+        }
     decision = comm.bcast(decision, root=0)
     if not isinstance(decision, Mapping):
         raise RuntimeError("MPI manifest decision was not a mapping")
     if decision.get("error"):
         raise RuntimeError(str(decision["error"]))
+    if manifest is None or decision.get("manifest_sha256") != manifest.sha256:
+        raise RuntimeError("MPI root preflight manifest digest differs")
 
 
 def _mpi_run_id(
@@ -1725,6 +1733,7 @@ def _audit_ranks(
     mismatched: list[dict[str, Any]] = []
     failed_candidates: set[int] = set()
     setup_failed_candidates: set[int] = set()
+    write_failed_candidates: list[dict[str, Any]] = []
     physical: list[tuple[int, str, frozenset[tuple[str, str]]]] = []
     for result, rank in zip(results, ranks):
         if rank not in expected:
@@ -1732,6 +1741,25 @@ def _audit_ranks(
         shard = shards[rank]
         assigned = [item.item_id for item in shard]
         assigned_set = set(assigned)
+        write_errors = result.get("record_write_errors")
+        write_error_ids: set[str] = set()
+        write_errors_valid = isinstance(write_errors, list)
+        if write_errors_valid:
+            for error in write_errors:
+                if (
+                    not isinstance(error, Mapping)
+                    or not isinstance(error.get("item_id"), str)
+                    or error["item_id"] not in assigned_set
+                    or error["item_id"] in write_error_ids
+                    or not isinstance(error.get("type"), str)
+                    or not error["type"]
+                    or not isinstance(error.get("message"), str)
+                ):
+                    write_errors_valid = False
+                    break
+                write_error_ids.add(error["item_id"])
+        if not write_errors_valid:
+            write_error_ids.clear()
         assigned_records = [
             record
             for record in records_by_rank.get(rank, ())
@@ -1739,10 +1767,16 @@ def _audit_ranks(
             and record.get("item_id") in assigned_set
         ]
         success_count = sum(
-            record.get("status") == "success" for record in assigned_records
+            record.get("status") == "success"
+            for record in assigned_records
+            if record["item_id"] not in write_error_ids
         )
-        failed_count = sum(
-            record.get("status") == "failed" for record in assigned_records
+        # A directory fsync failure can leave a visible record. It remains
+        # a failed write, rather than a successfully persisted outcome.
+        failed_count = len(write_error_ids) + sum(
+            record.get("status") == "failed"
+            for record in assigned_records
+            if record["item_id"] not in write_error_ids
         )
         success_count_matches = (
             _integer(result.get("success_count")) == success_count
@@ -1751,7 +1785,9 @@ def _audit_ranks(
             _integer(result.get("failed_count")) == failed_count
         )
         terminal_assignment = all(
-            item_ranks.get(item_id) == rank for item_id in assigned
+            item_ranks.get(item_id) == rank
+            or (item_id in write_error_ids and item_id not in item_ranks)
+            for item_id in assigned
         )
         rank_error = result.get("error")
         expected_setup_error = (
@@ -1767,17 +1803,22 @@ def _audit_ranks(
         )
         setup_records_match = (
             expected_setup_error is not None
-            and len(assigned_records) == len(assigned)
+            and sum(
+                record["item_id"] not in write_error_ids
+                for record in assigned_records
+            )
+            == len(assigned) - len(write_error_ids)
             and all(
                 record.get("status") == "failed"
                 and record.get("error") == expected_setup_error
                 for record in assigned_records
+                if record["item_id"] not in write_error_ids
             )
         )
         setup_failure = (
             result.get("status") == "failed"
             and expected_setup_error is not None
-            and result.get("record_write_errors") == []
+            and write_errors_valid
             and result.get("artifact_error") is None
             and success_count == 0
             and failed_count == len(shard)
@@ -1813,7 +1854,7 @@ def _audit_ranks(
             "status": result.get("status")
             == ("failed" if failed_count or setup_failure else "success"),
             "error": setup_failure or rank_error is None,
-            "record_write_errors": result.get("record_write_errors") == [],
+            "record_write_errors": write_errors_valid,
             "artifact_error": result.get("artifact_error") is None,
             "terminal_assignment": terminal_assignment,
         }
@@ -1844,6 +1885,10 @@ def _audit_ranks(
             physical.append((rank, str(provenance["hostname"]), ids))
         if fields:
             mismatched.append({"rank": rank, "fields": sorted(fields)})
+        elif write_error_ids:
+            write_failed_candidates.append(
+                {"rank": rank, "record_write_errors": write_errors}
+            )
         elif setup_failure:
             setup_failed_candidates.add(rank)
         elif workload_failure:
@@ -1875,12 +1920,18 @@ def _audit_ranks(
     mismatched_rank_ids = {item["rank"] for item in mismatched}
     failed_ranks = sorted(failed_candidates - mismatched_rank_ids)
     setup_failed_ranks = sorted(setup_failed_candidates - mismatched_rank_ids)
+    write_failed_ranks = [
+        item
+        for item in write_failed_candidates
+        if item["rank"] not in mismatched_rank_ids
+    ]
     return {
         "ok": not missing
         and not duplicates
         and not unexpected
         and all(rank is not None for rank in ranks)
-        and not mismatched,
+        and not mismatched
+        and not write_failed_ranks,
         "expected_count": len(shards),
         "observed_count": len(results),
         "missing_ranks": missing,
@@ -1890,6 +1941,9 @@ def _audit_ranks(
         "incomparable_physical_gpu_ranks": sorted(incomparable_gpu_ranks),
         "failed_ranks": failed_ranks,
         "setup_failed_ranks": setup_failed_ranks,
+        "write_failed_ranks": sorted(
+            write_failed_ranks, key=lambda item: item["rank"]
+        ),
         "mismatched_ranks": sorted(mismatched, key=lambda item: item["rank"]),
     }
 

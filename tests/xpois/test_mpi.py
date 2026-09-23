@@ -1972,6 +1972,96 @@ def test_execute_rank_continues_and_persists_terminal_records(
     assert audit["mismatched_ranks"] == []
 
 
+@pytest.mark.parametrize("visible_record", [False, True])
+@pytest.mark.parametrize("setup_failure", [False, True])
+def test_rank_audit_classifies_record_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    visible_record: bool,
+    setup_failure: bool,
+) -> None:
+    monkeypatch.delenv(
+        "CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES", raising=False
+    )
+    manifest = mpi.load_image_pair_manifest(_write_manifest(tmp_path, 2))
+    items = manifest.work_items()
+    run_dir = tmp_path / "run"
+    for name in ("items", "records", "ranks"):
+        (run_dir / name).mkdir(parents=True)
+    original_write = mpi.atomic_write_json
+
+    def fail_record(path, payload, **kwargs):
+        fail = path.parent.name == "records" and path.stem == "pair-0"
+        if not fail or visible_record:
+            original_write(path, payload, **kwargs)
+        if fail:
+            raise OSError("record durability failed")
+
+    monkeypatch.setattr(mpi, "atomic_write_json", fail_record)
+    result = mpi._execute_rank(
+        run_id="write-failure",
+        run_dir=run_dir,
+        manifest_sha256=manifest.sha256,
+        context=mpi._RankContext(0, 0, 1, "host", "test"),
+        items=items,
+        options=_options(),
+        visibility="GPU-0",
+        setup_error=(
+            {"type": "RuntimeError", "message": "setup failed"}
+            if setup_failure
+            else None
+        ),
+        item_runner=_item_runner,
+        gpu_identity_loader=lambda backend: _gpu(),
+    )
+    finalized = mpi._finalize(
+        run_dir,
+        "write-failure",
+        manifest,
+        _options(),
+        (items,),
+        (result,),
+        (),
+        "mpi",
+        mpi.timestamp_utc(),
+        time.perf_counter(),
+        "4.test",
+        "Test MPI",
+    )
+    audit = finalized.summary["rank_result_audit"]
+    assert finalized.status == "failed"
+    assert audit["ok"] is False
+    assert audit["mismatched_ranks"] == []
+    assert audit["write_failed_ranks"] == [
+        {
+            "rank": 0,
+            "record_write_errors": result["record_write_errors"],
+        }
+    ]
+    records, errors = mpi._read_mappings(run_dir / "records")
+    assert errors == []
+    for updates in (
+        {"failed_count": result["failed_count"] + 1},
+        {"record_write_errors": result["record_write_errors"] * 2},
+        {
+            "record_write_errors": [
+                {"item_id": "unassigned", "type": "OSError", "message": "bad"}
+            ]
+        },
+    ):
+        malformed = mpi._audit_ranks(
+            "write-failure",
+            manifest.sha256,
+            "cupy",
+            (items,),
+            ({**result, **updates},),
+            records,
+        )
+        assert malformed["ok"] is False
+        assert malformed["write_failed_ranks"] == []
+        assert malformed["mismatched_ranks"][0]["rank"] == 0
+
+
 def test_rank_result_sort_key_places_malformed_evidence_last() -> None:
     results = [
         {"rank": 1},
@@ -2632,6 +2722,133 @@ def test_terminal_record_audit_reports_assignment_fields_independently(
             "message": f"record 0 has invalid field(s): {field}",
         }
     ]
+
+
+@pytest.mark.parametrize("mode", ["mpi", "files"])
+@pytest.mark.parametrize("rank", [0, 1])
+def test_only_root_opens_manifest_inputs_before_consensus(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str, rank: int
+) -> None:
+    _files_environment(monkeypatch)
+    _remove_cuda_modules(monkeypatch)
+    path = _write_manifest(tmp_path, count=2)
+    expected = mpi.load_image_pair_manifest(path)
+    context = mpi._RankContext(
+        rank, rank, 2, "host", "test", launch_id="test-launch"
+    )
+    monkeypatch.setattr(mpi, "_environment_context", lambda env: context)
+    monkeypatch.setattr(mpi, "_mpi_context", lambda *args: context)
+    monkeypatch.setattr(mpi, "_mpi_run_id", lambda *args: "root-preflight")
+    monkeypatch.setattr(
+        mpi,
+        "_load_mpi_api",
+        lambda: mpi._MPIAPI(
+            SimpleNamespace(COMM_TYPE_SHARED=1),
+            _SingletonComm(),
+            "4.test",
+            "Test MPI",
+        ),
+    )
+    opened = []
+    original_load = np.load
+
+    def load_input(path, *args, **kwargs):
+        opened.append(Path(path))
+        return original_load(path, *args, **kwargs)
+
+    monkeypatch.setattr(np, "load", load_input)
+
+    class ConsensusReached(BaseException):
+        pass
+
+    def collective_consensus(comm, rank_context, manifest, error, *args):
+        assert manifest.sha256 == expected.sha256
+        assert error is None
+        raise ConsensusReached
+
+    def file_consensus(
+        rank_context,
+        run_dir,
+        run_id,
+        attempt_id,
+        timeout,
+        started,
+        manifest,
+        options,
+        error,
+        **kwargs,
+    ):
+        assert manifest.sha256 == expected.sha256
+        assert error is None
+        raise ConsensusReached
+
+    monkeypatch.setattr(mpi, "_mpi_manifest_consensus", collective_consensus)
+    monkeypatch.setattr(mpi, "_file_prepare_run", file_consensus)
+    with pytest.raises(ConsensusReached):
+        mpi.run_mpi_image_pair_batch(
+            manifest_path=path,
+            output_root=tmp_path / "runs",
+            run_id="root-preflight",
+            aggregation_mode=mode,
+            rank_timeout_sec=1.0 if mode == "files" else None,
+            attempt_id="attempt-one" if mode == "files" else None,
+            options=_options(),
+        )
+    if rank == 0:
+        assert set(opened) == {
+            identity.path for identity in expected.input_identities
+        }
+    else:
+        assert opened == []
+
+
+def test_manifest_consensus_broadcasts_root_preflight_digest(
+    tmp_path: Path,
+) -> None:
+    manifest = mpi.load_image_pair_manifest(_write_manifest(tmp_path, 2))
+
+    class RootComm:
+        decision = None
+
+        def gather(self, value, root):
+            return [value, {**value, "rank": 1}]
+
+        def bcast(self, value, root):
+            self.decision = value
+            return value
+
+    root_comm = RootComm()
+    root = mpi._RankContext(0, 0, 2, "host", "test")
+    peer = replace(root, rank=1, local_rank=1)
+    args = ("run", tmp_path / "run", _options(), "4.test", "Test MPI")
+    mpi._mpi_manifest_consensus(root_comm, root, manifest, None, *args)
+    assert root_comm.decision == {
+        "error": None,
+        "manifest_sha256": manifest.sha256,
+    }
+    mpi._mpi_manifest_consensus(
+        _NonrootAggregateComm(root_comm.decision),
+        peer,
+        manifest,
+        None,
+        *args,
+    )
+    with pytest.raises(RuntimeError, match="root preflight manifest digest"):
+        mpi._mpi_manifest_consensus(
+            _NonrootAggregateComm({"error": None, "manifest_sha256": "bad"}),
+            peer,
+            manifest,
+            None,
+            *args,
+        )
+    with pytest.raises(RuntimeError, match="invalid input shape"):
+        mpi._mpi_manifest_consensus(
+            _NonrootAggregateComm({"error": "invalid input shape"}),
+            peer,
+            manifest,
+            None,
+            *args,
+        )
 
 
 def test_singleton_collective_run_is_lazy_root_only_and_audited(

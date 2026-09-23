@@ -335,6 +335,13 @@ the allocation in `CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES`, selects one token,
 and only then executes the requested command. Do not place another shell or
 Python process before the helper.
 
+Rank zero opens and validates every manifest input before execution. Other
+ranks load the manifest and stat its inputs to agree on the same digest and
+assignment, without repeating the full input preflight. Collective consensus
+broadcasts the root-validated digest; file mode publishes it in the ready
+marker. A root preflight failure prevents either mode from starting work.
+Each rank still verifies input identity when executing its assigned items.
+
 Collective startup errors are exchanged before rank-context setup, and every
 rank verifies a root-written nonce through the resolved run directory before
 GPU work starts. A rank that cannot import or initialize MPI has no
@@ -473,6 +480,8 @@ under `shard_result_audit.write_failed_shards` rather than as evidence
 mismatches.
 The MPI rank-result audit reports trustworthy workload and setup failures in
 separate fields, apart from malformed or identity-inconsistent rank evidence.
+Valid record-write failures appear in `rank_result_audit.write_failed_ranks`
+and fail the run even when a record became visible before durability failed.
 GPU identity comparison prefers UUID when both peers report one and otherwise
 uses PCI identity only on the same host. Partial lookup failures are retained
 as warnings when a stable identifier survives, while an incomparable
