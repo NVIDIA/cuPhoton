@@ -20,8 +20,9 @@ torch = pytest.importorskip("torch")
 from cuphoton.xscan import training  # noqa: E402
 from cuphoton.xscan.config import PerformanceConfig  # noqa: E402
 from cuphoton.xscan.training import (  # noqa: E402
-    _cupy_to_torch,
+    CupyTorchView,
     _temporary_eval_mode,
+    cupy_to_torch,
     predict_tensors,
 )
 
@@ -565,8 +566,9 @@ def test_cupy_bridge_uses_producer_object_and_preserves_pointer(
         return original(producer, **kwargs)
 
     monkeypatch.setattr(torch.utils.dlpack, "from_dlpack", record_producer)
-    view = _cupy_to_torch(values, device=device)
+    view = cupy_to_torch(values, device=device)
 
+    assert isinstance(view, CupyTorchView)
     assert len(calls) == 1
     assert calls[0][0] is values
     assert calls[0][1] == {"copy": False}
@@ -585,7 +587,7 @@ def test_cupy_bridge_retains_owner_until_consumer_completion() -> None:
     cp = _cupy_on_device(device)
     values = cp.arange(34, dtype=cp.float32).reshape(2, 17)
     owner_ref = weakref.ref(values)
-    view = _cupy_to_torch(values, device=device)
+    view = cupy_to_torch(values, device=device)
     output = view.tensor + 1.0
 
     del values
@@ -615,8 +617,8 @@ def test_device_xfit_features_compose_with_tensor_inference() -> None:
         image_shape=(3, 3),
         variance_present=True,
     )
-    image_view = _cupy_to_torch(image_values, device=device)
-    feature_view = _cupy_to_torch(features.values, device=device)
+    image_view = cupy_to_torch(image_values, device=device)
+    feature_view = cupy_to_torch(features.values, device=device)
     model = _FusionModel().to(device)
 
     prediction = predict_tensors(
@@ -665,7 +667,7 @@ def test_cupy_bridge_orders_nondefault_streams() -> None:
         producer.wait_event(gate)
         values.fill(7.0)
         with torch.cuda.stream(consumer):
-            view = _cupy_to_torch(values, device=device)
+            view = cupy_to_torch(values, device=device)
             output = view.tensor.clone()
 
     consumer.synchronize()
@@ -689,7 +691,7 @@ def test_cupy_bridge_does_not_normalize_copy_or_synchronize(
     monkeypatch.setattr(cp, "ascontiguousarray", forbidden)
     monkeypatch.setattr(cp, "asnumpy", forbidden)
     monkeypatch.setattr(torch.cuda, "synchronize", forbidden)
-    view = _cupy_to_torch(values, device=device)
+    view = cupy_to_torch(values, device=device)
 
     assert view.tensor.data_ptr() == int(values.data.ptr)
 
@@ -722,7 +724,7 @@ def test_cupy_bridge_rejects_invalid_arrays(
     device = _cuda_device()
     cp = _cupy_on_device(device)
     with pytest.raises(exception, match=message):
-        _cupy_to_torch(make_values(cp), device=device)
+        cupy_to_torch(make_values(cp), device=device)
 
 
 @pytest.mark.parametrize("wrong_precondition", ["active", "array"])
@@ -737,10 +739,10 @@ def test_cupy_bridge_rejects_wrong_device(
         values = cp.ones((2, 17), dtype=cp.float32)
         with cp.cuda.Device(1):
             with pytest.raises(ValueError, match="active CuPy device"):
-                _cupy_to_torch(values, device=device)
+                cupy_to_torch(values, device=device)
         return
     with cp.cuda.Device(1):
         values = cp.ones((2, 17), dtype=cp.float32)
     cp.cuda.Device(0).use()
     with pytest.raises(ValueError, match="values are on cuda:1"):
-        _cupy_to_torch(values, device=device)
+        cupy_to_torch(values, device=device)

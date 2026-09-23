@@ -213,7 +213,7 @@ def _temporary_eval_mode(model: torch.nn.Module) -> Iterator[None]:
 
 
 @dataclass(frozen=True, slots=True)
-class _CupyTorchView:
+class CupyTorchView:
     """A zero-copy Torch view with a strong reference to its CuPy owner.
 
     The caller must retain this object until work consuming ``tensor`` has
@@ -306,18 +306,18 @@ def _load_cupy_for_dlpack() -> Any:
     return cp
 
 
-def _cupy_to_torch(
+def cupy_to_torch(
     values: Any,
     *,
     device: torch.device,
-) -> _CupyTorchView:
+) -> CupyTorchView:
     """Borrow one contiguous float32 CuPy allocation through DLPack.
 
     Conversion must occur while the stream that most recently wrote
     ``values`` is CuPy's current stream and while the intended consumer is
     Torch's current stream. Passing the producer object to ``from_dlpack``
     then orders those streams through the DLPack protocol. The returned
-    private view keeps the CuPy allocation alive; its caller owns
+    view keeps the CuPy allocation alive; its caller owns
     consumer-completion lifetime.
     """
 
@@ -360,7 +360,12 @@ def _cupy_to_torch(
         raise RuntimeError("DLPack handoff changed array contiguity")
     if tensor.data_ptr() != int(values.data.ptr):
         raise RuntimeError("DLPack handoff copied the array storage")
-    return _CupyTorchView(tensor=tensor, _owner=values)
+    return CupyTorchView(tensor=tensor, _owner=values)
+
+
+# Retain the original names used by existing device-pipeline callers.
+_CupyTorchView = CupyTorchView
+_cupy_to_torch = cupy_to_torch
 
 
 def make_dataloader(
@@ -1482,9 +1487,9 @@ def predict_tensors(
     writes ready on that stream (for example, with ``wait_stream`` for a
     different producer stream), retain input storage until consumption
     completes, and order any later consumer stream after these outputs.
-    DLPack callers must retain each private CuPy-owner view through a recorded
-    consumer-stream completion event or the terminal blocking device-to-host
-    copy.
+    DLPack callers must retain each :class:`CupyTorchView` returned by
+    :func:`cupy_to_torch` through a recorded consumer-stream completion event
+    or the terminal blocking device-to-host copy.
     """
 
     device = _require_explicit_cuda_device(device)
