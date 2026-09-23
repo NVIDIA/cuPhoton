@@ -2,11 +2,12 @@
 
 cuPhoton does not intentionally vendor third-party source code. Python runtime,
 optional-development, and build requirements are declared in
-[`pyproject.toml`](pyproject.toml). Native system requirements are documented
-separately below. `uv.lock` records the reproducible resolution for the project
-Python dependency profiles. Build-system requirements are resolved separately
-by the PEP 517 build frontend and are not locked by `uv.lock`; they are labeled
-`not locked` below.
+[`pyproject.toml`](pyproject.toml). Optional distributed runtimes and native
+system requirements are documented separately below. `uv.lock` records the
+reproducible resolution for the project Python dependency profiles; it does
+not include the separately installed DragonHPC, `mpi4py`, or MPI runtimes.
+Build-system requirements are resolved separately by the PEP 517 build
+frontend and are not locked by `uv.lock`; they are labeled `not locked` below.
 
 cuPhoton uses `uv` to resolve Python distributions from the registries
 recorded in `uv.lock` (currently the Python Package Index). NVIDIA-authored
@@ -180,3 +181,16 @@ uv sync --locked --extra dev --extra gpu --extra viz
 ```
 
 For a CPU-only development environment, replace `gpu` with `torch`.
+
+## cuPhoton distribution contents
+
+`make build` creates a pure-Python wheel with the xDataReader native extension
+disabled (`CUPHOTON_XDR_BUILD_EXT=0`) and a source distribution containing
+cuPhoton's own extension sources. Both artifacts include `LICENSE` and this
+notice file. Dependencies listed here are installed separately; these builds
+do not bundle DragonHPC, `mpi4py`, MPI, CFITSIO, or CUDA libraries.
+
+A source build with the native extension enabled links against the available
+CFITSIO and CUDA libraries. A distributor that bundles libraries, including
+through static linking, must inventory the resulting artifact and retain the
+applicable third-party licenses and notices.
