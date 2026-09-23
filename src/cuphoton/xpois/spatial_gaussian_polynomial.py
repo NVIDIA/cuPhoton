@@ -19,6 +19,7 @@ from typing import Literal, Sequence
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
+from scipy.linalg import solve_triangular
 
 from .ois import (
     BasisTerm,
@@ -949,7 +950,7 @@ def _solve_scaled_qr(
             f"condition {condition_number:.6g} exceeds {condition_limit:.6g}"
         )
     try:
-        scaled_coefficients = np.linalg.solve(
+        scaled_coefficients = solve_triangular(
             scaled_upper,
             transformed_rhs,
         )

@@ -206,6 +206,68 @@ def test_spatial_model_recovers_decoupled_spatial_fields(
     )
 
 
+def test_spatial_model_recovers_multiple_gaussian_widths() -> None:
+    shape = (40, 44)
+    source = _random_source(shape, seed=83)
+    components = [
+        GaussianBasisComponent(sigma=0.9, degree=1),
+        GaussianBasisComponent(sigma=1.7, degree=0),
+    ]
+    basis, _ = build_gaussian_polynomial_basis(
+        (9, 9), components, flux_conserve=True
+    )
+    photometric_coefficients = np.array([1.03, 0.02, -0.015])
+    shape_coefficients = np.array(
+        [[0.02, 0.005, -0.003], [-0.01, 0.002, 0.004], [0.25, 0.03, -0.02]]
+    )
+    background_coefficients = np.array([0.04, -0.008, 0.006])
+    # The oracle convolves each fixed basis kernel independently before
+    # applying its spatial field; it does not use the chunked fit design.
+    target = _spatial_target(
+        source,
+        basis,
+        photometric_coefficients,
+        shape_coefficients,
+        background_coefficients,
+        photometric_degree=1,
+        shape_degree=1,
+        background_degree=1,
+    )
+
+    result = solve_spatial_gaussian_polynomial_kernel(
+        source,
+        target,
+        components,
+        kernel_shape=(9, 9),
+        config=SpatialGaussianPolynomialKernelConfig(
+            shape_degree=1,
+            photometric_degree=1,
+            background_degree=1,
+        ),
+    )
+
+    for actual, expected in (
+        (result.photometric_coefficients, photometric_coefficients),
+        (result.shape_coefficients, shape_coefficients),
+        (result.background_coefficients, background_coefficients),
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1e-11)
+    np.testing.assert_allclose(
+        result.matched[result.fit_mask],
+        target[result.fit_mask],
+        rtol=0.0,
+        atol=1e-12,
+    )
+    for y, x in ((4, 4), (19, 21), (35, 39)):
+        terms = np.array([1.0, 2.0 * y / 39.0 - 1.0, 2.0 * x / 43.0 - 1.0])
+        expected = (photometric_coefficients @ terms) * basis[0]
+        expected += np.tensordot(shape_coefficients @ terms, basis[1:], 1)
+        np.testing.assert_allclose(
+            result.kernel_at_local(y, x), expected, rtol=0.0, atol=1e-12
+        )
+        assert np.linalg.matrix_rank(expected, tol=1e-12) > 1
+
+
 def test_spatial_model_uses_explicit_parent_spatial_domain() -> None:
     shape = (40, 44)
     source = _random_source(shape, seed=13)
