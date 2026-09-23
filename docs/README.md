@@ -1,7 +1,15 @@
 # cuPhoton documentation
 
-cuPhoton is organized as a set of reference workflows. Start with a synthetic
-run, then read the contract for the component you intend to adapt.
+cuPhoton is organized as a set of reference workflows. Use the README's
+[workflow chooser](../README.md#choose-a-workflow) to match your inputs to a
+component and see what it produces. The [component overview](../README.md#components)
+explains the scientific operations.
+
+For a view across components, read
+[how the science components fit together](architecture.md#how-the-science-components-fit-together)
+and [what an exposure contains](architecture.md#an-exposure-is-more-than-pixels).
+Then run a synthetic quickstart and read the contract for the component you
+intend to adapt.
 
 ## First run
 

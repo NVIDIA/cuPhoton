@@ -7,26 +7,26 @@ their own instruments and data products. It is not a stable application
 framework, and the scientific assumptions in each workflow must be checked
 against the target use case.
 
-All Python APIs are in the `cuphoton.*` namespace:
-
-- `cuphoton.core` provides the shared command-line, application-context,
-  logging, and invariant framework.
-- `cuphoton.xdr` loads FITS image HDUs through GPU-native GDS and nvCOMP
-  paths.
-- `cuphoton.xfit` performs batched nonlinear least-squares fits for sampled
-  stamp and analytic Gaussian dipole models.
-- `cuphoton.xpois` fits matching kernels and performs optimal image
-  subtraction.
-- `cuphoton.xscan` prepares transient datasets and trains, evaluates, and
-  reviews real/bogus classifiers, with explicitly selected, candidate-keyed
-  xFit fusion.
-- `cuphoton.xrep` provides xRep (xReproject) for placing FITS images on common
-  WCS grids.
-- `cuphoton.xray` extracts and analyzes X-ray detector traces.
-
-cuPhoton releases are currently alpha-quality. The curated Python
-exports and structured run artifacts are the intended integration points, but
+cuPhoton releases are currently alpha-quality. The curated Python exports
+and structured run artifacts are the intended integration points, but
 interfaces may evolve as additional institutions adapt the workflows.
+
+## Choose a workflow
+
+| If you have... | Use... | You get... |
+| --- | --- | --- |
+| FITS files whose pixels you need on a GPU | [xDataReader](docs/components/xdr.md) | Decoded and scaled device arrays |
+| Images with different pixel-to-sky mappings | [xRep](docs/components/xrep.md) | Images resampled onto a common sky grid |
+| An aligned reference image and a new observation | [XPOIS](docs/components/xpois.md) | A matched reference and a difference image |
+| Small cutouts containing positive/negative residuals | [xFit](docs/components/xfit.md) | Fitted positions, amplitudes, shapes, uncertainties, and fit status |
+| Candidate cutouts to score, or reviewed examples to train on | [XScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
+| X-ray detector images sampled over experimental delay | [XRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
+
+Each component can be used independently. An optical workflow can combine
+loading, reprojection, subtraction, and candidate analysis; XRay handles a
+separate kind of experimental data. See [how the components fit
+together](docs/architecture.md#how-the-science-components-fit-together) for
+the data flow and the adapters needed between stages.
 
 ## Start here
 
@@ -40,11 +40,12 @@ uv sync --locked --extra dev --extra gpu --extra viz
 uv run python examples/run_quickstarts.py
 ```
 
-The quickstart creates synthetic inputs, runs each science component, and
-writes results to `quickstart-output/`. Its JSON summary records the requested
-profile, the backend and device selected for each component, and the artifact
-paths. The default `auto` profile prefers a GPU and reports when it falls back
-to CPU.
+The quickstart creates synthetic inputs for xRep, XPOIS, xFit, XScan, and
+XRay, then writes results to `quickstart-output/`. xDataReader has a separate
+[native GPU setup](docs/components/xdr.md#install). The JSON summary records
+the requested profile, the backend and device selected for each component,
+and the artifact paths. The default `auto` profile prefers a GPU and reports
+when it falls back to CPU.
 
 For a deterministic CPU run:
 
@@ -63,16 +64,69 @@ subtraction, dipole fitting, and plotting, run the
 [script](examples/imaging-pipeline/run_imaging_pipeline.py). Both include setup
 instructions and require a CUDA 13-capable NVIDIA GPU and XDR's native extension.
 
-## Choose a workflow
+## Components
 
-| Goal | Component | First command |
-| --- | --- | --- |
-| Load FITS image HDUs directly to GPU arrays | xDataReader | `uv run cuphoton xdr benchmark-fits --help` |
-| Fit dipole models to image stamps | xFit | `uv run cuphoton xfit --help` |
-| Match PSFs and subtract two images | XPOIS | `uv run cuphoton xpois --help` |
-| Build and assess a real/bogus classifier | XScan | `uv run cuphoton xscan --help` |
-| Reproject images onto a shared sky grid | xRep (xReproject) | `uv run cuphoton xrep --help` |
-| Analyze X-ray detector traces | XRay | `uv run cuphoton xray --help` |
+### xDataReader: load pixels into GPU memory
+
+xDataReader (`cuphoton.xdr`) reads selected images from local FITS files,
+decodes supported compression, and applies byte-order and scaling rules to
+produce CuPy arrays. Use it to feed a GPU workflow while retaining the headers
+and scientific metadata in your application. Its native FITS extension
+requires a source build. Whether reads use native GPUDirect Storage depends
+on the storage and driver configuration.
+
+### xRep: put images on the same sky grid
+
+xRep, short for xReproject (`cuphoton.xrep`), resamples images so corresponding
+pixels refer to the same sky positions. It uses the supplied World Coordinate
+System (WCS) mapping and a chosen output grid. This handles differences in
+pixel scale, rotation, and position; matching the images' blur is a separate
+operation. Outputs include the reprojected arrays, optional masks, and grid
+metadata.
+
+### XPOIS: subtract a matched reference to reveal changes
+
+XPOIS (`cuphoton.xpois`) starts with aligned reference and target images. It
+fits a convolution kernel and background correction to match their blur,
+brightness scale, and background, then subtracts the matched reference.
+Unchanged sources should largely cancel, leaving a difference image for
+candidate detection. Residuals can also come from alignment errors, bad
+pixels, or a poor fit, so the saved matching model and diagnostics matter.
+
+### xFit: turn a candidate's shape into measurements
+
+A dipole is a positive lobe beside a negative lobe in a difference image;
+a small positional mismatch or a moving source can produce one. xFit
+(`cuphoton.xfit`) fits models to batches of small image cutouts, called
+stamps. It returns positions, amplitudes, and shape parameters with residuals,
+uncertainties, and fit status. These measurements describe the candidate and
+can optionally become inputs to an XScan classifier.
+
+### XScan: score candidates and collect review labels
+
+XScan (`cuphoton.xscan`) trains and evaluates real/bogus classifiers and runs
+inference on candidate stamps. Models use search and template images,
+optionally a difference image, and explicitly selected xFit features.
+Real/bogus scores help prioritize plausible detections over artifacts;
+they do not identify an object's astrophysical type. XScan also produces
+review material for inspecting predictions and collecting labels. Training
+requires reviewed labels and suitable train/validation/test splits.
+
+### XRay: measure oscillations in detector signals
+
+XRay (`cuphoton.xray`) analyzes X-ray detector measurements sampled over
+experimental delay. In a pump/probe experiment, one pulse excites a sample
+and another measures its response after a controlled delay. XRay extracts
+and normalizes signal traces from selected detector regions, then uses linear
+prediction to estimate their oscillatory modes. Outputs include frequencies,
+amplitudes, fit diagnostics, and detector review maps. Interpreting those
+measurements requires the experiment's geometry and calibration.
+
+All Python code is in the `cuphoton.*` namespace. The shared
+[Core](docs/components/core.md) (`cuphoton.core`) provides command discovery,
+application context, logging, and invariant checks. Each science component
+owns its algorithms and data contracts. The [glossary](docs/glossary.md)
+explains the scientific and file-format terms used here.
 
 ## Installation profiles
 
