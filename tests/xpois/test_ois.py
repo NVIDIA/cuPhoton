@@ -952,3 +952,20 @@ def test_solve_constant_kernel_rejects_malformed_numeric_fit_mask() -> None:
             background_degree=0,
             flux_conserve=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("component", "message"),
+    [
+        (GaussianBasisComponent(sigma=np.nan, degree=0), "sigma must be"),
+        (GaussianBasisComponent(sigma=1.2, degree=1.5), "degree must be"),
+    ],
+)
+def test_solve_separable_kernel_rejects_invalid_line_basis_components(
+    component: GaussianBasisComponent,
+    message: str,
+) -> None:
+    image = np.ones((9, 9))
+
+    with pytest.raises(ValueError, match=message):
+        solve_separable_kernel(image, image, [component], kernel_shape=(3, 3))

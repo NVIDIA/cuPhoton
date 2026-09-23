@@ -29,6 +29,11 @@ from .ois import (
     solve_separable_kernel,
     triangular_degree_pairs,
 )
+from .spatial_als import (
+    SpatialALSConfig,
+    SpatialALSFitResult,
+    solve_spatial_als,
+)
 from .stamps import extract_centered_stamp, simple_difference_stamp
 
 __all__ = [
@@ -40,6 +45,8 @@ __all__ = [
     "DeviceConstantKernelFitResult",
     "GaussianBasisComponent",
     "SeparableKernelFitResult",
+    "SpatialALSConfig",
+    "SpatialALSFitResult",
     "background_design",
     "build_compact_source_stamp_mask",
     "build_gaussian_polynomial_basis",
@@ -53,6 +60,7 @@ __all__ = [
     "solve_constant_kernel",
     "solve_constant_kernel_device",
     "solve_separable_kernel",
+    "solve_spatial_als",
     "standardize_constant_kernel_residual",
     "triangular_degree_pairs",
 ]

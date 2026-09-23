@@ -3,8 +3,8 @@
 `cuphoton.xpois` fits PSF-matching kernels and differential backgrounds,
 then subtracts a matched reference from a target image. It implements
 Alard-Lupton-style Gaussian-polynomial bases for constant two-dimensional
-kernels and a separable alternating solver. Its CLI group is
-`cuphoton xpois`.
+kernels, a global separable alternating solver, and a spatially varying
+separable ALS model. Its CLI group is `cuphoton xpois`.
 
 ## Install and smoke test
 
@@ -20,7 +20,8 @@ uv run python examples/run_quickstarts.py \
 ```
 
 Automatic selection prefers CuPy, then Numba-CUDA, then CPU. cuTile is an
-explicit experimental backend and is not selected by `auto`.
+explicit experimental backend and is not selected by `auto`. Spatial ALS is
+currently a CPU reference solver; `auto` resolves to CPU for that model.
 
 ## Input and output contract
 
@@ -29,9 +30,11 @@ CLI variance is target variance and must align with them. Optional masks must
 also align. Kernels and auto-selected stamps use odd dimensions. See
 [Data and artifact contracts](../data-artifacts.md#xpois-image-pairs).
 
-A successful run persists `kernel.npy`, `matched.npy`, `residual.npy`,
-`fit_mask.npy`, and `background.npy` plus `summary.json`. Auto-stamp fitting
-also saves the selected-region metadata.
+A successful run persists `matched.npy`, `residual.npy`, `fit_mask.npy`, and
+`background.npy` plus `summary.json`. Constant-kernel fits save `kernel.npy`.
+Spatial ALS fits instead save the line bases and coefficient fields plus
+`kernel_center.npy`, a clearly named preview evaluated at the image center.
+Auto-stamp fitting also saves the selected-region metadata.
 
 ## Fit and subtract
 
@@ -47,18 +50,27 @@ uv run cuphoton xpois fit-kernel \
 uv run cuphoton xpois subtract \
   --reference /path/to/reference.fits \
   --target /path/to/target.fits \
+  --solver spatial-als \
+  --spatial-degree 2 \
+  --flux-conserve \
   --backend auto \
   --output-dir /path/to/runs
 ```
 
 `fit-kernel` and `subtract` share the same solve but use different workflow
-names. Use `--fit-mask` for a reviewed binary NPY selection, or
-`--auto-stamp-mask` with an odd stamp size for compact-source selection.
+names. `--solver constant` remains the default. Use `--fit-mask` for a
+reviewed binary NPY selection, or `--auto-stamp-mask` with an odd stamp size
+for compact-source selection.
+
+Spatial ALS runs that reach the sweep budget still persist their artifacts
+and exit with status 0, but the command prints a warning and `summary.json`
+and `evaluation.json` record `converged: false`; do not accept such a run
+without raising `--als-iterations` or enabling `--flux-conserve`.
 
 Optional polynomial backgrounds and a flux-conserving basis rewrite are
-available from the CLI. Inspect the fitted kernel sum, fit-pixel count,
-chi-square, residual distribution, and source-scale residuals before accepting
-a subtraction.
+available from the CLI. Inspect the fitted kernel sum (`kernel_sum_center`
+for spatial ALS), fit-pixel count, chi-square, residual distribution, and
+source-scale residuals before accepting a subtraction.
 
 ## Compare and review
 
@@ -99,10 +111,10 @@ Benchmark artifacts separate timings from numerical comparisons. Device work
 is synchronized for measured iterations. Bokeh review is optional and can be
 rebuilt from the numeric run.
 
-## Separable-kernel Python API
+## Separable-kernel Python APIs
 
 The separable solver is available from the curated Python API even though the
-main CLI workflow fits a constant two-dimensional kernel:
+constant CLI model is a full two-dimensional kernel:
 
 ```python
 from cuphoton.xpois import GaussianBasisComponent, solve_separable_kernel
@@ -123,6 +135,59 @@ print(fit.converged, fit.iterations, fit.kernel.shape)
 `solve_constant_kernel`, Gaussian-basis builders, background helpers, stamp
 helpers, and the result dataclasses are also exported from
 `cuphoton.xpois`.
+
+`solve_spatial_als` fits a different model. At pixel `p`, its kernel is the
+outer product `K_p(v, u) = V_p(v) H_p(u)`, with Chebyshev coefficient fields
+for both line profiles. There is only one profile per axis, even with
+multiple Gaussian widths, so each realized kernel has rank at most one. A
+sum of distinct circular Gaussians or a rotated anisotropic PSF is generally
+not representable; the kernel-shape expressivity differs from the
+nonseparable `solve_constant_kernel` model. The returned result exposes
+`kernel_at(y, x)` rather than claiming one kernel represents the full image:
+
+```python
+from cuphoton.xpois import SpatialALSConfig, solve_spatial_als
+
+fit = solve_spatial_als(
+    reference,
+    target,
+    components,
+    variance=variance,
+    fit_mask=fit_mask,
+    config=SpatialALSConfig(spatial_degree=2, flux_conserve=True),
+)
+center_kernel = fit.kernel_at(
+    (reference.shape[0] - 1) / 2,
+    (reference.shape[1] - 1) / 2,
+)
+```
+
+Each kernel axis must have at least as many pixels as the line basis has
+functions; the CLI default basis has six, so the spatial model needs
+`--kernel-height` and `--kernel-width` of at least 7, and the solver rejects
+smaller kernels with a message naming the first failing axis, its length,
+and the number of basis functions.
+
+The solver is instrument-neutral. Callers supply already registered images and
+an optional variance image. A fit mask or explicit `(y, x)` sample positions
+can select the fit region; when neither is supplied, all valid pixels in the
+centered-kernel interior are fitted. Repeated positions are retained as
+multiplicity weights. Camera calibration, PSF measurement, source selection,
+astrometric registration, and unit interpretation remain responsibilities of
+the calling pipeline. The solver embeds no camera calibration or observational
+data; callers provide any calibration-derived masks, variances, or fit samples.
+Flux conservation is opt-in, matching the existing XPOIS CLI convention. When
+enabled, spatial basis corrections are zero-sum and the signed kernel sum is
+one fitted, position-independent scale. Without it, `flux_scale` is the
+vertical reference multiplier rather than a standalone photometric scale;
+evaluate `kernel_at(y, x)` for the local kernel sum. Near dependence between
+reference and correction profiles can cause poor conditioning or slow
+convergence. Use `--flux-conserve` (or `flux_conserve=True`) for the spatial
+model unless a position-dependent kernel sum is required.
+
+Setting `tolerance=0` still allows convergence when the finite objective
+repeats exactly or reaches its floating-point floor; it does not require the
+full `max_iterations` budget.
 
 ## Fixed-kernel marginal noise diagnostics
 
@@ -157,6 +222,9 @@ GPU workers. The coordinator reads a manifest, assigns one Dragon
 ProcessGroup worker to each selected GPU, and balances work by input size.
 Arrays and output files stay on shared storage; workers send compact result
 records through Dragon queues. Each image-pair fit runs on one GPU.
+
+This command runs the constant-kernel workflow. It is whole-image-pair
+orchestration, not a distributed implementation of the spatial ALS model.
 
 ### Runtime dependency
 

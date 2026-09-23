@@ -31,6 +31,7 @@ from .ois import (
     SUPPORTED_BACKENDS,
     GaussianBasisComponent,
 )
+from .spatial_als import SpatialALSConfig
 from .workflows import (
     benchmark_constant_kernel_backends,
     evaluate_subtraction_run,
@@ -388,6 +389,11 @@ class _KernelSolveCommand(_KernelSolveOptionsCommand):
 class _FitCommand(_KernelSolveCommand):
     backend = None
     no_review = None
+    solver = None
+    spatial_degree = None
+    als_iterations = None
+    als_tolerance = None
+    als_regularization = None
 
     class NoReviewArg(BoolInvariant):
         _arg = "--no-review"
@@ -398,16 +404,79 @@ class _FitCommand(_KernelSolveCommand):
     class BackendArg(SetInvariant):
         _arg = "--backend"
         _help = (
-            "Fit backend. Auto tries cupy, then numba-cuda, then cpu. "
+            "Fit backend. Constant-solver auto tries cupy, then numba-cuda, "
+            "then cpu; spatial-als accepts only auto or cpu. "
             "[default: %default]"
         )
         _mandatory = False
         _default = "auto"
         _set = set(SUPPORTED_BACKENDS)
 
+    class SolverArg(SetInvariant):
+        _arg = "--solver"
+        _help = (
+            "Kernel model to fit: constant or spatial-als. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "constant"
+        _set = {"constant", "spatial-als"}
+
+    def _warn_if_not_converged(self, summary: dict[str, Any]) -> None:
+        if summary.get("converged") is False:
+            spatial = summary.get("spatial_als", {})
+            self._warn(
+                "spatial ALS did not converge in "
+                f"{summary.get('iterations')} of "
+                f"{spatial.get('max_iterations')} sweeps; "
+                "inspect 'converged' in summary.json before accepting "
+                "the subtraction"
+            )
+
+    # The spatial ALS options default to None so the workflow can reject any
+    # explicit value for the constant solver and resolve unset values from
+    # SpatialALSConfig, the single source of those defaults.
+    class SpatialDegreeArg(NonNegativeIntegerInvariant):
+        _arg = "--spatial-degree"
+        _help = (
+            "Total Chebyshev degree for spatial ALS coefficient fields. "
+            f"[default: {SpatialALSConfig.spatial_degree}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class AlsIterationsArg(PositiveIntegerInvariant):
+        _arg = "--als-iterations"
+        _help = (
+            "Maximum spatial ALS sweeps. "
+            f"[default: {SpatialALSConfig.max_iterations}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class AlsToleranceArg(FloatInvariant):
+        _arg = "--als-tolerance"
+        _help = (
+            "Spatial ALS relative objective tolerance. "
+            f"[default: {SpatialALSConfig.tolerance}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.0
+
+    class AlsRegularizationArg(FloatInvariant):
+        _arg = "--als-regularization"
+        _help = (
+            "Spatial ALS ridge penalty. "
+            f"[default: {SpatialALSConfig.regularization}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.0
+
 
 class FitKernelCommand(_FitCommand):
-    """Fit a constant kernel and persist reviewable subtraction artifacts.
+    """Fit a kernel model and persist reviewable subtraction artifacts.
 
     This is the main source-backed OIS workflow entrypoint. It supports:
 
@@ -452,14 +521,20 @@ class FitKernelCommand(_FitCommand):
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
             review=not self.no_review,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
             workflow_name="fit_kernel",
             run_prefix="fit-kernel",
         )
+        self._warn_if_not_converged(result.summary)
         self._emit_json(result.summary)
 
 
 class SubtractCommand(_FitCommand):
-    """Run the same constant-kernel workflow under subtraction naming.
+    """Run the same kernel-fit workflow under subtraction naming.
 
     This currently shares the same underlying solve path as `fit-kernel`, but
     emits `workflow="subtract"` and uses the `subtract-*` run-prefix naming
@@ -498,9 +573,15 @@ class SubtractCommand(_FitCommand):
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
             review=not self.no_review,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
             workflow_name="subtract",
             run_prefix="subtract",
         )
+        self._warn_if_not_converged(result.summary)
         self._emit_json(result.summary)
 
 

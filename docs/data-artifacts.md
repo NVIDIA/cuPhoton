@@ -74,15 +74,41 @@ input masks must also match that shape. Kernels have odd height and width.
 An explicit NPY fit mask is boolean or binary and uses `True`/`1` for pixels
 included in the weighted solve.
 
+The spatial ALS Python API can instead receive an explicit `(sample, 2)`
+array of zero-based `(y, x)` positions. Duplicate positions are retained and
+therefore increase that pixel's weight. Chebyshev coordinates are normalized
+over the fitted image axes recorded in the summary's `image_shape`, which is
+the crop when a workflow crop is applied, so saved coefficient fields and
+`kernel_at` use crop coordinates. These positions and all image, variance, mask,
+registration, PSF, and instrument-calibration inputs are caller-owned;
+cuPhoton does not bundle an observational calibration archive.
+
 A successful fit writes `summary.json` and these arrays under `artifacts/`:
 
 | File | Meaning |
 | --- | --- |
-| `kernel.npy` | fitted matching kernel |
+| `kernel.npy` | fitted matching kernel for the constant solver |
 | `matched.npy` | convolved reference plus fitted background |
 | `residual.npy` | target minus matched image |
 | `fit_mask.npy` | pixels used by the solve |
 | `background.npy` | fitted differential background |
+
+Spatial ALS runs omit `kernel.npy`, because their kernel varies with image
+position. They instead save `kernel_center.npy` as a center-evaluated preview,
+the horizontal and vertical reference profiles and bases, both coefficient
+matrices, the background coefficients, and the objective history. The summary
+records the solver, term order, coordinate normalization, convergence,
+regularization, reference-profile scale, center kernel sum, and fit counts
+needed to interpret them. The `vertical_reference_scale` field is always
+saved because it multiplies the vertical reference when the factors are
+evaluated. With flux conservation enabled, the summary also records it as
+`flux_scale`, the position-independent signed kernel sum. Without flux
+conservation, `flux_scale` is omitted: the vertical reference multiplier is
+not a standalone photometric scale. Evaluate `kernel_at(y, x)` for the local
+kernel and its sum.
+The center kernel sum is recorded in either case. Spatial ALS `dof` is the
+nominal fit-row count minus parameter count, not an effective degrees of
+freedom estimate for the regularized nonlinear fit.
 
 Auto-stamp selection also writes metadata describing the selected regions.
 Benchmark runs add timings and numerical comparisons.
