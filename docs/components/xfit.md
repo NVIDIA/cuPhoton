@@ -66,6 +66,30 @@ applies one mask or variance plane to every channel of each candidate. If the
 batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
+An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
+form its weighted 8-by-8 normal equations without materializing an iteration
+Jacobian. The backend is opt-in, requires the `cuphoton[cutile]` extra on
+Linux with Python 3.12 or 3.13, and is not selected by `auto`. Final rank and
+covariance diagnostics still use the analytic Jacobian and a singular-value
+factorization. Sampled-stamp fits stay on the NumPy or CuPy backends. The Tile
+backend rejects finite-difference fitting rather than reporting Tile
+provenance for the generic CuPy path.
+
+The `cutile` extra installs cuTile's Python package. Execution also needs
+`tileiras` and its companion CUDA compiler libraries, supplied by a compatible
+CUDA Toolkit or cuTile's optional `tileiras` extra. When using compiler wheels,
+keep `nvidia-cuda-tileiras`, `nvidia-cuda-nvcc` and `nvidia-nvvm` on the same
+CUDA major/minor release; mismatches make cuTile fall back to the system
+compiler. See the [cuTile 1.4 installation guide](https://github.com/NVIDIA/cutile-python/blob/v1.4.0/docs/source/quickstart.rst#L25-L49)
+for compiler setup. GPU support depends on the compiler version.
+
+Compare warmed end-to-end Gaussian fits with:
+
+```bash
+uv run --locked --python 3.12 --extra gpu --extra cutile \
+  python examples/xfit/benchmark_gaussian.py --dtype float64
+```
+
 Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
 the reported split-mode covariance is therefore not statistically calibrated

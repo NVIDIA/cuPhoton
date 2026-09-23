@@ -757,7 +757,30 @@ def _fit_dipoles_backend(
 
         jacobian_function = jacobian
 
-    problem = BatchedLeastSquaresProblem(residual, jacobian_function)
+    normal_equations = None
+    if gaussian_model and resolved.name == "cutile":
+        from ._cutile import gaussian_normal_equations
+
+        def normal_equations(
+            parameters: BackendArray,
+            residuals: BackendArray,
+            *,
+            indices: BackendArray,
+        ) -> tuple[BackendArray, BackendArray]:
+            active_weights = weights[indices].reshape(residuals.shape)
+            return gaussian_normal_equations(
+                parameters,
+                residuals,
+                active_weights,
+                image_shape=(height, width),
+                mode=mode,
+            )
+
+    problem = BatchedLeastSquaresProblem(
+        residual,
+        jacobian_function,
+        normal_equations=normal_equations,
+    )
     low_level = batched_levenberg_marquardt(
         problem,
         solver_initial,

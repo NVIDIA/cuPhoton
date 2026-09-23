@@ -12,8 +12,8 @@ import numpy as np
 import numpy.typing as npt
 
 FitMode: TypeAlias = Literal["difference", "split"]
-BackendRequest: TypeAlias = Literal["auto", "numpy", "cupy"]
-ResolvedBackend: TypeAlias = Literal["numpy", "cupy"]
+BackendRequest: TypeAlias = Literal["auto", "numpy", "cupy", "cutile"]
+ResolvedBackend: TypeAlias = Literal["numpy", "cupy", "cutile"]
 ModelName: TypeAlias = Literal["gaussian", "stamp"]
 StampEvaluation: TypeAlias = Literal[
     "bilinear", "bilinear-vignetted", "finite-volume"
@@ -23,7 +23,7 @@ FloatDType: TypeAlias = Literal["float32", "float64"]
 
 FIT_MODES: frozenset[FitMode] = frozenset(("difference", "split"))
 BACKEND_REQUESTS: frozenset[BackendRequest] = frozenset(
-    ("auto", "numpy", "cupy")
+    ("auto", "numpy", "cupy", "cutile")
 )
 MODEL_NAMES: frozenset[ModelName] = frozenset(("gaussian", "stamp"))
 STAMP_EVALUATIONS: frozenset[StampEvaluation] = frozenset(

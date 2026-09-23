@@ -182,7 +182,12 @@ def test_public_fit_option_hints_are_literal_and_cupy_optional() -> None:
     hints = get_type_hints(fit_dipoles)
 
     assert set(get_args(hints["mode"])) == {"difference", "split"}
-    assert set(get_args(hints["backend"])) == {"auto", "numpy", "cupy"}
+    assert set(get_args(hints["backend"])) == {
+        "auto",
+        "numpy",
+        "cupy",
+        "cutile",
+    }
 
 
 def test_split_batch_three_auxiliary_precedence_is_per_candidate() -> None:
@@ -1191,3 +1196,255 @@ def test_cupy_stamp_fit_matches_numpy_when_cuda_is_available() -> None:
     assert gpu.device.startswith("cuda:")
     assert gpu.converged.all()
     assert np.allclose(gpu.parameters, cpu.parameters, rtol=2e-8, atol=2e-8)
+
+
+def test_cutile_rejects_finite_difference_provenance() -> None:
+    model = GaussianDipoleModel((7, 9), dtype=np.float64)
+    truth = _gaussian_truth()[:1]
+    images = model.evaluate(truth)
+
+    with pytest.raises(
+        ValueError, match="does not support finite-difference"
+    ):
+        fit_dipoles(
+            images,
+            model=model,
+            initial=truth,
+            backend="cutile",
+            config=LMConfig(use_finite_difference=True),
+        )
+
+
+def test_cutile_rejects_stamp_model_before_finite_differences() -> None:
+    model = StampDipoleModel(
+        _sampled_basis(), image_shape=(9, 13), dtype=np.float64
+    )
+    truth = np.asarray([[-2.1, 0.6, 2.2, -0.4, 5.0]])
+    images = model.evaluate(truth)
+
+    # The CLI forces finite differences for stamp fits; the model
+    # restriction must be reported rather than the derived one.
+    with pytest.raises(ValueError, match="supports only the Gaussian model"):
+        fit_dipoles(
+            images,
+            model=model,
+            initial=truth,
+            backend="cutile",
+            config=LMConfig(use_finite_difference=True),
+        )
+
+
+def _require_cutile():
+    cp = pytest.importorskip("cupy")
+    pytest.importorskip("cuda.tile")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("CUDA device is unavailable")
+    except Exception:
+        pytest.skip("CUDA runtime is unavailable")
+    return cp
+
+
+@pytest.mark.parametrize("mode", ["difference", "split"])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_cutile_gaussian_fit_matches_cupy(mode, dtype) -> None:
+    _require_cutile()
+    truth = _gaussian_truth(dtype)
+    model = GaussianDipoleModel((11, 15), dtype=dtype)
+    images = model.evaluate(truth, mode=mode)
+    initial = truth + np.asarray(
+        [0.2, 0.1, -0.1, 0.03, 0.1, -0.1, -0.1, 0.1], dtype=dtype
+    )
+    # An explicit variance keeps the covariance from being rescaled by the
+    # noiseless fixture's rounding-level reduced chi-square, which would
+    # otherwise leave every entry far below the comparison tolerance.
+    variance = np.full(images.shape, 0.5, dtype=dtype)
+
+    cupy_result = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        variance=variance,
+        mode=mode,
+        backend="cupy",
+    )
+    cutile_result = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        variance=variance,
+        mode=mode,
+        backend="cutile",
+    )
+
+    tolerance = 3.0e-5 if dtype is np.float32 else 5.0e-12
+    assert cutile_result.backend == "cutile"
+    assert np.array_equal(cutile_result.status, cupy_result.status)
+    assert np.array_equal(cutile_result.evaluations, cupy_result.evaluations)
+    assert np.allclose(
+        cutile_result.parameters,
+        cupy_result.parameters,
+        rtol=tolerance,
+        atol=tolerance,
+    )
+    assert cupy_result.uncertainty_valid.all()
+    assert cutile_result.uncertainty_valid.all()
+    assert np.abs(cupy_result.covariance).max() > 1.0e-3
+    assert np.allclose(
+        cutile_result.covariance,
+        cupy_result.covariance,
+        rtol=tolerance,
+        atol=tolerance,
+    )
+
+
+@pytest.mark.parametrize("mode", ["difference", "split"])
+def test_cutile_gaussian_normal_equations_match_noisy_float32(mode) -> None:
+    from cuphoton.xfit._cutile import gaussian_normal_equations
+
+    cp = _require_cutile()
+    rng = np.random.default_rng(1219)
+    physical = cp.asarray(_gaussian_truth(np.float32))
+    parameters = physical.copy()
+    parameters[:, 1:3] = cp.log(physical[:, 1:3])
+    model = GaussianDipoleModel((11, 15), backend="cupy", dtype=np.float32)
+    prediction = model.evaluate(physical, mode=mode)
+    images = prediction + cp.asarray(
+        rng.normal(scale=0.2, size=prediction.shape), dtype=cp.float32
+    )
+    weights = cp.asarray(
+        rng.uniform(0.25, 2.0, size=prediction.shape), dtype=cp.float32
+    )
+    weights.reshape(2, -1)[:, ::7] = 0
+    residuals = ((prediction - images) * weights).reshape(2, -1)
+
+    jacobian = model.jacobian(physical, mode=mode)
+    # The solver uses log-sigma coordinates and weighted residuals.
+    chain_shape = (2, 2) + (1,) * (jacobian.ndim - 2)
+    jacobian[:, 1:3] *= physical[:, 1:3].reshape(chain_shape)
+    jacobian = (jacobian * weights[:, None, ...]).reshape(2, 8, -1)
+    jacobian = jacobian.transpose(0, 2, 1)
+    expected_hessian = cp.einsum("bij,bik->bjk", jacobian, jacobian)
+    expected_gradient = cp.einsum("bij,bi->bj", jacobian, residuals)
+
+    gradient, hessian = gaussian_normal_equations(
+        parameters,
+        residuals,
+        weights.reshape(2, -1),
+        image_shape=(11, 15),
+        mode=mode,
+    )
+
+    assert bool(cp.any(residuals != 0).item())
+    assert cp.allclose(
+        gradient, expected_gradient, rtol=3e-5, atol=3e-5
+    ).item()
+    assert cp.allclose(hessian, expected_hessian, rtol=3e-5, atol=3e-5).item()
+
+
+def test_cutile_weighting_and_compacted_indices_match_cupy() -> None:
+    _require_cutile()
+    split_weights = (1.0, 0.25, 1.75)
+    model = GaussianDipoleModel(
+        (11, 15), split_weights=split_weights, dtype=np.float64
+    )
+    truth = np.concatenate(
+        (
+            _gaussian_truth(),
+            np.asarray([[4.2, 1.4, 2.0, 0.1, -1.7, 0.8, 1.9, -0.9]]),
+        )
+    )
+    images = model.evaluate(truth, mode="split")
+    initial = truth + np.asarray([0.2, 0.1, -0.1, 0.03, 0.1, -0.1, -0.1, 0.1])
+    initial[0] = truth[0]
+    mask = np.ones(images.shape, dtype=bool)
+    mask[0, 0, 0, :3] = False
+    mask[1, 1, 2:4, 5:8] = False
+    mask[2, 2, 7:, 10:] = False
+    y, x = np.mgrid[:11, :15]
+    variance = np.empty(images.shape, dtype=np.float64)
+    for candidate in range(3):
+        for plane in range(3):
+            variance[candidate, plane] = (
+                0.75 + 0.03 * x + 0.05 * y + 0.2 * candidate + 0.1 * plane
+            )
+
+    cupy_result = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        mask=mask,
+        variance=variance,
+        mode="split",
+        backend="cupy",
+    )
+    cutile_result = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        mask=mask,
+        variance=variance,
+        mode="split",
+        backend="cutile",
+    )
+
+    assert cutile_result.evaluations[0] == 1
+    assert np.all(cutile_result.evaluations[1:] > 1)
+    assert np.array_equal(cutile_result.status, cupy_result.status)
+    assert np.array_equal(cutile_result.evaluations, cupy_result.evaluations)
+    assert np.allclose(
+        cutile_result.parameters,
+        cupy_result.parameters,
+        rtol=5.0e-12,
+        atol=5.0e-12,
+    )
+    assert np.allclose(
+        cutile_result.covariance,
+        cupy_result.covariance,
+        rtol=5.0e-12,
+        atol=5.0e-12,
+    )
+
+
+def test_cutile_preserves_rank_and_budget_failure_semantics() -> None:
+    _require_cutile()
+    model = GaussianDipoleModel((7, 9), dtype=np.float64)
+    rank_deficient = np.asarray([[0.0, 1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0]])
+    images = model.evaluate(rank_deficient)
+
+    cupy_rank = fit_dipoles(
+        images, model=model, initial=rank_deficient, backend="cupy"
+    )
+    cutile_rank = fit_dipoles(
+        images, model=model, initial=rank_deficient, backend="cutile"
+    )
+
+    assert np.array_equal(cutile_rank.status, cupy_rank.status)
+    assert cutile_rank.uncertainty_reason == cupy_rank.uncertainty_reason
+    assert np.isnan(cutile_rank.covariance).all()
+
+    truth = _gaussian_truth()[:1]
+    model = GaussianDipoleModel((11, 15), dtype=np.float64)
+    images = model.evaluate(truth)
+    initial = truth + np.asarray(
+        [[0.3, 0.1, -0.1, 0.05, 0.1, -0.1, -0.1, 0.1]]
+    )
+    config = LMConfig(max_evaluations=1)
+    cupy_budget = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="cupy",
+        config=config,
+    )
+    cutile_budget = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="cutile",
+        config=config,
+    )
+
+    assert np.array_equal(cutile_budget.status, cupy_budget.status)
+    assert np.array_equal(cutile_budget.evaluations, cupy_budget.evaluations)
+    assert cutile_budget.uncertainty_reason == cupy_budget.uncertainty_reason
