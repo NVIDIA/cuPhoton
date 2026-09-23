@@ -713,7 +713,19 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
     np.testing.assert_allclose(freq_all[:, 0, :], freq_all[:, 1, :])
 
 
-def test_detector_artifacts_batches_default_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "identity",
+    [_detector_artifact_config_hash, detector_artifact_resume_identity],
+)
+def test_detector_artifact_identity_distinguishes_serial_optout(identity):
+    legacy = {"kind": "xray-detector-artifacts", "manifest_schema_version": 2}
+    assert identity(legacy) == identity({**legacy, "batch_rows": True})
+    assert identity(legacy) != identity({**legacy, "batch_rows": False})
+
+
+def test_detector_artifacts_batches_default_rows_and_allows_optout(
+    tmp_path, monkeypatch
+):
     cupy = pytest.importorskip("cupy")
     try:
         if cupy.cuda.runtime.getDeviceCount() < 1:
@@ -759,6 +771,38 @@ def test_detector_artifacts_batches_default_rows(tmp_path, monkeypatch):
         (tmp_path / "artifacts" / "manifest.json").read_text()
     )
     assert manifest["batched_tiles"] == 1
+    assert manifest["batch_rows"] is True
+
+    batch_calls.clear()
+    serial = _build_synthetic_detector_artifacts(
+        tmp_path,
+        tmp_path / "serial",
+        batch_rows=False,
+    )
+    assert batch_calls == []
+    assert len(row_calls) == 4
+    assert serial.batched_tiles == 0
+    assert serial.raw_fits == result.raw_fits
+    assert serial.failures == 0
+    _assert_detector_outputs_match(
+        _load_detector_outputs(tmp_path / "serial"),
+        _load_detector_outputs(tmp_path / "artifacts"),
+    )
+    serial_manifest = json.loads(
+        (tmp_path / "serial" / "manifest.json").read_text()
+    )
+    assert serial_manifest["batch_rows"] is False
+    assert serial_manifest["batched_tiles"] == 0
+    assert serial_manifest["config_hash"] != manifest["config_hash"]
+    assert serial_manifest["resume_identity"] != manifest["resume_identity"]
+    assert detector_artifact_complete(
+        tmp_path / "serial",
+        expected_resume_identity=serial_manifest["resume_identity"],
+    )
+    assert not detector_artifact_complete(
+        tmp_path / "serial",
+        expected_resume_identity=manifest["resume_identity"],
+    )
 
 
 @pytest.mark.parametrize("batch_failure", ["exception", "all_rows_failed"])

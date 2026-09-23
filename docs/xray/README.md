@@ -77,6 +77,14 @@ uv run cuphoton xray detector-artifacts \
 start for the input scan. Start with a representative ROI and inspect the
 manifest, fit-status array, and numerical outputs before scaling out.
 
+For Python A/B checks, pass `batch_rows=False` to
+`cuphoton.xray.detector_artifacts.build_detector_artifacts_cupy` to force
+the serial row loop. The default, `True`, batches eligible rows. The manifest
+records this choice, and serial runs have distinct configuration and resume
+identities. Frequency, amplitude, and FFT-frequency arrays match exactly in
+the batch-versus-row regression cases; `fft_all` can differ by rounding from
+the batched cuFFT plan (the normalized-trace tests use `atol=1e-15`).
+
 `--fit-diagnostics summary` writes one status-aware record for each processed
 tile row, without duplicating records across the tile's x pixels. The summary
 includes the scale-free residual ratio and P1/P2 conditioning. `full` also

@@ -210,6 +210,7 @@ def build_detector_artifacts_cupy(
     components: int = 30,
     p2_ridge_alpha: float = 0.0,
     roots_backend: str = "eigvals",
+    batch_rows: bool = True,
     savgol_window: int = 5,
     savgol_polyorder: int = 3,
     amp_threshold: float = 1.6,
@@ -231,6 +232,11 @@ def build_detector_artifacts_cupy(
     and ``amp_all_sum_filtered.npy``. Each fitted detector row is broadcast
     across the x-columns of its tile, preserving the current vertical-strip
     science path.
+
+    Set ``batch_rows=False`` to force the serial row loop for A/B checks
+    and diagnostics. The default batches eligible rows and retains the
+    existing row-local fallback. The chosen mode is recorded in the manifest
+    and distinguished by its configuration and resume identities.
     """
 
     _require_positive("tile width", tile_shape[0])
@@ -539,7 +545,8 @@ def build_detector_artifacts_cupy(
                 )
                 batched_rows: dict[int, dict[str, Any] | None] = {}
                 if (
-                    fit_diagnostics == "none"
+                    batch_rows
+                    and fit_diagnostics == "none"
                     and p2_ridge_alpha == 0.0
                     and roots_backend == "eigvals"
                     and len(active_local_rows) > 1
@@ -723,6 +730,7 @@ def build_detector_artifacts_cupy(
         "components": int(components),
         "p2_ridge_alpha": float(p2_ridge_alpha),
         "roots_backend": roots_backend,
+        "batch_rows": bool(batch_rows),
         "savgol_window": int(savgol_window),
         "savgol_polyorder": int(savgol_polyorder),
         "amp_threshold": float(amp_threshold),
@@ -3154,6 +3162,9 @@ def _detector_artifact_stable_manifest_keys(
         "max_tiles",
     )
     payload = {key: manifest.get(key) for key in keys}
+    # Omitted or enabled batching retains the pre-opt-out identity.
+    if not manifest.get("batch_rows", True):
+        payload["batch_rows"] = False
     if int(manifest.get("manifest_schema_version", 1)) >= 2:
         diagnostics = manifest.get("fit_diagnostics") or {}
         payload["fit_diagnostics_level"] = diagnostics.get("level")
@@ -3243,6 +3254,9 @@ def detector_artifact_resume_identity(manifest: dict[str, Any]) -> str:
         "shard",
     )
     payload = {key: manifest.get(key) for key in keys}
+    # Omitted or enabled batching retains the pre-opt-out identity.
+    if not manifest.get("batch_rows", True):
+        payload["batch_rows"] = False
     if int(manifest.get("manifest_schema_version", 1)) >= 2:
         diagnostics = manifest.get("fit_diagnostics") or {}
         payload["fit_diagnostics_level"] = diagnostics.get("level")
