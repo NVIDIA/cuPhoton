@@ -56,16 +56,58 @@ more than one license.
 
 ## Optional distributed runtime inventory
 
-XPOIS distributed execution requires the runtime selected by the caller.
-These runtimes are installed separately from cuPhoton and are not included
-in its wheel or dependency lock. See the
-[XPOIS guide](docs/components/xpois.md) for installation and launch details.
+The Dragon executor requires DragonHPC. MPI collective aggregation requires
+`mpi4py` and an MPI implementation. These dependencies are installed
+separately; cuPhoton does not impose numeric version constraints on these
+runtimes. The versions below identify the distributions examined for this
+inventory; they do not establish compatibility with every Python version,
+transport, or cluster configuration. See the
+[XPOIS launch documentation](docs/components/xpois.md#launch-with-dragon)
+for a Dragon launch example.
 
-| Runtime | License and upstream notices | Use and installation |
-| --- | --- | --- |
-| DragonHPC (`dragonhpc`; import `dragon`) | [MIT](https://github.com/DragonHPC/dragon/blob/0.14.2/LICENSE) | Required for Dragon workers, placement and communication. Install separately in cuPhoton's Python environment; no Dragon source or binaries are bundled. |
-| `mpi4py` | [BSD-3-Clause](https://github.com/mpi4py/mpi4py/blob/4.1.2/LICENSE.rst) | Required for MPI collective aggregation and installed against the selected MPI implementation. |
-| Open MPI | [Upstream licenses and notices](https://github.com/open-mpi/ompi/blob/v4.1.6/LICENSE) | External launcher and runtime supported by the packaged rank-launch helper; not bundled in cuPhoton. |
+| Runtime | Inventoried versions | License and upstream notices | Use and distribution |
+| --- | --- | --- | --- |
+| DragonHPC (`dragonhpc`; Python import `dragon`) | `0.14.1`, `0.14.2` | [MIT](https://github.com/DragonHPC/dragon/blob/0.14.2/LICENSE); Hewlett Packard Enterprise Development LP. Its Python dependencies and native libraries need their own inventory; see below. | ProcessGroup workers, placement, and communication for the Dragon executor. Installed separately from upstream; no Dragon source or binaries are bundled in cuPhoton. |
+| `mpi4py` | `4.1.2` | [BSD-3-Clause](https://github.com/mpi4py/mpi4py/blob/4.1.2/LICENSE.rst); Lisandro Dalcin. | Python MPI bindings for collective aggregation. Installed separately and linked to the selected MPI implementation; not bundled in cuPhoton. |
+| Open MPI | `4.1.6` | [BSD-3-Clause-Open-MPI and component notices](https://github.com/open-mpi/ompi/blob/v4.1.6/LICENSE). MPI implementations and their system dependencies have separate licenses. | External MPI launcher and runtime. The `cuphoton-openmpi-rank-exec` helper reads Open MPI rank variables; the MPI executor also supports scheduler-launched ranks. No MPI implementation is bundled in cuPhoton. |
+
+### Dragon dependencies
+
+The released `dragonhpc==0.14.2` wheel declares these base Python requirements.
+The resolved versions and license identifiers below come from an inspected
+Linux/Python 3.12 environment and its wheel metadata. These are a reference
+inventory, not cuPhoton dependency pins. PyYAML also appears in cuPhoton's
+base requirements.
+
+| Dragon requirement | Reference version | License and upstream notice | Notes |
+| --- | --- | --- | --- |
+| `cloudpickle>=3.0.0` | `3.1.2` | [BSD-3-Clause](https://github.com/cloudpipe/cloudpickle/blob/7576fff24b9769432f76cc6d2c01282583ee87a9/LICENSE) | Python serialization. |
+| `pyyaml>=6.0.2` | `6.0.3` | [MIT](https://github.com/yaml/pyyaml/blob/49790e73684bebad1df05ef8d828fa12f685bffb/LICENSE) | YAML parsing. |
+| `psutil>=5.9.0` | `7.2.2` | [BSD-3-Clause](https://github.com/giampaolo/psutil/blob/9eea97dd6f1d16ea33f5144c8925f1ce7a0688e1/LICENSE) | Process and system information. |
+| `pycapnp>=2.0.0,<2.2.0` | `2.1.0` | [BSD-2-Clause](https://github.com/capnproto/pycapnp/blob/3a3adfb5f1a8d1b52c98e4984f38ceb5b89a94a6/LICENSE.md) | Python bindings; also inspect the Cap'n Proto code included in the native extension. |
+| `paramiko>=3.5.1` | `5.0.0` | [LGPL-2.1](https://github.com/paramiko/paramiko/blob/710cc5c02e2ded370d8d24e261e2baa8317a20fa/LICENSE) | SSH support; its cryptographic dependencies carry separate licenses. |
+| `shtab>=1.6.0` | `1.12.1` | [MPL-2.0](https://github.com/tqdm/shtab/blob/e1ab40616e77298204a61e1aad50d6f6e90e9217/LICENCE) | Shell completion. |
+
+The same environment resolved the following additional Python packages
+through Paramiko. Optional extras and other environments can resolve a
+different dependency tree.
+
+| Package | Reference version | License and upstream notice | Required by |
+| --- | --- | --- | --- |
+| `bcrypt` | `5.0.0` | [Apache-2.0](https://github.com/pyca/bcrypt/blob/main/LICENSE) | Paramiko. |
+| `cryptography` | `50.0.1` | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE); native OpenSSL and Rust components require their own inventory. | Paramiko. |
+| `invoke` | `3.0.3` | [BSD-2-Clause](https://github.com/pyinvoke/invoke/blob/main/LICENSE) | Paramiko. |
+| `PyNaCl` | `1.6.2` | [Apache-2.0](https://github.com/pyca/pynacl/blob/main/LICENSE); the wheel also includes an [ISC notice for libsodium](https://github.com/jedisct1/libsodium/blob/master/LICENSE). | Paramiko. |
+| `cffi` | `2.1.1` | [MIT-0](https://github.com/python-cffi/cffi/blob/main/LICENSE); inspect native libffi separately. | `cryptography`, PyNaCl. |
+| `pycparser` | `3.0` | [BSD-3-Clause](https://github.com/eliben/pycparser/blob/main/LICENSE) | `cffi`. |
+
+Dragon's MIT license does not apply to this entire dependency tree. In
+particular, Paramiko and shtab have the distinct terms listed above. Optional
+Dragon extras and transitive Python dependencies depend on the installation.
+Dragon wheels also contain native Dragon and transport libraries; inventory
+their bundled and linked components for the selected artifact and transport.
+Use the license and notice files from the exact installed distributions when
+preparing a deployment or redistribution inventory.
 
 ## Native system dependency inventory
 
@@ -108,14 +150,28 @@ SERVICES PROVIDED HEREUNDER.
 
 ## Transitive dependencies and reproduction
 
-For project dependency profiles, `uv.lock` is the complete machine-readable
-transitive inventory, including registry URLs, artifact hashes, platform
-markers, and versions. Generate a human-readable appendix for a review record
-with:
+For the Python dependency profiles declared in `pyproject.toml`, `uv.lock`
+records transitive dependencies, registry URLs, artifact hashes, platform
+markers, and versions. Generate a human-readable appendix across supported
+Python versions and platforms with:
 
 ```bash
-uv tree --locked --all-groups
+uv tree --locked --all-groups --universal
 ```
+
+For a distributed installation, also capture the packages installed in the
+runtime interpreter. Set `RUNTIME_PYTHON` to the Python executable used by the
+Dragon workers or MPI ranks, then run:
+
+```bash
+uv pip freeze --python "$RUNTIME_PYTHON"
+uv pip tree --python "$RUNTIME_PYTHON"
+```
+
+Record the selected runtime artifact versions and hashes, enabled extras,
+transitive licenses, and native MPI/transport/system libraries alongside that
+package inventory. The lockfile and Python package list do not enumerate
+libraries supplied by the host or bundled inside third-party wheels.
 
 Reproduce the CUDA 13 development environment with:
 
