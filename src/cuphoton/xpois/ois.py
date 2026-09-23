@@ -2313,6 +2313,29 @@ def _cutile_mma_normal_equations_kernel() -> Any:
     return kernel
 
 
+@lru_cache(maxsize=4)
+def _cached_cutile_padded_basis(
+    device_id: int,
+    basis_shape: tuple[int, int, int],
+    normal_width: int,
+    basis_values: bytes,
+) -> Any:
+    """Retain at most four immutable padded uploads across bases/devices."""
+    cp, _ = _load_cutile()
+    basis = np.frombuffer(basis_values, dtype=np.float64).reshape(basis_shape)
+    kernel_size = basis_shape[1] * basis_shape[2]
+    k_tile = _CUTILE_MMA_K_TILE
+    padded_rows = math.ceil(kernel_size / k_tile) * k_tile
+    padded = np.zeros((padded_rows, normal_width), dtype=np.float64)
+    padded[:kernel_size, : basis_shape[0]] = (
+        basis[:, ::-1, ::-1].reshape(basis_shape[0], -1).T
+    )
+    with cp.cuda.Device(device_id):
+        # Finish the miss's upload before publishing it to another stream.
+        # Kernels only read this private cached array.
+        return cp.asarray(padded, blocking=True)
+
+
 def _accumulate_normal_equations_cutile(
     reference: np.ndarray,
     target: np.ndarray,
@@ -2352,14 +2375,12 @@ def _accumulate_normal_equations_cutile(
     kernel_size = int(kernel_height * kernel_width)
     k_tile = _CUTILE_MMA_K_TILE
     k_tile_count = math.ceil(kernel_size / k_tile)
-    padded_basis_host = np.zeros(
-        (k_tile_count * k_tile, normal_width),
-        dtype=np.float64,
+    padded_basis = _cached_cutile_padded_basis(
+        int(cp.cuda.runtime.getDevice()),
+        basis_kernels.shape,
+        normal_width,
+        np.asarray(basis_kernels, dtype=np.float64).tobytes(),
     )
-    padded_basis_host[:kernel_size, : basis_kernels.shape[0]] = (
-        basis_kernels[:, ::-1, ::-1].reshape(basis_kernels.shape[0], -1).T
-    )
-    padded_basis = cp.asarray(padded_basis_host)
     partial_normal = cp.empty(
         (block_count, column_count, column_count + 1),
         dtype=cp.float64,
