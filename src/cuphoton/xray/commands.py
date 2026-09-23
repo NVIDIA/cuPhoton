@@ -3835,6 +3835,7 @@ def _detector_artifacts(args):
         print(f"zero_offset_index={result.zero_offset_index}")
         print(f"zero_offset_status={result.zero_offset_status}")
         print(f"processed_tiles={result.processed_tiles}")
+        print(f"batched_tiles={result.batched_tiles}")
         print(f"raw_fits={result.raw_fits}")
         print(f"failures={result.failures}")
         print(f"skipped_fits={result.skipped_fits}")
