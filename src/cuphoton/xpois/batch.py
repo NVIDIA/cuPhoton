@@ -26,9 +26,15 @@ from .data import (
     FITS_SUFFIXES,
     MASK_EXTENSION_NAMES,
     VARIANCE_EXTENSION_NAMES,
+    load_fit_positions,
 )
+from .solver_options import resolve_spatial_als_config
 
 IMAGE_PAIR_MANIFEST_SCHEMA = "cuphoton.xpois.image-pairs/v1"
+IMAGE_PAIR_MANIFEST_SCHEMA_V2 = "cuphoton.xpois.image-pairs/v2"
+_SUPPORTED_MANIFEST_SCHEMAS = frozenset(
+    {IMAGE_PAIR_MANIFEST_SCHEMA, IMAGE_PAIR_MANIFEST_SCHEMA_V2}
+)
 
 _ROOT_FIELDS = frozenset({"schema", "pairs"})
 _PAIR_REQUIRED_FIELDS = frozenset({"id", "reference", "target"})
@@ -39,6 +45,7 @@ _PATH_FIELDS = (
     "reference_mask",
     "target_mask",
     "fit_mask",
+    "fit_positions",
 )
 _HDU_FIELDS = (
     "reference_hdu",
@@ -50,9 +57,12 @@ _HDU_FIELDS = (
 _PAIR_FIELDS = (
     _PAIR_REQUIRED_FIELDS | frozenset(_PATH_FIELDS) | frozenset(_HDU_FIELDS)
 )
+_PAIR_FIELDS_V1 = _PAIR_FIELDS - {"fit_positions"}
 _SUPPORTED_BACKENDS = frozenset(
     {"auto", "cpu", "cupy", "numba-cuda", "cutile"}
 )
+_SUPPORTED_SOLVERS = frozenset({"constant", "spatial-als"})
+_SPATIAL_ALS_BACKENDS = frozenset({"auto", "cpu", "cupy"})
 _MASK_POLICIES = frozenset({"none", "strict", "hsc-masklite", "masklite"})
 _INPUT_IDENTITY_KEY = "_input_identity"
 _INPUT_IDENTITY_POLICY = "size-mtime-ns"
@@ -287,12 +297,17 @@ class ImagePairSpec:
     reference_mask_hdu: int | None = None
     target_mask_hdu: int | None = None
     fit_mask: Path | None = None
+    fit_positions: Path | None = None
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(
+        self, *, include_fit_positions: bool = False
+    ) -> dict[str, Any]:
         """Return the canonical JSON-compatible representation."""
 
         payload: dict[str, Any] = {"id": self.item_id}
         for field in _PATH_FIELDS:
+            if field == "fit_positions" and not include_fit_positions:
+                continue
             value = getattr(self, field)
             payload[field] = str(value) if value is not None else None
         for field in _HDU_FIELDS:
@@ -319,13 +334,40 @@ class ImagePairManifest:
     pairs: tuple[ImagePairSpec, ...]
     input_identities: tuple[InputFileIdentity, ...]
     sha256: str
+    schema: str = IMAGE_PAIR_MANIFEST_SCHEMA
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.schema, str)
+            or self.schema not in _SUPPORTED_MANIFEST_SCHEMAS
+        ):
+            raise ValueError(
+                "manifest schema must be one of: "
+                + ", ".join(
+                    repr(item) for item in sorted(_SUPPORTED_MANIFEST_SCHEMAS)
+                )
+            )
+        if self.schema != IMAGE_PAIR_MANIFEST_SCHEMA_V2 and any(
+            pair.fit_positions is not None for pair in self.pairs
+        ):
+            raise ValueError(
+                "fit_positions require manifest schema "
+                f"{IMAGE_PAIR_MANIFEST_SCHEMA_V2!r}"
+            )
 
     def canonical_payload(self) -> dict[str, Any]:
         """Return the resolved manifest used for execution."""
 
         return {
-            "schema": IMAGE_PAIR_MANIFEST_SCHEMA,
-            "pairs": [pair.to_payload() for pair in self.pairs],
+            "schema": self.schema,
+            "pairs": [
+                pair.to_payload(
+                    include_fit_positions=(
+                        self.schema == IMAGE_PAIR_MANIFEST_SCHEMA_V2
+                    )
+                )
+                for pair in self.pairs
+            ],
         }
 
     def input_identity_payload(self) -> dict[str, Any]:
@@ -362,7 +404,11 @@ class ImagePairManifest:
             unique_identities = [
                 by_path[path].to_payload() for path in unique_paths
             ]
-            payload = pair.to_payload()
+            payload = pair.to_payload(
+                include_fit_positions=(
+                    self.schema == IMAGE_PAIR_MANIFEST_SCHEMA_V2
+                )
+            )
             payload[_INPUT_IDENTITY_KEY] = unique_identities
             items.append(
                 WorkItem(
@@ -395,6 +441,11 @@ class BatchFitOptions:
     background_degree: int = 0
     flux_conserve: bool = False
     backend: str = "cupy"
+    solver: str = "constant"
+    spatial_degree: int | None = None
+    als_iterations: int | None = None
+    als_tolerance: float | None = None
+    als_regularization: float | None = None
 
     def __post_init__(self) -> None:
         if len(self.kernel_shape) != 2 or any(
@@ -449,6 +500,25 @@ class BatchFitOptions:
             raise ValueError(f"unsupported mask policy: {self.mask_policy}")
         if self.backend not in _SUPPORTED_BACKENDS:
             raise ValueError(f"unsupported fit backend: {self.backend}")
+        if self.solver not in _SUPPORTED_SOLVERS:
+            raise ValueError(f"unsupported solver: {self.solver}")
+        resolve_spatial_als_config(
+            self.solver,
+            background_degree=self.background_degree,
+            flux_conserve=self.flux_conserve,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
+        )
+        if (
+            self.solver == "spatial-als"
+            and self.backend not in _SPATIAL_ALS_BACKENDS
+        ):
+            raise ValueError(
+                "solver 'spatial-als' supports only auto, cpu, and cupy "
+                "backends"
+            )
         crop = (
             self.crop_y0,
             self.crop_x0,
@@ -511,10 +581,23 @@ def load_image_pair_manifest(path: Path) -> ImagePairManifest:
         raise ValueError(f"invalid image-pair manifest: {exc}") from exc
     root = _require_mapping(raw, "image-pair manifest")
     _reject_unknown_fields(root, _ROOT_FIELDS, "image-pair manifest")
-    if root.get("schema") != IMAGE_PAIR_MANIFEST_SCHEMA:
+    schema = root.get("schema")
+    if (
+        not isinstance(schema, str)
+        or schema not in _SUPPORTED_MANIFEST_SCHEMAS
+    ):
         raise ValueError(
-            f"manifest schema must be {IMAGE_PAIR_MANIFEST_SCHEMA!r}"
+            "manifest schema must be one of: "
+            + ", ".join(
+                repr(item) for item in sorted(_SUPPORTED_MANIFEST_SCHEMAS)
+            )
         )
+    assert isinstance(schema, str)
+    pair_fields = (
+        _PAIR_FIELDS
+        if schema == IMAGE_PAIR_MANIFEST_SCHEMA_V2
+        else _PAIR_FIELDS_V1
+    )
     raw_pairs = root.get("pairs")
     if not isinstance(raw_pairs, list) or not raw_pairs:
         raise ValueError("manifest pairs must be a non-empty list")
@@ -523,7 +606,7 @@ def load_image_pair_manifest(path: Path) -> ImagePairManifest:
     seen_ids: set[str] = set()
     for index, raw_pair in enumerate(raw_pairs):
         entry = _require_mapping(raw_pair, f"pairs[{index}]")
-        _reject_unknown_fields(entry, _PAIR_FIELDS, f"pairs[{index}]")
+        _reject_unknown_fields(entry, pair_fields, f"pairs[{index}]")
         missing = sorted(_PAIR_REQUIRED_FIELDS - set(entry))
         if missing:
             raise ValueError(
@@ -550,8 +633,15 @@ def load_image_pair_manifest(path: Path) -> ImagePairManifest:
         pairs.append(ImagePairSpec(**values))
 
     canonical = {
-        "schema": IMAGE_PAIR_MANIFEST_SCHEMA,
-        "pairs": [pair.to_payload() for pair in pairs],
+        "schema": schema,
+        "pairs": [
+            pair.to_payload(
+                include_fit_positions=(
+                    schema == IMAGE_PAIR_MANIFEST_SCHEMA_V2
+                )
+            )
+            for pair in pairs
+        ],
     }
     input_paths = sorted(
         {
@@ -576,6 +666,7 @@ def load_image_pair_manifest(path: Path) -> ImagePairManifest:
     ).encode()
     return ImagePairManifest(
         source_path=resolved,
+        schema=schema,
         pairs=tuple(pairs),
         input_identities=input_identities,
         sha256=hashlib.sha256(encoded).hexdigest(),
@@ -605,24 +696,62 @@ def preflight_image_pair_manifest(
             _require_matching_shape(
                 pair.item_id, "variance", variance_shape, reference_shape
             )
+        if options.crop_y0 is not None:
+            assert options.crop_x0 is not None
+            assert options.crop_height is not None
+            assert options.crop_width is not None
+            if (
+                options.crop_y0 + options.crop_height > reference_shape[0]
+                or options.crop_x0 + options.crop_width > reference_shape[1]
+            ):
+                raise ValueError(
+                    f"pair {pair.item_id!r} crop exceeds image shape "
+                    f"{reference_shape}"
+                )
+        fit_shape = reference_shape
+        if options.crop_height is not None:
+            assert options.crop_width is not None
+            fit_shape = (options.crop_height, options.crop_width)
+        if pair.fit_mask is not None and pair.fit_positions is not None:
+            raise ValueError(
+                f"pair {pair.item_id!r} supplies both fit_mask and "
+                "fit_positions"
+            )
         if pair.fit_mask is not None:
             if pair.fit_mask.suffix.lower() != ".npy":
                 raise ValueError(
                     f"pair {pair.item_id!r} fit_mask must be NPY"
                 )
-            fit_shape = _probe_array_shape(pair.fit_mask, None, kind="image")
-            expected = reference_shape
-            if options.crop_height is not None:
-                assert options.crop_width is not None
-                expected = (options.crop_height, options.crop_width)
+            mask_shape = _probe_array_shape(pair.fit_mask, None, kind="image")
             _require_matching_shape(
-                pair.item_id, "fit_mask", fit_shape, expected
+                pair.item_id, "fit_mask", mask_shape, fit_shape
             )
             if options.auto_stamp_mask:
                 raise ValueError(
                     f"pair {pair.item_id!r} supplies fit_mask while "
                     "auto_stamp_mask is enabled"
                 )
+        if pair.fit_positions is not None:
+            if options.solver != "spatial-als":
+                raise ValueError(
+                    f"pair {pair.item_id!r} fit_positions require "
+                    "solver='spatial-als'"
+                )
+            if options.auto_stamp_mask:
+                raise ValueError(
+                    f"pair {pair.item_id!r} supplies fit_positions while "
+                    "auto_stamp_mask is enabled"
+                )
+            try:
+                load_fit_positions(
+                    pair.fit_positions,
+                    image_shape=fit_shape,
+                    kernel_shape=options.kernel_shape,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"pair {pair.item_id!r} has invalid fit_positions: {exc}"
+                ) from exc
         supplied_masks = any(
             value is not None
             for value in (
@@ -653,18 +782,6 @@ def preflight_image_pair_manifest(
                 shape = _probe_array_shape(path, hdu, kind="mask")
                 _require_matching_shape(
                     pair.item_id, label, shape, reference_shape
-                )
-        if options.crop_y0 is not None:
-            assert options.crop_x0 is not None
-            assert options.crop_height is not None
-            assert options.crop_width is not None
-            if (
-                options.crop_y0 + options.crop_height > reference_shape[0]
-                or options.crop_x0 + options.crop_width > reference_shape[1]
-            ):
-                raise ValueError(
-                    f"pair {pair.item_id!r} crop exceeds image shape "
-                    f"{reference_shape}"
                 )
     manifest.verify_input_identity()
 
@@ -721,6 +838,7 @@ def run_image_pair_item(
             crop_height=options.crop_height,
             crop_width=options.crop_width,
             fit_mask_path=pair.fit_mask,
+            fit_positions_path=pair.fit_positions,
             auto_stamp_mask=options.auto_stamp_mask,
             auto_stamp_size=options.auto_stamp_size,
             auto_stamp_count=options.auto_stamp_count,
@@ -728,6 +846,11 @@ def run_image_pair_item(
             background_degree=options.background_degree,
             flux_conserve=options.flux_conserve,
             backend=options.backend,
+            solver=options.solver,
+            spatial_degree=options.spatial_degree,
+            als_iterations=options.als_iterations,
+            als_tolerance=options.als_tolerance,
+            als_regularization=options.als_regularization,
             workflow_name="fit_batch_item",
             run_prefix="fit-batch-item",
         )
@@ -750,6 +873,7 @@ def run_image_pair_item(
     return {
         "summary_path": str(result.run_dir / "summary.json"),
         "run_dir": str(result.run_dir),
+        "solver": result.summary["solver"],
         "requested_backend": result.summary["requested_backend"],
         "backend": result.summary["backend"],
         "device": result.summary["device"],
@@ -964,6 +1088,7 @@ def _require_matching_shape(
 __all__ = [
     "BatchFitOptions",
     "IMAGE_PAIR_MANIFEST_SCHEMA",
+    "IMAGE_PAIR_MANIFEST_SCHEMA_V2",
     "ImagePairManifest",
     "ImagePairSpec",
     "InputFileIdentity",

@@ -23,6 +23,7 @@ from cuphoton.core.runtime import runtime_metadata
 
 from .data import (
     apply_rectangular_cutout,
+    load_fit_positions,
     load_image_with_wcs,
     load_mask_with_planes,
     load_variance_with_wcs,
@@ -36,6 +37,7 @@ from .ois import (
 )
 from .review import identify_residual_hotspots, write_review_metadata
 from .review_bokeh import write_interactive_review_artifact
+from .solver_options import resolve_spatial_als_config
 from .spatial_als import (
     SpatialALSConfig,
     SpatialALSFitResult,
@@ -106,6 +108,7 @@ def run_constant_kernel_fit(
     crop_height: int | None = None,
     crop_width: int | None = None,
     fit_mask_path: Path | None,
+    fit_positions_path: Path | None = None,
     auto_stamp_mask: bool = False,
     auto_stamp_size: int = 31,
     auto_stamp_count: int = 5,
@@ -128,6 +131,8 @@ def run_constant_kernel_fit(
     crop and masks, solves the kernel, and writes the matched image and
     ``target - matched`` residual. Image, variance, and mask paths may name
     NumPy arrays or FITS products; HDU selectors apply only to FITS inputs.
+    Spatial ALS may instead load ordered post-crop ``(y, x)`` fit rows from
+    ``fit_positions_path``; duplicate rows retain multiplicity weighting.
 
     ``solver`` selects the model: ``"constant"`` fits one two-dimensional
     kernel with :func:`solve_constant_kernel`, and ``"spatial-als"`` fits the
@@ -149,7 +154,7 @@ def run_constant_kernel_fit(
         raise ValueError(
             "solver 'spatial-als' supports only auto, cpu, and cupy backends"
         )
-    als_config = _resolve_spatial_als_config(
+    als_config = resolve_spatial_als_config(
         solver,
         background_degree=background_degree,
         flux_conserve=flux_conserve,
@@ -158,6 +163,9 @@ def run_constant_kernel_fit(
         als_tolerance=als_tolerance,
         als_regularization=als_regularization,
     )
+
+    if fit_positions_path is not None and solver != "spatial-als":
+        raise ValueError("fit_positions require solver='spatial-als'")
 
     workflow_start = time.perf_counter()
     run_setup_start = time.perf_counter()
@@ -172,9 +180,18 @@ def run_constant_kernel_fit(
         input_read_sec = 0.0
         if variance_hdu is not None and variance_path is None:
             raise ValueError("variance_hdu requires a variance image path")
+        if fit_mask_path is not None and fit_positions_path is not None:
+            raise ValueError(
+                "Specify either fit_mask_path or fit_positions_path, not both"
+            )
         if fit_mask_path is not None and auto_stamp_mask:
             raise ValueError(
                 "Specify either fit_mask_path or auto_stamp_mask, not both"
+            )
+        if fit_positions_path is not None and auto_stamp_mask:
+            raise ValueError(
+                "Specify either fit_positions_path or auto_stamp_mask, "
+                "not both"
             )
         crop_is_none = [
             crop_y0 is None,
@@ -320,6 +337,7 @@ def run_constant_kernel_fit(
                 "target_mask_fraction": float(np.mean(target_bad_mask)),
             }
         fit_mask = None
+        fit_positions = None
         fit_mask_kind: str | None = None
         fit_mask_metadata: dict[str, Any] | None = None
         if fit_mask_path is not None:
@@ -332,6 +350,17 @@ def run_constant_kernel_fit(
             finally:
                 input_read_sec += time.perf_counter() - input_read_start
             fit_mask_kind = "explicit_mask"
+        elif fit_positions_path is not None:
+            input_read_start = time.perf_counter()
+            try:
+                fit_positions = load_fit_positions(
+                    fit_positions_path,
+                    image_shape=target.shape,
+                    kernel_shape=kernel_shape,
+                )
+            finally:
+                input_read_sec += time.perf_counter() - input_read_start
+            fit_mask_kind = "explicit_positions"
         elif auto_stamp_mask:
             selection_image = np.where(
                 np.isfinite(reference) & np.isfinite(target),
@@ -372,6 +401,7 @@ def run_constant_kernel_fit(
                 kernel_shape=kernel_shape,
                 variance=variance,
                 fit_mask=fit_mask,
+                sample_positions=fit_positions,
                 config=als_config,
                 backend=backend,
             )
@@ -383,6 +413,14 @@ def run_constant_kernel_fit(
         output_start = time.perf_counter()
         saved = _save_artifacts(artifacts_dir, result)
         artifact_write_sec += time.perf_counter() - output_start
+        if fit_positions is not None:
+            fit_positions_artifact = artifacts_dir / "fit_positions.npy"
+            output_start = time.perf_counter()
+            _save_array(fit_positions_artifact, fit_positions)
+            artifact_write_sec += time.perf_counter() - output_start
+            saved["fit_positions"] = str(
+                fit_positions_artifact.relative_to(artifacts_dir.parent)
+            )
         if fit_mask_metadata is not None:
             fit_mask_metadata_path = artifacts_dir / "fit_mask_metadata.json"
             output_start = time.perf_counter()
@@ -548,6 +586,11 @@ def run_constant_kernel_fit(
             "reference_hdu": used_reference_hdu,
             "target_hdu": used_target_hdu,
             "variance_hdu": used_variance_hdu,
+            "fit_positions_path": (
+                str(fit_positions_path.expanduser().resolve())
+                if fit_positions_path is not None
+                else None
+            ),
             "crop": crop_metadata,
             "mask_policy": normalized_mask_policy,
             "solver": solver,
@@ -576,6 +619,11 @@ def run_constant_kernel_fit(
                 fit_mask_kind=fit_mask_kind,
                 kernel_shape=kernel_shape,
                 fit_mask_metadata=fit_mask_metadata,
+                unique_fit_pixel_count=(
+                    result.unique_fit_pixel_count
+                    if isinstance(result, SpatialALSFitResult)
+                    else result.fit_pixel_count
+                ),
             ),
             "saved": saved,
         }
@@ -702,7 +750,7 @@ def benchmark_constant_kernel_backends(
                 "solver 'spatial-als' supports only cpu and cupy benchmark "
                 "backends; unsupported: " + ", ".join(unsupported)
             )
-    als_config = _resolve_spatial_als_config(
+    als_config = resolve_spatial_als_config(
         solver,
         background_degree=background_degree,
         flux_conserve=flux_conserve,
@@ -1382,45 +1430,6 @@ def _solve_benchmark_model(
     )
 
 
-def _resolve_spatial_als_config(
-    solver: str,
-    *,
-    background_degree: int,
-    flux_conserve: bool,
-    spatial_degree: int | None,
-    als_iterations: int | None,
-    als_tolerance: float | None,
-    als_regularization: float | None,
-) -> SpatialALSConfig | None:
-    """Build the spatial ALS config, rejecting its options for other solvers.
-
-    ``None`` options resolve to the :class:`SpatialALSConfig` defaults so the
-    dataclass remains the single source of those values.
-    """
-
-    spatial_options = {
-        "spatial_degree": spatial_degree,
-        "max_iterations": als_iterations,
-        "tolerance": als_tolerance,
-        "regularization": als_regularization,
-    }
-    if solver != "spatial-als":
-        if any(value is not None for value in spatial_options.values()):
-            raise ValueError(
-                "spatial ALS options require solver='spatial-als'"
-            )
-        return None
-    return SpatialALSConfig(
-        background_degree=background_degree,
-        flux_conserve=flux_conserve,
-        **{
-            key: value
-            for key, value in spatial_options.items()
-            if value is not None
-        },
-    )
-
-
 def _time_benchmark_solve(
     backend: str,
     solve: Callable[[], ConstantKernelFitResult | SpatialALSFitResult],
@@ -2053,6 +2062,7 @@ def _fit_region_summary(
     fit_mask_kind: str | None,
     kernel_shape: tuple[int, int],
     fit_mask_metadata: dict[str, Any] | None = None,
+    unique_fit_pixel_count: int | None = None,
 ) -> dict[str, Any]:
     if fit_mask_kind is None:
         margin_y = kernel_shape[0] // 2
@@ -2071,6 +2081,16 @@ def _fit_region_summary(
         if fit_mask_metadata is not None:
             summary.update(fit_mask_metadata)
         return summary
+    if fit_mask_kind == "explicit_positions":
+        assert unique_fit_pixel_count is not None
+        return {
+            "kind": "explicit_positions",
+            "coordinate_order": "y,x",
+            "duplicates_preserved": True,
+            "row_count": fit_pixel_count,
+            "pixel_count": unique_fit_pixel_count,
+            "duplicate_row_count": (fit_pixel_count - unique_fit_pixel_count),
+        }
     return {
         "kind": "explicit_mask",
         "pixel_count": fit_pixel_count,

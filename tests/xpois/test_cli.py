@@ -99,11 +99,11 @@ def test_help_for_fit_batch_command(capsys) -> None:
     assert "--target" not in captured.out
     assert "--variance" not in captured.out
     assert "--fit-mask" not in captured.out
-    assert "--solver" not in captured.out
-    assert "--spatial-degree" not in captured.out
-    assert "--als-iterations" not in captured.out
-    assert "--als-tolerance" not in captured.out
-    assert "--als-regularization" not in captured.out
+    assert "--solver" in captured.out
+    assert "--spatial-degree" in captured.out
+    assert "--als-iterations" in captured.out
+    assert "--als-tolerance" in captured.out
+    assert "--als-regularization" in captured.out
 
 
 def test_fit_kernel_forwards_spatial_solver_options(
@@ -475,6 +475,7 @@ def test_fit_batch_dispatches_dragon_with_effective_defaults(
     }
     assert seen["manifest_path"] == manifest
     assert seen["options"].backend == "cupy"
+    assert seen["options"].solver == "constant"
     assert seen["max_workers"] is None
     assert seen["result_timeout_sec"] == 60.0
     assert seen["worker_timeout_sec"] == 3600.0
@@ -1914,3 +1915,104 @@ def test_data_inspect_missing_base_reports_zero_counts(
     assert rc == 0
     assert '"counts": {' in captured.out
     assert '"bundle_files": 0' in captured.out
+
+
+@pytest.mark.parametrize("executor", ["dragon", "mpi"])
+def test_fit_batch_forwards_spatial_solver_options(
+    executor, monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    manifest = tmp_path / "pairs.yaml"
+    manifest.write_text("schema: cuphoton.xpois.image-pairs/v1\n")
+    seen = {}
+
+    def run_batch(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            status="success",
+            summary_path=tmp_path / "run" / "summary.json",
+            to_dict=lambda: {"executor": executor, "status": "success"},
+        )
+
+    monkeypatch.setattr(
+        commands,
+        f"_run_{executor}_image_pair_batch",
+        run_batch,
+    )
+
+    rc = _run_cli(
+        [
+            "fit-batch",
+            "--executor",
+            executor,
+            "--manifest",
+            str(manifest),
+            "--backend",
+            "cupy",
+            "--solver",
+            "spatial-als",
+            "--spatial-degree",
+            "3",
+            "--als-iterations",
+            "17",
+            "--als-tolerance",
+            "2e-7",
+            "--als-regularization",
+            "4e-5",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0, captured.err
+    assert json.loads(captured.out) == {
+        "executor": executor,
+        "status": "success",
+    }
+    options = seen["options"]
+    assert options.backend == "cupy"
+    assert options.solver == "spatial-als"
+    assert options.spatial_degree == 3
+    assert options.als_iterations == 17
+    assert options.als_tolerance == pytest.approx(2e-7)
+    assert options.als_regularization == pytest.approx(4e-5)
+
+
+@pytest.mark.parametrize("executor", ["dragon", "mpi"])
+def test_fit_batch_rejects_spatial_als_with_cutile(
+    executor, monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    called = False
+
+    def should_not_run(**kwargs):
+        del kwargs
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        commands,
+        f"_run_{executor}_image_pair_batch",
+        should_not_run,
+    )
+
+    rc = _run_cli(
+        [
+            "fit-batch",
+            "--executor",
+            executor,
+            "--manifest",
+            str(tmp_path / "pairs.yaml"),
+            "--solver",
+            "spatial-als",
+            "--backend",
+            "cutile",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert called is False
+    assert "supports only auto, cpu, and cupy backends" in captured.err
+    assert "Traceback" not in captured.err

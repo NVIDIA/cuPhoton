@@ -1634,6 +1634,7 @@ def _finalize(
             records,
             attempt_id,
             run_dir,
+            solver=options.solver,
         )
     )
     rank_audit = _audit_ranks(
@@ -1956,6 +1957,8 @@ def _terminal_record_errors(
     records: Sequence[Mapping[str, Any]],
     attempt_id: str | None = None,
     run_dir: Path | None = None,
+    *,
+    solver: str,
 ) -> list[dict[str, str]]:
     expected = {
         item.item_id: (rank, item.weight_bytes)
@@ -1998,6 +2001,8 @@ def _terminal_record_errors(
             invalid.append("worker_seconds")
         status = record.get("status")
         if status == "success":
+            if record.get("solver") != solver:
+                invalid.append("solver")
             expected_item_dir = f"items/{item_id}"
             if record.get("run_dir") != expected_item_dir:
                 invalid.append("run_dir")

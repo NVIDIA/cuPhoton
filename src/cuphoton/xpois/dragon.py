@@ -384,6 +384,7 @@ def run_dragon_image_pair_batch(
             "worker_id": placement.worker_id,
             "weight_bytes": item.weight_bytes,
             "backend": options.backend,
+            "solver": options.solver,
         }
         for placement, shard in zip(selected, shards)
         for item in shard
@@ -1047,6 +1048,14 @@ def _audit_terminal_record_contract(
             expected_backend = (
                 assignment.get("backend") if assignment is not None else None
             )
+            expected_solver = (
+                assignment.get("solver") if assignment is not None else None
+            )
+            if (
+                expected_solver is not None
+                and record.get("solver") != expected_solver
+            ):
+                problems.append("solver")
             for field in ("requested_backend", "backend"):
                 if expected_backend is not None:
                     if record.get(field) != expected_backend:

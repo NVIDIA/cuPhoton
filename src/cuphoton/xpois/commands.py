@@ -312,7 +312,78 @@ class _KernelSolveOptionsCommand(XPOISCommand):
         return self.context.runs_dir
 
 
-class _KernelSolveCommand(_KernelSolveOptionsCommand):
+class _SpatialSolverOptionsCommand(_KernelSolveOptionsCommand):
+    solver = None
+    spatial_degree = None
+    als_iterations = None
+    als_tolerance = None
+    als_regularization = None
+
+    class SolverArg(SetInvariant):
+        _arg = "--solver"
+        _help = (
+            "Kernel model to fit: constant or spatial-als. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "constant"
+        _set = {"constant", "spatial-als"}
+
+    def _warn_if_not_converged(self, summary: dict[str, Any]) -> None:
+        if summary.get("converged") is False:
+            spatial = summary.get("spatial_als", {})
+            self._warn(
+                "spatial ALS did not converge in "
+                f"{summary.get('iterations')} of "
+                f"{spatial.get('max_iterations')} sweeps; "
+                "inspect 'converged' in summary.json before accepting "
+                "the subtraction"
+            )
+
+    # The spatial ALS options default to None so the workflow can reject any
+    # explicit value for the constant solver and resolve unset values from
+    # SpatialALSConfig, the single source of those defaults.
+    class SpatialDegreeArg(NonNegativeIntegerInvariant):
+        _arg = "--spatial-degree"
+        _help = (
+            "Total Chebyshev degree for spatial ALS coefficient fields. "
+            f"[default: {SpatialALSConfig.spatial_degree}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class AlsIterationsArg(PositiveIntegerInvariant):
+        _arg = "--als-iterations"
+        _help = (
+            "Maximum spatial ALS sweeps. "
+            f"[default: {SpatialALSConfig.max_iterations}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class AlsToleranceArg(FloatInvariant):
+        _arg = "--als-tolerance"
+        _help = (
+            "Spatial ALS relative objective tolerance; 0 disables the "
+            "relative-change stop. "
+            f"[default: {SpatialALSConfig.tolerance}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.0
+
+    class AlsRegularizationArg(FloatInvariant):
+        _arg = "--als-regularization"
+        _help = (
+            "Spatial ALS ridge penalty. "
+            f"[default: {SpatialALSConfig.regularization}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.0
+
+
+class _KernelSolveCommand(_SpatialSolverOptionsCommand):
     reference = None
     target = None
     reference_hdu = None
@@ -397,78 +468,7 @@ class _KernelSolveCommand(_KernelSolveOptionsCommand):
         _default = None
 
 
-class _SpatialSolverCommand(_KernelSolveCommand):
-    solver = None
-    spatial_degree = None
-    als_iterations = None
-    als_tolerance = None
-    als_regularization = None
-
-    class SolverArg(SetInvariant):
-        _arg = "--solver"
-        _help = (
-            "Kernel model to fit: constant or spatial-als. "
-            "[default: %default]"
-        )
-        _mandatory = False
-        _default = "constant"
-        _set = {"constant", "spatial-als"}
-
-    def _warn_if_not_converged(self, summary: dict[str, Any]) -> None:
-        if summary.get("converged") is False:
-            spatial = summary.get("spatial_als", {})
-            self._warn(
-                "spatial ALS did not converge in "
-                f"{summary.get('iterations')} of "
-                f"{spatial.get('max_iterations')} sweeps; "
-                "inspect 'converged' in summary.json before accepting "
-                "the subtraction"
-            )
-
-    # The spatial ALS options default to None so the workflow can reject any
-    # explicit value for the constant solver and resolve unset values from
-    # SpatialALSConfig, the single source of those defaults.
-    class SpatialDegreeArg(NonNegativeIntegerInvariant):
-        _arg = "--spatial-degree"
-        _help = (
-            "Total Chebyshev degree for spatial ALS coefficient fields. "
-            f"[default: {SpatialALSConfig.spatial_degree}]"
-        )
-        _mandatory = False
-        _default = None
-
-    class AlsIterationsArg(PositiveIntegerInvariant):
-        _arg = "--als-iterations"
-        _help = (
-            "Maximum spatial ALS sweeps. "
-            f"[default: {SpatialALSConfig.max_iterations}]"
-        )
-        _mandatory = False
-        _default = None
-
-    class AlsToleranceArg(FloatInvariant):
-        _arg = "--als-tolerance"
-        _help = (
-            "Spatial ALS relative objective tolerance; 0 disables the "
-            "relative-change stop. "
-            f"[default: {SpatialALSConfig.tolerance}]"
-        )
-        _mandatory = False
-        _default = None
-        _min = 0.0
-
-    class AlsRegularizationArg(FloatInvariant):
-        _arg = "--als-regularization"
-        _help = (
-            "Spatial ALS ridge penalty. "
-            f"[default: {SpatialALSConfig.regularization}]"
-        )
-        _mandatory = False
-        _default = None
-        _min = 0.0
-
-
-class _FitCommand(_SpatialSolverCommand):
+class _FitCommand(_KernelSolveCommand):
     backend = None
     no_review = None
 
@@ -600,7 +600,7 @@ class SubtractCommand(_FitCommand):
         self._emit_json(result.summary)
 
 
-class FitBatchCommand(_KernelSolveOptionsCommand):
+class FitBatchCommand(_SpatialSolverOptionsCommand):
     """Fit an image-pair manifest with a selected distributed executor."""
 
     executor = None
@@ -716,6 +716,11 @@ class FitBatchCommand(_KernelSolveOptionsCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
         )
         common = {
             "manifest_path": Path(self.manifest).expanduser(),
@@ -824,7 +829,7 @@ class FitBatchCommand(_KernelSolveOptionsCommand):
                 )
 
 
-class BenchmarkBackendsCommand(_SpatialSolverCommand):
+class BenchmarkBackendsCommand(_KernelSolveCommand):
     """Benchmark CPU/GPU kernel solvers and numerical parity.
 
     This command loads the input arrays once, repeats the selected solver for

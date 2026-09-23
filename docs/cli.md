@@ -64,11 +64,24 @@ uv run cuphoton xpois benchmark-backends \
   --reference-backend cpu
 ```
 
-For spatial ALS, `--backend auto` prefers CuPy when a usable CUDA device is
-available and otherwise uses the CPU reference implementation. Explicit
-`--backend cupy` fails instead of falling back. The CPU and CuPy paths use the
-same FP64 model and require no external calibration archive. MPI and Dragon
-batch orchestration remain separate from this single-fit backend.
+The Dragon batch executor accepts the same spatial solver configuration and
+assigns each image-pair fit to one explicitly placed GPU worker:
+
+```bash
+.venv/bin/dragon examples/xpois/dragon_batch.py \
+  --manifest /shared/manifests/fixed-32.yaml \
+  --solver spatial-als \
+  --backend cupy \
+  --max-workers 4
+```
+
+For single-image spatial ALS commands, `--backend auto` prefers CuPy when a
+usable CUDA device is available and otherwise uses the CPU reference
+implementation. Explicit `--backend cupy` fails instead of falling back. The
+CPU and CuPy paths use the same FP64 model and require no external calibration
+archive. The batch command requires `--backend cupy` for spatial ALS
+and rejects `auto`. One solver configuration applies to every pair in the
+batch; each complete spatial solve runs on one GPU.
 
 ## XScan: `cuphoton xscan`
 

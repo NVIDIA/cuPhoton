@@ -1344,6 +1344,45 @@ def test_terminal_record_contract_validates_wall_timings(wall_sec) -> None:
     assert errors[0]["message"].endswith("wall_sec")
 
 
+def test_terminal_record_contract_rejects_wrong_solver() -> None:
+    errors = _audit_terminal_record_contract(
+        run_id="run",
+        expected={
+            "item": {
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "backend": "cupy",
+                "solver": "spatial-als",
+            }
+        },
+        records=[
+            {
+                "schema": "cuphoton.xpois.dragon-item/v1",
+                "run_id": "run",
+                "item_id": "item",
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "started_at_utc": "2026-08-21T00:00:00+00:00",
+                "completed_at_utc": "2026-08-21T00:00:01+00:00",
+                "worker_seconds": 1.0,
+                "status": "success",
+                "run_dir": "items/item",
+                "summary_path": "items/item/summary.json",
+                "solver": "constant",
+                "requested_backend": "cupy",
+                "backend": "cupy",
+                "device": "fake-gpu",
+                "runtime": {},
+                "timings_sec": {},
+                "wall_sec": {},
+            }
+        ],
+    )
+
+    assert len(errors) == 1
+    assert errors[0]["message"].endswith("solver")
+
+
 def test_terminal_loader_exposes_unexpected_record_files(tmp_path) -> None:
     records_dir = tmp_path / "records"
     records_dir.mkdir()
@@ -1690,6 +1729,7 @@ def _fake_worker(
                 "status": "success",
                 "run_dir": f"items/{item.item_id}",
                 "summary_path": f"items/{item.item_id}/summary.json",
+                "solver": options_payload["solver"],
                 "requested_backend": "cupy",
                 "backend": "cupy",
                 "device": "fake-gpu",
@@ -1969,6 +2009,13 @@ def test_coordinator_audits_fake_dragon_process_group(
     )
     monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
     monkeypatch.setattr(dragon_module, "_dragon_shard_worker", _fake_worker)
+    options = _options(
+        solver="spatial-als",
+        spatial_degree=3,
+        als_iterations=17,
+        als_tolerance=2e-7,
+        als_regularization=4e-5,
+    )
 
     result = run_dragon_image_pair_batch(
         manifest_path=manifest,
@@ -1977,7 +2024,7 @@ def test_coordinator_audits_fake_dragon_process_group(
         max_workers=2,
         result_timeout_sec=1.0,
         worker_timeout_sec=30.0,
-        options=_options(),
+        options=options,
     )
 
     assert result.status == "success"
@@ -2002,6 +2049,9 @@ def test_coordinator_audits_fake_dragon_process_group(
     assert launch["record_type"] == "immutable-launch"
     assert launch["executor"] == "dragon"
     assert "status" not in launch
+    assert launch["options"] == options.to_payload()
+    record = json.loads((result.run_dir / "records" / "one.json").read_text())
+    assert record["solver"] == "spatial-als"
     assert (result.run_dir / "input-identity.json").is_file()
 
 
