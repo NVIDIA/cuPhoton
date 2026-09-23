@@ -8,6 +8,7 @@ import inspect
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pyarrow as pa
@@ -22,6 +23,7 @@ from cuphoton.xscan.xfit_features import (
     build_xfit_feature_bundle,
     export_xfit_input,
     load_xfit_feature_matrix,
+    transform_xfit_result_features,
 )
 
 _GAUSSIAN_PARAMETERS = (
@@ -269,6 +271,166 @@ def _write_run(
 
 def _column(values: np.ndarray, name: str) -> np.ndarray:
     return values[:, FEATURE_NAMES.index(name)]
+
+
+@pytest.mark.parametrize(
+    ("case", "row_overrides", "variance_present"),
+    [
+        pytest.param("valid", {}, True, id="valid"),
+        pytest.param(
+            "nonconverged",
+            {
+                "status": "max_evaluations",
+                "converged": False,
+                "uncertainty_valid": False,
+                "uncertainty_reason": "fit did not converge",
+            },
+            True,
+            id="nonconverged",
+        ),
+        pytest.param(
+            "invalid-position",
+            {"x_pos": 7.0},
+            True,
+            id="invalid-position",
+        ),
+        pytest.param(
+            "uncertainty-invalid",
+            {
+                "uncertainty_valid": False,
+                "uncertainty_reason": "rank-deficient Jacobian",
+                "amplitude_standard_error": np.nan,
+            },
+            True,
+            id="uncertainty-invalid",
+        ),
+        pytest.param("unweighted", {}, False, id="unweighted"),
+        pytest.param(
+            "clipped-nonfinite-quality",
+            {
+                "valid_pixel_fraction": 1.25,
+                "fractional_null_improvement": -2.0,
+                "delta_chi_square": np.nan,
+                "reduced_chi_square": np.nan,
+            },
+            True,
+            id="clipped-nonfinite-quality",
+        ),
+    ],
+)
+def test_live_and_artifact_feature_transforms_are_byte_equal(
+    tmp_path: Path,
+    case: str,
+    row_overrides: dict[str, object],
+    variance_present: bool,
+) -> None:
+    candidate_id = f"fit-{case}"
+    row = _gaussian_row(candidate_id, 0)
+    row.update(row_overrides)
+    dataset_dir = tmp_path / "dataset"
+    run_dir = tmp_path / "run"
+    output_dir = tmp_path / "features"
+    _write_dataset(dataset_dir, [candidate_id])
+    _write_run(run_dir, [row], variance_present=variance_present)
+
+    build_xfit_feature_bundle(
+        dataset_dir=dataset_dir,
+        xfit_run_dir=run_dir,
+        output_dir=output_dir,
+    )
+    artifact_features = np.load(
+        output_dir / "features.npy", allow_pickle=False
+    )
+
+    result = SimpleNamespace(
+        parameters=np.asarray(
+            [[float(row[name]) for name in _GAUSSIAN_PARAMETERS]]
+        ),
+        parameter_names=_GAUSSIAN_PARAMETERS,
+        converged=np.asarray([row["converged"]]),
+        degrees_of_freedom=np.asarray([row["degrees_of_freedom"]]),
+        valid_pixel_fraction=np.asarray([row["valid_pixel_fraction"]]),
+        fractional_null_improvement=np.asarray(
+            [row["fractional_null_improvement"]]
+        ),
+        delta_chi_square=np.asarray([row["delta_chi_square"]]),
+        reduced_chi_square=np.asarray([row["reduced_chi_square"]]),
+        uncertainty_valid=np.asarray([row["uncertainty_valid"]]),
+        standard_errors=np.asarray(
+            [
+                [
+                    float(row[f"{name}_standard_error"])
+                    for name in _GAUSSIAN_PARAMETERS
+                ]
+            ]
+        ),
+        covariance=np.eye(len(_GAUSSIAN_PARAMETERS))[None, ...],
+        model="gaussian",
+        mode="difference",
+        residuals=None,
+    )
+    live_features = transform_xfit_result_features(
+        result,
+        image_shape=(11, 13),
+        variance_present=variance_present,
+    )
+
+    assert live_features.dtype == np.float32
+    assert live_features.tobytes() == artifact_features.tobytes()
+
+
+def test_live_stamp_feature_transform_is_byte_equal_to_artifact(
+    tmp_path: Path,
+) -> None:
+    candidate_id = "fit-stamp"
+    row = _stamp_row(candidate_id, 0)
+    dataset_dir = tmp_path / "dataset"
+    run_dir = tmp_path / "run"
+    output_dir = tmp_path / "features"
+    _write_dataset(dataset_dir, [candidate_id])
+    _write_run(run_dir, [row], model="stamp")
+    build_xfit_feature_bundle(
+        dataset_dir=dataset_dir,
+        xfit_run_dir=run_dir,
+        output_dir=output_dir,
+    )
+    artifact_features = np.load(
+        output_dir / "features.npy", allow_pickle=False
+    )
+    result = SimpleNamespace(
+        parameters=np.asarray(
+            [[float(row[name]) for name in _STAMP_PARAMETERS]]
+        ),
+        parameter_names=_STAMP_PARAMETERS,
+        converged=np.asarray([row["converged"]]),
+        degrees_of_freedom=np.asarray([row["degrees_of_freedom"]]),
+        valid_pixel_fraction=np.asarray([row["valid_pixel_fraction"]]),
+        fractional_null_improvement=np.asarray(
+            [row["fractional_null_improvement"]]
+        ),
+        delta_chi_square=np.asarray([row["delta_chi_square"]]),
+        reduced_chi_square=np.asarray([row["reduced_chi_square"]]),
+        uncertainty_valid=np.asarray([row["uncertainty_valid"]]),
+        standard_errors=np.asarray(
+            [
+                [
+                    float(row[f"{name}_standard_error"])
+                    for name in _STAMP_PARAMETERS
+                ]
+            ]
+        ),
+        covariance=np.eye(len(_STAMP_PARAMETERS))[None, ...],
+        model="stamp",
+        mode="difference",
+    )
+
+    live_features = transform_xfit_result_features(
+        result,
+        image_shape=(11, 13),
+        variance_present=True,
+    )
+
+    assert live_features.tobytes() == artifact_features.tobytes()
 
 
 def _read_json(path: Path) -> dict[str, object]:
