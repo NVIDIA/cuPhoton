@@ -65,6 +65,12 @@ _INPUT_IDENTITY_LIMITATION = (
 class _UniqueKeySafeLoader(yaml.SafeLoader):
     """YAML loader that rejects duplicate mapping keys."""
 
+    def construct_document(self, node: yaml.Node) -> Any:
+        # Merge flattening mutates shared anchors after their validation.
+        # Reset the validation state before constructing each document.
+        self._validated_mapping_nodes: set[int] = set()
+        return super().construct_document(node)
+
 
 def _reject_duplicate_yaml_mapping_keys(
     loader: yaml.SafeLoader,
@@ -173,11 +179,13 @@ def _resolved_yaml_mapping_keys(
 
 
 def _construct_unique_yaml_mapping(
-    loader: yaml.SafeLoader,
+    loader: _UniqueKeySafeLoader,
     node: yaml.MappingNode,
     deep: bool = False,
 ) -> dict[Any, Any]:
-    _reject_duplicate_yaml_mapping_keys(loader, node, deep)
+    _reject_duplicate_yaml_mapping_keys(
+        loader, node, deep, loader._validated_mapping_nodes
+    )
     loader.flatten_mapping(node)
     result: dict[Any, Any] = {}
     for key_node, value_node in node.value:

@@ -239,6 +239,61 @@ pairs:
     assert manifest.pairs[1].target == tmp_path / "target.npy"
 
 
+@pytest.mark.parametrize(
+    ("pairs_yaml", "expected_ids"),
+    [
+        (
+            """  - &defaults
+    id: defaults
+    reference: reference.npy
+    target: target.npy
+  - &base
+    <<: *defaults
+    id: base
+    target: override.npy
+  - <<: *base
+    id: child
+""",
+            ["defaults", "base", "child"],
+        ),
+        (
+            """  - <<: &base
+      <<: &defaults
+        id: defaults
+        reference: reference.npy
+        target: target.npy
+      id: base
+      target: override.npy
+    id: child
+  - *base
+  - *defaults
+""",
+            ["child", "base", "defaults"],
+        ),
+    ],
+    ids=["parent-before-child", "child-before-parent"],
+)
+def test_manifest_yaml_chained_merges_preserve_overrides(
+    tmp_path, pairs_yaml, expected_ids
+) -> None:
+    for name in ("reference.npy", "target.npy", "override.npy"):
+        _write_array(tmp_path / name)
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        "schema: cuphoton.xpois.image-pairs/v1\npairs:\n" + pairs_yaml
+    )
+
+    manifest = load_image_pair_manifest(manifest_path)
+
+    assert [pair.item_id for pair in manifest.pairs] == expected_ids
+    for pair in manifest.pairs:
+        assert pair.reference == tmp_path / "reference.npy"
+        target = (
+            "target.npy" if pair.item_id == "defaults" else "override.npy"
+        )
+        assert pair.target == tmp_path / target
+
+
 def test_manifest_rejects_duplicate_yaml_keys_across_merged_mappings(
     tmp_path,
 ) -> None:
