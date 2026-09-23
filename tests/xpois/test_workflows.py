@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import json
 import shutil
@@ -242,6 +243,91 @@ def test_run_constant_kernel_fit_writes_interactive_and_numeric_review(
         assert (result.run_dir / saved["review_bokeh_html"]).exists()
     else:
         assert "review_bokeh_html" not in saved
+
+
+@pytest.mark.parametrize("bokeh_available", [False, True])
+def test_no_review_preserves_fit_and_skips_review_work(
+    tmp_path: Path, monkeypatch, bokeh_available: bool
+) -> None:
+    if bokeh_available:
+        pytest.importorskip("bokeh")
+    else:
+        original_import = builtins.__import__
+
+        def without_bokeh(name, *args, **kwargs):
+            if name == "bokeh" or name.startswith("bokeh."):
+                raise ModuleNotFoundError(name)
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", without_bokeh)
+
+    image = _compact_source_image((64, 64))
+    reference = tmp_path / "reference.npy"
+    target = tmp_path / "target.npy"
+    np.save(reference, image)
+    np.save(target, image + np.random.default_rng(7).normal(size=image.shape))
+    mask_path = tmp_path / "mask.npy"
+    mask = np.zeros(image.shape, dtype=np.uint16)
+    mask[10, 10] = 1
+    np.save(mask_path, mask)
+    options = dict(
+        reference_path=reference,
+        target_path=target,
+        output_root=tmp_path,
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(9, 9),
+        components=[GaussianBasisComponent(sigma=1.5, degree=0)],
+        variance_path=None,
+        fit_mask_path=None,
+        reference_mask_path=mask_path,
+        target_mask_path=mask_path,
+        mask_policy="strict",
+        background_degree=0,
+        flux_conserve=False,
+        backend="cpu",
+    )
+    reviewed = workflows.run_constant_kernel_fit(name="reviewed", **options)
+    assert reviewed.summary["review_enabled"] is True
+    assert "review_hotspots_metadata" in reviewed.summary["saved"]
+    assert (
+        "review_bokeh_html" in reviewed.summary["saved"]
+    ) == bokeh_available
+
+    def unexpected_review(*args, **kwargs):
+        pytest.fail("Review-only work ran with review disabled")
+
+    monkeypatch.setattr(workflows, "write_review_metadata", unexpected_review)
+    monkeypatch.setattr(
+        workflows, "write_interactive_review_artifact", unexpected_review
+    )
+    monkeypatch.setattr(np, "nanpercentile", unexpected_review)
+    deferred = workflows.run_constant_kernel_fit(
+        name="deferred", review=False, **options
+    )
+    assert deferred.summary["review_enabled"] is False
+    assert (
+        deferred.summary["timings_sec"]["review_generation_and_write_sec"]
+        == 0.0
+    )
+    assert not list((deferred.run_dir / "artifacts").glob("review_*"))
+    for key, relative_path in deferred.summary["saved"].items():
+        assert not key.startswith("review_")
+        assert (deferred.run_dir / relative_path).read_bytes() == (
+            reviewed.run_dir / reviewed.summary["saved"][key]
+        ).read_bytes()
+    for key in (
+        "fit_pixel_count",
+        "chi2",
+        "dof",
+        "kernel_sum",
+        "residual_mean",
+        "residual_std",
+        "all_pixels_residual_mean",
+        "all_pixels_residual_std",
+        "fit_region",
+    ):
+        assert deferred.summary[key] == reviewed.summary[key]
 
 
 def test_evaluate_subtraction_run_reports_fit_region_metrics(

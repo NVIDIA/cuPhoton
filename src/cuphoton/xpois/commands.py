@@ -387,6 +387,13 @@ class _KernelSolveCommand(_KernelSolveOptionsCommand):
 
 class _FitCommand(_KernelSolveCommand):
     backend = None
+    no_review = None
+
+    class NoReviewArg(BoolInvariant):
+        _arg = "--no-review"
+        _help = "Skip review metadata and HTML; retain fitted artifacts."
+        _mandatory = False
+        _default = False
 
     class BackendArg(SetInvariant):
         _arg = "--backend"
@@ -444,6 +451,7 @@ class FitKernelCommand(_FitCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            review=not self.no_review,
             workflow_name="fit_kernel",
             run_prefix="fit-kernel",
         )
@@ -489,6 +497,7 @@ class SubtractCommand(_FitCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            review=not self.no_review,
             workflow_name="subtract",
             run_prefix="subtract",
         )

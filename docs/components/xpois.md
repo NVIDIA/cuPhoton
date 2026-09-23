@@ -62,6 +62,21 @@ a subtraction.
 
 ## Compare and review
 
+Both fitting commands generate numeric hotspot metadata and, when Bokeh is
+installed, an interactive HTML review by default. Add `--no-review` to skip
+these artifacts and their preparation. The summary records
+`review_enabled=false` and retains the fitted arrays, fit metrics, mask
+metadata, and input paths. Keep the input files available to generate the
+HTML later with `review-bokeh --run-dir /path/to/run`.
+
+For large frames, including 4096 by 4096 images, inspect the summary's
+`review_generation_and_write_sec` separately from `solve_sec`: review work
+can exceed the solve time. Automatic stamp selection also processes the
+image and contributes to `preprocess_sec`; `--no-review` still performs that
+selection when requested. Hotspot significance uses the robust residual
+noise measured inside the fit region, so changing the fit mask changes the
+noise unit used by the review.
+
 Residual-hotspot and mask-component summaries group labeled foreground
 pixels once, avoiding a full-image scan for every component. Component
 statistics retain raster order and the input residual dtype, including
