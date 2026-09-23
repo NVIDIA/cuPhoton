@@ -310,7 +310,7 @@ def json_benchmark(monkeypatch, tmp_path):
     phases = []
 
     def helper_probe():
-        assert not phases, "capture capabilities before timed phases"
+        assert phases[-1].phase == "batch_to_device_stream"
         return True
 
     monkeypatch.setattr(bench, "cpp_helper_available", helper_probe)
@@ -580,6 +580,65 @@ def test_benchmark_without_json_keeps_return_and_text_output(
     printed = []
     assert bench.run_benchmark([path], out=printed.append) == phases
     assert any("batch_to_device_stream" in line for line in printed)
+
+
+def test_json_reporting_preserves_cold_native_plan_timings(
+    monkeypatch, tmp_path
+):
+    import json
+
+    import cuphoton.xdr.nvcomp_batch as nvcomp_batch
+
+    bench = _load_benchmark_module()
+    path = tmp_path / "input.fits"
+    path.touch()
+    monkeypatch.setattr(bench, "gpu_available", lambda: True)
+    monkeypatch.setattr(bench, "cp", SimpleNamespace(__version__="test"))
+    monkeypatch.setattr(bench, "is_gds_active", lambda: False)
+    monkeypatch.setattr(bench.storage_cache, "_enabled", False)
+    state = {"clock": 0.0, "loaded": False, "imports": 0}
+
+    def native_plan(*args):
+        state["clock"] += 0.005
+        return []
+
+    extension = SimpleNamespace(
+        plan_native_files=native_plan, NativeBatchBuilder=object
+    )
+
+    def load_extension():
+        if not state["loaded"]:
+            state["clock"] += 0.125
+            state["loaded"] = True
+            state["imports"] += 1
+        return extension
+
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", load_extension)
+    monkeypatch.setattr(bench.time, "perf_counter", lambda: state["clock"])
+    monkeypatch.setattr(
+        bench,
+        "bench_batch_load",
+        lambda *args, **kwargs: bench.make_result("batch", [1.0], 0, ""),
+    )
+    measured = []
+    output = tmp_path / "report.json"
+    for destination in (None, output):
+        state.update(clock=0.0, loaded=False, imports=0)
+        results = bench.run_benchmark(
+            [path],
+            iterations=2,
+            output_json=destination,
+            out=lambda _line: None,
+        )
+        measured.append(results[0].elapsed_ms)
+        assert state["imports"] == 1
+        assert results[0].ok
+    assert measured[0] == pytest.approx(67.5)
+    assert measured[1] == pytest.approx(measured[0])
+    report = json.loads(output.read_text())
+    assert report["phases"][0]["elapsed_ms"] == measured[1]
+    assert report["capabilities"]["cpp_helper_available"] is True
+    assert report["options"]["native_batcher_enabled"] is True
 
 
 def test_benchmark_cli_reports_invalid_json_destination(

@@ -547,7 +547,8 @@ def run_benchmark(
     """Run the FITS benchmark and optionally write a versioned JSON report.
 
     ``output_json`` requires an existing parent directory. Report metadata
-    sits outside phase timings; the return value remains a list of phases.
+    is collected after the timed phases so it cannot warm their native
+    helpers; the return value remains a list of phases.
     """
 
     paths = resolve_paths(
@@ -590,50 +591,6 @@ def run_benchmark(
             f"GDS={'ACTIVE' if gds_active else 'COMPAT-FALLBACK'}, "
             f"{storage_note}"
         )
-        report = None
-        if report_file is not None:
-            batcher_error = None
-            try:
-                batcher_enabled = (
-                    _native_batch_builder_class(resolved_native_batcher)
-                    is not None
-                )
-            except RuntimeError as exc:
-                batcher_enabled = None
-                batcher_error = str(exc)
-            report = {
-                "schema_version": 1,
-                "versions": {
-                    "cuphoton": __version__,
-                    "python": platform.python_version(),
-                    "cupy": cp.__version__,
-                    "kvikio": kvikio_version,
-                    "nvcomp": _nvcomp_version(),
-                },
-                "capabilities": {
-                    "cpp_helper_available": cpp_helper_available(),
-                    "gds_active": gds_active,
-                    "gds_probe": "cuphoton.xdr.is_gds_active",
-                },
-                "storage": {
-                    "mode": storage_mode,
-                    "requested_mock_storage": mock_storage_kind,
-                },
-                "options": {
-                    "hdu_indices": list(hdu_indices),
-                    "iterations": iterations,
-                    "prefetch_depth": prefetch_depth,
-                    "decode_batch_files": decode_batch_files,
-                    "batch_queue_depth": batch_queue_depth,
-                    "native_read_threads": native_read_threads,
-                    "native_plan_threads": native_plan_threads,
-                    "native_batcher": native_batcher,
-                    "native_batcher_enabled": batcher_enabled,
-                    "native_batcher_error": batcher_error,
-                    "skip_gds_read": skip_gds_read,
-                    "max_files": max_files,
-                },
-            }
         if mock_storage_kind:
             for path in paths:
                 storage_cache.preload(path)
@@ -689,7 +646,49 @@ def run_benchmark(
             )
         )
 
-        if report is not None:
+        if report_file is not None:
+            batcher_error = None
+            try:
+                batcher_enabled = (
+                    _native_batch_builder_class(resolved_native_batcher)
+                    is not None
+                )
+            except RuntimeError as exc:
+                batcher_enabled = None
+                batcher_error = str(exc)
+            report = {
+                "schema_version": 1,
+                "versions": {
+                    "cuphoton": __version__,
+                    "python": platform.python_version(),
+                    "cupy": cp.__version__,
+                    "kvikio": kvikio_version,
+                    "nvcomp": _nvcomp_version(),
+                },
+                "capabilities": {
+                    "cpp_helper_available": cpp_helper_available(),
+                    "gds_active": gds_active,
+                    "gds_probe": "cuphoton.xdr.is_gds_active",
+                },
+                "storage": {
+                    "mode": storage_mode,
+                    "requested_mock_storage": mock_storage_kind,
+                },
+                "options": {
+                    "hdu_indices": list(hdu_indices),
+                    "iterations": iterations,
+                    "prefetch_depth": prefetch_depth,
+                    "decode_batch_files": decode_batch_files,
+                    "batch_queue_depth": batch_queue_depth,
+                    "native_read_threads": native_read_threads,
+                    "native_plan_threads": native_plan_threads,
+                    "native_batcher": native_batcher,
+                    "native_batcher_enabled": batcher_enabled,
+                    "native_batcher_error": batcher_error,
+                    "skip_gds_read": skip_gds_read,
+                    "max_files": max_files,
+                },
+            }
             report["ok"] = all(result.ok for result in results)
             report["workload"] = {
                 "files": [str(path.resolve()) for path in paths],
