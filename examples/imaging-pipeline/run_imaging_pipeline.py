@@ -10,9 +10,17 @@ plot one synthetic template/science pair.
 
 Run from the repository root:
 
+    uv sync --locked --extra gpu --extra viz
+    bash src/cuphoton/xdr/src/build.sh
     export WORK_DIR="$PWD/blog-run"
     mkdir -p "$WORK_DIR"/{fits,figs}
-    uv run python examples/imaging-pipeline/run_imaging_pipeline.py
+    uv run --locked --extra gpu --extra viz python \
+        examples/imaging-pipeline/run_imaging_pipeline.py
+
+The full walkthrough requires Linux and a CUDA 13-capable NVIDIA GPU.
+The XDR load step allocates a CuPy batch and has no CPU fallback.
+See docs/components/xdr.md for the native extension's CUDA headers and
+thread-safe CFITSIO build prerequisites.
 
 If WORK_DIR is unset, outputs go to ./blog-run. The notebook of the same
 sections is examples/imaging-pipeline/run_imaging_pipeline.ipynb.
@@ -33,6 +41,8 @@ from cuphoton.xdr import batch_to_device
 from cuphoton.xfit import GaussianDipoleModel, fit_dipoles
 from cuphoton.xpois import GaussianBasisComponent, solve_constant_kernel
 from cuphoton.xrep import (
+    BBox,
+    Grid,
     build_stack_spec_from_fits,
     make_north_up_wcs,
     reproject_stack,
@@ -185,6 +195,8 @@ print(images.shape, images.dtype, images.device)
 native, spec = build_stack_spec_from_fits(
     [WORK / "fits" / "template.fits", WORK / "fits" / "science.fits"],
     hdu=1,
+    grid=Grid.from_wcs(wcs_t),
+    output_bbox=BBox(0, 0, SHAPE[1], SHAPE[0]),
     interpolation="lanczos3",
     mapping_grid_step=16,
 )
@@ -215,9 +227,17 @@ half = STAMP // 2
 cy, cx = 123, 112  # midpoint of the planted mover
 stamp = fit.residual[cy - half : cy + half + 1, cx - half : cx + half + 1]
 
-# Planted lobes in stamp-centered coordinates (x, y).
-truth = np.array([[14.0, 2.2, 2.2, 0.0, 4.0, 3.5, -4.0, -3.0]])
-initial = truth.copy()
+# Planted centers in stamp coordinates: x_pos, y_pos, x_neg, y_neg.
+truth_xy = np.array(
+    [
+        MOVER_NEW[1] - cx,
+        MOVER_NEW[0] - cy,
+        MOVER_OLD[1] - cx,
+        MOVER_OLD[0] - cy,
+    ]
+)
+# Amplitude, widths and angle are guesses after seeing and subtraction.
+initial = np.array([[14.0, 2.2, 2.2, 0.0, *truth_xy]])
 initial[0, 0] *= 0.85
 initial[0, 4:] += (0.35, -0.25, -0.30, 0.20)
 
@@ -226,8 +246,12 @@ result = fit_dipoles(
     stamp[None], model=model, initial=initial, backend="auto"
 )
 print(result.backend, result.device, bool(result.converged[0]))
-for name, t, p in zip(model.parameter_names, truth[0], result.parameters[0]):
-    print(f"{name:10s}  truth={t:7.3f}  fit={p:7.3f}")
+for name, start, fitted in zip(
+    model.parameter_names, initial[0], result.parameters[0]
+):
+    print(f"{name:10s}  initial={start:7.3f}  fit={fitted:7.3f}")
+print("planted centers (x_pos, y_pos, x_neg, y_neg):", truth_xy)
+print("center errors (pixels):", result.parameters[0, 4:] - truth_xy)
 
 # === PLOT ===
 host = images.get()
