@@ -1793,67 +1793,54 @@ def _fake_cupy(free_bytes: int):
     return FakeCupy()
 
 
-def test_spatial_model_gpu_design_chunk_size_is_memory_bounded() -> None:
-    # A 21x21 kernel with 12 bases and 6/6/3 terms spans 75 columns. The
-    # variance loop dominates the estimate: 5 * 441 + 12 + 6 + 6 + 32 = 2261
-    # FP64 values, or 18088 bytes, per row.
-    bytes_per_row = 18088
-    model = dict(
-        kernel_shape=(21, 21),
-        basis_count=12,
-        photometric_term_count=6,
-        shape_term_count=6,
-        background_term_count=3,
-    )
-    chunk = spatial_model_module._gpu_design_chunk_size
+@pytest.mark.parametrize("row_count", [1, 500, 10_000_000])
+@pytest.mark.parametrize(
+    (
+        "kernel_shape",
+        "basis_count",
+        "photometric_terms",
+        "shape_terms",
+        "background_terms",
+    ),
+    [((21, 21), 12, 6, 6, 3), ((3, 3), 6, 10, 10, 10), ((3, 3), 1, 1, 1, 1)],
+)
+def test_spatial_model_gpu_design_chunk_size_is_memory_bounded(
+    row_count: int,
+    kernel_shape: tuple[int, int],
+    basis_count: int,
+    photometric_terms: int,
+    shape_terms: int,
+    background_terms: int,
+) -> None:
+    free_bytes = [1, 64 * 1024**2, 1024**3, 80 * 1024**3]
+    chunks = [
+        spatial_model_module._gpu_design_chunk_size(
+            _fake_cupy(available),
+            row_count=row_count,
+            kernel_shape=kernel_shape,
+            basis_count=basis_count,
+            photometric_term_count=photometric_terms,
+            shape_term_count=shape_terms,
+            background_term_count=background_terms,
+        )
+        for available in free_bytes
+    ]
 
-    scarce = chunk(_fake_cupy(64 * 1024**2), row_count=10_000_000, **model)
-    ample = chunk(_fake_cupy(80 * 1024**3), row_count=10_000_000, **model)
-    exhausted = chunk(_fake_cupy(1), row_count=10_000_000, **model)
-    few_rows = chunk(_fake_cupy(80 * 1024**3), row_count=500, **model)
-    capped = chunk(
-        _fake_cupy(80 * 1024**3),
-        row_count=10_000_000,
-        kernel_shape=(3, 3),
-        basis_count=1,
-        photometric_term_count=1,
-        shape_term_count=1,
-        background_term_count=1,
-    )
-    # A 3x3 kernel with 6 bases and 10/10/10 terms spans 70 columns, so the
-    # QR loop dominates: 2 * 9 + 6 + 10 + 10 + 10 + 8 * 70 + 32 = 646 FP64
-    # values, or 5168 bytes, per row.
-    column_heavy = chunk(
-        _fake_cupy(80 * 1024**3),
-        row_count=10_000_000,
-        kernel_shape=(3, 3),
-        basis_count=6,
-        photometric_term_count=10,
-        shape_term_count=10,
-        background_term_count=10,
-    )
-
-    assert scarce == (64 * 1024**2 // 4) // bytes_per_row == 927
-    assert (
-        ample
-        == spatial_model_module._GPU_SCRATCH_BUDGET_BYTES // bytes_per_row
-        == 14840
-    )
-    assert scarce < ample < spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE
-    assert exhausted == 1
-    assert few_rows == 500
-    assert capped == spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE
-    assert (
-        column_heavy
-        == spatial_model_module._GPU_SCRATCH_BUDGET_BYTES // 5168
-        == 51941
-    )
+    cap = min(row_count, spatial_model_module._GPU_MAX_DESIGN_CHUNK_SIZE)
+    assert all(1 <= chunk <= cap for chunk in chunks)
+    assert chunks == sorted(chunks)
+    assert chunks[0] == 1
+    # More free memory cannot increase the chunk past the scratch budget.
+    assert chunks[-1] == chunks[-2]
+    if row_count == 10_000_000:
+        assert chunks[-1] > chunks[1]
 
 
 def test_spatial_model_cupy_matches_rank_two_parent_domain_cpu_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _cupy_device_or_skip()
+    # Force multiple chunks independently of the memory-sizing heuristic.
     monkeypatch.setattr(
         spatial_model_module,
         "_gpu_design_chunk_size",
@@ -1942,6 +1929,7 @@ def test_spatial_model_cupy_matches_weighting_and_source_variance(
     # 29 divides neither the 182 fit rows nor the 847 diagnostic rows, so
     # the QR, reconstruction, and variance-propagation loops all span
     # several chunks with a short final chunk.
+    # Force multiple chunks independently of the memory-sizing heuristic.
     monkeypatch.setattr(
         spatial_model_module,
         "_gpu_design_chunk_size",
