@@ -302,7 +302,9 @@ checksum when content identity matters.
 
 Work is assigned as deterministic input-byte-balanced whole-item shards.
 Scientific arrays stay on shared storage; only compact rank or worker results
-are aggregated. Runs are immutable, so use a new `--name` for every attempt.
+are aggregated. Runs are immutable. Use a new `--name` for each new attempt.
+The marker-only recovery retry described below must reuse the existing
+`--name` and `--attempt-id`.
 
 ### Launch with MPI
 
