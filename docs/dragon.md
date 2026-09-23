@@ -128,7 +128,7 @@ worker CPU budget and runtime versions constant. Rotate run order and retain
 the first command round as well as subsequent rounds. Record separately:
 
 - Launcher-to-exit wall time, including startup, warmup and shutdown.
-- Time from worker entry to readiness.
+- Time from harness entry until all workers are ready.
 - Whole-batch time from release through collection.
 - Worker execution time, with the treatment of output and receipt writes.
 
