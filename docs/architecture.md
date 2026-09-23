@@ -76,9 +76,13 @@ Exposure {
     mask[y, x]        // instrument flags, such as saturation or bad pixels
     wcs               // pixel-to-sky coordinate mapping
     psf               // image pattern produced by one point source
-    time, filter, calibration, provenance
+    exposure_time, filter, gain, calibration, provenance // caller metadata
 }
 ```
+
+The pixel and reprojection APIs read pixels and WCS information. Exposure
+time, filter, gain, calibration, and exposure provenance remain caller-managed
+metadata.
 
 FITS files can hold images and metadata in separate header/data units (HDUs).
 An image HDU and a variance HDU may have the same shape but different meanings.

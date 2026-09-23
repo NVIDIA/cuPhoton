@@ -678,4 +678,5 @@ wall time, coordinator or rank work time, and per-item phase timings.
 Select and configure the launcher before each batch. Each GPU processes
 complete image pairs. After failed work or a dead process, start a new run
 and inspect its terminal status before consuming outputs. The exact
-marker-recovery retry described above reuses a completed run's summary.
+marker-recovery retry described above repairs the terminal marker and exits
+nonzero with an error that names the existing immutable summary.

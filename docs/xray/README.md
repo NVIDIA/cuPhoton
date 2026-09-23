@@ -86,8 +86,9 @@ identities. Frequency, amplitude, and FFT-frequency arrays match exactly in
 the batch-versus-row regression cases; `fft_all` can differ by rounding from
 the batched cuFFT plan (the normalized-trace tests use `atol=1e-15`).
 
-`--fit-diagnostics summary` writes one status-aware record for each processed
-tile row, covering all of that row's x pixels. The summary includes the
+`--fit-diagnostics summary` writes one status-aware record per detector row
+within each processed tile, covering the tile's `tile_x_start` to
+`tile_x_stop` x range (exclusive of the stop). The summary includes the
 scale-free residual ratio and P1/P2 conditioning. `full` also
 retains the fitted time axis, traces, reconstructions, and flattened modal
 arrays; size the study region to fit the resulting sidecar in memory and
