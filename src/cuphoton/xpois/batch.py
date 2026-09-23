@@ -28,6 +28,7 @@ from .data import (
     VARIANCE_EXTENSION_NAMES,
     load_fit_positions,
 )
+from .solver_options import resolve_spatial_als_config
 
 IMAGE_PAIR_MANIFEST_SCHEMA = "cuphoton.xpois.image-pairs/v1"
 IMAGE_PAIR_MANIFEST_SCHEMA_V2 = "cuphoton.xpois.image-pairs/v2"
@@ -501,9 +502,7 @@ class BatchFitOptions:
             raise ValueError(f"unsupported fit backend: {self.backend}")
         if self.solver not in _SUPPORTED_SOLVERS:
             raise ValueError(f"unsupported solver: {self.solver}")
-        from .workflows import _resolve_spatial_als_config
-
-        _resolve_spatial_als_config(
+        resolve_spatial_als_config(
             self.solver,
             background_degree=self.background_degree,
             flux_conserve=self.flux_conserve,

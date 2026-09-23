@@ -37,6 +37,7 @@ from .ois import (
 )
 from .review import identify_residual_hotspots, write_review_metadata
 from .review_bokeh import write_interactive_review_artifact
+from .solver_options import resolve_spatial_als_config
 from .spatial_als import (
     SpatialALSConfig,
     SpatialALSFitResult,
@@ -153,7 +154,7 @@ def run_constant_kernel_fit(
         raise ValueError(
             "solver 'spatial-als' supports only auto, cpu, and cupy backends"
         )
-    als_config = _resolve_spatial_als_config(
+    als_config = resolve_spatial_als_config(
         solver,
         background_degree=background_degree,
         flux_conserve=flux_conserve,
@@ -749,7 +750,7 @@ def benchmark_constant_kernel_backends(
                 "solver 'spatial-als' supports only cpu and cupy benchmark "
                 "backends; unsupported: " + ", ".join(unsupported)
             )
-    als_config = _resolve_spatial_als_config(
+    als_config = resolve_spatial_als_config(
         solver,
         background_degree=background_degree,
         flux_conserve=flux_conserve,
@@ -1426,45 +1427,6 @@ def _solve_benchmark_model(
         fit_mask=fit_mask,
         config=als_config,
         backend=backend,
-    )
-
-
-def _resolve_spatial_als_config(
-    solver: str,
-    *,
-    background_degree: int,
-    flux_conserve: bool,
-    spatial_degree: int | None,
-    als_iterations: int | None,
-    als_tolerance: float | None,
-    als_regularization: float | None,
-) -> SpatialALSConfig | None:
-    """Build the spatial ALS config, rejecting its options for other solvers.
-
-    ``None`` options resolve to the :class:`SpatialALSConfig` defaults so the
-    dataclass remains the single source of those values.
-    """
-
-    spatial_options = {
-        "spatial_degree": spatial_degree,
-        "max_iterations": als_iterations,
-        "tolerance": als_tolerance,
-        "regularization": als_regularization,
-    }
-    if solver != "spatial-als":
-        if any(value is not None for value in spatial_options.values()):
-            raise ValueError(
-                "spatial ALS options require solver='spatial-als'"
-            )
-        return None
-    return SpatialALSConfig(
-        background_degree=background_degree,
-        flux_conserve=flux_conserve,
-        **{
-            key: value
-            for key, value in spatial_options.items()
-            if value is not None
-        },
     )
 
 
