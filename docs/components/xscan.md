@@ -240,6 +240,133 @@ The `*.blackwell.example.yaml` files demonstrate throughput-oriented settings
 for recent NVIDIA GPUs. They are starting points, not universal performance
 recommendations.
 
+## Persistent XPOIS, xFit and XScan pipeline
+
+The Python API in `cuphoton.xscan.device_pipeline` runs complete image pairs
+through constant-kernel XPOIS, stamp extraction, Gaussian difference-mode
+xFit, feature conversion and triplet XScan inference. A `DeviceWorkerContext`
+loads the model once and accepts serial jobs on one CUDA device. This path
+requires CUDA 13, CuPy and Torch (`uv sync --locked --extra gpu`).
+
+Use a triplet fusion checkpoint and the exact `schema.json` from its training
+xFit feature bundle. The schema must describe unmasked, unweighted Gaussian
+difference fits with the configured stamp shape. Pipeline inference disables
+AMP, TF32, compilation and cuDNN benchmarking through an explicit checkpoint
+policy. This policy does not enable PyTorch's deterministic-algorithm mode.
+
+Prepare descriptors from caller-owned NPY images; this example uses an
+existing 63-pixel checkpoint and an interior candidate in images of at least
+95 by 95 pixels. Change the candidate coordinates and kernel settings for
+your data. Optional item `variance` and `fit_mask` descriptors apply to XPOIS;
+xFit consumes unweighted difference stamps.
+
+```python
+from pathlib import Path
+
+import numpy as np
+
+from cuphoton.core.artifacts import file_sha256
+from cuphoton.xscan.device_pipeline import (
+    DevicePipelineCandidate,
+    DevicePipelineConfig,
+    DevicePipelineItem,
+    DeviceWorkerContext,
+    DeviceXPOISPipelineConfig,
+    NpyArrayDescriptor,
+    decode_device_pipeline_evidence,
+    run_device_pipeline_item,
+)
+
+
+def describe(path):
+    path = Path(path).resolve()
+    array = np.load(path, allow_pickle=False, mmap_mode="r")
+    return NpyArrayDescriptor(
+        path=str(path), sha256=file_sha256(path),
+        shape=tuple(array.shape), dtype=array.dtype.str,
+    )
+
+
+checkpoint = Path("/path/to/training-run").resolve()
+schema = Path("/path/to/training-features/schema.json").resolve()
+config = DevicePipelineConfig(
+    device="cuda:0",
+    checkpoint_dir=str(checkpoint),
+    checkpoint_sha256=file_sha256(checkpoint / "checkpoint.pt"),
+    feature_schema_path=str(schema),
+    feature_schema_sha256=file_sha256(schema),
+    stamp_shape=(63, 63),
+    decision_threshold=0.5,
+    xpois=DeviceXPOISPipelineConfig(
+        kernel_shape=(15, 15), basis_sigmas=(1.5,), basis_degrees=(0,),
+    ),
+)
+items = tuple(
+    DevicePipelineItem(
+        item_id=f"pair-{index}",
+        reference=describe(reference), target=describe(target),
+        candidates=(DevicePipelineCandidate(
+            candidate_id=f"candidate-{index}",
+            center_x=47, center_y=47, source_index=0,
+        ),),
+    )
+    for index, (reference, target) in enumerate([
+        ("/path/to/reference-0.npy", "/path/to/target-0.npy"),
+        ("/path/to/reference-1.npy", "/path/to/target-1.npy"),
+    ])
+)
+```
+
+For direct execution, import Torch before CuPy calls CUDA, bind both libraries
+to the configured device, and retain the context between items:
+
+```python
+import torch
+import cupy as cp
+
+torch.cuda.set_device(config.device_id)
+cp.cuda.Device(config.device_id).use()
+context = DeviceWorkerContext.initialize(config)
+results = [run_device_pipeline_item(item, context) for item in items]
+arrays = decode_device_pipeline_evidence(
+    results[0].scientific_evidence, config=config,
+)
+```
+
+For Dragon, use the descriptor preparation in a fresh coordinator process
+without importing Torch or CuPy there. Run the following entry point under
+your site's installed Dragon launcher, with all input, checkpoint, schema
+and output paths accessible on every worker:
+
+```python
+from cuphoton.xscan.dragon_pipeline import run_dragon_device_pipeline
+
+if __name__ == "__main__":
+    batch = run_dragon_device_pipeline(
+        items=items, config=config,
+        output_root=Path("/path/to/pipeline-runs"), max_workers=1,
+    )
+    if batch.status != "success":
+        raise RuntimeError(f"Pipeline failed: {batch.run_dir}")
+    print(batch.run_dir)
+```
+
+Dragon places one worker on each selected GPU and maps it to local `cuda:0`.
+Each worker reuses its context for complete image-pair jobs; increase
+`max_workers` to use more GPUs. Candidate order is preserved within each
+item. Workers validate placement before loading Torch and probing CuPy.
+Results include predictions, configuration/input hashes and compact
+scientific evidence; Dragon saves each result in
+`items/<item_id>/summary.json` and checks it again in the coordinator.
+The evidence decoder returns the 22 named arrays for comparison.
+
+The pipeline retains device owners through the blocking terminal copy and
+synchronizes failed work before reuse. Failed cleanup makes the context
+unusable. Transfer receipts count pipeline-owned uploads and the packed
+terminal download; internal XPOIS/xFit control transfers are outside that
+count. Timings are host elapsed times, so distinguish model initialization,
+first-item compilation and warmed context reuse when comparing runs.
+
 ## Review workflow
 
 ```bash
