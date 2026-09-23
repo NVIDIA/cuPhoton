@@ -2814,3 +2814,302 @@ def test_coordinator_rejects_oversized_arguments_before_init(
         }
     ]
     assert UninitializedGroup.last_closed
+
+
+def _install_round_runtime(monkeypatch, *, mutate=None, close_failure=False):
+    """Run persistent targets in threads with CUDA and Dragon faked."""
+    import threading
+
+    state = SimpleNamespace(
+        groups=[],
+        queues=[],
+        calls=[],
+        preflights=[],
+        initialized=[],
+        local=threading.local(),
+    )
+
+    class RoundQueue(_FakeQueue):
+        def __init__(self, maxsize=0, policy=None):
+            super().__init__(maxsize=maxsize)
+            self.policy = policy
+            self.closed = False
+            state.queues.append(self)
+
+        def put(self, value, block=True, timeout=None):
+            values = [value]
+            if self.policy is None and mutate is not None:
+                values = mutate(value)
+            for message in values:
+                super().put(message, block=block, timeout=timeout)
+
+        def close(self):
+            self.closed = True
+            if close_failure and self.policy is None:
+                raise RuntimeError("synthetic result queue close failure")
+
+    class RoundGroup(_FakeGroup):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.threads = []
+            self.stopped = False
+            self.closed = False
+            state.groups.append(self)
+
+        def start(self):
+            def invoke(index, template):
+                try:
+                    template.target(*template.args)
+                except Exception:
+                    self.exit_status.append((1000 + index, 1))
+                else:
+                    self.exit_status.append((1000 + index, 0))
+
+            for index, template in enumerate(self.templates):
+                thread = threading.Thread(
+                    target=invoke, args=(index, template)
+                )
+                thread.start()
+                self.threads.append(thread)
+
+        def join(self, timeout=None):
+            deadline = dragon_module.time.monotonic() + timeout
+            for thread in self.threads:
+                thread.join(max(0, deadline - dragon_module.time.monotonic()))
+            if any(thread.is_alive() for thread in self.threads):
+                raise TimeoutError("fake group join timed out")
+
+        def stop(self, patience=5.0):
+            self.stopped = True
+            for template in self.templates:
+                try:
+                    template.args[6].put_nowait(None)
+                except queue.Full:
+                    pass
+            for thread in self.threads:
+                thread.join(patience)
+            assert not any(thread.is_alive() for thread in self.threads)
+
+        def close(self, patience=5.0):
+            self.closed = True
+
+    def preflight(
+        placement, *, require_clean_cuda_imports, allow_loopback_alias
+    ):
+        del allow_loopback_alias
+        state.local.placement = placement
+        state.preflights.append(
+            (placement.worker_id, require_clean_cuda_imports)
+        )
+        return placement.host, str(placement.gpu_id)
+
+    def identity(backend):
+        placement = state.local.placement
+        state.initialized.append(placement.worker_id)
+        return _valid_shard_result((), placement, backend=backend)[
+            "provenance"
+        ]["gpu"]
+
+    def item_runner(item, output_dir, options):
+        state.calls.append(
+            (
+                state.local.placement.worker_id,
+                output_dir.parent.parent.name,
+                threading.get_ident(),
+            )
+        )
+        output_dir.mkdir(parents=True)
+        atomic_write_json(output_dir / "summary.json", {})
+        return {
+            "run_dir": str(output_dir),
+            "summary_path": str(output_dir / "summary.json"),
+            "solver": options.solver,
+            "requested_backend": options.backend,
+            "backend": options.backend,
+            "device": "fake-gpu",
+            "runtime": {},
+            "timings_sec": {"solve": 0.1},
+            "wall_sec": {"item_runner": 0.2},
+        }
+
+    monkeypatch.setattr(
+        dragon_module, "_validate_worker_placement", preflight
+    )
+    monkeypatch.setattr(dragon_module, "_collect_gpu_identity", identity)
+    monkeypatch.setattr(
+        dragon_module.socket, "gethostname", lambda: "fake-node"
+    )
+    monkeypatch.setattr(dragon_module, "run_image_pair_item", item_runner)
+    monkeypatch.setattr(
+        dragon_module,
+        "_load_dragon_api",
+        lambda: _DragonAPI(
+            System=_FakeSystem,
+            Node=_FakeNode,
+            Policy=_FakePolicy,
+            ProcessGroup=RoundGroup,
+            ProcessTemplate=_FakeTemplate,
+            Queue=RoundQueue,
+        ),
+    )
+    return state
+
+
+def _run_round_test(
+    tmp_path, *, warmup=1, measure=2, worker_count=2, worker_timeout=10.0
+):
+    from cuphoton.core.benchmark import BenchmarkOptions
+
+    manifest = _write_fake_manifest(tmp_path, item_ids=("one", "two"))
+    return run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "runs",
+        run_id="repeated",
+        max_workers=worker_count,
+        result_timeout_sec=0.2,
+        worker_timeout_sec=worker_timeout,
+        options=_options(),
+        benchmark=BenchmarkOptions(
+            warmup_rounds=warmup, measure_rounds=measure
+        ),
+    )
+
+
+def test_benchmark_keeps_placed_workers_alive_and_audits_all_rounds(
+    monkeypatch, tmp_path
+):
+    state = _install_round_runtime(monkeypatch)
+    result = _run_round_test(tmp_path)
+
+    assert result.status == "success", result.summary
+    assert len(state.groups) == 1
+    assert len(state.groups[0].templates) == 2
+    assert state.groups[0].closed and not state.groups[0].stopped
+    assert all(channel.closed for channel in state.queues)
+    assert sorted(state.initialized) == [0, 1]
+    assert [
+        channel.policy.host_name for channel in state.queues if channel.policy
+    ] == ["fake-node", "fake-node"]
+    expected_rounds = ["warmup-0000", "measure-0000", "measure-0001"]
+    for worker_id in range(2):
+        calls = [call for call in state.calls if call[0] == worker_id]
+        assert [call[1] for call in calls] == expected_rounds
+        assert len({call[2] for call in calls}) == 1
+        assert [
+            clean for worker, clean in state.preflights if worker == worker_id
+        ] == [True, False, False, False]
+    report = result.summary["benchmark"]
+    assert [
+        receipt["round_id"] for receipt in report["rounds"]
+    ] == expected_rounds
+    assert report["measured_batch_wall_sec"] is not None
+    assert result.summary["coordinator_timings_sec"]["readiness_sec"] > 0
+    record_run_ids = []
+    for receipt in report["rounds"]:
+        summary = json.loads(
+            (result.run_dir / receipt["summary_path"]).read_text()
+        )
+        assert summary["terminal_record_audit"]["ok"]
+        assert summary["shard_result_audit"]["ok"]
+        assert summary["parent_run_id"] == result.run_id
+        assert not (
+            result.run_dir / "rounds" / receipt["round_id"] / "receipts"
+        ).exists()
+        record = json.loads(
+            (
+                result.run_dir
+                / "rounds"
+                / receipt["round_id"]
+                / "records"
+                / "one.json"
+            ).read_text()
+        )
+        record_run_ids.append(record["run_id"])
+        assert record["run_id"] == summary["run_id"]
+    assert len(set(record_run_ids)) == 3
+    assert not (result.run_dir / "items").exists()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "ready-duplicate",
+        "wrong-round",
+        "missing-round",
+        "failed-round",
+        "changed-worker",
+        "invalid-duration",
+    ],
+)
+def test_benchmark_rejects_bad_receipts_and_preserves_partial_evidence(
+    monkeypatch, tmp_path, corruption
+):
+    def mutate(message):
+        if corruption == "ready-duplicate" and message["kind"] == "ready":
+            return [message, message]
+        if message["kind"] == "round":
+            if corruption == "wrong-round":
+                return [{**message, "round_id": "measure-9999"}]
+            if corruption == "missing-round":
+                return []
+            if corruption == "failed-round":
+                return [{**message, "status": "failed"}]
+            if corruption == "changed-worker":
+                result = dict(message["result"])
+                result["provenance"] = {
+                    **result["provenance"],
+                    "pid": 99999999,
+                }
+                return [{**message, "result": result}]
+            if corruption == "invalid-duration":
+                return [{**message, "worker_wall_sec": True}]
+        return [message]
+
+    state = _install_round_runtime(monkeypatch, mutate=mutate)
+    result = _run_round_test(
+        tmp_path,
+        worker_count=1,
+        worker_timeout=0.5 if corruption == "missing-round" else 10.0,
+    )
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert result.summary["lifecycle_errors"]
+    assert state.groups[0].stopped and state.groups[0].closed
+    assert all(channel.closed for channel in state.queues)
+    assert len(result.summary["benchmark"]["rounds"]) <= 1
+    assert (result.run_dir / "summary.json").is_file()
+
+
+def test_benchmark_cleanup_failure_invalidates_successful_rounds(
+    monkeypatch, tmp_path
+):
+    _install_round_runtime(monkeypatch, close_failure=True)
+    result = _run_round_test(tmp_path, warmup=0, measure=1)
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["rounds"][0]["status"] == "success"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert any(
+        error["phase"] == "queue_close"
+        for error in result.summary["lifecycle_errors"]
+    )
+
+
+def test_benchmark_notifies_startup_artifact_failure(monkeypatch, tmp_path):
+    state = _install_round_runtime(monkeypatch)
+    original_write = dragon_module.atomic_write_json
+
+    def fail_startup(path, payload):
+        if path.parent.name == "startup":
+            raise OSError("synthetic startup write failure")
+        original_write(path, payload)
+
+    monkeypatch.setattr(dragon_module, "atomic_write_json", fail_startup)
+    result = _run_round_test(tmp_path, worker_count=1)
+
+    assert result.status == "failed"
+    assert result.summary["ready_messages"][0]["status"] == "failed"
+    assert "artifact_error" in result.summary["ready_messages"][0]
+    assert not state.calls
+    assert state.groups[0].stopped

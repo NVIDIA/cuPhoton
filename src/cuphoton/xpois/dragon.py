@@ -23,6 +23,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from cuphoton.core.benchmark import BenchmarkOptions, build_benchmark_report
 from cuphoton.core.bulk import (
     Placement,
     WorkItem,
@@ -248,12 +249,15 @@ def run_dragon_image_pair_batch(
     result_timeout_sec: float,
     options: BatchFitOptions,
     worker_timeout_sec: float = 3600.0,
+    benchmark: BenchmarkOptions | None = None,
 ) -> DragonBatchResult:
     """Run deterministic XPOIS shards with one Dragon worker per GPU."""
 
     invocation_start = time.perf_counter()
     started_at = timestamp_utc()
     coordinator_timings: dict[str, float] = {}
+    if benchmark is not None and not isinstance(benchmark, BenchmarkOptions):
+        raise TypeError("benchmark must be BenchmarkOptions or None")
     if options.backend not in _DRAGON_GPU_BACKENDS:
         raise ValueError(
             "Dragon XPOIS workers require an explicit GPU backend"
@@ -289,6 +293,7 @@ def run_dragon_image_pair_batch(
         coordinator_timings=coordinator_timings,
         invocation_start=invocation_start,
         started_at=started_at,
+        benchmark=benchmark,
     )
 
 
@@ -311,6 +316,7 @@ def run_dragon_work_items(
     record_schema: str,
     shard_schema: str,
     worker_timeout_sec: float = 3600.0,
+    benchmark: BenchmarkOptions | None = None,
     coordinator_timings: Mapping[str, float] | None = None,
     invocation_start: float | None = None,
     started_at: str | None = None,
@@ -331,6 +337,13 @@ def run_dragon_work_items(
     order. Launch descriptors require a shared filesystem.
     """
 
+    if benchmark is not None:
+        if not isinstance(benchmark, BenchmarkOptions):
+            raise TypeError("benchmark must be BenchmarkOptions or None")
+        if worker_target is not _dragon_shard_worker:
+            raise ValueError(
+                "benchmark rounds currently require the XPOIS worker"
+            )
     if invocation_start is None:
         invocation_start = time.perf_counter()
     started_at = started_at or timestamp_utc()
@@ -420,7 +433,12 @@ def run_dragon_work_items(
     validate_identifier(effective_run_id, field="run_id")
     run_dir = output_root.expanduser().resolve() / effective_run_id
     run_dir.mkdir(parents=True, exist_ok=False)
-    for name in ("items", "launch", "records", "workers"):
+    directories = (
+        ("items", "launch", "records", "workers")
+        if benchmark is None
+        else ("launch", "rounds", "startup")
+    )
+    for name in directories:
         (run_dir / name).mkdir()
     atomic_write_json(run_dir / "manifest.json", normalized_manifest)
     atomic_write_json(
@@ -428,30 +446,42 @@ def run_dragon_work_items(
         normalized_input_identity,
     )
     dragon_version = _distribution_version("dragonhpc")
-    atomic_write_json(
-        run_dir / "run.json",
-        {
-            "schema": run_schema,
-            "record_type": "immutable-launch",
-            "executor": "dragon",
-            "run_id": effective_run_id,
-            "started_at_utc": started_at,
-            "manifest_sha256": manifest_sha256,
-            "dragonhpc_version": dragon_version,
-            "worker_count": worker_count,
-            "allocation_node_count": allocation_node_count,
-            "distinct_host_count": distinct_host_count,
-            "worker_timeout_sec": worker_timeout_sec,
-            "join_timeout_sec": join_timeout_sec,
-            "result_timeout_sec": result_timeout_sec,
-            "placements": [placement.to_dict() for placement in selected],
-            "options": normalized_options,
-            "worker_target": worker_reference,
-        },
-    )
+    launch_payload = {
+        "schema": run_schema,
+        "record_type": "immutable-launch",
+        "executor": "dragon",
+        "run_id": effective_run_id,
+        "started_at_utc": started_at,
+        "manifest_sha256": manifest_sha256,
+        "dragonhpc_version": dragon_version,
+        "worker_count": worker_count,
+        "allocation_node_count": allocation_node_count,
+        "distinct_host_count": distinct_host_count,
+        "worker_timeout_sec": worker_timeout_sec,
+        "join_timeout_sec": join_timeout_sec,
+        "result_timeout_sec": result_timeout_sec,
+        "placements": [placement.to_dict() for placement in selected],
+        "options": normalized_options,
+        "worker_target": worker_reference,
+    }
+    if benchmark is not None:
+        launch_payload["benchmark"] = benchmark.to_payload()
+    atomic_write_json(run_dir / "run.json", launch_payload)
     coordinator_timings["run_artifact_setup_sec"] = (
         time.perf_counter() - phase_start
     )
+    if benchmark is not None:
+        return _run_dragon_rounds(
+            api=api,
+            run_dir=run_dir,
+            launch_payload=launch_payload,
+            placements=selected,
+            shards=shards,
+            options=BatchFitOptions.from_payload(normalized_options),
+            benchmark=benchmark,
+            invocation_start=invocation_start,
+            coordinator_timings=coordinator_timings,
+        )
 
     lifecycle_errors: list[dict[str, str]] = []
     exit_status: list[dict[str, int]] = []
@@ -779,6 +809,603 @@ def run_dragon_work_items(
     )
 
 
+def _run_dragon_rounds(
+    *,
+    api: _DragonAPI,
+    run_dir: Path,
+    launch_payload: Mapping[str, Any],
+    placements: Sequence[Placement],
+    shards: Sequence[Sequence[WorkItem]],
+    options: BatchFitOptions,
+    benchmark: BenchmarkOptions,
+    invocation_start: float,
+    coordinator_timings: dict[str, float],
+) -> DragonBatchResult:
+    """Keep placed workers alive while timing complete production shards."""
+
+    run_id = launch_payload["run_id"]
+    worker_count = len(placements)
+    worker_timeout = launch_payload["worker_timeout_sec"]
+    result_timeout = launch_payload["result_timeout_sec"]
+    allow_loopback = launch_payload["allocation_node_count"] == 1
+    lifecycle_errors: list[dict[str, Any]] = []
+    ready_messages: list[dict[str, Any]] = []
+    rounds: list[dict[str, Any]] = []
+    exit_status: list[dict[str, int]] = []
+    command_queues: list[Any] = []
+    results_queue: Any | None = None
+    group: Any | None = None
+    start_attempted = False
+    joined = False
+    phase = "queue_create"
+    process_setup_start = time.perf_counter()
+    try:
+        results_queue = api.Queue(maxsize=worker_count)
+        phase = "group_create"
+        group = api.ProcessGroup(
+            restart=False,
+            ignore_error_on_exit=False,
+            walltime=worker_timeout,
+        )
+        phase = "process_setup"
+        for placement, shard in zip(placements, shards):
+            policy = api.Policy(
+                placement=api.Policy.Placement.HOST_NAME,
+                host_name=placement.host,
+                gpu_affinity=[placement.gpu_id],
+            )
+            # Blocking receives reside with their consumer. Python TCP's
+            # coordinator transport threads must remain free to send.
+            commands = api.Queue(maxsize=1, policy=policy)
+            command_queues.append(commands)
+            group.add_process(
+                nproc=1,
+                template=api.ProcessTemplate(
+                    target=_dragon_round_worker,
+                    args=(
+                        run_id,
+                        str(run_dir),
+                        placement.to_dict(),
+                        [item.to_dict() for item in shard],
+                        options.to_payload(),
+                        benchmark.to_payload(),
+                        commands,
+                        results_queue,
+                        allow_loopback,
+                        worker_timeout,
+                        result_timeout,
+                    ),
+                    policy=policy,
+                ),
+            )
+        phase = "init"
+        group.init()
+        coordinator_timings["dragon_process_setup_sec"] = (
+            time.perf_counter() - process_setup_start
+        )
+        phase = "start"
+        launch_start = time.perf_counter()
+        worker_deadline = time.monotonic() + worker_timeout
+        start_attempted = True
+        try:
+            group.start()
+        finally:
+            coordinator_timings["dragon_launch_sec"] = (
+                time.perf_counter() - launch_start
+            )
+        phase = "ready"
+        ready_start = time.perf_counter()
+        try:
+            _collect_worker_messages(
+                results_queue,
+                ready_messages,
+                worker_count=worker_count,
+                run_id=run_id,
+                kind="ready",
+                round_id=None,
+                deadline=worker_deadline,
+            )
+            for message in ready_messages:
+                placement = placements[message["worker_id"]]
+                if not _valid_shard_provenance(
+                    message.get("provenance"),
+                    placement=placement,
+                    allow_loopback_alias=allow_loopback,
+                    backend=options.backend,
+                ):
+                    raise ValueError("invalid Dragon READY provenance")
+        finally:
+            coordinator_timings["worker_ready_wait_sec"] = (
+                time.perf_counter() - ready_start
+            )
+            coordinator_timings["readiness_sec"] = (
+                time.perf_counter() - invocation_start
+            )
+        for spec in benchmark.rounds():
+            phase = f"round:{spec.round_id}"
+            round_dir = run_dir / "rounds" / spec.round_id
+            for name in ("items", "records", "workers"):
+                (round_dir / name).mkdir(parents=True, exist_ok=False)
+            messages: list[dict[str, Any]] = []
+            round_errors: list[dict[str, Any]] = []
+            timings: dict[str, float] = {}
+            batch_start = time.perf_counter()
+            try:
+                try:
+                    for commands in command_queues:
+                        remaining = min(
+                            result_timeout,
+                            worker_deadline - time.monotonic(),
+                        )
+                        if remaining <= 0:
+                            raise TimeoutError(
+                                "Dragon worker deadline expired"
+                            )
+                        commands.put(
+                            {"run_id": run_id, **spec.to_payload()},
+                            timeout=remaining,
+                        )
+                finally:
+                    timings["dispatch_sec"] = (
+                        time.perf_counter() - batch_start
+                    )
+                collection_start = time.perf_counter()
+                try:
+                    _collect_worker_messages(
+                        results_queue,
+                        messages,
+                        worker_count=worker_count,
+                        run_id=run_id,
+                        kind="round",
+                        round_id=spec.round_id,
+                        deadline=worker_deadline,
+                    )
+                finally:
+                    timings["collection_sec"] = (
+                        time.perf_counter() - collection_start
+                    )
+            except Exception as exc:
+                round_errors.append(error_payload(exc))
+            batch_wall = time.perf_counter() - batch_start
+            shard_results = [
+                message["result"]
+                for message in messages
+                if message.get("kind") == "round"
+                and message.get("run_id") == run_id
+                and message.get("round_id") == spec.round_id
+                and isinstance(message.get("result"), Mapping)
+            ]
+            ready_by_worker = {
+                message["worker_id"]: message["provenance"]
+                for message in ready_messages
+            }
+            if any(
+                result.get("provenance")
+                != ready_by_worker.get(result.get("worker_id"))
+                for result in shard_results
+            ):
+                round_errors.append(
+                    {
+                        "type": "WorkerIdentityChanged",
+                        "message": "worker provenance changed after READY",
+                    }
+                )
+            audit_start = time.perf_counter()
+            records, record_errors = _wait_terminal_artifacts(
+                round_dir, shards, shard_results, result_timeout
+            )
+            audit = _audit_batch_records(
+                run_id=spec.run_id(run_id),
+                shards=shards,
+                placements=placements,
+                options=options,
+                records=records,
+                record_errors=record_errors,
+                shard_results=shard_results,
+                allow_loopback_alias=allow_loopback,
+            )
+            timings["artifact_audit_sec"] = time.perf_counter() - audit_start
+            worker_wall = max(
+                (
+                    float(message["worker_wall_sec"])
+                    for message in messages
+                    if isinstance(
+                        message.get("worker_wall_sec"), (int, float)
+                    )
+                    and not isinstance(message["worker_wall_sec"], bool)
+                    and math.isfinite(message["worker_wall_sec"])
+                    and message["worker_wall_sec"] >= 0
+                ),
+                default=0.0,
+            )
+            receipt = {
+                **spec.to_payload(),
+                "status": (
+                    "success"
+                    if audit["status"] == "success" and not round_errors
+                    else "failed"
+                ),
+                "batch_wall_sec": batch_wall,
+                "worker_wall_max_sec": worker_wall,
+                "coordinator_timings_sec": timings,
+                "summary_path": f"rounds/{spec.round_id}/summary.json",
+            }
+            atomic_write_json(
+                round_dir / "summary.json",
+                {
+                    "schema": "cuphoton.xpois.dragon-round/v1",
+                    "run_id": spec.run_id(run_id),
+                    "parent_run_id": run_id,
+                    **audit,
+                    **receipt,
+                    "messages": messages,
+                    "errors": round_errors,
+                },
+            )
+            rounds.append(receipt)
+            if receipt["status"] != "success":
+                raise RuntimeError(f"Dragon round {spec.round_id} failed")
+        phase = "join"
+        join_start = time.perf_counter()
+        try:
+            group.join(timeout=result_timeout)
+            joined = True
+        finally:
+            coordinator_timings["worker_join_sec"] = (
+                time.perf_counter() - join_start
+            )
+        phase = "unexpected_result"
+        try:
+            extra = results_queue.get(timeout=0)
+        except (queue.Empty, TimeoutError):
+            pass
+        else:
+            raise ValueError(f"unexpected Dragon worker result: {extra!r}")
+    except Exception as exc:
+        lifecycle_errors.append({"phase": phase, **error_payload(exc)})
+    finally:
+        coordinator_timings.setdefault(
+            "dragon_process_setup_sec",
+            time.perf_counter() - process_setup_start,
+        )
+        cleanup_start = time.perf_counter()
+        if group is not None:
+            if start_attempted and not joined:
+                try:
+                    group.stop(patience=5.0)
+                except Exception as exc:
+                    lifecycle_errors.append(
+                        {"phase": "stop_after_failure", **error_payload(exc)}
+                    )
+            try:
+                exit_status = [
+                    {"puid": int(puid), "exit_code": int(code)}
+                    for puid, code in group.inactive_puids
+                ]
+            except Exception as exc:
+                lifecycle_errors.append(
+                    {"phase": "exit_status", **error_payload(exc)}
+                )
+            try:
+                group.close(patience=5.0)
+            except Exception as exc:
+                lifecycle_errors.append(
+                    {"phase": "close", **error_payload(exc)}
+                )
+                cleanup = getattr(group, "_close_no_decorator", None)
+                if cleanup is not None:
+                    try:
+                        cleanup(patience=5.0)
+                    except Exception as cleanup_exc:
+                        lifecycle_errors.append(
+                            {
+                                "phase": "forced_close",
+                                **error_payload(cleanup_exc),
+                            }
+                        )
+        for channel in [*command_queues, results_queue]:
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception as exc:
+                    lifecycle_errors.append(
+                        {"phase": "queue_close", **error_payload(exc)}
+                    )
+        coordinator_timings["dragon_cleanup_sec"] = (
+            time.perf_counter() - cleanup_start
+        )
+    process_audit = {
+        "ok": len(exit_status) == worker_count
+        and all(item["exit_code"] == 0 for item in exit_status),
+        "expected_count": worker_count,
+        "observed_count": len(exit_status),
+        "nonzero": [item for item in exit_status if item["exit_code"] != 0],
+    }
+    if not process_audit["ok"]:
+        lifecycle_errors.append(
+            {
+                "phase": "exit_status",
+                "type": "WorkerExitFailure",
+                "message": "missing or nonzero Dragon worker exit status",
+            }
+        )
+    report = build_benchmark_report(
+        benchmark, rounds, errors=lifecycle_errors
+    )
+    summary = {
+        **launch_payload,
+        "schema": "cuphoton.xpois.dragon-summary/v1",
+        "record_type": "terminal",
+        "status": report["status"],
+        "completed_at_utc": timestamp_utc(),
+        "coordinator_wall_sec": time.perf_counter() - invocation_start,
+        "coordinator_wall_definition": (
+            "Function entry through worker cleanup and terminal audits; "
+            "the final summary.json atomic commit is excluded."
+        ),
+        "coordinator_timings_sec": coordinator_timings,
+        "ready_messages": ready_messages,
+        "command_queue_placement": "consumer",
+        "process_exit_status": exit_status,
+        "process_exit_audit": process_audit,
+        "lifecycle_errors": lifecycle_errors,
+        "benchmark": report,
+    }
+    summary_path = run_dir / "summary.json"
+    atomic_write_json(summary_path, summary)
+    return DragonBatchResult(
+        run_id=run_id,
+        run_dir=run_dir,
+        summary_path=summary_path,
+        status=report["status"],
+        summary=summary,
+    )
+
+
+def _collect_worker_messages(
+    results_queue: Any,
+    messages: list[dict[str, Any]],
+    *,
+    worker_count: int,
+    run_id: str,
+    kind: str,
+    round_id: str | None,
+    deadline: float,
+) -> None:
+    """Collect one identified receipt per worker, failing on any replay."""
+
+    seen: set[int] = set()
+    while len(seen) < worker_count:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Dragon {kind} deadline expired")
+        try:
+            message = json_mapping(
+                results_queue.get(timeout=remaining),
+                field=f"Dragon {kind} result",
+            )
+        except queue.Empty as exc:
+            raise TimeoutError(f"Dragon {kind} deadline expired") from exc
+        messages.append(message)
+        worker_id = _strict_integer(message.get("worker_id"))
+        if (
+            message.get("run_id") != run_id
+            or message.get("kind") != kind
+            or message.get("round_id") != round_id
+            or worker_id is None
+            or worker_id not in range(worker_count)
+            or worker_id in seen
+        ):
+            raise ValueError(f"invalid or duplicate Dragon {kind} identity")
+        seen.add(worker_id)
+        if message.get("status") != "success":
+            raise RuntimeError(f"Dragon worker {worker_id} {kind} failed")
+        if kind == "round":
+            result = message.get("result")
+            duration = message.get("worker_wall_sec")
+            if (
+                isinstance(duration, bool)
+                or not isinstance(duration, (int, float))
+                or not math.isfinite(duration)
+                or duration < 0
+                or not isinstance(result, Mapping)
+                or _strict_integer(result.get("worker_id")) != worker_id
+                or result.get("status") != "success"
+            ):
+                raise ValueError("invalid Dragon round shard result")
+
+
+def _audit_batch_records(
+    *,
+    run_id: str,
+    shards: Sequence[Sequence[WorkItem]],
+    placements: Sequence[Placement],
+    options: BatchFitOptions,
+    records: Sequence[Mapping[str, Any]],
+    record_errors: Sequence[Mapping[str, Any]],
+    shard_results: Sequence[Mapping[str, Any]],
+    allow_loopback_alias: bool,
+) -> dict[str, Any]:
+    """Apply the same scientific artifact contract to every execution."""
+
+    errors = list(record_errors)
+    audit = audit_terminal_records(
+        [item.item_id for shard in shards for item in shard], records
+    )
+    expected = {
+        item.item_id: {
+            "worker_id": placement.worker_id,
+            "weight_bytes": item.weight_bytes,
+            "backend": options.backend,
+            "solver": options.solver,
+        }
+        for placement, shard in zip(placements, shards)
+        for item in shard
+    }
+    errors.extend(
+        _audit_terminal_record_contract(
+            run_id=run_id, expected=expected, records=records
+        )
+    )
+    shard_audit = _audit_shard_results(
+        shards,
+        shard_results,
+        records,
+        placements=placements,
+        allow_loopback_alias=allow_loopback_alias,
+        backend=options.backend,
+    )
+    item_timings, timing_errors = _aggregate_item_timings(records)
+    errors.extend(timing_errors)
+    return {
+        "status": (
+            "success"
+            if audit["ok"]
+            and not audit["failed_item_ids"]
+            and shard_audit["ok"]
+            and not errors
+            else "failed"
+        ),
+        "shard_result_audit": shard_audit,
+        "terminal_record_audit": audit,
+        "terminal_record_errors": errors,
+        "timings_sec": item_timings,
+    }
+
+
+def _dragon_round_worker(
+    run_id: str,
+    run_dir_raw: str,
+    placement_payload: Mapping[str, Any],
+    item_payloads: Sequence[Mapping[str, Any]],
+    options_payload: Mapping[str, Any],
+    benchmark_payload: Mapping[str, Any],
+    commands: Any,
+    results_queue: Any,
+    allow_loopback_alias: bool,
+    worker_timeout: float,
+    result_timeout: float,
+) -> None:
+    """Initialize once, then execute the normal shard for each release."""
+
+    run_dir = Path(run_dir_raw)
+    placement = Placement(**dict(placement_payload))
+    ready: dict[str, Any] = {
+        "kind": "ready",
+        "run_id": run_id,
+        "round_id": None,
+        "worker_id": placement.worker_id,
+        "status": "success",
+    }
+    try:
+        items = tuple(
+            WorkItem.from_dict(payload) for payload in item_payloads
+        )
+        options = BatchFitOptions.from_payload(options_payload)
+        benchmark = BenchmarkOptions(**dict(benchmark_payload))
+        actual_host, visibility = _validate_worker_placement(
+            placement,
+            require_clean_cuda_imports=True,
+            allow_loopback_alias=allow_loopback_alias,
+        )
+        gpu_identity = dict(_collect_gpu_identity(options.backend))
+        ready["provenance"] = {
+            "worker_id": placement.worker_id,
+            "requested_host": placement.host,
+            "requested_gpu_id": placement.gpu_id,
+            "hostname": actual_host,
+            "pid": os.getpid(),
+            "cuda_visible_devices": visibility,
+            "gpu": gpu_identity,
+        }
+    except Exception as exc:
+        ready.update(status="failed", error=error_payload(exc))
+    try:
+        atomic_write_json(
+            run_dir / "startup" / f"worker-{placement.worker_id:04d}.json",
+            ready,
+        )
+    except Exception as exc:
+        ready.update(status="failed", artifact_error=error_payload(exc))
+    results_queue.put(ready, timeout=result_timeout)
+    if ready["status"] != "success":
+        raise RuntimeError("Dragon worker initialization failed")
+    for spec in benchmark.rounds():
+        round_dir = run_dir / "rounds" / spec.round_id
+        message: dict[str, Any] = {
+            "kind": "round",
+            "run_id": run_id,
+            "round_id": spec.round_id,
+            "worker_id": placement.worker_id,
+            "status": "success",
+        }
+        try:
+            command = commands.get(timeout=worker_timeout)
+            if command != {"run_id": run_id, **spec.to_payload()}:
+                raise ValueError("unexpected Dragon round command")
+            worker_start = time.perf_counter()
+            result = _execute_shard(
+                run_id=spec.run_id(run_id),
+                run_dir=round_dir,
+                placement=placement,
+                items=items,
+                options=options,
+                item_runner=run_image_pair_item,
+                gpu_identity_loader=lambda backend: gpu_identity,
+                require_clean_cuda_imports=False,
+                allow_loopback_alias=allow_loopback_alias,
+            )
+            message.update(
+                status=result["status"],
+                result=result,
+                worker_wall_sec=time.perf_counter() - worker_start,
+            )
+        except Exception as exc:
+            message.update(status="failed", error=error_payload(exc))
+            try:
+                atomic_write_json(
+                    round_dir
+                    / "errors"
+                    / f"worker-{placement.worker_id:04d}.json",
+                    message,
+                )
+            except Exception as artifact_exc:
+                message["artifact_error"] = error_payload(artifact_exc)
+        results_queue.put(message, timeout=result_timeout)
+        if message["status"] != "success":
+            raise RuntimeError(f"Dragon worker round {spec.round_id} failed")
+
+
+def _validate_worker_placement(
+    placement: Placement,
+    *,
+    require_clean_cuda_imports: bool,
+    allow_loopback_alias: bool,
+) -> tuple[str, str]:
+    actual_host = socket.gethostname()
+    if not _hostnames_match(
+        placement.host,
+        actual_host,
+        allow_loopback_alias=allow_loopback_alias,
+    ):
+        raise RuntimeError(
+            "Dragon worker placement mismatch: requested "
+            f"{placement.host!r}, running on {actual_host!r}"
+        )
+    visibility = _singleton_cuda_visibility(placement.gpu_id)
+    premature = sorted(
+        name
+        for name in ("cupy", "numba.cuda", "cuda.tile", "torch")
+        if name in sys.modules
+    )
+    if require_clean_cuda_imports and premature:
+        raise RuntimeError(
+            "CUDA modules were imported before Dragon worker placement: "
+            + ", ".join(premature)
+        )
+    return actual_host, visibility
+
+
 def discover_gpu_placements(
     system_type: Callable[[], Any],
     node_type: Callable[[Any], Any],
@@ -956,26 +1583,11 @@ def _execute_shard(
         raise ValueError("Dragon shard backend must be a non-empty string")
     try:
         actual_host = socket.gethostname()
-        if not _hostnames_match(
-            placement.host,
-            actual_host,
+        actual_host, visibility = _validate_worker_placement(
+            placement,
+            require_clean_cuda_imports=require_clean_cuda_imports,
             allow_loopback_alias=allow_loopback_alias,
-        ):
-            raise RuntimeError(
-                "Dragon worker placement mismatch: requested "
-                f"{placement.host!r}, running on {actual_host!r}"
-            )
-        visibility = _singleton_cuda_visibility(placement.gpu_id)
-        premature = sorted(
-            name
-            for name in ("cupy", "numba.cuda", "cuda.tile", "torch")
-            if name in sys.modules
         )
-        if require_clean_cuda_imports and premature:
-            raise RuntimeError(
-                "CUDA modules were imported before Dragon worker placement: "
-                + ", ".join(premature)
-            )
         gpu_identity = dict(gpu_identity_loader(resolved_backend))
     except Exception as exc:
         setup_exception = exc
