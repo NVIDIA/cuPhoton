@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu clean-dist build package-check release-check ci-lint ci-test-cpu hooks
+.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu clean-dist build package-check wheels release-check ci-lint ci-test-cpu hooks
 
-CPU_EXTRAS = --extra dev --extra torch --extra viz
+CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
-CORE_EXTRAS = --extra dev
-VIZ_EXTRAS = --extra dev --extra viz
+CORE_EXTRAS = --extra dev --extra photometry
+VIZ_EXTRAS = --extra dev --extra viz --extra photometry
 UV_RUN = uv run --locked
 
 sync:
@@ -70,7 +70,10 @@ clean-dist:
 	rm -rf dist
 
 build: clean-dist
-	CUPHOTON_XDR_BUILD_EXT=0 uv build
+	CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
+
+wheels: build
+	uv tool run --from cibuildwheel==4.2.1 cibuildwheel --platform linux --output-dir dist dist/*.tar.gz
 
 package-check: build
 	uvx --isolated --from twine==6.2.0 twine check --strict dist/*
@@ -79,7 +82,9 @@ release-check:
 	$(MAKE) lock-check
 	$(MAKE) ci-lint
 	$(MAKE) ci-test-cpu
-	$(MAKE) package-check
+	$(MAKE) wheels
+	python scripts/wheels/check_distributions.py dist --arch "$$(uname -m)"
+	uvx --isolated --from twine==6.2.0 twine check --strict dist/*
 
 ci-lint:
 	$(MAKE) lint

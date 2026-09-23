@@ -2,12 +2,19 @@
 
 cuPhoton does not intentionally vendor third-party source code. Python runtime,
 optional-development, and build requirements are declared in
-[`pyproject.toml`](pyproject.toml). Optional distributed runtimes and native
-system requirements are documented separately below. `uv.lock` records the
-reproducible resolution for the project Python dependency profiles; it does
-not include the separately installed DragonHPC, `mpi4py`, or MPI runtimes.
-Build-system requirements are resolved separately by the PEP 517 build
-frontend and are not locked by `uv.lock`; they are labeled `not locked` below.
+[`pyproject.toml`](pyproject.toml). Optional distributed runtimes, native
+requirements, and the CFITSIO library bundled in Linux wheels are documented
+below. `uv.lock` records the reproducible resolution for the project Python
+dependency profiles; it does not include the separately installed DragonHPC,
+`mpi4py`, or MPI runtimes. Build-system requirements are resolved separately
+by the PEP 517 build frontend and are not locked by `uv.lock`; they are labeled
+`not locked` below.
+
+Git-derived package versions use the MIT-licensed build tools
+`setuptools-scm==10.3.4` and its `vcs-versioning` dependency. They are not
+included in the installed runtime dependencies. Native wheel builds pin both
+tools in `scripts/wheels/build-requirements.txt`; isolated source builds
+resolve build requirements separately from `uv.lock`.
 
 cuPhoton uses `uv` to resolve Python distributions from the registries
 recorded in `uv.lock` (currently the Python Package Index). NVIDIA-authored
@@ -19,8 +26,7 @@ incomplete.
 
 ## Direct Python dependency inventory
 
-The locked versions below reflect `uv.lock`. `scipy` resolves to 1.17.1 on
-Python 3.11 and 1.18.0 on Python 3.12 or later. Compound expressions and
+The locked versions below reflect `uv.lock`. Compound expressions and
 component caveats are retained where binary wheels contain material under
 more than one license.
 
@@ -33,25 +39,26 @@ more than one license.
 | `base` | `numexpr>=2.10` | `2.14.1` | `MIT` | [NumExpr](https://github.com/pydata/numexpr) | `uv / PyPI` |
 | `base` | `numpy>=2.0,<2.6` | `2.4.6` | `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0` | [NumPy](https://github.com/numpy/numpy) | `uv / PyPI` |
 | `base` | `pandas>=2.2` | `3.0.3` | `BSD-3-Clause` | [pandas](https://github.com/pandas-dev/pandas) | `uv / PyPI` |
-| `base` | `photutils>=3.0` | `3.0.0` | `BSD-3-Clause` | [Photutils](https://github.com/astropy/photutils) | `uv / PyPI` |
+| `photometry` | `photutils>=3.0` | `3.0.0` | `BSD-3-Clause` | [Photutils](https://github.com/astropy/photutils) | `uv / PyPI` |
 | `base` | `pyarrow>=23.0` | `24.0.0` | `Apache-2.0`; binary distributions include Arrow and third-party notices | [Apache Arrow](https://github.com/apache/arrow) | `uv / PyPI` |
 | `base` | `PyYAML>=6.0` | `6.0.3` | `MIT` | [PyYAML](https://github.com/yaml/pyyaml) | `uv / PyPI` |
-| `base` | `scipy>=1.13` | `1.17.1, 1.18.0` | `BSD-3-Clause`; distributions include separately licensed components | [SciPy](https://github.com/scipy/scipy) | `uv / PyPI` |
+| `base` | `scipy>=1.13` | `1.18.0` | `BSD-3-Clause`; distributions include separately licensed components | [SciPy](https://github.com/scipy/scipy) | `uv / PyPI` |
 | `torch` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
 | `viz` | `bokeh>=3.9` | `3.9.1` | `BSD-3-Clause` | [Bokeh](https://github.com/bokeh/bokeh) | `uv / PyPI` |
 | `viz` | `pillow>=10.4` | `12.3.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
 | `viz` | `tornado>=6.5.10` | `6.5.10` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
-| `gpu` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
-| `gpu` | `kvikio-cu13>=26.6,<27` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
-| `gpu` | `libkvikio-cu13>=26.6,<27` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
+| `io`, `gpu` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
+| `io`, `gpu` | `kvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
+| `io`, `gpu` | `libkvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
 | `gpu` | `numba>=0.61,<0.66` | `0.65.1` | `BSD-2-Clause` | [Numba](https://github.com/numba/numba) | `uv / PyPI` |
 | `gpu` | `numba-cuda[cu13]>=0.30,<0.31` | `0.30.3` | `BSD-2-Clause` | [Numba-CUDA](https://github.com/NVIDIA/numba-cuda) | `uv / PyPI` |
-| `gpu` | `nvidia-libnvcomp-cu13>=5.2,<6` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
-| `gpu` | `nvidia-nvcomp-cu13>=5.2,<6` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
-| `gpu` | `pybind11>=2.12,<4` | `3.0.4` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
+| `io`, `gpu` | `nvidia-libnvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
+| `io`, `gpu` | `nvidia-nvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
+| `native build` | `pybind11==3.0.4` | `build recipe` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
 | `gpu` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
 | `cutile` | `cuda-tile>=1.4` | `1.4.0` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI` |
 | `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
+| `dev` | `setuptools>=83.0.0` | `83.0.0` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
 | `dev` | `pytest>=8.3` | `9.1.1` | `MIT` | [pytest](https://github.com/pytest-dev/pytest) | `uv / PyPI` |
 | `dev` | `ruff>=0.15.12` | `0.15.20` | `MIT` | [Ruff](https://github.com/astral-sh/ruff) | `uv / PyPI` |
@@ -111,16 +118,23 @@ their bundled and linked components for the selected artifact and transport.
 Use the license and notice files from the exact installed distributions when
 preparing a deployment or redistribution inventory.
 
-## Native system dependency inventory
+The native release build pins its tools and CUDA 13.0 SDK inputs in
+[`scripts/wheels/build-requirements.txt`](scripts/wheels/build-requirements.txt).
+Those inputs are separate from the runtime lock. cuFile is requested explicitly
+through `cuda-toolkit[cufile]>=13,<14` in the `io` extra. GPU runtime shared
+libraries remain in their upstream distributions and are not copied into
+cuPhoton wheels.
+
+## Native dependency inventory
 
 | Package | Version or version range | License identifier | Upstream | Use in cuPhoton | Distribution |
 | --- | --- | --- | --- | --- | --- |
-| `CFITSIO` | No numeric version constraint is currently enforced; release validation used `4.6.4`. A thread-safe/reentrant build is required. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | System- or user-provided native library linked by the `cuphoton.xdr` extension; CFITSIO source is not vendored. A distributor that bundles CFITSIO must retain its copyright notice and warranty disclaimer. |
+| `CFITSIO` | Release wheels bundle `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
 
 ### CFITSIO copyright and license notice
 
-The following notice is reproduced from the CFITSIO 4.6.4 distribution used
-for release validation:
+The following notice is reproduced from `licenses/License.txt` in the
+CFITSIO 4.7.0 distribution bundled in release wheels:
 
 ```text
 Copyright (Unpublished--all rights reserved under the copyright laws of
@@ -185,13 +199,13 @@ For a CPU-only development environment, replace `gpu` with `torch`.
 
 ## cuPhoton distribution contents
 
-`make build` creates a pure-Python wheel with the xDataReader native extension
-disabled (`CUPHOTON_XDR_BUILD_EXT=0`) and a source distribution containing
-cuPhoton's own extension sources. Both artifacts include `LICENSE` and this
-notice file. Dependencies listed here are installed separately; these builds
-do not bundle DragonHPC, `mpi4py`, MPI, CFITSIO, or CUDA libraries.
+`make build` creates a source distribution containing cuPhoton's extension
+sources and the pinned native build recipe. `make wheels` builds the native
+Linux wheels from that archive. Each wheel includes the XDR extension and a
+privately renamed CFITSIO shared library, with the license notice above. The
+source archive and wheels include `LICENSE` and this notice file.
 
-A source build with the native extension enabled links against the available
-CFITSIO and CUDA libraries. A distributor that bundles libraries, including
-through static linking, must inventory the resulting artifact and retain the
-applicable third-party licenses and notices.
+DragonHPC, `mpi4py`, MPI, and CUDA runtime libraries are installed separately.
+A development source build links against the available CFITSIO and CUDA
+libraries. Distributors must retain the licenses and notices for the libraries
+included in their artifacts.

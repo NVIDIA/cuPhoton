@@ -81,7 +81,7 @@ def test_build_selects_interpreter_and_preserves_install_arguments(
         str(expected),
         "--no-build-isolation",
         "-e",
-        f"{root}[gpu]",
+        f"{root}[io]",
     ]
 
 

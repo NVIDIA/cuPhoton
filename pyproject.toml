@@ -11,7 +11,7 @@ name = "cuphoton"
 dynamic = ["version"]
 description = "GPU-accelerated astronomy and imaging tools from NVIDIA."
 readme = "README.md"
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "NVIDIA Corporation" }]
@@ -21,7 +21,6 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
@@ -33,13 +32,15 @@ dependencies = [
   "numexpr>=2.10",
   "numpy>=2.0,<2.6",
   "pandas>=2.2",
-  "photutils>=3.0",
   "pyarrow>=23.0",
   "PyYAML>=6.0",
   "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
+photometry = [
+  "photutils>=3.0",
+]
 torch = [
   "torch>=2.13,<3",
 ]
@@ -48,15 +49,18 @@ viz = [
   "pillow>=10.4",
   "tornado>=6.5.10",
 ]
-gpu = [
+io = [
   "cupy-cuda13x[ctk]>=14,<15; platform_system == 'Linux'",
-  "kvikio-cu13>=26.6,<27; platform_system == 'Linux'",
-  "libkvikio-cu13>=26.6,<27; platform_system == 'Linux'",
+  "cuda-toolkit[cufile]>=13,<14; platform_system == 'Linux'",
+  "kvikio-cu13==26.6.*; platform_system == 'Linux'",
+  "libkvikio-cu13==26.6.*; platform_system == 'Linux'",
+  "nvidia-libnvcomp-cu13==5.2.*; platform_system == 'Linux'",
+  "nvidia-nvcomp-cu13==5.2.*; platform_system == 'Linux'",
+]
+gpu = [
+  "cuphoton[io,photometry]",
   "numba>=0.61,<0.66; platform_system == 'Linux'",
   "numba-cuda[cu13]>=0.30,<0.31; platform_system == 'Linux'",
-  "nvidia-libnvcomp-cu13>=5.2,<6; platform_system == 'Linux'",
-  "nvidia-nvcomp-cu13>=5.2,<6; platform_system == 'Linux'",
-  "pybind11>=2.12,<4; platform_system == 'Linux'",
   "torch>=2.13,<3; platform_system == 'Linux'",
 ]
 cutile = [
@@ -64,6 +68,7 @@ cutile = [
   "cupy-cuda13x[ctk]>=14,<15; python_version >= '3.12' and python_version < '3.14' and platform_system == 'Linux'",
 ]
 dev = [
+  "setuptools>=83.0.0",
   "pre-commit>=4.0",
   "pytest>=8.3",
   "ruff>=0.15.12",
@@ -102,7 +107,7 @@ environments = ["sys_platform == 'linux'"]
 
 [tool.ruff]
 line-length = 78
-target-version = "py311"
+target-version = "py312"
 force-exclude = true
 extend-exclude = [
   "*.ipynb",
@@ -128,3 +133,17 @@ markers = [
 ]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.cibuildwheel]
+build = "cp312-manylinux_* cp313-manylinux_* cp314-manylinux_*"
+build-frontend = { name = "build[uv]", args = ["--no-isolation"] }
+before-all = "bash {package}/scripts/wheels/prepare_cfitsio.sh"
+before-build = "bash {package}/scripts/wheels/install_build_dependencies.sh"
+repair-wheel-command = "python {package}/scripts/wheels/repair_wheel.py {wheel} {dest_dir}"
+test-command = "python -I {package}/scripts/wheels/test_installed.py --mode base"
+
+[tool.cibuildwheel.linux]
+archs = ["auto64"]
+manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64@sha256:ae21cd1c8220f773f9b5934f3b845d677494d4cd4b8981c1e416f654e8afa74e"
+manylinux-aarch64-image = "quay.io/pypa/manylinux_2_28_aarch64@sha256:f2c063e4d418c18356490aa38ebd045a8e27a6e3e1f2284dd1fd62da1218789d"
+environment = { CUPHOTON_XDR_BUILD_EXT = "1", CUPHOTON_XDR_CFITSIO_ROOT = "/opt/cuphoton-cfitsio", CUDA_HOME = "", CUDA_PATH = "" }

@@ -25,28 +25,38 @@ reader by default.
 
 ## Install
 
-Install the CUDA 13 development profile:
+Install the I/O profile for GPU FITS loading:
 
 ```bash
-uv sync --locked --extra dev --extra gpu
+python -m pip install 'cuphoton[io]'
 ```
 
-The base package supports imports in CPU environments. xDataReader's loading
-paths require the `gpu` extra. To build its native extension after syncing
-the GPU environment, run:
+Linux x86-64 and ARM64 wheels for CPython 3.12–3.14 include the native
+extension and a private, reentrant CFITSIO 4.7.0 library. The extra installs
+CuPy, KvikIO, cuFile, and nvCOMP; `gpu` also includes these dependencies.
+The base package remains importable without GPU dependencies. No compiler,
+local CUDA toolkit, or system CFITSIO is needed for a wheel installation.
+Only CUDA 13 dependency variants are supported. A compatible NVIDIA driver
+is required for GPU execution.
+
+GPUDirect Storage also needs a supported host driver, filesystem, and storage
+configuration. KvikIO compatibility mode supports ordinary local file I/O;
+installing a wheel does not configure GDS. Use `KVIKIO_COMPAT_MODE=ON` to
+select compatibility mode explicitly.
+
+For development from a source checkout:
 
 ```bash
+uv sync --locked --extra dev --extra io
 bash src/cuphoton/xdr/src/build.sh
 ```
 
-The native extension also needs CUDA toolkit headers, cuFile headers, and a
-thread-safe CFITSIO development install visible through `pkg-config cfitsio` or
-`CUPHOTON_XDR_CFITSIO_ROOT`.
-
-Normal PEP 517 and pip builds produce the pure Python package. Set
-`CUPHOTON_XDR_BUILD_EXT=1` for a native source build, as `build.sh` does above.
-`CUPHOTON_XDR_BUILD_EXT=0` explicitly selects the default pure Python build.
-The supported dependency variants target CUDA 13.
+Source and editable builds default to a Python-only installation without
+probing native prerequisites. Building the extension requires
+`CUPHOTON_XDR_BUILD_EXT=1`, as performed by `build.sh` above. The source build
+requires a C++17 compiler, CUDA and cuFile headers, and a reentrant CFITSIO
+development installation. See [the wheel build procedure](../packaging.md)
+for the pinned release recipe.
 
 ### Native extension availability
 
@@ -84,13 +94,16 @@ tar -xzf cfitsio-4.7.0.tar.gz
 Return to the checkout and run `build.sh` in the same shell so the prefix
 remains exported. The prefix must contain `include/fitsio.h` and the CFITSIO
 library in `lib` or `lib64`. `--disable-curl` removes CFITSIO's optional URL
-support. Keep `--enable-reentrant` for concurrent native planning and reads.
+support; local FITS loading does not require it. Keep `--enable-reentrant`
+for concurrent native planning and reads.
 
-Official release wheels are pure Python (`py3-none-any`). Build
-`cuphoton.xdr._nvcomp_batch_ext` from source using the installed `gpu`
-environment: `build.sh` passes `--no-build-isolation` to resolve pybind11,
-KvikIO, and nvCOMP from that environment. CFITSIO headers and libraries come from
+An explicit native source build runs without
+PEP 517 build isolation (as `build.sh` does with `--no-build-isolation`)
+because pybind11, KvikIO and nvCOMP are resolved from the installed `io`
+environment. CFITSIO headers and libraries come from
 `CUPHOTON_XDR_CFITSIO_ROOT` or `pkg-config cfitsio`, as described above.
+The helper installs pybind11 as a build dependency; it is not an I/O runtime
+requirement.
 Verify the extension after building:
 
 ```bash

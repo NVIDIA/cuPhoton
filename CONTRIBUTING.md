@@ -50,7 +50,7 @@ Use uv for development environments and dependency locking. The supported GPU
 profile is CUDA 13.
 
 ```bash
-uv sync --locked --extra dev --extra torch --extra viz
+uv sync --locked --extra dev --extra torch --extra viz --extra photometry
 uv run --locked --extra dev pre-commit install
 ```
 
@@ -73,7 +73,7 @@ uv lock --check
 uv run --locked --extra dev pre-commit run --all-files
 make lint
 make test-cpu
-uv build
+make build
 ```
 
 Validation logs should be clean. If warnings are expected, describe them in the

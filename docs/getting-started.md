@@ -2,15 +2,31 @@
 
 ## Requirements
 
-cuPhoton supports Python 3.11 through 3.14 on Linux for the base, GPU, CPU
-PyTorch, and visualization profiles. CPU workflows run with the base or CPU
-PyTorch dependencies. The GPU profile targets CUDA 13 and requires a
-compatible NVIDIA driver. Python 3.12 or 3.13 is required for the
-experimental cuTile profile.
+cuPhoton supports CPython 3.12 through 3.14 on Linux for the base, GPU, CPU
+PyTorch, and visualization profiles. CPU workflows do not require CUDA. The
+GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. Python
+3.12 or 3.13 is required for the experimental cuTile profile.
 
 Install [uv](https://docs.astral.sh/uv/) before working from a checkout. uv is
 the supported environment and lock-file tool; editable pip installation is
 also available for integration into an existing environment.
+
+## Install a release
+
+```bash
+python -m pip install cuphoton
+python -m pip install 'cuphoton[io]'  # Native GPU FITS loading
+```
+
+The Linux x86-64 and ARM64 wheels include the XDR extension and private
+CFITSIO. `io` installs the CUDA 13 runtime dependencies; no compiler or local
+CUDA toolkit is needed. GPU execution still requires a compatible NVIDIA
+driver. See [XDR](components/xdr.md) for GPUDirect Storage requirements.
+
+Install `cuphoton[photometry]` for source detection, background estimation,
+and aperture photometry. It uses Photutils, which currently requires a C
+compiler on ARM64. The broader `gpu` profile includes `io` and `photometry`.
+Free-threaded Python and Windows/macOS wheels are not provided.
 
 ## Clone and select a profile
 
@@ -28,7 +44,7 @@ uv sync --locked --extra dev --extra gpu --extra viz
 For CPU development, including PyTorch workflows:
 
 ```bash
-uv sync --locked --extra dev --extra torch --extra viz
+uv sync --locked --extra dev --extra torch --extra viz --extra photometry
 ```
 
 The base package supports CPU data inspection and NumPy/SciPy workflows:
@@ -42,8 +58,10 @@ The extras are composable:
 | Extra | Adds |
 | --- | --- |
 | `dev` | pytest, Ruff, pre-commit, and packaging checks |
+| `photometry` | Photutils background, detection, and aperture routines |
+| `io` | CuPy, KvikIO, cuFile, and nvCOMP for native XDR |
 | `torch` | CPU-capable PyTorch |
-| `gpu` | CUDA 13 PyTorch, CuPy, and Numba-CUDA |
+| `gpu` | `io`, `photometry`, CUDA 13 PyTorch, and Numba-CUDA |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `viz` | Bokeh and Pillow |
 
@@ -72,7 +90,7 @@ The repository uses standard Python package metadata. From an activated
 environment:
 
 ```bash
-python -m pip install -e '.[dev,torch,viz]'
+python -m pip install -e '.[dev,torch,viz,photometry]'
 ```
 
 or, for CUDA 13:

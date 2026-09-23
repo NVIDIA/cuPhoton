@@ -37,7 +37,10 @@ def _require_dir(path: Path, description: str) -> Path:
 
 
 def _package_dir(module_name: str) -> Path:
-    spec = importlib.util.find_spec(module_name)
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ModuleNotFoundError:
+        spec = None
     if spec is None:
         raise RuntimeError(
             f"Required Python package is not importable: {module_name}"
@@ -102,6 +105,14 @@ def _cuda_home_candidates():
             if path not in seen:
                 seen.add(path)
                 yield path
+    for module_name in ("nvidia.cu13", "nvidia.cuda_runtime"):
+        try:
+            path = _package_dir(module_name)
+        except RuntimeError:
+            continue
+        if path not in seen:
+            seen.add(path)
+            yield path
     default = Path("/usr/local/cuda")
     if default not in seen:
         seen.add(default)
@@ -116,24 +127,21 @@ def _cuda_home_candidates():
 def _find_cuda_toolkit():
     for cuda_home in _cuda_home_candidates():
         include_dir = cuda_home / "include"
-        if not (include_dir / "cuda_runtime.h").is_file():
+        if not all(
+            (include_dir / header).is_file()
+            for header in ("cuda_runtime.h", "crt/host_config.h")
+        ):
             continue
 
         for lib_name in ("lib64", "lib"):
             lib_dir = cuda_home / lib_name
-            if any(
-                (lib_dir / soname).is_file()
-                for soname in (
-                    "libcudart.so",
-                    "libcudart.so.13",
-                )
-            ):
+            if (lib_dir / "libcudart.so.13").is_file():
                 return include_dir, lib_dir
 
     raise RuntimeError(
-        "CUDA toolkit with cuda_runtime.h and libcudart is required to build "
-        "cuphoton.xdr._nvcomp_batch_ext. Set CUDA_HOME to the "
-        "toolkit root."
+        "CUDA 13 headers (including CRT) and libcudart.so.13 are required "
+        "to build cuphoton.xdr._nvcomp_batch_ext. Install the CUDA 13 "
+        "development wheels or set CUDA_HOME to the toolkit root."
     )
 
 
@@ -177,12 +185,13 @@ def _find_cufile_include(cuda_include: Path) -> Path:
     if (cuda_include / "cufile.h").is_file():
         return cuda_include
 
-    try:
-        candidate = _package_dir("nvidia.cufile") / "include"
+    for module_name in ("nvidia.cu13", "nvidia.cufile"):
+        try:
+            candidate = _package_dir(module_name) / "include"
+        except RuntimeError:
+            continue
         if (candidate / "cufile.h").is_file():
             return candidate
-    except RuntimeError:
-        pass
 
     raise RuntimeError(
         "cuFile header cufile.h is required to build "
@@ -322,7 +331,7 @@ def get_extensions():
                 "-pthread",
                 "-l:libnvcomp.so.5",
                 "-l:libkvikio.so",
-                "-lcudart",
+                "-l:libcudart.so.13",
                 *cfitsio_paths["extra_link_args"],
             ],
         )

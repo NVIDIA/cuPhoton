@@ -59,6 +59,8 @@ def test_independent_loader_preserves_active_kvikio_pool(monkeypatch):
         "kvikio",
         SimpleNamespace(defaults=defaults, CuFile=CuFile),
     )
+    monkeypatch.setattr(gds, "_KVIKIO_NUM_THREADS", None)
+    monkeypatch.delenv("KVIKIO_NTHREADS", raising=False)
     monkeypatch.setattr(gds, "available_cpu_cores", lambda: desired_threads)
     monkeypatch.setattr(storage_cache, "active", lambda: False)
 
@@ -75,7 +77,8 @@ def test_independent_loader_preserves_active_kvikio_pool(monkeypatch):
     desired_threads = 8
     with gds.GdsHeapLoader("third.fits") as third:
         assert third._file().path == "third.fits"
-    assert resets == [4, 8]
+    # Later affinity changes must not reset a pool exposed to earlier readers.
+    assert resets == [4]
 
 
 @pytest.fixture

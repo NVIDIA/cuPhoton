@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Native wheel build inputs, installed separately for each CPython ABI.
+setuptools==83.0.0
+wheel==0.48.0
+pybind11==3.0.4
+libkvikio-cu13==26.6.0
+rapids-logger==0.2.3
+nvidia-libnvcomp-cu13==5.2.0.13
+# Build against the same CUDA 13.0 SDK floor used by runtime acceptance.
+nvidia-cuda-runtime==13.0.96
+nvidia-cuda-crt==13.0.88
+nvidia-cufile==1.15.1.6
+auditwheel==6.8.2
+patchelf==0.19.1.0
+packaging==26.2
+pyelftools==0.32

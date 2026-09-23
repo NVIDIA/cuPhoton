@@ -57,7 +57,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
     distribution = metadata.distribution("cuphoton")
     assert set(distribution.metadata["Requires-Python"].split(",")) == {
         "<3.15",
-        ">=3.11",
+        ">=3.12",
     }
     assert "Programming Language :: Python :: 3.14" in (
         distribution.metadata.get_all("Classifier") or ()
@@ -66,6 +66,8 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "cutile",
         "dev",
         "gpu",
+        "io",
+        "photometry",
         "torch",
         "viz",
     }
@@ -134,6 +136,7 @@ BLOCKED = (
     "kvikio",
     "mpi4py",
     "numba",
+    "photutils",
     "torch",
 )
 
