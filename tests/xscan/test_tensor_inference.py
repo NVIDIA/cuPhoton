@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import gc
+import os
 import pickle
 import subprocess
 import sys
 import weakref
+from dataclasses import asdict
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -150,6 +153,239 @@ def test_training_import_does_not_eagerly_import_cupy() -> None:
         check=False,
     )
     assert result.returncode == 0
+
+
+def test_checkpoint_performance_override_replaces_saved_policy(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_performance = PerformanceConfig(
+        amp_dtype="bf16",
+        allow_tf32=True,
+        cudnn_benchmark=True,
+        compile=True,
+    )
+    checkpoint_model = _FusionModel()
+    with torch.no_grad():
+        checkpoint_model.scale.fill_(2.5)
+        checkpoint_model.offset.fill_(-0.75)
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    torch.save(
+        {
+            "model_config": {},
+            "model_state": checkpoint_model.state_dict(),
+            "train_config": {"performance": asdict(saved_performance)},
+        },
+        checkpoint_path,
+    )
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    monkeypatch.setattr(training, "build_model", lambda **_: _FusionModel())
+    events: list[tuple[str, PerformanceConfig]] = []
+
+    def record_compile(model: Any, *, performance: PerformanceConfig) -> Any:
+        events.append(("compile", performance))
+        return model, {"enabled": False}
+
+    monkeypatch.setattr(training, "maybe_compile_model", record_compile)
+    monkeypatch.setattr(
+        training,
+        "configure_runtime",
+        lambda *, performance, device: events.append(
+            ("runtime", performance)
+        ),
+    )
+
+    default_model, _, default_policy = training.load_model_from_checkpoint(
+        tmp_path, device=torch.device("cpu")
+    )
+    assert asdict(default_policy) == asdict(saved_performance)
+    assert events == [
+        ("runtime", default_policy),
+        ("compile", default_policy),
+    ]
+
+    override = PerformanceConfig(pin_memory=True, non_blocking_transfers=True)
+    original_override = asdict(override)
+    model, checkpoint, policy = training.load_model_from_checkpoint(
+        tmp_path,
+        device=torch.device("cpu"),
+        performance_override=override,
+    )
+    assert asdict(policy) == asdict(PerformanceConfig())
+    assert asdict(override) == original_override
+    assert events == [
+        ("runtime", default_policy),
+        ("compile", default_policy),
+        ("runtime", policy),
+        ("compile", policy),
+    ]
+    assert checkpoint["train_config"]["performance"] == asdict(
+        saved_performance
+    )
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+    assert model.training is False
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, checkpoint_model.state_dict()[name])
+        torch.testing.assert_close(value, default_model.state_dict()[name])
+    images = torch.ones((2, 2, 3, 3))
+    torch.testing.assert_close(model(images), default_model(images))
+
+
+@pytest.mark.parametrize("use_override", [False, True])
+@pytest.mark.parametrize("allow_tf32", [False, True])
+def test_checkpoint_applies_selected_runtime_policy_before_compile(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    use_override: bool,
+    allow_tf32: bool,
+) -> None:
+    saved_policy = PerformanceConfig(
+        allow_tf32=allow_tf32,
+        cudnn_benchmark=allow_tf32,
+        compile=True,
+    )
+    model = _FusionModel()
+    checkpoint = {
+        "model_config": {},
+        "model_state": model.state_dict(),
+        "train_config": {"performance": asdict(saved_policy)},
+    }
+    # Exercise the real CUDA runtime settings without requiring GPU storage.
+    monkeypatch.setattr(torch, "load", lambda *args, **kwargs: checkpoint)
+    monkeypatch.setattr(training, "build_model", lambda **kwargs: model)
+    monkeypatch.setattr(model, "to", lambda device: model)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda device: SimpleNamespace(name="test", major=12, minor=0),
+    )
+    monkeypatch.setenv("TORCHINDUCTOR_WORKER_START", "subprocess")
+
+    def runtime_settings() -> tuple[bool, bool, bool, str]:
+        return (
+            torch.backends.cuda.matmul.allow_tf32,
+            torch.backends.cudnn.allow_tf32,
+            torch.backends.cudnn.benchmark,
+            torch.get_float32_matmul_precision(),
+        )
+
+    observed_settings: list[tuple[bool, bool, bool, str]] = []
+
+    def compile_model(model: Any, **kwargs: Any) -> Any:
+        observed_settings.append(runtime_settings())
+        return model
+
+    monkeypatch.setattr(torch, "compile", compile_model)
+    original_settings = runtime_settings()
+    try:
+        torch.set_float32_matmul_precision(
+            "highest" if allow_tf32 else "high"
+        )
+        torch.backends.cudnn.allow_tf32 = not allow_tf32
+        torch.backends.cudnn.benchmark = not allow_tf32
+        training.load_model_from_checkpoint(
+            tmp_path,
+            device=torch.device("cuda"),
+            performance_override=saved_policy if use_override else None,
+        )
+        assert observed_settings == [
+            (
+                allow_tf32,
+                allow_tf32,
+                allow_tf32,
+                "high" if allow_tf32 else "highest",
+            )
+        ]
+    finally:
+        torch.set_float32_matmul_precision(original_settings[3])
+        torch.backends.cuda.matmul.allow_tf32 = original_settings[0]
+        torch.backends.cudnn.allow_tf32 = original_settings[1]
+        torch.backends.cudnn.benchmark = original_settings[2]
+
+
+@pytest.mark.parametrize("use_override", [False, True])
+def test_checkpoint_compile_uses_selected_policy_environment(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    use_override: bool,
+) -> None:
+    saved_policy = PerformanceConfig(
+        compile=True,
+        compile_threads=3,
+        compile_worker_start_method="fork",
+    )
+    override = PerformanceConfig(
+        compile=True,
+        compile_threads=5,
+        compile_worker_start_method=" SPAWN ",
+    )
+    torch.save(
+        {
+            "model_config": {},
+            "model_state": _FusionModel().state_dict(),
+            "train_config": {"performance": asdict(saved_policy)},
+        },
+        tmp_path / "checkpoint.pt",
+    )
+    monkeypatch.setattr(training, "build_model", lambda **_: _FusionModel())
+    monkeypatch.setenv("TORCHINDUCTOR_COMPILE_THREADS", "97")
+    monkeypatch.setenv("TORCHINDUCTOR_WORKER_START", "subprocess")
+    compile_environment: list[tuple[str, str]] = []
+
+    def compile_model(model: Any, **kwargs: Any) -> Any:
+        compile_environment.append(
+            (
+                os.environ["TORCHINDUCTOR_COMPILE_THREADS"],
+                os.environ["TORCHINDUCTOR_WORKER_START"],
+            )
+        )
+        return model
+
+    monkeypatch.setattr(torch, "compile", compile_model)
+    training.load_model_from_checkpoint(
+        tmp_path,
+        device=torch.device("cpu"),
+        performance_override=override if use_override else None,
+    )
+
+    assert compile_environment == [
+        ("5", "spawn") if use_override else ("3", "fork")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("override", "exception", "message"),
+    [
+        ({}, TypeError, "performance_override must be a PerformanceConfig"),
+        (
+            PerformanceConfig(compile_threads=0),
+            ValueError,
+            "compile_threads must be positive",
+        ),
+        (
+            PerformanceConfig(worker_start_method="invalid"),
+            ValueError,
+            "worker_start_method must be one of",
+        ),
+    ],
+)
+def test_checkpoint_override_rejected_before_loading(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    override: Any,
+    exception: type[Exception],
+    message: str,
+) -> None:
+    def unexpected_load(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("invalid override must fail before checkpoint loading")
+
+    monkeypatch.setattr(torch, "load", unexpected_load)
+    with pytest.raises(exception, match=message):
+        training.load_model_from_checkpoint(
+            tmp_path,
+            device=torch.device("cpu"),
+            performance_override=override,
+        )
 
 
 def test_predict_tensors_is_transfer_free_and_device_resident(
