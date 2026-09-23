@@ -4087,15 +4087,18 @@ def test_shared_filesystem_wait_uses_bounded_backoff(
 
 
 def test_collective_artifact_wait_absorbs_visibility_delay(
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     run_dir = tmp_path / "collective"
     for name in ("items", "ranks", "records"):
         (run_dir / name).mkdir(parents=True, exist_ok=True)
     shard = (WorkItem("pair-0", {"id": "pair-0"}, 1),)
+    clock = [0.0]
 
-    def publish() -> None:
-        time.sleep(0.02)
+    monkeypatch.setattr(mpi.time, "monotonic", lambda: clock[0])
+
+    def publish(delay: float) -> None:
+        clock[0] += delay
         item_dir = run_dir / "items" / "pair-0"
         item_dir.mkdir()
         mpi.atomic_write_json(item_dir / "summary.json", {})
@@ -4104,10 +4107,10 @@ def test_collective_artifact_wait_absorbs_visibility_delay(
         )
         mpi.atomic_write_json(run_dir / "ranks" / "rank-0000.json", {})
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(publish)
-        assert mpi._wait_collective_artifacts(run_dir, (shard,), 0.5) == []
-        future.result()
+    monkeypatch.setattr(mpi.time, "sleep", publish)
+
+    assert mpi._wait_collective_artifacts(run_dir, (shard,), 0.5) == []
+    assert clock[0] > 0
 
 
 def test_collective_artifact_wait_reports_missing_paths(
