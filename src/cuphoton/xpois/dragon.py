@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import json
 import math
 import os
 import queue
@@ -52,6 +55,8 @@ from .batch import (
 )
 
 _DRAGON_GPU_BACKENDS = frozenset({"cupy", "numba-cuda", "cutile"})
+_DRAGON_LAUNCH_SCHEMA = "cuphoton.xpois.dragon-launch/v1"
+_DRAGON_TEMPLATE_BUDGET_BYTES = 96 * 1024
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,154 @@ class _DragonAPI:
     Queue: Any
 
 
+def _resolve_worker_target(
+    reference: Mapping[str, Any],
+) -> Callable[..., None]:
+    """Resolve one package-importable worker target."""
+
+    normalized = json_mapping(reference, field="Dragon worker reference")
+    if set(normalized) != {"module", "qualname"}:
+        raise ValueError("Dragon worker reference has invalid fields")
+    module_name = normalized["module"]
+    qualname = normalized["qualname"]
+    if (
+        not isinstance(module_name, str)
+        or not module_name
+        or module_name == "__main__"
+        or not isinstance(qualname, str)
+        or not qualname
+        or "<locals>" in qualname
+    ):
+        raise ValueError("Dragon worker target must be package-importable")
+    target: Any = importlib.import_module(module_name)
+    for component in qualname.split("."):
+        if not component or component.startswith("<"):
+            raise ValueError("Dragon worker target has an invalid qualname")
+        target = getattr(target, component)
+    if not callable(target):
+        raise TypeError("Dragon worker target reference is not callable")
+    return target
+
+
+def _worker_target_reference(
+    target: Callable[..., None],
+) -> dict[str, str]:
+    """Return and verify a stable import reference for a worker target."""
+
+    reference = {
+        "module": str(getattr(target, "__module__", "")),
+        "qualname": str(getattr(target, "__qualname__", "")),
+    }
+    try:
+        resolved = _resolve_worker_target(reference)
+    except (AttributeError, ImportError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "Dragon worker_target must be a package-importable top-level "
+            "callable, not a __main__ or local function"
+        ) from exc
+    if resolved is not target:
+        raise ValueError(
+            "Dragon worker_target import reference resolves to a different "
+            "callable"
+        )
+    return reference
+
+
+def _dragon_launch_worker(
+    run_id: str,
+    descriptor_path_raw: str,
+    descriptor_sha256: str,
+    context: Mapping[str, Any],
+    results_queue: Any,
+) -> None:
+    """Load an immutable shard descriptor before importing its worker."""
+
+    started_at = timestamp_utc()
+    worker_start = time.perf_counter()
+    run_dir = Path(context["run_dir"])
+    worker_id = context["worker_id"]
+    try:
+        descriptor_path = Path(descriptor_path_raw)
+        if (
+            not run_dir.is_absolute()
+            or descriptor_path
+            != run_dir / "launch" / f"worker-{worker_id:04d}.json"
+            or not _regular_file(descriptor_path)
+        ):
+            raise ValueError(
+                "Dragon launch descriptor is not a regular run file"
+            )
+        with descriptor_path.open("rb") as handle:
+            encoded = handle.read(context["descriptor_bytes"] + 1)
+        if len(encoded) != context["descriptor_bytes"]:
+            raise ValueError("Dragon launch descriptor size differs")
+        if hashlib.sha256(encoded).hexdigest() != descriptor_sha256:
+            raise ValueError("Dragon launch descriptor SHA-256 differs")
+        descriptor = json_mapping(
+            json.loads(encoded), field="Dragon launch descriptor"
+        )
+        if (
+            descriptor["schema"] != _DRAGON_LAUNCH_SCHEMA
+            or descriptor["run_id"] != run_id
+            or descriptor["run_dir"] != str(run_dir)
+            or descriptor["placement"]["worker_id"] != worker_id
+        ):
+            raise ValueError("Dragon launch descriptor identity differs")
+        items = tuple(
+            WorkItem.from_dict(payload) for payload in descriptor["items"]
+        )
+        if (
+            len(items) != context["item_count"]
+            or sum(item.weight_bytes for item in items)
+            != context["weight_bytes"]
+            or _item_ids_sha256(items) != context["item_ids_sha256"]
+        ):
+            raise ValueError(
+                "Dragon launch descriptor shard identity differs"
+            )
+        target = _resolve_worker_target(descriptor["worker_target"])
+        target(
+            run_id,
+            str(run_dir),
+            descriptor["placement"],
+            descriptor["items"],
+            descriptor["options"],
+            results_queue,
+            descriptor["allow_loopback_alias"],
+        )
+    except Exception as exc:
+        result = {
+            "schema": context["shard_schema"],
+            "worker_id": worker_id,
+            "status": "failed",
+            "item_count": context["item_count"],
+            "success_count": 0,
+            "failed_count": context["item_count"],
+            "weight_bytes": context["weight_bytes"],
+            "item_ids_sha256": context["item_ids_sha256"],
+            "started_at_utc": started_at,
+            "completed_at_utc": timestamp_utc(),
+            "worker_wall_sec": time.perf_counter() - worker_start,
+            "timings_sec": {},
+            "provenance": None,
+            "record_write_errors": [],
+            "error": error_payload(exc),
+        }
+        try:
+            atomic_write_json(
+                run_dir / "launch" / f"worker-{worker_id:04d}-failure.json",
+                result,
+                overwrite=False,
+            )
+        except Exception as write_exc:
+            result["artifact_error"] = error_payload(write_exc)
+        try:
+            results_queue.put(result)
+        except Exception as report_exc:
+            exc.add_note(f"Dragon launch failure report failed: {report_exc}")
+        raise
+
+
 def run_dragon_image_pair_batch(
     *,
     manifest_path: Path,
@@ -101,6 +254,87 @@ def run_dragon_image_pair_batch(
     invocation_start = time.perf_counter()
     started_at = timestamp_utc()
     coordinator_timings: dict[str, float] = {}
+    if options.backend not in _DRAGON_GPU_BACKENDS:
+        raise ValueError(
+            "Dragon XPOIS workers require an explicit GPU backend"
+        )
+    phase_start = time.perf_counter()
+    manifest = load_image_pair_manifest(manifest_path)
+    coordinator_timings["manifest_load_sec"] = (
+        time.perf_counter() - phase_start
+    )
+    phase_start = time.perf_counter()
+    preflight_image_pair_manifest(manifest, options)
+    coordinator_timings["manifest_preflight_sec"] = (
+        time.perf_counter() - phase_start
+    )
+    return run_dragon_work_items(
+        items=manifest.work_items(),
+        output_root=output_root,
+        run_id=run_id,
+        max_workers=max_workers,
+        result_timeout_sec=result_timeout_sec,
+        worker_timeout_sec=worker_timeout_sec,
+        backend=options.backend,
+        options_payload=options.to_payload(),
+        manifest_payload=manifest.canonical_payload(),
+        input_identity_payload=manifest.input_identity_payload(),
+        manifest_sha256=manifest.sha256,
+        worker_target=_dragon_shard_worker,
+        run_prefix="dragon-xpois",
+        run_schema="cuphoton.xpois.dragon-run/v1",
+        summary_schema="cuphoton.xpois.dragon-summary/v1",
+        record_schema="cuphoton.xpois.dragon-item/v1",
+        shard_schema="cuphoton.xpois.dragon-shard/v1",
+        coordinator_timings=coordinator_timings,
+        invocation_start=invocation_start,
+        started_at=started_at,
+    )
+
+
+def run_dragon_work_items(
+    *,
+    items: Sequence[WorkItem],
+    output_root: Path,
+    run_id: str | None,
+    max_workers: int | None,
+    result_timeout_sec: float,
+    backend: str,
+    options_payload: Mapping[str, Any],
+    manifest_payload: Mapping[str, Any],
+    input_identity_payload: Mapping[str, Any],
+    manifest_sha256: str,
+    worker_target: Callable[..., None],
+    run_prefix: str,
+    run_schema: str,
+    summary_schema: str,
+    record_schema: str,
+    shard_schema: str,
+    worker_timeout_sec: float = 3600.0,
+    coordinator_timings: Mapping[str, float] | None = None,
+    invocation_start: float | None = None,
+    started_at: str | None = None,
+    success_record_validator: (
+        Callable[[Mapping[str, Any]], Sequence[str]] | None
+    ) = None,
+    failed_record_validator: (
+        Callable[[Mapping[str, Any]], Sequence[str]] | None
+    ) = None,
+) -> DragonBatchResult:
+    """Run preflighted whole-item shards with one Dragon worker per GPU.
+
+    Callers own workload-specific manifest parsing, item construction, and
+    worker targets. This coordinator owns the established Dragon placement,
+    lifecycle, durable terminal-record, and audit contracts. Workers must be
+    importable callables taking run ID, run directory, placement, item and
+    options payloads, result queue, and the loopback-alias flag, in that
+    order. Launch descriptors require a shared filesystem.
+    """
+
+    if invocation_start is None:
+        invocation_start = time.perf_counter()
+    started_at = started_at or timestamp_utc()
+    coordinator_timings = dict(coordinator_timings or {})
     if (
         isinstance(result_timeout_sec, bool)
         or not isinstance(result_timeout_sec, (int, float))
@@ -121,21 +355,42 @@ def run_dragon_image_pair_batch(
         or worker_timeout_sec <= 0
     ):
         raise ValueError("worker_timeout_sec must be positive")
-    if options.backend not in _DRAGON_GPU_BACKENDS:
+    if backend not in _DRAGON_GPU_BACKENDS:
+        raise ValueError("Dragon workers require an explicit GPU backend")
+    if not items:
+        raise ValueError("Dragon work items must not be empty")
+    if not callable(worker_target):
+        raise TypeError("worker_target must be callable")
+    validate_identifier(run_prefix, field="run prefix")
+    for name, value in (
+        ("run_schema", run_schema),
+        ("summary_schema", summary_schema),
+        ("record_schema", record_schema),
+        ("shard_schema", shard_schema),
+    ):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{name} must be a non-empty string")
+    if (
+        not isinstance(manifest_sha256, str)
+        or len(manifest_sha256) != 64
+        or any(value not in "0123456789abcdef" for value in manifest_sha256)
+    ):
+        raise ValueError("manifest_sha256 must be a lowercase SHA-256 digest")
+    normalized_options = json_mapping(
+        options_payload, field="Dragon worker options"
+    )
+    if normalized_options.get("backend") != backend:
         raise ValueError(
-            "Dragon XPOIS workers require an explicit GPU backend"
+            "Dragon worker options backend must match the coordinator backend"
         )
+    normalized_manifest = json_mapping(
+        manifest_payload, field="Dragon manifest payload"
+    )
+    normalized_input_identity = json_mapping(
+        input_identity_payload, field="Dragon input identity payload"
+    )
+    worker_reference = _worker_target_reference(worker_target)
 
-    phase_start = time.perf_counter()
-    manifest = load_image_pair_manifest(manifest_path)
-    coordinator_timings["manifest_load_sec"] = (
-        time.perf_counter() - phase_start
-    )
-    phase_start = time.perf_counter()
-    preflight_image_pair_manifest(manifest, options)
-    coordinator_timings["manifest_preflight_sec"] = (
-        time.perf_counter() - phase_start
-    )
     phase_start = time.perf_counter()
     api = _load_dragon_api()
     system = api.System()
@@ -151,40 +406,37 @@ def run_dragon_image_pair_batch(
     )
     phase_start = time.perf_counter()
     requested_workers = max_workers or len(placements)
-    worker_count = min(
-        requested_workers, len(placements), len(manifest.pairs)
-    )
+    worker_count = min(requested_workers, len(placements), len(items))
     if worker_count <= 0:
         raise RuntimeError("Dragon allocation exposes no usable GPUs")
     selected = _select_gpu_placements(placements, worker_count)
     distinct_host_count = len({placement.host for placement in selected})
-    items = manifest.work_items()
     shards = partition_byte_balanced(items, worker_count)
     coordinator_timings["partition_sec"] = time.perf_counter() - phase_start
 
     phase_start = time.perf_counter()
     join_timeout_sec = float(worker_timeout_sec + result_timeout_sec)
-    effective_run_id = run_id or new_run_id("dragon-xpois")
+    effective_run_id = run_id or new_run_id(run_prefix)
     validate_identifier(effective_run_id, field="run_id")
     run_dir = output_root.expanduser().resolve() / effective_run_id
     run_dir.mkdir(parents=True, exist_ok=False)
-    for name in ("items", "records", "workers"):
+    for name in ("items", "launch", "records", "workers"):
         (run_dir / name).mkdir()
-    atomic_write_json(run_dir / "manifest.json", manifest.canonical_payload())
+    atomic_write_json(run_dir / "manifest.json", normalized_manifest)
     atomic_write_json(
         run_dir / "input-identity.json",
-        manifest.input_identity_payload(),
+        normalized_input_identity,
     )
     dragon_version = _distribution_version("dragonhpc")
     atomic_write_json(
         run_dir / "run.json",
         {
-            "schema": "cuphoton.xpois.dragon-run/v1",
+            "schema": run_schema,
             "record_type": "immutable-launch",
             "executor": "dragon",
             "run_id": effective_run_id,
             "started_at_utc": started_at,
-            "manifest_sha256": manifest.sha256,
+            "manifest_sha256": manifest_sha256,
             "dragonhpc_version": dragon_version,
             "worker_count": worker_count,
             "allocation_node_count": allocation_node_count,
@@ -193,7 +445,8 @@ def run_dragon_image_pair_batch(
             "join_timeout_sec": join_timeout_sec,
             "result_timeout_sec": result_timeout_sec,
             "placements": [placement.to_dict() for placement in selected],
-            "options": options.to_payload(),
+            "options": normalized_options,
+            "worker_target": worker_reference,
         },
     )
     coordinator_timings["run_artifact_setup_sec"] = (
@@ -220,24 +473,54 @@ def run_dragon_image_pair_batch(
         )
         lifecycle_phase = "process_setup"
         for placement, shard in zip(selected, shards):
+            descriptor_path = (
+                run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
+            )
+            atomic_write_json(
+                descriptor_path,
+                {
+                    "schema": _DRAGON_LAUNCH_SCHEMA,
+                    "run_id": effective_run_id,
+                    "run_dir": str(run_dir),
+                    "worker_target": worker_reference,
+                    "placement": placement.to_dict(),
+                    "items": [item.to_dict() for item in shard],
+                    "options": normalized_options,
+                    "allow_loopback_alias": allocation_node_count == 1,
+                },
+                overwrite=False,
+            )
+            encoded = descriptor_path.read_bytes()
+            descriptor_sha256 = hashlib.sha256(encoded).hexdigest()
+            context = {
+                "run_dir": str(run_dir),
+                "worker_id": placement.worker_id,
+                "shard_schema": shard_schema,
+                "item_count": len(shard),
+                "weight_bytes": sum(item.weight_bytes for item in shard),
+                "item_ids_sha256": _item_ids_sha256(shard),
+                "descriptor_bytes": len(encoded),
+            }
             policy = api.Policy(
                 placement=api.Policy.Placement.HOST_NAME,
                 host_name=placement.host,
                 gpu_affinity=[placement.gpu_id],
             )
             template = api.ProcessTemplate(
-                target=_dragon_shard_worker,
+                target=_dragon_launch_worker,
                 args=(
                     effective_run_id,
-                    str(run_dir),
-                    placement.to_dict(),
-                    [item.to_dict() for item in shard],
-                    options.to_payload(),
+                    str(descriptor_path),
+                    descriptor_sha256,
+                    context,
                     results_queue,
-                    allocation_node_count == 1,
                 ),
                 policy=policy,
             )
+            if len(template.argdata) > _DRAGON_TEMPLATE_BUDGET_BYTES:
+                raise ValueError(
+                    "Dragon worker launch arguments exceed 96 KiB"
+                )
             group.add_process(nproc=1, template=template)
 
         lifecycle_phase = "init"
@@ -383,8 +666,8 @@ def run_dragon_image_pair_batch(
         item.item_id: {
             "worker_id": placement.worker_id,
             "weight_bytes": item.weight_bytes,
-            "backend": options.backend,
-            "solver": options.solver,
+            "backend": backend,
+            "solver": normalized_options.get("solver"),
         }
         for placement, shard in zip(selected, shards)
         for item in shard
@@ -394,6 +677,9 @@ def run_dragon_image_pair_batch(
             run_id=effective_run_id,
             expected=expected_records,
             records=records,
+            record_schema=record_schema,
+            success_record_validator=success_record_validator,
+            failed_record_validator=failed_record_validator,
         )
     )
     shard_audit = _audit_shard_results(
@@ -402,7 +688,8 @@ def run_dragon_image_pair_batch(
         records,
         placements=selected,
         allow_loopback_alias=allocation_node_count == 1,
-        backend=options.backend,
+        backend=backend,
+        shard_schema=shard_schema,
     )
     item_timings, timing_errors = _aggregate_item_timings(records)
     record_errors.extend(timing_errors)
@@ -440,7 +727,7 @@ def run_dragon_image_pair_batch(
     )
     coordinator_wall_sec = time.perf_counter() - invocation_start
     summary = {
-        "schema": "cuphoton.xpois.dragon-summary/v1",
+        "schema": summary_schema,
         "executor": "dragon",
         "status": status,
         "run_id": effective_run_id,
@@ -453,14 +740,14 @@ def run_dragon_image_pair_batch(
         ),
         "coordinator_timings_sec": coordinator_timings,
         "coordinator_totals_sec": {"setup": coordinator_setup_sec},
-        "manifest_sha256": manifest.sha256,
+        "manifest_sha256": manifest_sha256,
         "dragonhpc_version": dragon_version,
         "worker_timeout_sec": worker_timeout_sec,
         "join_timeout_sec": join_timeout_sec,
         "result_timeout_sec": result_timeout_sec,
         "allocation_node_count": allocation_node_count,
         "distinct_host_count": distinct_host_count,
-        "options": options.to_payload(),
+        "options": normalized_options,
         "placements": [placement.to_dict() for placement in selected],
         "shards": [
             {
@@ -642,11 +929,12 @@ def _execute_shard(
     run_dir: Path,
     placement: Placement,
     items: Sequence[WorkItem],
-    options: BatchFitOptions,
-    item_runner: Callable[
-        [WorkItem, Path, BatchFitOptions], Mapping[str, Any]
-    ],
+    options: Any,
+    item_runner: Callable[[WorkItem, Path, Any], Mapping[str, Any]],
     gpu_identity_loader: Callable[[str], Mapping[str, Any]],
+    backend: str | None = None,
+    record_schema: str = "cuphoton.xpois.dragon-item/v1",
+    shard_schema: str = "cuphoton.xpois.dragon-shard/v1",
     require_clean_cuda_imports: bool = True,
     allow_loopback_alias: bool = False,
 ) -> dict[str, Any]:
@@ -659,6 +947,13 @@ def _execute_shard(
     gpu_identity: dict[str, Any] | None = None
     setup_exception: Exception | None = None
     setup_error: dict[str, str] | None = None
+    resolved_backend = backend or (
+        options.get("backend")
+        if isinstance(options, Mapping)
+        else getattr(options, "backend", None)
+    )
+    if not isinstance(resolved_backend, str) or not resolved_backend:
+        raise ValueError("Dragon shard backend must be a non-empty string")
     try:
         actual_host = socket.gethostname()
         if not _hostnames_match(
@@ -673,7 +968,7 @@ def _execute_shard(
         visibility = _singleton_cuda_visibility(placement.gpu_id)
         premature = sorted(
             name
-            for name in ("cupy", "numba.cuda", "cuda.tile")
+            for name in ("cupy", "numba.cuda", "cuda.tile", "torch")
             if name in sys.modules
         )
         if require_clean_cuda_imports and premature:
@@ -681,7 +976,7 @@ def _execute_shard(
                 "CUDA modules were imported before Dragon worker placement: "
                 + ", ".join(premature)
             )
-        gpu_identity = dict(gpu_identity_loader(options.backend))
+        gpu_identity = dict(gpu_identity_loader(resolved_backend))
     except Exception as exc:
         setup_exception = exc
         setup_error = error_payload(exc)
@@ -701,7 +996,7 @@ def _execute_shard(
     for item in items:
         item_start = time.perf_counter()
         identity = {
-            "schema": "cuphoton.xpois.dragon-item/v1",
+            "schema": record_schema,
             "run_id": run_id,
             "item_id": item.item_id,
             "worker_id": placement.worker_id,
@@ -764,7 +1059,7 @@ def _execute_shard(
                 failed_count += 1
 
     result = {
-        "schema": "cuphoton.xpois.dragon-shard/v1",
+        "schema": shard_schema,
         "worker_id": placement.worker_id,
         "status": (
             "success"
@@ -995,6 +1290,13 @@ def _audit_terminal_record_contract(
     run_id: str,
     expected: Mapping[str, Mapping[str, Any]],
     records: Sequence[Mapping[str, Any]],
+    record_schema: str = "cuphoton.xpois.dragon-item/v1",
+    success_record_validator: (
+        Callable[[Mapping[str, Any]], Sequence[str]] | None
+    ) = None,
+    failed_record_validator: (
+        Callable[[Mapping[str, Any]], Sequence[str]] | None
+    ) = None,
 ) -> list[dict[str, str]]:
     """Validate durable Dragon item records beyond identity/status counts."""
 
@@ -1003,7 +1305,7 @@ def _audit_terminal_record_contract(
         item_id_value = record.get("item_id")
         item_id = item_id_value if isinstance(item_id_value, str) else ""
         problems: list[str] = []
-        if record.get("schema") != "cuphoton.xpois.dragon-item/v1":
+        if record.get("schema") != record_schema:
             problems.append("schema")
         if record.get("run_id") != run_id:
             problems.append("run_id")
@@ -1081,6 +1383,8 @@ def _audit_terminal_record_contract(
                 )
             except (TypeError, ValueError):
                 problems.append("wall_sec")
+            if success_record_validator is not None:
+                problems.extend(success_record_validator(record))
         elif status == "failed":
             error = record.get("error")
             if not isinstance(error, Mapping) or not all(
@@ -1088,6 +1392,8 @@ def _audit_terminal_record_contract(
                 for field in ("type", "message")
             ):
                 problems.append("error")
+            if failed_record_validator is not None:
+                problems.extend(failed_record_validator(record))
         else:
             problems.append("status")
         if problems:
@@ -1112,6 +1418,7 @@ def _audit_shard_results(
     placements: Sequence[Placement],
     allow_loopback_alias: bool,
     backend: str,
+    shard_schema: str = "cuphoton.xpois.dragon-shard/v1",
 ) -> dict[str, Any]:
     worker_count = len(shards)
     placement_by_worker = {
@@ -1172,7 +1479,7 @@ def _audit_shard_results(
             != expected_fields["item_ids_sha256"]
         ):
             fields.add("item_ids_sha256")
-        if result.get("schema") != "cuphoton.xpois.dragon-shard/v1":
+        if result.get("schema") != shard_schema:
             fields.add("schema")
         started_at = _parse_timezone_aware_timestamp(
             result.get("started_at_utc")

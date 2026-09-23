@@ -39,6 +39,7 @@ from cuphoton.xpois.dragon import (
     _wait_terminal_artifacts,
     discover_gpu_placements,
     run_dragon_image_pair_batch,
+    run_dragon_work_items,
 )
 
 
@@ -1569,6 +1570,7 @@ class _FakeTemplate:
         self.target = target
         self.args = args
         self.policy = policy
+        self.argdata = b"fake compact launch arguments"
 
 
 class _FakeGroup:
@@ -1585,6 +1587,7 @@ class _FakeGroup:
         type(self).last_closed = False
         type(self).last_stopped = False
         self.templates = []
+        type(self).last_templates = self.templates
         self.exit_status = []
 
     def add_process(self, *, nproc, template):
@@ -2574,3 +2577,240 @@ def test_declared_write_failure_does_not_hide_inconsistent_counts(
     assert len(audit["mismatched_shards"]) == 1
     assert mismatch in audit["mismatched_shards"][0]["fields"]
     assert len(audit["write_failed_shards"]) == 1
+
+
+def _fake_generic_worker(
+    run_id,
+    run_dir_raw,
+    placement,
+    items,
+    options,
+    results,
+    allow_loopback_alias,
+):
+    def run_item(item, item_dir, worker_options):
+        if item.payload.get("fail"):
+            raise ValueError("deliberate item failure")
+        item_dir.mkdir(parents=True)
+        atomic_write_json(item_dir / "summary.json", {})
+        return {
+            "run_dir": str(item_dir),
+            "summary_path": str(item_dir / "summary.json"),
+            "requested_backend": worker_options["backend"],
+            "backend": worker_options["backend"],
+            "device": "fake-gpu",
+            "runtime": {},
+            "timings_sec": {},
+            "wall_sec": {},
+        }
+
+    results.put(
+        _execute_shard(
+            run_id=run_id,
+            run_dir=Path(run_dir_raw),
+            placement=Placement(**placement),
+            items=tuple(WorkItem.from_dict(item) for item in items),
+            options=options,
+            item_runner=run_item,
+            gpu_identity_loader=lambda backend: {
+                "backend": backend,
+                "name": "fake-gpu",
+                "uuid": "GPU-generic",
+                "pci_bus_id": "0000:03:00.0",
+                "identity_error": None,
+            },
+            record_schema="example.dragon-item/v1",
+            shard_schema="example.dragon-shard/v1",
+            require_clean_cuda_imports=False,
+            allow_loopback_alias=allow_loopback_alias,
+        )
+    )
+
+
+def _generic_kwargs(tmp_path, **overrides):
+    values = {
+        "items": (WorkItem("generic", {"value": 1}, 12),),
+        "output_root": tmp_path / "runs",
+        "run_id": "generic-dragon",
+        "max_workers": 1,
+        "result_timeout_sec": 0.01,
+        "worker_timeout_sec": 30.0,
+        "backend": "cupy",
+        "options_payload": {"backend": "cupy"},
+        "manifest_payload": {"schema": "example.manifest/v1"},
+        "input_identity_payload": {"schema": "example.identity/v1"},
+        "manifest_sha256": "0" * 64,
+        "worker_target": _fake_generic_worker,
+        "run_prefix": "generic",
+        "run_schema": "example.dragon-run/v1",
+        "summary_schema": "example.dragon-summary/v1",
+        "record_schema": "example.dragon-item/v1",
+        "shard_schema": "example.dragon-shard/v1",
+    }
+    values.update(overrides)
+    return values
+
+
+def _generic_api(monkeypatch, *, template=_FakeTemplate, group=_FakeGroup):
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=group,
+        ProcessTemplate=template,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(
+        dragon_module.socket, "gethostname", lambda: "fake-node"
+    )
+
+
+def test_generic_coordinator_preserves_large_file_backed_workload(
+    monkeypatch, tmp_path
+) -> None:
+    _generic_api(monkeypatch)
+    validated = []
+
+    def validate(record):
+        validated.append(record["item_id"])
+        return ()
+
+    result = run_dragon_work_items(
+        **_generic_kwargs(
+            tmp_path,
+            items=(WorkItem("generic", {"value": "x" * 300_000}, 12),),
+            success_record_validator=validate,
+        )
+    )
+
+    assert result.status == "success"
+    assert result.summary["schema"] == "example.dragon-summary/v1"
+    assert result.summary["shard_result_audit"]["ok"]
+    assert result.summary["terminal_record_audit"]["ok"]
+    assert validated == ["generic"]
+    template = _FakeGroup.last_templates[0]
+    assert template.target is dragon_module._dragon_launch_worker
+    assert len(template.args) == 5
+    assert len(repr(template.args)) < 2000
+    descriptor = json.loads(Path(template.args[1]).read_text())
+    assert len(descriptor["items"][0]["payload"]["value"]) == 300_000
+    assert descriptor["worker_target"] == {
+        "module": __name__,
+        "qualname": "_fake_generic_worker",
+    }
+    record = json.loads((result.run_dir / "records/generic.json").read_text())
+    assert record["schema"] == "example.dragon-item/v1"
+
+
+@pytest.mark.parametrize("failed_item", [False, True])
+def test_generic_coordinator_runs_workload_terminal_validators(
+    monkeypatch, tmp_path, failed_item
+) -> None:
+    _generic_api(monkeypatch)
+    validated = []
+
+    def validate(record):
+        validated.append(record["status"])
+        return ("workload_evidence",)
+
+    result = run_dragon_work_items(
+        **_generic_kwargs(
+            tmp_path,
+            items=(WorkItem("generic", {"fail": failed_item}, 12),),
+            success_record_validator=validate,
+            failed_record_validator=validate,
+        )
+    )
+
+    assert result.status == "failed"
+    assert validated == ["failed" if failed_item else "success"]
+    assert result.summary["terminal_record_errors"][0]["message"].endswith(
+        "workload_evidence"
+    )
+    assert _FakeGroup.last_closed
+
+
+@pytest.mark.parametrize("failure", ["digest", "size", "symlink"])
+def test_launch_worker_retains_descriptor_failures(tmp_path, failure) -> None:
+    run_dir = tmp_path / "run"
+    descriptor = run_dir / "launch/worker-0000.json"
+    atomic_write_json(descriptor, {"invalid": True}, overwrite=False)
+    descriptor_bytes = descriptor.stat().st_size
+    if failure == "size":
+        descriptor_bytes += 1
+    elif failure == "symlink":
+        outside = tmp_path / "outside.json"
+        descriptor.rename(outside)
+        descriptor.symlink_to(outside)
+    results = _FakeQueue()
+    with pytest.raises(ValueError):
+        dragon_module._dragon_launch_worker(
+            "run",
+            str(descriptor),
+            "0" * 64,
+            {
+                "run_dir": str(run_dir),
+                "worker_id": 0,
+                "shard_schema": "example.dragon-shard/v1",
+                "item_count": 1,
+                "weight_bytes": 12,
+                "item_ids_sha256": "1" * 64,
+                "descriptor_bytes": descriptor_bytes,
+            },
+            results,
+        )
+    result = results.get_nowait()
+    assert result["status"] == "failed"
+    assert result["worker_id"] == 0
+    receipt = json.loads(
+        (run_dir / "launch/worker-0000-failure.json").read_text()
+    )
+    assert receipt == result
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"worker_target": lambda: None}, "package-importable"),
+        ({"options_payload": {"backend": "numba-cuda"}}, "must match"),
+        ({"items": ()}, "must not be empty"),
+    ],
+)
+def test_generic_coordinator_rejects_invalid_input_before_dragon(
+    monkeypatch, tmp_path, overrides, message
+) -> None:
+    monkeypatch.setattr(
+        dragon_module,
+        "_load_dragon_api",
+        lambda: pytest.fail("invalid input must not initialize Dragon"),
+    )
+    with pytest.raises(ValueError, match=message):
+        run_dragon_work_items(**_generic_kwargs(tmp_path, **overrides))
+
+
+def test_coordinator_rejects_oversized_arguments_before_init(
+    monkeypatch, tmp_path
+) -> None:
+    class OversizedTemplate(_FakeTemplate):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.argdata = b"x" * (96 * 1024 + 1)
+
+    class UninitializedGroup(_FakeGroup):
+        def init(self):
+            pytest.fail("oversized arguments must fail before initialization")
+
+    _generic_api(
+        monkeypatch, template=OversizedTemplate, group=UninitializedGroup
+    )
+    result = run_dragon_work_items(**_generic_kwargs(tmp_path))
+    assert result.status == "failed"
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "process_setup",
+            "type": "ValueError",
+            "message": "Dragon worker launch arguments exceed 96 KiB",
+        }
+    ]
+    assert UninitializedGroup.last_closed
