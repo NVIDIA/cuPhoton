@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: native wheels
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+      - run: CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
+      - name: Check the default source installation
+        run: |
+          uv venv --python 3.12 .sdist-venv
+          CUPHOTON_XDR_BUILD_EXT=0 uv pip install --python .sdist-venv/bin/python dist/*.tar.gz
+          uv pip check --python .sdist-venv/bin/python
+          .sdist-venv/bin/python -I -c 'import cuphoton; import cuphoton.xdr; print(cuphoton.__version__)'
+          .sdist-venv/bin/cuphoton xdr --help
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  wheels:
+    needs: sdist
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-sdist
+          path: dist
+      - name: Build and test all three ABIs from the source archive
+        run: >-
+          uv tool run --from cibuildwheel==4.2.1 cibuildwheel
+          --platform linux --output-dir wheelhouse dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-wheels-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  install:
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+        platform:
+          - {runner: ubuntu-24.04, arch: x86_64}
+          - {runner: ubuntu-24.04-arm, arch: aarch64}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-wheels-${{ matrix.platform.arch }}
+          path: wheelhouse
+      - name: Install without a compiler, toolkit, or system CFITSIO
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: |
+          docker run --rm \
+            -e WHEEL_ABI="cp${PYTHON_VERSION/./}" \
+            -v "$PWD/wheelhouse:/wheels:ro" \
+            -v "$PWD/scripts/wheels:/checks:ro" \
+            "python:${PYTHON_VERSION}-slim-bookworm" \
+            sh -ec '
+              set -- /wheels/*-"${WHEEL_ABI}"-*.whl
+              test "$#" = 1
+              python -m pip install --only-binary=:all: "$1"
+              python -I /checks/test_installed.py --mode base
+              python -m pip install --only-binary=:all: "$1[io]"
+              python -m pip check
+              python -I /checks/test_installed.py --mode native
+            '
+
+  distributions:
+    needs: [sdist, wheels, install]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cuphoton-*
+          merge-multiple: true
+          path: dist
+      - run: python scripts/wheels/check_distributions.py dist
+      - run: uvx --isolated --from twine==6.2.0 twine check --strict dist/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
