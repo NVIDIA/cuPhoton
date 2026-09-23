@@ -51,6 +51,8 @@ seed, selected backend/device, dtype, GPU and driver when applicable, output
 shapes, and validation metrics. Prefer relative paths inside a run so the run
 directory can be moved. Use public or synthetic identifiers in tracked examples
 and reusable reports, with authentication configured separately.
+Never write credentials or private service URLs into tracked examples or
+reusable reports.
 
 ## 5. Validate numerically and visually
 

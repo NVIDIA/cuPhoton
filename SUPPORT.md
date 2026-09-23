@@ -1,7 +1,8 @@
 # Support
 
 cuPhoton is a reference-workflow project with best-effort community support.
-Its workflows are designed to be inspected and adapted.
+Its workflows are designed to be inspected and adapted. It does not carry
+the service or compatibility guarantees of a supported NVIDIA product.
 
 ## Getting help
 
@@ -20,9 +21,9 @@ sensitive metadata from reproductions.
 ## Scope
 
 Maintainers help with reproducible defects in this repository and review
-well-scoped extensions as time permits. Research teams handle scientific
-validation for their instruments, access to their datasets, and operation of
-their own infrastructure.
+well-scoped extensions as time permits. Maintainers cannot commit to response
+times. Research teams handle scientific validation for their instruments,
+access to their datasets, and operation of their own infrastructure.
 
 ## Security
 

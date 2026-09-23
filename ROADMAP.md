@@ -31,5 +31,5 @@ institutional adaptation.
   reproducible interfaces.
 - Add migrations when a widely used artifact schema changes.
 
-Maintainers refine roadmap priorities through review and public issue
-discussion.
+Roadmap items are intentions, not commitments. Maintainers refine roadmap
+priorities through review and public issue discussion.

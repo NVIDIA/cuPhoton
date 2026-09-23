@@ -6,6 +6,10 @@ teams that want working implementations they can run, inspect, and adapt to
 their own instruments and data products. The curated Python exports and
 structured run artifacts provide integration points for those workflows.
 
+cuPhoton releases are currently alpha-quality, and interfaces may evolve.
+It is not a stable application framework, and the scientific assumptions in
+each workflow must be checked against the target use case.
+
 ## Choose a workflow
 
 | If you have... | Use... | You get... |

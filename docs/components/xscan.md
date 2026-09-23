@@ -5,8 +5,8 @@ PyTorch real/bogus classifiers, and creates numeric or Bokeh review artifacts.
 The umbrella CLI group is `cuphoton xscan`.
 
 XScan is CLI-first because dataset provenance, split controls, and run
-artifacts are part of the reproducible workflow. Model modules provide
-extension points for custom workflows.
+artifacts are part of the reproducible workflow. Internal model modules
+provide extension points for custom workflows, but are not a broad stable API.
 
 ## Install and smoke test
 
