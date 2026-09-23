@@ -116,8 +116,19 @@ provenance.
 `cuphoton xscan data-export-xfit-input` writes a pickle-free `.npz` containing
 numeric or Unicode arrays: unique `candidate_id` and exact float `images` rows from
 `difference.npy`. It is the default bridge into `cuphoton xfit fit-dipoles`;
-construct an archive manually only when the fit also needs masks, variances,
-initial parameters, or a stamp basis.
+optional `--variance` and `--mask` NPY files add xFit's existing `variance` and
+`mask` members. Each input must match the original `difference.npy` shape and
+row order. The exporter retains each plane's dtype and applies the same
+first-occurrence candidate deduplication to every member; duplicate auxiliary
+planes must contain equal values, including matching NaNs at excluded pixels.
+
+Nonzero mask values include pixels. The mask must be finite everywhere;
+images must be finite and variance must be finite and positive at included
+pixels. Variance uses squared image units. The optional `--image-unit` label
+and source-file SHA-256 hashes appear in the emitted JSON summary, outside the
+NPZ's numeric-array contract. Redirect that summary to a file to retain it.
+Construct an archive manually when initial parameters or a stamp basis are
+required.
 
 `cuphoton xscan data-build-xfit-features` joins a completed difference-mode
 xFit run to a prepared XScan dataset by `candidate_id` and writes a new bundle

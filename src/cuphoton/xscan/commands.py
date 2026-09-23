@@ -349,6 +349,10 @@ class DataExportXFitInputCommand(XScanCommand):
 
     dataset_dir = None
     output_path = None
+    variance = None
+    mask = None
+    image_unit = None
+    skip_source_rehash = None
 
     class DatasetDirArg(PathSpecInvariant):
         _arg = "--dataset-dir"
@@ -360,11 +364,46 @@ class DataExportXFitInputCommand(XScanCommand):
         _help = "New .npz path for exact, unique xFit input stamps."
         _mandatory = True
 
+    class VarianceArg(PathSpecInvariant):
+        _arg = "--variance"
+        _help = "Optional variance .npy aligned to the original dataset rows."
+        _mandatory = False
+        _default = None
+
+    class MaskArg(PathSpecInvariant):
+        _arg = "--mask"
+        _help = "Optional row-aligned inclusion mask .npy; nonzero includes."
+        _mandatory = False
+        _default = None
+
+    class ImageUnitArg(StringInvariant):
+        _arg = "--image-unit"
+        _help = (
+            "Image unit label for provenance; variance uses squared units."
+        )
+        _mandatory = False
+        _default = None
+
+    class SkipSourceRehashArg(BoolInvariant):
+        _arg = "--skip-source-rehash"
+        _help = (
+            "Skip post-copy source hashing for immutable inputs; "
+            "initial source hashes and the archive hash are retained."
+        )
+        _mandatory = False
+        _default = False
+
     def run(self) -> None:
         payload = self._call(
             export_xfit_input_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
             output_path=Path(self.output_path).expanduser(),
+            variance_path=Path(self.variance).expanduser()
+            if self.variance
+            else None,
+            mask_path=Path(self.mask).expanduser() if self.mask else None,
+            image_unit=self.image_unit,
+            verify_sources_after_copy=not bool(self.skip_source_rehash),
         )
         self._emit_json(payload)
 

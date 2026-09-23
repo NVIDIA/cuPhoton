@@ -72,10 +72,43 @@ uv run cuphoton xscan data-build-xfit-features \
 
 The exporter preserves the `difference.npy` dtype and values, rejects
 nonfinite unmasked stamps, and safely collapses duplicate candidate IDs only
-when their stamps and split identity agree. Use an explicitly constructed
-xFit archive when masks, variances, initial parameters, or a sampled PSF basis
-are required. `--compute-dtype float64` keeps the row hashes bound to the
-original survey stamps while solving in float64, which is recommended for
+when their stamps and split identity agree. Optional `--variance` and `--mask`
+accept NPY arrays with exactly the same `(sample, y, x)` shape as
+`difference.npy`, in the original dataset row order. The exporter selects the
+same unique rows from every array and rejects duplicate IDs with conflicting
+auxiliary planes, including values at excluded pixels. Nonzero mask values
+include pixels; zero excludes them. Images must be finite and variance must
+be finite and strictly positive at included pixels. Excluded image and
+variance pixels can retain nonfinite values. Masks must be finite everywhere.
+
+```bash
+uv run cuphoton xscan data-export-xfit-input \
+  --dataset-dir /path/to/dataset \
+  --variance /path/to/variance.npy --mask /path/to/inclusion-mask.npy \
+  --image-unit electron \
+  --output /path/to/weighted-input.npz > /path/to/export-summary.json
+```
+
+Variance must describe the exported images in their squared units. If images
+have been rescaled by a factor, rescale their variance by the factor squared.
+`--image-unit` records a unit label without changing values; the JSON summary
+records that label, the corresponding variance unit, source filenames and
+SHA-256 hashes, and the output archive hash. Supplying variance enables xFit's
+variance-weighted chi-square and the two variance-dependent scalar features.
+The exporter does not estimate variance or convert bad-pixel bit masks.
+
+By default, the exporter re-hashes each source after copying and removes its
+new archive if a source changed. For large inputs guaranteed to remain
+immutable throughout export, `--skip-source-rehash` skips this second source
+hash pass (`verify_sources_after_copy=False` in the Python API). Initial
+source hashes and the output archive hash are always recorded. The summary's
+`source_hash_verification` is `before_and_after_copy` by default or
+`before_copy_only` with the opt-out; the latter does not detect source
+mutation during export.
+
+Use an explicitly constructed xFit archive when initial parameters or a
+sampled PSF basis are required. `--compute-dtype float64` keeps the row hashes
+bound to the original stamps while solving in float64, which is recommended for
 ill-conditioned observational fits. Use `input` or `float32` when that
 precision/performance tradeoff is intentional.
 

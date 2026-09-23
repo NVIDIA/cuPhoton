@@ -1180,6 +1180,8 @@ def _write_indexed_image_member(
     archive: zipfile.ZipFile,
     difference: np.ndarray,
     row_indices: Sequence[int],
+    *,
+    name: str = "images.npy",
 ) -> None:
     output_shape = (len(row_indices), *difference.shape[1:])
     header = {
@@ -1193,7 +1195,7 @@ def _write_indexed_image_member(
         1,
     )
     batch_rows = max(1, _EXPORT_BATCH_BYTES // bytes_per_row)
-    with archive.open("images.npy", mode="w", force_zip64=True) as member:
+    with archive.open(name, mode="w", force_zip64=True) as member:
         np.lib.format.write_array_header_2_0(member, header)
         for start in range(0, len(row_indices), batch_rows):
             selected_rows = row_indices[start : start + batch_rows]
@@ -1207,6 +1209,8 @@ def _write_xfit_input_archive(
     candidate_id: np.ndarray,
     difference: np.ndarray,
     row_indices: Sequence[int],
+    auxiliary: Mapping[str, np.ndarray],
+    source_hashes: Sequence[tuple[Path, str]],
 ) -> None:
     created = False
     try:
@@ -1220,6 +1224,16 @@ def _write_xfit_input_archive(
         with archive:
             _write_npy_member(archive, "candidate_id.npy", candidate_id)
             _write_indexed_image_member(archive, difference, row_indices)
+            for name, values in auxiliary.items():
+                _write_indexed_image_member(
+                    archive, values, row_indices, name=f"{name}.npy"
+                )
+        for source_path, expected_hash in source_hashes:
+            if file_sha256(source_path) != expected_hash:
+                raise ValueError(
+                    "xFit input source changed during export: "
+                    f"{source_path.name}"
+                )
     except BaseException:
         if created:
             path.unlink(missing_ok=True)
@@ -1230,8 +1244,22 @@ def export_xfit_input(
     *,
     dataset_dir: str | Path,
     output_path: str | Path,
+    variance_path: str | Path | None = None,
+    mask_path: str | Path | None = None,
+    image_unit: str | None = None,
+    verify_sources_after_copy: bool = True,
 ) -> dict[str, Any]:
-    """Export exact, unique stamps in a pickle-free xFit NPZ."""
+    """Export exact, unique stamps and optional row-aligned xFit planes.
+
+    Variance and mask inputs are pickle-free NPY arrays with the same shape
+    as ``difference.npy``. Nonzero mask values include pixels. Variance must
+    be positive and finite on included pixels, in squared image units.
+    ``image_unit`` records a caller-supplied label without converting values.
+    Sources are hashed before and after copying by default. Set
+    ``verify_sources_after_copy=False`` only when inputs remain immutable
+    throughout export; initial source hashes and the archive hash are
+    retained.
+    """
 
     dataset_root = Path(dataset_dir).expanduser().resolve()
     difference_path = dataset_root / "difference.npy"
@@ -1247,7 +1275,11 @@ def export_xfit_input(
         raise ValueError(
             "XScan difference.npy must be a pickle-free numeric array"
         ) from exc
-    if difference.ndim != 3 or difference.dtype.kind != "f":
+    if (
+        difference.ndim != 3
+        or difference.dtype.kind != "f"
+        or any(size == 0 for size in difference.shape)
+    ):
         raise ValueError(
             "XScan difference.npy must be a floating array with shape "
             "(sample, y, x)"
@@ -1256,19 +1288,86 @@ def export_xfit_input(
         dataset_root,
         image_shape=(int(difference.shape[1]), int(difference.shape[2])),
     )
-    for row_index in range(difference.shape[0]):
-        if not np.isfinite(difference[row_index]).all():
+    if image_unit is not None:
+        if not isinstance(image_unit, str) or not image_unit.strip():
+            raise ValueError("image_unit must be a nonempty string")
+        image_unit = image_unit.strip()
+    auxiliary = {}
+    source_paths = {"images": difference_path}
+    sources = {
+        "images": {
+            "name": difference_path.name,
+            "sha256": file_sha256(difference_path),
+        }
+    }
+    for name, path in (("variance", variance_path), ("mask", mask_path)):
+        if path is None:
+            continue
+        resolved = Path(path).expanduser().resolve()
+        if resolved.suffix.lower() != ".npy":
+            raise ValueError(f"{name} input must be a pickle-free .npy array")
+        try:
+            values = np.load(resolved, mmap_mode="r", allow_pickle=False)
+        except ValueError as exc:
             raise ValueError(
-                "XScan difference.npy contains non-finite pixels at row "
-                f"{row_index}; construct a masked xFit input explicitly"
+                f"{name} must be a pickle-free numeric array"
+            ) from exc
+        if not isinstance(values, np.ndarray):
+            values.close()
+            raise ValueError(f"{name} must be a single .npy array")
+        allowed_kinds = "fiub" if name == "mask" else "fiu"
+        if values.dtype.kind not in allowed_kinds:
+            raise ValueError(f"{name} must be a real numeric array")
+        if values.shape != difference.shape:
+            raise ValueError(
+                f"{name} must have the same shape as difference.npy: "
+                f"{difference.shape}"
             )
-    keys = [_candidate_key(value) for value in dataset.candidate_id]
+        auxiliary[name] = values
+        source_paths[name] = resolved
+        sources[name] = {
+            "name": resolved.name,
+            "sha256": file_sha256(resolved),
+        }
+    mask = auxiliary.get("mask")
+    variance = auxiliary.get("variance")
     unique_rows: list[int] = []
-    seen: set[tuple[str, int | str]] = set()
-    for row_index, key in enumerate(keys):
-        if key not in seen:
+    first_rows: dict[tuple[str, int | str], int] = {}
+    for row_index, value in enumerate(dataset.candidate_id):
+        included = True
+        if mask is not None:
+            if not np.isfinite(mask[row_index]).all():
+                raise ValueError(
+                    f"mask must contain only finite values at row {row_index}"
+                )
+            included = mask[row_index].astype(bool)
+        if np.any(included & ~np.isfinite(difference[row_index])):
+            raise ValueError(
+                "difference.npy contains non-finite included pixels at row "
+                f"{row_index}"
+            )
+        if variance is not None:
+            invalid = ~np.isfinite(variance[row_index]) | (
+                variance[row_index] <= 0
+            )
+            if np.any(included & invalid):
+                raise ValueError(
+                    "variance must be finite and strictly positive at "
+                    f"included pixels at row {row_index}"
+                )
+        key = _candidate_key(value)
+        first_row = first_rows.setdefault(key, row_index)
+        if first_row == row_index:
             unique_rows.append(row_index)
-            seen.add(key)
+        else:
+            for name, values in auxiliary.items():
+                if not np.array_equal(
+                    values[first_row], values[row_index], equal_nan=True
+                ):
+                    raise ValueError(
+                        "duplicate candidate_id rows have conflicting "
+                        f"{name} planes"
+                    )
     candidate_id = np.asarray(dataset.candidate_id[unique_rows])
 
     resolved_output = Path(output_path).expanduser().resolve()
@@ -1284,6 +1383,13 @@ def export_xfit_input(
         candidate_id=candidate_id,
         difference=difference,
         row_indices=unique_rows,
+        auxiliary=auxiliary,
+        source_hashes=[
+            (path, sources[name]["sha256"])
+            for name, path in source_paths.items()
+        ]
+        if verify_sources_after_copy
+        else [],
     )
     images_shape = (len(unique_rows), *difference.shape[1:])
     return {
@@ -1299,6 +1405,16 @@ def export_xfit_input(
         "images_shape": list(images_shape),
         "images_dtype": str(difference.dtype),
         "input_archive_sha256": file_sha256(resolved_output),
+        "mask_present": mask is not None,
+        "variance_present": variance is not None,
+        "source_arrays": sources,
+        "source_hash_verification": "before_and_after_copy"
+        if verify_sources_after_copy
+        else "before_copy_only",
+        "image_unit": image_unit,
+        "variance_unit": f"({image_unit})^2"
+        if image_unit and variance is not None
+        else None,
     }
 
 
