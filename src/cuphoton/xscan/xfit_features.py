@@ -1247,6 +1247,7 @@ def export_xfit_input(
     variance_path: str | Path | None = None,
     mask_path: str | Path | None = None,
     image_unit: str | None = None,
+    verify_sources_after_copy: bool = True,
 ) -> dict[str, Any]:
     """Export exact, unique stamps and optional row-aligned xFit planes.
 
@@ -1254,6 +1255,10 @@ def export_xfit_input(
     as ``difference.npy``. Nonzero mask values include pixels. Variance must
     be positive and finite on included pixels, in squared image units.
     ``image_unit`` records a caller-supplied label without converting values.
+    Sources are hashed before and after copying by default. Set
+    ``verify_sources_after_copy=False`` only when inputs remain immutable
+    throughout export; initial source hashes and the archive hash are
+    retained.
     """
 
     dataset_root = Path(dataset_dir).expanduser().resolve()
@@ -1382,7 +1387,9 @@ def export_xfit_input(
         source_hashes=[
             (path, sources[name]["sha256"])
             for name, path in source_paths.items()
-        ],
+        ]
+        if verify_sources_after_copy
+        else [],
     )
     images_shape = (len(unique_rows), *difference.shape[1:])
     return {
@@ -1401,6 +1408,9 @@ def export_xfit_input(
         "mask_present": mask is not None,
         "variance_present": variance is not None,
         "source_arrays": sources,
+        "source_hash_verification": "before_and_after_copy"
+        if verify_sources_after_copy
+        else "before_copy_only",
         "image_unit": image_unit,
         "variance_unit": f"({image_unit})^2"
         if image_unit and variance is not None

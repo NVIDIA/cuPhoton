@@ -670,6 +670,7 @@ def export_xfit_input_workflow(
     variance_path: Path | None = None,
     mask_path: Path | None = None,
     image_unit: str | None = None,
+    verify_sources_after_copy: bool = True,
 ) -> dict[str, Any]:
     """Export exact XScan difference stamps and optional xFit planes."""
 
@@ -681,6 +682,7 @@ def export_xfit_input_workflow(
         variance_path=variance_path,
         mask_path=mask_path,
         image_unit=image_unit,
+        verify_sources_after_copy=verify_sources_after_copy,
     )
 
 

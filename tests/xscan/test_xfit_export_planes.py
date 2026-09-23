@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -132,6 +133,73 @@ def test_export_rejects_sources_changed_during_archive_copy(
             mask_path=mask_path,
         )
     assert not output.exists()
+
+
+@pytest.mark.parametrize("skip_source_rehash", [False, True])
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+def test_export_rehash_optout_preserves_initial_and_artifact_hashes(
+    tmp_path, monkeypatch, capsys, skip_source_rehash, entrypoint
+):
+    root, images = _dataset(tmp_path)
+    variance_path, mask_path, variance, mask = _planes(tmp_path, images)
+    output = tmp_path / "input.npz"
+    hash_calls = Counter()
+
+    def counted_hash(path):
+        hash_calls[path] += 1
+        return file_sha256(path)
+
+    monkeypatch.setattr(xfit_features, "file_sha256", counted_hash)
+    if entrypoint == "api":
+        options = (
+            {"verify_sources_after_copy": False} if skip_source_rehash else {}
+        )
+        summary = export_xfit_input(
+            dataset_dir=root,
+            output_path=output,
+            variance_path=variance_path,
+            mask_path=mask_path,
+            **options,
+        )
+    else:
+        args = [
+            "data-export-xfit-input",
+            "--dataset-dir",
+            str(root),
+            "--output",
+            str(output),
+            "--variance",
+            str(variance_path),
+            "--mask",
+            str(mask_path),
+        ]
+        if skip_source_rehash:
+            args.append("--skip-source-rehash")
+        assert run_component("xscan", args) == 0
+        summary = json.loads(capsys.readouterr().out)
+
+    source_paths = {
+        "images": root / "difference.npy",
+        "variance": variance_path,
+        "mask": mask_path,
+    }
+    expected_calls = {
+        path: 1 if skip_source_rehash else 2 for path in source_paths.values()
+    }
+    assert hash_calls == Counter({**expected_calls, output: 1})
+    for name, path in source_paths.items():
+        assert summary["source_arrays"][name]["sha256"] == file_sha256(path)
+    assert summary["input_archive_sha256"] == file_sha256(output)
+    assert summary["source_hash_verification"] == (
+        "before_copy_only" if skip_source_rehash else "before_and_after_copy"
+    )
+    with np.load(output, allow_pickle=False) as archive:
+        for name, values in (
+            ("images", images),
+            ("variance", variance),
+            ("mask", mask),
+        ):
+            np.testing.assert_array_equal(archive[name], values[:2])
 
 
 @pytest.mark.parametrize("plane", ["variance", "mask"])

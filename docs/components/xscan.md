@@ -97,6 +97,15 @@ SHA-256 hashes, and the output archive hash. Supplying variance enables xFit's
 variance-weighted chi-square and the two variance-dependent scalar features.
 The exporter does not estimate variance or convert bad-pixel bit masks.
 
+By default, the exporter re-hashes each source after copying and removes its
+new archive if a source changed. For large inputs guaranteed to remain
+immutable throughout export, `--skip-source-rehash` skips this second source
+hash pass (`verify_sources_after_copy=False` in the Python API). Initial
+source hashes and the output archive hash are always recorded. The summary's
+`source_hash_verification` is `before_and_after_copy` by default or
+`before_copy_only` with the opt-out; the latter does not detect source
+mutation during export.
+
 Use an explicitly constructed xFit archive when initial parameters or a
 sampled PSF basis are required. `--compute-dtype float64` keeps the row hashes
 bound to the original stamps while solving in float64, which is recommended for
