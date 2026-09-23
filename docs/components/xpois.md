@@ -19,9 +19,11 @@ uv run python examples/run_quickstarts.py \
   --component xpois --profile cpu
 ```
 
-Automatic selection prefers CuPy, then Numba-CUDA, then CPU. cuTile is an
-explicit experimental backend and is not selected by `auto`. Spatial ALS is
-currently a CPU reference solver; `auto` resolves to CPU for that model.
+Backend selection is solver-specific. For the constant solver, `auto` prefers
+CuPy, then Numba-CUDA, then CPU; cuTile remains explicit and experimental. For
+spatial ALS, `auto` prefers CuPy when it has a usable CUDA device and otherwise
+uses the CPU reference implementation. Explicit `cupy` selection fails instead
+of falling back when its runtime is unavailable.
 
 ## Input and output contract
 
@@ -53,7 +55,7 @@ uv run cuphoton xpois subtract \
   --solver spatial-als \
   --spatial-degree 2 \
   --flux-conserve \
-  --backend auto \
+  --backend cupy \
   --output-dir /path/to/runs
 ```
 
@@ -99,7 +101,9 @@ component ranks retain labeling order before `max_regions` truncation.
 uv run cuphoton xpois benchmark-backends \
   --reference /path/to/reference.fits \
   --target /path/to/target.fits \
-  --backends cpu,cupy,numba-cuda \
+  --solver spatial-als \
+  --backends cpu,cupy \
+  --reference-backend cpu \
   --repeats 5 \
   --output-dir /path/to/runs
 
@@ -155,6 +159,7 @@ fit = solve_spatial_als(
     variance=variance,
     fit_mask=fit_mask,
     config=SpatialALSConfig(spatial_degree=2, flux_conserve=True),
+    backend="auto",
 )
 center_kernel = fit.kernel_at(
     (reference.shape[0] - 1) / 2,
@@ -162,17 +167,26 @@ center_kernel = fit.kernel_at(
 )
 ```
 
+`backend="cpu"` selects the NumPy reference implementation,
+`backend="cupy"` requires a usable CUDA device, and `backend="auto"` uses CuPy
+when available before falling back to CPU. Inputs and returned arrays remain
+NumPy host arrays, and both implementations perform the fit in FP64.
+
 Each kernel axis must have at least as many pixels as the line basis has
 functions; the CLI default basis has six, so the spatial model needs
 `--kernel-height` and `--kernel-width` of at least 7, and the solver rejects
 smaller kernels with a message naming the first failing axis, its length,
 and the number of basis functions.
 
+ALS means alternating linear least squares. This model is unrelated to
+Levenberg-Marquardt fitting and does not use the third-party `lmfit` package.
 The solver is instrument-neutral. Callers supply already registered images and
 an optional variance image. A fit mask or explicit `(y, x)` sample positions
 can select the fit region; when neither is supplied, all valid pixels in the
 centered-kernel interior are fitted. Repeated positions are retained as
-multiplicity weights. Camera calibration, PSF measurement, source selection,
+multiplicity weights. Explicit positions fail closed if any requested target,
+variance, or source footprint is non-finite; mask and default selection omit
+invalid pixels. Camera calibration, PSF measurement, source selection,
 astrometric registration, and unit interpretation remain responsibilities of
 the calling pipeline. The solver embeds no camera calibration or observational
 data; callers provide any calibration-derived masks, variances, or fit samples.
@@ -185,9 +199,18 @@ reference and correction profiles can cause poor conditioning or slow
 convergence. Use `--flux-conserve` (or `flux_conserve=True`) for the spatial
 model unless a position-dependent kernel sum is required.
 
-Setting `tolerance=0` still allows convergence when the finite objective
-repeats exactly or reaches its floating-point floor; it does not require the
-full `max_iterations` budget.
+Setting `tolerance=0` disables the relative-change stopping criterion.
+Only the numerical objective floor can end iterations before the full
+`max_iterations` budget.
+`SpatialALSConfig.tolerance`
+(`--als-tolerance`) is the relative penalized-objective change that stops the
+alternating updates early. A tolerance of `0` disables that stop; the fit then
+runs to `max_iterations` unless the objective reaches its numerical floor, and
+`converged` is otherwise false.
+
+The CuPy backend accelerates one spatial fit on one GPU. MPI and Dragon are
+separate whole-item orchestration layers; enabling this backend does not shard
+one fit or add the spatial solver to those batch paths.
 
 ## Fixed-kernel marginal noise diagnostics
 

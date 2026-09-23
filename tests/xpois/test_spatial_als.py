@@ -180,6 +180,7 @@ def recovery_case() -> _RecoveryCase:
             regularization=0.0,
             flux_conserve=True,
         ),
+        backend="cpu",
     )
     return _RecoveryCase(
         result=result,
@@ -212,6 +213,17 @@ def _true_kernel_at(case: _RecoveryCase, y: int, x: int) -> np.ndarray:
         optimize=True,
     )
     return np.outer(vertical, horizontal)
+
+
+def _cupy_device_or_skip():
+    cp = pytest.importorskip("cupy")
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    if device_count < 1:
+        pytest.skip("CuPy CUDA runtime has no visible device")
+    return cp
 
 
 def test_spatial_als_recovers_nonconstant_degree_two_model(
@@ -344,9 +356,12 @@ def test_degree_zero_matches_separable_solver() -> None:
     assert spatial.chi2 == pytest.approx(separable.chi2, rel=1.0e-9)
 
 
-def test_exact_fit_converges_with_a_single_sweep_budget() -> None:
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
+def test_exact_fit_converges_with_a_single_sweep_budget(backend: str) -> None:
     from scipy.signal import fftconvolve
 
+    if backend == "cupy":
+        _cupy_device_or_skip()
     source = np.random.default_rng(551).normal(size=(15, 17))
     line = np.exp(-(np.arange(-2, 3, dtype=float) ** 2) / 2)
     line /= line.sum()
@@ -359,6 +374,7 @@ def test_exact_fit_converges_with_a_single_sweep_budget() -> None:
         target,
         [GaussianBasisComponent(sigma=1.0, degree=0)],
         kernel_shape=(5, 5),
+        backend=backend,
         config=SpatialALSConfig(
             spatial_degree=0,
             background_degree=0,
@@ -411,9 +427,13 @@ def test_objective_increase_never_reports_convergence() -> None:
     )
 
 
+@pytest.mark.parametrize("backend", ["cpu", "cupy"])
 def test_overflowed_target_energy_does_not_end_the_first_sweep(
     recovery_case: _RecoveryCase,
+    backend: str,
 ) -> None:
+    if backend == "cupy":
+        _cupy_device_or_skip()
     case = recovery_case
     with np.errstate(over="ignore"):
         result = solve_spatial_als(
@@ -422,6 +442,7 @@ def test_overflowed_target_energy_does_not_end_the_first_sweep(
             [GaussianBasisComponent(sigma=1.0, degree=2)],
             kernel_shape=(5, 5),
             variance=np.full(case.source.shape, 1.0e308),
+            backend=backend,
             config=SpatialALSConfig(
                 spatial_degree=2,
                 background_degree=1,
@@ -455,6 +476,26 @@ def test_objective_jitter_below_numerical_floor_reports_convergence() -> None:
         2.0e-28,
         tolerance=0.0,
         objective_floor=1.0e-27,
+    )
+
+
+def test_zero_tolerance_converges_when_objective_crosses_floor() -> None:
+    assert spatial_als_module._objective_has_converged(
+        2.0e-27,
+        5.0e-28,
+        tolerance=0.0,
+        objective_floor=1.0e-27,
+    )
+
+
+def test_zero_tolerance_does_not_stop_on_equal_objectives_above_floor() -> (
+    None
+):
+    assert not spatial_als_module._objective_has_converged(
+        1.0,
+        1.0,
+        tolerance=0.0,
+        objective_floor=1.0e-30,
     )
 
 
@@ -738,6 +779,7 @@ def test_repeated_sample_positions_act_as_multiplicity_weights() -> None:
         kernel_shape=(5, 5),
         sample_positions=repeated_positions,
         config=config,
+        backend="cpu",
     )
     equivalent_variance = np.ones(shape)
     equivalent_variance[tuple(repeated_position)] = 1.0 / multiplicity
@@ -749,6 +791,7 @@ def test_repeated_sample_positions_act_as_multiplicity_weights() -> None:
         variance=equivalent_variance,
         sample_positions=unique_positions,
         config=config,
+        backend="cpu",
     )
     deduplicated = solve_spatial_als(
         source,
@@ -757,6 +800,7 @@ def test_repeated_sample_positions_act_as_multiplicity_weights() -> None:
         kernel_shape=(5, 5),
         sample_positions=unique_positions,
         config=config,
+        backend="cpu",
     )
 
     assert repeated.fit_pixel_count == unique_positions.shape[0] + 7
@@ -827,19 +871,29 @@ def test_spatial_als_builds_designs_and_patches_in_bounded_chunks(
         sample_x: np.ndarray,
         image_shape: tuple[int, int],
         terms: tuple[tuple[int, int], ...],
+        *,
+        xp=np,
     ) -> np.ndarray:
         design_sizes.append(sample_y.size)
         assert sample_y.size <= chunk_size
-        return original_design(sample_y, sample_x, image_shape, terms)
+        return original_design(
+            sample_y,
+            sample_x,
+            image_shape,
+            terms,
+            xp=xp,
+        )
 
     def tracked_contract(
         patches: np.ndarray,
         vertical: np.ndarray,
         horizontal: np.ndarray,
+        *,
+        xp=np,
     ) -> np.ndarray:
         patch_sizes.append(patches.shape[0])
         assert patches.shape[0] <= chunk_size
-        return original_contract(patches, vertical, horizontal)
+        return original_contract(patches, vertical, horizontal, xp=xp)
 
     monkeypatch.setattr(spatial_als_module, "_DESIGN_CHUNK_SIZE", chunk_size)
     monkeypatch.setattr(
@@ -863,9 +917,11 @@ def test_spatial_als_builds_designs_and_patches_in_bounded_chunks(
             background_degree=0,
             max_iterations=4,
         ),
+        backend="cpu",
     )
 
     assert np.isfinite(result.chi2)
+    assert result.design_chunk_size == chunk_size
     assert max(design_sizes) == chunk_size
     assert max(patch_sizes) == chunk_size
 
@@ -900,10 +956,501 @@ def test_spatial_als_accepts_noncontiguous_image_cutouts() -> None:
             background_degree=0,
             max_iterations=4,
         ),
+        backend="cpu",
     )
 
     assert result.converged
     assert np.sqrt(np.mean(result.residual[result.fit_mask] ** 2)) < 1.0e-12
+
+
+def test_spatial_als_auto_falls_back_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        spatial_als_module,
+        "_cupy_is_available",
+        lambda: False,
+    )
+    source = np.arange(121, dtype=np.float64).reshape(11, 11)
+    reference, _ = _line_model(3, 1.2)
+    target = _render_constant_target(
+        source,
+        np.outer(reference, reference),
+        0.02,
+    )
+
+    result = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=1.2, degree=0)],
+        kernel_shape=(3, 3),
+        config=SpatialALSConfig(spatial_degree=0, max_iterations=4),
+        backend="auto",
+    )
+
+    assert result.backend == "cpu"
+    assert result.design_chunk_size == spatial_als_module._DESIGN_CHUNK_SIZE
+
+
+def test_spatial_als_auto_prefers_cupy_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        spatial_als_module,
+        "_cupy_is_available",
+        lambda: True,
+    )
+
+    assert spatial_als_module._resolve_spatial_backend("auto") == "cupy"
+
+
+def test_spatial_als_explicit_cupy_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable():
+        raise ImportError("test CuPy failure")
+
+    monkeypatch.setattr(spatial_als_module, "_load_cupy", unavailable)
+    image = np.ones((9, 9), dtype=np.float64)
+
+    with pytest.raises(ImportError, match="test CuPy failure"):
+        solve_spatial_als(
+            image,
+            image,
+            [GaussianBasisComponent(sigma=1.2, degree=0)],
+            kernel_shape=(3, 3),
+            backend="cupy",
+        )
+
+
+def test_spatial_als_rejects_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="auto, cpu, cupy"):
+        solve_spatial_als(
+            np.ones((9, 9)),
+            np.ones((9, 9)),
+            [GaussianBasisComponent(sigma=1.2, degree=0)],
+            backend="numba-cuda",
+        )
+
+
+def test_gpu_design_chunk_size_is_memory_bounded() -> None:
+    class Runtime:
+        @staticmethod
+        def memGetInfo() -> tuple[int, int]:
+            return (64 * 1024**2, 80 * 1024**3)
+
+    class Cuda:
+        runtime = Runtime()
+
+    class FakeCupy:
+        cuda = Cuda()
+
+    chunk_size = spatial_als_module._gpu_design_chunk_size(
+        FakeCupy(),
+        row_count=10_000_000,
+        kernel_shape=(21, 21),
+        spatial_term_count=6,
+        background_term_count=3,
+        horizontal_basis_count=12,
+        vertical_basis_count=12,
+    )
+
+    # A quarter of the fake 64 MiB free memory over the 5904-byte per-row
+    # scratch estimate for these dimensions; the 65536-row cap is not hit.
+    assert chunk_size == (64 * 1024**2 // 4) // 5904 == 2841
+
+
+def test_dense_gpu_selection_does_not_construct_host_indices() -> None:
+    fit_mask, candidate_indices = (
+        spatial_als_module._prepare_gpu_sample_selection(
+            (4096, 4096),
+            (15, 15),
+            fit_mask=None,
+            sample_positions=None,
+        )
+    )
+
+    assert fit_mask is None
+    assert candidate_indices is None
+
+
+def test_spatial_als_cupy_matches_degree_two_cpu_oracle(
+    recovery_case: _RecoveryCase,
+) -> None:
+    _cupy_device_or_skip()
+    gpu = solve_spatial_als(
+        recovery_case.source,
+        recovery_case.target,
+        [GaussianBasisComponent(sigma=1.1, degree=2)],
+        kernel_shape=(5, 5),
+        config=SpatialALSConfig(
+            spatial_degree=2,
+            background_degree=1,
+            max_iterations=40,
+            tolerance=0.0,
+            regularization=0.0,
+            flux_conserve=True,
+        ),
+        backend="cupy",
+    )
+    cpu = recovery_case.result
+
+    assert gpu.backend == "cupy"
+    assert np.array_equal(gpu.fit_mask, cpu.fit_mask)
+    assert np.allclose(
+        gpu.horizontal_coefficients,
+        cpu.horizontal_coefficients,
+        rtol=1.0e-8,
+        atol=1.0e-9,
+    )
+    assert np.allclose(
+        gpu.vertical_coefficients,
+        cpu.vertical_coefficients,
+        rtol=1.0e-8,
+        atol=1.0e-9,
+    )
+    assert gpu.flux_scale == pytest.approx(cpu.flux_scale, rel=1.0e-8)
+    finite = np.isfinite(cpu.matched)
+    assert np.allclose(
+        gpu.matched[finite],
+        cpu.matched[finite],
+        rtol=1.0e-8,
+        atol=1.0e-9,
+    )
+
+
+def test_spatial_als_cupy_matches_cpu_with_mask_and_invalid_inputs() -> None:
+    _cupy_device_or_skip()
+    shape = (25, 27)
+    generator = np.random.default_rng(1935)
+    source = generator.normal(size=shape)
+    reference, _ = _line_model(5, 1.1)
+    target = _render_constant_target(
+        source,
+        np.outer(reference, reference),
+        0.08,
+    )
+    variance = 0.7 + np.linspace(0.0, 0.3, source.size).reshape(shape)
+    fit_mask = np.zeros(shape, dtype=bool)
+    fit_mask[2:-2, 2:-2] = True
+    source[8, 8] = np.nan
+    target[12, 14] = np.nan
+    variance[18, 20] = np.nan
+    config = SpatialALSConfig(
+        spatial_degree=0,
+        background_degree=0,
+        max_iterations=6,
+        tolerance=0.0,
+        regularization=1.0e-8,
+    )
+
+    cpu = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=1.1, degree=0)],
+        kernel_shape=(5, 5),
+        variance=variance,
+        fit_mask=fit_mask,
+        config=config,
+        backend="cpu",
+    )
+    gpu = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=1.1, degree=0)],
+        kernel_shape=(5, 5),
+        variance=variance,
+        fit_mask=fit_mask,
+        config=config,
+        backend="cupy",
+    )
+
+    assert np.array_equal(gpu.fit_mask, cpu.fit_mask)
+    assert not gpu.fit_mask[8, 8]
+    assert not gpu.fit_mask[12, 14]
+    assert not gpu.fit_mask[18, 20]
+    assert gpu.fit_pixel_count == cpu.fit_pixel_count
+    assert gpu.flux_scale == pytest.approx(cpu.flux_scale, rel=1.0e-10)
+    assert np.allclose(
+        gpu.background_coefficients,
+        cpu.background_coefficients,
+        rtol=1.0e-10,
+        atol=1.0e-10,
+    )
+    assert np.array_equal(np.isnan(gpu.matched), np.isnan(cpu.matched))
+    finite = np.isfinite(cpu.matched)
+    assert np.allclose(
+        gpu.matched[finite],
+        cpu.matched[finite],
+        rtol=1.0e-10,
+        atol=1.0e-10,
+    )
+
+
+@pytest.mark.parametrize("flux_conserve", [False, True])
+def test_spatial_als_cupy_matches_cpu_with_duplicate_samples(
+    flux_conserve: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _cupy_device_or_skip()
+    # Exercise one-chunk parity independently of device memory pressure.
+    monkeypatch.setattr(
+        spatial_als_module,
+        "_gpu_design_chunk_size",
+        lambda cp, **dimensions: dimensions["row_count"],
+    )
+    shape = (31, 33)
+    kernel_shape = (5, 5)
+    sigma = 1.1
+    generator = np.random.default_rng(20260903)
+    source = generator.normal(size=shape)
+    horizontal_reference, horizontal_basis = _line_model(5, sigma)
+    vertical_reference, vertical_basis = _line_model(5, sigma)
+    horizontal_coefficients = np.array(
+        [[0.03, -0.01, 0.005], [-0.02, 0.008, -0.003]]
+    )
+    vertical_coefficients = np.array(
+        [[-0.02, 0.007, 0.004], [0.015, -0.006, 0.002]]
+    )
+    spatial_terms = ((0, 0), (0, 1), (1, 0))
+    spatial = _chebyshev_design(shape, spatial_terms)
+    target = np.zeros(shape, dtype=np.float64)
+    for y in range(2, shape[0] - 2):
+        for x in range(2, shape[1] - 2):
+            horizontal = horizontal_reference + np.einsum(
+                "is,s,iu->u",
+                horizontal_coefficients,
+                spatial[y, x],
+                horizontal_basis,
+                optimize=True,
+            )
+            vertical = 1.04 * vertical_reference + np.einsum(
+                "is,s,iv->v",
+                vertical_coefficients,
+                spatial[y, x],
+                vertical_basis,
+                optimize=True,
+            )
+            patch = source[y - 2 : y + 3, x - 2 : x + 3]
+            target[y, x] = np.sum(
+                patch * np.outer(vertical, horizontal)[::-1, ::-1]
+            )
+    variance = 0.5 + np.linspace(0.0, 0.4, source.size).reshape(shape)
+    positions = np.array(
+        [
+            (y, x)
+            for y in range(2, shape[0] - 2)
+            for x in range(2, shape[1] - 2)
+        ],
+        dtype=np.int64,
+    )
+    positions = np.concatenate(
+        (positions, np.repeat([[15, 16]], 3, axis=0)),
+        axis=0,
+    )
+    config = SpatialALSConfig(
+        spatial_degree=1,
+        background_degree=0,
+        max_iterations=8,
+        tolerance=0.0,
+        regularization=1.0e-3,
+        flux_conserve=flux_conserve,
+    )
+
+    cpu = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=sigma, degree=2)],
+        kernel_shape=kernel_shape,
+        variance=variance,
+        sample_positions=positions,
+        config=config,
+        backend="cpu",
+    )
+    gpu = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=sigma, degree=2)],
+        kernel_shape=kernel_shape,
+        variance=variance,
+        sample_positions=positions,
+        config=config,
+        backend="cupy",
+    )
+
+    assert gpu.backend == "cupy"
+    assert isinstance(gpu.matched, np.ndarray)
+    assert gpu.design_chunk_size == gpu.fit_pixel_count
+    assert gpu.fit_pixel_count == cpu.fit_pixel_count
+    assert gpu.unique_fit_pixel_count == cpu.unique_fit_pixel_count
+    assert gpu.fit_pixel_count - gpu.unique_fit_pixel_count == 3
+    assert gpu.dof == cpu.dof
+    assert np.array_equal(gpu.fit_mask, cpu.fit_mask)
+    assert np.allclose(
+        gpu.horizontal_coefficients,
+        cpu.horizontal_coefficients,
+        rtol=2.0e-8,
+        atol=2.0e-9,
+    )
+    assert np.allclose(
+        gpu.vertical_coefficients,
+        cpu.vertical_coefficients,
+        rtol=2.0e-8,
+        atol=2.0e-9,
+    )
+    assert gpu.flux_scale == pytest.approx(cpu.flux_scale, rel=2.0e-8)
+    finite = np.isfinite(cpu.matched) & np.isfinite(gpu.matched)
+    assert np.allclose(
+        gpu.matched[finite],
+        cpu.matched[finite],
+        rtol=2.0e-8,
+        atol=2.0e-9,
+    )
+    assert np.allclose(
+        gpu.residual[finite],
+        cpu.residual[finite],
+        rtol=2.0e-8,
+        atol=2.0e-9,
+    )
+    assert np.allclose(
+        gpu.objective_history,
+        cpu.objective_history,
+        rtol=2.0e-8,
+        atol=2.0e-9,
+    )
+
+
+def test_spatial_als_cupy_matches_cpu_across_design_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _cupy_device_or_skip()
+    shape = (23, 25)
+    generator = np.random.default_rng(20260906)
+    source = generator.normal(size=shape)
+    reference, _ = _line_model(5, 1.1)
+    target = _render_constant_target(
+        source,
+        np.outer(reference, reference),
+        0.05,
+    )
+    target += 1.0e-3 * generator.normal(size=shape)
+    variance = 0.6 + np.linspace(0.0, 0.5, source.size).reshape(shape)
+    source[4, 5] = np.nan
+    positions = np.array(
+        [
+            (y, x)
+            for y in range(7, shape[0] - 2)
+            for x in range(2, shape[1] - 2)
+        ],
+        dtype=np.int64,
+    )
+    positions = np.concatenate(
+        (positions, np.repeat([[12, 13]], 3, axis=0), positions[:4]),
+        axis=0,
+    )
+    positions = positions[generator.permutation(positions.shape[0])]
+    config = SpatialALSConfig(
+        spatial_degree=1,
+        background_degree=1,
+        max_iterations=10,
+        tolerance=1.0e-6,
+        regularization=1.0e-4,
+    )
+    monkeypatch.setattr(spatial_als_module, "_DESIGN_CHUNK_SIZE", 5)
+    monkeypatch.setattr(spatial_als_module, "_GPU_MAX_DESIGN_CHUNK_SIZE", 7)
+
+    cpu = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=1.1, degree=1)],
+        kernel_shape=(5, 5),
+        variance=variance,
+        sample_positions=positions,
+        config=config,
+        backend="cpu",
+    )
+    gpu = solve_spatial_als(
+        source,
+        target,
+        [GaussianBasisComponent(sigma=1.1, degree=1)],
+        kernel_shape=(5, 5),
+        variance=variance,
+        sample_positions=positions,
+        config=config,
+        backend="cupy",
+    )
+
+    assert cpu.design_chunk_size == 5
+    assert gpu.design_chunk_size == 7
+    assert gpu.fit_pixel_count == cpu.fit_pixel_count == positions.shape[0]
+    assert gpu.unique_fit_pixel_count == cpu.unique_fit_pixel_count
+    assert gpu.iterations == cpu.iterations
+    assert gpu.converged and cpu.converged
+    assert 1 < gpu.iterations < config.max_iterations
+    assert np.array_equal(gpu.fit_mask, cpu.fit_mask)
+    assert np.array_equal(np.isnan(gpu.matched), np.isnan(cpu.matched))
+    assert np.isnan(gpu.matched[4, 5])
+    assert np.isfinite(gpu.matched[2, 2])
+    for name in (
+        "horizontal_coefficients",
+        "vertical_coefficients",
+        "background_coefficients",
+        "objective_history",
+        "background",
+    ):
+        assert np.allclose(
+            getattr(gpu, name),
+            getattr(cpu, name),
+            rtol=1.0e-8,
+            atol=1.0e-9,
+        ), name
+    assert gpu.flux_scale == pytest.approx(cpu.flux_scale, rel=1.0e-8)
+    finite = np.isfinite(cpu.matched)
+    assert np.allclose(
+        gpu.matched[finite],
+        cpu.matched[finite],
+        rtol=1.0e-8,
+        atol=1.0e-9,
+    )
+    assert np.allclose(
+        gpu.residual[finite],
+        cpu.residual[finite],
+        rtol=1.0e-8,
+        atol=1.0e-9,
+    )
+
+
+@pytest.mark.parametrize("invalid_input", ["source", "target", "variance"])
+def test_spatial_als_cupy_rejects_invalid_explicit_sample_positions(
+    invalid_input: str,
+) -> None:
+    _cupy_device_or_skip()
+    source = np.ones((9, 9))
+    target = source.copy()
+    variance = np.ones_like(target)
+    if invalid_input == "source":
+        source[3, 3] = np.nan
+    elif invalid_input == "target":
+        target[4, 4] = np.nan
+    else:
+        variance[4, 4] = np.nan
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "finite target and variance values with finite source footprints"
+        ),
+    ):
+        solve_spatial_als(
+            source,
+            target,
+            [GaussianBasisComponent(sigma=1.2, degree=0)],
+            kernel_shape=(3, 3),
+            variance=variance,
+            sample_positions=np.array([[4, 4]]),
+            config=SpatialALSConfig(spatial_degree=0),
+            backend="cupy",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1190,6 +1737,7 @@ def test_spatial_als_rejects_invalid_explicit_sample_positions(
             variance=variance,
             sample_positions=np.array([[4, 4]]),
             config=SpatialALSConfig(spatial_degree=0),
+            backend="cpu",
         )
 
 

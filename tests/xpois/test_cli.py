@@ -50,7 +50,7 @@ def test_help_for_fit_kernel_command(capsys) -> None:
     assert "--solver" in captured.out
     unwrapped_help = " ".join(captured.out.split())
     assert "Kernel model to fit: constant or spatial-als." in unwrapped_help
-    assert "spatial-als accepts only auto or cpu." in unwrapped_help
+    assert "spatial-als auto tries cupy, then cpu." in unwrapped_help
     assert "--spatial-degree" in captured.out
     assert "--als-iterations" in captured.out
     assert "--als-tolerance" in captured.out
@@ -69,6 +69,11 @@ def test_help_for_benchmark_backends_command_case(capsys) -> None:
     assert "--backends" in captured.out
     assert "--reference-backend" in captured.out
     assert "--repeats" in captured.out
+    assert "--solver" in captured.out
+    assert "--spatial-degree" in captured.out
+    assert "--als-iterations" in captured.out
+    assert "--als-tolerance" in captured.out
+    assert "--als-regularization" in captured.out
 
 
 def test_help_for_fit_batch_command(capsys) -> None:
@@ -125,6 +130,62 @@ def test_fit_kernel_forwards_spatial_solver_options(
             str(reference),
             "--target",
             str(target),
+            "--solver",
+            "spatial-als",
+            "--backend",
+            "cupy",
+            "--spatial-degree",
+            "3",
+            "--als-iterations",
+            "17",
+            "--als-tolerance",
+            "2e-7",
+            "--als-regularization",
+            "4e-5",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert json.loads(captured.out) == {"solver": "spatial-als"}
+    assert seen["solver"] == "spatial-als"
+    assert seen["backend"] == "cupy"
+    assert seen["spatial_degree"] == 3
+    assert seen["als_iterations"] == 17
+    assert seen["als_tolerance"] == pytest.approx(2e-7)
+    assert seen["als_regularization"] == pytest.approx(4e-5)
+
+
+def test_benchmark_backends_forwards_spatial_solver_options(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    reference = tmp_path / "reference.npy"
+    target = tmp_path / "target.npy"
+    reference.touch()
+    target.touch()
+    seen = {}
+
+    def fake_benchmark(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(summary={"solver": kwargs["solver"]})
+
+    monkeypatch.setattr(
+        commands,
+        "benchmark_constant_kernel_backends",
+        fake_benchmark,
+    )
+
+    rc = _run_cli(
+        [
+            "benchmark-backends",
+            "--reference",
+            str(reference),
+            "--target",
+            str(target),
+            "--backends",
+            "cpu",
             "--solver",
             "spatial-als",
             "--spatial-degree",
@@ -236,6 +297,7 @@ def test_fit_kernel_runs_spatial_solver_with_cli_defaults(
     assert rc == 0, captured.err
     summary = json.loads(captured.out)
     assert summary["solver"] == "spatial-als"
+    assert summary["requested_backend"] == "auto"
     assert summary["basis"] == [
         {"sigma": 1.5, "degree": 2},
         {"sigma": 3.0, "degree": 1},

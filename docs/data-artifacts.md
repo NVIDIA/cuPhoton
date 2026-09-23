@@ -76,12 +76,15 @@ included in the weighted solve.
 
 The spatial ALS Python API can instead receive an explicit `(sample, 2)`
 array of zero-based `(y, x)` positions. Duplicate positions are retained and
-therefore increase that pixel's weight. Chebyshev coordinates are normalized
-over the fitted image axes recorded in the summary's `image_shape`, which is
-the crop when a workflow crop is applied, so saved coefficient fields and
-`kernel_at` use crop coordinates. These positions and all image, variance, mask,
-registration, PSF, and instrument-calibration inputs are caller-owned;
-cuPhoton does not bundle an observational calibration archive.
+therefore increase that pixel's weight. Every explicit position must reference
+a finite target, variance, and source footprint; explicit selection fails
+closed instead of silently dropping rows. Mask and default selection omit
+invalid pixels. Chebyshev coordinates are normalized over the fitted image
+axes recorded in the summary's `image_shape`, which is the crop when a
+workflow crop is applied, so saved coefficient fields and `kernel_at` use crop
+coordinates. These positions and all image, variance, mask, registration, PSF,
+and instrument-calibration inputs are caller-owned; cuPhoton does not bundle an
+observational calibration archive.
 
 A successful fit writes `summary.json` and these arrays under `artifacts/`:
 
@@ -99,7 +102,10 @@ the horizontal and vertical reference profiles and bases, both coefficient
 matrices, the background coefficients, and the objective history. The summary
 records the solver, term order, coordinate normalization, convergence,
 regularization, reference-profile scale, center kernel sum, and fit counts
-needed to interpret them. The `vertical_reference_scale` field is always
+needed to interpret them, plus `design_chunk_size`, the row-batch cap used for
+normal equations and reconstruction. That cap is fixed on CPU and derived from
+free device memory on CuPy; runs with different caps agree only to
+floating-point rounding. The `vertical_reference_scale` field is always
 saved because it multiplies the vertical reference when the factors are
 evaluated. With flux conservation enabled, the summary also records it as
 `flux_scale`, the position-independent signed kernel sum. Without flux
@@ -111,7 +117,25 @@ nominal fit-row count minus parameter count, not an effective degrees of
 freedom estimate for the regularized nonlinear fit.
 
 Auto-stamp selection also writes metadata describing the selected regions.
-Benchmark runs add timings and numerical comparisons.
+
+Benchmark runs write `timings.json`, `comparisons.json`, and each backend's
+result arrays as `<backend>_<name>.npy`. Constant-kernel benchmarks save the
+kernel, matched, residual, fit-mask, and background images. Spatial ALS
+benchmarks save those images without the kernel, plus the line references and
+bases, both coefficient fields, the background coefficients, `flux_scale`,
+the objective history, the spatial and background term tables,
+`kernel_sample_positions_yx` (the four image corners and the center), and
+`realized_kernels` evaluated there; the kernels are reproducible from the
+saved factors. With flux conservation enabled, `flux_scale` is the signed
+kernel sum; otherwise it is the vertical reference multiplier, and local
+kernel sums must be evaluated from the saved factors. The summary separates
+first-solve from warm timings, states
+each timing boundary, and reports median speedups against the reference
+backend, per-backend solver facts including `design_chunk_size`, and the CPU
+thread environment. CuPy timing rows add CUDA-event intervals and memory-pool
+observations. `parity.ok` gates arrays, scalars, exact fields, and fit masks;
+the objective history, condition number, iteration count, and convergence
+flag are reported as non-gating diagnostics.
 
 ## XScan datasets
 
