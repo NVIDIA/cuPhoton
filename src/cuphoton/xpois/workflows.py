@@ -210,6 +210,10 @@ def _prepare_kernel_inputs(
     finally:
         input_read_sec += time.perf_counter() - input_read_start
     full_shape = target.shape
+    if reference.shape != full_shape:
+        raise ValueError("reference and target must share the same shape")
+    if variance is not None and variance.shape != full_shape:
+        raise ValueError("variance must match the image shape")
     if crop_metadata is not None:
         reference = apply_rectangular_cutout(reference, **crop_metadata)
         target = apply_rectangular_cutout(target, **crop_metadata)
@@ -244,6 +248,14 @@ def _prepare_kernel_inputs(
             )
         finally:
             input_read_sec += time.perf_counter() - input_read_start
+        if reference_mask.shape != full_shape:
+            raise ValueError(
+                "reference mask array shape does not match the image shape"
+            )
+        if target_mask.shape != full_shape:
+            raise ValueError(
+                "target mask array shape does not match the image shape"
+            )
         if crop_metadata is not None:
             reference_mask = apply_rectangular_cutout(
                 reference_mask,

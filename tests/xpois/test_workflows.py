@@ -1363,6 +1363,60 @@ def test_evaluate_subtraction_run_reports_zero_outliers_for_constant_field(
     assert evaluation["pixels_gt_5sigma"] == 0
 
 
+@pytest.mark.parametrize("workflow", ["fit", "benchmark"])
+@pytest.mark.parametrize(
+    "mismatched_input, message",
+    [
+        ("reference", "reference and target must share the same shape"),
+        ("variance", "variance must match the image shape"),
+        ("reference_mask", "reference mask.*shape"),
+        ("target_mask", "target mask.*shape"),
+    ],
+)
+def test_cropped_workflows_reject_full_frame_shape_mismatches(
+    tmp_path, workflow, mismatched_input, message
+):
+    reference = _compact_source_image((64, 64))
+    arrays = {
+        "reference": reference,
+        "target": 1.1 * reference + 0.2,
+        "variance": np.ones_like(reference),
+        "reference_mask": np.zeros(reference.shape, dtype=np.int16),
+        "target_mask": np.zeros(reference.shape, dtype=np.int16),
+    }
+    arrays[mismatched_input] = np.pad(arrays[mismatched_input], 8)
+    paths = {}
+    for label, array in arrays.items():
+        paths[f"{label}_path"] = tmp_path / f"{label}.npy"
+        np.save(paths[f"{label}_path"], array, allow_pickle=False)
+    options = dict(
+        **paths,
+        output_root=tmp_path,
+        name=workflow,
+        reference_hdu=None,
+        target_hdu=None,
+        kernel_shape=(3, 3),
+        components=[GaussianBasisComponent(sigma=1.0, degree=0)],
+        fit_mask_path=None,
+        background_degree=0,
+        flux_conserve=False,
+        mask_policy="strict",
+        crop_y0=8,
+        crop_x0=8,
+        crop_height=48,
+        crop_width=48,
+    )
+    with pytest.raises(ValueError, match=message):
+        if workflow == "fit":
+            workflows.run_constant_kernel_fit(
+                **options, backend="cpu", review=False
+            )
+        else:
+            workflows.benchmark_constant_kernel_backends(
+                **options, backends=["cpu"], repeats=1, warmup=0
+            )
+
+
 @pytest.mark.parametrize("selection", ["full", "auto", "explicit", "cropped"])
 @pytest.mark.parametrize("mask_policy", ["strict", "masklite"])
 def test_benchmark_preprocessing_matches_fitting(
