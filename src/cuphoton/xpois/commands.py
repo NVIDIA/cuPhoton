@@ -23,7 +23,9 @@ from cuphoton.core.cli import (
     StringInvariant,
 )
 
+from .batch import BatchFitOptions
 from .data import inspect_hsc_data_tree
+from .dragon import run_dragon_image_pair_batch
 from .ois import (
     EXPLICIT_BACKENDS,
     SUPPORTED_BACKENDS,
@@ -121,19 +123,8 @@ class DataInspectCommand(XPOISCommand):
         self._emit_json(summary)
 
 
-class _KernelSolveCommand(XPOISCommand):
-    reference = None
-    target = None
-    reference_hdu = None
-    target_hdu = None
-    variance = None
-    variance_hdu = None
-    reference_mask = None
-    target_mask = None
-    reference_mask_hdu = None
-    target_mask_hdu = None
+class _KernelSolveOptionsCommand(XPOISCommand):
     mask_policy = None
-    fit_mask = None
     auto_stamp_mask = None
     auto_stamp_size = None
     auto_stamp_count = None
@@ -151,71 +142,6 @@ class _KernelSolveCommand(XPOISCommand):
     background_degree = None
     flux_conserve = None
 
-    class ReferenceArg(ImagePathInvariant):
-        _arg = "--reference"
-        _help = "Reference image path (.fits or .npy)."
-        _mandatory = True
-
-    class TargetArg(ImagePathInvariant):
-        _arg = "--target"
-        _help = "Target image path (.fits or .npy)."
-        _mandatory = True
-
-    class ReferenceHduArg(NonNegativeIntegerInvariant):
-        _arg = "--reference-hdu"
-        _help = "Optional explicit HDU index for the reference FITS file."
-        _mandatory = False
-        _default = None
-
-    class TargetHduArg(NonNegativeIntegerInvariant):
-        _arg = "--target-hdu"
-        _help = "Optional explicit HDU index for the target FITS file."
-        _mandatory = False
-        _default = None
-
-    class VarianceArg(PathSpecInvariant):
-        _arg = "--variance"
-        _help = "Optional target variance image path (.fits or .npy)."
-        _mandatory = False
-        _default = None
-
-    class VarianceHduArg(NonNegativeIntegerInvariant):
-        _arg = "--variance-hdu"
-        _help = "Optional explicit HDU index for the variance FITS file."
-        _mandatory = False
-        _default = None
-
-    class ReferenceMaskArg(PathSpecInvariant):
-        _arg = "--reference-mask"
-        _help = (
-            "Optional reference mask path (.fits or .npy). "
-            "Defaults to --reference when mask-policy is enabled on FITS "
-            "input."
-        )
-        _mandatory = False
-        _default = None
-
-    class TargetMaskArg(PathSpecInvariant):
-        _arg = "--target-mask"
-        _help = (
-            "Optional target mask path (.fits or .npy). "
-            "Defaults to --target when mask-policy is enabled on FITS input."
-        )
-        _mandatory = False
-        _default = None
-
-    class ReferenceMaskHduArg(NonNegativeIntegerInvariant):
-        _arg = "--reference-mask-hdu"
-        _help = "Optional explicit HDU index for the reference FITS mask."
-        _mandatory = False
-        _default = None
-
-    class TargetMaskHduArg(NonNegativeIntegerInvariant):
-        _arg = "--target-mask-hdu"
-        _help = "Optional explicit HDU index for the target FITS mask."
-        _mandatory = False
-        _default = None
-
     class MaskPolicyArg(SetInvariant):
         _arg = "--mask-policy"
         _help = (
@@ -225,12 +151,6 @@ class _KernelSolveCommand(XPOISCommand):
         _mandatory = False
         _default = "none"
         _set = {"none", "strict", "hsc-masklite", "masklite"}
-
-    class FitMaskArg(PathSpecInvariant):
-        _arg = "--fit-mask"
-        _help = "Optional boolean .npy mask selecting fit pixels."
-        _mandatory = False
-        _default = None
 
     class AutoStampMaskArg(BoolInvariant):
         _arg = "--auto-stamp-mask"
@@ -380,6 +300,91 @@ class _KernelSolveCommand(XPOISCommand):
         return self.context.runs_dir
 
 
+class _KernelSolveCommand(_KernelSolveOptionsCommand):
+    reference = None
+    target = None
+    reference_hdu = None
+    target_hdu = None
+    variance = None
+    variance_hdu = None
+    reference_mask = None
+    target_mask = None
+    reference_mask_hdu = None
+    target_mask_hdu = None
+    fit_mask = None
+
+    class ReferenceArg(ImagePathInvariant):
+        _arg = "--reference"
+        _help = "Reference image path (.fits or .npy)."
+        _mandatory = True
+
+    class TargetArg(ImagePathInvariant):
+        _arg = "--target"
+        _help = "Target image path (.fits or .npy)."
+        _mandatory = True
+
+    class ReferenceHduArg(NonNegativeIntegerInvariant):
+        _arg = "--reference-hdu"
+        _help = "Optional explicit HDU index for the reference FITS file."
+        _mandatory = False
+        _default = None
+
+    class TargetHduArg(NonNegativeIntegerInvariant):
+        _arg = "--target-hdu"
+        _help = "Optional explicit HDU index for the target FITS file."
+        _mandatory = False
+        _default = None
+
+    class VarianceArg(PathSpecInvariant):
+        _arg = "--variance"
+        _help = "Optional target variance image path (.fits or .npy)."
+        _mandatory = False
+        _default = None
+
+    class VarianceHduArg(NonNegativeIntegerInvariant):
+        _arg = "--variance-hdu"
+        _help = "Optional explicit HDU index for the variance FITS file."
+        _mandatory = False
+        _default = None
+
+    class ReferenceMaskArg(PathSpecInvariant):
+        _arg = "--reference-mask"
+        _help = (
+            "Optional reference mask path (.fits or .npy). "
+            "Defaults to --reference when mask-policy is enabled on FITS "
+            "input."
+        )
+        _mandatory = False
+        _default = None
+
+    class TargetMaskArg(PathSpecInvariant):
+        _arg = "--target-mask"
+        _help = (
+            "Optional target mask path (.fits or .npy). "
+            "Defaults to --target when mask-policy is enabled on FITS input."
+        )
+        _mandatory = False
+        _default = None
+
+    class ReferenceMaskHduArg(NonNegativeIntegerInvariant):
+        _arg = "--reference-mask-hdu"
+        _help = "Optional explicit HDU index for the reference FITS mask."
+        _mandatory = False
+        _default = None
+
+    class TargetMaskHduArg(NonNegativeIntegerInvariant):
+        _arg = "--target-mask-hdu"
+        _help = "Optional explicit HDU index for the target FITS mask."
+        _mandatory = False
+        _default = None
+
+    class FitMaskArg(PathSpecInvariant):
+        _arg = "--fit-mask"
+        _help = "Optional boolean .npy mask selecting fit pixels."
+        _mandatory = False
+        _default = None
+
+
 class _FitCommand(_KernelSolveCommand):
     backend = None
 
@@ -488,6 +493,90 @@ class SubtractCommand(_FitCommand):
             run_prefix="subtract",
         )
         self._emit_json(result.summary)
+
+
+class FitBatchDragonCommand(_KernelSolveOptionsCommand):
+    """Fit an image-pair manifest with explicitly placed Dragon workers."""
+
+    manifest = None
+    max_workers = None
+    result_timeout_sec = None
+    worker_timeout_sec = None
+    backend = None
+
+    class ManifestArg(PathSpecInvariant):
+        _arg = "--manifest"
+        _help = "Strict JSON or YAML image-pair manifest."
+        _mandatory = True
+
+    class MaxWorkersArg(PositiveIntegerInvariant):
+        _arg = "--max-workers"
+        _help = "Maximum explicitly placed GPU workers."
+        _mandatory = False
+        _default = None
+
+    class ResultTimeoutSecArg(FloatInvariant):
+        _arg = "--result-timeout-sec"
+        _help = (
+            "Seconds of grace for ProcessGroup join and compact worker "
+            "results. [default: %default]"
+        )
+        _mandatory = False
+        _default = 60.0
+        _min = 0.001
+
+    class WorkerTimeoutSecArg(FloatInvariant):
+        _arg = "--worker-timeout-sec"
+        _help = (
+            "Dragon ProcessGroup worker wall time in seconds. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = 3600.0
+        _min = 0.001
+
+    class BackendArg(SetInvariant):
+        _arg = "--backend"
+        _help = "GPU fit backend. [default: %default]"
+        _mandatory = False
+        _default = "cupy"
+        _set = {"cupy", "numba-cuda", "cutile"}
+
+    def run(self) -> None:
+        components = self._components()
+        options = self._call(
+            BatchFitOptions,
+            kernel_shape=(self.kernel_height, self.kernel_width),
+            basis_sigmas=tuple(item.sigma for item in components),
+            basis_degrees=tuple(item.degree for item in components),
+            mask_policy=self.mask_policy,
+            crop_y0=self.crop_y0,
+            crop_x0=self.crop_x0,
+            crop_height=self.crop_height,
+            crop_width=self.crop_width,
+            auto_stamp_mask=bool(self.auto_stamp_mask),
+            auto_stamp_size=self.auto_stamp_size,
+            auto_stamp_count=self.auto_stamp_count,
+            auto_peak_percentile=self.auto_peak_percentile,
+            background_degree=self.background_degree,
+            flux_conserve=bool(self.flux_conserve),
+            backend=self.backend,
+        )
+        result = self._call(
+            run_dragon_image_pair_batch,
+            manifest_path=Path(self.manifest).expanduser(),
+            output_root=self._output_root(),
+            run_id=self.run_name or None,
+            max_workers=self.max_workers,
+            result_timeout_sec=self.result_timeout_sec,
+            worker_timeout_sec=self.worker_timeout_sec,
+            options=options,
+        )
+        self._emit_json(result.to_dict())
+        if result.status != "success":
+            raise CommandError(
+                "Dragon batch failed; inspect " + str(result.summary_path)
+            )
 
 
 class BenchmarkBackendsCommand(_KernelSolveCommand):

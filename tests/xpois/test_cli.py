@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,6 +55,139 @@ def test_help_for_benchmark_backends_command_case(capsys) -> None:
     assert "--backends" in captured.out
     assert "--reference-backend" in captured.out
     assert "--repeats" in captured.out
+
+
+def test_help_for_fit_batch_dragon_command(capsys) -> None:
+    rc = _run_cli(["help", "fit-batch-dragon"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "Usage: cuphoton xpois fit-batch-dragon" in captured.out
+    assert "--manifest" in captured.out
+    assert "--max-workers" in captured.out
+    assert "--result-timeout-sec" in captured.out
+    assert "--worker-timeout-sec" in captured.out
+    assert "[default: cupy]" in captured.out
+    assert "--reference" not in captured.out
+    assert "--target" not in captured.out
+    assert "--variance" not in captured.out
+    assert "--fit-mask" not in captured.out
+
+
+def test_fit_batch_dragon_accepts_manifest_without_pair_arguments(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    manifest = tmp_path / "pairs.yaml"
+    manifest.write_text("schema: cuphoton.xpois.image-pairs/v1\n")
+    summary = tmp_path / "run" / "summary.json"
+    seen = {}
+
+    def _run_dragon_image_pair_batch(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            status="success",
+            summary_path=summary,
+            to_dict=lambda: {"status": "success"},
+        )
+
+    monkeypatch.setattr(
+        commands,
+        "run_dragon_image_pair_batch",
+        _run_dragon_image_pair_batch,
+    )
+
+    rc = _run_cli(
+        [
+            "fit-batch-dragon",
+            "--manifest",
+            str(manifest),
+            "--output-dir",
+            str(tmp_path / "runs"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert json.loads(captured.out) == {"status": "success"}
+    assert seen["manifest_path"] == manifest
+    assert seen["options"].backend == "cupy"
+    assert seen["worker_timeout_sec"] == 3600.0
+
+
+def test_fit_batch_dragon_wraps_invalid_options(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    manifest = tmp_path / "pairs.yaml"
+    manifest.write_text("schema: cuphoton.xpois.image-pairs/v1\n")
+    called = False
+
+    def should_not_run(**kwargs):
+        del kwargs
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        commands,
+        "run_dragon_image_pair_batch",
+        should_not_run,
+    )
+
+    rc = _run_cli(
+        [
+            "fit-batch-dragon",
+            "--manifest",
+            str(manifest),
+            "--kernel-height",
+            "8",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert called is False
+    assert "kernel_shape must contain two positive odd values" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_fit_batch_dragon_rejects_auto_backend(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from cuphoton.xpois import commands
+
+    called = False
+
+    def should_not_run(**kwargs):
+        del kwargs
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        commands,
+        "run_dragon_image_pair_batch",
+        should_not_run,
+    )
+
+    rc = _run_cli(
+        [
+            "fit-batch-dragon",
+            "--manifest",
+            str(tmp_path / "pairs.yaml"),
+            "--backend",
+            "auto",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert called is False
+    assert "invalid choice: 'auto'" in captured.err
+    for backend in ("cupy", "cutile", "numba-cuda"):
+        assert backend in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_help_for_evaluate_subtraction_command(capsys) -> None:

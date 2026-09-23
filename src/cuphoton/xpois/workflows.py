@@ -119,12 +119,17 @@ def run_constant_kernel_fit(
         Run directory and JSON-compatible summary of saved artifacts.
     """
 
+    workflow_start = time.perf_counter()
+    run_setup_start = time.perf_counter()
     run_dir = _resolve_run_dir(output_root, name, run_prefix)
     run_dir.mkdir(parents=True, exist_ok=False)
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir()
+    run_setup_sec = time.perf_counter() - run_setup_start
 
     try:
+        prepare_start = time.perf_counter()
+        input_read_sec = 0.0
         if variance_hdu is not None and variance_path is None:
             raise ValueError("variance_hdu requires a variance image path")
         if fit_mask_path is not None and auto_stamp_mask:
@@ -164,21 +169,25 @@ def run_constant_kernel_fit(
                 "reference/target mask inputs require a non-'none' "
                 "mask_policy"
             )
-        reference, _, used_reference_hdu = load_image_with_wcs(
-            reference_path,
-            hdu=reference_hdu,
-        )
-        target, _, used_target_hdu = load_image_with_wcs(
-            target_path,
-            hdu=target_hdu,
-        )
-        variance = None
-        used_variance_hdu = None
-        if variance_path is not None:
-            variance, _, used_variance_hdu = load_variance_with_wcs(
-                variance_path,
-                hdu=variance_hdu,
+        input_read_start = time.perf_counter()
+        try:
+            reference, _, used_reference_hdu = load_image_with_wcs(
+                reference_path,
+                hdu=reference_hdu,
             )
+            target, _, used_target_hdu = load_image_with_wcs(
+                target_path,
+                hdu=target_hdu,
+            )
+            variance = None
+            used_variance_hdu = None
+            if variance_path is not None:
+                variance, _, used_variance_hdu = load_variance_with_wcs(
+                    variance_path,
+                    hdu=variance_hdu,
+                )
+        finally:
+            input_read_sec += time.perf_counter() - input_read_start
         crop_metadata: dict[str, int] | None = None
         if crop_y0 is not None:
             crop_metadata = {
@@ -199,18 +208,24 @@ def run_constant_kernel_fit(
         if normalized_mask_policy != MASK_POLICY_NONE:
             reference_mask_source = reference_mask_path or reference_path
             target_mask_source = target_mask_path or target_path
-            reference_mask, used_reference_mask_hdu, reference_plane_map = (
-                load_mask_with_planes(
+            input_read_start = time.perf_counter()
+            try:
+                (
+                    reference_mask,
+                    used_reference_mask_hdu,
+                    reference_plane_map,
+                ) = load_mask_with_planes(
                     reference_mask_source,
                     hdu=reference_mask_hdu,
                 )
-            )
-            target_mask, used_target_mask_hdu, target_plane_map = (
-                load_mask_with_planes(
-                    target_mask_source,
-                    hdu=target_mask_hdu,
+                target_mask, used_target_mask_hdu, target_plane_map = (
+                    load_mask_with_planes(
+                        target_mask_source,
+                        hdu=target_mask_hdu,
+                    )
                 )
-            )
+            finally:
+                input_read_sec += time.perf_counter() - input_read_start
             if crop_metadata is not None:
                 reference_mask = apply_rectangular_cutout(
                     reference_mask,
@@ -267,10 +282,14 @@ def run_constant_kernel_fit(
         fit_mask_kind: str | None = None
         fit_mask_metadata: dict[str, Any] | None = None
         if fit_mask_path is not None:
-            fit_mask = _load_fit_mask(
-                fit_mask_path.expanduser().resolve(),
-                expected_shape=target.shape,
-            )
+            input_read_start = time.perf_counter()
+            try:
+                fit_mask = _load_fit_mask(
+                    fit_mask_path.expanduser().resolve(),
+                    expected_shape=target.shape,
+                )
+            finally:
+                input_read_sec += time.perf_counter() - input_read_start
             fit_mask_kind = "explicit_mask"
         elif auto_stamp_mask:
             selection_image = np.where(
@@ -289,6 +308,9 @@ def run_constant_kernel_fit(
             fit_mask_kind = "auto_stamp_mask"
             fit_mask_metadata = auto_mask.to_metadata()
 
+        prepare_sec = time.perf_counter() - prepare_start
+        preprocess_sec = max(0.0, prepare_sec - input_read_sec)
+        solve_start = time.perf_counter()
         result = solve_constant_kernel(
             reference,
             target,
@@ -300,11 +322,19 @@ def run_constant_kernel_fit(
             flux_conserve=flux_conserve,
             backend=backend,
         )
+        solve_sec = time.perf_counter() - solve_start
 
+        postprocess_start = time.perf_counter()
+        artifact_write_sec = 0.0
+        review_generation_and_write_sec = 0.0
+        output_start = time.perf_counter()
         saved = _save_artifacts(artifacts_dir, result)
+        artifact_write_sec += time.perf_counter() - output_start
         if fit_mask_metadata is not None:
             fit_mask_metadata_path = artifacts_dir / "fit_mask_metadata.json"
+            output_start = time.perf_counter()
             _write_json(fit_mask_metadata_path, fit_mask_metadata)
+            artifact_write_sec += time.perf_counter() - output_start
             saved["fit_mask_metadata"] = str(
                 fit_mask_metadata_path.relative_to(artifacts_dir.parent)
             )
@@ -312,7 +342,9 @@ def run_constant_kernel_fit(
             preprocessing_metadata_path = (
                 artifacts_dir / "input_mask_metadata.json"
             )
+            output_start = time.perf_counter()
             _write_json(preprocessing_metadata_path, preprocessing_metadata)
+            artifact_write_sec += time.perf_counter() - output_start
             saved["input_mask_metadata"] = str(
                 preprocessing_metadata_path.relative_to(artifacts_dir.parent)
             )
@@ -342,13 +374,16 @@ def run_constant_kernel_fit(
                 )
             ),
         }
+        review_start = time.perf_counter()
         review_saved, hotspots = write_review_metadata(
             artifacts_dir,
             run_name=run_dir.name,
             residual=result.residual,
             review_metrics=review_metrics,
         )
+        review_generation_and_write_sec += time.perf_counter() - review_start
         saved.update(review_saved)
+        review_start = time.perf_counter()
         interactive_saved = write_interactive_review_artifact(
             artifacts_dir,
             run_name=run_dir.name,
@@ -410,12 +445,36 @@ def run_constant_kernel_fit(
                 else 1.0
             ),
         )
+        review_generation_and_write_sec += time.perf_counter() - review_start
         saved.update(interactive_saved)
 
         runtime = runtime_metadata(
             backend=result.backend,
             dtype=str(result.kernel.dtype),
         )
+        postprocess_total_sec = time.perf_counter() - postprocess_start
+        postprocess_other_sec = max(
+            0.0,
+            postprocess_total_sec
+            - artifact_write_sec
+            - review_generation_and_write_sec,
+        )
+        timings_sec = {
+            "run_setup_sec": run_setup_sec,
+            "input_read_sec": input_read_sec,
+            "preprocess_sec": preprocess_sec,
+            "solve_sec": solve_sec,
+            "artifact_write_sec": artifact_write_sec,
+            "review_generation_and_write_sec": (
+                review_generation_and_write_sec
+            ),
+            "postprocess_other_sec": postprocess_other_sec,
+        }
+        wall_sec = {
+            "workflow_before_summary_write": (
+                time.perf_counter() - workflow_start
+            )
+        }
         summary = {
             "workflow": workflow_name,
             "package_version": __version__,
@@ -435,6 +494,8 @@ def run_constant_kernel_fit(
             "device": runtime["device"],
             "dtype": str(result.kernel.dtype),
             "runtime": runtime,
+            "timings_sec": timings_sec,
+            "wall_sec": wall_sec,
             "fit_pixel_count": result.fit_pixel_count,
             "chi2": result.chi2,
             "dof": result.dof,

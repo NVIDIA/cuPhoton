@@ -54,6 +54,17 @@ more than one license.
 | `dev` | `pytest>=8.3` | `9.1.1` | `MIT` | [pytest](https://github.com/pytest-dev/pytest) | `uv / PyPI` |
 | `dev` | `ruff>=0.15.12` | `0.15.20` | `MIT` | [Ruff](https://github.com/astral-sh/ruff) | `uv / PyPI` |
 
+## Optional distributed runtime inventory
+
+XPOIS distributed execution requires the runtime selected by the caller.
+These runtimes are installed separately from cuPhoton and are not included
+in its wheel or dependency lock. See the
+[XPOIS guide](docs/components/xpois.md) for installation and launch details.
+
+| Runtime | License and upstream notices | Use and installation |
+| --- | --- | --- |
+| DragonHPC (`dragonhpc`; import `dragon`) | [MIT](https://github.com/DragonHPC/dragon/blob/0.14.2/LICENSE) | Required for Dragon workers, placement and communication. Install separately in cuPhoton's Python environment; no Dragon source or binaries are bundled. |
+
 ## Native system dependency inventory
 
 | Package | Version or version range | License identifier | Upstream | Use in cuPhoton | Distribution |
