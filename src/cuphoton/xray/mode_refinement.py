@@ -8,8 +8,8 @@ linear prediction.
 Linear prediction gives frequencies and decays without an initial guess,
 but it is not a maximum-likelihood estimator and its root filter can drop a
 lightly damped mode under noise. Refining the same damped-mode model by
-nonlinear least squares from the linear-prediction result recovers the
-Cramer-Rao bound, and a mode the filter dropped can be seeded from the
+nonlinear least squares from the linear-prediction result can improve
+parameter estimates, and a mode the filter dropped can be seeded from the
 peak of the residual spectrum before refinement. The model is
 
     trace(t) = c + sum_k A_k exp(-d_k t) cos(w_k t + p_k)
@@ -33,9 +33,10 @@ class RefinedModes:
     """Refined damped modes and the fit diagnostics.
 
     Arrays are ordered by descending amplitude. ``sigma_*`` are one-sigma
-    uncertainties from the Jacobian at the solution and the residual
-    variance; ``initial_mode_count`` is how many oscillating modes the
-    linear-prediction step supplied and ``seeded_mode_count`` how many had
+    local uncertainties from the Jacobian and residual variance. They are
+    NaN when the scaled Jacobian is rank deficient or no residual degrees
+    of freedom remain. ``initial_mode_count`` is how many oscillating modes
+    the linear-prediction step supplied and ``seeded_mode_count`` how many had
     to be seeded from the residual spectrum.
     """
 
@@ -127,13 +128,21 @@ def refine_modes(
     theta = res.x
     model, jac = _model_and_jacobian(theta, time, n)
     resid = trace - model
-    dof = max(time.size - theta.size, 1)
-    var = float(resid @ resid) / dof
+    dof = time.size - theta.size
+    sigma = np.full(theta.size, np.nan)
     try:
-        cov = np.linalg.inv(jac.T @ jac) * var
-        sigma = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+        # Normalize columns before testing rank so parameter units do not
+        # determine identifiability. SVD avoids squaring the condition number.
+        scale = np.linalg.norm(jac, axis=0)
+        scale = np.where(scale > 0, scale, 1.0)
+        _, singular, vh = np.linalg.svd(jac / scale, full_matrices=False)
+        cutoff = np.finfo(float).eps * max(jac.shape) * singular[0]
+        if dof > 0 and np.all(singular > cutoff):
+            var = float(resid @ resid) / dof
+            sigma = np.sqrt(np.sum((vh / singular[:, None]) ** 2, axis=0))
+            sigma *= np.sqrt(var) / scale
     except np.linalg.LinAlgError:
-        sigma = np.full(theta.size, np.nan)
+        pass
     amp = theta[0 : 4 * n : 4].copy()
     dec = theta[1 : 4 * n : 4].copy()
     freq = theta[2 : 4 * n : 4].copy()
