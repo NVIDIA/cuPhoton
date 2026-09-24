@@ -1,111 +1,106 @@
-# Linear prediction benchmarks by GPU
+# Running and interpreting XRay benchmarks
 
-Measured timings of the xray linear-prediction benchmark commands on named
-hardware, with the commands to reproduce them. Add a section per machine;
-keep the raw JSON outside the checkout and record the source revision the
-run used.
+The XRay benchmark commands compare individual stages on synthetic traces.
+Use them to investigate a workload before measuring the full detector path.
+Keep generated JSON and profiling output outside the checkout, as described
+in [Performance records](GPU-FIRST.md#performance-records).
 
-## How the commands measure
+## Choose a stage
 
-`linear-prediction-benchmark` (`lpb`), `linear-prediction-p2-benchmark`
-(`lppb`) and `linear-prediction-savgol-benchmark` (`lpsb`) share one
-procedure:
+| Command | Timed work | CPU reference |
+| --- | --- | --- |
+| `linear-prediction-benchmark` (`lpb`) | P1: Hankel construction, SVD, prediction coefficients, and roots | NumPy loop over traces |
+| `linear-prediction-p2-benchmark` (`lppb`) | P2: least squares and reconstruction using modes selected before timing | NumPy loop over traces |
+| `linear-prediction-savgol-benchmark` (`lpsb`) | Savitzky-Golay smoothing | One SciPy call on the two-dimensional batch |
 
-- `synthetic_trace_batch` generates `--traces` rows on the host, with 96
-  samples by default and varying frequencies, phases and offsets by row.
-- CPU: P1 and P2 use a serial NumPy loop over the rows; Savitzky-Golay
-  calls SciPy once on the full two-dimensional batch along the sample axis.
-  Timings are the best of `--repeat` runs (default 3) by `perf_counter`.
-- GPU: the time axis and the trace rows are copied to the device once,
-  before any timing. Bulk input uploads and final result downloads are
-  excluded; internal scalar transfers and synchronization remain included.
-  One untimed warm-up call of each GPU path runs first. Each
-  repeat is bracketed by `cupy.cuda.Stream.null.synchronize()` and the best
-  of `--repeat` runs is reported for the serial (one call per trace) and the
-  batched (one call for all traces) paths.
-- Numerical agreement between CPU and GPU results is reported alongside
-  (`max_abs_coefficient_diff`, `max_abs_eigenvalue_diff`,
-  `max_abs_reconstruction_diff`, `max_abs_filter_diff`).
+`synthetic_trace_batch` generates rows on the host, varying frequencies,
+phases, and offsets by row. These paths use float64. P2 selects its fixed
+decays and frequencies from the first row before timing; it does not measure
+mode selection or a complete fit for each row.
 
-`--json` prints the same fields the tables below quote.
+## Run a comparison
 
-## NVIDIA GeForce RTX 4050 Laptop GPU (Ada, compute capability 8.9, 6 GiB)
-
-Host: Intel Core i9-13900H, WSL2 Ubuntu 24.04 on Windows 11, Linux
-6.18.33.2-microsoft-standard-WSL2, driver 596.49, CUDA runtime 13.2, CuPy
-14.1.1, Python 3.12, cuPhoton main 9e91835, `uv sync --locked --extra dev
---extra gpu`. WSL memory cap 5 GB, 4 processors. Best of 3 repeats, command
-defaults except where stated. These benchmark paths use float64.
+Install the CUDA 13 environment described in [Environment setup](ENVIRONMENT.md).
+For example, capture one run of each stage with explicit settings:
 
 ```bash
-uv run cuphoton xray lpb --traces 16 --components 8 --json
-uv run cuphoton xray lpb --traces 256 --components 8 --json
-uv run cuphoton xray lpb --traces 2048 --components 8 --json
-uv run cuphoton xray lppb --traces 16 --json
-uv run cuphoton xray lpsb --traces 16 --json
+mkdir -p /tmp/cuphoton-xray-benchmarks
+uv run --locked --extra gpu cuphoton xray lpb \
+  --samples 96 --traces 16 --components 8 --roots-backend eigvals \
+  --repeat 3 --json > /tmp/cuphoton-xray-benchmarks/p1.json
+uv run --locked --extra gpu cuphoton xray lppb \
+  --samples 96 --traces 16 --components 8 --repeat 3 \
+  --json > /tmp/cuphoton-xray-benchmarks/p2.json
+uv run --locked --extra gpu cuphoton xray lpsb \
+  --samples 96 --traces 16 --window-length 11 --polyorder 3 --repeat 3 \
+  --json > /tmp/cuphoton-xray-benchmarks/savgol.json
 ```
 
-| Benchmark | traces | CPU best (s) | GPU serial best (s) | GPU batched best (s) | GPU serial / GPU batched | CPU / GPU batched |
-| --- | --- | --- | --- | --- | --- | --- |
-| P1, SVD and roots (`lpb`, CPU serial) | 16 | 0.0142 | 0.235 | 0.214 | 1.10 | 0.066 |
-| P1, SVD and roots (`lpb`, CPU serial) | 256 | 0.239 | 3.61 | 3.55 | 1.02 | 0.067 |
-| P1, SVD and roots (`lpb`, CPU serial) | 2048 | 1.83 | 31.4 | 29.0 | 1.08 | 0.063 |
-| P2, fixed-shape fit (`lppb`, 2 modes, 8 components) | 16 | 0.00097 | 0.0527 | 0.00334 | 15.8 | 0.29 |
-| Savitzky-Golay (`lpsb`, CPU batched, window 11, order 3) | 16 | 0.00028 | 0.0643 | 0.0039 | 16.5 | 0.072 |
+For a CPU-only smoke check, omit `--extra gpu` and add `--no-gpu` to each
+command. Use separate output locations when changing settings. Increase
+`--traces` or `--samples` to investigate batch size and trace length; keep
+the requested component count explicit in comparisons.
 
-The commands above explicitly request the source default of eight P1
-components. The original timing notes labeled P1 as six components but
-supplied commands with the default; raw command output was not retained
-with this page, so the requested order for these measurements is unverified.
-Rerun the explicit commands before making an order-specific timing comparison.
+## Timing boundaries
 
-CPU and GPU coefficients agree to 3e-15 and eigenvalues to 2e-13 in every P1
-run; P2 reconstructions and Savitzky-Golay filters agree to 3e-15 and 7e-15.
+CPU timings use `perf_counter` and report the minimum of `--repeat` calls.
+There is no separate CPU warm-up call. GPU timings exclude the initial bulk
+input upload and final result download. Each GPU path runs once before
+timing, then each measured call is bracketed by
+`cupy.cuda.Stream.null.synchronize()`. Internal scalar transfers and
+synchronization remain in the measured interval.
 
-### Where the P1 GPU time goes
+The GPU serial path calls the operation for each trace; the batched path
+passes all rows in one call. P1's batched comparison is available with
+`--roots-backend eigvals`. The `roots` option compares serial paths only;
+availability depends on the backend and library version. None of these
+timers includes HDF5 loading or the complete detector workflow.
 
-Same machine and revision, `lpb --traces 256`, with `cProfile` around the
-benchmark function and `cupyx.profiler.benchmark` (3 repeats after a
-warm-up) on arrays of the real sizes: Hankel matrices 24 x 71 and companion
-matrices 71 x 71, batch of 256.
+The reported minimum is a best observed time, not a median or a measure of
+run-to-run variability. These commands do not retain the individual repeat
+times. A performance study that needs a distribution must capture repeated
+measurements explicitly; do not label the existing minimum as a median.
 
-The exact profiling script and raw outputs are not included. The call counts
-below match one timed repeat plus warm-up for each P1 path, rather than the
-three repeats used by the main table. Treat these as separate reported
-observations until the original profile invocation is available.
+## Read the JSON
 
-| Stage, batch of 256 | GPU, batched 3-D call | GPU, serial Python loop | NumPy serial |
-| --- | --- | --- | --- |
-| SVD of the 24 x 71 Hankel matrices | 855 ms (3.34 ms per trace) | 963 ms (3.76 ms per trace) | 29 ms (0.11 ms per trace) |
-| Eigenvalues of the 71 x 71 companion matrices | 2106 ms (8.23 ms per trace) | 2101 ms (8.21 ms per trace) | 171 ms (0.67 ms per trace) |
+Check `gpu_error` and the GPU timing fields first. A missing GPU result is
+not evidence of a successful comparison. With `--no-gpu`, GPU timings are
+unset intentionally.
 
-In the profile of the 13.5 s benchmark run, `cusolver.xgeev` takes 9.18 s in
-1024 calls, one per matrix: `cupy.linalg.eigvals` on a 3-D array loops over
-the batch and calls `xgeev` per matrix, which is why the batched time equals
-the serial-loop time. `cusolverDnDgesvd` takes 0.96 s in 512 calls on the
-serial path and `_gesvd_batched` 1.66 s on the batched path. At 96 samples
-the per-trace linear algebra is far below the size at which these routines
-are efficient, and the batched P1 path serialises at the library level, not
-in cuPhoton's code.
+`gpu_batch_speedup` is GPU serial time divided by GPU batched time. It says
+how much batching helps the GPU path. To compare with the CPU, divide
+`cpu_serial_best_s` by `gpu_batched_best_s`. Despite its name,
+`cpu_serial_best_s` measures one batched SciPy call for smoothing. A ratio
+above one means the GPU took less time; below one means the CPU took less
+time. These ratios have different baselines.
 
-Trace length, 32 traces, best of 2, same machine:
+Read numerical differences alongside timings: P1 reports coefficient and
+eigenvalue differences, P2 reconstruction differences, and smoothing filter
+differences. Small differences in coefficients or roots alone do not prove
+that mode selection and the final scientific result are unchanged. Inspect
+recovered modes and reconstructions before adopting an alternative solver.
 
-| samples | companion size | CPU serial per trace | GPU batched per trace | CPU / GPU batched |
-| --- | --- | --- | --- | --- |
-| 96 | 71 x 71 | 0.84 ms | 11.9 ms | 0.07 |
-| 256 | 191 x 191 | 18.6 ms | 86.6 ms | 0.21 |
-| 512 | 383 x 383 | 93.8 ms | 229 ms | 0.41 |
-| 1024 | 767 x 767 | 486 ms | 718 ms | 0.68 |
+Record the source revision, command, input shape, dtype, Python/package
+versions, CPU and thread settings, GPU, driver, and CUDA runtime with the
+result. The benchmark JSON contains stage timings and comparison fields;
+it does not capture all of this environment information automatically.
 
-The GPU closes the gap as the companion matrix grows but has not crossed
-over by 1024 samples on this card. On both sides the cost is the O(m^3)
-eigenproblem of a companion matrix whose order tracks the trace length
-while only a handful of poles are wanted. Options, in order of effort:
-route P1 to the CPU for short traces and keep the GPU for P2 and
-Savitzky-Golay, which batch well; evaluate the existing experimental
-`subspace-benchmark` and `subspace-acceptance` matrix-pencil implementation
-(Hua and Sarkar, 1990), where the k
-signal poles are the eigenvalues of a k x k matrix built from the SVD
-subspace, so the large general eigenproblem and its spurious roots
-disappear; or batch the small eigenproblems with a custom kernel if the
-companion route must stay.
+## Investigate the P1 eigenvalue solve
+
+P1 builds companion matrices whose size grows with trace length. In
+[CuPy 14.1.1](https://github.com/cupy/cupy/blob/v14.1.1/cupy/linalg/_eigenvalue.py#L181-L192),
+`cupy.linalg.eigvals` loops over the matrices of a three-dimensional input
+and invokes `cusolver.xgeev` once per matrix. Passing a batch therefore
+does not imply one batched eigensolver operation. Profile the installed
+version and workload to determine whether this stage dominates elapsed time.
+
+The existing `subspace-benchmark` and `subspace-acceptance` commands compare
+experimental matrix-pencil and ESPRIT methods with linear prediction. Their
+reduced eigenproblems use the chosen subspace order. They change the estimator
+and require accuracy and mode-recovery checks; they are not interchangeable
+root-solving backends. Inspect their options with:
+
+```bash
+uv run --locked cuphoton xray help subspace-benchmark
+uv run --locked cuphoton xray help subspace-acceptance
+```
