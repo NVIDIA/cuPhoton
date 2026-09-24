@@ -717,8 +717,8 @@ transport of an already running Dragon session. The worker wall-time limit
 covers the entire invocation, including warmups and all measured rounds.
 
 See [Dragon transport and coordination](../dragon.md) for native HSTA TCP
-launch options, queue placement in custom coordinators, and measurement
-boundaries.
+launch options, consumer-local queues in the pending persistent executors,
+and measurement boundaries.
 
 ### Results and limits
 

@@ -38,8 +38,8 @@ intend to adapt.
 ## Adapting and validating
 
 - [Architecture](architecture.md): package boundaries and execution model.
-- [Dragon transport and coordination](dragon.md): transport selection, queue
-  placement, and timing comparisons.
+- [Dragon transport and coordination](dragon.md): execution models,
+  consumer-local queues, transport selection, and timing boundaries.
 - [Adapting the workflows](adapting-workflows.md): a practical extension
   process.
 - [Data and artifact contracts](data-artifacts.md): shapes, files, metadata,
