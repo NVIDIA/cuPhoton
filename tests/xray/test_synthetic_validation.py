@@ -4,6 +4,7 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -159,6 +160,49 @@ def test_estimator_errors_count_as_failed_trials():
     assert level.trials_failed == 3 and level.trials_successful == 0
     assert all(m.loss_rate == 1.0 for m in level.modes)
     assert np.isnan(level.residual_ratio)
+
+
+@pytest.mark.parametrize("amplitude", [-1.0, 1.0])
+@pytest.mark.parametrize("phase", [0.3, 0.3 + 4 * np.pi])
+def test_sweep_uses_the_same_amplitude_phase_convention_for_truth_and_fit(
+    amplitude, phase
+):
+    mode = DampedMode(amplitude, 0.1, 2.0, phase)
+    fixture = synthetic_modes_trace(modes=(mode,))
+
+    def exact_estimator(t, y, k):
+        return SimpleNamespace(
+            amplitude=np.array([mode.amplitude]),
+            decay=np.array([mode.decay]),
+            angular_frequency=np.array([mode.angular_frequency]),
+            phase=np.array([mode.phase]),
+            reconstruction=fixture.clean,
+        )
+
+    sweep = validation_sweep(
+        modes=(mode,),
+        snr_db=(30.0,),
+        trials=2,
+        n_components=1,
+        estimator=exact_estimator,
+    )
+    result = sweep.levels[0].modes[0]
+    assert result.recovered_trials == 2
+    for name in PARAMETERS:
+        stats = getattr(result, name)
+        assert stats.bias == pytest.approx(0.0, abs=1e-14)
+        assert stats.rmse == pytest.approx(0.0, abs=1e-14)
+        assert stats.truth == getattr(sweep.modes[0], name)
+
+    canonical = synthetic_modes_trace(modes=sweep.modes)
+    np.testing.assert_allclose(canonical.clean, fixture.clean, atol=1e-14)
+    summary = build_summary([sweep])
+    truth = summary["config"]["truth"]["modes"][0]
+    assert truth["amplitude"] == 1.0
+    expected_phase = 0.3 - np.pi if amplitude < 0 else 0.3
+    assert truth["phase"] == pytest.approx(expected_phase)
+    for name in PARAMETERS:
+        assert summary["results"][0]["modes"][0][name]["truth"] == truth[name]
 
 
 def test_summary_schema_and_run_artifacts(tmp_path):
