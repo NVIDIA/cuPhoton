@@ -38,19 +38,32 @@ jobs:
       matrix:
         python: ["3.12", "3.13", "3.14"]
         platform:
-          - {runner: ubuntu-24.04, subdir: linux-64}
-          - {runner: ubuntu-24.04-arm, subdir: linux-aarch64}
+          - runner: ubuntu-24.04
+            subdir: linux-64
+            pixi-target: x86_64-unknown-linux-musl
+            pixi-sha256: a40e0cb519c681b76cf5ae3a2bdb72e98edde6b1a72cc6a2469edaa4f2c68dca
+          - runner: ubuntu-24.04-arm
+            subdir: linux-aarch64
+            pixi-target: aarch64-unknown-linux-musl
+            pixi-sha256: bac5949b12ec65d76ea5a9d22b67340b2447cf6ccaa34deac1386430b45b5231
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
-        with:
-          pixi-version: v0.62.2
-          run-install: false
-          cache: false
+      - name: Install pinned Pixi
+        env:
+          PIXI_TARGET: ${{ matrix.platform.pixi-target }}
+          PIXI_SHA256: ${{ matrix.platform.pixi-sha256 }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/pixi-bin"
+          curl --fail --location --retry 3 \
+            "https://github.com/prefix-dev/pixi/releases/download/v0.62.2/pixi-${PIXI_TARGET}" \
+            --output "${RUNNER_TEMP}/pixi-bin/pixi"
+          printf '%s  %s\n' "${PIXI_SHA256}" "${RUNNER_TEMP}/pixi-bin/pixi" | sha256sum --check
+          chmod +x "${RUNNER_TEMP}/pixi-bin/pixi"
+          echo "${RUNNER_TEMP}/pixi-bin" >> "${GITHUB_PATH}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cuphoton-conda-source
