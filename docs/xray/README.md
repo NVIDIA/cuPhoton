@@ -1,8 +1,9 @@
 # XRay
 
-`cuphoton.xray` provides X-ray trace extraction, linear-prediction analysis,
-detector artifact generation, numerical validation, and standalone review
-views. It is available through the `cuphoton xray` command group.
+`cuphoton.xray` provides X-ray trace extraction, linear prediction, optional
+iterative fitting, detector artifact generation, numerical validation, and
+standalone review views. It is available through the `cuphoton xray` command
+group.
 
 XRay is GPU-first for high-throughput detector work. Supported operations fall
 back to NumPy for CPU smoke and correctness runs; commands that require a GPU
@@ -100,10 +101,92 @@ uses the unregularized least-squares path. Treat a nonzero value as an
 experiment configuration that requires independent validation, not as a
 general-purpose default.
 
-Detector artifact manifests are now version 2 and record the diagnostics level
-and ridge alpha in the resume identity. Version 1 manifests still load, but
-shards written before this change no longer match the resume identity, so a
-resumed run recomputes them once and rewrites them as version 2.
+For linear prediction, detector artifact manifests use version 2 and record
+the diagnostics level and ridge alpha in the resume identity. Version 1 manifests
+still load, but shards written before this change no longer match the resume
+identity, so a resumed linear-prediction run recomputes them once and rewrites
+them as version 2. Iterative fitting uses manifest version 3.
+
+## Optional iterative fitting
+
+Use `iterative_fit` to fit a fixed number of damped cosine modes plus a
+constant offset. Linear prediction remains the default for detector work.
+Start with a small synthetic trace:
+
+```python
+import numpy as np
+
+from cuphoton.xray.iterative_fit import IterativeFitOptions, iterative_fit
+
+time = np.linspace(0.0, 20.0, 241)
+trace = 0.2 + 2.0 * np.exp(-0.08 * time) * np.cos(2 * np.pi * 0.3 * time)
+fit = iterative_fit(
+    time, trace, components=1,
+    options=IterativeFitOptions(max_frequency=1.0),
+)
+print(fit.converged, fit.status, fit.relative_residual)
+print(fit.angular_frequency / (2 * np.pi))
+```
+
+The default API backend is `cpu`. Pass `backend="gpu"` for CuPy iterations;
+initialization runs on the CPU and an explicitly requested GPU must be
+available. Both paths return NumPy arrays. Time samples must be finite,
+increasing and uniformly spaced (allowing float32 rounding of delay metadata).
+Frequency bounds and detector frequency arrays use cycles per input time
+unit. The API's `angular_frequency` uses radians per input time unit;
+divide by `2 * np.pi` to obtain cycles per time unit, as in the example.
+Decay rates use inverse time units, and phases refer to the first fitted
+sample. For time measured in picoseconds, cycles per time unit are THz.
+
+This method uses a Levenberg-Marquardt iteration with analytic derivatives.
+Positive decay rates use a logarithmic parameter; an arctangent transform
+keeps frequency inside the configured bounds. Automatic initial guesses
+come from the trace's spectrum. The model has `4 * components + 1`
+parameters; choose a small mode count relative to the available samples.
+It can converge to a local minimum, especially for overlapping modes or
+poorly resolved frequencies.
+
+Frequency bounds apply to the signed internal frequency. A negative
+`min_frequency` can move the lower optimization boundary away from zero.
+Returned modes use nonnegative frequencies and amplitudes, with phases
+adjusted to preserve the reconstructed signal.
+
+`amplitude_l2` adds an amplitude penalty to the objective:
+`0.5 * sum((reconstruction - trace)**2) + amplitude_l2 * sum(amplitude**2)`.
+The default is zero. A nonzero value changes the scientific fit and must
+be selected for the dataset. `chi2` is the mean squared reconstruction
+residual without this penalty. A convergence flag describes the optimizer;
+it does not establish that the recovered modes are physically correct.
+
+Inspect `status` when a fit does not converge. `iteration-limit` means the
+iteration budget was exhausted. `stalled` means repeated trial steps failed
+to improve the objective and exhausted the damping range before reaching
+the stationarity tolerance. `nonfinite` means this rejection limit was
+reached with a nonfinite trial. These results retain the best finite fit
+for inspection. Increasing `max_iterations` only addresses the iteration
+budget; a stalled fit requires examining the trace, model and initialization.
+
+For detector artifacts, add these options to the HDF5 example above:
+
+```text
+--fit-method iterative --components 2 --iterative-max-frequency 1.0
+--iterative-max-iterations 600 --fit-diagnostics full
+```
+
+Detector normalization, smoothing and FFTs use CuPy. Sequential iterative
+row fits run on the CPU to avoid per-iteration GPU synchronization; this
+does not change the standalone API's explicit GPU option. The iterative
+method returns modal center frequencies directly.
+The amplitude threshold still controls the displayed signal selection.
+Failed convergence counts against the detector's fit-failure budget.
+Use a bounded region and inspect reconstructions and recovered modes before
+running a whole detector.
+
+The implementation follows the damped-cosine model and LM update developed
+by Irina Demeshko, with fitting-workflow contributions from Malte Foerster.
+It provides NumPy/CuPy numerical paths with explicit controls. Compare
+representative traces against linear prediction and expected physical
+modes for each experiment.
 
 ## Input and artifact boundary
 

@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import json
+import sys
 import warnings
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -1437,3 +1439,231 @@ def _assert_detector_outputs_match(
             )
         else:
             np.testing.assert_array_equal(actual[name], values)
+
+
+@pytest.mark.parametrize(
+    "method,options,ridge,match",
+    [
+        ("unknown", None, 0, "fit_method"),
+        ("iterative", None, 0.1, "p2_ridge_alpha"),
+        ("linear-prediction", "default", 0, "iterative options require"),
+        ("iterative", "invalid", 0, "max_iterations"),
+    ],
+)
+def test_detector_fit_options_fail_before_gpu_or_input_access(
+    tmp_path, method, options, ridge, match
+):
+    from cuphoton.xray.iterative_fit import IterativeFitOptions
+
+    if options == "default":
+        options = IterativeFitOptions()
+    elif options == "invalid":
+        options = IterativeFitOptions(max_iterations=0)
+    with pytest.raises(ValueError, match=match):
+        build_detector_artifacts_cupy(
+            h5dir=tmp_path / "missing",
+            fon="on.h5",
+            foff="off.h5",
+            output_dir=tmp_path / "out",
+            fit_method=method,
+            iterative_options=options,
+            p2_ridge_alpha=ridge,
+        )
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("converged", [True, False])
+def test_iterative_detector_dispatch_and_convergence_diagnostics(
+    tmp_path, monkeypatch, converged
+):
+    import cuphoton.xray.detector_artifacts as artifacts
+    import cuphoton.xray.iterative_fit as solver
+
+    time = np.linspace(0, 1, 8)
+    result = SimpleNamespace(
+        time=time,
+        reconstruction=np.cos(time),
+        time_components=np.cos(time)[:, None],
+        angular_frequency=np.asarray([2 * np.pi * 0.25]),
+        decay=np.asarray([0.2]),
+        amplitude=np.asarray([3.0]),
+        phase=np.asarray([0.1]),
+        offset=0.5,
+        chi2=0.01,
+        trace_std=2.0,
+        residual_std=0.1,
+        relative_residual=0.05,
+        converged=converged,
+        status="converged" if converged else "iteration-limit",
+        iterations=20,
+        cost=0.04,
+        gradient_norm=1e-8,
+    )
+    captured = {}
+    trace = np.cos(time)
+
+    def fit(time_arg, trace_arg, components, **kwargs):
+        assert time_arg is time
+        assert trace_arg is trace
+        captured.update(kwargs, components=components)
+        return result
+
+    monkeypatch.setattr(solver, "iterative_fit", fit)
+    monkeypatch.setattr(
+        artifacts,
+        "_tdsfft_cupy",
+        lambda *args: (np.asarray([0, 1]), np.asarray([2, 3])),
+    )
+    time_gpu = SimpleNamespace(host=time)
+    trace_gpu = SimpleNamespace(host=trace)
+    cp = SimpleNamespace(
+        asnumpy=lambda value: (
+            value.host if hasattr(value, "host") else np.asarray(value)
+        )
+    )
+    options = solver.IterativeFitOptions(max_iterations=20)
+    args = dict(
+        cp=cp,
+        time_gpu=time_gpu,
+        trace_gpu=trace_gpu,
+        components=1,
+        roots_backend="eigvals",
+        padded_length=4,
+        fit_method="iterative",
+        iterative_options=options,
+        fit_diagnostics="full",
+    )
+    writer = _FitDiagnosticsWriter(tmp_path, "full", schema_version=2)
+    if converged:
+        row = artifacts._fit_detector_row(**args)
+        np.testing.assert_array_equal(row["freq"], [0.25, 0, 0, 0])
+        np.testing.assert_array_equal(row["amp"], [3, 0, 0, 0])
+        writer.append(
+            dict(
+                tile_x_start=0,
+                tile_x_stop=1,
+                tile_y_start=0,
+                tile_y_stop=1,
+                detector_y=0,
+                **row["diagnostics"],
+            )
+        )
+    else:
+        with pytest.raises(ValueError, match="iteration-limit") as raised:
+            artifacts._fit_detector_row(**args)
+        assert isinstance(raised.value, artifacts._fit_error_types(cp))
+        # Retain failure details without accepting the fitted modes.
+        writer._set_time(time)
+        artifacts._append_non_ok_fit_diagnostic(
+            writer,
+            level="full",
+            fit_status=artifacts.FIT_STATUS_FAILED,
+            x0=0,
+            x1=1,
+            y0=0,
+            y1=1,
+            detector_y=0,
+            iterative_result=raised.value.iterative_result,
+        )
+    metadata = writer.finalize(source_identity_sha256="a" * 64)
+    assert captured == {"options": options, "backend": "cpu", "components": 1}
+    assert metadata["schema_version"] == 2
+    with np.load(tmp_path / FIT_DIAGNOSTICS_FILE, allow_pickle=False) as data:
+        assert data["converged"].tolist() == [int(converged)]
+        assert data["optimizer_status"].tolist() == [result.status]
+        assert data["iterations"].tolist() == [20]
+        assert data["offset"].tolist() == [0.5]
+        assert data["mode_offsets"].tolist() == [0, int(converged)]
+        assert not any(name.startswith(("p1_", "p2_")) for name in data.files)
+        assert "selected_model_order" not in data.files
+
+
+def test_detector_artifacts_cli_forwards_iterative_controls(
+    tmp_path, monkeypatch, capsys
+):
+    import cuphoton.xray.detector_artifacts as artifacts
+
+    captured = {}
+
+    def build(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(to_dict=lambda: {"complete": True})
+
+    monkeypatch.setattr(artifacts, "build_detector_artifacts_cupy", build)
+    assert (
+        main(
+            [
+                "detector-artifacts",
+                "--h5dir",
+                str(tmp_path),
+                "--fon",
+                "on.h5",
+                "--foff",
+                "off.h5",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--fit-method",
+                "iterative",
+                "--iterative-max-iterations",
+                "40",
+                "--iterative-amplitude-l2",
+                "0.02",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {"complete": True}
+    assert captured["fit_method"] == "iterative"
+    assert captured["iterative_options"].max_iterations == 40
+    assert captured["iterative_options"].amplitude_l2 == 0.02
+
+
+def test_iterative_artifact_build_never_uses_lp_batch(tmp_path, monkeypatch):
+    import cuphoton.xray.detector_artifacts as artifacts
+    from cuphoton.core.runtime import runtime_metadata
+
+    _write_synthetic_hdf5_pair(tmp_path, samples=48, rows=4, cols=4)
+    monkeypatch.setitem(sys.modules, "cupy", np)
+    monkeypatch.setitem(
+        sys.modules,
+        "cupyx.scipy.signal",
+        SimpleNamespace(
+            savgol_filter=lambda values, *_args, **_kwargs: values
+        ),
+    )
+    monkeypatch.setattr(artifacts, "_ensure_cuda_device", lambda _cp: None)
+    monkeypatch.setattr(
+        artifacts,
+        "runtime_metadata",
+        lambda **_kwargs: runtime_metadata(backend="cpu", dtype="float64"),
+    )
+    calls = []
+
+    def fit_row(**kwargs):
+        calls.append(kwargs)
+        return {
+            name: np.ones(kwargs["padded_length"], dtype=np.float64)
+            for name in ("freq", "amp", "fft", "fft_freq")
+        }
+
+    monkeypatch.setattr(artifacts, "_fit_detector_row", fit_row)
+    monkeypatch.setattr(
+        artifacts,
+        "_fit_detector_rows_batched",
+        lambda **_kwargs: pytest.fail("iterative fitting entered LP batch"),
+    )
+    result = _build_synthetic_detector_artifacts(
+        tmp_path,
+        tmp_path / "iterative",
+        fit_method="iterative",
+    )
+
+    assert result.raw_fits == 4
+    assert result.batched_tiles == 0
+    assert len(calls) == 4
+    assert all(call["fit_method"] == "iterative" for call in calls)
+    assert all(call["iterative_options"] is not None for call in calls)
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["fit_method"] == "iterative"
+    assert manifest["batched_tiles"] == 0
