@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 GPU_FIRST_POLICY = """\
-XRay GPU-capable paths prefer NVIDIA GPU execution through CuPy. Supported
+xRay GPU-capable paths prefer NVIDIA GPU execution through CuPy. Supported
 CPU paths use NumPy for portable runs, diagnostics, and correctness checks.
 Optional distributed-array adapters are used only by workflows that select
 them explicitly.

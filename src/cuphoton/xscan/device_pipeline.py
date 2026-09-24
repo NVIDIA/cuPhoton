@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent, same-process XPOIS-to-XScan device inference seam.
+"""Persistent, same-process xPois-to-xScan device inference seam.
 
 This module deliberately stops before process orchestration and artifact
 publication. A caller binds one CUDA device, initializes one
@@ -381,7 +381,7 @@ class DevicePipelineItem:
 
 @dataclass(frozen=True, slots=True)
 class DeviceXPOISPipelineConfig:
-    """Constant-kernel XPOIS settings owned by a device worker."""
+    """Constant-kernel xPois settings owned by a device worker."""
 
     kernel_shape: tuple[int, int]
     basis_sigmas: tuple[float, ...]
@@ -447,7 +447,7 @@ class DeviceXPOISPipelineConfig:
         object.__setattr__(self, "basis_degrees", degrees)
 
     def to_payload(self) -> dict[str, Any]:
-        """Return JSON-compatible XPOIS settings."""
+        """Return JSON-compatible xPois settings."""
 
         return {
             "kernel_shape": list(self.kernel_shape),
@@ -463,7 +463,7 @@ class DeviceXPOISPipelineConfig:
     def from_payload(
         cls, payload: Mapping[str, Any]
     ) -> DeviceXPOISPipelineConfig:
-        """Restore strict XPOIS settings from JSON-compatible values."""
+        """Restore strict xPois settings from JSON-compatible values."""
 
         values = _require_exact_fields(
             payload,
@@ -637,7 +637,7 @@ class DevicePipelineConfig:
             odd=True,
         )
         if stamp_shape[0] != stamp_shape[1]:
-            raise ValueError("stamp_shape must be square for the XScan model")
+            raise ValueError("stamp_shape must be square for the xScan model")
         threshold = _require_finite(
             self.decision_threshold,
             field_name="decision_threshold",
@@ -736,7 +736,7 @@ class DevicePipelineConfig:
 
 @dataclass(frozen=True, slots=True)
 class DevicePipelinePrediction:
-    """One compact terminal XScan prediction in source order."""
+    """One compact terminal xScan prediction in source order."""
 
     candidate_id: int | str
     center_x: int
@@ -1036,7 +1036,7 @@ def _device_pipeline_evidence_layout_contract(
         )
         zero_sum_values.append(term["zero_sum"])
     if len(set(basis_identities)) != len(basis_identities):
-        raise ValueError("scientific evidence XPOIS basis terms repeat")
+        raise ValueError("scientific evidence xPois basis terms repeat")
     if xpois["flux_conserve"]:
         expected_zero_sum = [False, *([True] * (len(basis_terms) - 1))]
     else:
@@ -1086,7 +1086,7 @@ def _device_pipeline_evidence_layout_contract(
         or background_shape[0] < 1
     ):
         raise ValueError(
-            "scientific evidence XPOIS background coefficient shape is "
+            "scientific evidence xPois background coefficient shape is "
             "invalid"
         )
     background_count = background_shape[0]
@@ -1096,7 +1096,7 @@ def _device_pipeline_evidence_layout_contract(
         or (discriminant_root - 3) % 2 != 0
     ):
         raise ValueError(
-            "scientific evidence XPOIS background coefficient count is not "
+            "scientific evidence xPois background coefficient count is not "
             "triangular"
         )
 
@@ -1556,7 +1556,7 @@ def _validate_device_pipeline_evidence_values(
             )
     if np.any((probabilities < 0.0) | (probabilities > 1.0)):
         raise ValueError(
-            "scientific evidence XScan probabilities are outside [0, 1]"
+            "scientific evidence xScan probabilities are outside [0, 1]"
         )
     expected_probabilities = (
         1.0 / (1.0 + np.exp(-logits.astype(np.float32)))
@@ -1568,7 +1568,7 @@ def _validate_device_pipeline_evidence_values(
         atol=1.0e-7,
     ):
         raise ValueError(
-            "scientific evidence XScan probabilities do not match logits"
+            "scientific evidence xScan probabilities do not match logits"
         )
 
 
@@ -1620,11 +1620,11 @@ def _validate_device_pipeline_evidence_config(
     xpois = json_mapping(values["xpois"], field="scientific evidence xpois")
     if tuple(xpois["kernel_shape"]) != config.xpois.kernel_shape:
         raise ValueError(
-            "scientific evidence XPOIS kernel_shape does not match config"
+            "scientific evidence xPois kernel_shape does not match config"
         )
     if xpois["flux_conserve"] is not config.xpois.flux_conserve:
         raise ValueError(
-            "scientific evidence XPOIS flux_conserve does not match config"
+            "scientific evidence xPois flux_conserve does not match config"
         )
     actual_basis_terms = tuple(
         (
@@ -1638,7 +1638,7 @@ def _validate_device_pipeline_evidence_config(
     )
     if actual_basis_terms != _canonical_xpois_basis_terms(config):
         raise ValueError(
-            "scientific evidence XPOIS basis terms do not match config"
+            "scientific evidence xPois basis terms do not match config"
         )
     expected_background_count = (
         (config.xpois.background_degree + 1)
@@ -1649,7 +1649,7 @@ def _validate_device_pipeline_evidence_config(
         expected_background_count,
     ):
         raise ValueError(
-            "scientific evidence XPOIS background coefficients do not match "
+            "scientific evidence xPois background coefficients do not match "
             "config"
         )
 
@@ -2017,7 +2017,7 @@ def _pack_scientific_evidence(
         or str(xpois_result.solver) != "constant"
         or bool(xpois_result.flux_conserve) != flux_conserve
     ):
-        raise ValueError("device pipeline XPOIS evidence contract changed")
+        raise ValueError("device pipeline xPois evidence contract changed")
     parameter_count = len(parameter_names)
     pieces: list[Any] = []
     layout: list[DevicePipelineEvidenceSegment] = []
@@ -2065,15 +2065,15 @@ def _pack_scientific_evidence(
     kernel_coefficients = xpois_result.kernel_coefficients
     background_coefficients = xpois_result.background_coefficients
     if getattr(kernel_coefficients, "ndim", None) != 1:
-        raise ValueError("XPOIS kernel coefficients must be one-dimensional")
+        raise ValueError("xPois kernel coefficients must be one-dimensional")
     if getattr(background_coefficients, "ndim", None) != 1:
         raise ValueError(
-            "XPOIS background coefficients must be one-dimensional"
+            "xPois background coefficients must be one-dimensional"
         )
     kernel_count = int(kernel_coefficients.shape[0])
     background_count = int(background_coefficients.shape[0])
     if kernel_count < 1 or background_count < 1:
-        raise ValueError("XPOIS coefficient evidence must be nonempty")
+        raise ValueError("xPois coefficient evidence must be nonempty")
     append(
         "xpois.kernel_coefficients",
         kernel_coefficients,
@@ -2122,7 +2122,7 @@ def _pack_scientific_evidence(
     for term in xpois_result.basis_terms:
         sigma = float(term.sigma)
         if not math.isfinite(sigma):
-            raise ValueError("XPOIS basis-term sigma must be finite")
+            raise ValueError("xPois basis-term sigma must be finite")
         basis_terms.append(
             (
                 int(term.component_index),
@@ -2133,7 +2133,7 @@ def _pack_scientific_evidence(
             )
         )
     if len(basis_terms) != kernel_count:
-        raise ValueError("XPOIS basis terms must align with coefficients")
+        raise ValueError("xPois basis terms must align with coefficients")
     return _PackedScientificEvidence(
         values=packed,
         layout=tuple(layout),
@@ -2439,10 +2439,10 @@ class DeviceWorkerContext:
         checkpoint_path = checkpoint_dir / "checkpoint.pt"
         if not checkpoint_path.is_file():
             raise FileNotFoundError(
-                f"XScan checkpoint does not exist: {checkpoint_path}"
+                f"xScan checkpoint does not exist: {checkpoint_path}"
             )
         if file_sha256(checkpoint_path) != config.checkpoint_sha256:
-            raise RuntimeError("XScan checkpoint changed before worker load")
+            raise RuntimeError("xScan checkpoint changed before worker load")
         feature_schema = _load_feature_schema_contract(
             Path(config.feature_schema_path),
             expected_sha256=config.feature_schema_sha256,
@@ -2461,10 +2461,10 @@ class DeviceWorkerContext:
         )
         if asdict(performance) != config.inference_policy:
             raise RuntimeError(
-                "loaded XScan inference policy changed during normalization"
+                "loaded xScan inference policy changed during normalization"
             )
         if file_sha256(checkpoint_path) != config.checkpoint_sha256:
-            raise RuntimeError("XScan checkpoint changed during worker load")
+            raise RuntimeError("xScan checkpoint changed during worker load")
         if (
             file_sha256(config.feature_schema_path)
             != config.feature_schema_sha256
@@ -2550,35 +2550,35 @@ def _validate_checkpoint_contract(
 ) -> None:
     model_config = checkpoint.get("model_config")
     if not isinstance(model_config, Mapping):
-        raise ValueError("XScan checkpoint is missing model_config")
+        raise ValueError("xScan checkpoint is missing model_config")
     if model_config.get("input_mode") != "triplet":
         raise ValueError(
-            "device pipeline requires a triplet XScan checkpoint"
+            "device pipeline requires a triplet xScan checkpoint"
         )
     image_size = model_config.get("image_size")
     if isinstance(image_size, bool) or not isinstance(image_size, int):
-        raise ValueError("XScan checkpoint image_size must be an integer")
+        raise ValueError("xScan checkpoint image_size must be an integer")
     if stamp_shape != (image_size, image_size):
         raise ValueError(
-            "XScan checkpoint image_size does not match pipeline stamp_shape"
+            "xScan checkpoint image_size does not match pipeline stamp_shape"
         )
     if model_config.get("xfit_feature_names") != list(feature_names):
         raise ValueError(
-            "XScan checkpoint must use the canonical ordered xFit features"
+            "xScan checkpoint must use the canonical ordered xFit features"
         )
     raw_bundle_identity = checkpoint.get("xfit_feature_bundle")
     if not isinstance(raw_bundle_identity, Mapping):
-        raise ValueError("XScan checkpoint is missing xfit_feature_bundle")
+        raise ValueError("xScan checkpoint is missing xfit_feature_bundle")
     bundle_identity = _require_exact_fields(
         raw_bundle_identity,
         expected=frozenset(
             {"schema_sha256", "feature_sha256", "source_artifacts"}
         ),
-        field_name="XScan checkpoint xfit_feature_bundle",
+        field_name="xScan checkpoint xfit_feature_bundle",
     )
     if bundle_identity.get("schema_sha256") != feature_schema_sha256:
         raise ValueError(
-            "XScan checkpoint and live xFit feature schema identities differ"
+            "xScan checkpoint and live xFit feature schema identities differ"
         )
     artifacts = feature_schema.get("artifacts")
     if not isinstance(artifacts, Mapping):
@@ -2592,7 +2592,7 @@ def _validate_checkpoint_contract(
         "sha256"
     ):
         raise ValueError(
-            "XScan checkpoint feature identity does not match its schema"
+            "xScan checkpoint feature identity does not match its schema"
         )
     source_artifacts = feature_schema.get("source_artifacts")
     if not isinstance(source_artifacts, Mapping):
@@ -2601,7 +2601,7 @@ def _validate_checkpoint_contract(
         )
     if bundle_identity.get("source_artifacts") != source_artifacts:
         raise ValueError(
-            "XScan checkpoint source artifacts do not match "
+            "xScan checkpoint source artifacts do not match "
             "its feature schema"
         )
 
@@ -2653,13 +2653,13 @@ def _validate_loaded_model_contract(
 ) -> None:
     original_model = getattr(model, "_orig_mod", model)
     if getattr(original_model, "input_mode", None) != "triplet":
-        raise ValueError("loaded XScan model must use triplet inputs")
+        raise ValueError("loaded xScan model must use triplet inputs")
     configured_names = tuple(
         getattr(original_model, "xfit_feature_names", ())
     )
     if configured_names != feature_names:
         raise ValueError(
-            "loaded XScan model must use the canonical ordered xFit features"
+            "loaded xScan model must use the canonical ordered xFit features"
         )
 
 
@@ -2709,7 +2709,7 @@ def _validate_item_contract(
         ):
             raise ValueError(
                 f"candidate {candidate.candidate_id!r} stamp crosses the "
-                "image or XPOIS kernel edge"
+                "image or xPois kernel edge"
             )
 
 
@@ -2850,10 +2850,10 @@ def run_device_pipeline_item(
     item: DevicePipelineItem,
     context: DeviceWorkerContext,
 ) -> DevicePipelineResult:
-    """Run one item through resident XPOIS, xFit, and XScan stages.
+    """Run one item through resident xPois, xFit, and xScan stages.
 
     No device result is returned or published. CuPy-to-Torch owner leases stay
-    live through one blocking terminal copy containing XPOIS coefficients,
+    live through one blocking terminal copy containing xPois coefficients,
     full compact xFit diagnostics, features, logits, and probabilities.
     Pipeline-owned full-array D2H and post-ingress compact H2D transfers are
     forbidden; scalar/control transfers internal to the existing device-stage
@@ -3070,11 +3070,11 @@ def run_device_pipeline_item(
             or not np.isfinite(host_probabilities).all()
         ):
             raise ValueError(
-                "terminal XScan predictions contain non-finite values"
+                "terminal xScan predictions contain non-finite values"
             )
         xpois_chi2 = float(xpois_result.chi2)
         if not math.isfinite(xpois_chi2):
-            raise ValueError("terminal XPOIS chi2 is non-finite")
+            raise ValueError("terminal xPois chi2 is non-finite")
         _verify_item_hashes(item, when="during execution")
         scientific_evidence = _scientific_evidence_receipt(
             evidence_device,

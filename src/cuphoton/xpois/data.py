@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Data helpers for XPOIS."""
+"""Data helpers for xPois."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def discover_shared_hsc_dir(start_dir: Path | None = None) -> Path | None:
 
 
 def default_shared_hsc_dir() -> Path:
-    """Resolve the XPOIS HSC data directory without creating it."""
+    """Resolve the xPois HSC data directory without creating it."""
 
     explicit = os.environ.get(_SHARED_HSC_ENV)
     if explicit:

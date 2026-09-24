@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training and inference helpers for XScan."""
+"""Training and inference helpers for xScan."""
 
 from __future__ import annotations
 
@@ -238,7 +238,7 @@ def _require_explicit_cuda_device(device: torch.device) -> torch.device:
     if device.type != "cuda" or device.index is None:
         raise ValueError("device must be an explicit CUDA device like cuda:0")
     if not torch.cuda.is_available():
-        raise RuntimeError("XScan tensor inference requires Torch CUDA")
+        raise RuntimeError("xScan tensor inference requires Torch CUDA")
     if device.index < 0 or device.index >= torch.cuda.device_count():
         raise ValueError(
             f"CUDA device ordinal {device.index} is not visible to Torch"
@@ -299,7 +299,7 @@ def _load_cupy_for_dlpack() -> Any:
         import cupy as cp
     except ImportError as exc:
         raise ImportError(
-            "CuPy-to-Torch XScan handoff requires CuPy; run "
+            "CuPy-to-Torch xScan handoff requires CuPy; run "
             "'uv sync --extra gpu' for development or install "
             "'cuphoton[gpu]'"
         ) from exc
@@ -329,7 +329,7 @@ def cupy_to_torch(
         active_device = int(cp.cuda.runtime.getDevice())
     except Exception as exc:
         raise RuntimeError(
-            "CuPy-to-Torch XScan handoff requires CuPy CUDA"
+            "CuPy-to-Torch xScan handoff requires CuPy CUDA"
         ) from exc
     if active_device != device.index:
         raise ValueError(

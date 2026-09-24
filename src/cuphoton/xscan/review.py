@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Human review queue and annotation helpers for XScan."""
+"""Human review queue and annotation helpers for xScan."""
 
 from __future__ import annotations
 
@@ -1254,7 +1254,7 @@ def review_bokeh_server_summary(
         allow_websocket_origin=allow_origin,
     )
     server.start()
-    print(f"XScan review server: {url}")
+    print(f"xScan review server: {url}")
     try:
         server.io_loop.start()
     except KeyboardInterrupt:
@@ -1320,7 +1320,7 @@ def entity_review_bokeh_server_summary(
         allow_websocket_origin=allow_origin,
     )
     server.start()
-    print(f"XScan entity review server: {url}")
+    print(f"xScan entity review server: {url}")
     try:
         server.io_loop.start()
     except KeyboardInterrupt:
@@ -2101,7 +2101,7 @@ def build_review_document(doc, *, review_dir: Path) -> None:
         tag_control.active = active_tags
         others_div.text = ""
         title.text = _review_header_html(
-            title="XScan Review",
+            title="xScan Review",
             subtitle="Review astronomical detections with human insight",
             id_label="Candidate ID",
             item=item,
@@ -2418,7 +2418,7 @@ def build_review_document(doc, *, review_dir: Path) -> None:
         css_classes=["review-shell"],
         styles={"margin": "18px auto 34px", "gap": "12px"},
     )
-    doc.title = "XScan Review"
+    doc.title = "xScan Review"
     doc.add_root(layout)
     refresh()
 
@@ -2688,7 +2688,7 @@ def build_entity_review_document(doc, *, review_dir: Path) -> None:
             else ""
         )
         title.text = _review_header_html(
-            title="XScan Entity Review",
+            title="xScan Entity Review",
             subtitle="Review astronomical detections with human insight",
             id_label="Entity ID",
             item=item,
@@ -3043,7 +3043,7 @@ def build_entity_review_document(doc, *, review_dir: Path) -> None:
         css_classes=["review-shell"],
         styles={"margin": "18px auto 34px", "gap": "12px"},
     )
-    doc.title = "XScan Entity Review"
+    doc.title = "xScan Entity Review"
     doc.add_root(layout)
     refresh()
 
@@ -5805,7 +5805,7 @@ def _render_review_contact_sheet_page(
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
     strong_font = ImageFont.load_default()
-    title = f"XScan Review Contact Sheet - Page {page_index}"
+    title = f"xScan Review Contact Sheet - Page {page_index}"
     draw.text((margin, margin), title, fill=(15, 23, 42), font=strong_font)
 
     y0 = margin + title_h

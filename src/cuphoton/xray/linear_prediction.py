@@ -770,7 +770,7 @@ def linear_prediction_modes_from_roots_numpy(
     roots,
     singular_value_count: int,
 ) -> LinearPredictionModes:
-    """Select current XRay P2 modes from P1 roots on NumPy arrays."""
+    """Select current xRay P2 modes from P1 roots on NumPy arrays."""
 
     return _linear_prediction_modes_from_roots(
         np,
@@ -785,7 +785,7 @@ def linear_prediction_modes_from_roots_cupy(
     roots,
     singular_value_count: int,
 ) -> LinearPredictionModes:
-    """Select current XRay P2 modes from P1 roots on CuPy arrays."""
+    """Select current xRay P2 modes from P1 roots on CuPy arrays."""
 
     try:
         import cupy as cp
@@ -808,7 +808,7 @@ def linear_prediction_mode_batch_from_roots_numpy(
     root_rows,
     singular_value_counts,
 ) -> LinearPredictionModeBatch:
-    """Select and pad current XRay P2 modes from NumPy P1 root rows."""
+    """Select and pad current xRay P2 modes from NumPy P1 root rows."""
 
     return _linear_prediction_mode_batch_from_roots(
         np,
@@ -823,7 +823,7 @@ def linear_prediction_mode_batch_from_roots_cupy(
     root_rows,
     singular_value_counts,
 ) -> LinearPredictionModeBatch:
-    """Select and pad current XRay P2 modes from CuPy P1 root rows."""
+    """Select and pad current xRay P2 modes from CuPy P1 root rows."""
 
     try:
         import cupy as cp
@@ -3333,7 +3333,7 @@ def _linear_prediction_modes_from_roots(
     sorted_roots = xp.sort(roots)[::-1]
     active_roots = sorted_roots[: int(singular_value_count)]
     decay = xp.log(xp.abs(active_roots)) / delta_t
-    # XRay's fitted components use exp(-decay * t), so nonnegative
+    # xRay's fitted components use exp(-decay * t), so nonnegative
     # fitted decay values are the decaying/stable candidates preserved by
     # the current root filter.
     decaying_root_count = _scalar_int(xp.sum(decay >= 0))

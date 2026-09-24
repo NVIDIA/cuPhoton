@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dataset packaging, validation, and loading for XScan."""
+"""Dataset packaging, validation, and loading for xScan."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ NODIFF_REQUIRED_FIELDS = COMMON_METADATA_FIELDS | {
 
 @dataclass(slots=True)
 class DatasetBuildResult:
-    """Location and summary of a newly packaged XScan dataset.
+    """Location and summary of a newly packaged xScan dataset.
 
     Attributes
     ----------
@@ -137,7 +137,7 @@ def summarize_float_values(values: list[float]) -> dict[str, Any]:
 
 
 class StampDataset(Dataset[DatasetSample]):
-    """Memory-mapped canonical XScan dataset for PyTorch.
+    """Memory-mapped canonical xScan dataset for PyTorch.
 
     The dataset directory owns ``search.npy`` and ``template.npy`` arrays
     shaped ``(samples, height, width)``, plus one-dimensional ``labels.npy``
@@ -219,11 +219,11 @@ class StampDataset(Dataset[DatasetSample]):
             if xfit_feature_matrix.dataset_dir != self.dataset_dir:
                 raise ValueError(
                     "xFit feature matrix was validated for a different "
-                    "XScan dataset directory"
+                    "xScan dataset directory"
                 )
             if len(xfit_feature_matrix) != int(self.labels.shape[0]):
                 raise ValueError(
-                    "xFit feature row count does not match the XScan dataset"
+                    "xFit feature row count does not match the xScan dataset"
                 )
             if (
                 xfit_feature_names is not None
@@ -286,7 +286,7 @@ def inspect_dataset_dir(
     Parameters
     ----------
     dataset_dir
-        Directory containing canonical XScan arrays.
+        Directory containing canonical xScan arrays.
     dataset_kind
         Optional dataset contract name included in the summary.
 
@@ -339,7 +339,7 @@ def validate_dataset_dir(
     *,
     dataset_kind: str | None = None,
 ) -> dict[str, Any]:
-    """Validate a canonical XScan dataset directory.
+    """Validate a canonical xScan dataset directory.
 
     Canonical image arrays are rank three with shape
     ``(samples, height, width)``. Labels and split assignments are rank-one,

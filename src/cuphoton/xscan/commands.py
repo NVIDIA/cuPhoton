@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Class-based CLI commands for XScan."""
+"""Class-based CLI commands for xScan."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def _load_workflow(name: str) -> Callable[..., Any]:
             if exc.name != "torch":
                 raise
             raise ModuleNotFoundError(
-                "XScan workflows require PyTorch; run "
+                "xScan workflows require PyTorch; run "
                 "'uv sync --extra torch' for development or install "
                 "'cuphoton[torch]'"
             ) from exc
@@ -244,7 +244,7 @@ class XScanCommand(InvariantAwareCommand):
 
 
 class DataInspectCommand(XScanCommand):
-    """Inspect a packaged XScan dataset directory."""
+    """Inspect a packaged xScan dataset directory."""
 
     dataset_dir = None
     dataset_kind = None
@@ -270,7 +270,7 @@ class DataInspectCommand(XScanCommand):
 
 
 class DataValidateCommand(XScanCommand):
-    """Validate a packaged XScan dataset directory."""
+    """Validate a packaged xScan dataset directory."""
 
     dataset_dir = None
     dataset_kind = None
@@ -296,7 +296,7 @@ class DataValidateCommand(XScanCommand):
 
 
 class DataBuildXFitFeaturesCommand(XScanCommand):
-    """Build a candidate-keyed xFit feature bundle for XScan fusion."""
+    """Build a candidate-keyed xFit feature bundle for xScan fusion."""
 
     _name_ = "data-build-xfit-features"
 
@@ -308,7 +308,7 @@ class DataBuildXFitFeaturesCommand(XScanCommand):
     class DatasetDirArg(PathSpecInvariant):
         _arg = "--dataset-dir"
         _help = (
-            "Packaged XScan dataset whose candidate order is authoritative."
+            "Packaged xScan dataset whose candidate order is authoritative."
         )
         _mandatory = True
 
@@ -319,7 +319,7 @@ class DataBuildXFitFeaturesCommand(XScanCommand):
 
     class OutputDirArg(PathSpecInvariant):
         _arg = "--output-dir"
-        _help = "New directory for the XScan xFit feature bundle."
+        _help = "New directory for the xScan xFit feature bundle."
         _mandatory = True
 
     class MissingPolicyArg(XFitMissingPolicyInvariant):
@@ -356,7 +356,7 @@ class DataExportXFitInputCommand(XScanCommand):
 
     class DatasetDirArg(PathSpecInvariant):
         _arg = "--dataset-dir"
-        _help = "Packaged XScan dataset containing difference.npy."
+        _help = "Packaged xScan dataset containing difference.npy."
         _mandatory = True
 
     class OutputPathArg(PathSpecInvariant):
@@ -409,7 +409,7 @@ class DataExportXFitInputCommand(XScanCommand):
 
 
 class DataMergeCommand(XScanCommand):
-    """Merge compatible packaged XScan datasets."""
+    """Merge compatible packaged xScan datasets."""
 
     dataset_dirs = None
     output_dir = None

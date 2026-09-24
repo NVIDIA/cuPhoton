@@ -1,6 +1,6 @@
-# XRay GPU-first behavior
+# xRay GPU-first behavior
 
-XRay uses CuPy for high-throughput trace batches and detector-wide analysis.
+xRay uses CuPy for high-throughput trace batches and detector-wide analysis.
 NumPy paths provide deterministic smoke tests, algorithm inspection, and
 correctness references for supported operations.
 

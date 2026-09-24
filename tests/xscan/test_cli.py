@@ -8238,7 +8238,7 @@ def test_cli_smoke_build_train_infer_evaluate_compare(
     compare_summary = json.loads(captured.out)
     assert rc == 0
     assert compare_summary["best_run_dir"] == str(run_dir.resolve())
-    assert "# XScan Compare Inputs" in compare_summary["leaderboard_markdown"]
+    assert "# xScan Compare Inputs" in compare_summary["leaderboard_markdown"]
 
 
 def test_cli_train_inada_pair_finetunes_from_checkpoint(
@@ -8745,7 +8745,7 @@ def test_cli_reproduce_pair_triplet_uses_one_reviewed_dataset(
     assert (run_dir / "summary.md").exists()
     assert payload["saved"]["summary_markdown"] == "summary.md"
     assert (
-        "# XScan Pair/Triplet Comparison Summary"
+        "# xScan Pair/Triplet Comparison Summary"
         in (payload["summary_markdown"])
     )
     assert "TPR @ 1% FPR" in payload["summary_markdown"]
@@ -8966,7 +8966,7 @@ def test_cli_reproduce_hsc_comparison(tmp_path, capsys, monkeypatch) -> None:
     ).exists()
     assert (run_dir / "summary.md").exists()
     assert payload["saved"]["summary_markdown"] == "summary.md"
-    assert "# XScan HSC Comparison Summary" in payload["summary_markdown"]
+    assert "# xScan HSC Comparison Summary" in payload["summary_markdown"]
 
 
 def test_cli_reproduce_hsc_xpois_sweep(tmp_path, capsys, monkeypatch) -> None:
@@ -9080,7 +9080,7 @@ def test_cli_reproduce_hsc_xpois_sweep(tmp_path, capsys, monkeypatch) -> None:
     assert other["difference_diagnostics"]["mean_abs_delta"] > 0.0
     assert (run_dir / "summary.md").exists()
     assert payload["saved"]["summary_markdown"] == "summary.md"
-    assert "# XScan HSC XPOIS Sweep Summary" in payload["summary_markdown"]
+    assert "# xScan HSC xPois Sweep Summary" in payload["summary_markdown"]
     assert (
         "Unranked because no run has defined ROC and PR AUC"
         in payload["summary_markdown"]

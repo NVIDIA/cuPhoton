@@ -343,7 +343,7 @@ def _ensure_gpu_submissions_safe() -> None:
         )
     if unresolved:
         raise RuntimeError(
-            "previous XDR GPU work could not be synchronized; refusing "
+            "previous xDR GPU work could not be synchronized; refusing "
             "another submission while its source, scratch, and output "
             "buffers remain quarantined; "
             "restart the process if the CUDA context cannot recover"
@@ -1625,7 +1625,7 @@ def batch_to_device_stream(
         Optional CuPy stream for the consumer side. The function waits for
         all submitted work on this stream before returning. If completion
         cannot be confirmed, that work's source, scratch, and output buffers
-        remain in a process-wide quarantine; later XDR submissions fail
+        remain in a process-wide quarantine; later xDR submissions fail
         closed until completion becomes observable, and an unrecoverable
         CUDA context requires process restart.
     out

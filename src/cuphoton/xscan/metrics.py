@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure-numpy binary metrics for XScan runs."""
+"""Pure-numpy binary metrics for xScan runs."""
 
 from __future__ import annotations
 
@@ -1175,7 +1175,7 @@ def build_markdown_report(metrics: dict[str, Any]) -> str:
         return f"{value:.6f}" if value is not None else "n/a"
 
     lines = [
-        "# XScan Evaluation Summary",
+        "# xScan Evaluation Summary",
         "",
         f"- Samples: {metrics['sample_count']}",
         f"- Positives: {metrics['positive_count']}",

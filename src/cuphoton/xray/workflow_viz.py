@@ -172,7 +172,7 @@ def build_workflow_viz(
     drop_leading: int = 1,
     chunk_frames: int = 16,
     reference_shift: bool = True,
-    title: str = "XRay Workflow Workbench",
+    title: str = "xRay Workflow Workbench",
     components: int = 30,
     roots_backend: str = "eigvals",
     max_traces: int = 48,
@@ -385,10 +385,10 @@ def load_workflow_bundle(path: Path | str) -> WorkflowVizBundle:
             )
         manifest = _publishable_manifest(_loaded_manifest(loaded["manifest"]))
         if manifest.get("kind") != "xray-workflow-viz-bundle":
-            raise ValueError("not an XRay workflow-viz bundle")
+            raise ValueError("not an xRay workflow-viz bundle")
         if manifest.get("version") != WORKFLOW_BUNDLE_VERSION:
             raise ValueError(
-                "unsupported XRay workflow-viz bundle version: "
+                "unsupported xRay workflow-viz bundle version: "
                 f"{manifest.get('version')!r}; expected "
                 f"{WORKFLOW_BUNDLE_VERSION}"
             )

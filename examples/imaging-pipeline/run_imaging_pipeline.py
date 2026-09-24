@@ -15,7 +15,7 @@ Run from the repository root:
         examples/imaging-pipeline/run_imaging_pipeline.py
 
 The full walkthrough requires Linux and a CUDA 13-capable NVIDIA GPU.
-The XDR load step allocates a CuPy batch and has no CPU fallback.
+The xDR load step allocates a CuPy batch and has no CPU fallback.
 See docs/components/xdr.md for the native extension's CUDA headers and
 thread-safe CFITSIO build prerequisites.
 
@@ -192,7 +192,7 @@ write_fits(WORK / "fits" / "science.fits", science, wcs_s)
 )
 print(images.shape, images.dtype, images.device)
 
-# === XREP ===
+# === xRep ===
 native, spec = build_stack_spec_from_fits(
     [WORK / "fits" / "template.fits", WORK / "fits" / "science.fits"],
     hdu=1,
@@ -205,7 +205,7 @@ aligned = reproject_stack(native, spec, backend="auto")
 print(aligned.images.shape, aligned.backend)
 reference, target = aligned.images
 
-# === XPOIS ===
+# === xPois ===
 # Fit only the static scene, excluding both mover positions and their wings.
 fit_mask = np.ones(SHAPE, dtype=bool)
 fit_mask[105:142, 93:132] = False
@@ -226,7 +226,7 @@ print(
 # No variance is supplied, so chi2 is an unweighted sum of squares here.
 print("static-scene residual RMS:", np.sqrt(fit.chi2 / fit.fit_pixel_count))
 
-# === XFIT ===
+# === xFit ===
 STAMP = 21
 half = STAMP // 2
 cy, cx = 123, 112  # midpoint of the planted mover
@@ -310,7 +310,7 @@ show_row(
 show_row(
     panel(stamp, diverging=True, limit=stamp_peak),
     panel(model_img, diverging=True, limit=stamp_peak),
-    # XFIT returns model minus data; display data minus model, as in XPOIS.
+    # xFit returns model minus data; display data minus model, as in xPois.
     panel(-result.residuals[0], diverging=True, limit=stamp_peak),
     path=WORK / "figs" / "04_dipole.png",
 )

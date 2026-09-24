@@ -486,7 +486,7 @@ def test_shared_feature_matrix_is_bound_to_validated_dataset(
     other_root.mkdir()
     other_dataset_dir, _ = _write_dataset_and_features(other_root)
 
-    with pytest.raises(ValueError, match="different XScan dataset"):
+    with pytest.raises(ValueError, match="different xScan dataset"):
         StampDataset(
             other_dataset_dir,
             input_mode="pair",

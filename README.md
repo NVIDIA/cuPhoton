@@ -12,13 +12,13 @@ structured run artifacts provide integration points for those workflows.
 | --- | --- | --- |
 | FITS files whose pixels you need on a GPU | [xDataReader](docs/components/xdr.md) | Decoded and scaled device arrays |
 | Images with different pixel-to-sky mappings | [xRep](docs/components/xrep.md) | Images resampled onto a common sky grid |
-| An aligned reference image and a new observation | [XPOIS](docs/components/xpois.md) | A matched reference and a difference image |
+| An aligned reference image and a new observation | [xPois](docs/components/xpois.md) | A matched reference and a difference image |
 | Small cutouts containing positive/negative residuals | [xFit](docs/components/xfit.md) | Fitted positions, amplitudes, shapes, uncertainties, and fit status |
-| Candidate cutouts to score, or reviewed examples to train on | [XScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
-| X-ray detector images sampled over experimental delay | [XRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
+| Candidate cutouts to score, or reviewed examples to train on | [xScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
+| X-ray detector images sampled over experimental delay | [xRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
 
 Each component can be used independently. An optical workflow can combine
-loading, reprojection, subtraction, and candidate analysis; XRay handles a
+loading, reprojection, subtraction, and candidate analysis; xRay handles a
 separate kind of experimental data. See [how the components fit
 together](docs/architecture.md#how-the-science-components-fit-together) for
 the data flow and the adapters needed between stages.
@@ -35,8 +35,8 @@ uv sync --locked --extra dev --extra gpu --extra viz
 uv run python examples/run_quickstarts.py
 ```
 
-The quickstart creates synthetic inputs for xRep, XPOIS, xFit, XScan, and
-XRay, then writes results to `quickstart-output/`. xDataReader has a separate
+The quickstart creates synthetic inputs for xRep, xPois, xFit, xScan, and
+xRay, then writes results to `quickstart-output/`. xDataReader has a separate
 [native GPU setup](docs/components/xdr.md#install). The JSON summary records
 the requested profile, the backend and device selected for each component,
 and the artifact paths. The default `auto` profile prefers a GPU and reports
@@ -57,7 +57,7 @@ For a synthetic imaging walkthrough from FITS loading through alignment,
 subtraction, dipole fitting, and plotting, run the
 [notebook](examples/imaging-pipeline/run_imaging_pipeline.ipynb) or equivalent
 [script](examples/imaging-pipeline/run_imaging_pipeline.py). Both include setup
-instructions and require a CUDA 13-capable NVIDIA GPU and XDR's native extension.
+instructions and require a CUDA 13-capable NVIDIA GPU and xDR's native extension.
 
 ## Components
 
@@ -79,9 +79,9 @@ pixel scale, rotation, and position; matching the images' blur is a separate
 operation. Outputs include the reprojected arrays, optional masks, and grid
 metadata.
 
-### XPOIS: subtract a matched reference to reveal changes
+### xPois: subtract a matched reference to reveal changes
 
-XPOIS (`cuphoton.xpois`) starts with aligned reference and target images. It
+xPois (`cuphoton.xpois`) starts with aligned reference and target images. It
 fits a convolution kernel and background correction to match their blur,
 brightness scale, and background, then subtracts the matched reference.
 Unchanged sources should largely cancel, leaving a difference image for
@@ -95,23 +95,23 @@ a small positional mismatch or a moving source can produce one. xFit
 (`cuphoton.xfit`) fits models to batches of small image cutouts, called
 stamps. It returns positions, amplitudes, and shape parameters with residuals,
 uncertainties, and fit status. These measurements describe the candidate and
-can optionally become inputs to an XScan classifier.
+can optionally become inputs to an xScan classifier.
 
-### XScan: score candidates and collect review labels
+### xScan: score candidates and collect review labels
 
-XScan (`cuphoton.xscan`) trains and evaluates real/bogus classifiers and runs
+xScan (`cuphoton.xscan`) trains and evaluates real/bogus classifiers and runs
 inference on candidate stamps. Models use search and template images,
 optionally a difference image, and explicitly selected xFit features.
 Real/bogus scores help prioritize plausible detections over artifacts for
-further scientific classification. XScan also produces review material for
+further scientific classification. xScan also produces review material for
 inspecting predictions and collecting labels. Training requires reviewed
 labels and suitable train/validation/test splits.
 
-### XRay: measure oscillations in detector signals
+### xRay: measure oscillations in detector signals
 
-XRay (`cuphoton.xray`) analyzes X-ray detector measurements sampled over
+xRay (`cuphoton.xray`) analyzes X-ray detector measurements sampled over
 experimental delay. In a pump/probe experiment, one pulse excites a sample
-and another measures its response after a controlled delay. XRay extracts
+and another measures its response after a controlled delay. xRay extracts
 and normalizes signal traces from selected detector regions, then uses linear
 prediction to estimate their oscillatory modes. Outputs include frequencies,
 amplitudes, fit diagnostics, and detector review maps. Interpreting those

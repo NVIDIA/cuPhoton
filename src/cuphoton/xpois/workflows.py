@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Workflow helpers for XPOIS."""
+"""Workflow helpers for xPois."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from .spatial_als import (
 
 @dataclass
 class WorkflowResult:
-    """Persisted XPOIS workflow result.
+    """Persisted xPois workflow result.
 
     Attributes
     ----------

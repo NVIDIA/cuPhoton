@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Workflow helpers for XScan."""
+"""Workflow helpers for xScan."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class WorkflowResult:
-    """Persisted XScan workflow result.
+    """Persisted xScan workflow result.
 
     Attributes
     ----------
@@ -672,7 +672,7 @@ def export_xfit_input_workflow(
     image_unit: str | None = None,
     verify_sources_after_copy: bool = True,
 ) -> dict[str, Any]:
-    """Export exact XScan difference stamps and optional xFit planes."""
+    """Export exact xScan difference stamps and optional xFit planes."""
 
     from .xfit_features import export_xfit_input
 
@@ -693,7 +693,7 @@ def build_xfit_feature_bundle_workflow(
     output_dir: Path,
     missing_policy: MissingPolicy = "error",
 ) -> WorkflowResult:
-    """Convert portable xFit artifacts into an ordered XScan sidecar."""
+    """Convert portable xFit artifacts into an ordered xScan sidecar."""
 
     from .xfit_features import build_xfit_feature_bundle
 
@@ -2369,9 +2369,9 @@ def reproduce_pair_triplet_workflow(
 
 def build_compare_markdown(rows: list[dict[str, Any]]) -> str:
     if not rows:
-        return "# XScan Compare Inputs\n\nNo runs provided.\n"
+        return "# xScan Compare Inputs\n\nNo runs provided.\n"
     lines = [
-        "# XScan Compare Inputs",
+        "# xScan Compare Inputs",
         "",
         "| Run Dir | Input Mode | ROC AUC | PR AUC | Accuracy | Samples |",
         "|---|---|---:|---:|---:|---:|",
@@ -2395,7 +2395,7 @@ def build_compare_markdown(rows: list[dict[str, Any]]) -> str:
 
 def build_pair_triplet_markdown(aggregate: dict[str, Any]) -> str:
     lines = [
-        "# XScan Pair/Triplet Comparison Summary",
+        "# xScan Pair/Triplet Comparison Summary",
         "",
         f"- Dataset: `{aggregate['dataset_dir']}`",
         f"- Pair config: `{aggregate['pair_config']}`",
@@ -2463,7 +2463,7 @@ def build_pair_triplet_markdown(aggregate: dict[str, Any]) -> str:
 
 def build_reproduction_markdown(aggregate: dict[str, Any]) -> str:
     lines = [
-        "# XScan Reproduction Summary",
+        "# xScan Reproduction Summary",
         "",
         "| Job | Mean ROC AUC | Std ROC AUC | Mean Accuracy | "
         "Std Accuracy | Runs |",
@@ -2553,7 +2553,7 @@ def compare_hsc_dataset_alignment(dataset_dirs: list[Path]) -> dict[str, Any]:
 
 def build_hsc_comparison_markdown(aggregate: dict[str, Any]) -> str:
     lines = [
-        "# XScan HSC Comparison Summary",
+        "# xScan HSC Comparison Summary",
         "",
         f"- Manifest: `{aggregate['manifest_path']}`",
         f"- Pair config: `{aggregate['pair_config']}`",
@@ -2715,7 +2715,7 @@ def build_hsc_xpois_sweep_markdown(aggregate: dict[str, Any]) -> str:
         return f"{plane} ({count}, mean={mean_fraction:.3f})"
 
     lines = [
-        "# XScan HSC XPOIS Sweep Summary",
+        "# xScan HSC xPois Sweep Summary",
         "",
         f"- Manifest: `{aggregate['manifest_path']}`",
         f"- Pair config: `{aggregate['pair_config']}`",

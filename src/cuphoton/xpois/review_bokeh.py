@@ -599,7 +599,7 @@ def write_interactive_review_artifact(
             "<div style='min-width:0;'>"
             "<h1 style='color:#07145c;font-size:34px;font-weight:760;"
             "line-height:1.08;margin:0 0 12px;'>"
-            "XPOIS Subtraction Review</h1>"
+            "xPois Subtraction Review</h1>"
             "</div>"
             "</div>"
             "<p style='color:#7080b5;font-size:15px;line-height:1.5;"
@@ -832,7 +832,7 @@ def write_interactive_review_artifact(
         file_html(
             layout,
             INLINE,
-            f"XPOIS interactive review: {run_name}",
+            f"xPois interactive review: {run_name}",
             template=_REVIEW_TEMPLATE,
             template_variables={
                 "favicon_href": _asset_data_uri("favicon.ico", "image/x-icon")

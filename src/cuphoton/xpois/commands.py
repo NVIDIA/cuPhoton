@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Class-based CLI commands for XPOIS."""
+"""Class-based CLI commands for xPois."""
 
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ class XPOISCommand(InvariantAwareCommand):
 
 
 class DataInspectCommand(XPOISCommand):
-    """Inspect the shared HSC data tree used by XPOIS."""
+    """Inspect the shared HSC data tree used by xPois."""
 
     base = None
 
