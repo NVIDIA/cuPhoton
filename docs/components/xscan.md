@@ -426,7 +426,7 @@ dragon cuphoton xscan run-pipeline --executor dragon \
   --manifest pipeline.json --output-dir runs --name dragon-pipeline \
   --max-workers 8 --warmup-rounds 1 --measure-rounds 2
 
-mpiexec -n 8 cuphoton-openmpi-rank-exec \
+mpiexec -n 8 cuphoton-openmpi-rank-exec -- \
   cuphoton xscan run-pipeline --executor mpi \
   --manifest pipeline.json --output-dir runs --name mpi-pipeline \
   --warmup-rounds 1 --measure-rounds 2
