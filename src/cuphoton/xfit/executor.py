@@ -488,7 +488,11 @@ def finalize_xfit_round(
 
 
 def prepare_xfit_workload(
-    *, input_path: Path, chunk_size: int = 256, fit_options: Mapping[str, Any]
+    *,
+    input_path: Path,
+    chunk_size: int = 256,
+    fit_options: Mapping[str, Any],
+    retain_input: bool = True,
 ):
     """Preflight one standalone fit for either shared GPU executor."""
     from cuphoton.core.execution import WorkloadSpec
@@ -508,6 +512,8 @@ def prepare_xfit_workload(
     items, options, dataset = _plan_xfit_chunks(
         input_path, chunk_size=chunk_size, fit_options=fit_options
     )
+    if not retain_input:
+        dataset = None
     by_id = {item.item_id: item for item in items}
 
     def validate(record, round_dir):

@@ -327,6 +327,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                     input_path=self.input,
                     chunk_size=self.chunk_size or 256,
                     fit_options=fit_options,
+                    retain_input=rank == 0,
                 ),
                 output_root=output_dir.parent,
                 run_id=output_dir.name,

@@ -109,6 +109,7 @@ def test_two_rank_adapters_publish_scientific_results(
                 input_path=path,
                 chunk_size=2,
                 fit_options={"backend": "cupy", "max_evaluations": 2},
+                retain_input=rank == 0,
             )
 
     else:

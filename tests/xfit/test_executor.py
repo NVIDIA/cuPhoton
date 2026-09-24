@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
+import weakref
 from dataclasses import fields, replace
 
 import numpy as np
@@ -149,9 +151,11 @@ def test_preflight_accepts_analytic_gaussian_cutile(tmp_path):
     assert spec.backend == "cutile"
 
 
-@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+@pytest.mark.parametrize(
+    "runtime,rank", [("dragon", 0), ("mpi", 0), ("mpi", 1)]
+)
 def test_cli_dispatches_collective_preflight_and_preserves_options(
-    tmp_path, monkeypatch, capsys, runtime
+    tmp_path, monkeypatch, capsys, runtime, rank
 ):
     from types import SimpleNamespace
 
@@ -161,15 +165,26 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
     path = _input(tmp_path)
     output_dir = tmp_path / "distributed"
     calls = []
+    planning_arrays = []
+    original_load = executor.load_xfit_dataset
+
+    def load(*args, **kwargs):
+        dataset = original_load(*args, **kwargs)
+        planning_arrays.append(weakref.ref(dataset.images))
+        return dataset
 
     def run(**kwargs):
-        spec = kwargs["prepare_workload"](0)
+        spec = kwargs["prepare_workload"](rank)
         calls.append((kwargs, spec))
+        gc.collect()
+        assert len(planning_arrays) == 1
+        assert (planning_arrays[0]() is not None) == (rank == 0)
         return SimpleNamespace(
             status="success", to_dict=lambda: {"status": "success"}
         )
 
     monkeypatch.setattr(executors, "run_workload", run)
+    monkeypatch.setattr(executor, "load_xfit_dataset", load)
     assert (
         run_component(
             "xfit",
