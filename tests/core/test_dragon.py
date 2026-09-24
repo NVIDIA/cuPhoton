@@ -761,7 +761,9 @@ def test_known_round_failure_uses_short_artifact_timeout(
     _install_runtime(
         monkeypatch,
         mutate=lambda message: (
-            [] if message["kind"] == "round" else [message]
+            [{**message, "status": "failed"}]
+            if message["kind"] == "round"
+            else [message]
         ),
     )
     finalize = dragon.finalize_round
@@ -772,9 +774,7 @@ def test_known_round_failure_uses_short_artifact_timeout(
         return finalize(*args, **kwargs)
 
     monkeypatch.setattr(dragon, "finalize_round", inspect_finalize)
-    result = _run(
-        tmp_path, worker_count=1, worker_timeout=0.1, result_timeout=30
-    )
+    result = _run(tmp_path, worker_count=1, result_timeout=30)
     assert result.status == "failed"
     assert observed == [0.01]
 
