@@ -2732,7 +2732,10 @@ def test_generic_coordinator_runs_workload_terminal_validators(
 
 
 @pytest.mark.parametrize("failure", ["digest", "size", "symlink"])
-def test_launch_worker_retains_descriptor_failures(tmp_path, failure) -> None:
+@pytest.mark.parametrize("rounds", [False, True])
+def test_launch_worker_retains_descriptor_failures(
+    tmp_path, failure, rounds
+) -> None:
     run_dir = tmp_path / "run"
     descriptor = run_dir / "launch/worker-0000.json"
     atomic_write_json(descriptor, {"invalid": True}, overwrite=False)
@@ -2759,10 +2762,15 @@ def test_launch_worker_retains_descriptor_failures(tmp_path, failure) -> None:
                 "descriptor_bytes": descriptor_bytes,
             },
             results,
+            *([_FakeQueue()] if rounds else []),
         )
     result = results.get_nowait()
     assert result["status"] == "failed"
     assert result["worker_id"] == 0
+    if rounds:
+        assert result["kind"] == "ready"
+        assert result["run_id"] == "run"
+        assert result["round_id"] is None
     receipt = json.loads(
         (run_dir / "launch/worker-0000-failure.json").read_text()
     )
@@ -2816,7 +2824,9 @@ def test_coordinator_rejects_oversized_arguments_before_init(
     assert UninitializedGroup.last_closed
 
 
-def _install_round_runtime(monkeypatch, *, mutate=None, close_failure=False):
+def _install_round_runtime(
+    monkeypatch, *, mutate=None, close_failure=False, template=_FakeTemplate
+):
     """Run persistent targets in threads with CUDA and Dragon faked."""
     import threading
 
@@ -2883,7 +2893,7 @@ def _install_round_runtime(monkeypatch, *, mutate=None, close_failure=False):
             self.stopped = True
             for template in self.templates:
                 try:
-                    template.args[6].put_nowait(None)
+                    template.args[5].put_nowait(None)
                 except queue.Full:
                     pass
             for thread in self.threads:
@@ -2948,7 +2958,7 @@ def _install_round_runtime(monkeypatch, *, mutate=None, close_failure=False):
             Node=_FakeNode,
             Policy=_FakePolicy,
             ProcessGroup=RoundGroup,
-            ProcessTemplate=_FakeTemplate,
+            ProcessTemplate=template,
             Queue=RoundQueue,
         ),
     )
@@ -2956,11 +2966,17 @@ def _install_round_runtime(monkeypatch, *, mutate=None, close_failure=False):
 
 
 def _run_round_test(
-    tmp_path, *, warmup=1, measure=2, worker_count=2, worker_timeout=10.0
+    tmp_path,
+    *,
+    warmup=1,
+    measure=2,
+    worker_count=2,
+    worker_timeout=10.0,
+    item_ids=("one", "two"),
 ):
     from cuphoton.core.benchmark import BenchmarkOptions
 
-    manifest = _write_fake_manifest(tmp_path, item_ids=("one", "two"))
+    manifest = _write_fake_manifest(tmp_path, item_ids=item_ids)
     return run_dragon_image_pair_batch(
         manifest_path=manifest,
         output_root=tmp_path / "runs",
@@ -3028,6 +3044,70 @@ def test_benchmark_keeps_placed_workers_alive_and_audits_all_rounds(
         assert record["run_id"] == summary["run_id"]
     assert len(set(record_run_ids)) == 3
     assert not (result.run_dir / "items").exists()
+
+
+def test_benchmark_preserves_large_file_backed_workload(
+    monkeypatch, tmp_path
+):
+    state = _install_round_runtime(monkeypatch)
+    item_ids = tuple(f"image-{index:04d}" for index in range(512))
+    result = _run_round_test(
+        tmp_path,
+        warmup=0,
+        measure=1,
+        worker_count=1,
+        item_ids=item_ids,
+    )
+
+    assert result.status == "success", result.summary
+    template = state.groups[0].templates[0]
+    assert template.target is dragon_module._dragon_launch_worker
+    assert len(template.args) == 6
+    assert len(repr(template.args)) < 2000
+    descriptor_path = Path(template.args[1])
+    assert descriptor_path.stat().st_size > 131_072
+    descriptor = json.loads(descriptor_path.read_text())
+    assert [item["item_id"] for item in descriptor["items"]] == list(item_ids)
+    assert descriptor["benchmark"] == {
+        "warmup_rounds": 0,
+        "measure_rounds": 1,
+    }
+    assert descriptor["worker_target"] == {
+        "module": dragon_module.__name__,
+        "qualname": "_dragon_round_worker",
+    }
+    assert len(state.calls) == 512
+    assert state.initialized == [0]
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is not None
+
+
+def test_benchmark_rejects_oversized_arguments_before_init(
+    monkeypatch, tmp_path
+):
+    class OversizedTemplate(_FakeTemplate):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.argdata = b"x" * (96 * 1024 + 1)
+
+    state = _install_round_runtime(monkeypatch, template=OversizedTemplate)
+    monkeypatch.setattr(
+        dragon_module._load_dragon_api().ProcessGroup,
+        "init",
+        lambda _: pytest.fail("oversized arguments must fail before init"),
+    )
+    result = _run_round_test(tmp_path, worker_count=1)
+
+    assert result.status == "failed"
+    assert result.summary["lifecycle_errors"][0] == {
+        "phase": "process_setup",
+        "type": "ValueError",
+        "message": "Dragon worker launch arguments exceed 96 KiB",
+    }
+    assert result.summary["benchmark"]["rounds"] == []
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert not state.calls and not state.initialized
+    assert state.groups[0].closed
+    assert all(channel.closed for channel in state.queues)
 
 
 @pytest.mark.parametrize(
@@ -3100,10 +3180,10 @@ def test_benchmark_notifies_startup_artifact_failure(monkeypatch, tmp_path):
     state = _install_round_runtime(monkeypatch)
     original_write = dragon_module.atomic_write_json
 
-    def fail_startup(path, payload):
+    def fail_startup(path, payload, **kwargs):
         if path.parent.name == "startup":
             raise OSError("synthetic startup write failure")
-        original_write(path, payload)
+        original_write(path, payload, **kwargs)
 
     monkeypatch.setattr(dragon_module, "atomic_write_json", fail_startup)
     result = _run_round_test(tmp_path, worker_count=1)

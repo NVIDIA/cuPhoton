@@ -151,6 +151,7 @@ def _dragon_launch_worker(
     descriptor_sha256: str,
     context: Mapping[str, Any],
     results_queue: Any,
+    commands: Any | None = None,
 ) -> None:
     """Load an immutable shard descriptor before importing its worker."""
 
@@ -198,15 +199,17 @@ def _dragon_launch_worker(
                 "Dragon launch descriptor shard identity differs"
             )
         target = _resolve_worker_target(descriptor["worker_target"])
-        target(
-            run_id,
-            str(run_dir),
-            descriptor["placement"],
-            descriptor["items"],
-            descriptor["options"],
-            results_queue,
-            descriptor["allow_loopback_alias"],
-        )
+        if commands is None:
+            target(
+                run_id,
+                str(run_dir),
+                descriptor["placement"],
+                descriptor["items"],
+                descriptor["options"],
+                results_queue,
+                descriptor["allow_loopback_alias"],
+            )
+            return
     except Exception as exc:
         result = {
             "schema": context["shard_schema"],
@@ -225,6 +228,8 @@ def _dragon_launch_worker(
             "record_write_errors": [],
             "error": error_payload(exc),
         }
+        if commands is not None:
+            result.update(kind="ready", run_id=run_id, round_id=None)
         try:
             atomic_write_json(
                 run_dir / "launch" / f"worker-{worker_id:04d}-failure.json",
@@ -238,6 +243,21 @@ def _dragon_launch_worker(
         except Exception as report_exc:
             exc.add_note(f"Dragon launch failure report failed: {report_exc}")
         raise
+    # The persistent worker reports its own READY and round failures. Keep its
+    # invocation outside this handler to avoid a second READY receipt.
+    target(
+        run_id,
+        str(run_dir),
+        descriptor["placement"],
+        descriptor["items"],
+        descriptor["options"],
+        descriptor["benchmark"],
+        commands,
+        results_queue,
+        descriptor["allow_loopback_alias"],
+        descriptor["worker_timeout_sec"],
+        descriptor["result_timeout_sec"],
+    )
 
 
 def run_dragon_image_pair_batch(
@@ -849,6 +869,38 @@ def _run_dragon_rounds(
         )
         phase = "process_setup"
         for placement, shard in zip(placements, shards):
+            descriptor_path = (
+                run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
+            )
+            atomic_write_json(
+                descriptor_path,
+                {
+                    "schema": _DRAGON_LAUNCH_SCHEMA,
+                    "run_id": run_id,
+                    "run_dir": str(run_dir),
+                    "worker_target": _worker_target_reference(
+                        _dragon_round_worker
+                    ),
+                    "placement": placement.to_dict(),
+                    "items": [item.to_dict() for item in shard],
+                    "options": options.to_payload(),
+                    "benchmark": benchmark.to_payload(),
+                    "allow_loopback_alias": allow_loopback,
+                    "worker_timeout_sec": worker_timeout,
+                    "result_timeout_sec": result_timeout,
+                },
+                overwrite=False,
+            )
+            encoded = descriptor_path.read_bytes()
+            context = {
+                "run_dir": str(run_dir),
+                "worker_id": placement.worker_id,
+                "shard_schema": "cuphoton.xpois.dragon-shard/v1",
+                "item_count": len(shard),
+                "weight_bytes": sum(item.weight_bytes for item in shard),
+                "item_ids_sha256": _item_ids_sha256(shard),
+                "descriptor_bytes": len(encoded),
+            }
             policy = api.Policy(
                 placement=api.Policy.Placement.HOST_NAME,
                 host_name=placement.host,
@@ -858,26 +910,23 @@ def _run_dragon_rounds(
             # coordinator transport threads must remain free to send.
             commands = api.Queue(maxsize=1, policy=policy)
             command_queues.append(commands)
-            group.add_process(
-                nproc=1,
-                template=api.ProcessTemplate(
-                    target=_dragon_round_worker,
-                    args=(
-                        run_id,
-                        str(run_dir),
-                        placement.to_dict(),
-                        [item.to_dict() for item in shard],
-                        options.to_payload(),
-                        benchmark.to_payload(),
-                        commands,
-                        results_queue,
-                        allow_loopback,
-                        worker_timeout,
-                        result_timeout,
-                    ),
-                    policy=policy,
+            template = api.ProcessTemplate(
+                target=_dragon_launch_worker,
+                args=(
+                    run_id,
+                    str(descriptor_path),
+                    hashlib.sha256(encoded).hexdigest(),
+                    context,
+                    results_queue,
+                    commands,
                 ),
+                policy=policy,
             )
+            if len(template.argdata) > _DRAGON_TEMPLATE_BUDGET_BYTES:
+                raise ValueError(
+                    "Dragon worker launch arguments exceed 96 KiB"
+                )
+            group.add_process(nproc=1, template=template)
         phase = "init"
         group.init()
         coordinator_timings["dragon_process_setup_sec"] = (
