@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["setuptools>=83.0.0", "wheel"]
+requires = ["setuptools>=83.0.0", "setuptools-scm==10.3.4", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -88,8 +88,18 @@ package-dir = {"" = "src"}
 include-package-data = false
 script-files = ["scripts/cuphoton-openmpi-rank-exec"]
 
-[tool.setuptools.dynamic]
-version = { attr = "cuphoton.__version__" }
+[tool.setuptools_scm]
+version_file = "src/cuphoton/_version.py"
+tag_regex = '^v(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:rc[0-9]+)?)$'
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"]
+version_file_template = '''
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Generated at build time by setuptools-scm. Do not edit.
+__version__ = {version!r}
+'''
 
 [tool.setuptools.packages.find]
 where = ["src"]

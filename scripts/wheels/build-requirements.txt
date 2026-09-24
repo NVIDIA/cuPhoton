@@ -4,6 +4,8 @@
 
 # Native wheel build inputs, installed separately for each CPython ABI.
 setuptools==83.0.0
+setuptools-scm==10.3.4
+vcs-versioning==2.5.0
 wheel==0.48.0
 pybind11==3.0.4
 libkvikio-cu13==26.6.0
