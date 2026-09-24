@@ -34,6 +34,7 @@ def print_validation_sweep(sweep):
         print(
             f"snr_db={level.snr_db:g} sigma={level.noise_sigma:.4g} "
             f"trials={level.trials_successful}/{level.trials_attempted} "
+            f"estimator_errors={level.estimator_errors} "
             f"any_mode_lost_rate={level.any_mode_lost_rate:.3f} "
             f"residual_ratio={level.residual_ratio:.2f}"
         )

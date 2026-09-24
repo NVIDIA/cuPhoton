@@ -14,7 +14,8 @@ uv run cuphoton xray lpv --json
 ```
 
 Keep `--output-dir` outside the checkout. It receives `summary.json` and, when
-the `viz` extra is installed, `validation.html`.
+the `viz` extra is installed, `validation.html`. The HTML includes its Bokeh
+resources and can be viewed offline.
 
 ## Model and fixture
 
@@ -37,6 +38,8 @@ Noise is white Gaussian, independent per sample. A level's `snr_db` is
 `20 log10(rms of the mean-removed clean trace / sigma)`. One `numpy` generator
 seeded by `--seed` draws every trial in order, so a run is reproducible from
 the summary's `config`.
+SNR levels must be finite and produce finite, positive noise scales;
+`--components` and `--trials` must be positive integers.
 
 ## Bounds
 
@@ -58,7 +61,8 @@ their total frequency error. Each fitted mode is used at most once. The
 per-mode `loss_rate` is the fraction of trials in which the mode was not
 recovered. A trial is successful when the estimator returned and every true
 mode was recovered; a trial in which the estimator raised counts in
-`estimator_errors` and as a loss of every mode.
+`estimator_errors` and as a loss of every mode. The text report includes
+the error count so estimator failures can be distinguished from mode loss.
 
 For each mode and parameter (`amplitude`, `decay`, `angular_frequency`,
 `phase`) the summary gives `bias`, `std` (ddof 1) and `rmse` computed over
@@ -74,7 +78,8 @@ Read the decay statistics of a lightly damped mode together with its
 the fitted decay of such a mode through zero the mode is dropped rather than
 reported with a negative decay; the surviving decay estimates are truncated
 at zero, and their scatter and bias are conditional on survival. The summary
-labels these statistics `statistics_over: recovered_trials`.
+labels these statistics `statistics_over: recovered_trials`. Conditional
+statistics and finite-sample scatter can fall below the unconditional bound.
 
 Every level also reports `residual_rms_over_sigma_median`, the median over
 trials of the rms residual of the reconstruction divided by sigma. It is
@@ -95,6 +100,9 @@ model class:
 | `clip` | the trace is clipped above `amount` |
 | `glitch` | one sample at mid-record is offset by `amount` |
 
+Amounts must be finite. The Gaussian 1/e time must be positive and is measured
+from the first sample.
+
 The truth used for bias and bounds stays the undistorted mode set, so the
 statistics measure the estimator's response to the mismatch. A chirp or a
 clipped trace can return modes with a confident, biased frequency and no
@@ -112,8 +120,12 @@ loss; the residual ratio supplies an additional reconstruction diagnostic.
   the estimators and distortions covered.
 - `runtime`: `cuphoton.core.runtime.runtime_metadata` for the CPU backend
   (package, Python, platform, NumPy versions, backend, device, dtype) plus
-  `scipy_version` and `source_revision` (the git revision of the checkout,
-  or `null`).
+  `scipy_version`, `source_revision`, and `source_dirty`. A revision is
+  recorded only when this module is tracked by its Git checkout;
+  `source_dirty` reports tracked changes anywhere in that checkout.
+  Both are `null` for an installed or untracked module, or when Git metadata
+  is unavailable. Ignored and untracked run artifacts do not mark the source
+  dirty.
 - `results`: one entry per sweep condition (estimator by distortion by
   signal-to-noise level): `snr_db`, `signal_rms`, `noise_sigma`, `trials` with
   `attempted`, `successful`, `failed` and `estimator_errors`,
