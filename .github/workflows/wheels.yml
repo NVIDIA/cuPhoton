@@ -127,8 +127,87 @@ jobs:
               python -I /checks/test_installed.py --mode native
             '
 
+  runtimes:
+    name: installed runtimes / py${{ matrix.python.version }} / ${{ matrix.platform.arch }}
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - {version: "3.12", dragon: true}
+          - {version: "3.13", dragon: true}
+          # Dragon 0.14.2 has no Python 3.14 wheel or source distribution.
+          - {version: "3.14", dragon: false}
+        platform:
+          - {runner: ubuntu-24.04, arch: x86_64}
+          - {runner: ubuntu-24.04-arm, arch: aarch64}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref || github.sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-wheels-${{ matrix.platform.arch }}
+          path: wheelhouse
+      - name: Exercise installed cuTile imports and distributed CPU runtimes
+        env:
+          PYTHON_VERSION: ${{ matrix.python.version }}
+          WITH_DRAGON: ${{ matrix.python.dragon }}
+        run: |
+          mkdir -p stack-reports
+          docker run --rm --shm-size=2g \
+            -e WHEEL_ABI="cp${PYTHON_VERSION/./}" \
+            -e WITH_DRAGON \
+            -e OMPI_ALLOW_RUN_AS_ROOT=1 \
+            -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
+            -e DRAGON_DEFAULT_SEG_SZ=536870912 \
+            -e DRAGON_INF_SEG_SZ=268435456 \
+            -e CUDA_VISIBLE_DEVICES="" \
+            -v "$PWD/wheelhouse:/wheels:ro" \
+            -v "$PWD/scripts/wheels:/checks:ro" \
+            -v "$PWD/stack-reports:/reports" \
+            "python:${PYTHON_VERSION}-slim-bookworm" \
+            sh -ec '
+              apt-get update
+              apt-get install -y --no-install-recommends openmpi-bin libopenmpi3
+              rm -rf /var/lib/apt/lists/*
+              set -- /wheels/*-"${WHEEL_ABI}"-*.whl
+              test "$#" = 1
+              extras="cutile,mpi"
+              if test "$WITH_DRAGON" = true; then
+                extras="$extras,dragon"
+              fi
+              python -m pip install --only-binary=:all: "$1[$extras]"
+              python -m pip check
+              python -I /checks/test_stack.py --mode imports \
+                --expect "$extras" --report /reports/imports.json
+              timeout --kill-after=15s 180s mpiexec --oversubscribe -n 2 \
+                python -I /checks/test_stack.py --mode mpi --backend cpu \
+                --workers 2 --report /reports/mpi.json
+              if test "$WITH_DRAGON" = true; then
+                timeout --kill-after=15s 180s dragon --single-node-override \
+                  python -I /checks/test_stack.py --mode dragon --backend cpu \
+                  --workers 2 --report /reports/dragon.json
+              fi
+            '
+      - name: Record the Python 3.14 Dragon limitation
+        if: matrix.python.version == '3.14'
+        run: >-
+          echo 'Python 3.14: cuTile imports and real MPI workers are required.
+          Dragon is excluded because upstream publishes no compatible wheel.
+          These CPU jobs do not qualify GPU execution.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: cuphoton-runtime-checks-cp${{ matrix.python.version }}-${{ matrix.platform.arch }}
+          path: stack-reports/*.json
+          if-no-files-found: error
+
   distributions:
-    needs: [sdist, wheels, install]
+    needs: [sdist, wheels, install, runtimes]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

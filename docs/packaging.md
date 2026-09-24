@@ -81,6 +81,13 @@ planning must work without a GPU. The final artifact check requires exactly
 six native wheels and one source archive; it rejects accidental pure wheels,
 missing native code or notices, and bundled GPU runtime libraries.
 
+The installed-wheel runtime matrix also requires cuTile imports and two real
+MPI workers on every Python/architecture pair. Python 3.12 and 3.13 require
+two real Dragon workers as well; upstream Dragon has no Python 3.14 wheel.
+These workers solve generated xPOIS inputs on the CPU and check numerical
+results, distinct processes, and MPI collectives. JSON receipts are retained
+as CI artifacts. These checks do not establish GPU executor correctness.
+
 ## GPU qualification
 
 CI CPU checks do not establish GPU correctness. Download the exact
@@ -106,6 +113,44 @@ Retain the source commit, artifact SHA256 values, container image, installed
 dependency versions, Python, GPU/driver details, and JSON test receipts. When
 testing the minimum CUDA runtime, constrain `cuda-toolkit==13.0.3.0` and
 `nvidia-nvjitlink==13.0.88`; also test the normal unconstrained `io` resolution.
+
+## Whole-stack qualification
+
+Use `scripts/wheels/test_stack.py` alongside the native GPU check above.
+Install the same wheel with `[gpu,viz,cutile,mpi,dragon]` on Python 3.12 and
+3.13, or `[gpu,viz,cutile,mpi]` on Python 3.14. An MPI runtime and matching
+launcher are required. cuTile uses an external CUDA 13.2 or newer compiler;
+see [optional runtime setup](getting-started.md#optional-runtimes) for the
+current PyTorch/compiler dependency constraint.
+
+From outside the checkout, using the installed environment's Python:
+
+```bash
+python -I /checks/test_installed.py --mode gpu --output /results/xdr.json
+python -I /checks/test_stack.py --mode gpu --report /results/compute.json
+
+# One rank per visible GPU; this example needs two CUDA 13-capable GPUs.
+CUDA_VISIBLE_DEVICES=0,1 timeout --kill-after=15s 180s mpiexec -n 2 \
+  cuphoton-openmpi-rank-exec -- python -I /checks/test_stack.py \
+  --mode mpi --backend cupy --workers 2 --report /results/mpi-gpu.json
+
+# Python 3.12 or 3.13; two available GPU placements are required.
+CUDA_VISIBLE_DEVICES=0,1 timeout --kill-after=15s 180s dragon --single-node-override \
+  python -I /checks/test_stack.py --mode dragon --backend cupy \
+  --workers 2 --report /results/dragon-gpu.json
+```
+
+For a one-GPU host, use one visible device, `mpiexec -n 1`, and `--workers 1`
+for both executors. Record that as single-worker acceptance, not multi-GPU
+qualification. Use `--backend cpu --workers 2` with the two launchers to
+repeat the CPU runtime checks without GPU requirements.
+
+The compute check solves the same known xPOIS problem with CPU, CuPy,
+Numba-CUDA, and cuTile, and checks CuPy-to-PyTorch GPU inference through
+xScan's DLPack bridge. The executor checks run cuPhoton's real MPI/Dragon
+batch paths and verify saved numerical outputs. Missing selected runtimes,
+GPU support, worker results, or compiler tools fail instead of skipping.
+Retain these JSON receipts with the wheel hashes and native XDR receipts.
 
 ## Publish the qualified artifacts
 

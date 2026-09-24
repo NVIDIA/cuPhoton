@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu clean-dist build package-check wheels release-check ci-lint ci-test-cpu hooks
+.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels release-check ci-lint ci-test-cpu hooks
 
 CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
@@ -17,7 +17,7 @@ sync-gpu:
 	uv sync --locked $(GPU_EXTRAS)
 
 sync-cutile:
-	uv sync --locked --python 3.12 $(GPU_EXTRAS) --extra cutile
+	uv sync --locked $(GPU_EXTRAS) --extra cutile
 
 lock:
 	uv lock
@@ -65,6 +65,9 @@ test-xray:
 
 test-gpu:
 	$(UV_RUN) $(GPU_EXTRAS) pytest
+
+test-cutile:
+	$(UV_RUN) $(GPU_EXTRAS) --extra cutile pytest tests/xfit tests/xpois
 
 clean-dist:
 	rm -rf dist
