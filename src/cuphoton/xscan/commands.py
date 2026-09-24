@@ -7,14 +7,17 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, TypeVar
 
 from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
+    FloatInvariant,
     InvariantAwareCommand,
     NonNegativeIntegerInvariant,
     PositiveIntegerInvariant,
@@ -2156,3 +2159,132 @@ class ReproduceHscXPOISSweepCommand(XScanCommand):
             run_name=self.run_name or None,
         )
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
+
+
+class BenchmarkPipelineCommand(XScanCommand):
+    """Compare the device pipeline with separate file-mediated stages."""
+
+    _name_ = "benchmark-pipeline"
+
+    output = None
+    config = None
+    items = None
+    images = None
+    image_size = None
+    candidates = None
+    stamp_size = None
+    seed = None
+    device = None
+    warmup = None
+    repeat = None
+    timeout = None
+    order = None
+    stage = None
+
+    class OutputArg(PathSpecInvariant):
+        _arg = "--output"
+        _help = "New output directory for benchmark receipts and artifacts."
+        _mandatory = True
+
+    class ConfigArg(PathSpecInvariant):
+        _arg = "--config"
+        _help = "Existing pipeline config JSON; requires --items."
+        _default = None
+
+    class ItemsArg(PathSpecInvariant):
+        _arg = "--items"
+        _help = "Existing pipeline items JSON; requires --config."
+        _default = None
+
+    class ImagesArg(PositiveIntegerInvariant):
+        _arg = "--images"
+        _help = "Synthetic image-pair count. [default: %default]"
+        _default = 4
+
+    class ImageSizeArg(PositiveIntegerInvariant):
+        _arg = "--image-size"
+        _help = "Synthetic square image width in pixels. [default: %default]"
+        _default = 256
+
+    class CandidatesArg(PositiveIntegerInvariant):
+        _arg = "--candidates"
+        _help = "Candidates per synthetic image. [default: %default]"
+        _default = 9
+
+    class StampSizeArg(PositiveIntegerInvariant):
+        _arg = "--stamp-size"
+        _help = "Square candidate stamp width in pixels. [default: %default]"
+        _default = 17
+
+    class SeedArg(NonNegativeIntegerInvariant):
+        _arg = "--seed"
+        _help = "Synthetic fixture random seed. [default: %default]"
+        _default = 2026
+
+    class DeviceArg(StringInvariant):
+        _arg = "--device"
+        _help = "CUDA device for the synthetic fixture. [default: %default]"
+        _default = "cuda:0"
+
+    class WarmupArg(PositiveIntegerInvariant):
+        _arg = "--warmup"
+        _help = "Recorded warmup rounds per treatment. [default: %default]"
+        _default = 1
+
+    class RepeatArg(PositiveIntegerInvariant):
+        _arg = "--repeat"
+        _help = "Measured rounds per treatment. [default: %default]"
+        _default = 3
+
+    class TimeoutArg(FloatInvariant):
+        _arg = "--timeout"
+        _help = (
+            "Positive child-process timeout in seconds. [default: %default]"
+        )
+        _default = 600.0
+
+        @classmethod
+        def validate(cls, value: Any) -> float | None:
+            converted = super().validate(value)
+            if converted is not None and (
+                not math.isfinite(converted) or converted <= 0
+            ):
+                raise ValueError("must be finite and greater than zero")
+            return converted
+
+    class OrderArg(SetInvariant):
+        _arg = "--order"
+        _help = "Treatment launch order. [default: %default]"
+        _set = {"pipeline-first", "staged-first"}
+        _default = "pipeline-first"
+
+    class StageArg(SetInvariant):
+        _arg = "--stage"
+        _help = (
+            "Comparison or individual subprocess stage. [default: %default]"
+        )
+        _set = {"compare", "pipeline", "xpois", "xfit", "xscan"}
+        _default = "compare"
+
+    def run(self) -> None:
+        from .pipeline_benchmark.runner import run_benchmark
+
+        self._call(
+            run_benchmark,
+            SimpleNamespace(
+                output=Path(self.output).expanduser(),
+                config=self._path(self.config),
+                items=self._path(self.items),
+                images=self.images,
+                image_size=self.image_size,
+                candidates=self.candidates,
+                stamp_size=self.stamp_size,
+                seed=self.seed,
+                device=self.device,
+                warmup=self.warmup,
+                repeat=self.repeat,
+                timeout=self.timeout,
+                order=self.order,
+                stage=self.stage,
+            ),
+        )

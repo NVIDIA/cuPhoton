@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import argparse
 import importlib.metadata
 import json
 import os
@@ -17,11 +16,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 
-MODULE = "cuphoton.xscan.pipeline_benchmark"
+CLI = [sys.executable, "-m", "cuphoton", "xscan", "benchmark-pipeline"]
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -104,7 +104,7 @@ def run_child(command: list[str], log: Path, *, timeout: float) -> float:
     return time.perf_counter() - started
 
 
-def pipeline_worker(args: argparse.Namespace) -> None:
+def pipeline_worker(args: SimpleNamespace) -> None:
     started = time.perf_counter()
     import cupy as cp
     import torch
@@ -178,15 +178,14 @@ def pipeline_worker(args: argparse.Namespace) -> None:
     )
 
 
-def measure_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+def measure_pipeline(args: SimpleNamespace) -> dict[str, Any]:
     output = args.output / "pipeline"
     output.mkdir()
     elapsed = run_child(
         [
-            sys.executable,
-            "-m",
-            MODULE,
-            "--pipeline-worker",
+            *CLI,
+            "--stage",
+            "pipeline",
             "--config",
             str(args.config),
             "--items",
@@ -206,7 +205,7 @@ def measure_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
-def measure_stages(args: argparse.Namespace) -> dict[str, Any]:
+def measure_stages(args: SimpleNamespace) -> dict[str, Any]:
     output = args.output / "staged"
     output.mkdir()
     rounds = []
@@ -226,16 +225,14 @@ def measure_stages(args: argparse.Namespace) -> dict[str, Any]:
                 stage_started = time.perf_counter()
                 elapsed = run_child(
                     [
-                        sys.executable,
-                        "-m",
-                        f"{MODULE}.stages",
+                        *CLI,
                         "--stage",
                         stage,
                         "--config",
                         str(args.config),
                         "--items",
                         str(args.items),
-                        "--output-dir",
+                        "--output",
                         str(root),
                     ],
                     root / f"{stage}.log",
@@ -274,7 +271,7 @@ def measure_stages(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
-def audit(args: argparse.Namespace) -> dict[str, Any]:
+def audit(args: SimpleNamespace) -> dict[str, Any]:
     from cuphoton.core.artifacts import file_sha256
     from cuphoton.xscan.device_pipeline import (
         _verify_item_hashes,
@@ -413,36 +410,24 @@ def provenance() -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--config", type=Path)
-    parser.add_argument("--items", type=Path)
-    parser.add_argument("--images", type=int, default=4)
-    parser.add_argument("--image-size", type=int, default=256)
-    parser.add_argument("--candidates", type=int, default=9)
-    parser.add_argument("--stamp-size", type=int, default=17)
-    parser.add_argument("--seed", type=int, default=2026)
-    parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--repeat", type=int, default=3)
-    parser.add_argument("--timeout", type=float, default=600)
-    parser.add_argument(
-        "--order",
-        choices=("pipeline-first", "staged-first"),
-        default="pipeline-first",
-    )
-    parser.add_argument(
-        "--pipeline-worker", action="store_true", help=argparse.SUPPRESS
-    )
-    args = parser.parse_args()
+def run_benchmark(args: SimpleNamespace) -> None:
+    """Run a comparison or one child stage through the shared CLI adapter."""
     if args.repeat < 1 or args.warmup < 1 or args.timeout <= 0:
-        parser.error("repeat, warmup and timeout must be positive")
+        raise ValueError("repeat, warmup and timeout must be positive")
     if (args.config is None) != (args.items is None):
-        parser.error("provide both --config and --items, or neither")
+        raise ValueError("provide both --config and --items, or neither")
     args.output = args.output.resolve()
-    if args.pipeline_worker:
-        pipeline_worker(args)
+    if args.stage != "compare":
+        if args.config is None:
+            raise ValueError("child stages require --config and --items")
+        if args.stage == "pipeline":
+            args.output.mkdir(parents=True, exist_ok=True)
+            pipeline_worker(args)
+        else:
+            from .stages import run_stage
+
+            config, items = read_inputs(args.config, args.items)
+            run_stage(args.stage, config, items, args.output)
         return
     args.output.mkdir(parents=True, exist_ok=False)
     try:
@@ -512,7 +497,3 @@ def main() -> None:
             },
         )
         raise
-
-
-if __name__ == "__main__":
-    main()

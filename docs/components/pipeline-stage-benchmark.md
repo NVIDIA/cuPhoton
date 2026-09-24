@@ -18,7 +18,7 @@ root:
 ```bash
 uv sync --locked --extra gpu
 
-uv run --locked --extra gpu python -m cuphoton.xscan.pipeline_benchmark \
+uv run --locked --extra gpu cuphoton xscan benchmark-pipeline \
   --output /tmp/cuphoton-pipeline-forward \
   --images 4 --image-size 256 --candidates 9 --stamp-size 17 \
   --seed 2026 --device cuda:0 --warmup 1 --repeat 3 \
@@ -34,7 +34,7 @@ run serially on the selected GPU.
 Reverse the treatment order using the *same generated fixture*:
 
 ```bash
-uv run --locked --extra gpu python -m cuphoton.xscan.pipeline_benchmark \
+uv run --locked --extra gpu cuphoton xscan benchmark-pipeline \
   --output /tmp/cuphoton-pipeline-reverse \
   --config /tmp/cuphoton-pipeline-forward/input/config.json \
   --items /tmp/cuphoton-pipeline-forward/input/items.json \
@@ -67,6 +67,11 @@ full subtraction images and fit residuals in addition to the compact
 scientific outputs shared with the pipeline. Their transfers, hashing and
 I/O are part of this treatment's cost. Its preliminary rounds prepare
 caches; subsequent measured rounds still create fresh processes.
+
+To inspect a manual round directly, invoke the command three times with
+`--stage xpois`, `--stage xfit` and `--stage xscan`, in that order. Supply the
+same `--config`, `--items` and `--output` directory each time. The stage
+commands reject changed upstream artifacts and refuse to overwrite a stage.
 
 Both treatments use float64 subtraction and xFit inputs, unweighted xFit
 stamps, float32 triplets/features, and the same GPU sigmoid. Inference forces

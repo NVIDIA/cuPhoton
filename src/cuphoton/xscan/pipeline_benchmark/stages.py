@@ -12,7 +12,6 @@ compared as GPU-only timings with the pipeline's asynchronous host timers.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import time
@@ -532,27 +531,3 @@ def load_science_arrays(root: Path, index: int) -> dict[str, np.ndarray]:
         ).astype(np.float64)
         for name in SCIENCE_KEYS
     }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", required=True, choices=STAGES)
-    parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--items", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
-    args = parser.parse_args()
-    config = pipeline.DevicePipelineConfig.from_payload(
-        json.loads(args.config.read_text())
-    )
-    items = [
-        pipeline.DevicePipelineItem.from_payload(item)
-        for item in json.loads(args.items.read_text())
-    ]
-    summary = run_stage(args.stage, config, items, args.output_dir)
-    print(
-        json.dumps({"stage": summary["stage"], "status": summary["status"]})
-    )
-
-
-if __name__ == "__main__":
-    main()

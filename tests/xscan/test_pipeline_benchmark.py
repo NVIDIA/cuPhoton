@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from cuphoton.xscan.pipeline_benchmark import __main__ as benchmark
-from cuphoton.xscan.pipeline_benchmark.__main__ import (
+from cuphoton.xscan.pipeline_benchmark import runner as benchmark
+from cuphoton.xscan.pipeline_benchmark.runner import (
     compare_arrays,
     run_child,
 )
