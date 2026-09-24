@@ -27,9 +27,10 @@ scratch/
 
 # Project runtime artifacts
 /core
-/cufile.log
+cufile.log
 COMMAND-MAP.md
 /quickstart-output/
+imaging-pipeline-output/
 /data/
 /*/data/
 /*/runs/

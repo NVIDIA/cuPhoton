@@ -57,6 +57,12 @@ Use `--require-gpu` when a CPU fallback should be an error. See
 [Quickstarts](docs/quickstarts.md) for individual components and output
 contracts.
 
+For a synthetic imaging walkthrough from FITS loading through alignment,
+subtraction, dipole fitting, and plotting, run the
+[notebook](examples/imaging-pipeline/run_imaging_pipeline.ipynb) or equivalent
+[script](examples/imaging-pipeline/run_imaging_pipeline.py). Both include setup
+instructions and require a CUDA 13-capable NVIDIA GPU and XDR's native extension.
+
 ## Choose a workflow
 
 | Goal | Component | First command |
