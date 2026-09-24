@@ -50,6 +50,7 @@ from cuphoton.core.execution import (
 
 _LAUNCH_SCHEMA = "cuphoton.core.dragon-launch/v1"
 _TEMPLATE_BUDGET_BYTES = 96 * 1024
+_WORKER_POLL_SEC = 0.5
 
 
 @dataclass(frozen=True)
@@ -447,6 +448,7 @@ def run_dragon_work_items(
                 kind="ready",
                 round_id=None,
                 deadline=worker_deadline,
+                group=group,
             )
             provenances = [message["provenance"] for message in ready]
             ready_errors = audit_worker_provenance(
@@ -520,6 +522,7 @@ def run_dragon_work_items(
                         kind="round",
                         round_id=round_spec.round_id,
                         deadline=worker_deadline,
+                        group=group,
                     )
                 finally:
                     round_timings["collection_sec"] = (
@@ -614,6 +617,7 @@ def run_dragon_work_items(
             kind="closed",
             round_id=None,
             deadline=time.monotonic() + result_timeout_sec,
+            group=group,
         )
         timings["worker_close_sec"] = time.perf_counter() - close_start
         phase = "join"
@@ -762,6 +766,7 @@ def _collect_messages(
     kind: str,
     round_id: str | None,
     deadline: float,
+    group: Any,
 ) -> None:
     seen: set[int] = set()
     while len(seen) < worker_count:
@@ -770,11 +775,21 @@ def _collect_messages(
             raise TimeoutError(f"Dragon {kind} deadline expired")
         try:
             message = json_mapping(
-                results_queue.get(timeout=remaining),
+                results_queue.get(timeout=min(remaining, _WORKER_POLL_SEC)),
                 field=f"Dragon {kind} result",
             )
-        except queue.Empty as exc:
-            raise TimeoutError(f"Dragon {kind} deadline expired") from exc
+        except queue.Empty:
+            failed_exits = [
+                (puid, code)
+                for puid, code in group.inactive_puids
+                if code != 0
+            ]
+            if failed_exits:
+                raise RuntimeError(
+                    f"Dragon worker exited before {kind} completion: "
+                    f"{failed_exits}"
+                )
+            continue
         messages.append(message)
         worker_id = _strict_integer(message.get("worker_id"))
         if (

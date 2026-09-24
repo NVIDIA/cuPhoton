@@ -473,3 +473,113 @@ def test_fast_worker_waits_for_close_until_all_round_results_arrive(
     assert len(result.summary["messages"]) == 2
     assert len(result.summary["closed_messages"]) == 2
     assert state.groups[0].closed and not state.groups[0].stopped
+
+
+@pytest.mark.parametrize("kind", ["ready", "round", "closed"])
+def test_collector_detects_native_exit_on_first_bounded_poll(kind):
+    timeouts = []
+
+    class EmptyQueue:
+        def get(self, *, timeout):
+            timeouts.append(timeout)
+            raise queue.Empty
+
+    with pytest.raises(RuntimeError, match="worker exited"):
+        dragon._collect_messages(
+            EmptyQueue(),
+            [],
+            worker_count=1,
+            run_id="run",
+            kind=kind,
+            round_id=None,
+            deadline=time.monotonic() + 3600,
+            group=SimpleNamespace(inactive_puids=[(123, -9)]),
+        )
+    assert len(timeouts) == 1
+    assert 0 < timeouts[0] <= 1
+
+
+def test_collector_keeps_queued_results_before_reporting_peer_exit():
+    receipt = {
+        "kind": "ready",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "status": "success",
+    }
+
+    class ResultsQueue:
+        calls = 0
+
+        def get(self, *, timeout):
+            self.calls += 1
+            if self.calls == 1:
+                return receipt
+            raise queue.Empty
+
+    messages = []
+    with pytest.raises(RuntimeError, match="worker exited"):
+        dragon._collect_messages(
+            ResultsQueue(),
+            messages,
+            worker_count=2,
+            run_id="run",
+            kind="ready",
+            round_id=None,
+            deadline=time.monotonic() + 3600,
+            group=SimpleNamespace(inactive_puids=[(123, -9)]),
+        )
+    assert messages == [receipt]
+
+
+def test_closed_collection_allows_normal_exit_before_delayed_receipt():
+    receipt = {
+        "kind": "closed",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "status": "success",
+    }
+
+    class DelayedQueue:
+        calls = 0
+
+        def get(self, *, timeout):
+            self.calls += 1
+            if self.calls == 1:
+                raise queue.Empty
+            return receipt
+
+    channel = DelayedQueue()
+    messages = []
+    dragon._collect_messages(
+        channel,
+        messages,
+        worker_count=1,
+        run_id="run",
+        kind="closed",
+        round_id=None,
+        deadline=time.monotonic() + 3600,
+        group=SimpleNamespace(inactive_puids=[(123, 0)]),
+    )
+    assert channel.calls == 2
+    assert messages == [receipt]
+
+
+def test_native_worker_crash_stops_group_without_ready_receipt(
+    monkeypatch, tmp_path
+):
+    state = _install_runtime(monkeypatch)
+
+    def crash(*args):
+        raise RuntimeError("synthetic native crash")
+
+    monkeypatch.setattr(dragon, "_workload_worker", crash)
+    result = _run(tmp_path, worker_count=1)
+    assert result.status == "failed"
+    assert not result.summary["ready_messages"]
+    assert any(
+        "worker exited before ready" in error["message"]
+        for error in result.summary["lifecycle_errors"]
+    )
+    assert state.groups[0].stopped and state.groups[0].closed
