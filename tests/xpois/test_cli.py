@@ -527,7 +527,16 @@ def test_fit_batch_forwards_benchmark_to_existing_executor(
     [
         ["--measure-rounds", "0"],
         ["--warmup-rounds", "-1"],
-        ["--measure-rounds", "2", "--aggregation-mode", "files"],
+        [
+            "--measure-rounds",
+            "2",
+            "--aggregation-mode",
+            "files",
+            "--name",
+            "repeated",
+            "--attempt-id",
+            "attempt-1",
+        ],
     ],
 )
 def test_fit_batch_rejects_invalid_round_options_before_executor(
