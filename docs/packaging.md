@@ -142,8 +142,10 @@ workflow.
    `main` with the same `version`, `target=testpypi`, and the original release
    `run-id`. This reuses its artifacts even while its PyPI job awaits approval.
 4. Verify the TestPyPI downloads against the recorded hashes, then approve the
-   original PyPI job. Alternatively, dispatch with `target=pypi` and the same
-   original build run ID to promote the identical files.
+   original PyPI job. Alternatively, cancel that waiting job before dispatching
+   with `target=pypi` and the same original build run ID. Publishing runs for
+   one version and destination are serialized, so leaving the original waiting
+   would block the replacement. The replacement promotes the identical files.
 
 Manual dispatch without `run-id` builds the supplied existing tag and publishes
 to the selected environment after approval. Dispatch with `run-id` always uses
