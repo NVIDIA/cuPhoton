@@ -117,3 +117,48 @@ def test_bounds_are_the_reference_for_the_refined_uncertainties():
     r = linear_prediction_refined(fx.time, y, 6, 2)
     ratio = r.sigma_angular_frequency / b["angular_frequency"]
     assert np.all(ratio > 0.6) and np.all(ratio < 1.6)
+
+
+def test_rank_deficient_fit_reports_unavailable_uncertainty():
+    fx = synthetic_modes_trace(96)
+    start = [(1.0, 0.09, 2.4, 0.3), (0.3, 0.09, 2.41, 0.3)]
+    theta = np.array([v for mode in start for v in mode] + [0.15])
+    clean, _ = _model_and_jacobian(theta, fx.time, 2)
+    y = clean + np.random.default_rng(6).normal(0.0, 0.02, fx.time.size)
+    result = refine_modes(fx.time, y, start, 0.15)
+    assert result.converged
+    assert result.residual_rms < 0.025
+    for field in (
+        "sigma_amplitude",
+        "sigma_decay",
+        "sigma_angular_frequency",
+        "sigma_phase",
+    ):
+        assert np.all(np.isnan(getattr(result, field)))
+
+
+@pytest.mark.parametrize("time_scale", [1e-9, 1e9])
+def test_identifiable_uncertainty_is_independent_of_time_units(time_scale):
+    fx = synthetic_modes_trace(96, noise_sigma=0.002, seed=5)
+    start = [
+        (m.amplitude, m.decay, m.angular_frequency, m.phase) for m in fx.modes
+    ]
+    base = refine_modes(fx.time, fx.trace, start, fx.constant)
+    scaled_start = [
+        (a, d / time_scale, w / time_scale, p) for a, d, w, p in start
+    ]
+    scaled = refine_modes(
+        fx.time * time_scale, fx.trace, scaled_start, fx.constant
+    )
+    for field in (
+        "sigma_amplitude",
+        "sigma_decay",
+        "sigma_angular_frequency",
+        "sigma_phase",
+    ):
+        actual = getattr(scaled, field)
+        if field in ("sigma_decay", "sigma_angular_frequency"):
+            actual = actual * time_scale
+        assert np.all(np.isfinite(actual))
+        assert np.all(actual > 0)
+        np.testing.assert_allclose(actual, getattr(base, field), rtol=1e-4)
