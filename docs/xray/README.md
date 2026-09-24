@@ -208,4 +208,4 @@ See [Data and artifact contracts](../data-artifacts.md#xray-hdf5-and-trace-produ
 - [Distributed detector artifacts](DISTRIBUTED-DETECTOR-ARTIFACTS.md)
 - [Validation visualization](VALIDATION-VIZ.md)
 - [Linear prediction validation](LINEAR-PREDICTION-VALIDATION.md)
-- [Nonlinear refinement of linear-prediction modes](LINEAR-PREDICTION-REFINEMENT.md)
+- [Experimental nonlinear refinement of linear-prediction modes](LINEAR-PREDICTION-REFINEMENT.md)
