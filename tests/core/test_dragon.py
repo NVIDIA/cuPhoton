@@ -76,7 +76,12 @@ def _factory(options):
 
 
 def _install_runtime(
-    monkeypatch, *, mutate=None, item_failure=False, close_failure=False
+    monkeypatch,
+    *,
+    mutate=None,
+    item_failure=False,
+    close_failure=False,
+    interleave_close=False,
 ):
     global _STATE
     state = _STATE = SimpleNamespace(
@@ -90,6 +95,9 @@ def _install_runtime(
         bindings=[],
         item_failure=item_failure,
         close_failure=close_failure,
+        fast_result=threading.Event(),
+        fast_waiting_for_close=threading.Event(),
+        release_slow_result=threading.Event(),
     )
 
     class Queue(queue.Queue):
@@ -106,7 +114,36 @@ def _install_runtime(
                 else [value]
             )
             for message in values:
+                if (
+                    interleave_close
+                    and self.policy is None
+                    and message["kind"] == "round"
+                    and message["worker_id"] == 1
+                ):
+                    assert state.release_slow_result.wait(timeout=5)
                 super().put(message, block=block, timeout=timeout)
+                if interleave_close and self.policy is None:
+                    if (
+                        message["kind"] == "round"
+                        and message["worker_id"] == 0
+                    ):
+                        state.fast_result.set()
+                    elif (
+                        message["kind"] == "closed"
+                        and message["worker_id"] == 0
+                    ):
+                        state.release_slow_result.set()
+
+        def get(self, block=True, timeout=None):
+            if (
+                interleave_close
+                and self.policy is not None
+                and self.policy.gpu_affinity == [3]
+                and state.fast_result.is_set()
+            ):
+                state.fast_waiting_for_close.set()
+                state.release_slow_result.set()
+            return super().get(block=block, timeout=timeout)
 
         def close(self):
             self.closed = True
@@ -422,3 +459,17 @@ def test_scientific_validator_failure_suppresses_component_finalizer(
         "scientific receipt differs" in error["message"]
         for error in result.summary["errors"]
     )
+
+
+def test_fast_worker_waits_for_close_until_all_round_results_arrive(
+    monkeypatch, tmp_path
+):
+    state = _install_runtime(monkeypatch, interleave_close=True)
+    result = _run(tmp_path)
+
+    assert result.status == "success", result.summary
+    assert state.fast_waiting_for_close.is_set()
+    assert sorted(state.closed) == [0, 1]
+    assert len(result.summary["messages"]) == 2
+    assert len(result.summary["closed_messages"]) == 2
+    assert state.groups[0].closed and not state.groups[0].stopped

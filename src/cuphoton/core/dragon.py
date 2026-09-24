@@ -595,6 +595,17 @@ def run_dragon_work_items(
                     f"Dragon round {round_spec.round_id} failed"
                 )
         phase = "worker_close"
+        close_start = time.perf_counter()
+        for commands in command_queues:
+            remaining = min(
+                result_timeout_sec, worker_deadline - time.monotonic()
+            )
+            if remaining <= 0:
+                raise TimeoutError("Dragon worker deadline expired")
+            commands.put(
+                {"run_id": effective_run_id, "kind": "close"},
+                timeout=remaining,
+            )
         _collect_messages(
             results_queue,
             closed,
@@ -604,6 +615,7 @@ def run_dragon_work_items(
             round_id=None,
             deadline=time.monotonic() + result_timeout_sec,
         )
+        timings["worker_close_sec"] = time.perf_counter() - close_start
         phase = "join"
         phase_start = time.perf_counter()
         try:
@@ -980,6 +992,11 @@ def _workload_worker(
                 raise RuntimeError(
                     f"Dragon worker round {round_spec.round_id} failed"
                 )
+        # Closing produces another result-queue message. Wait until the
+        # coordinator has collected and audited every final-round receipt.
+        command = commands.get(timeout=descriptor["worker_timeout_sec"])
+        if command != {"run_id": run_id, "kind": "close"}:
+            raise ValueError("unexpected Dragon worker close command")
     except Exception:
         failed = True
         raise
