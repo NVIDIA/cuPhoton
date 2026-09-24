@@ -1026,12 +1026,34 @@ def test_file_preflight_peer_failure_does_not_wait_for_missing_rank(
     failure = {"type": "ValueError", "message": "peer preflight failed"}
     published = Barrier(2)
     original_publish = mpi._publish_file_preflight
+    original_consensus = mpi._file_preflight_consensus
+    original_wait = mpi._shared_filesystem_wait
+    state = local()
+    consensus_checked = Event()
 
     def publish(*args, **kwargs) -> None:
         original_publish(*args, **kwargs)
         published.wait(timeout=2)
 
     monkeypatch.setattr(mpi, "_publish_file_preflight", publish)
+
+    def consensus(*args, **kwargs):
+        consensus_checked.set()
+        state.checking_consensus = True
+        try:
+            return original_consensus(*args, **kwargs)
+        finally:
+            state.checking_consensus = False
+
+    def wait(deadline, delay):
+        # The peer may wait for the terminal marker; consensus must not
+        # wait for the absent third rank after both records are published.
+        if getattr(state, "checking_consensus", False):
+            pytest.fail("preflight consensus waited after a peer failure")
+        return original_wait(deadline, delay)
+
+    monkeypatch.setattr(mpi, "_file_preflight_consensus", consensus)
+    monkeypatch.setattr(mpi, "_shared_filesystem_wait", wait)
 
     def prepare(rank: int) -> str:
         try:
@@ -1052,11 +1074,10 @@ def test_file_preflight_peer_failure_does_not_wait_for_missing_rank(
             return str(exc)
         return "unexpected success"
 
-    start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(prepare, (0, 1)))
 
-    assert time.perf_counter() - start < 1.0
+    assert consensus_checked.is_set()
     assert all("peer preflight failed" in outcome for outcome in outcomes)
     marker = mpi.read_json_mapping(
         mpi._attempt_path(run_dir, run_id, attempt_id)
