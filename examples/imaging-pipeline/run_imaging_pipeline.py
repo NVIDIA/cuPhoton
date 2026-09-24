@@ -3,17 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Walkthrough from the NVIDIA Technical Blog on cuPhoton imaging pipelines.
+"""Load, align, subtract, fit, and plot a synthetic pair of FITS images.
 
-This is the copy-all script for that post: load, align, subtract, fit, and
-plot one synthetic template/science pair.
+Three static stars and one moving source illustrate cuPhoton's imaging APIs.
 
 Run from the repository root:
 
     uv sync --locked --extra gpu --extra viz
     bash src/cuphoton/xdr/src/build.sh
-    export WORK_DIR="$PWD/blog-run"
-    mkdir -p "$WORK_DIR"/{fits,figs}
     uv run --locked --extra gpu --extra viz python \
         examples/imaging-pipeline/run_imaging_pipeline.py
 
@@ -22,8 +19,9 @@ The XDR load step allocates a CuPy batch and has no CPU fallback.
 See docs/components/xdr.md for the native extension's CUDA headers and
 thread-safe CFITSIO build prerequisites.
 
-If WORK_DIR is unset, outputs go to ./blog-run. The notebook of the same
-sections is examples/imaging-pipeline/run_imaging_pipeline.ipynb.
+If WORK_DIR is unset, outputs go to ./imaging-pipeline-output (gitignored).
+The notebook of the same sections is
+examples/imaging-pipeline/run_imaging_pipeline.ipynb.
 
 """
 
@@ -56,8 +54,9 @@ except ImportError:
         pass
 
 
-WORK = Path(os.environ.get("WORK_DIR", Path.cwd() / "blog-run"))
-os.environ["WORK_DIR"] = str(WORK)
+WORK = Path(
+    os.environ.get("WORK_DIR", Path.cwd() / "imaging-pipeline-output")
+)
 (WORK / "fits").mkdir(parents=True, exist_ok=True)
 (WORK / "figs").mkdir(parents=True, exist_ok=True)
 SHAPE = (256, 256)
@@ -71,6 +70,7 @@ MOVER_NEW = (126.5, 116.0, 14.0, 2.10)
 CRVAL = (150.0, 2.0)
 PIXEL_SCALE = 0.2  # arcsec / pixel
 SCIENCE_SHIFT = (20.0, -32.0)  # dy, dx; large enough to see by eye
+SEEING_SIGMA = 0.65  # extra Gaussian blur applied to the science frame
 
 
 def gaussian2d(shape, y0, x0, amp, sigma):
@@ -110,9 +110,11 @@ def stretch_gray(arr):
     return (x * 255).astype(np.uint8)
 
 
-def stretch_div(arr):
+def stretch_div(arr, limit=None):
     a = np.asarray(arr, np.float64)
-    m = max(float(np.nanpercentile(np.abs(a), 99)), 1e-8)
+    if limit is None:
+        limit = float(np.nanpercentile(np.abs(a), 99))
+    m = max(limit, 1e-8)
     t = np.clip(a / m, -1, 1)
     rgb = np.stack(
         [
@@ -126,8 +128,8 @@ def stretch_div(arr):
     return (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
 
 
-def panel(arr, diverging=False, size=256):
-    data = stretch_div(arr) if diverging else stretch_gray(arr)
+def panel(arr, diverging=False, size=256, limit=None):
+    data = stretch_div(arr, limit=limit) if diverging else stretch_gray(arr)
     mode = "RGB" if diverging else "L"
     im = Image.fromarray(data, mode=mode).convert("RGB")
     return im.resize((size, size), Image.NEAREST)
@@ -161,7 +163,6 @@ def show_row(*ims, path=None, gap=16):
         canvas.save(path)
         print("wrote", path)
     display(canvas)
-    return canvas
 
 
 wcs_t = make_north_up_wcs(CRVAL, SHAPE, PIXEL_SCALE)
@@ -175,7 +176,7 @@ wcs_s.wcs.set()
 
 template = make_scene(MOVER_OLD)
 science = ndshift(
-    make_scene(MOVER_NEW, seeing=0.65),
+    make_scene(MOVER_NEW, seeing=SEEING_SIGMA),
     shift=SCIENCE_SHIFT,
     order=3,
     mode="constant",
@@ -205,21 +206,25 @@ print(aligned.images.shape, aligned.backend)
 reference, target = aligned.images
 
 # === XPOIS ===
+# Fit only the static scene, excluding both mover positions and their wings.
+fit_mask = np.ones(SHAPE, dtype=bool)
+fit_mask[105:142, 93:132] = False
 fit = solve_constant_kernel(
     reference,
     target,
-    [GaussianBasisComponent(sigma=1.6, degree=1)],
+    [GaussianBasisComponent(sigma=SEEING_SIGMA, degree=0)],
     kernel_shape=(15, 15),
     background_degree=0,
     flux_conserve=True,
+    fit_mask=fit_mask,
     backend="auto",
 )
 print(
-    fit.backend,
-    float(fit.kernel.sum()),
-    float(fit.chi2),
-    int(fit.fit_pixel_count),
+    f"kernel backend: {fit.backend}; sum: {float(fit.kernel.sum()):.8f}; "
+    f"fit pixels: {int(fit.fit_pixel_count)}"
 )
+# No variance is supplied, so chi2 is an unweighted sum of squares here.
+print("static-scene residual RMS:", np.sqrt(fit.chi2 / fit.fit_pixel_count))
 
 # === XFIT ===
 STAMP = 21
@@ -227,6 +232,50 @@ half = STAMP // 2
 cy, cx = 123, 112  # midpoint of the planted mover
 stamp = fit.residual[cy - half : cy + half + 1, cx - half : cx + half + 1]
 
+# Seed the fit from the observed stamp extrema, in centered x/y coordinates.
+y_pos, x_pos = np.unravel_index(np.argmax(stamp), stamp.shape)
+y_neg, x_neg = np.unravel_index(np.argmin(stamp), stamp.shape)
+initial = np.array(
+    [
+        [
+            stamp.max(),
+            2.0,
+            2.0,
+            0.0,
+            x_pos - half,
+            y_pos - half,
+            x_neg - half,
+            y_neg - half,
+        ]
+    ]
+)
+
+model = GaussianDipoleModel((STAMP, STAMP), dtype=np.float64)
+result = fit_dipoles(
+    stamp[None], model=model, initial=initial, backend="auto"
+)
+print(
+    f"dipole backend: {result.backend}; device: {result.device}; "
+    f"converged: {bool(result.converged[0])}"
+)
+for name, start, fitted in zip(
+    model.parameter_names, initial[0], result.parameters[0]
+):
+    # Orientation is unconstrained for these nearly circular lobes.
+    if name != "theta":
+        print(f"{name:10s}  initial={start:7.3f}  fit={fitted:7.3f}")
+
+# Use the planted scene only to check the recovered fit.
+expected_sigma = np.hypot(MOVER_NEW[3], SEEING_SIGMA)
+print(
+    f"expected sigma: {expected_sigma:.6f}; "
+    f"fitted sigma_x/sigma_y: {result.parameters[0, 1:3]}"
+)
+stamp_peak = float(np.max(np.abs(stamp)))
+print(
+    "max dipole residual / stamp peak:",
+    float(np.max(np.abs(result.residuals[0]))) / stamp_peak,
+)
 # Planted centers in stamp coordinates: x_pos, y_pos, x_neg, y_neg.
 truth_xy = np.array(
     [
@@ -236,20 +285,6 @@ truth_xy = np.array(
         MOVER_OLD[0] - cy,
     ]
 )
-# Amplitude, widths and angle are guesses after seeing and subtraction.
-initial = np.array([[14.0, 2.2, 2.2, 0.0, *truth_xy]])
-initial[0, 0] *= 0.85
-initial[0, 4:] += (0.35, -0.25, -0.30, 0.20)
-
-model = GaussianDipoleModel((STAMP, STAMP), dtype=np.float64)
-result = fit_dipoles(
-    stamp[None], model=model, initial=initial, backend="auto"
-)
-print(result.backend, result.device, bool(result.converged[0]))
-for name, start, fitted in zip(
-    model.parameter_names, initial[0], result.parameters[0]
-):
-    print(f"{name:10s}  initial={start:7.3f}  fit={fitted:7.3f}")
 print("planted centers (x_pos, y_pos, x_neg, y_neg):", truth_xy)
 print("center errors (pixels):", result.parameters[0, 4:] - truth_xy)
 
@@ -273,8 +308,9 @@ show_row(
     path=WORK / "figs" / "03_subtraction.png",
 )
 show_row(
-    panel(stamp, diverging=True),
-    panel(model_img, diverging=True),
-    panel(result.residuals[0], diverging=True),
+    panel(stamp, diverging=True, limit=stamp_peak),
+    panel(model_img, diverging=True, limit=stamp_peak),
+    # XFIT returns model minus data; display data minus model, as in XPOIS.
+    panel(-result.residuals[0], diverging=True, limit=stamp_peak),
     path=WORK / "figs" / "04_dipole.png",
 )

@@ -8,6 +8,11 @@ run, then read the contract for the component you intend to adapt.
 - [Getting started](getting-started.md): prerequisites and installation
   profiles.
 - [Quickstarts](quickstarts.md): data-independent CPU and GPU smoke runs.
+- Imaging walkthrough:
+  [notebook](../examples/imaging-pipeline/run_imaging_pipeline.ipynb) and
+  [script](../examples/imaging-pipeline/run_imaging_pipeline.py) with setup for
+  synthetic FITS loading, alignment, subtraction, dipole fitting, and plotting;
+  requires a CUDA 13-capable NVIDIA GPU and XDR's native extension.
 - [Command-line index](cli.md): the umbrella executable and command groups.
 
 ## Workflow guides
