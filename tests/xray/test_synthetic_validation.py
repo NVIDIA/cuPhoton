@@ -110,6 +110,16 @@ def test_chirp_integrates_the_requested_frequency_ramp(start):
     np.testing.assert_allclose(actual, expected)
 
 
+@pytest.mark.parametrize("start", [0.0, 3.0])
+def test_gaussian_envelope_starts_at_the_first_sample(start):
+    time = np.linspace(start, start + 10.0, 256)
+    expected = np.exp(-(((time - start) / 5.0) ** 2)) * np.cos(2 * time + 0.3)
+    actual = distort_trace(
+        time, (DampedMode(1, 0.1, 2, 0.3),), 0, "gaussian_envelope", 5.0
+    )
+    np.testing.assert_allclose(actual, expected)
+
+
 def test_matching_recovers_close_modes_independent_of_truth_order():
     modes = (DampedMode(1, 0, 1.0), DampedMode(1, 0, 1.15))
     fitted = np.array([1.05, 0.85])
@@ -132,8 +142,9 @@ def test_validation_sweep_reports_bound_ratios_and_loss_rates():
     w = strong.angular_frequency
     assert w.crlb_std > 0 and w.std > 0
     assert w.crlb_variance == pytest.approx(w.crlb_std**2)
-    assert w.std_over_crlb_std >= 1.0  # an estimator cannot beat the bound
-    assert w.std_over_crlb_std < 10.0
+    # A coarse plausibility check: finite-sample, recovered-trial scatter
+    # from a biased estimator need not exceed the unconditional CRLB.
+    assert 0.2 < w.std_over_crlb_std < 10.0
     assert abs(w.bias) < 0.01
     assert w.rmse >= abs(w.bias)
     for name in PARAMETERS:
@@ -298,6 +309,56 @@ def test_invalid_inputs_are_rejected():
         validation_sweep(trials=5, snr_db=())
     with pytest.raises(ValueError):
         synthetic_modes_trace(8)
+
+
+@pytest.mark.parametrize("sigma", [-0.1, np.nan, np.inf, -np.inf])
+def test_fixture_rejects_invalid_noise_sigma(sigma):
+    with pytest.raises(ValueError, match="noise_sigma"):
+        synthetic_modes_trace(noise_sigma=sigma)
+
+
+@pytest.mark.parametrize(
+    "sigma", [np.nan, np.inf, -0.1, 1e-200, 1e-160, 1e200]
+)
+def test_bounds_reject_invalid_noise_scales_without_runtime_warnings(sigma):
+    fx = synthetic_modes_trace()
+    with (
+        np.errstate(all="raise"),
+        pytest.raises(ValueError, match="noise_sigma"),
+    ):
+        cramer_rao_bounds(fx.modes, fx.constant, fx.time, sigma)
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"snr_db": (30.0, np.nan)}, "snr_db"),
+        ({"snr_db": (30.0, np.inf)}, "snr_db"),
+        ({"snr_db": (30.0, -np.inf)}, "snr_db"),
+        ({"snr_db": (30.0, 1e308)}, "noise_sigma"),
+        ({"snr_db": (30.0, -1e308)}, "noise_sigma"),
+        ({"snr_db": (30.0, 4000.0)}, "noise_sigma"),
+        ({"snr_db": (30.0, -4000.0)}, "noise_sigma"),
+        ({"n_components": 0}, "n_components"),
+        ({"distortion": ("gaussian_envelope", 0.0)}, "must be positive"),
+        ({"distortion": ("gaussian_envelope", -1.0)}, "must be positive"),
+        ({"distortion": ("glitch", np.inf)}, "must be finite"),
+        ({"match_tolerance": np.nan}, "match_tolerance"),
+        ({"duration": 0.0}, "duration"),
+    ],
+)
+def test_invalid_sweep_input_is_rejected_before_any_estimator_calls(
+    kwargs, message
+):
+    calls = []
+
+    def estimator(*args):
+        calls.append(args)
+        raise RuntimeError("invalid input must not reach the estimator")
+
+    with np.errstate(all="raise"), pytest.raises(ValueError, match=message):
+        validation_sweep(trials=1, estimator=estimator, **kwargs)
+    assert not calls
 
 
 def test_undistorted_residual_ratio_is_near_one():

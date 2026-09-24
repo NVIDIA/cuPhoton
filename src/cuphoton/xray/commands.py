@@ -20,6 +20,7 @@ from cuphoton.core.cli import (
     NonNegativeIntegerInvariant,
     PairInvariant,
     PathValueInvariant,
+    PositiveIntegerInvariant,
     SequenceInvariant,
     SetInvariant,
     StringInvariant,
@@ -621,7 +622,7 @@ class LinearPredictionValidateCommand(_XRayCommand):
 
     components = 6
 
-    class ComponentsArg(IntegerInvariant):
+    class ComponentsArg(PositiveIntegerInvariant):
         _arg = "--components"
         _help = "Number of SVD components to fit."
         _required = False
@@ -629,7 +630,7 @@ class LinearPredictionValidateCommand(_XRayCommand):
 
     trials = 200
 
-    class TrialsArg(IntegerInvariant):
+    class TrialsArg(PositiveIntegerInvariant):
         _arg = "--trials"
         _help = "Monte Carlo trials per signal-to-noise level."
         _required = False
@@ -4396,8 +4397,16 @@ def _linear_prediction_validate(args):
     snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
     distortion = None
     if args.distortion:
-        kind, _, amount = str(args.distortion).partition(":")
-        distortion = (kind.strip(), float(amount))
+        try:
+            kind, amount = str(args.distortion).split(":", maxsplit=1)
+            if not kind.strip():
+                raise ValueError("missing distortion kind")
+            distortion = (kind.strip(), float(amount))
+        except ValueError as exc:
+            raise ValueError(
+                "--distortion must be kind:amount with a numeric amount "
+                "(for example chirp:0.05)"
+            ) from exc
     sweeps = [
         validation_sweep(
             samples=args.samples,
