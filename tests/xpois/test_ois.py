@@ -18,6 +18,7 @@ from cuphoton.xpois.ois import (
     GaussianBasisComponent,
     _accumulate_normal_equations,
     _accumulate_normal_equations_cutile,
+    _cached_cutile_padded_basis,
     _default_fit_mask,
     background_design,
     build_compact_source_stamp_mask,
@@ -724,6 +725,107 @@ def test_cutile_mma_normal_equations_match_cpu_for_sparse_rows(
     assert rows == expected_rows
     assert np.allclose(gram, expected_gram, rtol=2e-12, atol=1e-8)
     assert np.allclose(rhs, expected_rhs, rtol=2e-12, atol=1e-9)
+
+
+def test_cutile_reuses_basis_upload_across_calls_and_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_cutile()
+    cp = pytest.importorskip("cupy")
+    reference, target, variance, mask, basis, background = (
+        _sparse_rows_fixture(component_count=3, background_degree=0)
+    )
+    uploads = []
+    real_asarray = cp.asarray
+
+    def recording_asarray(value, *args, **kwargs):
+        if isinstance(value, np.ndarray) and value.shape == (240, 16):
+            uploads.append(value.copy())
+        return real_asarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "asarray", recording_asarray)
+    _cached_cutile_padded_basis.cache_clear()
+    try:
+        first = _accumulate_normal_equations_cutile(
+            reference, target, variance, mask, basis, background
+        )
+        # Public solves build equivalent fresh arrays. A different stream
+        # must see the completed upload without uploading it again.
+        with cp.cuda.Stream(non_blocking=True):
+            second = _accumulate_normal_equations_cutile(
+                reference, target, variance, mask, basis.copy(), background
+            )
+        assert len(uploads) == 1
+        for actual, previous in zip(second, first, strict=True):
+            np.testing.assert_array_equal(actual, previous)
+
+        # NumPy basis arrays remain mutable: changing values must miss.
+        basis[0] *= 1.25
+        changed = _accumulate_normal_equations_cutile(
+            reference, target, variance, mask, basis, background
+        )
+        assert len(uploads) == 2
+        expected = _accumulate_normal_equations(
+            reference, target, variance, mask, basis, background
+        )
+        assert changed[2] == expected[2]
+        assert np.allclose(changed[0], expected[0], rtol=2e-12, atol=1e-8)
+        assert np.allclose(changed[1], expected[1], rtol=2e-12, atol=1e-9)
+        assert not np.allclose(changed[0], first[0])
+    finally:
+        _cached_cutile_padded_basis.cache_clear()
+
+
+def test_cutile_basis_upload_separates_shapes_and_widths() -> None:
+    _require_cutile()
+    cp = pytest.importorskip("cupy")
+    device = int(cp.cuda.runtime.getDevice())
+    basis = np.arange(9, dtype=np.float64).reshape(1, 3, 3)
+    _cached_cutile_padded_basis.cache_clear()
+    try:
+        narrow = _cached_cutile_padded_basis(
+            device, basis.shape, 4, basis.tobytes()
+        )
+        wide = _cached_cutile_padded_basis(
+            device, basis.shape, 8, basis.tobytes()
+        )
+        reshaped = _cached_cutile_padded_basis(
+            device, (3, 1, 3), 4, basis.tobytes()
+        )
+        assert narrow.shape == reshaped.shape == (16, 4)
+        assert wide.shape == (16, 8)
+        assert wide is not narrow and reshaped is not narrow
+        np.testing.assert_array_equal(cp.asnumpy(wide[:, :4]), narrow.get())
+        assert not np.array_equal(narrow.get(), reshaped.get())
+        assert not cp.asnumpy(wide[:, 4:]).any()
+    finally:
+        _cached_cutile_padded_basis.cache_clear()
+
+
+def test_cutile_basis_upload_stays_on_its_device() -> None:
+    _require_cutile()
+    cp = pytest.importorskip("cupy")
+    if cp.cuda.runtime.getDeviceCount() < 2:
+        pytest.skip("two CUDA devices are required")
+    basis = np.ones((1, 3, 3), dtype=np.float64)
+    _cached_cutile_padded_basis.cache_clear()
+    try:
+        first = _cached_cutile_padded_basis(
+            0, basis.shape, 4, basis.tobytes()
+        )
+        second = _cached_cutile_padded_basis(
+            1, basis.shape, 4, basis.tobytes()
+        )
+        assert first.device.id == 0
+        assert second.device.id == 1
+        assert first is not second
+        np.testing.assert_array_equal(first.get(), second.get())
+        assert (
+            _cached_cutile_padded_basis(0, basis.shape, 4, basis.tobytes())
+            is first
+        )
+    finally:
+        _cached_cutile_padded_basis.cache_clear()
 
 
 def test_cutile_mma_kernel_signature_ignores_row_count(
