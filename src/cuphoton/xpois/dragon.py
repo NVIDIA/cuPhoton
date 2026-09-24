@@ -19,7 +19,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +45,18 @@ from cuphoton.core.bulk import (
 )
 from cuphoton.core.bulk import (
     regular_file as _regular_file,
+)
+from cuphoton.core.dragon import (
+    _distribution_version,
+    _DragonAPI,
+    _hostnames_match,
+    _load_dragon_api,
+    _select_gpu_placements,
+    _singleton_cuda_visibility,
+    _stable_gpu_physical_ids,
+    _strict_integer,
+    _valid_shard_provenance,
+    discover_gpu_placements,
 )
 
 from .batch import (
@@ -87,16 +98,6 @@ class DragonBatchResult:
             "summary_path": str(self.summary_path),
             "status": self.status,
         }
-
-
-@dataclass(frozen=True)
-class _DragonAPI:
-    System: Any
-    Node: Any
-    Policy: Any
-    ProcessGroup: Any
-    ProcessTemplate: Any
-    Queue: Any
 
 
 def _resolve_worker_target(
@@ -1502,78 +1503,6 @@ def _validate_worker_placement(
     return actual_host, visibility
 
 
-def discover_gpu_placements(
-    system_type: Callable[[], Any],
-    node_type: Callable[[Any], Any],
-    *,
-    node_ids: Sequence[Any] | None = None,
-) -> tuple[Placement, ...]:
-    """Enumerate actual Dragon Node.gpus IDs in allocation order."""
-
-    if node_ids is None:
-        node_ids = tuple(system_type().nodes)
-    placements: list[Placement] = []
-    seen: set[tuple[str, int]] = set()
-    for node_id in node_ids:
-        node = node_type(node_id)
-        host = str(node.hostname)
-        for gpu_id in node.gpus or []:
-            if isinstance(gpu_id, bool) or not isinstance(gpu_id, int):
-                raise RuntimeError(
-                    f"Dragon node {host!r} reported a non-integer GPU ID"
-                )
-            key = (host, gpu_id)
-            if key in seen:
-                raise RuntimeError(
-                    f"duplicate Dragon GPU placement: {host}:{gpu_id}"
-                )
-            seen.add(key)
-            placements.append(
-                Placement(
-                    worker_id=len(placements),
-                    host=host,
-                    gpu_id=gpu_id,
-                )
-            )
-    return tuple(placements)
-
-
-def _select_gpu_placements(
-    placements: Sequence[Placement], worker_count: int
-) -> tuple[Placement, ...]:
-    """Select GPUs round-robin across hosts, then assign dense worker IDs."""
-
-    if isinstance(worker_count, bool) or not isinstance(worker_count, int):
-        raise TypeError("worker_count must be an integer")
-    if worker_count <= 0 or worker_count > len(placements):
-        raise ValueError("worker_count exceeds available Dragon placements")
-    by_host: dict[str, list[Placement]] = {}
-    for placement in placements:
-        by_host.setdefault(placement.host, []).append(placement)
-    selected: list[Placement] = []
-    offset = 0
-    while len(selected) < worker_count:
-        progressed = False
-        for host_placements in by_host.values():
-            if offset >= len(host_placements):
-                continue
-            selected.append(host_placements[offset])
-            progressed = True
-            if len(selected) == worker_count:
-                break
-        if not progressed:
-            raise RuntimeError("could not select requested Dragon placements")
-        offset += 1
-    return tuple(
-        Placement(
-            worker_id=worker_id,
-            host=placement.host,
-            gpu_id=placement.gpu_id,
-        )
-        for worker_id, placement in enumerate(selected)
-    )
-
-
 def _dragon_shard_worker(
     run_id: str,
     run_dir_raw: str,
@@ -1822,54 +1751,6 @@ def _validate_success_item_output(
         ) from exc
     if not stat.S_ISREG(summary_mode):
         raise ValueError("item runner did not create a regular summary file")
-
-
-def _singleton_cuda_visibility(expected_gpu_id: int | None = None) -> str:
-    raw = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if raw is None:
-        raise RuntimeError("Dragon worker has no CUDA_VISIBLE_DEVICES")
-    tokens = [token.strip() for token in raw.split(",")]
-    if (
-        any(not token for token in tokens)
-        or len(tokens) != 1
-        or tokens[0] == "-1"
-    ):
-        raise RuntimeError(
-            f"Dragon worker must see exactly one CUDA device, got {raw!r}"
-        )
-    if expected_gpu_id is not None and tokens[0] != str(expected_gpu_id):
-        raise RuntimeError(
-            "Dragon worker GPU placement mismatch: requested "
-            f"{expected_gpu_id}, got CUDA_VISIBLE_DEVICES={raw!r}"
-        )
-    return tokens[0]
-
-
-def _hostnames_match(
-    requested: str,
-    actual: str,
-    *,
-    allow_loopback_alias: bool = False,
-) -> bool:
-    """Accept exact or equivalent short/FQDN scheduler hostnames."""
-
-    requested_normalized = requested.rstrip(".").lower()
-    actual_normalized = actual.rstrip(".").lower()
-    if allow_loopback_alias and requested_normalized in {
-        "localhost",
-        "localhost.localdomain",
-    }:
-        # Dragon 0.14.1 reports ``localhost`` for its single-node system
-        # descriptor even though socket.gethostname() exposes the machine
-        # hostname inside the launched worker.
-        return bool(actual_normalized)
-    if requested_normalized == actual_normalized:
-        return True
-    if "." not in requested_normalized:
-        return actual_normalized.startswith(requested_normalized + ".")
-    if "." not in actual_normalized:
-        return requested_normalized.startswith(actual_normalized + ".")
-    return False
 
 
 def _load_terminal_records(
@@ -2452,111 +2333,9 @@ def _parse_timezone_aware_timestamp(value: Any) -> datetime | None:
     return parsed
 
 
-def _stable_gpu_physical_ids(
-    value: Any,
-) -> frozenset[tuple[str, str]] | None:
-    if (
-        not isinstance(value, Mapping)
-        or "identity_error" not in value
-        or value["identity_error"] is not None
-    ):
-        return None
-    identities = frozenset(
-        (field, identifier.strip().casefold())
-        for field in ("uuid", "pci_bus_id")
-        if isinstance((identifier := value.get(field)), str)
-        and identifier.strip()
-    )
-    return identities or None
-
-
-def _valid_shard_provenance(
-    value: Any,
-    *,
-    placement: Placement,
-    allow_loopback_alias: bool,
-    backend: str,
-) -> bool:
-    if not isinstance(value, Mapping):
-        return False
-    worker_id = _strict_integer(value.get("worker_id"))
-    requested_gpu_id = _strict_integer(value.get("requested_gpu_id"))
-    pid = _strict_integer(value.get("pid"))
-    requested_host = value.get("requested_host")
-    hostname = value.get("hostname")
-    visibility = value.get("cuda_visible_devices")
-    if (
-        worker_id != placement.worker_id
-        or requested_host != placement.host
-        or requested_gpu_id != placement.gpu_id
-        or pid is None
-        or pid <= 0
-        or not isinstance(hostname, str)
-        or not hostname
-        or not _hostnames_match(
-            requested_host,
-            hostname,
-            allow_loopback_alias=allow_loopback_alias,
-        )
-        or not isinstance(visibility, str)
-        or [token.strip() for token in visibility.split(",") if token.strip()]
-        != [str(placement.gpu_id)]
-    ):
-        return False
-    gpu = value.get("gpu")
-    if not isinstance(gpu, Mapping) or not gpu:
-        return False
-    gpu_backend = gpu.get("backend")
-    expected_identity_backend = (
-        "cupy" if backend in {"cupy", "cutile"} else backend
-    )
-    return (
-        isinstance(gpu_backend, str)
-        and bool(gpu_backend)
-        and gpu_backend == expected_identity_backend
-        and _stable_gpu_physical_ids(gpu) is not None
-    )
-
-
-def _strict_integer(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
 def _shard_result_sort_key(result: Mapping[str, Any]) -> tuple[int, int]:
     worker_id = _strict_integer(result.get("worker_id"))
     return (worker_id is None, worker_id if worker_id is not None else 0)
-
-
-def _load_dragon_api() -> _DragonAPI:
-    try:
-        from dragon.infrastructure.policy import Policy
-        from dragon.native.machine import Node, System
-        from dragon.native.process import ProcessTemplate
-        from dragon.native.process_group import ProcessGroup
-        from dragon.native.queue import Queue
-    except (ImportError, OSError) as exc:
-        raise RuntimeError(
-            "The Dragon executor requires the dragonhpc runtime; "
-            "install it in this Python environment on every node "
-            "and launch with dragon"
-        ) from exc
-    return _DragonAPI(
-        System=System,
-        Node=Node,
-        Policy=Policy,
-        ProcessGroup=ProcessGroup,
-        ProcessTemplate=ProcessTemplate,
-        Queue=Queue,
-    )
-
-
-def _distribution_version(name: str) -> str | None:
-    try:
-        return version(name)
-    except PackageNotFoundError:
-        return None
 
 
 __all__ = [
