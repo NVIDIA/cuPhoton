@@ -54,6 +54,42 @@ def _input(tmp_path, *, mode="difference", auxiliary="candidate"):
     return path
 
 
+@pytest.mark.parametrize(
+    "model,finite_difference,message",
+    [
+        ("stamp", False, "only the Gaussian model"),
+        ("gaussian", True, "does not support finite-difference fitting"),
+    ],
+)
+def test_preflight_rejects_unsupported_cutile_settings(
+    tmp_path, model, finite_difference, message
+):
+    path = _input(tmp_path)
+    if model == "stamp":
+        np.savez_compressed(
+            path,
+            candidate_id=np.array(["stamp"]),
+            images=np.zeros((1, 7, 9)),
+            stamp_basis=np.ones((7, 9)),
+        )
+    with pytest.raises(ValueError, match=message):
+        executor.prepare_xfit_workload(
+            input_path=path,
+            fit_options={
+                "backend": "cutile",
+                "model": model,
+                "use_finite_difference": finite_difference,
+            },
+        )
+
+
+def test_preflight_accepts_analytic_gaussian_cutile(tmp_path):
+    spec = executor.prepare_xfit_workload(
+        input_path=_input(tmp_path), fit_options={"backend": "cutile"}
+    )
+    assert spec.backend == "cutile"
+
+
 @pytest.mark.parametrize("runtime", ["dragon", "mpi"])
 def test_cli_dispatches_collective_preflight_and_preserves_options(
     tmp_path, monkeypatch, capsys, runtime

@@ -477,6 +477,15 @@ def prepare_xfit_workload(
     backend = options["fit_options"]["backend"]
     if backend not in {"cupy", "cutile"}:
         raise ValueError("distributed xFit requires backend cupy or cutile")
+    settings = options["fit_options"]
+    if backend == "cutile" and settings["model"] == "stamp":
+        raise ValueError(
+            "backend='cutile' currently supports only the Gaussian model"
+        )
+    if backend == "cutile" and settings["use_finite_difference"]:
+        raise ValueError(
+            "backend='cutile' does not support finite-difference fitting"
+        )
     by_id = {item.item_id: item for item in items}
 
     def validate(record, round_dir):
