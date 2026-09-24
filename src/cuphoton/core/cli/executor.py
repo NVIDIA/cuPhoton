@@ -29,7 +29,9 @@ class ExecutorOptions:
 
     class ExecutorArg(SetInvariant):
         _arg = "--executor"
-        _help = "Execution runtime. [default: %default]"
+        _help = (
+            "Execution runtime: local, dragon, or mpi. [default: %default]"
+        )
         _set = {"local", "dragon", "mpi"}
         _default = "local"
 
@@ -58,12 +60,18 @@ class ExecutorOptions:
 
     class WarmupRoundsArg(NonNegativeIntegerInvariant):
         _arg = "--warmup-rounds"
-        _help = "Persistent-worker warmup passes, with outputs retained."
+        _help = (
+            "Opt into the benchmark round layout with this many warmup "
+            "passes; outputs are retained. [default when benchmarking: 0]"
+        )
         _default = None
 
     class MeasureRoundsArg(PositiveIntegerInvariant):
         _arg = "--measure-rounds"
-        _help = "Measured passes in persistent workers. [default: 1]"
+        _help = (
+            "Opt into the benchmark round layout with this many measured "
+            "passes in persistent workers. [default when benchmarking: 1]"
+        )
         _default = None
 
     def executor_options(self) -> dict:

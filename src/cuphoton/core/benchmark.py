@@ -149,9 +149,9 @@ def build_benchmark_report(
         "timing_definitions": {
             "batch_wall_sec": (
                 "Coordinator time from before round release through receipt "
-                "of all worker completions, including ordinary input reads, "
-                "numerical work, output writes and record publication; "
-                "excludes subsequent coordinator artifact audits."
+                "of all worker completions, including any per-round input "
+                "reads, computation, output writes and record publication. "
+                "Coordinator artifact audits and finalization are excluded."
             ),
             "worker_wall_max_sec": (
                 "Maximum worker-local elapsed time for the round. Its "

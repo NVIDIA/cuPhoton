@@ -99,16 +99,26 @@ def stage(tmp_path, spec=None):
     return spec, shards, results
 
 
-def test_round_audits_then_finalizes_in_manifest_order(tmp_path):
+def test_round_audits_then_finalizes_in_manifest_order(monkeypatch, tmp_path):
     calls = []
+    clock = [100.0]
 
     def finalize(run_dir, records):
+        clock[0] += 2.5
         calls.append([record["item_id"] for record in records])
         return {"ordered": calls[-1]}
 
     spec, shards, results = stage(
-        tmp_path / "run", workload(finalize_round=finalize)
+        tmp_path / "run",
+        workload(
+            items=(
+                WorkItem("two", {"value": 2}, 2),
+                WorkItem("one", {"value": 1}, 1),
+            ),
+            finalize_round=finalize,
+        ),
     )
+    monkeypatch.setattr(execution.time, "perf_counter", lambda: clock[0])
     report = execution.finalize_round(
         tmp_path / "run",
         "run",
@@ -119,9 +129,10 @@ def test_round_audits_then_finalizes_in_manifest_order(tmp_path):
     )
     assert report["status"] == "success"
     assert report["terminal_record_audit"]["ok"]
-    assert calls == [["one", "two"]]
-    assert report["result"] == {"ordered": ["one", "two"]}
-    assert read_json_mapping(tmp_path / "run" / "summary.json") == report
+    assert calls == [["two", "one"]]
+    assert report["result"] == {"ordered": ["two", "one"]}
+    assert not (tmp_path / "run" / "summary.json").exists()
+    assert report["finalization_sec"] == 2.5
 
 
 @pytest.mark.parametrize(
@@ -249,3 +260,30 @@ def test_run_directory_is_never_reused(tmp_path):
     execution.prepare_run(run_dir, "run", workload(), "test")
     with pytest.raises(FileExistsError):
         execution.prepare_run(run_dir, "run", workload(), "test")
+
+
+@pytest.mark.parametrize(
+    "hosts, duplicate",
+    [
+        (("node.alpha.example", "node.beta.example"), False),
+        (("node", "node.alpha.example"), True),
+        (("NODE.alpha.example.", "node.alpha.example"), True),
+    ],
+)
+def test_provenance_host_equivalence_preserves_domains(hosts, duplicate):
+    identities = []
+    for index, host in enumerate(hosts):
+        value = provenance(
+            index,
+            {
+                "backend": "cupy",
+                "device_index": 0,
+                "identity_error": None,
+                "pci_bus_id": "0000:01:00.0",
+            },
+        )
+        identities.append({**value, "hostname": host})
+    errors = execution.audit_worker_provenance(
+        identities, backend="cupy", expected_worker_count=2
+    )
+    assert bool(errors) is duplicate

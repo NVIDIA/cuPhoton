@@ -176,6 +176,7 @@ def _install_runtime(
         def start(self):
             def invoke(index, template):
                 try:
+                    state.local.puid = 1000 + index
                     template.target(*template.args)
                 except Exception:
                     self.inactive_puids.append((1000 + index, 1))
@@ -217,6 +218,7 @@ def _install_runtime(
         return placement.host, str(placement.gpu_id)
 
     monkeypatch.setattr(dragon, "_validate_binding", binding)
+    monkeypatch.setattr(dragon, "_current_puid", lambda: state.local.puid)
     monkeypatch.setattr(
         dragon,
         "_load_dragon_api",
@@ -240,6 +242,7 @@ def _run(
     benchmark=None,
     worker_count=2,
     worker_timeout=10,
+    result_timeout=0.2,
     large=False,
     validator=None,
     finalizer=None,
@@ -263,7 +266,7 @@ def _run(
         output_root=tmp_path,
         run_id="run",
         max_workers=worker_count,
-        result_timeout_sec=0.2,
+        result_timeout_sec=result_timeout,
         worker_timeout_sec=worker_timeout,
         benchmark=benchmark,
     )
@@ -326,6 +329,8 @@ def test_persistent_workers_use_bounded_descriptors_and_all_rounds(
             (result.run_dir / receipt["summary_path"]).read_text()
         )
         assert summary["terminal_record_audit"]["ok"]
+        assert summary["finalization_sec"] == receipt["finalization_sec"]
+        assert receipt["finalization_sec"] >= 0
         assert summary["result"] == {"item_ids": ["one", "two"]}
         run_ids.add(summary["run_id"])
     assert len(run_ids) == 3
@@ -475,8 +480,18 @@ def test_fast_worker_waits_for_close_until_all_round_results_arrive(
     assert state.groups[0].closed and not state.groups[0].stopped
 
 
-@pytest.mark.parametrize("kind", ["ready", "round", "closed"])
-def test_collector_detects_native_exit_on_first_bounded_poll(kind):
+@pytest.mark.parametrize(
+    "kind, exit_code",
+    [
+        ("ready", -9),
+        ("round", -9),
+        ("closed", -9),
+        ("ready", 0),
+        ("round", 0),
+        ("closed", 0),
+    ],
+)
+def test_collector_detects_native_exit_on_first_bounded_poll(kind, exit_code):
     timeouts = []
 
     class EmptyQueue:
@@ -492,11 +507,12 @@ def test_collector_detects_native_exit_on_first_bounded_poll(kind):
             run_id="run",
             kind=kind,
             round_id=None,
-            deadline=time.monotonic() + 3600,
-            group=SimpleNamespace(inactive_puids=[(123, -9)]),
+            deadline=time.monotonic() + 2,
+            group=SimpleNamespace(inactive_puids=[(123, exit_code)]),
         )
-    assert len(timeouts) == 1
+    assert len(timeouts) == 2
     assert 0 < timeouts[0] <= 1
+    assert timeouts[1] == 0
 
 
 def test_collector_keeps_queued_results_before_reporting_peer_exit():
@@ -505,6 +521,7 @@ def test_collector_keeps_queued_results_before_reporting_peer_exit():
         "run_id": "run",
         "round_id": None,
         "worker_id": 0,
+        "puid": 1000,
         "status": "success",
     }
 
@@ -526,7 +543,7 @@ def test_collector_keeps_queued_results_before_reporting_peer_exit():
             run_id="run",
             kind="ready",
             round_id=None,
-            deadline=time.monotonic() + 3600,
+            deadline=time.monotonic() + 2,
             group=SimpleNamespace(inactive_puids=[(123, -9)]),
         )
     assert messages == [receipt]
@@ -538,6 +555,7 @@ def test_closed_collection_allows_normal_exit_before_delayed_receipt():
         "run_id": "run",
         "round_id": None,
         "worker_id": 0,
+        "puid": 1000,
         "status": "success",
     }
 
@@ -559,7 +577,7 @@ def test_closed_collection_allows_normal_exit_before_delayed_receipt():
         run_id="run",
         kind="closed",
         round_id=None,
-        deadline=time.monotonic() + 3600,
+        deadline=time.monotonic() + 2,
         group=SimpleNamespace(inactive_puids=[(123, 0)]),
     )
     assert channel.calls == 2
@@ -583,3 +601,207 @@ def test_native_worker_crash_stops_group_without_ready_receipt(
         for error in result.summary["lifecycle_errors"]
     )
     assert state.groups[0].stopped and state.groups[0].closed
+
+
+@pytest.mark.parametrize("close_failure", [False, True])
+def test_terminal_summary_is_absent_until_cleanup(
+    monkeypatch, tmp_path, close_failure
+):
+    state = _install_runtime(monkeypatch, close_failure=close_failure)
+    close = _Worker.close
+    group_type = dragon._load_dragon_api().ProcessGroup
+    join = group_type.join
+    group_close = group_type.close
+    observations = []
+
+    def inspect_close(worker):
+        observations.append(
+            ("worker_close", (tmp_path / "run/summary.json").exists())
+        )
+        return close(worker)
+
+    def inspect_join(group, timeout):
+        observations.append(
+            ("join", (tmp_path / "run/summary.json").exists())
+        )
+        return join(group, timeout)
+
+    def inspect_group_close(group, patience):
+        observations.append(
+            ("group_close", (tmp_path / "run/summary.json").exists())
+        )
+        return group_close(group, patience)
+
+    monkeypatch.setattr(_Worker, "close", inspect_close)
+    monkeypatch.setattr(group_type, "join", inspect_join)
+    monkeypatch.setattr(group_type, "close", inspect_group_close)
+    result = _run(tmp_path)
+    assert not any(exists for _, exists in observations)
+    assert [phase for phase, _ in observations].count("worker_close") == 2
+    assert ("join", False) in observations or close_failure
+    assert ("group_close", False) in observations
+    assert result.status == ("failed" if close_failure else "success")
+    assert len(result.summary["closed_messages"]) == 2
+    assert all(not thread.is_alive() for thread in state.groups[0].threads)
+    assert json.loads(result.summary_path.read_text()) == result.summary
+
+
+def test_failed_round_collects_slow_peer_after_failed_worker_closes(
+    monkeypatch, tmp_path
+):
+    failed_closed = threading.Event()
+
+    def observe(message):
+        if message["kind"] == "closed" and message["worker_id"] == 0:
+            failed_closed.set()
+        return [message]
+
+    state = _install_runtime(monkeypatch, mutate=observe)
+    run_item = _Worker.run_item
+
+    def run_with_failure(worker, item, output_dir):
+        if worker.placement.worker_id == 0:
+            raise ValueError("first worker failed")
+        assert failed_closed.wait(timeout=2)
+        return run_item(worker, item, output_dir)
+
+    monkeypatch.setattr(_Worker, "run_item", run_with_failure)
+    result = _run(tmp_path, benchmark=BenchmarkOptions(0, 2))
+    assert result.status == "failed"
+    assert len(result.summary["benchmark"]["rounds"]) == 1
+    summary = json.loads(
+        (result.run_dir / "rounds/measure-0000/summary.json").read_text()
+    )
+    assert len(summary["worker_results"]) == 2
+    assert summary["terminal_record_audit"]["ok"]
+    assert len(summary["terminal_record_audit"]["failed_item_ids"]) == 1
+    assert sorted(record["status"] for record in summary["records"]) == [
+        "failed",
+        "success",
+    ]
+    assert all(not thread.is_alive() for thread in state.groups[0].threads)
+    assert not any(
+        error["phase"] == "stop_after_failure"
+        for error in result.summary["lifecycle_errors"]
+    )
+
+
+def test_collector_drains_receipt_after_exit_snapshot_before_failing():
+    receipt = {
+        "kind": "ready",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "puid": 123,
+        "status": "failed",
+    }
+    timeouts = []
+
+    class RacingQueue:
+        def get(self, *, timeout):
+            timeouts.append(timeout)
+            if len(timeouts) == 1:
+                raise queue.Empty
+            return receipt
+
+    messages = []
+    with pytest.raises(RuntimeError, match="ready failed"):
+        dragon._collect_messages(
+            RacingQueue(),
+            messages,
+            worker_count=1,
+            run_id="run",
+            kind="ready",
+            round_id=None,
+            deadline=time.monotonic() + 2,
+            group=SimpleNamespace(inactive_puids=[(123, 1)]),
+        )
+    assert messages == [receipt]
+    assert timeouts[1] == 0
+
+
+@pytest.mark.parametrize("kind", ["ready", "round", "closed"])
+def test_failed_receipt_does_not_abort_slow_peer_on_reported_exit(kind):
+    first = {
+        "kind": kind,
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "puid": 1000,
+        "status": "failed",
+    }
+    peer = {**first, "worker_id": 1, "puid": 1001, "status": "failed"}
+    sequence = iter((first, queue.Empty, queue.Empty, peer))
+
+    class DelayedQueue:
+        def get(self, *, timeout):
+            value = next(sequence)
+            if value is queue.Empty:
+                raise queue.Empty
+            return value
+
+    messages = []
+    with pytest.raises(RuntimeError, match=kind + " failed"):
+        dragon._collect_messages(
+            DelayedQueue(),
+            messages,
+            worker_count=2,
+            run_id="run",
+            kind=kind,
+            round_id=None,
+            deadline=time.monotonic() + 2,
+            group=SimpleNamespace(inactive_puids=[(1000, 1)]),
+        )
+    assert messages == [first, peer]
+
+
+def test_known_round_failure_uses_short_artifact_timeout(
+    monkeypatch, tmp_path
+):
+    _install_runtime(
+        monkeypatch,
+        mutate=lambda message: (
+            [] if message["kind"] == "round" else [message]
+        ),
+    )
+    finalize = dragon.finalize_round
+    observed = []
+
+    def inspect_finalize(*args, **kwargs):
+        observed.append(kwargs["artifact_timeout_sec"])
+        return finalize(*args, **kwargs)
+
+    monkeypatch.setattr(dragon, "finalize_round", inspect_finalize)
+    result = _run(
+        tmp_path, worker_count=1, worker_timeout=0.1, result_timeout=30
+    )
+    assert result.status == "failed"
+    assert observed == [0.01]
+
+
+@pytest.mark.parametrize("reject_terminal_put", [False, True])
+def test_interrupted_worker_keeps_failed_close_evidence(
+    monkeypatch, tmp_path, reject_terminal_put
+):
+    state = _install_runtime(monkeypatch)
+    _run(tmp_path, worker_count=1)
+    args = list(state.groups[0].templates[0].args)
+    state.local.puid = 1000
+
+    class InterruptedCommands:
+        def get(self, **kwargs):
+            raise KeyboardInterrupt("synthetic interrupt")
+
+    class Results:
+        def put(self, message, **kwargs):
+            if reject_terminal_put and message["kind"] == "closed":
+                raise queue.Full
+
+    args[4:] = [InterruptedCommands(), Results()]
+    with pytest.raises(KeyboardInterrupt, match="synthetic interrupt"):
+        dragon._workload_worker(*args)
+    closed = json.loads(
+        (tmp_path / "run/startup/worker-0000-closed.json").read_text()
+    )
+    assert closed["status"] == "failed"
+    assert closed["error"]["type"] == "KeyboardInterrupt"

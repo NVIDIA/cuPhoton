@@ -179,6 +179,9 @@ def test_two_rank_persistent_lifecycle_and_collective_failures(
         assert root.status == "success"
         assert peer is None
         assert len(report["rounds"]) == 3
+        assert all(
+            receipt["finalization_sec"] == 0 for receipt in report["rounds"]
+        )
         assert report["measured_batch_wall_sec"] is not None
         assert len([event for event in trace if event[0] == "execute"]) == 6
     else:
@@ -243,6 +246,14 @@ def test_ordinary_mode_and_rank_binding_before_worker_factory(
     )
     _STATE.rank = 0
     _STATE.trace = []
+    close = TrackingWorker.close
+    observations = []
+
+    def inspect_close(worker):
+        observations.append((tmp_path / "once/summary.json").exists())
+        return close(worker)
+
+    monkeypatch.setattr(TrackingWorker, "close", inspect_close)
     result = mpi.run_mpi_work_items(
         prepare_workload=lambda rank: workload(
             worker_factory=tracking_factory, options_payload={"failure": None}
@@ -251,12 +262,20 @@ def test_ordinary_mode_and_rank_binding_before_worker_factory(
         run_id="once",
     )
     assert result.status == "success"
+    assert observations == [False]
     assert "benchmark" not in result.summary
     assert not (result.run_dir / "rounds").exists()
     assert (
         len([event for event in _STATE.trace if event[0] == "execute"]) == 2
     )
     assert _STATE.trace[-1] == ("close", 0)
+    with pytest.raises(RuntimeError, match="FileExistsError"):
+        mpi.run_mpi_work_items(
+            prepare_workload=lambda rank: workload(),
+            output_root=tmp_path,
+            run_id="once",
+        )
+    assert read_json_mapping(result.summary_path) == result.summary
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
     with pytest.raises(RuntimeError, match="one CUDA device"):
         mpi.run_mpi_work_items(

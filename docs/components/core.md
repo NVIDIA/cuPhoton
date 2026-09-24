@@ -1,7 +1,7 @@
 # Core
 
-`cuphoton.core` owns the command-line, context, path, logging, and invariant
-framework shared by every cuPhoton component. Component algorithms, datasets,
+`cuphoton.core` owns the command-line, context, path, logging, invariant,
+and shared Dragon/MPI execution framework. Component algorithms, datasets,
 scientific validation, and output formatting remain in their owning
 `cuphoton.*` namespaces.
 
@@ -15,12 +15,17 @@ scientific validation, and output formatting remain in their owning
 - side-effect-free resolution of component XDG config, state, data, run, and
   log paths.
 
-The fixed public surface has six groups, 89 domain commands, 86 accepted
-command aliases, and 754 declared arguments. Five groups also support a
-component-level `version` command, for 94 commands when those built-ins are
-included; xDataReader is the exception.
+The public surface is pinned by the CLI contract tests. Five groups also
+support a component-level `version` command; xDataReader is the exception.
 
 Workflow-specific YAML `--config` options belong to each component.
+
+Shared executor rounds measure `batch_wall_sec` through receipt of all worker
+completions. Coordinator artifact audits and scientific output merging follow
+that interval; `finalization_sec` measures the component's merge separately.
+Inputs retained by an adapter are loaded during worker setup. A round summary
+records a completed pass, while the root terminal summary is published after
+worker shutdown and the executor's lifecycle checks.
 
 ## Public facade
 

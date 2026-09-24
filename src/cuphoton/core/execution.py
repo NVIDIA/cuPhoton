@@ -25,6 +25,7 @@ from .bulk import (
     audit_terminal_records,
     classify_physical_gpu_pair,
     error_payload,
+    hostnames_match,
     item_ids_sha256,
     json_mapping,
     partition_byte_balanced,
@@ -40,12 +41,24 @@ SUMMARY_SCHEMA = "cuphoton.core.execution-summary/v1"
 
 
 class Worker(Protocol):
-    """Worker-local state constructed after placement and CUDA binding."""
+    """Worker-local state constructed after placement and CUDA binding.
+
+    ``gpu_identity`` must contain ``backend`` (``cupy`` for ``cutile``),
+    ``device_index=0``, ``identity_error=None``, and at least one non-empty
+    physical ``uuid`` or ``pci_bus_id`` string.
+    """
 
     gpu_identity: Mapping[str, Any]
 
     def run_item(self, item: WorkItem, output_dir: Path) -> Mapping[str, Any]:
-        """Execute one item and durably publish its ordinary output files."""
+        """Execute an item and durably publish ``output_dir/summary.json``.
+
+        Return JSON metadata with ``run_dir`` and ``summary_path`` equal to
+        those absolute paths, ``backend`` equal to the workload backend, a
+        non-empty ``device`` string, a ``runtime`` mapping, and mappings
+        ``timings_sec`` and ``wall_sec`` of names to finite non-negative
+        seconds.
+        """
 
     def close(self) -> None:
         """Complete pending work and release worker-local resources."""
@@ -397,10 +410,7 @@ def audit_worker_provenance(
             identities.append((value["worker_id"], host, ids))
     for index, (worker_id, host, ids) in enumerate(identities):
         for other_id, other_host, other_ids in identities[:index]:
-            same_host = (
-                host.rstrip(".").casefold().split(".")[0]
-                == other_host.rstrip(".").casefold().split(".")[0]
-            )
+            same_host = hostnames_match(host, other_host)
             relation = classify_physical_gpu_pair(
                 dict(ids), dict(other_ids), same_host=same_host
             )
@@ -424,7 +434,11 @@ def finalize_round(
     *,
     artifact_timeout_sec: float,
 ) -> dict[str, Any]:
-    """Audit durable execution evidence, then run a component's merge step."""
+    """Audit evidence, merge outputs, and return an unpublished summary.
+
+    The executor publishes benchmark round summaries separately and commits
+    the root terminal summary only after worker shutdown and lifecycle audits.
+    """
 
     if (
         not _finite_nonnegative(artifact_timeout_sec)
@@ -504,7 +518,9 @@ def finalize_round(
         )
     )
     scientific_result = None
+    finalization_sec = 0.0
     if not errors and spec.finalize_round is not None:
+        finalization_start = time.perf_counter()
         try:
             by_id = {record["item_id"]: record for record in records}
             scientific_result = json_mapping(
@@ -515,6 +531,8 @@ def finalize_round(
             )
         except Exception as exc:
             errors.append({"phase": "finalization", **error_payload(exc)})
+        finally:
+            finalization_sec = time.perf_counter() - finalization_start
     summary = {
         "schema": SUMMARY_SCHEMA,
         "run_id": run_id,
@@ -527,8 +545,8 @@ def finalize_round(
         "worker_results": [dict(result) for result in worker_results],
         "errors": errors,
         "result": scientific_result,
+        "finalization_sec": finalization_sec,
     }
-    atomic_write_json(run_dir / "summary.json", summary)
     return summary
 
 

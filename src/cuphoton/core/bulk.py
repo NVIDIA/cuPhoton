@@ -440,3 +440,30 @@ def item_ids_sha256(items: Sequence[WorkItem]) -> str:
     return hashlib.sha256(
         "\n".join(item.item_id for item in items).encode()
     ).hexdigest()
+
+
+def hostnames_match(
+    requested: str,
+    actual: str,
+    *,
+    allow_loopback_alias: bool = False,
+) -> bool:
+    """Accept exact or equivalent short/FQDN scheduler hostnames."""
+
+    requested_normalized = requested.rstrip(".").lower()
+    actual_normalized = actual.rstrip(".").lower()
+    if allow_loopback_alias and requested_normalized in {
+        "localhost",
+        "localhost.localdomain",
+    }:
+        # Dragon 0.14.1 reports ``localhost`` for its single-node system
+        # descriptor even though socket.gethostname() exposes the machine
+        # hostname inside the launched worker.
+        return bool(actual_normalized)
+    if requested_normalized == actual_normalized:
+        return True
+    if "." not in requested_normalized:
+        return actual_normalized.startswith(requested_normalized + ".")
+    if "." not in actual_normalized:
+        return requested_normalized.startswith(actual_normalized + ".")
+    return False

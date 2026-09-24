@@ -301,6 +301,7 @@ def run_mpi_work_items(
                         last_summary["status"] = "failed"
                     timing = {
                         "batch_wall_sec": collected_at - round_start,
+                        "finalization_sec": last_summary["finalization_sec"],
                         "worker_wall_max_sec": max(
                             value["worker_wall_sec"] for value in gathered
                         ),
@@ -310,9 +311,10 @@ def run_mpi_work_items(
                         },
                     }
                     last_summary.update(timing)
-                    atomic_write_json(
-                        round_dir / "summary.json", last_summary
-                    )
+                    if benchmark:
+                        atomic_write_json(
+                            round_dir / "summary.json", last_summary
+                        )
                     rounds.append(
                         {
                             **planned.to_payload(),
@@ -365,7 +367,13 @@ def run_mpi_work_items(
     if context.rank == 0:
         try:
             if not ownership["claimed"]:
-                raise RuntimeError("MPI run directory was not claimed")
+                raise RuntimeError(
+                    "MPI run directory was not claimed: "
+                    + "; ".join(
+                        f"{error['type']}: {error['message']}"
+                        for error in errors
+                    )
+                )
             if benchmark:
                 report = build_benchmark_report(
                     benchmark, rounds, errors=errors

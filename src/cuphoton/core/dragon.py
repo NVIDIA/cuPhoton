@@ -37,6 +37,9 @@ from cuphoton.core.bulk import (
     timestamp_utc,
     validate_identifier,
 )
+from cuphoton.core.bulk import (
+    hostnames_match as _hostnames_match,
+)
 from cuphoton.core.execution import (
     ExecutionResult,
     WorkloadSpec,
@@ -154,33 +157,6 @@ def _singleton_cuda_visibility(expected_gpu_id: int | None = None) -> str:
             f"{expected_gpu_id}, got CUDA_VISIBLE_DEVICES={raw!r}"
         )
     return tokens[0]
-
-
-def _hostnames_match(
-    requested: str,
-    actual: str,
-    *,
-    allow_loopback_alias: bool = False,
-) -> bool:
-    """Accept exact or equivalent short/FQDN scheduler hostnames."""
-
-    requested_normalized = requested.rstrip(".").lower()
-    actual_normalized = actual.rstrip(".").lower()
-    if allow_loopback_alias and requested_normalized in {
-        "localhost",
-        "localhost.localdomain",
-    }:
-        # Dragon 0.14.1 reports ``localhost`` for its single-node system
-        # descriptor even though socket.gethostname() exposes the machine
-        # hostname inside the launched worker.
-        return bool(actual_normalized)
-    if requested_normalized == actual_normalized:
-        return True
-    if "." not in requested_normalized:
-        return actual_normalized.startswith(requested_normalized + ".")
-    if "." not in actual_normalized:
-        return requested_normalized.startswith(actual_normalized + ".")
-    return False
 
 
 def _load_dragon_api() -> _DragonAPI:
@@ -365,7 +341,7 @@ def run_dragon_work_items(
     phase = "process_setup"
     phase_start = time.perf_counter()
     try:
-        results_queue = api.Queue(maxsize=worker_count)
+        results_queue = api.Queue(maxsize=2 * worker_count)
         group = api.ProcessGroup(
             restart=False,
             ignore_error_on_exit=False,
@@ -449,6 +425,7 @@ def run_dragon_work_items(
                 round_id=None,
                 deadline=worker_deadline,
                 group=group,
+                closed_messages=closed,
             )
             provenances = [message["provenance"] for message in ready]
             ready_errors = audit_worker_provenance(
@@ -523,6 +500,7 @@ def run_dragon_work_items(
                         round_id=round_spec.round_id,
                         deadline=worker_deadline,
                         group=group,
+                        closed_messages=closed,
                     )
                 finally:
                     round_timings["collection_sec"] = (
@@ -561,10 +539,15 @@ def run_dragon_work_items(
                 spec,
                 shards,
                 worker_results,
-                artifact_timeout_sec=result_timeout_sec,
+                artifact_timeout_sec=min(result_timeout_sec, 0.01)
+                if round_errors
+                else result_timeout_sec,
             )
-            round_timings["artifact_audit_sec"] = (
-                time.perf_counter() - audit_start
+            round_timings["artifact_audit_sec"] = max(
+                0.0,
+                time.perf_counter()
+                - audit_start
+                - terminal_summary["finalization_sec"],
             )
             receipt = {
                 **round_spec.to_payload(),
@@ -573,6 +556,7 @@ def run_dragon_work_items(
                 and not round_errors
                 else "failed",
                 "batch_wall_sec": batch_wall,
+                "finalization_sec": terminal_summary["finalization_sec"],
                 "worker_wall_max_sec": max(
                     (
                         _duration(message.get("worker_wall_sec"))
@@ -591,7 +575,10 @@ def run_dragon_work_items(
                 messages=messages,
                 round_errors=round_errors,
             )
-            atomic_write_json(round_dir / "summary.json", terminal_summary)
+            if benchmark:
+                atomic_write_json(
+                    round_dir / "summary.json", terminal_summary
+                )
             rounds.append(receipt)
             if receipt["status"] != "success":
                 raise RuntimeError(
@@ -767,31 +754,66 @@ def _collect_messages(
     round_id: str | None,
     deadline: float,
     group: Any,
+    closed_messages: list[dict[str, Any]] | None = None,
 ) -> None:
-    seen: set[int] = set()
+    seen: dict[int, int] = {}
+    failed_workers: set[int] = set()
+    observed_exits: list[tuple[int, int]] | None = None
     while len(seen) < worker_count:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Dragon {kind} deadline expired")
         try:
             message = json_mapping(
-                results_queue.get(timeout=min(remaining, _WORKER_POLL_SEC)),
+                results_queue.get(
+                    timeout=0
+                    if observed_exits is not None
+                    else min(remaining, _WORKER_POLL_SEC)
+                ),
                 field=f"Dragon {kind} result",
             )
         except queue.Empty:
-            failed_exits = [
+            if observed_exits is None:
+                # Snapshot exits before draining: a worker sends its receipt
+                # before exiting, possibly just after the timed get expires.
+                observed_exits = list(group.inactive_puids)
+                if not observed_exits:
+                    observed_exits = None
+                continue
+            missing_exits = [
                 (puid, code)
-                for puid, code in group.inactive_puids
-                if code != 0
+                for puid, code in observed_exits
+                if puid not in seen.values()
             ]
-            if failed_exits:
+            if missing_exits:
                 raise RuntimeError(
                     f"Dragon worker exited before {kind} completion: "
-                    f"{failed_exits}"
+                    f"{missing_exits}"
                 )
+            observed_exits = None
+            continue
+        worker_id = _strict_integer(message.get("worker_id"))
+        puid = _strict_integer(message.get("puid"))
+        if (
+            closed_messages is not None
+            and kind != "closed"
+            and message.get("kind") == "closed"
+        ):
+            if (
+                message.get("run_id") != run_id
+                or message.get("round_id") is not None
+                or worker_id not in failed_workers
+                or puid != seen.get(worker_id)
+                or any(
+                    m.get("worker_id") == worker_id for m in closed_messages
+                )
+            ):
+                raise ValueError(
+                    "invalid or duplicate Dragon closed identity"
+                )
+            closed_messages.append(message)
             continue
         messages.append(message)
-        worker_id = _strict_integer(message.get("worker_id"))
         if (
             message.get("run_id") != run_id
             or message.get("kind") != kind
@@ -799,12 +821,14 @@ def _collect_messages(
             or worker_id is None
             or worker_id not in range(worker_count)
             or worker_id in seen
+            or puid is None
+            or puid in seen.values()
         ):
             raise ValueError(f"invalid or duplicate Dragon {kind} identity")
-        seen.add(worker_id)
+        seen[worker_id] = puid
         if message.get("status") != "success":
-            raise RuntimeError(f"Dragon worker {worker_id} {kind} failed")
-        if kind == "round":
+            failed_workers.add(worker_id)
+        if kind == "round" and message.get("status") == "success":
             result = message.get("result")
             duration = message.get("worker_wall_sec")
             if (
@@ -817,6 +841,10 @@ def _collect_messages(
                 or result.get("status") != "success"
             ):
                 raise ValueError("invalid Dragon round worker result")
+    if failed_workers:
+        raise RuntimeError(
+            f"Dragon workers {sorted(failed_workers)} {kind} failed"
+        )
 
 
 def _read_descriptor(
@@ -887,6 +915,12 @@ def _validate_binding(
     return hostname, visibility
 
 
+def _current_puid() -> int:
+    from dragon.infrastructure.parameters import this_process
+
+    return int(this_process.my_puid)
+
+
 def _workload_worker(
     run_id: str,
     descriptor_path: str,
@@ -897,16 +931,19 @@ def _workload_worker(
 ) -> None:
     worker = None
     worker_id = context["worker_id"]
+    puid = _current_puid()
     run_dir = Path(context["run_dir"])
     timeout = context["result_timeout_sec"]
     ready: dict[str, Any] = {
         "kind": "ready",
+        "puid": puid,
         "run_id": run_id,
         "round_id": None,
         "worker_id": worker_id,
         "status": "success",
     }
     failed = False
+    failure_error = None
     try:
         try:
             descriptor = _read_descriptor(
@@ -953,6 +990,7 @@ def _workload_worker(
         for round_spec in (benchmark or BenchmarkOptions()).rounds():
             message: dict[str, Any] = {
                 "kind": "round",
+                "puid": puid,
                 "run_id": run_id,
                 "round_id": round_spec.round_id,
                 "worker_id": worker_id,
@@ -1012,17 +1050,21 @@ def _workload_worker(
         command = commands.get(timeout=descriptor["worker_timeout_sec"])
         if command != {"run_id": run_id, "kind": "close"}:
             raise ValueError("unexpected Dragon worker close command")
-    except Exception:
+    except BaseException as exc:
         failed = True
+        failure_error = error_payload(exc)
         raise
     finally:
         closed = {
             "kind": "closed",
+            "puid": puid,
             "run_id": run_id,
             "round_id": None,
             "worker_id": worker_id,
             "status": "failed" if failed else "success",
         }
+        if failure_error is not None:
+            closed["error"] = failure_error
         if worker is not None:
             try:
                 worker.close()
@@ -1035,6 +1077,10 @@ def _workload_worker(
             )
         except Exception as exc:
             closed.update(status="failed", artifact_error=error_payload(exc))
-        results_queue.put(closed, timeout=timeout)
+        try:
+            results_queue.put(closed, timeout=timeout)
+        except Exception:
+            if not failed:
+                raise
         if closed["status"] != "success" and not failed:
             raise RuntimeError("Dragon worker cleanup failed")
