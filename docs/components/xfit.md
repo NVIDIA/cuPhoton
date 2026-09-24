@@ -142,6 +142,46 @@ acceptable.
 See [Data and artifact contracts](../data-artifacts.md#xfit-dipole-batches)
 for the stable shapes and output fields.
 
+## Distributed fitting
+
+`fit-dipoles --executor dragon|mpi` distributes independent candidate chunks
+across GPUs. The default `--executor local` retains the original batch fit.
+Distributed fitting requires `--backend cupy` or `--backend cutile`, a shared
+filesystem for the input and output, and the same installed environment on
+every worker. `--chunk-size` sets candidates per task independently of worker
+count. Keep it fixed for matched comparisons; candidate IDs and input order
+are restored in the merged artifacts.
+
+Under an allocation with Dragon configured, run one warmup and two measured
+passes with workers retained across all three passes:
+
+```bash
+dragon .venv/bin/cuphoton xfit fit-dipoles \
+  --executor dragon --max-workers 8 \
+  --input /shared/dipoles.npz --model gaussian --backend cupy \
+  --chunk-size 256 --output-dir /shared/results/xfit-dragon \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+With Open MPI, use the installed rank wrapper to narrow GPU visibility before
+Python starts. The parent mask must list allocated GPUs in local-rank order:
+
+```bash
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xfit fit-dipoles \
+  --executor mpi --input /shared/dipoles.npz --model gaussian --backend cupy \
+  --chunk-size 256 --output-dir /shared/results/xfit-mpi \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+The output directory must be new. Each pass retains normal xFit artifacts
+under `rounds/<round-id>/scientific/`, including warmup passes. Without round
+flags, a single pass writes them under `scientific/`. The execution summary
+records placement, item receipts and round timing; scientific merging and
+validation occur after the timed worker phase.
+
 ## Opt-in observational-data checks
 
 The observational checks read caller-supplied FITS files and create every

@@ -54,6 +54,64 @@ def _input(tmp_path, *, mode="difference", auxiliary="candidate"):
     return path
 
 
+@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+def test_cli_dispatches_collective_preflight_and_preserves_options(
+    tmp_path, monkeypatch, capsys, runtime
+):
+    from types import SimpleNamespace
+
+    from cuphoton.core import executors
+    from cuphoton.core.cli import run_component
+
+    path = _input(tmp_path)
+    output_dir = tmp_path / "distributed"
+    calls = []
+
+    def run(**kwargs):
+        spec = kwargs["prepare_workload"](0)
+        calls.append((kwargs, spec))
+        return SimpleNamespace(
+            status="success", to_dict=lambda: {"status": "success"}
+        )
+
+    monkeypatch.setattr(executors, "run_workload", run)
+    assert (
+        run_component(
+            "xfit",
+            [
+                "fit-dipoles",
+                "--input",
+                str(path),
+                "--model",
+                "gaussian",
+                "--backend",
+                "cupy",
+                "--executor",
+                runtime,
+                "--chunk-size",
+                "2",
+                "--output-dir",
+                str(output_dir),
+                "--max-evaluations",
+                "10",
+                "--warmup-rounds",
+                "1",
+                "--measure-rounds",
+                "2",
+            ],
+        )
+        == 0
+    )
+    kwargs, spec = calls[0]
+    assert kwargs["run_id"] == "distributed"
+    assert kwargs["output_root"] == tmp_path
+    assert kwargs["benchmark"].warmup_rounds == 1
+    assert kwargs["benchmark"].measure_rounds == 2
+    assert len(spec.items) == 2
+    assert spec.options_payload["fit_options"]["max_evaluations"] == 10
+    assert json.loads(capsys.readouterr().out)["status"] == "success"
+
+
 @pytest.mark.parametrize(
     "mode,auxiliary",
     [

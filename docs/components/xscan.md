@@ -236,6 +236,54 @@ The `*.blackwell.example.yaml` files demonstrate throughput-oriented settings
 for recent NVIDIA GPUs. Tune these starting points for your hardware and
 dataset.
 
+## Distributed inference
+
+`infer-real-bogus --executor dragon|mpi` scores a fixed split across GPUs.
+Each worker loads the checkpoint once and retains it across optional warmup
+and measured passes. Training and evaluation commands retain their existing
+local behavior. The default `--executor local` also preserves the original
+inference output location.
+
+Inputs, checkpoint, optional xFit feature bundle and output directory must
+reside on a filesystem shared by all workers. `--batch-size` retains its
+ordinary inference meaning. `--task-batches` groups whole minibatches into
+tasks; only the final task can contain the original final partial batch.
+Keep both values fixed when comparing worker counts. The merge restores
+selected-split order, original sample indices, labels and candidate metadata,
+and uses the same host probability calculation as local inference.
+
+Under a configured Dragon allocation:
+
+```bash
+dragon .venv/bin/cuphoton xscan infer-real-bogus \
+  --executor dragon --max-workers 8 \
+  --run-dir /shared/model --dataset-dir /shared/dataset --split test \
+  --batch-size 32 --task-batches 16 --num-workers 0 \
+  --output-dir /shared/results/inference-dragon \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+With Open MPI, the rank wrapper narrows GPU visibility before Python starts.
+The parent mask must list allocated GPUs in local-rank order:
+
+```bash
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xscan infer-real-bogus \
+  --executor mpi --run-dir /shared/model --dataset-dir /shared/dataset \
+  --split test --batch-size 32 --task-batches 16 --num-workers 0 \
+  --output-dir /shared/results/inference-mpi \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+Distributed inference requires a new `--output-dir`. Each pass writes merged
+logits, labels, probabilities, sample indices and a summary under
+`rounds/<round-id>/scientific/`; warmup outputs are retained too. Without
+round flags, the single pass uses `scientific/`. The model directory remains
+unchanged. Execution receipts and timing are separate from these scientific
+outputs, and merging and validation occur after the timed worker phase.
+
 ## Persistent XPOIS, xFit and XScan pipeline
 
 The Python API in `cuphoton.xscan.device_pipeline` runs complete image pairs

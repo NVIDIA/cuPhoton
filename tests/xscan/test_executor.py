@@ -76,6 +76,85 @@ def _cpu_worker(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+def test_cli_dispatches_collective_preflight_and_preserves_batches(
+    tmp_path, monkeypatch, capsys, runtime
+):
+    from types import SimpleNamespace
+
+    from cuphoton.core import executors
+    from cuphoton.core.cli import run_component
+
+    run_dir, dataset_dir = _inputs(tmp_path)
+    output_dir = tmp_path / "distributed"
+    calls = []
+
+    def run(**kwargs):
+        spec = kwargs["prepare_workload"](0)
+        calls.append((kwargs, spec))
+        return SimpleNamespace(
+            status="success", to_dict=lambda: {"status": "success"}
+        )
+
+    monkeypatch.setattr(executors, "run_workload", run)
+    assert (
+        run_component(
+            "xscan",
+            [
+                "infer-real-bogus",
+                "--run-dir",
+                str(run_dir),
+                "--dataset-dir",
+                str(dataset_dir),
+                "--executor",
+                runtime,
+                "--output-dir",
+                str(output_dir),
+                "--batch-size",
+                "2",
+                "--task-batches",
+                "1",
+                "--num-workers",
+                "0",
+                "--warmup-rounds",
+                "1",
+                "--measure-rounds",
+                "2",
+            ],
+        )
+        == 0
+    )
+    kwargs, spec = calls[0]
+    assert kwargs["run_id"] == "distributed"
+    assert kwargs["output_root"] == tmp_path
+    assert kwargs["benchmark"].warmup_rounds == 1
+    assert len(spec.items) == 3
+    assert spec.options_payload["batch_size"] == 2
+    assert spec.options_payload["num_workers"] == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "success"
+
+
+def test_cli_requires_separate_distributed_output(tmp_path, capsys):
+    from cuphoton.core.cli import run_component
+
+    assert (
+        run_component(
+            "xscan",
+            [
+                "infer-real-bogus",
+                "--run-dir",
+                str(tmp_path),
+                "--dataset-dir",
+                str(tmp_path),
+                "--executor",
+                "mpi",
+            ],
+        )
+        != 0
+    )
+    assert "--output-dir is required" in capsys.readouterr().err
+
+
 def test_persistent_workers_preserve_original_batches_predictions_and_order(
     tmp_path, monkeypatch
 ):
