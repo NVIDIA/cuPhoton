@@ -35,6 +35,11 @@ from .spatial_als import (
     solve_spatial_als,
 )
 from .stamps import extract_centered_stamp, simple_difference_stamp
+from .statistics import (
+    StandardizedResidualStatistics,
+    StandardizedResidualSummary,
+    summarize_standardized_residuals,
+)
 
 __all__ = [
     "__version__",
@@ -47,6 +52,8 @@ __all__ = [
     "SeparableKernelFitResult",
     "SpatialALSConfig",
     "SpatialALSFitResult",
+    "StandardizedResidualStatistics",
+    "StandardizedResidualSummary",
     "background_design",
     "build_compact_source_stamp_mask",
     "build_gaussian_polynomial_basis",
@@ -62,5 +69,6 @@ __all__ = [
     "solve_separable_kernel",
     "solve_spatial_als",
     "standardize_constant_kernel_residual",
+    "summarize_standardized_residuals",
     "triangular_degree_pairs",
 ]

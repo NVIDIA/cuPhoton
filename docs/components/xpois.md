@@ -340,7 +340,10 @@ The survey-neutral Python API can propagate a reference variance plane through
 an already fitted constant kernel and combine it with target variance:
 
 ```python
-from cuphoton.xpois import standardize_constant_kernel_residual
+from cuphoton.xpois import (
+    standardize_constant_kernel_residual,
+    summarize_standardized_residuals,
+)
 
 noise = standardize_constant_kernel_residual(
     fit.residual,
@@ -350,6 +353,11 @@ noise = standardize_constant_kernel_residual(
     valid_mask=evaluation_mask,
 )
 standardized = noise.standardized_residual
+statistics = summarize_standardized_residuals(
+    standardized[None, ...],
+    valid_mask=noise.valid_mask[None, ...],
+)
+print(statistics.pixel_pooled.cardinal_lag1_rho)
 ```
 
 This is a fixed-kernel marginal-diagonal calculation. The reference variance
@@ -359,6 +367,26 @@ represent neighboring-pixel covariance, reference-target covariance,
 resampling covariance, or fitted-kernel uncertainty. The standardized residual
 is a descriptive diagnostic, not a whitened residual or calibrated
 significance image. Prefer held-out pixels when assessing fit quality.
+
+`summarize_standardized_residuals` reports the RMS, the demeaned standard
+deviation (the population root mean square of residuals centered on each
+stamp's valid-pixel mean), and cardinal, diagonal, and radius-three lag
+diagnostics for each stamp and for all valid pixels pooled together. The
+pooled summary weights stamps by their valid pixels or lag-endpoint pairs; use
+`per_stamp` when an equal-stamp aggregation is required. `radius3_rho_rms` is
+an unweighted RMS of 24 noisy per-lag correlations, so white noise does not
+drive it to zero. Gaussian white-noise simulations give a complete-stamp
+floor of roughly 0.47 at the 4-by-4 minimum (where the corner lags rest on a
+single pair), 0.16 at 8-by-8, and 0.03 at 32-by-32. For large stamps the
+sampling contribution is about
+`sqrt(mean(1 / N_lag))` over the per-lag pair counts. Per-stamp centering
+also induces negative correlations: pooling many complete, independent
+white-noise stamps with `N` pixels each makes each lag correlation approach
+`-1 / (N - 1)`. The pooled correlation RMS therefore stays near 0.067 for
+4-by-4 stamps even as the pair counts grow. Compare stamp sizes and masks
+as well as pair counts, using a matching white-noise baseline. These
+diagnostics do not whiten the residual, estimate a covariance model, set
+acceptance thresholds, or calibrate statistical significance.
 
 ## Distributed image-pair batches
 

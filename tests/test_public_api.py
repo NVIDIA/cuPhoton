@@ -22,6 +22,11 @@ from cuphoton.xpois.spatial_gaussian_polynomial import (
     SpatialGaussianPolynomialKernelFitResult,
     solve_spatial_gaussian_polynomial_kernel,
 )
+from cuphoton.xpois.statistics import (
+    StandardizedResidualStatistics,
+    StandardizedResidualSummary,
+    summarize_standardized_residuals,
+)
 from cuphoton.xray.linear_prediction import LinearPredictionResult
 from cuphoton.xrep.geometry import MaskedReprojectionResult, ReprojectionSpec
 from cuphoton.xrep.mapping import PreparedReprojection
@@ -41,6 +46,14 @@ def test_curated_root_exports_are_real_objects() -> None:
     assert (
         xpois.standardize_constant_kernel_residual
         is standardize_constant_kernel_residual
+    )
+    assert (
+        xpois.StandardizedResidualStatistics is StandardizedResidualStatistics
+    )
+    assert xpois.StandardizedResidualSummary is StandardizedResidualSummary
+    assert (
+        xpois.summarize_standardized_residuals
+        is summarize_standardized_residuals
     )
 
 
@@ -70,6 +83,15 @@ def test_research_solver_requires_module_qualified_import() -> None:
     assert not hasattr(xpois, "SpatialGaussianPolynomialKernelFitResult")
     assert not hasattr(xpois, "SpatialGaussianPolynomialKernelFitSamples")
     assert not hasattr(xpois, "SpatialKernelDomain")
+
+
+def test_xpois_statistics_signature_is_explicit() -> None:
+    assert list(
+        inspect.signature(xpois.summarize_standardized_residuals).parameters
+    ) == [
+        "standardized_residual_stamps",
+        "valid_mask",
+    ]
 
 
 def test_xfit_curated_exports_and_fit_signature() -> None:
@@ -227,6 +249,8 @@ def test_xrep_existing_function_signatures_remain_stable() -> None:
     [
         (ConstantKernelFitResult, "target - matched"),
         (ConstantKernelNoiseResult, "marginal diagonal"),
+        (StandardizedResidualStatistics, "performs no whitening"),
+        (StandardizedResidualSummary, "empirical diagnostics"),
         (xpois.SeparableKernelFitResult, "target - matched"),
         (xpois.SpatialALSFitResult, "target - matched"),
         (SpatialGaussianPolynomialKernelFitResult, "target - matched"),
