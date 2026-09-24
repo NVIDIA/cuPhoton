@@ -412,35 +412,40 @@ uv run cuphoton xpois help fit-batch
 
 The Dragon executor requires [DragonHPC](https://dragonhpc.github.io/dragon/doc/_build/html/index.html)
 (Python distribution `dragonhpc`, import `dragon`) in the same Python
-environment as cuPhoton on every participating node. Install DragonHPC
-separately alongside cuPhoton's `gpu` extra and manage its version as an
-external runtime dependency.
-
-For example, install the released DragonHPC 0.14.2 package into a CUDA 13
-cuPhoton environment:
+environment as cuPhoton on every participating node. The `dragon` extra
+installs the runtime and keeps it in the project lock:
 
 ```bash
-uv sync --locked --python 3.12 --extra gpu
-uv pip install --python .venv/bin/python "dragonhpc==0.14.2"
+uv sync --locked --python 3.13 --extra gpu --extra dragon
 ```
 
+For a published wheel, use `python -m pip install 'cuphoton[gpu,dragon]'`.
 The [DragonHPC 0.14.2 wheels](https://pypi.org/project/dragonhpc/0.14.2/#files)
-support CPython 3.11 through 3.13 on Linux x86-64 and AArch64 with glibc 2.28
-or newer. Use one of those Python versions for this installation.
+support cuPhoton's Python 3.12 and 3.13 environments on Linux x86-64 and
+AArch64 with glibc 2.28 or newer. Dragon has no Python 3.14 wheel yet;
+requesting the extra there fails installation rather than silently omitting it.
 
 Use the installed `.venv/bin/dragon` launcher with the examples below.
-`uv sync` removes packages outside the project lock, so repeat the DragonHPC
-installation after resynchronizing the environment. Use the same cuPhoton
-environment and DragonHPC version on every node. Each run records the
-DragonHPC version it discovers. See the
+Keep `--extra dragon` when resynchronizing a checkout environment. Use the
+same cuPhoton environment and DragonHPC version on every node. Each run
+records the DragonHPC version it discovers. See the
 [runtime notices](../../THIRD_PARTY_NOTICES.md#optional-distributed-runtime-inventory)
 for licensing and installation details.
 
 The MPI executor uses an external MPI or scheduler launcher. Collective
-aggregation (`--aggregation-mode mpi`) also requires `mpi4py` built for the
-selected MPI implementation. Shared-file aggregation exchanges results
-through the filesystem, with the external launcher managing its processes.
-Install the runtimes required by the selected executor on each node.
+aggregation (`--aggregation-mode mpi`) also requires the `mpi` extra:
+
+```bash
+uv sync --locked --extra gpu --extra mpi
+# Or, for a published wheel:
+python -m pip install 'cuphoton[gpu,mpi]'
+```
+
+The extra installs mpi4py, while the MPI implementation and matching launcher
+remain site-provided. Follow the [mpi4py installation instructions](https://mpi4py.readthedocs.io/en/stable/install.html)
+when a site-specific build is needed. Shared-file aggregation does not import
+mpi4py: it exchanges results through the filesystem, with the external
+launcher managing processes. Install the selected runtime on every node.
 
 ### Manifest and storage contract
 

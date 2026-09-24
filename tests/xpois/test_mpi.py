@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import sys
 import time
@@ -1703,7 +1704,7 @@ def test_batch_coordinates_cuda_import_guard_after_mpi_loading(
 
     with pytest.raises(
         RuntimeError,
-        match="rank-startup validation.*before MPI rank binding: cupy",
+        match=r"rank-startup validation.*before MPI rank binding: .*\bcupy\b",
     ):
         mpi.run_mpi_image_pair_batch(
             manifest_path=tmp_path / "unused.json",
@@ -1908,6 +1909,35 @@ def test_mpi_consensus_rejects_resolved_run_directory_mismatch() -> None:
             "4.test",
             "Test MPI",
         )
+
+
+@pytest.mark.parametrize(
+    "import_error",
+    [
+        ModuleNotFoundError("No module named 'mpi4py'"),
+        OSError("libmpi.so could not be loaded"),
+        RuntimeError("cannot load MPI library"),
+    ],
+)
+def test_mpi_import_failure_explains_installation(
+    monkeypatch: pytest.MonkeyPatch, import_error: Exception
+) -> None:
+    original_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "mpi4py":
+            raise import_error
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    with pytest.raises(RuntimeError) as error:
+        mpi._load_mpi_api()
+
+    assert "pip install 'cuphoton[mpi]'" in str(error.value)
+    assert "MPI runtime" in str(error.value)
+    assert "mpiexec/mpirun" in str(error.value)
+    assert error.value.__cause__ is import_error
 
 
 def test_mpi_library_version_strips_trailing_nul(

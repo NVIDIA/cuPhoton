@@ -133,9 +133,9 @@ explains the scientific and file-format terms used here.
 The base install contains the shared CPU data and scientific stack. Optional
 extras are deliberately separated by purpose:
 
-CPython 3.12 through 3.14 is supported on Linux for the base, GPU, CPU PyTorch,
-and visualization profiles. The experimental cuTile profile remains limited
-to Python 3.12 and 3.13.
+CPython 3.12 through 3.14 is supported on Linux, including the experimental
+cuTile backend. Dragon currently requires Python 3.12 or 3.13 because its
+upstream release has no Python 3.14 wheel.
 
 | Extra | Use |
 | --- | --- |
@@ -144,7 +144,9 @@ to Python 3.12 and 3.13.
 | `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for XDR |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
 | `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch and Numba-CUDA |
-| `cutile` | Experimental `cuda.tile` backend on Python 3.12 or 3.13 |
+| `cutile` | Experimental `cuda.tile` backend and CuPy |
+| `mpi` | mpi4py bindings for an existing MPI runtime |
+| `dragon` | DragonHPC runtime on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |
 
 Linux x86-64 and ARM64 wheels include the native XDR extension and a private,
@@ -154,7 +156,9 @@ it with the commands below. Until then, use the checkout instructions above:
 ```bash
 python -m pip install cuphoton          # CPU data workflows
 python -m pip install 'cuphoton[io]'    # GPU FITS loading
-python -m pip install 'cuphoton[gpu]'   # All GPU backends and photometry
+python -m pip install 'cuphoton[gpu]'   # CuPy, Numba, PyTorch, I/O and photometry
+python -m pip install 'cuphoton[gpu,mpi]'  # Also install MPI Python bindings
+python -m pip install 'cuphoton[gpu,dragon]'  # Python 3.12 or 3.13
 ```
 
 The `io` profile needs a CUDA 13-compatible NVIDIA driver, but no compiler,
@@ -172,11 +176,11 @@ python -m pip install -e '.[dev,torch,viz,photometry]'
 python -m pip install -e '.[dev,gpu,viz]'
 ```
 
-The cuTile profile is separate because it has a narrower Python and toolchain
-compatibility range:
+For the cuTile profile, use a CUDA 13.2 or newer TileIR compiler
+(`tileiras`). See [compiler and distributed runtime setup](docs/getting-started.md#optional-runtimes).
 
 ```bash
-uv sync --locked --python 3.12 --extra dev --extra gpu --extra cutile
+uv sync --locked --extra dev --extra gpu --extra cutile
 ```
 
 Only CUDA 13 dependency variants are supported by this release.

@@ -4,8 +4,9 @@
 
 cuPhoton supports CPython 3.12 through 3.14 on Linux for the base, GPU, CPU
 PyTorch, and visualization profiles. CPU workflows do not require CUDA. The
-GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. Python
-3.12 or 3.13 is required for the experimental cuTile profile.
+GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. The
+experimental cuTile profile supports the same Python versions. Dragon
+currently requires Python 3.12 or 3.13.
 
 Install [uv](https://docs.astral.sh/uv/) before working from a checkout. uv is
 the supported environment and lock-file tool; editable pip installation is
@@ -66,14 +67,60 @@ The extras are composable:
 | `torch` | CPU-capable PyTorch |
 | `gpu` | `io`, `photometry`, CUDA 13 PyTorch, and Numba-CUDA |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
+| `mpi` | mpi4py bindings; an MPI runtime and launcher are also required |
+| `dragon` | DragonHPC; Python 3.12 or 3.13 |
 | `viz` | Bokeh and Pillow |
 
 For cuTile backend development:
 
 ```bash
-uv sync --locked --python 3.12 \
-  --extra dev --extra gpu --extra cutile
+uv sync --locked --extra dev --extra gpu --extra cutile
 ```
+
+## Optional runtimes
+
+Extras compose: use `cuphoton[gpu,mpi]` or `cuphoton[gpu,dragon]` for the
+corresponding distributed GPU executor. From a checkout:
+
+```bash
+# Choose the MPI profile:
+uv sync --locked --extra gpu --extra mpi
+# Or the Dragon profile:
+uv sync --locked --python 3.13 --extra gpu --extra dragon
+```
+
+The `mpi` extra installs mpi4py, not an MPI implementation. Load the site's
+MPI module or install a compatible MPI runtime and launcher, then verify
+`.venv/bin/python -c 'from mpi4py import MPI; print(MPI.Get_library_version())'`
+from a checkout, or use the activated environment's Python for a wheel install.
+Use the same runtime with `mpiexec` on every node. Follow
+[mpi4py's installation guide](https://mpi4py.readthedocs.io/en/stable/install.html)
+for site-specific builds. MPI file aggregation does not import mpi4py.
+
+DragonHPC 0.14.2 provides Linux x86-64 and ARM64 wheels for Python 3.12 and
+3.13, but no Python 3.14 wheel. Installing `[dragon]` on Python 3.14 fails
+instead of silently omitting Dragon. Use the installed `dragon` launcher and
+the [distributed launch examples](components/xpois.md#launch-with-dragon).
+Both executors need the same environment on every participating node.
+
+The `cutile` extra installs cuda-tile 1.6 or newer and CuPy on Python
+3.12–3.14. For kernel compilation in this setup, use a CUDA 13.2 or newer
+toolkit with `tileiras`, `ptxas`, and NVVM. The compiler is separate:
+cuTile's upstream `[tileiras]` extra requires `cuda-toolkit>=13.2`, while
+PyTorch 2.13 pins that Python metapackage to 13.0.3. Requesting both compiler
+and PyTorch extras in one environment cannot currently resolve. Use a
+system toolkit for cuTile compilation alongside the pip GPU runtime
+dependencies; see the [cuTile setup guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html).
+
+Select the matching compiler tools for the process, for example:
+
+```bash
+PATH=/usr/local/cuda-13.2/bin:$PATH CUDA_HOME=/usr/local/cuda-13.2 \
+  uv run --locked --extra gpu --extra cutile cuphoton --version
+```
+
+Use the same environment when running cuTile workloads. Selecting the
+compiler does not require adding the toolkit's libraries to `LD_LIBRARY_PATH`.
 
 ## Verify the checkout
 

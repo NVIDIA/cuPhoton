@@ -5,8 +5,8 @@ optional-development, and build requirements are declared in
 [`pyproject.toml`](pyproject.toml). Optional distributed runtimes, native
 requirements, and the CFITSIO library bundled in Linux wheels are documented
 below. `uv.lock` records the reproducible resolution for the project Python
-dependency profiles; it does not include the separately installed DragonHPC,
-`mpi4py`, or MPI runtimes. Build-system requirements are resolved separately
+dependency profiles, including the optional DragonHPC and mpi4py packages.
+The site-provided MPI implementation is not part of that lock. Build-system requirements are resolved separately
 by the PEP 517 build frontend and are not locked by `uv.lock`; they are labeled
 `not locked` below.
 
@@ -56,7 +56,7 @@ more than one license.
 | `io`, `gpu` | `nvidia-nvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
 | `native build` | `pybind11==3.0.4` | `build recipe` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
 | `gpu` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
-| `cutile` | `cuda-tile>=1.4` | `1.4.0` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI` |
+| `cutile` | `cuda-tile>=1.6,<2` | `1.6.0` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI` |
 | `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
 | `dev` | `setuptools>=83.0.0` | `83.0.0` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
@@ -66,10 +66,11 @@ more than one license.
 ## Optional distributed runtime inventory
 
 The Dragon executor requires DragonHPC. MPI collective aggregation requires
-`mpi4py` and an MPI implementation. These dependencies are installed
-separately; cuPhoton does not impose numeric version constraints on these
-runtimes. The versions below identify the distributions examined for this
-inventory; they do not establish compatibility with every Python version,
+`mpi4py` and an MPI implementation. The `dragon` extra declares
+`dragonhpc>=0.14.2,<0.15`; the `mpi` extra declares `mpi4py>=4.1.2,<5`.
+Both are installed from upstream distributions and recorded in `uv.lock`;
+neither is bundled in the cuPhoton wheel. The MPI implementation remains
+site-provided. The inventoried versions do not establish compatibility with every Python version,
 transport, or cluster configuration. See the
 [XPOIS launch documentation](docs/components/xpois.md#launch-with-dragon)
 for a Dragon launch example.

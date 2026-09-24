@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import queue
@@ -108,6 +109,37 @@ def _valid_shard_result(
         },
         "record_write_errors": [],
     }
+
+
+@pytest.mark.parametrize(
+    "import_error",
+    [
+        ModuleNotFoundError("No module named 'dragon'"),
+        OSError("Dragon shared library could not be loaded"),
+    ],
+)
+def test_dragon_import_failure_explains_installation(
+    monkeypatch: pytest.MonkeyPatch, import_error: Exception
+) -> None:
+    original_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.startswith("dragon."):
+            raise import_error
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    with pytest.raises(RuntimeError) as error:
+        dragon_module._load_dragon_api()
+
+    message = str(error.value)
+    assert "pip install 'cuphoton[dragon]'" in message
+    assert "Python 3.12 or 3.13" in message
+    assert "every node" in message
+    assert "launch with dragon" in message
+    assert "no Python 3.14 wheels" in message
+    assert error.value.__cause__ is import_error
 
 
 def test_discovery_uses_actual_noncontiguous_node_gpu_ids() -> None:
