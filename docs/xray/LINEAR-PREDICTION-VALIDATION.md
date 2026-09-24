@@ -63,8 +63,9 @@ mode was recovered; a trial in which the estimator raised counts in
 For each mode and parameter (`amplitude`, `decay`, `angular_frequency`,
 `phase`) the summary gives `bias`, `std` (ddof 1) and `rmse` computed over
 the recovered trials only, the bound (`crlb_std`, `crlb_variance`) and
-`std_over_crlb_std`. A negative fitted amplitude is folded into the phase
-and the phase error is wrapped to `[-pi, pi)`.
+`std_over_crlb_std`. Truth and fitted modes use nonnegative amplitudes,
+folding a negative amplitude into the phase. Both phases and phase errors
+are wrapped to `[-pi, pi)`; the summary records truth in this convention.
 Undefined statistics are written as JSON `null`: standard deviation requires
 at least two recovered trials, and bias and RMSE require at least one.
 
