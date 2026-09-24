@@ -1,4 +1,4 @@
-# XPOIS
+# xPois
 
 `cuphoton.xpois` fits PSF-matching kernels and differential backgrounds,
 then subtracts a matched reference from a target image. It implements
@@ -209,7 +209,7 @@ footprint is non-finite; mask and default selection use valid pixels. The
 calling pipeline supplies camera calibration, PSF measurement, source
 selection, astrometric registration, and unit interpretation, including
 calibration-derived masks, variances, or fit samples. Flux conservation is
-opt-in, matching the existing XPOIS CLI convention. When enabled, spatial
+opt-in, matching the existing xPois CLI convention. When enabled, spatial
 basis corrections are zero-sum and the signed kernel sum is one fitted,
 position-independent scale. With flux conservation disabled, `flux_scale` is
 the vertical reference multiplier; evaluate `kernel_at(y, x)` for the local
@@ -445,7 +445,7 @@ Install the runtimes required by the selected executor on each node.
 ### Manifest and storage contract
 
 Both executors consume the same strict JSON or YAML manifest and run the same
-XPOIS item function. Manifests use resolved filesystem paths:
+xPois item function. Manifests use resolved filesystem paths:
 
 ```yaml
 schema: cuphoton.xpois.image-pairs/v2

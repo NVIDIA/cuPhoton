@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dragon orchestration for the persistent XPOIS-to-XScan device seam."""
+"""Dragon orchestration for the persistent xPois-to-xScan device seam."""
 
 from __future__ import annotations
 
@@ -303,15 +303,15 @@ def _strict_device_pipeline_result_payload(
     xpois = _exact_mapping(
         values["xpois"],
         expected=_XPOIS_RESULT_FIELDS,
-        field="device pipeline XPOIS result",
+        field="device pipeline xPois result",
     )
     _finite_float(
-        xpois["chi2"], field="device pipeline XPOIS chi2", minimum=0.0
+        xpois["chi2"], field="device pipeline xPois chi2", minimum=0.0
     )
-    dof = _strict_integer(xpois["dof"], field="device pipeline XPOIS dof")
+    dof = _strict_integer(xpois["dof"], field="device pipeline xPois dof")
     fit_pixel_count = _strict_integer(
         xpois["fit_pixel_count"],
-        field="device pipeline XPOIS fit_pixel_count",
+        field="device pipeline xPois fit_pixel_count",
         minimum=1,
     )
 
@@ -482,11 +482,11 @@ def _strict_device_pipeline_result_payload(
         or background_coefficients.ndim != 1
         or background_coefficients.size < 1
     ):
-        raise ValueError("device pipeline XPOIS evidence shape differs")
+        raise ValueError("device pipeline xPois evidence shape differs")
     if dof != fit_pixel_count - int(
         kernel_coefficients.size + background_coefficients.size
     ):
-        raise ValueError("device pipeline XPOIS degrees of freedom differ")
+        raise ValueError("device pipeline xPois degrees of freedom differ")
     for index, prediction in enumerate(predictions):
         if (
             float(decoded["xscan.logits"][index]) != prediction["logit"]
@@ -642,7 +642,7 @@ def _preflight(
     checkpoint_size = _observe_content_file(
         checkpoint_path,
         expected_sha256=config.checkpoint_sha256,
-        description="XScan checkpoint",
+        description="xScan checkpoint",
         cache=observed_files,
     )
     feature_schema_path = Path(config.feature_schema_path)

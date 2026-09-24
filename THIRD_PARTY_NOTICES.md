@@ -64,7 +64,7 @@ separately; cuPhoton does not impose numeric version constraints on these
 runtimes. The versions below identify the distributions examined for this
 inventory; they do not establish compatibility with every Python version,
 transport, or cluster configuration. See the
-[XPOIS launch documentation](docs/components/xpois.md#launch-with-dragon)
+[xPois launch documentation](docs/components/xpois.md#launch-with-dragon)
 for a Dragon launch example.
 
 | Runtime | Inventoried versions | License and upstream notices | Use and distribution |

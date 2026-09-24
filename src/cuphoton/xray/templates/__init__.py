@@ -2,4 +2,4 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Package data for XRay report templates."""
+"""Package data for xRay report templates."""

@@ -1753,7 +1753,7 @@ def _normalize_backend(backend: str) -> str:
 
 
 def resolve_backend(backend: str = "auto") -> str:
-    """Resolve an XPOIS backend name.
+    """Resolve an xPois backend name.
 
     Parameters
     ----------

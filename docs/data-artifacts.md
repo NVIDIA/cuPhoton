@@ -47,9 +47,9 @@ Covariance uses supplied variances when present and residual scaling
 otherwise. Non-converged or rank-deficient fits retain status information and
 mark their uncertainties invalid.
 
-## XScan HSC NPY inputs
+## xScan HSC NPY inputs
 
-XScan accepts an HSC NPY directory directly or as `HSC_npy` beneath a supplied
+xScan accepts an HSC NPY directory directly or as `HSC_npy` beneath a supplied
 base directory. The directory contains `metadata.json` and these arrays:
 
 | File | Axis order | Meaning |
@@ -65,7 +65,7 @@ Spatial dimensions and exposure counts must agree across corresponding
 arrays. Treat the directory as caller-supplied data and keep it outside the
 repository.
 
-## XPOIS image pairs
+## xPois image pairs
 
 `reference` and `target` are two-dimensional arrays with the same shape. An
 optional target variance image, used for fit weights and chi-square, and
@@ -142,7 +142,7 @@ observations. `parity.ok` gates arrays, scalars, exact fields, and fit
 masks; the objective history, condition number, iteration count, and
 convergence flag are reported as non-gating diagnostics.
 
-## XScan datasets
+## xScan datasets
 
 A prepared dataset directory contains:
 
@@ -166,7 +166,7 @@ and a summary that records the selected device and split. Review annotations
 are separate append-only artifacts and should retain reviewer and source-run
 provenance.
 
-### xFit feature bundles for XScan
+### xFit feature bundles for xScan
 
 `cuphoton xscan data-export-xfit-input` writes a pickle-free `.npz` containing
 numeric or Unicode arrays: unique `candidate_id` and exact float `images` rows from
@@ -186,20 +186,20 @@ Construct an archive manually when initial parameters or a stamp basis are
 required.
 
 `cuphoton xscan data-build-xfit-features` joins a completed difference-mode
-xFit run to a prepared XScan dataset by `candidate_id` and writes a new bundle
+xFit run to a prepared xScan dataset by `candidate_id` and writes a new bundle
 directory. It verifies the xFit artifact hashes and binds every matched row to
-the exact XScan `difference.npy` stamp by a dtype-, shape-, and content-aware
+the exact xScan `difference.npy` stamp by a dtype-, shape-, and content-aware
 hash:
 
 | File | Meaning |
 | --- | --- |
-| `candidate-id.npy` | numeric or Unicode candidate IDs in exact XScan metadata order, loaded with pickle disabled |
+| `candidate-id.npy` | numeric or Unicode candidate IDs in exact xScan metadata order, loaded with pickle disabled |
 | `features.npy` | row-aligned float32 feature matrix, loaded read-only through a memory map so split datasets and data-loader workers share the same file-backed values |
 | `input-image-sha256.npy` | fixed-width ASCII SHA-256 values for the exact difference stamps, loaded with pickle disabled |
 | `schema.json` | ordered feature contract, bounded transforms, source SHA-256 hashes, missing policy, and join diagnostics |
 
-The candidate array must exactly match XScan metadata order when loaded.
-Duplicate XScan rows may reuse one fit only when the duplicate stamps, splits,
+The candidate array must exactly match xScan metadata order when loaded.
+Duplicate xScan rows may reuse one fit only when the duplicate stamps, splits,
 and split groups are identical; duplicate xFit candidate IDs are rejected.
 The default `missing_policy: error` requires every dataset row to have a fit.
 `indicator` instead emits finite zero features with
@@ -244,9 +244,9 @@ Single-image runs write `artifacts/reprojected.npy`, an optional `mask.npy`, and
 bounding box, and timings. FITS output is optional. Stack runs use
 `reprojected_stack.npy` and an optional mask stack on one shared grid.
 
-## XRay HDF5 and trace products
+## xRay HDF5 and trace products
 
-XRay probes an HDF5 file before selecting a supported image cube, scan/delay
+xRay probes an HDF5 file before selecting a supported image cube, scan/delay
 axis, entry counts, and intensity-normalization fields. On/off cubes must use
 the same schema and image shape. Detector ROIs are supplied as `(x, y)` origins
 and `(width, height)` dimensions; generated NumPy images remain row-major.
@@ -258,7 +258,7 @@ logs, and a merged manifest. Preserve the ROI, excluded rows, normalization,
 fit parameters, shard ranges, and package/hardware details with published
 results.
 
-XRay detector artifacts from the optional iterative fitter use manifest
+xRay detector artifacts from the optional iterative fitter use manifest
 version 3, including the fitting method and iterative controls in the
 configuration and resume identity. Existing linear-prediction artifacts keep
 their version 2 representation. The numerical diagnostic sidecar also

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional Dragon ProcessGroup adapter for XPOIS image pairs."""
+"""Optional Dragon ProcessGroup adapter for xPois image pairs."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ _DRAGON_TEMPLATE_BUDGET_BYTES = 96 * 1024
 
 @dataclass(frozen=True)
 class DragonBatchResult:
-    """Handle for a terminal XPOIS Dragon batch."""
+    """Handle for a terminal xPois Dragon batch."""
 
     run_id: str
     run_dir: Path
@@ -249,14 +249,14 @@ def run_dragon_image_pair_batch(
     options: BatchFitOptions,
     worker_timeout_sec: float = 3600.0,
 ) -> DragonBatchResult:
-    """Run deterministic XPOIS shards with one Dragon worker per GPU."""
+    """Run deterministic xPois shards with one Dragon worker per GPU."""
 
     invocation_start = time.perf_counter()
     started_at = timestamp_utc()
     coordinator_timings: dict[str, float] = {}
     if options.backend not in _DRAGON_GPU_BACKENDS:
         raise ValueError(
-            "Dragon XPOIS workers require an explicit GPU backend"
+            "Dragon xPois workers require an explicit GPU backend"
         )
     phase_start = time.perf_counter()
     manifest = load_image_pair_manifest(manifest_path)

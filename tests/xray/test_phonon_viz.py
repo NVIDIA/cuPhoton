@@ -34,7 +34,7 @@ def test_build_phonon_viz_from_trace_dir(tmp_path):
     assert result.trace_count == 3
     assert output.exists()
     text = output.read_text(encoding="utf-8")
-    assert "XRay Phonon Dispersion" in text
+    assert "xRay Phonon Dispersion" in text
     assert "trace-derived phonon proxy" in text
     assert "Phonon dispersion proxy" in text
     assert str(tmp_path) not in text

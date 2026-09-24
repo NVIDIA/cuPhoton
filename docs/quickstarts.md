@@ -54,10 +54,10 @@ Valid component names are `xfit`, `xpois`, `xscan`, `xrep`, and `xray`.
 | Component | Synthetic input | Exercised path |
 | --- | --- | --- |
 | xFit | analytic Gaussian dipole stamps and perturbed parameters | batched nonlinear fit and uncertainty artifacts |
-| XPOIS | two matched 2D source images | kernel fit, matched image, and residual |
-| XScan | labeled image stamps and fixed splits | one-epoch training and evaluation smoke |
+| xPois | two matched 2D source images | kernel fit, matched image, and residual |
+| xScan | labeled image stamps and fixed splits | one-epoch training and evaluation smoke |
 | xRep | a small FITS image with a valid celestial WCS | reprojection and mask propagation |
-| XRay | deterministic detector traces | extraction or linear-prediction analysis |
+| xRay | deterministic detector traces | extraction or linear-prediction analysis |
 
 ## Output contract
 

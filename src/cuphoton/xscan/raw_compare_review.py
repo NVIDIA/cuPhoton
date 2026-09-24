@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bokeh view for comparing XScan review stamp arrays."""
+"""Bokeh view for comparing xScan review stamp arrays."""
 
 from __future__ import annotations
 
@@ -132,7 +132,7 @@ def run_server(
     )
     server.start()
     print(
-        f"XScan raw comparison server: http://{host}:{port}/?s=1352",
+        f"xScan raw comparison server: http://{host}:{port}/?s=1352",
         flush=True,
     )
     server.io_loop.start()
@@ -176,7 +176,7 @@ def build_document(doc, *, review_dir: Path) -> None:
     )
     state = {"sample_index": initial_sample}
 
-    doc.title = f"XScan Raw Comparison {initial_sample}"
+    doc.title = f"xScan Raw Comparison {initial_sample}"
 
     title = Div(width=470, css_classes=["review-brand"])
     progress_div = Div(width=120)
@@ -302,7 +302,7 @@ window.history.replaceState({}, "", url.toString());
             )
             return
         state["sample_index"] = sample_index
-        doc.title = f"XScan Raw Comparison {sample_index}"
+        doc.title = f"xScan Raw Comparison {sample_index}"
         sample_input.value = str(sample_index)
         url_state.text = str(sample_index)
 
@@ -336,7 +336,7 @@ window.history.replaceState({}, "", url.toString());
         item = current_item(sample_index)
         qpos = queue_position(sample_index)
         title.text = _review_header_html(
-            title="XScan Review",
+            title="xScan Review",
             subtitle="Review astronomical detections with human insight",
             id_label="Candidate ID",
             item=item,

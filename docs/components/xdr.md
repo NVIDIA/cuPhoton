@@ -19,7 +19,7 @@ For general HDF5 access, use `h5py` directly; it is a base dependency. Remove
 `hdf5` from installation extras, for example by replacing `cuphoton[hdf5]`
 with `cuphoton`.
 
-For supported XRay detector inputs, see the [single-node HDF5
+For supported xRay detector inputs, see the [single-node HDF5
 workflow](../xray/README.md#single-node-hdf5-workflow), which uses the `h5py`
 reader by default.
 

@@ -113,7 +113,7 @@ def build_phonon_viz(
     x_value: int | None = None,
     y_start: int | None = None,
     y_end: int | None = None,
-    title: str = "XRay Phonon Dispersion",
+    title: str = "xRay Phonon Dispersion",
     components: int = 30,
     roots_backend: str = "eigvals",
     max_traces: int = 256,

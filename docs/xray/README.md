@@ -1,11 +1,11 @@
-# XRay
+# xRay
 
 `cuphoton.xray` provides X-ray trace extraction, linear prediction, optional
 iterative fitting, detector artifact generation, numerical validation, and
 standalone review views. It is available through the `cuphoton xray` command
 group.
 
-XRay is GPU-first for high-throughput detector work. Supported operations fall
+xRay is GPU-first for high-throughput detector work. Supported operations fall
 back to NumPy for CPU smoke and correctness runs; commands that require a GPU
 report that requirement explicitly.
 
@@ -43,7 +43,7 @@ uv run cuphoton xray help extract-trace
 
 ## Single-node HDF5 workflow
 
-XRay recognizes two on/off cube layouts. Both files in a pair must use the
+xRay recognizes two on/off cube layouts. Both files in a pair must use the
 same schema and array shapes.
 
 | Schema | Image cube | Delay axis | Entry counts | Normalization |

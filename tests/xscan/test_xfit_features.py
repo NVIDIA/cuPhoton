@@ -910,7 +910,7 @@ def test_bundle_missing_policy_error_rejects_absent_fit(
     run_dir = tmp_path / "run"
     _write_run(run_dir, [_gaussian_row("fit-a", 0)])
 
-    with pytest.raises(ValueError, match="missing XScan candidate_id"):
+    with pytest.raises(ValueError, match="missing xScan candidate_id"):
         build_xfit_feature_bundle(
             dataset_dir=dataset_dir,
             xfit_run_dir=run_dir,
@@ -1298,7 +1298,7 @@ def test_loader_rebinds_bundle_to_current_difference_stamps(
     difference[0, 0, 0] += 1.0
     np.save(difference_path, difference, allow_pickle=False)
 
-    with pytest.raises(ValueError, match="current XScan difference.npy"):
+    with pytest.raises(ValueError, match="current xScan difference.npy"):
         load_xfit_feature_matrix(
             dataset_dir=dataset_dir,
             feature_dir=output_dir,

@@ -13,7 +13,7 @@ before drawing scientific conclusions.
   *Astronomy & Astrophysics Supplement Series*, 144:363-370, 2000.
   [doi:10.1051/aas:2000214](https://doi.org/10.1051/aas:2000214)
 
-XPOIS uses Gaussian-times-polynomial bases, optional polynomial
+xPois uses Gaussian-times-polynomial bases, optional polynomial
 backgrounds, fit masks, and weighted least squares in this family of methods.
 
 ## Transient classification
@@ -26,7 +26,7 @@ backgrounds, fit masks, and weighted least squares in this family of methods.
   Subtraction,” *The Astronomical Journal*, 2023.
   [doi:10.3847/1538-3881/ace9d8](https://doi.org/10.3847/1538-3881/ace9d8)
 
-XScan's pair and triplet paths reproduce the image-channel comparison in
+xScan's pair and triplet paths reproduce the image-channel comparison in
 this line of work, with a transformer-family model. Evaluate its data
 assumptions on the intended domain and keep related samples together when
 constructing training, validation, and test splits.

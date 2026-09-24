@@ -333,7 +333,7 @@ def test_abandoned_pending_future_blocks_submission_on_idle_stream(
     assert first.stream.synchronize_calls == 0
 
     second = read_runtime.make_read()
-    with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+    with pytest.raises(RuntimeError, match="previous xDR GPU work"):
         second.read()
     assert second.load_calls == 0
     assert read_runtime.quarantine == [owner]
@@ -377,7 +377,7 @@ def test_foreign_unresolved_batch_during_wait_rejects_decode(
 
     assert not thread.is_alive()
     assert isinstance(result.get("error"), RuntimeError)
-    assert "previous XDR GPU work" in str(result["error"])
+    assert "previous xDR GPU work" in str(result["error"])
     assert first.decode_calls == first.stream.synchronize_calls == 0
     assert owner in read_runtime.quarantine
     assert owner.actively_awaited is False
@@ -387,7 +387,7 @@ def test_foreign_unresolved_batch_during_wait_rejects_decode(
     assert first.loader.closed is owns_loader
 
     foreign_event.done = True
-    with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+    with pytest.raises(RuntimeError, match="previous xDR GPU work"):
         prefetch._ensure_gpu_submissions_safe()
     assert read_runtime.quarantine == [owner]
     first.stream.done = True
@@ -432,7 +432,7 @@ def test_first_gate_exit_signal_abandons_published_io(
     assert first.loader.closed is False
 
     second = read_runtime.make_read()
-    with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+    with pytest.raises(RuntimeError, match="previous xDR GPU work"):
         second.read()
     assert second.load_calls == 0
     assert read_runtime.quarantine == [owner]
@@ -478,7 +478,7 @@ def test_second_gate_entry_error_abandons_published_owner(
     assert first.output in owner.keepalive
     assert first.loader.closed is owns_loader
 
-    with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+    with pytest.raises(RuntimeError, match="previous xDR GPU work"):
         prefetch._ensure_gpu_submissions_safe()
     first.stream.done = True
     prefetch._ensure_gpu_submissions_safe()
