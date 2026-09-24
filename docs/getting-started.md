@@ -13,6 +13,9 @@ also available for integration into an existing environment.
 
 ## Install a release
 
+After the first PyPI release is published, install it with the commands below.
+Until then, use the [checkout instructions](#clone-and-select-a-profile).
+
 ```bash
 python -m pip install cuphoton
 python -m pip install 'cuphoton[io]'  # Native GPU FITS loading

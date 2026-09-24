@@ -25,7 +25,8 @@ reader by default.
 
 ## Install
 
-Install the I/O profile for GPU FITS loading:
+After the first PyPI release is published, install the I/O profile for GPU
+FITS loading. Until then, use the source checkout instructions below:
 
 ```bash
 python -m pip install 'cuphoton[io]'

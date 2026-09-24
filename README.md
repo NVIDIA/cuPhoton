@@ -148,7 +148,8 @@ to Python 3.12 and 3.13.
 | `viz` | Bokeh reviews and Pillow image outputs |
 
 Linux x86-64 and ARM64 wheels include the native XDR extension and a private,
-thread-safe CFITSIO library. For an installed release:
+thread-safe CFITSIO library. After the first PyPI release is published, install
+it with the commands below. Until then, use the checkout instructions above:
 
 ```bash
 python -m pip install cuphoton          # CPU data workflows
