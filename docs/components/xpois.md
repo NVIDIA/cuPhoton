@@ -662,8 +662,18 @@ can run one warmup and three measured rounds on a single node:
   --max-workers 4 --warmup-rounds 1 --measure-rounds 3
 ```
 
-Use the same two flags with `--executor mpi --aggregation-mode mpi` in the
-MPI launch above. File aggregation does not support synchronized rounds.
+Use the same two flags with a collective MPI launch:
+
+```bash
+mpirun -n 4 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xpois fit-batch --executor mpi \
+  --backend cupy --manifest /shared/manifests/fixed-32.yaml \
+  --output-dir /shared/results/xpois-mpi --name repeated-mpi \
+  --aggregation-mode mpi --warmup-rounds 1 --measure-rounds 3
+```
+
+File aggregation does not support synchronized rounds.
 Omitting both flags preserves the ordinary single-pass execution and artifact
 layout. Supplying either flag opts in; unspecified warmup and measured counts
 default to zero and one respectively.

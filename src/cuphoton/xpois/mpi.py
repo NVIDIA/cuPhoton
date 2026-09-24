@@ -452,6 +452,7 @@ def _run_mpi_benchmark(
             api.comm, "MPI benchmark readiness", setup_error
         )
         assert gpu is not None
+        startup_ready_sec = time.perf_counter() - start
 
         for planned in benchmark.rounds():
             phase = planned.round_id
@@ -471,8 +472,6 @@ def _run_mpi_benchmark(
                 shards=shards,
                 start=time.perf_counter(),
             )
-            if startup_ready_sec is None:
-                startup_ready_sec = time.perf_counter() - start
             # Run preparation includes a readiness gather. No rank starts
             # work until root releases this round through the broadcast.
             round_start = time.perf_counter()
@@ -578,8 +577,14 @@ def _run_mpi_benchmark(
             decision = {"status": "failed", "error": error_payload(exc)}
             _aggregate_error(run_dir, run_id, decision["error"])
     decision = api.comm.bcast(decision, root=0)
-    if not isinstance(decision, Mapping) or decision.get("error"):
-        raise RuntimeError("cannot persist MPI benchmark aggregate")
+    if not isinstance(decision, Mapping):
+        raise RuntimeError(
+            "MPI benchmark aggregate decision was not a mapping"
+        )
+    if decision.get("error"):
+        raise RuntimeError(
+            f"cannot persist MPI benchmark aggregate: {decision['error']}"
+        )
     if context.rank != 0 and decision.get("status") != "success":
         raise RuntimeError(f"MPI benchmark {run_id!r} failed")
     return result
@@ -1747,7 +1752,9 @@ def _mpi_aggregate(
     if not isinstance(decision, Mapping):
         raise RuntimeError("MPI aggregate decision was not a mapping")
     if decision.get("error"):
-        raise RuntimeError("cannot persist MPI aggregate")
+        raise RuntimeError(
+            f"cannot persist MPI aggregate: {decision['error']}"
+        )
     if context.rank != 0:
         if decision.get("status") != "success" and benchmark_timing is None:
             raise RuntimeError(f"MPI batch {run_id!r} failed")
@@ -1845,7 +1852,9 @@ def _finalize(
     rank_timeout_sec: float | None = None,
     rank_setup_timeout_sec: float | None = None,
 ) -> MPIBatchResult:
-    records, record_errors = _read_mappings(run_dir / "records")
+    records, record_errors = _read_mappings(
+        run_dir / "records", validate_item_filename=True
+    )
     expected_items = [item.item_id for shard in shards for item in shard]
     item_audit = audit_terminal_records(expected_items, records)
     record_errors.extend(
@@ -2414,12 +2423,17 @@ def _same_json_value(left: Any, right: Any) -> bool:
 
 def _read_mappings(
     directory: Path,
+    *,
+    validate_item_filename: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for path in sorted(directory.glob("*.json")):
         try:
-            records.append(_read_regular_mapping(path))
+            record = _read_regular_mapping(path)
+            if validate_item_filename and path.stem != record.get("item_id"):
+                raise ValueError("record filename does not match item_id")
+            records.append(record)
         except Exception as exc:
             errors.append({"path": path.name, **error_payload(exc)})
     return records, errors

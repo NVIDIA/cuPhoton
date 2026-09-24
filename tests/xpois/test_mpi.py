@@ -253,7 +253,7 @@ def _stage_file_rank(
                 "status": "failed",
                 "error": {"type": "OSError", "message": "cannot write"},
             },
-            "cannot persist MPI aggregate",
+            "cannot persist MPI aggregate: .*OSError.*cannot write",
         ),
     ],
 )
@@ -2944,6 +2944,7 @@ def test_benchmark_reuses_rank_and_gpu_with_audited_round_artifacts(
     executions = []
     clock = [0.0]
     real_wait = mpi._wait_collective_artifacts
+    real_prepare = mpi._mpi_prepare_run
 
     def load_api():
         loads.append(True)
@@ -2967,10 +2968,16 @@ def test_benchmark_reuses_rank_and_gpu_with_audited_round_artifacts(
         clock[0] += 100.0
         return real_wait(*args, **kwargs)
 
+    def prepare(*args, **kwargs):
+        if args[2].parent.name == "rounds":
+            clock[0] += 5.0
+        return real_prepare(*args, **kwargs)
+
     monkeypatch.setattr(mpi, "_load_mpi_api", load_api)
     monkeypatch.setattr(mpi, "_gpu_identity", gpu_identity)
     monkeypatch.setattr(mpi, "run_image_pair_item", execute)
     monkeypatch.setattr(mpi, "_wait_collective_artifacts", audit)
+    monkeypatch.setattr(mpi, "_mpi_prepare_run", prepare)
     monkeypatch.setattr(
         mpi,
         "time",
@@ -3025,7 +3032,7 @@ def test_benchmark_reuses_rank_and_gpu_with_audited_round_artifacts(
         assert summary["rank_result_audit"]["ok"] is True
         pids.add(summary["rank_results"][0]["provenance"]["pid"])
     assert len(pids) == 1
-    assert result.summary["coordinator_wall_sec"] == 326.0
+    assert result.summary["coordinator_wall_sec"] == 341.0
 
 
 @pytest.mark.parametrize("benchmark", [None, BenchmarkOptions()])
@@ -5478,3 +5485,18 @@ def test_collective_spatial_batch_audits_reported_solver(
         assert result.status == "failed"
         assert len(errors) == 1
         assert errors[0]["message"] == "record 0 has invalid field(s): solver"
+
+
+def test_item_record_filenames_bind_the_record_identity(tmp_path):
+    records = tmp_path / "records"
+    records.mkdir()
+    mpi.atomic_write_json(records / "one.json", {"item_id": "two"})
+    mpi.atomic_write_json(records / "two.json", {"item_id": "one"})
+    accepted, errors = mpi._read_mappings(
+        records, validate_item_filename=True
+    )
+    assert accepted == []
+    assert [error["path"] for error in errors] == ["one.json", "two.json"]
+    assert all(
+        "filename does not match" in error["message"] for error in errors
+    )

@@ -1404,6 +1404,24 @@ def test_terminal_loader_exposes_unexpected_record_files(tmp_path) -> None:
     assert audit["unexpected_item_ids"] == ["unexpected"]
 
 
+def test_terminal_loader_rejects_swapped_record_names(tmp_path) -> None:
+    for filename, item_id in (("one", "two"), ("two", "one")):
+        atomic_write_json(
+            tmp_path / "records" / f"{filename}.json",
+            {"item_id": item_id, "status": "success"},
+        )
+
+    records, errors = _load_terminal_records(tmp_path)
+
+    assert records == []
+    assert [error["record_path"] for error in errors] == [
+        "records/one.json",
+        "records/two.json",
+    ]
+    assert all("item_id differs" in error["message"] for error in errors)
+    assert all(not error.get("retryable") for error in errors)
+
+
 def test_terminal_artifact_wait_absorbs_visibility_delay(
     monkeypatch, tmp_path
 ) -> None:
@@ -2734,8 +2752,9 @@ def test_generic_coordinator_runs_workload_terminal_validators(
 @pytest.mark.parametrize("failure", ["digest", "size", "symlink"])
 @pytest.mark.parametrize("rounds", [False, True])
 def test_launch_worker_retains_descriptor_failures(
-    tmp_path, failure, rounds
+    monkeypatch, tmp_path, failure, rounds
 ) -> None:
+    monkeypatch.setattr(dragon_module, "_dragon_process_id", lambda: 1000)
     run_dir = tmp_path / "run"
     descriptor = run_dir / "launch/worker-0000.json"
     atomic_write_json(descriptor, {"invalid": True}, overwrite=False)
@@ -2864,13 +2883,15 @@ def _install_round_runtime(
             self.threads = []
             self.stopped = False
             self.closed = False
+            self.join_timeout = None
             state.groups.append(self)
 
         def start(self):
             def invoke(index, template):
+                state.local.puid = 1000 + index
                 try:
                     template.target(*template.args)
-                except Exception:
+                except BaseException:
                     self.exit_status.append((1000 + index, 1))
                 else:
                     self.exit_status.append((1000 + index, 0))
@@ -2883,6 +2904,7 @@ def _install_round_runtime(
                 self.threads.append(thread)
 
         def join(self, timeout=None):
+            self.join_timeout = timeout
             deadline = dragon_module.time.monotonic() + timeout
             for thread in self.threads:
                 thread.join(max(0, deadline - dragon_module.time.monotonic()))
@@ -2947,6 +2969,9 @@ def _install_round_runtime(
     )
     monkeypatch.setattr(dragon_module, "_collect_gpu_identity", identity)
     monkeypatch.setattr(
+        dragon_module, "_dragon_process_id", lambda: state.local.puid
+    )
+    monkeypatch.setattr(
         dragon_module.socket, "gethostname", lambda: "fake-node"
     )
     monkeypatch.setattr(dragon_module, "run_image_pair_item", item_runner)
@@ -3001,6 +3026,12 @@ def test_benchmark_keeps_placed_workers_alive_and_audits_all_rounds(
     assert len(state.groups) == 1
     assert len(state.groups[0].templates) == 2
     assert state.groups[0].closed and not state.groups[0].stopped
+    assert state.groups[0].join_timeout == 0.2
+    assert result.summary["join_timeout_sec"] == 0.2
+    assert (
+        result.summary["schema"]
+        == "cuphoton.xpois.dragon-benchmark-summary/v1"
+    )
     assert all(channel.closed for channel in state.queues)
     assert sorted(state.initialized) == [0, 1]
     assert [
@@ -3119,12 +3150,18 @@ def test_benchmark_rejects_oversized_arguments_before_init(
         "failed-round",
         "changed-worker",
         "invalid-duration",
+        "ready-bad-provenance",
     ],
 )
 def test_benchmark_rejects_bad_receipts_and_preserves_partial_evidence(
     monkeypatch, tmp_path, corruption
 ):
     def mutate(message):
+        if (
+            corruption == "ready-bad-provenance"
+            and message["kind"] == "ready"
+        ):
+            return [{**message, "provenance": {}}]
         if corruption == "ready-duplicate" and message["kind"] == "ready":
             return [message, message]
         if message["kind"] == "round":
@@ -3159,6 +3196,15 @@ def test_benchmark_rejects_bad_receipts_and_preserves_partial_evidence(
     assert all(channel.closed for channel in state.queues)
     assert len(result.summary["benchmark"]["rounds"]) <= 1
     assert (result.run_dir / "summary.json").is_file()
+    assert not any(thread.is_alive() for thread in state.groups[0].threads)
+    if corruption == "ready-bad-provenance":
+        assert result.summary["lifecycle_errors"][0] == {
+            "phase": "ready",
+            "type": "ValueError",
+            "message": "invalid Dragon READY provenance",
+        }
+        assert result.summary["benchmark"]["rounds"] == []
+        assert not state.calls
 
 
 def test_benchmark_cleanup_failure_invalidates_successful_rounds(
@@ -3193,3 +3239,221 @@ def test_benchmark_notifies_startup_artifact_failure(monkeypatch, tmp_path):
     assert "artifact_error" in result.summary["ready_messages"][0]
     assert not state.calls
     assert state.groups[0].stopped
+
+
+@pytest.mark.parametrize("exit_code", [0, -9])
+def test_round_collector_detects_receiptless_exit_without_deadline_wait(
+    exit_code,
+):
+    class EmptyResults:
+        def get(self, *, timeout):
+            assert 0 <= timeout <= dragon_module._WORKER_POLL_SEC
+            raise queue.Empty
+
+    with pytest.raises(RuntimeError, match="exited before ready completion"):
+        dragon_module._collect_worker_messages(
+            EmptyResults(),
+            [],
+            worker_count=1,
+            run_id="run",
+            kind="ready",
+            round_id=None,
+            deadline=dragon_module.time.monotonic() + 30,
+            group=SimpleNamespace(inactive_puids=[(1000, exit_code)]),
+        )
+
+
+def test_round_collector_drains_receipt_delivered_during_exit_check():
+    receipt = {
+        "kind": "ready",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "puid": 1000,
+        "status": "success",
+    }
+
+    class RacingResults:
+        delivered = False
+
+        def get(self, *, timeout):
+            if self.delivered:
+                assert timeout == 0
+                return receipt
+            raise queue.Empty
+
+    results = RacingResults()
+
+    class ExitedGroup:
+        @property
+        def inactive_puids(self):
+            results.delivered = True
+            return [(1000, 0)]
+
+    messages = []
+    dragon_module._collect_worker_messages(
+        results,
+        messages,
+        worker_count=1,
+        run_id="run",
+        kind="ready",
+        round_id=None,
+        deadline=dragon_module.time.monotonic() + 30,
+        group=ExitedGroup(),
+    )
+    assert messages == [receipt]
+
+
+def test_round_collector_waits_for_peers_after_reported_worker_exit():
+    failed = {
+        "kind": "ready",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "puid": 1000,
+        "status": "failed",
+    }
+    healthy = {**failed, "worker_id": 1, "puid": 1001, "status": "success"}
+
+    class Results:
+        pending = iter((failed, None, None, healthy))
+
+        def get(self, *, timeout):
+            message = next(self.pending)
+            if message is None:
+                raise queue.Empty
+            return message
+
+    messages = []
+    with pytest.raises(RuntimeError, match=r"workers \[0\] ready failed"):
+        dragon_module._collect_worker_messages(
+            Results(),
+            messages,
+            worker_count=2,
+            run_id="run",
+            kind="ready",
+            round_id=None,
+            deadline=dragon_module.time.monotonic() + 30,
+            group=SimpleNamespace(inactive_puids=[(1000, 1)]),
+        )
+    assert messages == [failed, healthy]
+
+
+@pytest.mark.parametrize("phase", ["ready", "round"])
+def test_benchmark_detects_worker_exit_without_receipt(
+    monkeypatch, tmp_path, phase
+):
+    state = _install_round_runtime(monkeypatch)
+    monkeypatch.setattr(dragon_module, "_WORKER_POLL_SEC", 0.01)
+    attribute = (
+        "_collect_gpu_identity" if phase == "ready" else "run_image_pair_item"
+    )
+    original = getattr(dragon_module, attribute)
+
+    def exit_worker(*args, **kwargs):
+        if state.local.placement.worker_id == 0:
+            raise SystemExit("synthetic abrupt worker exit")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(dragon_module, attribute, exit_worker)
+    result = _run_round_test(tmp_path, warmup=0, measure=1, worker_timeout=2)
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    if phase == "ready":
+        errors = result.summary["lifecycle_errors"]
+    else:
+        summary = json.loads(
+            (result.run_dir / "rounds/measure-0000/summary.json").read_text()
+        )
+        errors = summary["errors"]
+    assert any(
+        f"exited before {phase} completion" in error["message"]
+        for error in errors
+    )
+    assert not any(thread.is_alive() for thread in state.groups[0].threads)
+
+
+def test_benchmark_finishes_healthy_shard_after_peer_failure(
+    monkeypatch, tmp_path
+):
+    import threading
+
+    state = _install_round_runtime(monkeypatch)
+    monkeypatch.setattr(dragon_module, "_WORKER_POLL_SEC", 0.01)
+    original_runner = dragon_module.run_image_pair_item
+    healthy_can_finish = threading.Event()
+    failed_receipt_read = threading.Event()
+    results_type = dragon_module._load_dragon_api().Queue
+    original_get = results_type.get
+
+    def get(channel, *args, **kwargs):
+        if channel.policy is None and failed_receipt_read.is_set():
+            healthy_can_finish.set()
+        message = original_get(channel, *args, **kwargs)
+        if (
+            channel.policy is None
+            and message.get("kind") == "round"
+            and message.get("status") == "failed"
+        ):
+            failed_receipt_read.set()
+        return message
+
+    def run_item(item, output_dir, options):
+        if state.local.placement.worker_id == 0:
+            raise RuntimeError("synthetic failed item")
+        assert healthy_can_finish.wait(2), (
+            "coordinator stopped collecting receipts"
+        )
+        return original_runner(item, output_dir, options)
+
+    monkeypatch.setattr(results_type, "get", get)
+    monkeypatch.setattr(dragon_module, "run_image_pair_item", run_item)
+    result = _run_round_test(tmp_path, warmup=0, measure=2, worker_timeout=3)
+
+    assert result.status == "failed"
+    assert len(result.summary["benchmark"]["rounds"]) == 1
+    summary = json.loads(
+        (result.run_dir / "rounds/measure-0000/summary.json").read_text()
+    )
+    assert sorted(
+        message["worker_id"] for message in summary["messages"]
+    ) == [0, 1]
+    assert summary["shard_result_audit"]["missing_worker_ids"] == []
+    assert summary["terminal_record_audit"]["missing_item_ids"] == []
+    records = list(
+        (result.run_dir / "rounds/measure-0000/records").glob("*.json")
+    )
+    assert sorted(
+        json.loads(path.read_text())["status"] for path in records
+    ) == [
+        "failed",
+        "success",
+    ]
+    assert not any(thread.is_alive() for thread in state.groups[0].threads)
+
+
+@pytest.mark.parametrize("exit_status", [[], [(1000, -9)]])
+def test_benchmark_exit_audit_invalidates_successful_round(
+    monkeypatch, tmp_path, exit_status
+):
+    state = _install_round_runtime(monkeypatch)
+    group_type = dragon_module._load_dragon_api().ProcessGroup
+    original_join = group_type.join
+
+    def join(group, timeout=None):
+        original_join(group, timeout=timeout)
+        group.exit_status = exit_status
+
+    monkeypatch.setattr(group_type, "join", join)
+    result = _run_round_test(tmp_path, warmup=0, measure=1, worker_count=1)
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["rounds"][0]["status"] == "success"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert result.summary["process_exit_audit"]["ok"] is False
+    assert any(
+        error["phase"] == "exit_status"
+        for error in result.summary["lifecycle_errors"]
+    )
+    assert state.groups[0].join_timeout == 0.2

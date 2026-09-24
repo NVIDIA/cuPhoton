@@ -58,6 +58,13 @@ from .batch import (
 _DRAGON_GPU_BACKENDS = frozenset({"cupy", "numba-cuda", "cutile"})
 _DRAGON_LAUNCH_SCHEMA = "cuphoton.xpois.dragon-launch/v1"
 _DRAGON_TEMPLATE_BUDGET_BYTES = 96 * 1024
+_WORKER_POLL_SEC = 0.5
+
+
+def _dragon_process_id() -> int:
+    from dragon.infrastructure.parameters import this_process
+
+    return int(this_process.my_puid)
 
 
 @dataclass(frozen=True)
@@ -229,7 +236,12 @@ def _dragon_launch_worker(
             "error": error_payload(exc),
         }
         if commands is not None:
-            result.update(kind="ready", run_id=run_id, round_id=None)
+            result.update(
+                kind="ready",
+                run_id=run_id,
+                round_id=None,
+                puid=_dragon_process_id(),
+            )
         try:
             atomic_write_json(
                 run_dir / "launch" / f"worker-{worker_id:04d}-failure.json",
@@ -448,7 +460,11 @@ def run_dragon_work_items(
     coordinator_timings["partition_sec"] = time.perf_counter() - phase_start
 
     phase_start = time.perf_counter()
-    join_timeout_sec = float(worker_timeout_sec + result_timeout_sec)
+    join_timeout_sec = float(
+        worker_timeout_sec + result_timeout_sec
+        if benchmark is None
+        else result_timeout_sec
+    )
     effective_run_id = run_id or new_run_id(run_prefix)
     validate_identifier(effective_run_id, field="run_id")
     run_dir = output_root.expanduser().resolve() / effective_run_id
@@ -953,6 +969,7 @@ def _run_dragon_rounds(
                 kind="ready",
                 round_id=None,
                 deadline=worker_deadline,
+                group=group,
             )
             for message in ready_messages:
                 placement = placements[message["worker_id"]]
@@ -1008,6 +1025,7 @@ def _run_dragon_rounds(
                         kind="round",
                         round_id=spec.round_id,
                         deadline=worker_deadline,
+                        group=group,
                     )
                 finally:
                     timings["collection_sec"] = (
@@ -1183,7 +1201,7 @@ def _run_dragon_rounds(
     )
     summary = {
         **launch_payload,
-        "schema": "cuphoton.xpois.dragon-summary/v1",
+        "schema": "cuphoton.xpois.dragon-benchmark-summary/v1",
         "record_type": "terminal",
         "status": report["status"],
         "completed_at_utc": timestamp_utc(),
@@ -1220,23 +1238,39 @@ def _collect_worker_messages(
     kind: str,
     round_id: str | None,
     deadline: float,
+    group: Any,
 ) -> None:
     """Collect one identified receipt per worker, failing on any replay."""
 
     seen: set[int] = set()
+    seen_puids: set[int] = set()
+    failed: list[int] = []
     while len(seen) < worker_count:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Dragon {kind} deadline expired")
         try:
-            message = json_mapping(
-                results_queue.get(timeout=remaining),
-                field=f"Dragon {kind} result",
-            )
-        except queue.Empty as exc:
-            raise TimeoutError(f"Dragon {kind} deadline expired") from exc
+            raw = results_queue.get(timeout=min(remaining, _WORKER_POLL_SEC))
+        except queue.Empty:
+            exits = list(group.inactive_puids)
+            # A worker publishes before exiting. Recheck the queue after the
+            # exit snapshot so a concurrently delivered receipt is retained.
+            try:
+                raw = results_queue.get(timeout=0)
+            except queue.Empty:
+                missing = [
+                    entry for entry in exits if entry[0] not in seen_puids
+                ]
+                if missing:
+                    raise RuntimeError(
+                        f"Dragon worker exited before {kind} completion: "
+                        f"{missing}"
+                    ) from None
+                continue
+        message = json_mapping(raw, field=f"Dragon {kind} result")
         messages.append(message)
         worker_id = _strict_integer(message.get("worker_id"))
+        puid = _strict_integer(message.get("puid"))
         if (
             message.get("run_id") != run_id
             or message.get("kind") != kind
@@ -1244,11 +1278,15 @@ def _collect_worker_messages(
             or worker_id is None
             or worker_id not in range(worker_count)
             or worker_id in seen
+            or puid is None
+            or puid in seen_puids
         ):
             raise ValueError(f"invalid or duplicate Dragon {kind} identity")
         seen.add(worker_id)
+        seen_puids.add(puid)
         if message.get("status") != "success":
-            raise RuntimeError(f"Dragon worker {worker_id} {kind} failed")
+            failed.append(worker_id)
+            continue
         if kind == "round":
             result = message.get("result")
             duration = message.get("worker_wall_sec")
@@ -1262,6 +1300,8 @@ def _collect_worker_messages(
                 or result.get("status") != "success"
             ):
                 raise ValueError("invalid Dragon round shard result")
+    if failed:
+        raise RuntimeError(f"Dragon workers {failed} {kind} failed")
 
 
 def _audit_batch_records(
@@ -1344,6 +1384,7 @@ def _dragon_round_worker(
         "run_id": run_id,
         "round_id": None,
         "worker_id": placement.worker_id,
+        "puid": _dragon_process_id(),
         "status": "success",
     }
     try:
@@ -1386,6 +1427,7 @@ def _dragon_round_worker(
             "run_id": run_id,
             "round_id": spec.round_id,
             "worker_id": placement.worker_id,
+            "puid": ready["puid"],
             "status": "success",
         }
         try:
@@ -1837,7 +1879,10 @@ def _load_terminal_records(
         try:
             if not _regular_file(path):
                 raise ValueError(f"record is not a regular file: {path.name}")
-            records.append(read_json_mapping(path))
+            record = read_json_mapping(path)
+            if record.get("item_id") != path.stem:
+                raise ValueError("record item_id differs from its filename")
+            records.append(record)
         except Exception as exc:
             error = {
                 "record_path": str(path.relative_to(run_dir)),

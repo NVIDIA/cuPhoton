@@ -621,7 +621,8 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
         _arg = "--warmup-rounds"
         _help = (
             "Opt into persistent-worker benchmarking with this many warmup "
-            "passes over the manifest. Outputs are retained. [default: 0]"
+            "passes over the manifest. Outputs are retained. "
+            "[default when benchmarking: 0]"
         )
         _mandatory = False
         _default = None
@@ -805,8 +806,13 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
             )
 
     def _validate_executor_options(self) -> None:
-        if self.aggregation_mode == "files" and (
-            self.warmup_rounds is not None or self.measure_rounds is not None
+        if (
+            self.executor == "mpi"
+            and self.aggregation_mode == "files"
+            and (
+                self.warmup_rounds is not None
+                or self.measure_rounds is not None
+            )
         ):
             raise CommandError(
                 "--warmup-rounds and --measure-rounds require MPI "
