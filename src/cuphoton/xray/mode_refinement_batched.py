@@ -10,8 +10,9 @@ run for a whole batch at once: analytic Jacobians for all traces by
 broadcasting, normal equations solved as a batch of small (4K+1) systems,
 and per-trace damping with accept/reject. The array module is a parameter,
 so the same code runs on NumPy and CuPy; the parameters are the same
-(amplitude, decay, angular frequency, phase per mode, then the constant)
-and, on convergence, the result matches the per-trace SciPy solver.
+(amplitude, decay, angular frequency, phase per mode, then the constant).
+Both solvers find local optima; convergence alone does not establish that
+they found the same optimum.
 """
 
 from __future__ import annotations
@@ -85,9 +86,11 @@ def refine_modes_batched(
     cost is accepted and its damping divided by 3, otherwise the damping
     is multiplied by 5 and the trace keeps its parameters. Iteration
     stops when every trace has converged or ``max_iter`` is reached.
-    A scaled gradient check recognizes stationary starts independently of
-    step acceptance. Diagonal damping has a positive floor so an initially
-    zero-amplitude mode does not make the whole batch singular.
+    Convergence requires a small gradient in Jacobian-scaled coordinates;
+    a step made tiny by damping does not imply stationarity. Scaling the
+    Jacobian columns makes the solve and stopping criterion independent of
+    parameter units. Positive damping also handles zero Jacobian columns
+    from an initial zero-amplitude mode.
     """
     t = xp.asarray(time, dtype=xp.float64)
     y = xp.asarray(traces, dtype=xp.float64)
@@ -109,35 +112,33 @@ def refine_modes_batched(
     eye = xp.eye(theta.shape[1], dtype=xp.float64)[None, :, :]
     iterations = 0
     for iterations in range(1, max_iter + 1):
-        jtj = xp.einsum("bnp,bnq->bpq", jac, jac)
-        jtr = xp.einsum("bnp,bn->bp", jac, resid)
-        diagonal = xp.maximum(xp.diagonal(jtj, axis1=1, axis2=2), 1.0)
-        gradient_scale = (
-            xp.sqrt(diagonal) * xp.maximum(xp.sqrt(cost), 1.0)[:, None]
+        scale = xp.sqrt(xp.sum(jac * jac, axis=1))
+        scale = xp.where(scale > 0, scale, 1.0)
+        scaled_jac = jac / scale[:, None, :]
+        jtj = xp.einsum("bnp,bnq->bpq", scaled_jac, scaled_jac)
+        jtr = xp.einsum("bnp,bn->bp", scaled_jac, resid)
+        stationary = xp.max(xp.abs(jtr), axis=1) <= (
+            tol * xp.maximum(xp.sqrt(cost), 1.0)
         )
-        stationary = xp.max(xp.abs(jtr) / gradient_scale, axis=1) <= tol
         converged = converged | stationary
         if bool(xp.all(converged)):
             break
-        diag = diagonal[:, :, None] * eye
-        step = -xp.linalg.solve(
-            jtj + lam[:, None, None] * diag, jtr[:, :, None]
-        )[:, :, 0]
+        step = (
+            -xp.linalg.solve(jtj + lam[:, None, None] * eye, jtr[:, :, None])[
+                :, :, 0
+            ]
+            / scale
+        )
         trial = theta + step
         model_t, jac_t = model_and_jacobian_batched(xp, trial, t, n_modes)
         resid_t = model_t - y
         cost_t = xp.sum(resid_t * resid_t, axis=1)
         accept = (cost_t < cost) & ~converged
-        scale = xp.sqrt(xp.sum(theta * theta, axis=1)) + 1e-12
-        small = xp.sqrt(xp.sum(step * step, axis=1)) < tol * scale
         theta = xp.where(accept[:, None], trial, theta)
         resid = xp.where(accept[:, None], resid_t, resid)
         jac = xp.where(accept[:, None, None], jac_t, jac)
         cost = xp.where(accept, cost_t, cost)
         lam = xp.where(accept, lam / 3.0, lam * 5.0)
-        converged = converged | (accept & small)
-        if bool(xp.all(converged)):
-            break
     _sync(xp)
     rms = xp.sqrt(cost / y.shape[1])
     return BatchedRefinement(
