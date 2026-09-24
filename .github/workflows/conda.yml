@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: native conda packages
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - run: CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-conda-source
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+        platform:
+          - {runner: ubuntu-24.04, subdir: linux-64}
+          - {runner: ubuntu-24.04-arm, subdir: linux-aarch64}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: v0.62.2
+          run-install: false
+          cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-conda-source
+          path: dist
+      - name: Build and test in isolated conda environments
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: >-
+          pixi exec --spec rattler-build=0.76.1 --spec python=3.12 --
+          python scripts/conda/build.py dist/*.tar.gz
+          --python "$PYTHON_VERSION" --output-dir dist/conda
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-conda-${{ matrix.platform.subdir }}-py${{ matrix.python }}
+          path: |
+            dist/conda/${{ matrix.platform.subdir }}/cuphoton-*.conda
+            dist/conda/provenance.json
+          if-no-files-found: error
+          retention-days: 30

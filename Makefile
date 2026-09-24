@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels release-check ci-lint ci-test-cpu hooks
+.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels conda release-check ci-lint ci-test-cpu hooks
 
 CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
@@ -77,6 +77,9 @@ build: clean-dist
 
 wheels: build
 	uv tool run --from cibuildwheel==4.2.1 cibuildwheel --platform linux --output-dir dist dist/*.tar.gz
+
+conda: build
+	pixi exec --spec rattler-build=0.76.1 --spec python=3.12 -- python scripts/conda/build.py dist/*.tar.gz
 
 package-check: build
 	uvx --isolated --from twine==6.2.0 twine check --strict dist/*

@@ -87,9 +87,13 @@ jobs:
     name: native distributions
     uses: ./.github/workflows/wheels.yml
 
+  conda:
+    name: native conda distributions
+    uses: ./.github/workflows/conda.yml
+
   ci-required:
     name: ci-required
-    needs: [lint, test-cpu, package]
+    needs: [lint, test-cpu, package, conda]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -99,7 +103,8 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
+          CONDA_RESULT: ${{ needs.conda.result }}
         run: |
-          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}"; do
+          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done
