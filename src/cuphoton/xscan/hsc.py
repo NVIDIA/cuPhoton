@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local HSC NPY-store helpers used by XScan."""
+"""Local HSC NPY-store helpers used by xScan."""
 
 from __future__ import annotations
 

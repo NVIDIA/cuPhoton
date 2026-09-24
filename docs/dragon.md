@@ -6,23 +6,23 @@ Dragon launcher. It does not change cuPhoton's numerical backend or fit options.
 
 ## Execution models
 
-The [XPOIS batch executor](components/xpois.md#launch-with-dragon)
+The [xPois batch executor](components/xpois.md#launch-with-dragon)
 assigns a complete shard to each worker at launch. Workers process their
 assigned items and send one terminal result to the coordinator in single-pass
 mode. Repeated rounds and component commands retain workers as follows:
 
 | Path | Coordination and retained state |
 |---|---|
-| Single-pass XPOIS | One assigned shard and one terminal result per worker; no per-round command queue. |
-| [Repeated XPOIS rounds](components/xpois.md#repeat-a-batch-in-persistent-workers) | `--warmup-rounds` and `--measure-rounds` reuse workers and CUDA contexts. Each worker has a command queue on its own host and repeats its assigned shard. |
-| [Shared executors](../src/cuphoton/core/executors.py) and [component commands](components/xscan.md#distributed-inference) | xFit, XScan and `xscan run-pipeline` use the shared Dragon/MPI lifecycle. Dragon uses consumer-local command queues for both a single pass and repeated rounds; component workers retain their input/model context. |
+| Single-pass xPois | One assigned shard and one terminal result per worker; no per-round command queue. |
+| [Repeated xPois rounds](components/xpois.md#repeat-a-batch-in-persistent-workers) | `--warmup-rounds` and `--measure-rounds` reuse workers and CUDA contexts. Each worker has a command queue on its own host and repeats its assigned shard. |
+| [Shared executors](../src/cuphoton/core/executors.py) and [component commands](components/xscan.md#distributed-inference) | xFit, xScan and `xscan run-pipeline` use the shared Dragon/MPI lifecycle. Dragon uses consumer-local command queues for both a single pass and repeated rounds; component workers retain their input/model context. |
 
 ### Persistent behavior
 
-Persistence does not remove all per-item work. XPOIS still reads, transfers and
+Persistence does not remove all per-item work. xPois still reads, transfers and
 writes ordinary scientific artifacts each round. Standalone xFit retains its
-loaded host input; XScan retains metadata, its model and loader across tasks.
-Distributed XScan defaults to `--num-workers 0`. Explicitly requested loader
+loaded host input; xScan retains metadata, its model and loader across tasks.
+Distributed xScan defaults to `--num-workers 0`. Explicitly requested loader
 processes start before READY and persist across tasks and rounds. The combined
 pipeline keeps intermediate arrays inside each GPU worker while it
 processes an image pair. Each GPU handles complete items; these paths do not
@@ -54,7 +54,7 @@ DRAGON_HSTA_FORCE_BACKEND=tcp \
   --worker-timeout-sec 3600
 ```
 
-As in the XPOIS launch example, these paths must be accessible to the allocated
+As in the xPois launch example, these paths must be accessible to the allocated
 nodes. The manifest needs enough image pairs for the selected workers. Adapt
 the node and worker counts to the allocation.
 
@@ -66,13 +66,13 @@ can confirm native HSTA startup without providing network byte counters.
 
 HSTA TCP is a useful candidate for workloads with frequent small messages.
 Qualify it on the target installation with representative numerical work,
-output validation and cleanup checks. The Python TCP launch in the XPOIS guide
+output validation and cleanup checks. The Python TCP launch in the xPois guide
 remains an explicit alternative. Transport availability and the fastest queue
 layout depend on the Dragon build and workload.
 
 ## Place command queues with their consumers
 
-The repeated XPOIS and shared Dragon executors use a READY/command/result
+The repeated xPois and shared Dragon executors use a READY/command/result
 protocol. Each worker sends READY after initialization, then waits on its own
 command queue. The coordinator waits for all READY messages before releasing
 a round. Custom coordinators with the same protocol need to consider queue
@@ -113,7 +113,7 @@ progress implementation; the Python TCP thread setting still applies to a
 Python TCP overlay. Consumer-local queues are not universally faster under HSTA.
 
 The repeated-round and shared executors use consumer-local
-command queues. The [single-pass XPOIS path](../src/cuphoton/xpois/dragon.py)
+command queues. The [single-pass xPois path](../src/cuphoton/xpois/dragon.py)
 uses only a result queue and needs no command-queue relocation. Neither path
 automatically changes the transport or raises the Python TCP thread ceiling;
 those remain launcher settings.
@@ -155,8 +155,8 @@ produce a comparable whole-pipeline gain. These results do not qualify a
 512-GPU speedup or establish the best layout at larger node counts. This was
 a separate harness experiment, with one invocation per configuration.
 
-Later two-node/eight-GPU product checks covered XPOIS, standalone xFit and
-XScan, and the combined pipeline under Dragon and MPI. They established
+Later two-node/eight-GPU product checks covered xPois, standalone xFit and
+xScan, and the combined pipeline under Dragon and MPI. They established
 numerical parity, persistent identities and cleanup for the tested revisions.
 They predate later lifecycle, loader and input-ownership fixes; they do not
 qualify the final implementations in #50/#54/#56.

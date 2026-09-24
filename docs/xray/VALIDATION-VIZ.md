@@ -1,4 +1,4 @@
-# XRay validation visualization
+# xRay validation visualization
 
 `validation-viz`, `workflow-viz`, and `phonon-viz` create standalone Bokeh HTML
 files from persisted numeric products. Install the visualization profile:

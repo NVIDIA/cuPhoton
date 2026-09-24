@@ -35,7 +35,7 @@ xDataReader: decode and load pixels onto the GPU
 xRep: resample onto a common sky grid, when needed
     |
     v
-XPOIS: match blur and background, then subtract
+xPois: match blur and background, then subtract
     |
     v
 candidate detection and stamp extraction (caller or dataset workflow)
@@ -43,7 +43,7 @@ candidate detection and stamp extraction (caller or dataset workflow)
     +--> xFit: measure dipole shapes (optional) --+
     |                                          |
     v                                          v
-XScan: score candidate images, optionally with xFit measurements
+xScan: score candidate images, optionally with xFit measurements
     |
     v
 scores, evaluation, and human review
@@ -51,11 +51,11 @@ scores, evaluation, and human review
 
 Applications compose these stages with their own adapters, masks, candidate
 selection, and execution choices. You can enter at any stage with suitable
-local data or arrays. XScan pair models use search and template stamps;
+local data or arrays. xScan pair models use search and template stamps;
 triplet models add a difference image. xFit measurements are an optional
 input for models configured to use them.
 
-XRay follows a separate path: delay-indexed detector images become normalized
+xRay follows a separate path: delay-indexed detector images become normalized
 traces for selected regions, then fitted oscillations and detector maps. Its
 inputs and experimental axes differ from optical exposures. Detector-wide
 artifact generation requires a GPU and fits row traces within tiles,
@@ -91,7 +91,7 @@ Keep their identities and metadata with the arrays you pass to a workflow.
 The World Coordinate System (WCS) describes where pixels point on the sky.
 The point-spread function (PSF) describes how light from one point spreads
 across nearby pixels. Two images can be aligned yet have different blur:
-xRep handles the coordinate mapping, while XPOIS fits the matching filter.
+xRep handles the coordinate mapping, while xPois fits the matching filter.
 A variance plane describes uncertainty at each pixel. Resampling can also
 correlate neighboring pixels' errors; modeling those relationships requires
 covariance information.
@@ -109,16 +109,16 @@ invariant evaluation. The six science namespaces own their domain models,
 algorithms, adapters, workflow configuration, and workflows. They share
 Core's public CLI facade.
 
-xDataReader, xFit, XPOIS, and xRep expose a curated Python surface
-for embedding numerical operations. XScan and XRay are primarily
+xDataReader, xFit, xPois, and xRep expose a curated Python surface
+for embedding numerical operations. xScan and xRay are primarily
 CLI-first, with internal modules available as extension points for workflow
 authors.
 
-The portable xFit-to-XScan workflow uses an artifact boundary. XScan
+The portable xFit-to-xScan workflow uses an artifact boundary. xScan
 validates a difference-mode xFit run, joins candidates by `candidate_id`,
 verifies each fit against the exact difference-stamp hash, and writes a
 versioned numeric feature bundle before training or inference. This keeps
-the classifier coupled to a feature contract and stable candidate IDs. XScan
+the classifier coupled to a feature contract and stable candidate IDs. xScan
 can export a pickle-free input archive of numeric and Unicode arrays for
 xFit, revalidates stamp hashes whenever a feature bundle is loaded, and pins
 the bundle identity in fusion checkpoints.
@@ -149,10 +149,10 @@ orders are:
 | --- | --- |
 | xDataReader | KvikIO, nvCOMP, and CuPy on CUDA 13 |
 | xFit | CuPy, then NumPy |
-| XPOIS | Constant: CuPy, Numba-CUDA, then CPU; spatial ALS: CuPy, then CPU |
-| XScan | PyTorch CUDA, then PyTorch CPU |
+| xPois | Constant: CuPy, Numba-CUDA, then CPU; spatial ALS: CuPy, then CPU |
+| xScan | PyTorch CUDA, then PyTorch CPU |
 | xRep | CuPy, PyTorch CUDA, then CPU |
-| XRay | CuPy, then NumPy for supported operations |
+| xRay | CuPy, then NumPy for supported operations |
 
 Select cuTile explicitly after checking compiler/runtime compatibility for
 the environment. Use the workflow summary to inspect its resolved execution

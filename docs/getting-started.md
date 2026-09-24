@@ -22,10 +22,10 @@ python -m pip install cuphoton
 python -m pip install 'cuphoton[io]'  # Native GPU FITS loading
 ```
 
-The Linux x86-64 and ARM64 wheels include the XDR extension and private
+The Linux x86-64 and ARM64 wheels include the xDR extension and private
 CFITSIO. `io` installs the CUDA 13 runtime dependencies; no compiler or local
 CUDA toolkit is needed. GPU execution still requires a compatible NVIDIA
-driver. See [XDR](components/xdr.md) for GPUDirect Storage requirements.
+driver. See [xDR](components/xdr.md) for GPUDirect Storage requirements.
 
 Install `cuphoton[photometry]` for source detection, background estimation,
 and aperture photometry. It uses Photutils, which currently requires a C
@@ -63,7 +63,7 @@ The extras are composable:
 | --- | --- |
 | `dev` | pytest, Ruff, mypy, pre-commit, and packaging checks |
 | `photometry` | Photutils background, detection, and aperture routines |
-| `io` | CuPy, KvikIO, cuFile, and nvCOMP for native XDR |
+| `io` | CuPy, KvikIO, cuFile, and nvCOMP for native xDR |
 | `torch` | CPU-capable PyTorch |
 | `gpu` | `io`, `photometry`, CUDA 13 PyTorch, and Numba-CUDA |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |

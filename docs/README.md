@@ -20,7 +20,7 @@ intend to adapt.
   [notebook](../examples/imaging-pipeline/run_imaging_pipeline.ipynb) and
   [script](../examples/imaging-pipeline/run_imaging_pipeline.py) with setup for
   synthetic FITS loading, alignment, subtraction, dipole fitting, and plotting;
-  requires a CUDA 13-capable NVIDIA GPU and XDR's native extension.
+  requires a CUDA 13-capable NVIDIA GPU and xDR's native extension.
 - [Command-line index](cli.md): the umbrella executable and command groups.
 
 ## Workflow guides
@@ -29,11 +29,11 @@ intend to adapt.
 - [xDataReader](components/xdr.md): GPU-native FITS loading with GDS and
   nvCOMP.
 - [xFit](components/xfit.md): batched nonlinear least-squares dipole fitting.
-- [XPOIS](components/xpois.md): kernel fitting and image subtraction.
-- [XScan](components/xscan.md): transient datasets, classification,
+- [xPois](components/xpois.md): kernel fitting and image subtraction.
+- [xScan](components/xscan.md): transient datasets, classification,
   evaluation, and review.
 - [xRep (xReproject)](components/xrep.md): FITS/WCS reprojection.
-- [XRay](xray/README.md): X-ray trace and detector analysis.
+- [xRay](xray/README.md): X-ray trace and detector analysis.
 
 ## Adapting and validating
 

@@ -93,7 +93,7 @@ Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
 statistical calibration of the reported covariance requires a caller-supplied
 weighting model that accounts for that dependence. `uncertainty_valid` reports
-numerical and rank validity. The XScan feature adapter requires difference-mode
+numerical and rank validity. The xScan feature adapter requires difference-mode
 xFit runs.
 
 ## CLI and artifacts

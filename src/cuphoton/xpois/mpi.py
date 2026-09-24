@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional MPI execution for independent XPOIS image pairs."""
+"""Optional MPI execution for independent xPois image pairs."""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ _POLL_MAX_SEC = 1.0
 
 @dataclass(frozen=True)
 class MPIBatchResult:
-    """Root-rank handle for a terminal XPOIS MPI batch."""
+    """Root-rank handle for a terminal xPois MPI batch."""
 
     run_id: str
     run_dir: Path
@@ -152,7 +152,7 @@ def run_mpi_image_pair_batch(
     rank_setup_timeout_sec: float = 600.0,
     benchmark: BenchmarkOptions | None = None,
 ) -> MPIBatchResult | None:
-    """Run byte-balanced XPOIS shards under an external MPI launcher."""
+    """Run byte-balanced xPois shards under an external MPI launcher."""
 
     started_at = timestamp_utc()
     start = time.perf_counter()
@@ -629,7 +629,7 @@ def _validate_arguments(
     if aggregation_mode not in _AGGREGATION_MODES:
         raise ValueError("aggregation_mode must be one of: files, mpi")
     if options.backend not in _GPU_BACKENDS:
-        raise ValueError("MPI XPOIS ranks require an explicit GPU backend")
+        raise ValueError("MPI xPois ranks require an explicit GPU backend")
     if (
         isinstance(rank_setup_timeout_sec, bool)
         or not isinstance(rank_setup_timeout_sec, (int, float))
@@ -787,7 +787,7 @@ def _mpi_manifest_consensus(
             elif any(
                 item["options"] != records[0]["options"] for item in records
             ):
-                message = "XPOIS options differ across MPI ranks"
+                message = "xPois options differ across MPI ranks"
             elif any(
                 item.get("benchmark") != records[0].get("benchmark")
                 for item in records

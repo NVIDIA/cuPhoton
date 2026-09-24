@@ -72,7 +72,7 @@ used. Release builds must not set `CIBW_TEST_SKIP`.
 
 The default `make build` produces only the source archive. Plain source and
 editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` is
-set. See [XDR source installation](components/xdr.md#native-extension-availability)
+set. See [xDR source installation](components/xdr.md#native-extension-availability)
 for the explicit native development build.
 
 `make build` refreshes only the source archive. `make wheels` replaces cuPhoton
@@ -92,13 +92,13 @@ missing native code or notices, and bundled GPU runtime libraries.
 The installed-wheel runtime matrix also requires cuTile imports and two real
 MPI workers on every Python/architecture pair. Python 3.12 and 3.13 require
 two real Dragon workers as well; upstream Dragon has no Python 3.14 wheel.
-These workers solve generated xPOIS inputs on the CPU and check numerical
+These workers solve generated xPois inputs on the CPU and check numerical
 results, distinct processes, and MPI collectives. JSON receipts are retained
 as CI artifacts. These checks do not establish GPU executor correctness.
 
 ## Build and install conda packages
 
-The `cuphoton` conda package includes the compiled XDR extension and depends on
+The `cuphoton` conda package includes the compiled xDR extension and depends on
 upstream conda packages for CFITSIO 4.7, CUDA 13, KvikIO 26.6, and nvCOMP 5.2.
 Conda installs those libraries into the environment; no manual CUDA paths
 are needed.
@@ -245,12 +245,12 @@ for both executors. Record that as single-worker acceptance, not multi-GPU
 qualification. Use `--backend cpu --workers 2` with the two launchers to
 repeat the CPU runtime checks without GPU requirements.
 
-The compute check solves the same known xPOIS problem with CPU, CuPy,
+The compute check solves the same known xPois problem with CPU, CuPy,
 Numba-CUDA, and cuTile, and checks CuPy-to-PyTorch GPU inference through
 xScan's DLPack bridge. The executor checks run cuPhoton's real MPI/Dragon
 batch paths and verify saved numerical outputs. Missing selected runtimes,
 GPU support, worker results, or compiler tools fail instead of skipping.
-Retain these JSON receipts with the wheel hashes and native XDR receipts.
+Retain these JSON receipts with the wheel hashes and native xDR receipts.
 
 ## Publish the qualified artifacts
 

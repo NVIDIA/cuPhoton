@@ -71,7 +71,7 @@ about:
   homepage: https://github.com/NVIDIA/cuPhoton
   repository: https://github.com/NVIDIA/cuPhoton
   documentation: https://github.com/NVIDIA/cuPhoton/blob/main/docs/packaging.md
-  summary: GPU-accelerated astronomy and imaging tools with native XDR I/O
+  summary: GPU-accelerated astronomy and imaging tools with native xDR I/O
   license: Apache-2.0
   license_file:
     - LICENSE

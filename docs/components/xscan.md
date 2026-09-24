@@ -1,10 +1,10 @@
-# XScan
+# xScan
 
 `cuphoton.xscan` packages transient image stamps, trains and evaluates
 PyTorch real/bogus classifiers, and creates numeric or Bokeh review artifacts.
 The umbrella CLI group is `cuphoton xscan`.
 
-XScan is CLI-first because dataset provenance, split controls, and run
+xScan is CLI-first because dataset provenance, split controls, and run
 artifacts are part of the reproducible workflow. Internal model modules
 provide extension points for custom workflows, but are not a broad stable API.
 
@@ -174,9 +174,9 @@ local paths, depending on the stage. Confirm that their source data and metadata
 are cleared for release before publishing generated artifacts.
 
 The builder accepts difference-mode xFit runs and joins `fits.parquet` to
-XScan metadata by `candidate_id`. It also verifies that each fit row was
+xScan metadata by `candidate_id`. It also verifies that each fit row was
 computed from the exact `difference.npy` stamp, including dtype and shape,
-and validates the hashes recorded by the xFit run. Pair and triplet XScan
+and validates the hashes recorded by the xFit run. Pair and triplet xScan
 models can both consume this same difference-fit sidecar. The new output
 directory contains standalone `candidate-id.npy`, `features.npy`, and
 `input-image-sha256.npy` arrays plus `schema.json`. The arrays are
@@ -349,7 +349,7 @@ round flags, the single pass uses `scientific/`. The model directory remains
 unchanged. Execution receipts and timing are separate from these scientific
 outputs, and merging and validation occur after the timed worker phase.
 
-## Persistent XPOIS, xFit and XScan pipeline
+## Persistent xPois, xFit and xScan pipeline
 
 For a reproducible comparison with separately launched stages and intermediate
 files, see the [pipeline stage benchmark](pipeline-stage-benchmark.md). It
@@ -357,8 +357,8 @@ checks the same scientific outputs while reporting startup and warm execution
 separately.
 
 The Python API in `cuphoton.xscan.device_pipeline` runs complete image pairs
-through constant-kernel XPOIS, stamp extraction, Gaussian difference-mode
-xFit, feature conversion and triplet XScan inference. A `DeviceWorkerContext`
+through constant-kernel xPois, stamp extraction, Gaussian difference-mode
+xFit, feature conversion and triplet xScan inference. A `DeviceWorkerContext`
 loads the model once and accepts serial jobs on one CUDA device. This path
 requires CUDA 13, CuPy and Torch (`uv sync --locked --extra gpu`).
 
@@ -371,7 +371,7 @@ policy. This policy does not enable PyTorch's deterministic-algorithm mode.
 Prepare descriptors from caller-owned NPY images; this example uses an
 existing 63-pixel checkpoint and an interior candidate in images of at least
 95 by 95 pixels. Change the candidate coordinates and kernel settings for
-your data. Optional item `variance` and `fit_mask` descriptors apply to XPOIS;
+your data. Optional item `variance` and `fit_mask` descriptors apply to xPois;
 xFit consumes unweighted difference stamps.
 
 ```python
@@ -564,7 +564,7 @@ reported statistics. Omitting both round flags runs a single pass.
 The pipeline retains device owners through the blocking terminal copy and
 synchronizes failed work before reuse. Failed cleanup makes the context
 unusable. Transfer receipts count pipeline-owned uploads and the packed
-terminal download; internal XPOIS/xFit control transfers are outside that
+terminal download; internal xPois/xFit control transfers are outside that
 count. FITS reads have separate receipts with requested and actual readers,
 HDU identities, fallback reasons and decoded bytes. Reader-internal transfers
 are not counted by `input_h2d_bytes`, which covers pipeline-owned NPY uploads.

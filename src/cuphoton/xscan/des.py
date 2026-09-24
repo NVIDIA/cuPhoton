@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raw DES-oriented dataset builders for XScan."""
+"""Raw DES-oriented dataset builders for xScan."""
 
 from __future__ import annotations
 

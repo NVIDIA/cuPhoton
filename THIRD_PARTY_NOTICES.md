@@ -74,7 +74,7 @@ Both are installed from upstream distributions and recorded in `uv.lock`;
 neither is bundled in the cuPhoton wheel. The MPI implementation remains
 site-provided. The inventoried versions do not establish compatibility with every Python version,
 transport, or cluster configuration. See the
-[XPOIS launch documentation](docs/components/xpois.md#launch-with-dragon)
+[xPois launch documentation](docs/components/xpois.md#launch-with-dragon)
 for a Dragon launch example.
 
 | Runtime | Inventoried versions | License and upstream notices | Use and distribution |
@@ -215,7 +215,7 @@ For a CPU-only development environment, replace `gpu` with `torch`.
 
 `make build` creates a source distribution containing cuPhoton's extension
 sources and the pinned native build recipe. `make wheels` builds the native
-Linux wheels from that archive. Each wheel includes the XDR extension and a
+Linux wheels from that archive. Each wheel includes the xDR extension and a
 privately renamed CFITSIO shared library, with the license notice above. The
 source archive and wheels include `LICENSE` and this notice file.
 

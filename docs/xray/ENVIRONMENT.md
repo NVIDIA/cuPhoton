@@ -1,6 +1,6 @@
-# XRay environment setup
+# xRay environment setup
 
-XRay ships in the single `cuphoton` distribution. Run environment and command
+xRay ships in the single `cuphoton` distribution. Run environment and command
 operations from the repository root.
 
 ## CPU development

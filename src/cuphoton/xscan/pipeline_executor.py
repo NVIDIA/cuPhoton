@@ -211,7 +211,7 @@ def run_pipeline_manifest(
     fits_reader: str | None = None,
     **options: Any,
 ) -> ExecutionResult | None:
-    """Run an XPOIS/xFit/XScan manifest through the selected executor."""
+    """Run an xPois/xFit/xScan manifest through the selected executor."""
 
     from cuphoton.core.executors import run_workload
 

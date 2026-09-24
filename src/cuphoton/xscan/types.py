@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared static contracts for XScan configuration and feature artifacts."""
+"""Shared static contracts for xScan configuration and feature artifacts."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class XFitCoverage(TypedDict):
 
 
 class XFitFeatureSchema(TypedDict):
-    """Fully validated schema for the v1 xFit-to-XScan feature contract."""
+    """Fully validated schema for the v1 xFit-to-xScan feature contract."""
 
     schema_version: int
     artifact: str

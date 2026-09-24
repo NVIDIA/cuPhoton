@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Whole-image batch contracts for XPOIS."""
+"""Whole-image batch contracts for xPois."""
 
 from __future__ import annotations
 

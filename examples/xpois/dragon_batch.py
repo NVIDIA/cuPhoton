@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run XPOIS image-pair batches with Dragon workers."""
+"""Run xPois image-pair batches with Dragon workers."""
 
 from __future__ import annotations
 

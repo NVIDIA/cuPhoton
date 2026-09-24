@@ -97,7 +97,7 @@ class DeviceDipoleFitResult:
     use ``dtype``; portable fractions and reduced chi-square remain float64.
     Fitting returns residual arrays. Callers that no longer need them may
     use ``dataclasses.replace(result, residuals=None)`` and release the
-    original result before transforming XScan features.
+    original result before transforming xScan features.
     """
 
     parameters: Any

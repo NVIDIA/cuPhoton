@@ -37,7 +37,7 @@ execution remains the default. `--warmup-rounds` or `--measure-rounds` opts
 into persistent workers and a separate artifact directory for each round.
 See [xFit](components/xfit.md).
 
-## XPOIS: `cuphoton xpois`
+## xPois: `cuphoton xpois`
 
 `data-inspect`, `fit-kernel`, `subtract`, `fit-batch`, `benchmark-backends`,
 `evaluate-subtraction`, and `review-bokeh` cover local data inspection,
@@ -45,7 +45,7 @@ subtraction, distributed whole-pair execution, numerical comparison, and
 review. For `fit-batch`, `--executor mpi|dragon` selects process orchestration
 while `--backend cupy|numba-cuda|cutile` selects the numerical implementation
 inside each worker. Both are explicit; launcher and Dragon transport options
-remain outside cuPhoton. See [XPOIS](components/xpois.md).
+remain outside cuPhoton. See [xPois](components/xpois.md).
 
 Select the spatially varying alternating-linear-least-squares model and its
 single-GPU CuPy backend explicitly:
@@ -84,9 +84,9 @@ from the supplied image pair. The batch command requires `--backend cupy`
 for spatial ALS and rejects `auto`. One solver configuration applies to every
 pair in the batch; each complete spatial solve runs on one GPU.
 
-## XScan: `cuphoton xscan`
+## xScan: `cuphoton xscan`
 
-XScan has command families for dataset building and validation, pair or
+xScan has command families for dataset building and validation, pair or
 triplet training, inference and evaluation, review queues and annotations,
 and controlled reproduction studies. `data-build-xfit-features` creates the
 candidate-keyed scalar sidecar used by optional xFit late fusion;
@@ -98,11 +98,11 @@ evaluated/validation-split `fit_present` coverage mismatch unless the narrow
 standalone raw-comparison and Alard--Lupton review servers are available as
 `review-raw-compare` (`rrc`) and `review-alard-lupton` (`ral`). Use
 `cuphoton xscan --help`, then `cuphoton xscan help <command>` for
-command-specific contracts. See [XScan](components/xscan.md).
+command-specific contracts. See [xScan](components/xscan.md).
 
 `infer-real-bogus --executor dragon|mpi` distributes complete minibatches;
 `run-pipeline --executor dragon|mpi` distributes complete image pairs through
-xPOIS, xFit and xScan. Optional round flags retain the workers across passes.
+xPois, xFit and xScan. Optional round flags retain the workers across passes.
 These commands require a shared input/output filesystem and the matching
 runtime launcher.
 
@@ -113,9 +113,9 @@ runtime launcher.
 inspection, reprojection, parity, and performance. See
 [xRep](components/xrep.md).
 
-## XRay: `cuphoton xray`
+## xRay: `cuphoton xray`
 
-XRay includes `doctor` and `gpu-policy`; HDF5 probing and trace extraction;
+xRay includes `doctor` and `gpu-policy`; HDF5 probing and trace extraction;
 linear-prediction correctness and performance commands; detector artifact,
 normalization, comparison, distributed, and merge commands; and report or
 visualization commands. The complete list is available from:
@@ -125,7 +125,7 @@ uv run cuphoton xray --help
 uv run cuphoton xray help detector-artifact-distributed
 ```
 
-See [XRay](xray/README.md).
+See [xRay](xray/README.md).
 
 ## Configuration and output roots
 
