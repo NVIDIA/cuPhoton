@@ -296,6 +296,11 @@ outputs, and merging and validation occur after the timed worker phase.
 
 ## Persistent XPOIS, xFit and XScan pipeline
 
+For a reproducible comparison with separately launched stages and intermediate
+files, see the [pipeline stage benchmark](pipeline-stage-benchmark.md). It
+checks the same scientific outputs while reporting startup and warm execution
+separately.
+
 The Python API in `cuphoton.xscan.device_pipeline` runs complete image pairs
 through constant-kernel XPOIS, stamp extraction, Gaussian difference-mode
 xFit, feature conversion and triplet XScan inference. A `DeviceWorkerContext`
