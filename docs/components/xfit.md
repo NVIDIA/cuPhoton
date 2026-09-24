@@ -151,6 +151,8 @@ filesystem for the input and output, and the same installed environment on
 every worker. `--chunk-size` sets candidates per task independently of worker
 count. Keep it fixed for matched comparisons; candidate IDs and input order
 are restored in the merged artifacts.
+The task count must be at least the MPI rank count. Dragon uses the smaller
+of the requested worker count and task count.
 
 Under an allocation with Dragon configured, run one warmup and two measured
 passes with workers retained across all three passes:
@@ -176,7 +178,9 @@ mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
   --warmup-rounds 1 --measure-rounds 2
 ```
 
-The output directory must be new. Each pass retains normal xFit artifacts
+The output directory must be new. Its basename is the run ID: 1–128 ASCII
+letters, digits, dots, underscores or hyphens, starting with a letter or digit.
+Each pass retains normal xFit artifacts
 under `rounds/<round-id>/scientific/`, including warmup passes. Without round
 flags, a single pass writes them under `scientific/`. The execution summary
 records placement, item receipts and round timing; scientific merging and

@@ -251,6 +251,14 @@ tasks; only the final task can contain the original final partial batch.
 Keep both values fixed when comparing worker counts. The merge restores
 selected-split order, original sample indices, labels and candidate metadata,
 and uses the same host probability calculation as local inference.
+The task count must be at least the MPI rank count. Dragon uses the smaller
+of the requested worker count and task count.
+
+Distributed inference defaults to `--num-workers 0`, independently of the
+checkpoint's loader setting. An explicit positive value creates persistent
+loader processes during worker setup; the loader and parsed metadata are
+reused across tasks and rounds. Workers retain inputs and model state, so
+their initial load is outside the timed rounds.
 
 Under a configured Dragon allocation:
 
@@ -277,7 +285,9 @@ mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
   --warmup-rounds 1 --measure-rounds 2
 ```
 
-Distributed inference requires a new `--output-dir`. Each pass writes merged
+Distributed inference requires a new `--output-dir`. Its basename is the run
+ID: 1–128 ASCII letters, digits, dots, underscores or hyphens, starting with
+a letter or digit. Each pass writes merged
 logits, labels, probabilities, sample indices and a summary under
 `rounds/<round-id>/scientific/`; warmup outputs are retained too. Without
 round flags, the single pass uses `scientific/`. The model directory remains
@@ -426,7 +436,7 @@ dragon cuphoton xscan run-pipeline --executor dragon \
   --manifest pipeline.json --output-dir runs --name dragon-pipeline \
   --max-workers 8 --warmup-rounds 1 --measure-rounds 2
 
-mpiexec -n 8 cuphoton-openmpi-rank-exec -- \
+mpiexec -n 8 -x CUDA_VISIBLE_DEVICES cuphoton-openmpi-rank-exec -- \
   cuphoton xscan run-pipeline --executor mpi \
   --manifest pipeline.json --output-dir runs --name mpi-pipeline \
   --warmup-rounds 1 --measure-rounds 2

@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal, ParamSpec, TypeVar
 
 import numpy as np
 
+from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -298,6 +299,11 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             from .executor import prepare_xfit_workload
 
             output_dir = Path(self.output_dir).expanduser().resolve()
+            self._call(
+                validate_identifier,
+                output_dir.name,
+                field="--output-dir basename",
+            )
             fit_options = {
                 name: getattr(self, name)
                 for name in (

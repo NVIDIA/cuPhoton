@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import fields
+import os
+from dataclasses import fields, replace
 
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
+from cuphoton.core.artifacts import file_sha256
 from cuphoton.xfit import (
     DipoleFitResult,
     GaussianDipoleModel,
@@ -62,25 +64,82 @@ def _input(tmp_path, *, mode="difference", auxiliary="candidate"):
     ],
 )
 def test_preflight_rejects_unsupported_cutile_settings(
-    tmp_path, model, finite_difference, message
+    tmp_path, monkeypatch, model, finite_difference, message
 ):
-    path = _input(tmp_path)
-    if model == "stamp":
-        np.savez_compressed(
-            path,
-            candidate_id=np.array(["stamp"]),
-            images=np.zeros((1, 7, 9)),
-            stamp_basis=np.ones((7, 9)),
-        )
+    def unexpected_load(*args, **kwargs):
+        pytest.fail("invalid settings must fail before reading input")
+
+    monkeypatch.setattr(executor, "load_xfit_dataset", unexpected_load)
     with pytest.raises(ValueError, match=message):
         executor.prepare_xfit_workload(
-            input_path=path,
+            input_path=tmp_path / "missing.npz",
             fit_options={
                 "backend": "cutile",
                 "model": model,
                 "use_finite_difference": finite_difference,
             },
         )
+
+
+@pytest.mark.parametrize("backend", ["auto", "numpy"])
+def test_preflight_rejects_cpu_backend_before_input_reads(tmp_path, backend):
+    with pytest.raises(ValueError, match="requires backend cupy or cutile"):
+        executor.prepare_xfit_workload(
+            input_path=tmp_path / "missing.npz",
+            fit_options={"backend": backend},
+        )
+
+
+def test_chunk_size_is_part_of_configuration_identity(tmp_path):
+    path = _input(tmp_path)
+    _, first = executor.plan_xfit_chunks(path, chunk_size=1, fit_options={})
+    _, second = executor.plan_xfit_chunks(path, chunk_size=2, fit_options={})
+    assert first["chunk_size"] == 1
+    assert second["chunk_size"] == 2
+    assert first["configuration_sha256"] != second["configuration_sha256"]
+
+
+def test_finalizer_retains_planning_input_and_still_checks_content(
+    tmp_path, monkeypatch
+):
+    path = _input(tmp_path)
+    loads = []
+    original_load = executor.load_xfit_dataset
+
+    def load(*args, **kwargs):
+        loads.append(True)
+        return original_load(*args, **kwargs)
+
+    def cpu_fit(*args, **kwargs):
+        result = fit_dipoles(*args, **{**kwargs, "backend": "numpy"})
+        return replace(result, backend="cupy", device="cuda:0")
+
+    monkeypatch.setattr(executor, "load_xfit_dataset", load)
+    monkeypatch.setattr(executor, "fit_dipoles", cpu_fit)
+    monkeypatch.setattr(executor, "collect_gpu_identity", lambda _: {})
+    spec = executor.prepare_xfit_workload(
+        input_path=path,
+        chunk_size=2,
+        fit_options={"backend": "cupy", "max_evaluations": 2},
+    )
+    worker = spec.worker_factory(spec.options_payload)
+    for index in range(2):
+        round_dir = tmp_path / f"round-{index}"
+        records = []
+        for item in spec.items:
+            worker.run_item(item, round_dir / "items" / item.item_id)
+            records.append({"item_id": item.item_id, "status": "success"})
+        assert spec.finalize_round(round_dir, records)["candidate_count"] == 3
+    assert len(loads) == 2  # One planning load and one worker load.
+    before = path.stat()
+    changed = bytearray(path.read_bytes())
+    changed[-1] ^= 1
+    path.write_bytes(changed)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    with pytest.raises(ValueError, match="archive changed after planning"):
+        spec.finalize_round(tmp_path / "unused", records)
+    assert len(loads) == 2
+    worker.close()
 
 
 def test_preflight_accepts_analytic_gaussian_cutile(tmp_path):
@@ -233,10 +292,20 @@ def test_chunks_preserve_numerics_broadcasting_and_order(
 
 
 @pytest.mark.parametrize(
-    "defect", ["missing", "duplicate", "failed", "corrupt"]
+    "defect,message",
+    [
+        ("missing", "one successful result"),
+        ("duplicate", "one successful result"),
+        ("failed", "one successful result"),
+        ("corrupt", "checksum mismatch"),
+        ("checksum", "checksum mismatch"),
+        ("wrong_candidates", "candidate identity mismatch"),
+        ("wrong_summary", "summary identity mismatch"),
+        ("wrong_model", "configuration mismatch"),
+    ],
 )
 def test_merge_rejects_incomplete_or_changed_scientific_results(
-    tmp_path, monkeypatch, defect
+    tmp_path, monkeypatch, defect, message
 ):
     path = _input(tmp_path)
     items, options = executor.plan_xfit_chunks(
@@ -257,11 +326,31 @@ def test_merge_rejects_incomplete_or_changed_scientific_results(
         records[1] = dict(records[0])
     elif defect == "failed":
         records[1]["status"] = "failed"
-    else:
+    elif defect == "corrupt":
         (round_dir / "items" / items[0].item_id / "result.npz").write_bytes(
             b"changed"
         )
-    with pytest.raises(ValueError):
+    else:
+        item_dir = round_dir / "items" / items[0].item_id
+        summary_path = item_dir / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        if defect == "wrong_summary":
+            summary["configuration_sha256"] = "changed"
+        elif defect == "wrong_model":
+            summary["result_metadata"]["model"] = "stamp"
+        else:
+            archive = item_dir / "result.npz"
+            with np.load(archive, allow_pickle=False) as loaded:
+                values = dict(loaded)
+            if defect == "checksum":
+                values["parameters"][0, 0] += 1
+            else:
+                values["candidate_id"] = values["candidate_id"][::-1]
+            np.savez_compressed(archive, **values)
+            if defect != "checksum":
+                summary["result_sha256"] = file_sha256(archive)
+        summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match=message):
         executor.finalize_xfit_round(
             round_dir, records, items=items, options=options
         )

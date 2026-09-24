@@ -47,6 +47,12 @@ Covariance uses supplied variances when present and residual scaling
 otherwise. Non-converged or rank-deficient fits retain status information and
 mark their uncertainties invalid.
 
+For distributed xFit and XScan inference, `summary.json` is the terminal
+execution summary. Merged scientific artifacts live in `scientific/` for
+ordinary runs or `rounds/<round-id>/scientific/` for benchmark runs. Round
+summaries describe individual passes; only the root summary includes the
+executor's final lifecycle status. Warmup artifacts are retained.
+
 ## XScan HSC NPY inputs
 
 XScan accepts an HSC NPY directory directly or as `HSC_npy` beneath a supplied

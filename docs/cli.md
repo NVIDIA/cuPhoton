@@ -32,6 +32,9 @@ See [xDataReader](components/xdr.md).
 `data-inspect` and `data-validate` check pickle-free NPZ dipole batches
 whose arrays are numeric or Unicode; `fit-dipoles` fits sampled-stamp or
 analytic Gaussian models and writes portable fit and uncertainty artifacts.
+`fit-dipoles --executor dragon|mpi` distributes candidate chunks; local
+execution remains the default. `--warmup-rounds` or `--measure-rounds` opts
+into persistent workers and a separate artifact directory for each round.
 See [xFit](components/xfit.md).
 
 ## XPOIS: `cuphoton xpois`
@@ -96,6 +99,12 @@ standalone raw-comparison and Alard--Lupton review servers are available as
 `review-raw-compare` (`rrc`) and `review-alard-lupton` (`ral`). Use
 `cuphoton xscan --help`, then `cuphoton xscan help <command>` for
 command-specific contracts. See [XScan](components/xscan.md).
+
+`infer-real-bogus --executor dragon|mpi` distributes complete minibatches;
+`run-pipeline --executor dragon|mpi` distributes complete image pairs through
+xPOIS, xFit and xScan. Optional round flags retain the workers across passes.
+These commands require a shared input/output filesystem and the matching
+runtime launcher.
 
 ## xRep: `cuphoton xrep`
 

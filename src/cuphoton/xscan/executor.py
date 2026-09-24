@@ -123,7 +123,7 @@ def plan_inference_chunks(
         "split": split,
         "batch_size": batch_size,
         "task_batches": task_batches,
-        "num_workers": num_workers,
+        "num_workers": 0 if num_workers is None else num_workers,
         "use_xfit_features": use_xfit_features,
         "xfit_feature_dir": str(xfit_feature_dir.expanduser().resolve())
         if xfit_feature_dir is not None
@@ -202,8 +202,10 @@ class XScanInferenceWorker:
     """Retain the model, performance policy and dataset in one process."""
 
     def __init__(self, options: Mapping[str, Any]) -> None:
+        from .dataset import load_metadata_rows
         from .training import (
             load_model_from_checkpoint,
+            make_dataloader,
             normalize_performance_config,
             xfit_fit_coverage,
         )
@@ -219,11 +221,14 @@ class XScanInferenceWorker:
         self.model, checkpoint, self.performance = load_model_from_checkpoint(
             Path(options["run_dir"]), device=self.device
         )
-        if options["num_workers"] is not None:
-            self.performance = normalize_performance_config(
-                replace(self.performance, num_workers=options["num_workers"]),
-                device=self.device,
-            )
+        self.performance = normalize_performance_config(
+            replace(
+                self.performance,
+                num_workers=options["num_workers"],
+                persistent_workers=options["num_workers"] > 0,
+            ),
+            device=self.device,
+        )
         feature_dir = (
             Path(options["xfit_feature_dir"])
             if options["xfit_feature_dir"] is not None
@@ -248,6 +253,7 @@ class XScanInferenceWorker:
             raise ValueError(
                 "XScan worker split differs from planned sample order"
             )
+        self.metadata_rows = load_metadata_rows(Path(options["dataset_dir"]))
         self.summary = {
             "workflow": "infer",
             "run_dir": options["run_dir"],
@@ -269,6 +275,24 @@ class XScanInferenceWorker:
             },
         }
         _check_inputs(options, hash_content=True)
+        # The sampler lives in this process; loader children retain the full
+        # immutable dataset while each task selects its original minibatches.
+        self.sample_positions: list[int] = []
+        self.loader = make_dataloader(
+            self.dataset,
+            batch_size=options["batch_size"],
+            shuffle=False,
+            performance=self.performance,
+            sampler=self.sample_positions,
+        )
+        if self.performance.num_workers:
+            # The first iterator starts children; resetting it waits for their
+            # startup acknowledgements. Neither pass reads samples or runs the
+            # model, and child initialization completes before READY.
+            for _ in self.loader:
+                pass
+            for _ in self.loader:
+                pass
 
     def run_item(self, item: WorkItem, item_dir: Path) -> Mapping[str, Any]:
         from .training import predict_dataset
@@ -285,15 +309,19 @@ class XScanInferenceWorker:
             raise ValueError(
                 "XScan item sample order differs from its descriptor"
             )
+        self.sample_positions[:] = range(start, stop)
+        prediction_started = time.perf_counter()
         payload = predict_dataset(
             model=self.model,
             dataset=dataset,
             batch_size=self.options["batch_size"],
             device=self.device,
             performance=self.performance,
+            _loader=self.loader,
+            _metadata_rows=self.metadata_rows,
         )
+        prediction_seconds = time.perf_counter() - prediction_started
         _check_inputs(self.options)
-        prediction_seconds = time.perf_counter() - started
         item_dir.mkdir(parents=True, exist_ok=False)
         arrays = {
             name: payload[name]
@@ -331,8 +359,13 @@ class XScanInferenceWorker:
 
     def close(self) -> None:
         """Release model and dataset ownership after the final round."""
+        iterator = getattr(self.loader, "_iterator", None)
+        if iterator is not None:
+            iterator._shutdown_workers()
+        self.loader = None
         self.model = None
         self.dataset = None
+        self.metadata_rows = None
 
 
 def create_xscan_worker(options: Mapping[str, Any]) -> XScanInferenceWorker:
@@ -381,12 +414,25 @@ def _read_result(item: WorkItem, round_dir: Path, options: Mapping[str, Any]):
         != item.payload["sample_indices_sha256"]
     ):
         raise ValueError("XScan chunk sample identity mismatch")
-    if not np.all(np.isfinite(arrays["logits"])) or not np.array_equal(
-        arrays["probabilities"], sigmoid(arrays["logits"])
+    probabilities = arrays["probabilities"]
+    if (
+        arrays["logits"].dtype != np.dtype("float64")
+        or probabilities.dtype != np.dtype("float64")
+        or not np.all(np.isfinite(arrays["logits"]))
+        or not np.all(np.isfinite(probabilities))
     ):
-        raise ValueError(
-            "XScan chunk probabilities differ from the original host sigmoid"
+        raise ValueError("XScan chunk scores must be finite float64 arrays")
+    try:
+        # NumPy exp dispatch can differ by a few ULP between hosts. Retain
+        # the worker's original probabilities and bound only this audit.
+        np.testing.assert_array_max_ulp(
+            probabilities, sigmoid(arrays["logits"]), maxulp=4
         )
+    except AssertionError as exc:
+        raise ValueError(
+            "XScan chunk probabilities differ from the host sigmoid "
+            "by more than 4 ULP"
+        ) from exc
     return summary, arrays
 
 
@@ -412,7 +458,7 @@ def finalize_inference_round(
     metadata_path = Path(options["dataset_dir"]) / "metadata.jsonl"
     metadata = [
         json.loads(line)
-        for line in metadata_path.read_text().splitlines()
+        for line in metadata_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     labels = np.load(

@@ -8,6 +8,9 @@ import json
 import os
 import subprocess
 import sys
+import time
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,6 +22,11 @@ from cuphoton.core.artifacts import file_sha256  # noqa: E402
 from cuphoton.core.bulk import WorkItem  # noqa: E402
 from cuphoton.xscan import executor, training, workflows  # noqa: E402
 from cuphoton.xscan.model import build_model  # noqa: E402
+
+
+def _mark_loader_ready(worker_id, *, directory):
+    time.sleep(0.1)
+    (directory / f"ready-{os.getpid()}").write_text(str(worker_id))
 
 
 def _inputs(tmp_path):
@@ -155,10 +163,19 @@ def test_cli_requires_separate_distributed_output(tmp_path, capsys):
     assert "--output-dir is required" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("num_workers", [0, 1])
 def test_persistent_workers_preserve_original_batches_predictions_and_order(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, num_workers
 ):
     run_dir, dataset_dir = _inputs(tmp_path)
+    if num_workers:
+        # Spawned workers must be able to import the readiness test callback.
+        monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+        checkpoint = torch.load(run_dir / "checkpoint.pt", weights_only=True)
+        checkpoint["train_config"]["performance"]["worker_start_method"] = (
+            "spawn"
+        )
+        torch.save(checkpoint, run_dir / "checkpoint.pt")
     _cpu_worker(monkeypatch)
     monkeypatch.setattr(
         workflows, "resolve_device", lambda _: torch.device("cpu")
@@ -168,7 +185,7 @@ def test_persistent_workers_preserve_original_batches_predictions_and_order(
         dataset_dir=dataset_dir,
         split="test",
         batch_size=2,
-        num_workers=0,
+        num_workers=num_workers,
     )
     expected = {
         name: np.load(ordinary.run_dir / f"{name}.npy")
@@ -182,7 +199,7 @@ def test_persistent_workers_preserve_original_batches_predictions_and_order(
         split="test",
         batch_size=2,
         task_batches=1,
-        num_workers=0,
+        num_workers=num_workers,
     )
     items, options = spec.items, spec.options_payload
     assert [
@@ -196,7 +213,49 @@ def test_persistent_workers_preserve_original_batches_predictions_and_order(
         return original_load(*args, **kwargs)
 
     monkeypatch.setattr(training, "load_model_from_checkpoint", load)
+    from cuphoton.xscan import dataset as dataset_module
+
+    metadata_reads = []
+    loader_creations = []
+    original_metadata = dataset_module.load_metadata_rows
+    original_loader = training.make_dataloader
+
+    def metadata(path):
+        metadata_reads.append(path)
+        return original_metadata(path)
+
+    def loader(*args, **kwargs):
+        loader_creations.append(True)
+        result = original_loader(*args, **kwargs)
+        result.worker_init_fn = partial(
+            _mark_loader_ready, directory=tmp_path
+        )
+        return result
+
+    monkeypatch.setattr(dataset_module, "load_metadata_rows", metadata)
+    monkeypatch.setattr(training, "make_dataloader", loader)
     workers = [executor.create_xscan_worker(options) for _ in range(2)]
+    children = [
+        process
+        for worker in workers
+        for process in getattr(worker.loader._iterator, "_workers", [])
+    ]
+    assert len(children) == 2 * num_workers
+    assert len(list(tmp_path.glob("ready-*"))) == 2 * num_workers
+    assert all(process.is_alive() for process in children)
+    from multiprocessing.process import BaseProcess
+
+    def unexpected_process_start(_):
+        pytest.fail("loader processes must start before READY")
+
+    monkeypatch.setattr(BaseProcess, "start", unexpected_process_start)
+
+    def unexpected_metadata_read(_):
+        pytest.fail("metadata must be retained across tasks")
+
+    monkeypatch.setattr(
+        training, "load_metadata_rows", unexpected_metadata_read
+    )
     for round_index in range(2):
         round_dir = tmp_path / f"round-{round_index}"
         round_id = f"round-{round_index}"
@@ -248,29 +307,121 @@ def test_persistent_workers_preserve_original_batches_predictions_and_order(
             (round_dir / "scientific" / "summary.json").read_text()
         )
         for key in (
-            "performance",
             "xfit_features",
             "batch_size",
             "dataset_dir",
             "split",
         ):
             assert summary[key] == ordinary.summary[key]
+        assert summary["performance"] == {
+            **ordinary.summary["performance"],
+            "persistent_workers": num_workers > 0,
+        }
         assert summary["saved"]["logits"] == "logits.npy"
     assert len(loads) == 2
+    assert len(metadata_reads) == 2
+    assert len(loader_creations) == 2
+    assert all(process.is_alive() for process in children)
+    assert children == [
+        process
+        for worker in workers
+        for process in getattr(worker.loader._iterator, "_workers", [])
+    ]
     assert (run_dir / "checkpoint.pt").read_bytes() == checkpoint_bytes
     assert (
         ordinary.run_dir / "summary.json"
     ).read_bytes() == ordinary_summary
     for worker in workers:
         worker.close()
+    assert all(not process.is_alive() for process in children)
+
+
+def test_loader_defaults_and_prediction_timer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    run_dir, dataset_dir = _inputs(tmp_path)
+    checkpoint = torch.load(run_dir / "checkpoint.pt", weights_only=True)
+    checkpoint["train_config"]["performance"]["num_workers"] = 2
+    torch.save(checkpoint, run_dir / "checkpoint.pt")
+    _cpu_worker(monkeypatch)
+    items, options = executor.plan_inference_chunks(
+        run_dir=run_dir, dataset_dir=dataset_dir, split="test", batch_size=2
+    )
+    worker = executor.create_xscan_worker(options)
+    assert worker.performance.num_workers == 0
+    clock = [0.0]
+    original_check = executor._check_inputs
+    original_predict = training.predict_dataset
+
+    def check(*args, **kwargs):
+        clock[0] += 100
+        return original_check(*args, **kwargs)
+
+    def predict(**kwargs):
+        clock[0] += 7
+        return original_predict(**kwargs)
+
+    monkeypatch.setattr(
+        executor, "time", SimpleNamespace(perf_counter=lambda: clock[0])
+    )
+    monkeypatch.setattr(executor, "_check_inputs", check)
+    monkeypatch.setattr(training, "predict_dataset", predict)
+    result = worker.run_item(items[0], tmp_path / "item")
+    assert result["timings_sec"]["predict_sec"] == 7
+    assert result["wall_sec"]["item_runner"] == 207
+    worker.close()
+
+
+@pytest.mark.parametrize("ulps", [1, 4, 5])
+def test_probability_audit_tolerates_only_bounded_host_rounding(
+    tmp_path, monkeypatch, ulps
+):
+    run_dir, dataset_dir = _inputs(tmp_path)
+    _cpu_worker(monkeypatch)
+    items, options = executor.plan_inference_chunks(
+        run_dir=run_dir, dataset_dir=dataset_dir, split="test"
+    )
+    worker = executor.create_xscan_worker(options)
+    item = items[0]
+    round_dir = tmp_path / "round"
+    item_dir = round_dir / "items" / item.item_id
+    worker.run_item(item, item_dir)
+    path = item_dir / "probabilities.npy"
+    values = np.load(path)
+    for _ in range(ulps):
+        values = np.nextafter(values, np.inf)
+    np.save(path, values)
+    summary_path = item_dir / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["artifact_sha256"]["probabilities"] = file_sha256(path)
+    summary_path.write_text(json.dumps(summary))
+    if ulps > 4:
+        with pytest.raises(ValueError, match="more than 4 ULP"):
+            executor._read_result(item, round_dir, options)
+    else:
+        _, arrays = executor._read_result(item, round_dir, options)
+        np.testing.assert_array_equal(arrays["probabilities"], values)
+    worker.close()
 
 
 @pytest.mark.parametrize(
-    "defect",
-    ["missing", "duplicate", "failed", "wrong_probability", "wrong_identity"],
+    "defect,message",
+    [
+        ("missing", "one successful result"),
+        ("duplicate", "one successful result"),
+        ("failed", "one successful result"),
+        ("wrong_probability", "more than 4 ULP"),
+        ("wrong_identity", "identities or labels differ"),
+        ("checksum", "checksum mismatch"),
+        ("wrong_labels", "identities or labels differ"),
+        ("short_array", "row count mismatch"),
+        ("divergent_summary", "differ across workers"),
+        ("nonfinite", "finite float64"),
+        ("wrong_dtype", "finite float64"),
+    ],
 )
 def test_merge_rejects_incomplete_or_invalid_scientific_results(
-    tmp_path, monkeypatch, defect
+    tmp_path, monkeypatch, defect, message
 ):
     run_dir, dataset_dir = _inputs(tmp_path)
     _cpu_worker(monkeypatch)
@@ -297,15 +448,31 @@ def test_merge_rejects_incomplete_or_invalid_scientific_results(
         item_dir = round_dir / "items" / items[0].item_id
         summary_path = item_dir / "summary.json"
         summary = json.loads(summary_path.read_text())
-        if defect == "wrong_probability":
-            np.save(item_dir / "probabilities.npy", np.array([0.123, 0.456]))
-            summary["artifact_sha256"]["probabilities"] = file_sha256(
-                item_dir / "probabilities.npy"
-            )
-        else:
+        if defect == "wrong_identity":
             summary["metadata_rows"][0]["candidate_id"] = "wrong"
+        elif defect == "divergent_summary":
+            summary["inference_summary"]["performance"]["num_workers"] = 10
+        else:
+            name = "probabilities"
+            values = np.array([0.123, 0.456])
+            if defect == "wrong_labels":
+                name = "labels"
+                values = 1 - np.load(item_dir / "labels.npy")
+            elif defect == "short_array":
+                name = "logits"
+                values = np.load(item_dir / "logits.npy")[:-1]
+            elif defect == "nonfinite":
+                values[0] = np.nan
+            elif defect == "wrong_dtype":
+                values = np.load(item_dir / "probabilities.npy").astype(
+                    np.float32
+                )
+            path = item_dir / f"{name}.npy"
+            np.save(path, values)
+            if defect != "checksum":
+                summary["artifact_sha256"][name] = file_sha256(path)
         summary_path.write_text(json.dumps(summary))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         executor.finalize_inference_round(
             round_dir, records, items=items, options=options
         )

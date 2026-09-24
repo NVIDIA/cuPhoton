@@ -77,6 +77,16 @@ def plan_xfit_chunks(
 ) -> tuple[tuple[WorkItem, ...], dict[str, Any]]:
     """Freeze candidate ranges independently of the eventual worker count."""
 
+    items, options, _ = _plan_xfit_chunks(
+        input_path, chunk_size=chunk_size, fit_options=fit_options
+    )
+    return items, options
+
+
+def _plan_xfit_chunks(
+    input_path: Path, *, chunk_size: int, fit_options: Mapping[str, Any]
+) -> tuple[tuple[WorkItem, ...], dict[str, Any], XFitDataset]:
+
     if (
         isinstance(chunk_size, bool)
         or not isinstance(chunk_size, int)
@@ -99,6 +109,7 @@ def plan_xfit_chunks(
         "input_path": str(dataset.path),
         "input_sha256": dataset.input_archive_sha256,
         "candidate_count": dataset.batch_size,
+        "chunk_size": chunk_size,
         "result_dtype": (
             str(_floating_dtype(dataset.images))
             if settings["compute_dtype"] == "input"
@@ -128,7 +139,10 @@ def plan_xfit_chunks(
         for start in range(0, dataset.batch_size, chunk_size)
         for stop in (min(start + chunk_size, dataset.batch_size),)
     )
-    return items, options
+    if file_sha256(dataset.path) != dataset.input_archive_sha256:
+        raise ValueError("xFit input archive changed while planning")
+    _check_input_stat(options)
+    return items, options, dataset
 
 
 def _load_input(options: Mapping[str, Any]) -> XFitDataset:
@@ -407,6 +421,7 @@ def finalize_xfit_round(
     *,
     items: Sequence[WorkItem],
     options: Mapping[str, Any],
+    _dataset: XFitDataset | None = None,
 ) -> Mapping[str, Any]:
     """Restore candidate order and publish ordinary xFit artifacts."""
     expected = {item.item_id for item in items}
@@ -419,7 +434,14 @@ def finalize_xfit_round(
         raise ValueError(
             "xFit merge requires one successful result per chunk"
         )
-    dataset = _load_input(options)
+    if _dataset is None:
+        dataset = _load_input(options)
+    else:
+        dataset = _dataset
+        _check_input_stat(options)
+        if file_sha256(dataset.path) != options["input_sha256"]:
+            raise ValueError("xFit input archive changed after planning")
+        _check_input_stat(options)
     ordered = sorted(items, key=lambda item: item.payload["start"])
     chunks = []
     metadata = None
@@ -471,13 +493,10 @@ def prepare_xfit_workload(
     """Preflight one standalone fit for either shared GPU executor."""
     from cuphoton.core.execution import WorkloadSpec
 
-    items, options = plan_xfit_chunks(
-        input_path, chunk_size=chunk_size, fit_options=fit_options
-    )
-    backend = options["fit_options"]["backend"]
+    settings = {**_DEFAULTS, **fit_options}
+    backend = settings["backend"]
     if backend not in {"cupy", "cutile"}:
         raise ValueError("distributed xFit requires backend cupy or cutile")
-    settings = options["fit_options"]
     if backend == "cutile" and settings["model"] == "stamp":
         raise ValueError(
             "backend='cutile' currently supports only the Gaussian model"
@@ -486,6 +505,9 @@ def prepare_xfit_workload(
         raise ValueError(
             "backend='cutile' does not support finite-difference fitting"
         )
+    items, options, dataset = _plan_xfit_chunks(
+        input_path, chunk_size=chunk_size, fit_options=fit_options
+    )
     by_id = {item.item_id: item for item in items}
 
     def validate(record, round_dir):
@@ -513,6 +535,6 @@ def prepare_xfit_workload(
         worker_factory=create_xfit_worker,
         success_record_validator=validate,
         finalize_round=lambda round_dir, records: finalize_xfit_round(
-            round_dir, records, items=items, options=options
+            round_dir, records, items=items, options=options, _dataset=dataset
         ),
     )

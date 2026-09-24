@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -900,7 +901,9 @@ class RunPipelineCommand(ExecutorOptions, XScanCommand):
         _set = {"dragon", "mpi"}
         _default = None
         _mandatory = True
-        _help = "Distributed runtime, started by the matching launcher."
+        _help = (
+            "Distributed runtime: dragon or mpi, with its matching launcher."
+        )
 
     class ManifestArg(PathSpecInvariant):
         _arg = "--manifest"
@@ -988,7 +991,10 @@ class InferRealBogusCommand(ExecutorOptions, XScanCommand):
 
     class NumWorkersArg(NonNegativeIntegerInvariant):
         _arg = "--num-workers"
-        _help = "Loader workers; 0 disables workers, omitted uses checkpoint."
+        _help = (
+            "Loader workers; 0 disables workers. Distributed inference "
+            "defaults to 0; local inference uses the checkpoint setting."
+        )
         _mandatory = False
         _default = None
 
@@ -1019,6 +1025,11 @@ class InferRealBogusCommand(ExecutorOptions, XScanCommand):
                     "--output-dir is required for distributed inference"
                 )
             output_dir = Path(self.output_dir).expanduser().resolve()
+            self._call(
+                validate_identifier,
+                output_dir.name,
+                field="--output-dir basename",
+            )
             result = self._call(
                 run_workload,
                 executor=self.executor,

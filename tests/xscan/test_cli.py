@@ -9390,3 +9390,52 @@ def test_cli_reproduce_hsc_xpois_sweep_marks_nonfinite_variants_unstable(
     assert "non-finite" in unstable["failure"]["message"]
     assert "triplet_xpois_nan_variant" not in payload["jobs"]
     assert "triplet_xpois_nan_variant" in payload["unstable_variants"]
+
+
+@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+def test_distributed_inference_validates_output_name_before_launch(
+    tmp_path, monkeypatch, capsys, runtime
+):
+    from cuphoton.core import executors
+
+    monkeypatch.setattr(
+        executors, "run_workload", lambda **kwargs: pytest.fail("launched")
+    )
+    rc = run_component(
+        "xscan",
+        [
+            "infer-real-bogus",
+            "--run-dir",
+            str(tmp_path),
+            "--dataset-dir",
+            str(tmp_path),
+            "--executor",
+            runtime,
+            "--output-dir",
+            str(tmp_path / "invalid name"),
+        ],
+    )
+    assert rc != 0
+    assert "--output-dir basename" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "option,value", [("--task-batches", "1"), ("--output-dir", "output")]
+)
+def test_local_inference_rejects_distributed_options(
+    tmp_path, capsys, option, value
+):
+    rc = run_component(
+        "xscan",
+        [
+            "infer-real-bogus",
+            "--run-dir",
+            str(tmp_path),
+            "--dataset-dir",
+            str(tmp_path),
+            option,
+            value,
+        ],
+    )
+    assert rc != 0
+    assert "require --executor dragon or mpi" in capsys.readouterr().err
