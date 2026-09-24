@@ -1,18 +1,18 @@
 # Nonlinear refinement of linear-prediction modes
 
-Linear prediction gives frequencies and decays without an initial guess, but
-it is not a maximum-likelihood estimator and its root filter can drop a
-lightly damped mode under noise. `cuphoton.xray.mode_refinement` refines the
-same damped-mode model by nonlinear least squares from the linear-prediction
-result; `cuphoton.xray.mode_refinement_batched` does the same for a batch of
-traces at once on NumPy or CuPy. Both fit
+These experimental, opt-in tools refine linear-prediction modes by nonlinear
+least squares. `cuphoton.xray.mode_refinement` fits one trace with SciPy;
+`cuphoton.xray.mode_refinement_batched` fits a batch on NumPy or CuPy. Both use
+an analytic Jacobian for the model
 
 ```
 trace(t) = constant + sum_k amplitude_k exp(-decay_k t) cos(angular_frequency_k t + phase_k)
 ```
 
-with an analytic Jacobian. Nothing here changes the linear-prediction
-commands or their defaults.
+The fits are unconstrained: decay can become negative, and frequencies have
+no bounds. They are separate from the existing production
+`cuphoton.xray.iterative_fit` solver, which uses positive decay and bounded
+frequencies. These tools have no detector or distributed pipeline integration.
 
 ## Per-trace refinement
 
@@ -26,31 +26,26 @@ strongest peak of the residual spectrum (amplitude from the peak height, zero
 decay and phase) and refined before the next seed. `refine_modes` is the
 same solver from caller-supplied starting modes.
 
-`RefinedModes` carries the refined parameters ordered by amplitude, one-sigma
-uncertainties from the Jacobian at the solution and the residual variance,
-the reconstruction, the residual rms, the solver status, and how many modes
-came from linear prediction (`initial_mode_count`) versus the residual
-spectrum (`seeded_mode_count`). A residual rms well above the noise means
-the model class, not the fit, is wrong.
+`RefinedModes` carries the refined parameters ordered by amplitude, local
+one-sigma uncertainty estimates, the reconstruction, the residual rms, the
+solver status, and how many modes came from linear prediction
+(`initial_mode_count`) versus the residual spectrum (`seeded_mode_count`).
+The uncertainty calculation uses an SVD of the column-normalized Jacobian
+and the estimated residual variance. A rank-deficient Jacobian produces
+`NaN` uncertainties. Finite estimates describe the local fit under the model
+and independent, equal-variance noise assumptions; they do not establish
+identifiability away from that solution or account for model mismatch.
+
+A large residual can result from model mismatch, a poor local solution, or
+failure to converge. Check the solver status and the reconstruction before
+interpreting fitted parameters or uncertainties.
 
 `linear-prediction-validate --refine` runs the validation sweep a second time
-with this estimator (`estimator: cpu-refined` in the summary) so the two can
-be compared level by level. Reference run on the default fixture, CPU,
-default seed, 300 trials per level:
-
-```bash
-uv run cuphoton xray lpv --refine --trials 300 --snr-db 40,30,20,10,5
-```
-
-In that run the linear-prediction estimator loses the weak mode in 10 to 52
-percent of trials depending on the level, and its frequency scatter is 1.1
-to 3.8 times the bound. The refined estimator loses the weak mode in 1 of
-300 trials at each of the two lowest levels of that run and in none above,
-and its frequency and decay scatter are within 10 percent of the Cramer-Rao
-bound at every level of that run (ratios 0.91 to 1.07; the sampling
-uncertainty of a standard deviation from 300 trials is about 4 percent).
-The refinement does not remove the bias a model mismatch produces, and the
-residual ratio still flags that case.
+with this estimator (`estimator: cpu-refined` in the summary). Compare mode
+loss, bias, scatter, and residuals across noise levels and distortions.
+Results depend on the fixture, initialization, and noise realization;
+refinement does not guarantee recovery of every mode or attainment of the
+Cramer-Rao bound.
 
 ```bash
 uv run cuphoton xray lpv --refine --snr-db 40,20,10,5 --trials 200 --output-dir /tmp/lpv-refined
@@ -68,18 +63,23 @@ an optional distortion.
 `refine_modes_batched(xp, time, traces, theta0, n_modes)` takes traces shaped
 `(B, N)` and starting parameters `(B, 4K+1)` in the same layout as the
 per-trace solver (amplitude, decay, angular frequency, phase per mode, then
-the constant) and runs Levenberg-Marquardt for the whole batch: the Jacobian
-for all traces by broadcasting, the normal equations as a batch of small
-`(4K+1)` systems solved with `xp.linalg.solve`, and per-trace damping (a
-step that lowers the cost is accepted and the damping divided by 3, otherwise
-the damping is multiplied by 5 and the trace keeps its parameters). Iteration
-stops when every trace has converged (step below `tol` times the parameter
-norm, default 1e-9) or after `max_iter` (default 60). `xp` is `numpy` or
-`cupy`. On convergence the result matches the per-trace SciPy solver to about
-1e-8 in every parameter (table below).
+the constant). It normalizes the Jacobian columns and solves the damped
+normal equations as a batch of small `(4K+1)` systems with `xp.linalg.solve`.
+A step that lowers the cost is accepted and its damping divided by 3;
+otherwise the damping is multiplied by 5 and that trace keeps its parameters.
 
-The batch iterates until its slowest trace converges, so the NumPy batched
-path is slower than the SciPy loop; the batched form pays off on the GPU.
+Convergence requires the largest absolute component of the
+column-normalized Jacobian's residual gradient, divided by
+`max(residual norm, 1)`, to be at most `tol` (default 1e-9). This criterion
+is independent of the choice of time units. A tiny damped step alone does
+not establish convergence. Iteration stops when every trace has converged
+or after `max_iter` (default 60). Check each trace's convergence flag;
+stationarity does not guarantee a good fit or agreement with another solver.
+
+At tight tolerances, rounding can prevent further cost reduction before the
+gradient criterion is met. Such traces remain marked unconverged even when
+their parameters agree closely with another fit. Choose a tolerance suited
+to the required accuracy and inspect residuals as well as convergence flags.
 
 ## Benchmark
 
@@ -91,8 +91,8 @@ NumPy, and the batched solver on CuPy. Each path is timed `--repeat` times
 (default 3) and the best is reported. For the batched paths the clock covers
 the solver only: the arrays are on the device before the clock starts and
 the device is synchronised before and after, so host-to-device transfer and
-the copy of the result back are not included. One untimed CuPy call on 16
-traces runs first to absorb compilation and allocation. The command also
+the copy of the result back are not included. One untimed CuPy call on up to
+16 traces runs first to warm the device path. The command also
 reports the largest parameter difference between each batched result and
 the SciPy result.
 
@@ -102,23 +102,8 @@ uv run cuphoton xray lprb --traces 2048 --repeat 3 --json
 uv run cuphoton xray lprb --traces 8192 --repeat 3 --json
 ```
 
-### NVIDIA GeForce RTX 4050 Laptop GPU (Ada, compute capability 8.9, 6 GiB)
-
-Host: Intel Core i9-13900H, WSL2 Ubuntu 24.04 on Windows 11, driver 596.49,
-CUDA runtime 13.2, CuPy 14.1.1, Python 3.12, NumPy and SciPy from the locked
-`dev` and `gpu` extras. Best of 3 repeats; the three commands above.
-
-| traces | SciPy per trace, serial (s) | NumPy batched (s) | CuPy batched (s) | SciPy / CuPy | max abs parameter difference |
-| --- | --- | --- | --- | --- | --- |
-| 256 | 0.135 | 0.258 | 0.108 | 1.3 | 8.7e-9 |
-| 2048 | 1.09 | 2.49 | 0.162 | 6.7 | 1.2e-8 |
-| 8192 | 4.38 | 12.7 | 0.800 | 5.5 | 1.9e-8 |
-
-On this card the GPU path breaks even at a few hundred traces and is 5 to 7
-times faster than the SciPy loop from about two thousand traces upward.
-Timings at 256 traces vary by tens of percent between runs on this laptop
-(a second run of the 256-trace command gave 0.178 s for CuPy); the larger
-batches are stable to a few percent. In a
-`cupyx.profiler.benchmark` breakdown at 256 traces on the same card, one
-iteration costs about 1.5 ms in the Jacobian (launch-bound elementwise
-work), 0.2 ms in the normal equations and 0.2 ms in the batched solve.
+Use `--no-gpu` for the CPU comparison alone. These timings cover refinement
+from supplied starts and exclude linear-prediction initialization, input I/O,
+and detector processing. They cannot establish an end-to-end detector
+speedup. Performance and parameter agreement need measurement on the target
+hardware and representative traces.
