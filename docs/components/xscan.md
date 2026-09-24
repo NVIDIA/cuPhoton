@@ -356,6 +356,48 @@ scientific evidence; Dragon saves each result in
 `items/<item_id>/summary.json` and checks it again in the coordinator.
 The evidence decoder returns the 22 named arrays for comparison.
 
+The `run-pipeline` command accepts the same descriptors with either Dragon or
+MPI. Save the configuration and items above as a manifest:
+
+```python
+import json
+
+Path("pipeline.json").write_text(json.dumps({
+    "schema": "cuphoton.xscan.pipeline-manifest/v1",
+    "configuration": config.to_payload(),
+    "items": [item.to_payload() for item in items],
+}, indent=2) + "\n")
+```
+
+Paths may be absolute or relative to the manifest. All nodes must see the
+same source, inputs and output directory. Use your site's launcher settings;
+these examples run one warmup pass and two measured passes:
+
+```bash
+dragon cuphoton xscan run-pipeline --executor dragon \
+  --manifest pipeline.json --output-dir runs --name dragon-pipeline \
+  --max-workers 8 --warmup-rounds 1 --measure-rounds 2
+
+mpiexec -n 8 cuphoton-openmpi-rank-exec \
+  cuphoton xscan run-pipeline --executor mpi \
+  --manifest pipeline.json --output-dir runs --name mpi-pipeline \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+The MPI example requires Open MPI and the allocation's visible GPU list on
+each node. Other MPI launchers must bind each rank to exactly one GPU before
+starting Python; do not use the Open MPI wrapper with MPICH. Each rank uses
+local `cuda:0`, and duplicate physical GPU assignments fail validation.
+
+Both executors initialize one worker context and reuse it across all items
+and rounds. Warmup outputs remain under `rounds/warmup-*`; measured outputs
+remain under `rounds/measure-*`. Each round retains ordinary item results and
+audit evidence. The parent `summary.json` separates readiness, batch time,
+artifact validation and cleanup. Batch time includes dispatch, input loading,
+numerical work and worker output publication; coordinator audits follow that
+timer. It is not kernel-only time. Failed rounds or cleanup invalidate the
+reported statistics. Omitting both round flags runs a single pass.
+
 The pipeline retains device owners through the blocking terminal copy and
 synchronizes failed work before reuse. Failed cleanup makes the context
 unusable. Transfer receipts count pipeline-owned uploads and the packed

@@ -20,6 +20,7 @@ from cuphoton.core.cli import (
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.executor import ExecutorOptions
 
 T = TypeVar("T")
 _DEFAULT_REVIEW_DIR = os.environ.get("CUPHOTON_XSCAN_REVIEW_DIR")
@@ -886,6 +887,54 @@ class TrainInadaTripletCommand(_TrainCommand):
             input_mode_override="triplet",
         )
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
+
+
+class RunPipelineCommand(ExecutorOptions, XScanCommand):
+    """Run complete XPOIS, xFit and XScan jobs in persistent GPU workers."""
+
+    manifest = None
+    output_dir = None
+    run_name = None
+
+    class ExecutorArg(ExecutorOptions.ExecutorArg):
+        _set = {"dragon", "mpi"}
+        _default = None
+        _mandatory = True
+        _help = "Distributed runtime, started by the matching launcher."
+
+    class ManifestArg(PathSpecInvariant):
+        _arg = "--manifest"
+        _mandatory = True
+        _help = "JSON pipeline manifest with configuration and image pairs."
+
+    class OutputDirArg(PathSpecInvariant):
+        _arg = "--output-dir"
+        _mandatory = True
+        _help = "Parent directory for immutable pipeline runs."
+
+    class RunNameArg(StringInvariant):
+        _arg = "--name"
+        _default = None
+        _help = "Optional unique run identifier."
+
+    def run(self) -> None:
+        options = self.executor_options()
+        from .pipeline_executor import run_pipeline_manifest
+
+        result = self._call(
+            run_pipeline_manifest,
+            executor=self.executor,
+            manifest_path=Path(self.manifest),
+            output_root=Path(self.output_dir),
+            run_id=self.run_name,
+            **options,
+        )
+        if result is not None:
+            self._emit_json(result.to_dict())
+            if result.status != "success":
+                raise CommandError(
+                    f"Pipeline failed; inspect {result.summary_path}"
+                )
 
 
 class InferRealBogusCommand(XScanCommand):
