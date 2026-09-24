@@ -1,8 +1,8 @@
 # Roadmap
 
-cuPhoton v0.1.0 establishes runnable, inspectable reference workflows rather
-than a compatibility-stable library. Planned work after v0.1.0 is organized
-around reproducibility and easier institutional adaptation.
+cuPhoton v0.1.0 establishes runnable, inspectable reference workflows.
+Planned work after v0.1.0 is organized around reproducibility and easier
+institutional adaptation.
 
 ## Near term
 
@@ -31,5 +31,5 @@ around reproducibility and easier institutional adaptation.
   reproducible interfaces.
 - Add migrations when a widely used artifact schema changes.
 
-Roadmap items are intentions, not commitments. Priorities are set through
-maintainer review and public issue discussion.
+Roadmap items are intentions, not commitments. Maintainers refine roadmap
+priorities through review and public issue discussion.

@@ -5,8 +5,8 @@ PyTorch real/bogus classifiers, and creates numeric or Bokeh review artifacts.
 The umbrella CLI group is `cuphoton xscan`.
 
 XScan is CLI-first because dataset provenance, split controls, and run
-artifacts are part of the reproducible workflow. Internal model modules are
-extension points, not a broad stable API.
+artifacts are part of the reproducible workflow. Internal model modules
+provide extension points for custom workflows, but are not a broad stable API.
 
 ## Install and smoke test
 
@@ -90,12 +90,13 @@ uv run cuphoton xscan data-export-xfit-input \
 ```
 
 Variance must describe the exported images in their squared units. If images
-have been rescaled by a factor, rescale their variance by the factor squared.
-`--image-unit` records a unit label without changing values; the JSON summary
-records that label, the corresponding variance unit, source filenames and
-SHA-256 hashes, and the output archive hash. Supplying variance enables xFit's
+have been rescaled by a factor, rescale their variance by the factor
+squared. `--image-unit` labels the existing values; the JSON summary records
+that label, the corresponding variance unit, source filenames and SHA-256
+hashes, and the output archive hash. Supplying variance enables xFit's
 variance-weighted chi-square and the two variance-dependent scalar features.
-The exporter does not estimate variance or convert bad-pixel bit masks.
+Supply variance estimates and convert instrument bit masks to inclusion
+masks before export.
 
 By default, the exporter re-hashes each source after copying and removes its
 new archive if a source changed. For large inputs guaranteed to remain
@@ -103,8 +104,8 @@ immutable throughout export, `--skip-source-rehash` skips this second source
 hash pass (`verify_sources_after_copy=False` in the Python API). Initial
 source hashes and the output archive hash are always recorded. The summary's
 `source_hash_verification` is `before_and_after_copy` by default or
-`before_copy_only` with the opt-out; the latter does not detect source
-mutation during export.
+`before_copy_only` with the opt-out. Use the default verification to detect
+source changes during export.
 
 Use an explicitly constructed xFit archive when initial parameters or a
 sampled PSF basis are required. `--compute-dtype float64` keeps the row hashes
@@ -112,39 +113,35 @@ bound to the original stamps while solving in float64, which is recommended for
 ill-conditioned observational fits. Use `input` or `float32` when that
 precision/performance tradeoff is intentional.
 
-The exported input, feature bundle, checkpoints, and run summaries are
-data-bearing, not privacy-sanitized. Depending on the stage, they retain exact
+The exported input, feature bundle, checkpoints, and run summaries retain exact
 pixels, candidate identifiers, per-stamp hashes, fit values, and resolved
-local paths. Do not publish generated artifacts unless their source data and
-metadata are cleared for release.
+local paths, depending on the stage. Confirm that their source data and metadata
+are cleared for release before publishing generated artifacts.
 
 The builder accepts difference-mode xFit runs and joins `fits.parquet` to
-XScan metadata by `candidate_id`; array position is never used as the join
-key. It also verifies that each fit row was computed from the exact
-`difference.npy` stamp, including dtype and shape, and validates the hashes
-recorded by the xFit run. Pair and triplet XScan models can both consume this
-same difference-fit sidecar. The new output directory contains
-standalone `candidate-id.npy`, `features.npy`, and
+XScan metadata by `candidate_id`. It also verifies that each fit row was
+computed from the exact `difference.npy` stamp, including dtype and shape,
+and validates the hashes recorded by the xFit run. Pair and triplet XScan
+models can both consume this same difference-fit sidecar. The new output
+directory contains standalone `candidate-id.npy`, `features.npy`, and
 `input-image-sha256.npy` arrays plus `schema.json`. The arrays are
-pickle-free and memory-mappable; the schema records their hashes, the ordered
-feature names, transforms, and join diagnostics. The default
+pickle-free and memory-mappable; the schema records their hashes, the
+ordered feature names, transforms, and join diagnostics. The default
 `--missing-policy error` rejects an incomplete join. Use
 `--missing-policy indicator` only when missing fits are expected: affected
 rows have every feature set to zero, including `fit_present` and run-level
-indicators such as `variance_weighted`. Present but invalid fits retain valid
-run-level diagnostics, set validity gates to zero, and zero fit-parameter
-features.
-The feature bundle retains row hashes and is rebound to the current
-`difference.npy` every time it is loaded. Converting float32 stamps to float64
-or changing a pixel after bundle construction is rejected. Repeated candidate
-IDs may reuse one fit only when their difference stamps, split, and split
-group are identical.
+indicators such as `variance_weighted`. Present but invalid fits retain
+valid run-level diagnostics, set validity gates to zero, and zero
+fit-parameter features. The feature bundle retains row hashes and is rebound
+to the current `difference.npy` every time it is loaded. Converting float32
+stamps to float64 or changing a pixel after bundle construction is rejected.
+Repeated candidate IDs may reuse one fit only when their difference stamps,
+split, and split group are identical.
 
 Features use versioned, fixed bounded transforms for fit validity, residual
-improvement, uncertainty, dipole geometry, and Gaussian shape. No means,
-standard deviations, thresholds, or other scaling parameters are estimated
-from the dataset, so building a bundle cannot leak validation or test-set
-statistics into training.
+improvement, uncertainty, dipole geometry, and Gaussian shape. These transforms
+are independent of dataset statistics, preserving the separation of training,
+validation, and test sets during bundle construction.
 
 Enable fusion with the paired top-level training settings
 `use_xfit_features` and `xfit_feature_dir`:
@@ -228,17 +225,16 @@ settings. Keep the batch size fixed when comparing scores across worker counts.
 
 Use fixed, group-aware splits that keep related samples from crossing train,
 validation, and test sets. Record the seed, model config, selected checkpoint,
-device, label source, and dataset summary. Do not train on smoke placeholders
-or unlabeled rows. In particular, Rubin `candidate_isDipole` flags and
-placeholder `label.npy` values are not real/bogus truth. A future labeled
-evaluation should use reviewed labels and split by DiaObject, or an equivalent
+device, label source, and dataset summary. Use reviewed real/bogus labels for
+training and evaluation; Rubin `candidate_isDipole` flags and placeholder
+`label.npy` values serve smoke tests. Split by DiaObject, or an equivalent
 stable source group, before model selection. Training rejects `split_group`
 values that cross splits and also rejects cross-split Rubin DiaObject IDs when
 those fields are present.
 
 The `*.blackwell.example.yaml` files demonstrate throughput-oriented settings
-for recent NVIDIA GPUs. They are starting points, not universal performance
-recommendations.
+for recent NVIDIA GPUs. Tune these starting points for your hardware and
+dataset.
 
 ## Persistent XPOIS, xFit and XScan pipeline
 

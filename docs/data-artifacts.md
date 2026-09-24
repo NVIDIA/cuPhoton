@@ -10,12 +10,12 @@ Individual commands may accept additional fields; use `<command> help
 - Image coordinates use `(y, x)` array order unless an option explicitly asks
   for `(x, y)` pixel coordinates.
 - Inputs must be finite unless a command documents a NaN policy.
-- Variance arrays represent variance, not standard deviation, and must be
-  positive on fitted pixels.
+- Variance arrays use squared image units and must be positive on fitted
+  pixels.
 - Boolean fit masks use `True` for selected pixels. Instrument bit masks must
   be translated with the command's mask policy.
-- Keep units and coordinate frames in FITS headers or adjacent metadata; NumPy
-  arrays do not carry them.
+- Keep units and coordinate frames in FITS headers or adjacent metadata,
+  including metadata accompanying NumPy arrays.
 
 ## xFit dipole batches
 
@@ -29,10 +29,10 @@ variances must be positive wherever the mask selects a pixel. The
 sampled-stamp model additionally consumes a numeric `stamp_basis` array.
 For split inputs, `(batch, y, x)` auxiliaries are per-candidate and broadcast
 over all three planes. This interpretation also wins when `batch == 3`; use
-`(1, 3, y, x)` to express per-plane auxiliaries without ambiguity.
+`(1, 3, y, x)` to express per-plane auxiliaries explicitly.
 
 The command rejects standalone `.npy` inputs, object arrays, and archives that
-require pickle. It does not download or bundle observational data.
+require pickle. Callers supply the observational data.
 
 A successful `fit-dipoles` run contains:
 
@@ -45,8 +45,7 @@ A successful `fit-dipoles` run contains:
 
 Covariance uses supplied variances when present and residual scaling
 otherwise. Non-converged or rank-deficient fits retain status information and
-report invalid uncertainties explicitly instead of publishing finite-looking
-errors.
+mark their uncertainties invalid.
 
 ## XScan HSC NPY inputs
 
@@ -79,15 +78,15 @@ explicit `(sample, 2)` array of zero-based `(y, x)` positions. In a v2 manifest,
 `fit_positions` names a strict integer NPY file whose coordinates refer to the
 post-crop image. Position files require `solver=spatial-als` and cannot be
 combined with a fit mask or automatic stamp selection. Duplicate positions are
-retained and therefore increase that pixel's weight. Every explicit position must reference
-a finite target, variance, and source footprint; explicit selection fails
-closed instead of silently dropping rows. Mask and default selection omit
-invalid pixels. Chebyshev coordinates are normalized over the fitted image
+retained and therefore increase that pixel's weight. Every explicit position
+must reference a finite target, variance, and source footprint; an invalid
+explicit position raises an error for the selection. Mask and default
+selection use valid pixels. Chebyshev coordinates are normalized over the
+fitted image
 axes recorded in the summary's `image_shape`, which is the crop when a
 workflow crop is applied, so saved coefficient fields and `kernel_at` use crop
 coordinates. These positions and all image, variance, mask, registration, PSF,
-and instrument-calibration inputs are caller-owned; cuPhoton does not bundle an
-observational calibration archive.
+and instrument-calibration inputs come from the calling pipeline.
 
 Explicit-position summaries distinguish row count, unique pixel count, and
 duplicate row count.
@@ -103,46 +102,45 @@ A successful fit writes `summary.json` and these arrays under `artifacts/`:
 | `fit_positions.npy` | ordered fit rows, including duplicates, when supplied |
 | `background.npy` | fitted differential background |
 
-Spatial ALS runs omit `kernel.npy`, because their kernel varies with image
-position. They instead save `kernel_center.npy` as a center-evaluated preview,
-the horizontal and vertical reference profiles and bases, both coefficient
-matrices, the background coefficients, and the objective history. The summary
-records the solver, term order, coordinate normalization, convergence,
-regularization, reference-profile scale, center kernel sum, and fit counts
-needed to interpret them, plus `design_chunk_size`, the row-batch cap used for
-normal equations and reconstruction. That cap is fixed on CPU and derived from
-free device memory on CuPy; runs with different caps agree only to
-floating-point rounding. The `vertical_reference_scale` field is always
-saved because it multiplies the vertical reference when the factors are
-evaluated. With flux conservation enabled, the summary also records it as
-`flux_scale`, the position-independent signed kernel sum. Without flux
-conservation, `flux_scale` is omitted: the vertical reference multiplier is
-not a standalone photometric scale. Evaluate `kernel_at(y, x)` for the local
-kernel and its sum.
-The center kernel sum is recorded in either case. Spatial ALS `dof` is the
-nominal fit-row count minus parameter count, not an effective degrees of
-freedom estimate for the regularized nonlinear fit.
+Spatial ALS runs save their position-dependent kernel as horizontal and
+vertical reference profiles and bases, both coefficient matrices, and a
+center-evaluated preview in `kernel_center.npy`. They also save the
+background coefficients and objective history. The summary records the
+solver, term order, coordinate normalization, convergence, regularization,
+reference-profile scale, center kernel sum, and fit counts needed to
+interpret them, plus `design_chunk_size`, the row-batch cap used for normal
+equations and reconstruction. That cap is fixed on CPU and derived from free
+device memory on CuPy; different caps can produce floating-point rounding
+differences. The `vertical_reference_scale` field is always saved because it
+multiplies the vertical reference when the factors are evaluated. With flux
+conservation enabled, the summary also records it as `flux_scale`, the
+position-independent signed kernel sum. With flux conservation disabled, the
+summary stores the multiplier as `vertical_reference_scale`, and the local
+photometric scale comes from the sum of `kernel_at(y, x)`. The center kernel
+sum is recorded in either case. Spatial ALS `dof` is the nominal fit-row
+count minus parameter count. Estimating effective degrees of freedom for
+this regularized nonlinear fit requires a separate statistical analysis.
 
 Auto-stamp selection also writes metadata describing the selected regions.
 
 Benchmark runs write `timings.json`, `comparisons.json`, and each backend's
 result arrays as `<backend>_<name>.npy`. Constant-kernel benchmarks save the
 kernel, matched, residual, fit-mask, and background images. Spatial ALS
-benchmarks save those images without the kernel, plus the line references and
-bases, both coefficient fields, the background coefficients, `flux_scale`,
-the objective history, the spatial and background term tables,
-`kernel_sample_positions_yx` (the four image corners and the center), and
-`realized_kernels` evaluated there; the kernels are reproducible from the
-saved factors. With flux conservation enabled, `flux_scale` is the signed
-kernel sum; otherwise it is the vertical reference multiplier, and local
-kernel sums must be evaluated from the saved factors. The summary separates
-first-solve from warm timings, states
-each timing boundary, and reports median speedups against the reference
-backend, per-backend solver facts including `design_chunk_size`, and the CPU
-thread environment. CuPy timing rows add CUDA-event intervals and memory-pool
-observations. `parity.ok` gates arrays, scalars, exact fields, and fit masks;
-the objective history, condition number, iteration count, and convergence
-flag are reported as non-gating diagnostics.
+benchmarks save the matched, residual, fit-mask, and background images, plus
+the line references and bases, both coefficient fields, the background
+coefficients, `flux_scale`, the objective history, the spatial and
+background term tables, `kernel_sample_positions_yx` (the four image corners
+and the center), and `realized_kernels` evaluated there; the kernels are
+reproducible from the saved factors. With flux conservation enabled,
+`flux_scale` is the signed kernel sum; otherwise it is the vertical
+reference multiplier, and local kernel sums must be evaluated from the saved
+factors. The summary separates first-solve from warm timings, states each
+timing boundary, and reports median speedups against the reference backend,
+per-backend solver facts including `design_chunk_size`, and the CPU thread
+environment. CuPy timing rows add CUDA-event intervals and memory-pool
+observations. `parity.ok` gates arrays, scalars, exact fields, and fit
+masks; the objective history, condition number, iteration count, and
+convergence flag are reported as non-gating diagnostics.
 
 ## XScan datasets
 
@@ -160,8 +158,8 @@ A prepared dataset directory contains:
 
 All image arrays have the same shape and all first dimensions equal the label
 count. Pair models consume search and template channels; triplet models also
-require `difference.npy`. Validate label provenance before training; smoke or
-unlabeled placeholder rows are not training labels.
+require `difference.npy`. Train with reviewed labels whose provenance has been
+validated. Reserve smoke and unlabeled placeholder rows for workflow checks.
 
 Training runs contain an effective config, checkpoint and metric artifacts,
 and a summary that records the selected device and split. Review annotations
@@ -206,19 +204,18 @@ and split groups are identical; duplicate xFit candidate IDs are rejected.
 The default `missing_policy: error` requires every dataset row to have a fit.
 `indicator` instead emits finite zero features with
 `fit_present=0` for unmatched rows. Invalid or non-converged fits set their
-validity gates to zero and do not expose invalid parameter-derived values.
+validity gates and invalid parameter-derived features to zero.
 Every load recomputes the current dataset's difference-stamp hashes. Training
 checkpoints retain the exact schema and feature artifact identity, and
 inference records the independently validated identity of its target bundle.
 
-These generated artifacts are data-bearing, not privacy-sanitized. The xFit
-input contains exact pixels and candidate identifiers; fit and feature
-artifacts retain identifiers, hashes, residuals or derived fit values; and run
-summaries can retain resolved local paths. Do not publish them unless their
-source data and metadata are cleared for release.
+The xFit input contains exact pixels and candidate identifiers. Fit and
+feature artifacts retain identifiers, hashes, residuals or derived fit values,
+and run summaries can retain resolved local paths. Publish these artifacts
+after their source data and metadata have been cleared for release.
 
-Version 1 uses fixed, bounded transforms rather than statistics fitted to the
-training, validation, or test rows. A training config opts in with top-level
+Version 1 uses fixed, bounded transforms defined independently of the
+training, validation, and test rows. A training config opts in with top-level
 `use_xfit_features: true` plus `xfit_feature_dir`;
 `model.xfit_feature_names` is then populated from and locked to the bundle
 schema. The optional fusion controls are
@@ -230,10 +227,10 @@ rejects a validation/evaluated-split `fit_present` coverage difference greater
 than 0.05 unless the caller explicitly supplies
 `--allow-xfit-coverage-mismatch`.
 
-These artifacts do not create labels. Rubin `candidate_isDipole` and
-placeholder labels must not be interpreted as real/bogus truth. When reviewed
-labels become available, make train/validation/test partitions group-aware by
-DiaObject or an equivalent stable source identity.
+Real/bogus training requires separately reviewed labels. Rubin
+`candidate_isDipole` describes a dipole classification, and placeholder labels
+support workflow checks. Partition reviewed labels into train/validation/test
+groups by DiaObject or an equivalent stable source identity.
 
 ## xRep FITS and arrays
 
@@ -271,7 +268,7 @@ matching methods and controls as well as matching data and preprocessing.
 
 ## Run-directory hygiene
 
-Run directories are generated artifacts, not source. Store them outside the
-checkout when practical, do not commit them, and do not treat a standalone HTML
-view as the only result. A portable run should contain enough structured
-configuration and metadata to regenerate its derived review files.
+Store generated run directories outside the checkout when practical and keep
+them out of source commits. A portable run includes structured configuration,
+numeric artifacts, and metadata alongside its HTML views so review files can
+be regenerated.

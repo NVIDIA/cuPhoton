@@ -19,7 +19,7 @@ uv run cuphoton xray doctor
 uv run python examples/run_quickstarts.py --component xray --require-gpu
 ```
 
-Only CUDA 13 package variants are supported. `cuphoton xray doctor` reports Python,
+The GPU profile targets CUDA 13. `cuphoton xray doctor` reports Python,
 CuPy, CUDA visibility, and optional review dependencies; include that output
 when reporting environment problems.
 
@@ -30,5 +30,4 @@ python -m pip install -e '.[dev,viz]'
 python -m pip install -e '.[dev,gpu,viz]'
 ```
 
-The package installs no datasets or generated outputs. Pass input and output
-paths explicitly to each command.
+Supply your datasets and pass input and output paths explicitly to each command.

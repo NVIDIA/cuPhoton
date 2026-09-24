@@ -27,9 +27,9 @@ backgrounds, fit masks, and weighted least squares in this family of methods.
   [doi:10.3847/1538-3881/ace9d8](https://doi.org/10.3847/1538-3881/ace9d8)
 
 XScan's pair and triplet paths reproduce the image-channel comparison in
-this line of work, with a transformer-family model. Its data assumptions must
-be evaluated on the intended domain, with splits that prevent leakage across
-related samples.
+this line of work, with a transformer-family model. Evaluate its data
+assumptions on the intended domain and keep related samples together when
+constructing training, validation, and test splits.
 
 ## FITS and WCS
 

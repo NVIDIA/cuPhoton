@@ -1,8 +1,9 @@
 # Synthetic quickstarts
 
-The checkout quickstart runner creates small deterministic inputs and exercises
-the science components without downloading a dataset. It is a smoke test and
-an artifact-format example, not a scientific benchmark.
+The checkout quickstart runner creates small deterministic inputs locally and
+exercises the science components. Use it to smoke-test the environment and
+explore the artifact formats. Scientific benchmarks use representative data
+and a measurement protocol suited to the workflow.
 
 ## Run all components
 
@@ -21,7 +22,7 @@ uv sync --locked --extra dev --extra torch --extra viz
 uv run python examples/run_quickstarts.py --profile cpu
 ```
 
-To require CUDA instead of allowing fallback:
+To require CUDA:
 
 ```bash
 uv run python examples/run_quickstarts.py --require-gpu
@@ -69,12 +70,13 @@ The output root contains a subdirectory for each selected component and a root
 - input seeds and shapes; and
 - paths to the generated component artifacts.
 
-Delete the output directory before rerunning with the same destination. Do not
-commit quickstart outputs; regenerate them from the command and recorded seed.
+Delete the output directory before rerunning with the same destination. Keep
+quickstart outputs outside version control; regenerate them from the command
+and recorded seed.
 
 ## Interpreting fallback
 
-An `auto` run is successful on CPU or GPU. Read `summary.json` before treating
-the result as GPU validation. A performance or CUDA correctness check should
-use `--require-gpu`, record the GPU and driver, and synchronize device work in
-the benchmark harness.
+An `auto` run is successful on CPU or GPU. Use `summary.json` to confirm the
+backend used. A performance or CUDA correctness check should use
+`--require-gpu`, record the GPU and driver, and synchronize device work in the
+benchmark harness.

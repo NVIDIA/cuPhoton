@@ -1,8 +1,9 @@
 # xRep (xReproject)
 
 `cuphoton.xrep` reprojects two-dimensional images onto celestial WCS grids.
-It can derive a north-up grid or use an existing image as the destination. It supports bilinear and Lanczos-3 interpolation, optional mask
-propagation, relative-area scaling, and shared-grid stacks. Its CLI group is
+It can derive a north-up grid or use an existing image as the destination.
+It supports bilinear and Lanczos-3 interpolation, optional mask propagation,
+relative-area scaling, and shared-grid stacks. Its CLI group is
 `cuphoton xrep`.
 
 ## Install and smoke test
@@ -37,8 +38,8 @@ uv run cuphoton xrep reproject-image \
   --output-dir /path/to/runs
 ```
 
-If a target grid is not supplied, the workflow derives one from the source
-WCS. Provide a reference sky position and pixel scale for controlled
+By default, the workflow derives the target grid from the source WCS.
+Provide a reference sky position and pixel scale for controlled
 cross-image comparisons. Validate the output bounding box, WCS alignment,
 flux behavior, and mask footprint.
 
@@ -60,7 +61,7 @@ member.
 `reproject-stack --target-wcs` uses a selected FITS image HDU's full celestial
 WCS and exact `(height, width)`. `--target-hdu` selects its zero-based HDU index;
 omitting it selects the first 2D image. The output origin is `(0, 0)` on that
-image, so input footprints never enlarge the destination.
+image, and the destination dimensions stay fixed for every input footprint.
 
 ```bash
 uv run cuphoton xrep reproject-stack \
@@ -141,8 +142,8 @@ result = reproject_masked_array(
 Masked reprojections use squared normalized interpolation weights for variance,
 square the relative-area Jacobian, and preserve mask neighborhoods by exact
 bitwise OR over every nonzero contributor in the selected interpolation
-kernel. The returned variance is explicitly a diagonal approximation:
-interpolation-induced covariance is not represented. Pass
+kernel. The returned variance is a diagonal approximation; callers tracking
+interpolation-induced covariance need to carry it separately. Pass
 `variance_fill_value` to `reproject_masked_array` to set an out-of-footprint
 variance sentinel independently of the image `fill_value`; it defaults to
 NaN. Finite variance values must be nonnegative; NaN and positive infinity

@@ -3,9 +3,10 @@
 ## Requirements
 
 cuPhoton supports Python 3.11 through 3.14 on Linux for the base, GPU, CPU
-PyTorch, and visualization profiles. CPU workflows do not require CUDA. The
-GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. Python
-3.12 or 3.13 is required for the experimental cuTile profile.
+PyTorch, and visualization profiles. CPU workflows run with the base or CPU
+PyTorch dependencies. The GPU profile targets CUDA 13 and requires a
+compatible NVIDIA driver. Python 3.12 or 3.13 is required for the
+experimental cuTile profile.
 
 Install [uv](https://docs.astral.sh/uv/) before working from a checkout. uv is
 the supported environment and lock-file tool; editable pip installation is
@@ -30,8 +31,7 @@ For CPU development, including PyTorch workflows:
 uv sync --locked --extra dev --extra torch --extra viz
 ```
 
-The base package is sufficient for CPU data inspection and workflows that do
-not use PyTorch or optional review views:
+The base package supports CPU data inspection and NumPy/SciPy workflows:
 
 ```bash
 uv sync --locked
@@ -47,7 +47,7 @@ The extras are composable:
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `viz` | Bokeh and Pillow |
 
-Use the cuTile profile only when developing that backend:
+For cuTile backend development:
 
 ```bash
 uv sync --locked --python 3.12 \
