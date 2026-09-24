@@ -941,9 +941,7 @@ def _append_detector_worker_options(
         cmd.extend(["--fit-method", "iterative"])
         for name, value in options["iterative_options"].items():
             if value is not None:
-                cmd.extend(
-                    ["--iterative-" + name.replace("_", "-"), str(value)]
-                )
+                cmd.append(f"--iterative-{name.replace('_', '-')}={value}")
 
 
 def _read_detector_input_spec(

@@ -999,12 +999,14 @@ def _full_diagnostic_record(
         ("tolerance", 1e-7),
         ("amplitude_l2", 0.2),
         ("min_frequency", 0.1),
+        ("min_frequency", -1e-5),
         ("max_frequency", 0.8),
     ],
 )
 def test_iterative_distributed_options_change_identity_and_worker_command(
     tmp_path, monkeypatch, name, value
 ):
+    from cuphoton.xray import commands as xray_commands
     from cuphoton.xray.iterative_fit import IterativeFitOptions
 
     request_manifests = []
@@ -1061,7 +1063,17 @@ def test_iterative_distributed_options_change_identity_and_worker_command(
     command = configured["commands"][0]
     assert command[command.index("--fit-method") + 1] == "iterative"
     flag = "--iterative-" + name.replace("_", "-")
-    assert command[command.index(flag) + 1] == str(value)
+    assert f"{flag}={value}" in command
+    parsed_values = []
+
+    def capture_worker_options(args):
+        parsed_values.append(getattr(args, "iterative_" + name))
+
+    monkeypatch.setattr(
+        xray_commands, "_detector_artifacts", capture_worker_options
+    )
+    assert main(command[4:]) == 0
+    assert parsed_values == [value]
     assert "--fit-method" not in lp["commands"][0]
     assert not any(
         arg.startswith("--iterative-") for arg in lp["commands"][0]
