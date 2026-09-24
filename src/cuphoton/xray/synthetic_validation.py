@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -403,6 +403,10 @@ def validation_sweep(
     trial in which the estimator raises is counted in ``estimator_errors``
     and as a loss of every mode.
 
+    Truth and fitted modes use nonnegative amplitudes and phases in
+    ``[-pi, pi)``. The returned truth uses the same convention as the
+    parameter statistics.
+
     ``distortion`` = (kind, amount) replaces the clean trace with one from
     :func:`distort_trace`, outside the model class; ``residual_ratio`` is
     then the median rms residual of the reconstruction divided by the
@@ -413,6 +417,14 @@ def validation_sweep(
         raise ValueError("trials must be at least 1")
     if not snr_db:
         raise ValueError("snr_db must contain at least one level")
+    amplitudes, phases = _canonical(
+        np.array([m.amplitude for m in modes]),
+        np.array([m.phase for m in modes]),
+    )
+    modes = tuple(
+        replace(m, amplitude=float(a), phase=float(p))
+        for m, a, p in zip(modes, amplitudes, phases)
+    )
     est = estimator or (lambda t, y, k: linear_prediction_numpy(t, y, k))
     base = synthetic_modes_trace(
         samples, modes=modes, constant=constant, duration=duration
