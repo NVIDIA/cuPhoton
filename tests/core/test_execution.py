@@ -126,7 +126,16 @@ def test_round_audits_then_finalizes_in_manifest_order(tmp_path):
 
 @pytest.mark.parametrize(
     "tamper",
-    ["record", "receipt", "missing", "extra", "gpu", "round", "callback"],
+    [
+        "record",
+        "record-path",
+        "receipt",
+        "missing",
+        "extra",
+        "gpu",
+        "round",
+        "callback",
+    ],
 )
 def test_round_audit_rejects_invalid_evidence_before_component_merge(
     tmp_path, tamper
@@ -146,6 +155,12 @@ def test_round_audit_rejects_invalid_evidence_before_component_merge(
         record = read_json_mapping(path)
         record["worker_id"] = 0
         atomic_write_json(path, record)
+    elif tamper == "record-path":
+        first = run_dir / "records" / "one.json"
+        second = run_dir / "records" / "two.json"
+        first_record = read_json_mapping(first)
+        atomic_write_json(first, read_json_mapping(second))
+        atomic_write_json(second, first_record)
     elif tamper == "receipt":
         results[0]["success_count"] = 99
     elif tamper == "missing":

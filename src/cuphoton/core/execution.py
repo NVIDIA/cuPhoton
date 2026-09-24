@@ -582,6 +582,13 @@ def _read_round_artifacts(
                         raise ValueError("artifact is not a regular file")
                     raise FileNotFoundError(label)
                 mapping = json_mapping(read_json_mapping(path), field=label)
+                if (
+                    label.startswith("records/")
+                    and mapping.get("item_id") != Path(label).stem
+                ):
+                    raise ValueError(
+                        "terminal item identity differs from record path"
+                    )
                 mappings[label] = mapping
                 if (
                     label.startswith("records/")
