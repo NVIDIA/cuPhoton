@@ -1,21 +1,23 @@
-# Native wheels
+# Native packages
 
 Release artifacts are six Linux wheels (CPython 3.12, 3.13, and 3.14 on
 x86-64 and ARM64) plus one source archive. Wheels target glibc 2.28 or later.
 The runtime dependencies may impose a newer glibc floor; the installed-wheel
-CI tests use Debian 12. Free-threaded Python, Windows, macOS, and conda builds
-are outside this matrix.
+CI tests use Debian 12. Native conda builds cover the same six Python and
+architecture combinations, as described below. Free-threaded Python, Windows,
+and macOS are outside both matrices.
 
 Each wheel contains `cuphoton.xdr._nvcomp_batch_ext` and a privately renamed,
 reentrant CFITSIO 4.7.0 shared library. CUDA, cuFile, KvikIO, and nvCOMP remain
 in their upstream wheels, installed through `cuphoton[io]`. `cuphoton[gpu]`
-also includes the photometry, PyTorch, and Numba backends. Photutils currently
-requires a source build and C compiler on ARM64; `cuphoton` and `cuphoton[io]`
-do not install it.
+also includes the photometry, PyTorch, and Numba backends. Installing Photutils
+from PyPI currently requires a source build and C compiler on ARM64;
+`cuphoton` and `cuphoton[io]` do not install it. Conda provides ARM64 Photutils
+binaries.
 
 The native KvikIO ABI is restricted to the 26.6 release family. nvCOMP is
 restricted to 5.2. Updating either family requires rebuilding and qualifying
-the native wheels. The CUDA SDK build inputs are pinned to 13.0 so a newer
+the native packages. The CUDA SDK build inputs are pinned to 13.0 so a newer
 build environment cannot silently raise the runtime floor.
 
 ## Versions and release candidates
@@ -51,14 +53,14 @@ Add `viz` for visualization dependencies. Use `--pre` when selecting the newest
 available prerelease instead of pinning one. Each changed candidate needs a
 new RC number: PyPI does not allow replacing an uploaded filename.
 
-## Build
+## Build wheels
 
 From the checkout, on each native Linux architecture with Docker and uv:
 
 ```bash
 make wheels
 python scripts/wheels/check_distributions.py dist --arch "$(uname -m)"
-uvx --from twine==6.2.0 twine check --strict dist/*
+uvx --from twine==6.2.0 twine check --strict dist/*.tar.gz dist/*.whl
 ```
 
 `make wheels` builds a source archive, then uses cibuildwheel 4.2.1 to build
@@ -72,6 +74,12 @@ The default `make build` produces only the source archive. Plain source and
 editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` is
 set. See [XDR source installation](components/xdr.md#native-extension-availability)
 for the explicit native development build.
+
+`make build` refreshes only the source archive. `make wheels` replaces cuPhoton
+wheels while preserving conda outputs; `make conda` replaces `dist/conda` while
+preserving wheels. Use `make clean-dist` explicitly to remove all distributions.
+To reuse the wheel build's exact archive for conda, use the direct conda build
+command below.
 
 The reusable `wheels.yml` workflow builds from one source archive on native
 x86-64 and ARM64 runners. It checks base imports inside cibuildwheel, then
@@ -88,7 +96,99 @@ These workers solve generated xPOIS inputs on the CPU and check numerical
 results, distinct processes, and MPI collectives. JSON receipts are retained
 as CI artifacts. These checks do not establish GPU executor correctness.
 
-## GPU qualification
+## Build and install conda packages
+
+The `cuphoton` conda package includes the compiled XDR extension and depends on
+upstream conda packages for CFITSIO 4.7, CUDA 13, KvikIO 26.6, and nvCOMP 5.2.
+Conda installs those libraries into the environment; no manual CUDA paths
+are needed.
+Conda has no pip-style extras: this package provides the native I/O profile
+only and requires CUDA 13 libraries. It does not provide a CPU-only install;
+use the base pip package for that profile.
+
+With uv and pixi installed, run on each native Linux architecture:
+
+```bash
+make conda
+```
+
+This builds the SCM-versioned source archive and uses rattler-build 0.76.1 to
+produce Python 3.12, 3.13, and 3.14 packages. The archive supplies the same
+version used by wheels, including RC versions, without requiring Git during
+the conda build. To build one Python version from an existing source archive:
+
+```bash
+pixi exec --spec rattler-build=0.76.1 --spec python=3.12 -- \
+  python scripts/conda/build.py 'dist/cuphoton-<version>.tar.gz' \
+  --python 3.12 --output-dir dist/conda
+```
+
+Use an output directory without existing cuPhoton packages. Outputs go under
+`linux-64` or `linux-aarch64`, with a `provenance.json` recording the source
+archive and package SHA256 values. Builds use strict channel priority with
+`rapidsai` before `conda-forge`, excluding `defaults`. This order is required
+by the current installed-package solver; it also gives RAPIDS precedence for
+other packages present in both channels. Review the resolved environment
+before qualifying an artifact.
+The qualified conda nvCOMP build is 5.2.0.10, while the wheel environment uses
+5.2.0.13. Both stay within the required 5.2 ABI family and need independent
+artifact qualification; their patch versions are not interchangeable evidence.
+
+Create a local channel index so conda resolves the artifact's runtime
+dependencies. For downloaded CI artifacts, place the packages under
+`dist/conda/linux-64` or `dist/conda/linux-aarch64` first. Select the version
+and build string from the package filename:
+
+```bash
+mkdir -p dist/conda/noarch
+pixi exec --spec conda-index=0.13.0 -- python -m conda_index dist/conda
+conda create --prefix ./conda-xdr --override-channels \
+  --strict-channel-priority -c "$PWD/dist/conda" -c rapidsai -c conda-forge \
+  'python=3.12' 'cuphoton=<version>=<build>'
+```
+
+Direct installation of a `.conda` filename skips dependency resolution; use
+the indexed channel directory above. See [conda's installation
+guidance](https://docs.conda.io/projects/conda/en/latest/user-guide/concepts/installing-with-conda.html).
+For broader GPU and photometry functionality, add the following packages.
+The PyTorch build selector chooses its CUDA 13.0 build:
+
+```bash
+conda install --prefix ./conda-xdr --override-channels \
+  --strict-channel-priority -c "$PWD/dist/conda" -c rapidsai -c conda-forge \
+  'photutils>=3' 'numba>=0.61,<0.66' 'numba-cuda>=0.30,<0.31' \
+  'pytorch>=2.13,<3' 'pytorch=*=cuda130*' 'cuda-version=13.0'
+```
+
+Install development tools such as `pytest`, `ruff`, and `pre-commit` through
+conda. Keep the repository's uv development environment separate: the current
+conda PyTorch package requires `setuptools<82`, while the pip `dev` extra
+requires `setuptools>=83`. For Python-only editable work in a separate conda
+environment with the runtime dependencies and pip installed, run
+`CUPHOTON_XDR_BUILD_EXT=0 conda run --prefix ./conda-dev python -m pip install --no-deps -e .`.
+Native builds should use the recipe above.
+
+The reusable `conda.yml` workflow builds all six variants from one source
+archive and retains the packages and provenance as CI artifacts. Its isolated
+installation tests load the native extension and exercise CFITSIO planning
+without a GPU or driver. Upstream conda GPU packages retain some pip-only
+dependency names in their Python metadata, so `pip check` is not a conda
+validation gate. The actual native and GPU tests are required.
+
+Qualify each exact conda artifact on its architecture and Python version with
+a CUDA 13-compatible driver, using the installed-package GPU check:
+
+```bash
+conda run --prefix ./conda-xdr python -I scripts/wheels/test_installed.py \
+  --mode gpu --output conda-gpu.json
+```
+
+The check runs outside the source tree internally and exercises the same
+decoding, ordering, concurrency, and buffer-lifetime cases as wheels. Retain
+its JSON receipt and the tested artifact hash. Conda channel publication is
+not configured; release-tag publishing below applies to PyPI artifacts.
+
+## Wheel GPU qualification
 
 CI CPU checks do not establish GPU correctness. Download the exact
 `cuphoton-distributions` artifact and test each wheel on its architecture and

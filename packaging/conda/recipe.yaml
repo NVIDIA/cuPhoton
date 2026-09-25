@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+context:
+  version: ${{ env.get("CUPHOTON_CONDA_VERSION") }}
+
+package:
+  name: cuphoton
+  version: ${{ version }}
+
+# scripts/conda/build.py stages the versioned source archive here.
+source:
+  path: ../source
+
+build:
+  number: 0
+  skip: not linux
+  script: build.sh
+
+requirements:
+  build:
+    - ${{ compiler('cxx') }}
+    - ${{ stdlib('c') }}
+  host:
+    - python
+    - pip
+    - setuptools >=83
+    - setuptools-scm ==10.3.4
+    - wheel
+    - pybind11 >=3,<4
+    - cuda-version ==13.0
+    - cuda-cudart-dev
+    - cuda-crt-dev_${{ target_platform }}
+    - libcufile-dev
+    - cfitsio >=4.7,<5
+    - libkvikio >=26.06,<26.07
+    - libnvcomp-dev >=5.2,<5.3
+  run:
+    - python
+    - astropy-base >=6.1.4
+    - h5py >=3.10
+    - numexpr >=2.10
+    - numpy >=2.0,<2.6
+    - pandas >=2.2
+    - pyarrow >=23
+    - pyyaml >=6
+    - scipy >=1.13
+    - cuda-version >=13,<14
+    - cupy >=14,<15
+    - kvikio >=26.06,<26.07
+    - libkvikio >=26.06,<26.07
+    - libnvcomp >=5.2,<5.3
+    - nvcomp >=5.2,<5.3
+
+tests:
+  - python:
+      imports:
+        - cuphoton
+        - cuphoton.xdr
+      # Upstream GPU packages retain pip-only dependency names in METADATA.
+      # Conda solves those dependencies; the next test loads the actual libs.
+      pip_check: false
+  - script:
+      - python -I scripts/wheels/test_installed.py --mode native
+    files:
+      source:
+        - scripts/wheels/test_installed.py
+
+about:
+  homepage: https://github.com/NVIDIA/cuPhoton
+  repository: https://github.com/NVIDIA/cuPhoton
+  documentation: https://github.com/NVIDIA/cuPhoton/blob/main/docs/packaging.md
+  summary: GPU-accelerated astronomy and imaging tools with native XDR I/O
+  license: Apache-2.0
+  license_file:
+    - LICENSE
+    - THIRD_PARTY_NOTICES.md

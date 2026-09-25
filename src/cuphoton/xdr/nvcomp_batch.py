@@ -19,7 +19,9 @@ from __future__ import annotations
 import ctypes
 import importlib.util
 import os
+import platform
 import struct
+import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -72,6 +74,7 @@ def _find_library_path(
     *,
     env_var: str,
     description: str,
+    recursive: bool = True,
 ) -> Path:
     env_value = os.environ.get(env_var)
     if env_value:
@@ -89,14 +92,16 @@ def _find_library_path(
         if path is not None:
             return path
 
-    for name in names:
-        matches = sorted(package_base.rglob(name))
-        if matches:
-            return matches[0]
+    if recursive:
+        for name in names:
+            matches = sorted(package_base.rglob(name))
+            if matches:
+                return matches[0]
 
     raise ImportError(
         f"Could not find {description} under {package_base}. "
-        "Searched lib64, lib, and recursive matches for: "
+        "Searched lib64, lib"
+        f"{' and subdirectories' if recursive else ''} for: "
         f"{', '.join(names)}. "
         f"Set {env_var} to the directory containing the library."
     )
@@ -118,6 +123,17 @@ def _candidate_cuda_homes():
         if path is not None and path not in seen:
             seen.add(path)
             yield path
+    prefix = Path(sys.prefix)
+    if (prefix / "conda-meta").is_dir():
+        machine = platform.machine()
+        target = "sbsa" if machine == "aarch64" else machine
+        for path in (
+            prefix,
+            prefix / "targets" / f"{target}-linux",
+        ):
+            if path not in seen:
+                seen.add(path)
+                yield path
     default = Path("/usr/local/cuda")
     if default not in seen:
         yield default
@@ -155,35 +171,40 @@ def _preload_gpu_package_libraries() -> None:
     nvcomp_base = _package_dir("nvidia.libnvcomp")
     rapids_logger_base = _package_dir("rapids_logger")
     kvikio_base = _package_dir("libkvikio")
+    prefix = Path(sys.prefix)
     if (
         nvcomp_base is None
         or rapids_logger_base is None
         or kvikio_base is None
     ):
-        raise ImportError(
-            "Could not find libkvikio, rapids-logger, or "
-            "nvidia-libnvcomp Python packages required by "
-            "cuphoton.xdr._nvcomp_batch_ext."
-        )
+        if not (prefix / "conda-meta").is_dir():
+            raise ImportError(
+                "Could not find libkvikio, rapids-logger, or "
+                "nvidia-libnvcomp Python packages required by "
+                "cuphoton.xdr._nvcomp_batch_ext."
+            )
 
     libraries = [
         _find_library_path(
-            nvcomp_base,
+            nvcomp_base or prefix,
             ("libnvcomp.so.5", "libnvcomp.so"),
             env_var=_NVCOMP_LIB_ENV,
             description="nvCOMP library",
+            recursive=nvcomp_base is not None,
         ),
         _find_library_path(
-            rapids_logger_base,
+            rapids_logger_base or prefix,
             ("librapids_logger.so",),
             env_var=_RAPIDS_LOGGER_LIB_ENV,
             description="RAPIDS logger library",
+            recursive=rapids_logger_base is not None,
         ),
         _find_library_path(
-            kvikio_base,
+            kvikio_base or prefix,
             ("libkvikio.so",),
             env_var=_KVIKIO_LIB_ENV,
             description="KvikIO library",
+            recursive=kvikio_base is not None,
         ),
     ]
     for library in libraries:
