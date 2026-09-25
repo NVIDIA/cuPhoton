@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Sequence
 
 _KVIKIO_DEFAULTS_LOCK = threading.Lock()
+_KVIKIO_NUM_THREADS: int | None = None
 
 
 def available_cpu_cores() -> int:
@@ -36,16 +37,24 @@ def available_cpu_cores() -> int:
 
 
 def configure_kvikio_parallelism() -> int:
-    """Configure KvikIO's default thread pool for parallel FITS reads."""
-    import kvikio.defaults as defaults
+    """Initialize the shared KvikIO pool before the first cuPhoton reader.
 
-    num_threads = available_cpu_cores()
-    # Setting even the current size resets the pool and waits for active I/O.
-    # Keep concurrent callers from acting on a stale pool size.
+    Keep an explicit KVIKIO_NTHREADS setting; otherwise use available CPUs.
+    Resetting this global pool while another reader uses it is unsafe.
+    """
+    global _KVIKIO_NUM_THREADS
     with _KVIKIO_DEFAULTS_LOCK:
-        if defaults.get("num_threads") != num_threads:
-            defaults.set("num_threads", num_threads)
-    return num_threads
+        if _KVIKIO_NUM_THREADS is None:
+            import kvikio.defaults as defaults
+
+            num_threads = int(defaults.get("num_threads"))
+            if "KVIKIO_NTHREADS" not in os.environ:
+                desired_threads = available_cpu_cores()
+                if num_threads != desired_threads:
+                    defaults.set("num_threads", desired_threads)
+                    num_threads = int(defaults.get("num_threads"))
+            _KVIKIO_NUM_THREADS = num_threads
+        return _KVIKIO_NUM_THREADS
 
 
 @contextmanager

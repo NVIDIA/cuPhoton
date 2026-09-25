@@ -49,7 +49,7 @@ when it falls back to CPU.
 For a deterministic CPU run:
 
 ```bash
-uv sync --locked --extra dev --extra torch --extra viz
+uv sync --locked --extra dev --extra torch --extra viz --extra photometry
 uv run python examples/run_quickstarts.py --profile cpu
 ```
 
@@ -70,9 +70,10 @@ instructions and require a CUDA 13-capable NVIDIA GPU and XDR's native extension
 xDataReader (`cuphoton.xdr`) reads selected images from local FITS files,
 decodes supported compression, and applies byte-order and scaling rules to
 produce CuPy arrays. Use it to feed a GPU workflow while retaining the headers
-and scientific metadata in your application. Its native FITS extension
-requires a source build. Whether reads use native GPUDirect Storage depends
-on the storage and driver configuration.
+and scientific metadata in your application. Linux release wheels include its
+native FITS extension; install `cuphoton[io]` for the GPU runtime dependencies.
+Whether reads use native GPUDirect Storage depends on the storage and driver
+configuration.
 
 ### xRep: put images on the same sky grid
 
@@ -132,41 +133,61 @@ explains the scientific and file-format terms used here.
 The base install contains the shared CPU data and scientific stack. Optional
 extras are deliberately separated by purpose:
 
-Python 3.11 through 3.14 is supported on Linux for the base, GPU, CPU PyTorch,
-and visualization profiles. The experimental cuTile profile supports Python
-3.12 and 3.13.
+CPython 3.12 through 3.14 is supported on Linux, including the experimental
+cuTile backend. Dragon currently requires Python 3.12 or 3.13 because its
+upstream release has no Python 3.14 wheel.
 
 | Extra | Use |
 | --- | --- |
 | `dev` | Tests, formatting, linting, and build tools |
+| `photometry` | Photutils source detection, backgrounds, and aperture measurements |
+| `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for XDR |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
-| `gpu` | CUDA 13 PyTorch, CuPy, Numba-CUDA, KvikIO, and nvCOMP backends |
-| `cutile` | Experimental `cuda.tile` backend on Python 3.12 or 3.13 |
+| `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch and Numba-CUDA |
+| `cutile` | Experimental `cuda.tile` backend and CuPy |
+| `mpi` | mpi4py bindings for an existing MPI runtime |
+| `dragon` | DragonHPC runtime on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |
+
+Linux x86-64 and ARM64 wheels include the native XDR extension and a private,
+thread-safe CFITSIO library. After the first PyPI release is published, install
+it with the commands below. Until then, use the checkout instructions above:
+
+```bash
+python -m pip install cuphoton          # CPU data workflows
+python -m pip install 'cuphoton[io]'    # GPU FITS loading
+python -m pip install 'cuphoton[gpu]'   # CuPy, Numba, PyTorch, I/O and photometry
+python -m pip install 'cuphoton[gpu,mpi]'  # Also install MPI Python bindings
+python -m pip install 'cuphoton[gpu,dragon]'  # Python 3.12 or 3.13
+```
+
+The `io` profile needs a CUDA 13-compatible NVIDIA driver, but no compiler,
+system CFITSIO, or locally installed CUDA toolkit. On ARM64, Photutils currently
+builds from source; `photometry` and `gpu` therefore need a C compiler.
+Free-threaded Python, Windows, and macOS wheels are not provided.
 
 Typical editable installs are:
 
 ```bash
 # CPU development
-python -m pip install -e '.[dev,torch,viz]'
+python -m pip install -e '.[dev,torch,viz,photometry]'
 
 # CUDA 13 development
 python -m pip install -e '.[dev,gpu,viz]'
 ```
 
-The cuTile profile is separate because it has a narrower Python and toolchain
-compatibility range:
+For the cuTile profile, use a CUDA 13.2 or newer TileIR compiler
+(`tileiras`). See [compiler and distributed runtime setup](docs/getting-started.md#optional-runtimes).
 
 ```bash
-uv sync --locked --python 3.12 --extra dev --extra gpu --extra cutile
+uv sync --locked --extra dev --extra gpu --extra cutile
 ```
 
 Only CUDA 13 dependency variants are supported by this release.
 
-xDataReader's GPU FITS path uses a native extension built from source.
-From a source checkout, build the extension with
-`bash src/cuphoton/xdr/src/build.sh` (see
-[docs/components/xdr.md](docs/components/xdr.md)).
+Source checkouts require an explicit native XDR build. See the
+[XDR installation guide](docs/components/xdr.md) and
+[native wheel build and release procedure](docs/packaging.md).
 
 ## Python and command-line interfaces
 
@@ -210,7 +231,7 @@ workflow to new products.
 uv lock --check
 make lint
 make test-cpu
-uv build
+make build
 ```
 
 See [Contributing](CONTRIBUTING.md) for the full development workflow and

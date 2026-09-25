@@ -50,7 +50,7 @@ Use uv for development environments and dependency locking. The supported GPU
 profile is CUDA 13.
 
 ```bash
-uv sync --locked --extra dev --extra torch --extra viz
+uv sync --locked --extra dev --extra torch --extra viz --extra photometry
 uv run --locked --extra dev pre-commit install
 ```
 
@@ -60,8 +60,9 @@ For CUDA 13 development:
 uv sync --locked --extra dev --extra gpu --extra viz
 ```
 
-Use the smallest profile that exercises the change. The `cutile` extra is
-experimental and supports Python 3.12 and 3.13 only.
+Use the smallest profile that exercises the change. The experimental `cutile`
+extra supports Python 3.12–3.14; use a CUDA 13.2 or newer TileIR compiler
+for the supported setup. The `dragon` extra currently supports Python 3.12 and 3.13.
 
 ## Checks
 
@@ -73,7 +74,7 @@ uv lock --check
 uv run --locked --extra dev pre-commit run --all-files
 make lint
 make test-cpu
-uv build
+make build
 ```
 
 Validation logs should be clean. If warnings are expected, describe them in the

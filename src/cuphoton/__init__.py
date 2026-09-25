@@ -4,6 +4,10 @@
 
 """GPU-accelerated astronomy and imaging tools from NVIDIA."""
 
-__version__ = "0.1.3"
+try:
+    from ._version import __version__
+except ModuleNotFoundError:
+    # An unbuilt source checkout has no resolved distribution version yet.
+    __version__ = "0.0.0.dev0"
 
 __all__ = ["__version__"]

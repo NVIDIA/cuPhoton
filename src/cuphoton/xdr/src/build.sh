@@ -38,7 +38,9 @@ fi
 
 cd "$ROOT_DIR"
 printf 'Building xdr with Python: %s\n' "$PYTHON"
+uv pip install --python "$PYTHON" \
+    'setuptools>=83.0.0' 'setuptools-scm==10.3.4' wheel 'pybind11>=3.0,<4'
 exec env CUPHOTON_XDR_BUILD_EXT=1 uv pip install \
     --python "$PYTHON" \
     --no-build-isolation \
-    -e "$ROOT_DIR[gpu]"
+    -e "$ROOT_DIR[io]"

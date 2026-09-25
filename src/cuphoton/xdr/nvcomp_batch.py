@@ -44,7 +44,10 @@ def _load_shared_library(path: Path | str) -> None:
 
 
 def _package_dir(module_name: str) -> Path | None:
-    spec = importlib.util.find_spec(module_name)
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ModuleNotFoundError:
+        return None
     if spec is None:
         return None
     locations = spec.submodule_search_locations
@@ -110,6 +113,11 @@ def _candidate_cuda_homes():
             if path not in seen:
                 seen.add(path)
                 yield path
+    for module_name in ("nvidia.cu13", "nvidia.cuda_runtime"):
+        path = _package_dir(module_name)
+        if path is not None and path not in seen:
+            seen.add(path)
+            yield path
     default = Path("/usr/local/cuda")
     if default not in seen:
         yield default
@@ -120,25 +128,9 @@ def _preload_cudart() -> None:
     for cuda_home in _candidate_cuda_homes():
         for lib_name in ("lib64", "lib"):
             lib_dir = cuda_home / lib_name
-            candidates.extend(
-                [
-                    lib_dir / "libcudart.so.13",
-                    lib_dir / "libcudart.so",
-                ]
-            )
-
-    cuda_runtime_base = _package_dir("nvidia.cuda_runtime")
-    if cuda_runtime_base is not None:
-        runtime_lib = cuda_runtime_base / "lib"
-        candidates.extend(
-            [
-                runtime_lib / "libcudart.so.13",
-                runtime_lib / "libcudart.so",
-            ]
-        )
+            candidates.append(lib_dir / "libcudart.so.13")
 
     candidates.append("libcudart.so.13")
-    candidates.append("libcudart.so")
 
     last_error: OSError | None = None
     for candidate in candidates:
@@ -152,9 +144,10 @@ def _preload_cudart() -> None:
 
     detail = f" Last loader error was: {last_error}" if last_error else ""
     raise ImportError(
-        "Could not preload libcudart for "
+        "Could not preload libcudart.so.13 for "
         "cuphoton.xdr._nvcomp_batch_ext. "
-        "Set CUDA_HOME to a CUDA toolkit root containing libcudart." + detail
+        "Install cuphoton[io] or set CUDA_HOME to a CUDA 13 toolkit root."
+        + detail
     )
 
 
@@ -269,7 +262,8 @@ def get_native_batch_builder(required: bool = False):
         msg = (
             "native_batcher=True but "
             "`_nvcomp_batch_ext.NativeBatchBuilder` is "
-            "not importable. Build it from a source checkout with "
+            "not importable. Install `cuphoton[io]` from a native wheel, "
+            "or build it from a source checkout with "
             "`bash src/cuphoton/xdr/src/build.sh` (see "
             "docs/components/xdr.md); the native builder requires KvikIO."
         )
@@ -296,7 +290,8 @@ def get_native_plan_files(required: bool = False):
         msg = (
             "native_batcher=True but "
             "`_nvcomp_batch_ext.plan_native_files` is "
-            "not importable. Build it from a source checkout with "
+            "not importable. Install `cuphoton[io]` from a native wheel, "
+            "or build it from a source checkout with "
             "`bash src/cuphoton/xdr/src/build.sh` (see "
             "docs/components/xdr.md); the native planner requires CFITSIO."
         )
@@ -444,7 +439,8 @@ def _warn_python_fallback_once() -> None:
         "Python `nvcomp.as_array` fallback path, which is ~6x slower "
         "than the "
         "optional C++ helper (`_nvcomp_batch_ext`). "
-        "To enable the fast path, build the native extension: "
+        "To enable the fast path, install `cuphoton[io]` from a native wheel "
+        "or build the native extension from source: "
         "`bash src/cuphoton/xdr/src/build.sh`."
     )
     if _CPP_EXT_IMPORT_ERROR:
@@ -829,7 +825,8 @@ def gpu_gzip_decompress_batch(
             raise RuntimeError(
                 "use_cpp_helper=True but `_nvcomp_batch_ext` is not "
                 "importable. "
-                "Run `bash src/cuphoton/xdr/src/build.sh` first. "
+                "Install `cuphoton[io]` from a native wheel or run "
+                "`bash src/cuphoton/xdr/src/build.sh` from source. "
                 f"Import error: {_CPP_EXT_IMPORT_ERROR}"
             )
     elif n == 0:

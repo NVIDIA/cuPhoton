@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release tag version, such as 0.1.3rc0
+        required: true
+        type: string
+      target:
+        description: Protected publishing environment
+        required: true
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+      run-id:
+        description: Reuse this release build run instead of rebuilding (optional)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ inputs.target || 'testpypi' }}-${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      (github.event_name == 'push' && !github.event.deleted) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+      tag: ${{ steps.release.outputs.tag }}
+      target: ${{ inputs.target || 'testpypi' }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve the release tag to a reviewed source commit
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+          EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+          BUILD_RUN_ID: ${{ inputs.run-id }}
+        run: |
+          if test -n "$BUILD_RUN_ID"; then
+            [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          fi
+          python scripts/wheels/release.py resolve "$RELEASE_TAG" --expected-sha "$EXPECTED_SHA"
+
+  build:
+    name: release wheels
+    needs: prepare
+    if: inputs.run-id == ''
+    uses: ./.github/workflows/wheels.yml
+    with:
+      source-ref: ${{ needs.prepare.outputs.sha }}
+      release-version: ${{ needs.prepare.outputs.version }}
+
+  stage:
+    needs: [prepare, build]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (needs.build.result == 'skipped' && inputs.run-id != ''))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      pending: ${{ steps.upload.outputs.pending }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-distributions
+          path: dist
+          run-id: ${{ inputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-build-provenance
+          path: provenance
+          run-id: ${{ inputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify the build, tag, complete matrix, and unchanged bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.run-id || github.run_id }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          python scripts/wheels/release.py resolve "$RELEASE_TAG" --expected-sha "$SOURCE_SHA"
+          python scripts/wheels/check_distributions.py dist --version "$RELEASE_VERSION"
+          python scripts/wheels/release.py verify dist provenance/provenance.json \
+            --tag "$RELEASE_TAG" --sha "$SOURCE_SHA" --run-id "$BUILD_RUN_ID"
+          uvx --isolated --from twine==6.2.0 twine check --strict dist/*
+          cat provenance/provenance.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Exclude already published files only when their hashes match
+        id: upload
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET: ${{ needs.prepare.outputs.target }}
+        run: |
+          python scripts/wheels/release.py pending dist --version "$RELEASE_VERSION" --target "$TARGET"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.upload.outputs.pending != '0'
+        with:
+          name: publish-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, stage]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.stage.result == 'success' && needs.stage.outputs.pending != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: ${{ needs.prepare.outputs.target }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: publish-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          repository-url: ${{ needs.prepare.outputs.target == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}

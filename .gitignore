@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.so
 *.egg-info/
+/src/cuphoton/_version.py
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

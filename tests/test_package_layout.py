@@ -11,6 +11,7 @@ from importlib import metadata, resources
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 import cuphoton
 
@@ -57,7 +58,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
     distribution = metadata.distribution("cuphoton")
     assert set(distribution.metadata["Requires-Python"].split(",")) == {
         "<3.15",
-        ">=3.11",
+        ">=3.12",
     }
     assert "Programming Language :: Python :: 3.14" in (
         distribution.metadata.get_all("Classifier") or ()
@@ -65,21 +66,43 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
     assert set(distribution.metadata.get_all("Provides-Extra") or ()) == {
         "cutile",
         "dev",
+        "dragon",
         "gpu",
+        "io",
+        "mpi",
+        "photometry",
         "torch",
         "viz",
     }
-    requirements = distribution.metadata.get_all("Requires-Dist") or ()
-    cutile_requirements = [
-        requirement
-        for requirement in requirements
-        if 'extra == "cutile"' in requirement
+
+
+@pytest.mark.parametrize("python_version", ("3.12", "3.13", "3.14"))
+def test_optional_runtime_requirements_are_not_silently_omitted(
+    python_version: str,
+) -> None:
+    requirements = [
+        Requirement(value) for value in metadata.requires("cuphoton") or ()
     ]
-    assert len(cutile_requirements) == 2
-    assert all(
-        'python_version < "3.14"' in requirement
-        for requirement in cutile_requirements
-    )
+
+    def selected(extra: str) -> dict[str, Requirement]:
+        environment = {
+            "extra": extra,
+            "python_version": python_version,
+            "platform_system": "Linux",
+        }
+        return {
+            requirement.name: requirement
+            for requirement in requirements
+            if requirement.marker and requirement.marker.evaluate(environment)
+        }
+
+    cutile = selected("cutile")
+    assert {"cuda-tile", "cupy-cuda13x"} <= cutile.keys()
+    assert "mpi4py" in selected("mpi")
+    # Dragon has no 3.14 wheel yet: its extra must fail resolution there,
+    # rather than appear to install successfully without the runtime.
+    assert "dragonhpc" in selected("dragon")
+    assert not {"mpi4py", "dragonhpc", "cuda-tile"} & selected("gpu").keys()
 
 
 def test_distribution_exposes_only_the_umbrella_console_script() -> None:
@@ -134,6 +157,7 @@ BLOCKED = (
     "kvikio",
     "mpi4py",
     "numba",
+    "photutils",
     "torch",
 )
 

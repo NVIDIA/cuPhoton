@@ -1,0 +1,269 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: native wheels
+
+on:
+  workflow_call:
+    inputs:
+      source-ref:
+        description: Immutable source commit to build
+        required: false
+        type: string
+        default: ""
+      release-version:
+        description: Version from the validated release tag
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - name: Build the versioned source archive
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          if test -n "$RELEASE_VERSION"; then
+            export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CUPHOTON="$RELEASE_VERSION"
+          fi
+          CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
+      - name: Check the default source installation
+        run: |
+          uv venv --python 3.12 .sdist-venv
+          CUPHOTON_XDR_BUILD_EXT=0 uv pip install --python .sdist-venv/bin/python dist/*.tar.gz
+          uv pip check --python .sdist-venv/bin/python
+          .sdist-venv/bin/python -I -c 'import cuphoton; import cuphoton.xdr; print(cuphoton.__version__)'
+          .sdist-venv/bin/cuphoton xdr --help
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  wheels:
+    needs: sdist
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-sdist
+          path: dist
+      - name: Build and test all three ABIs from the source archive
+        run: >-
+          uv tool run --from cibuildwheel==4.2.1 cibuildwheel
+          --platform linux --output-dir wheelhouse dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-wheels-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  install:
+    name: installed wheel / py${{ matrix.python.version }} / ${{ matrix.platform.arch }}
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - version: "3.12"
+            image: python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+          - version: "3.13"
+            image: python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
+          - version: "3.14"
+            image: python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
+        platform:
+          - {runner: ubuntu-24.04, arch: x86_64}
+          - {runner: ubuntu-24.04-arm, arch: aarch64}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref || github.sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-wheels-${{ matrix.platform.arch }}
+          path: wheelhouse
+      - name: Install without a compiler, toolkit, or system CFITSIO
+        env:
+          PYTHON_VERSION: ${{ matrix.python.version }}
+          PYTHON_IMAGE: ${{ matrix.python.image }}
+        run: |
+          docker run --rm \
+            -e WHEEL_ABI="cp${PYTHON_VERSION/./}" \
+            -v "$PWD/wheelhouse:/wheels:ro" \
+            -v "$PWD/scripts/wheels:/checks:ro" \
+            "$PYTHON_IMAGE" \
+            sh -ec '
+              set -- /wheels/*-"${WHEEL_ABI}"-*.whl
+              test "$#" = 1
+              python -m pip install --only-binary=:all: "$1"
+              python -I /checks/test_installed.py --mode base
+              python -m pip install --only-binary=:all: "$1[io]"
+              python -m pip check
+              python -I /checks/test_installed.py --mode native
+            '
+
+  runtimes:
+    name: installed runtimes / py${{ matrix.python.version }} / ${{ matrix.platform.arch }}
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - version: "3.12"
+            dragon: true
+            image: python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+          - version: "3.13"
+            dragon: true
+            image: python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
+          # Dragon 0.14.2 has no Python 3.14 wheel or source distribution.
+          - version: "3.14"
+            dragon: false
+            image: python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
+        platform:
+          - {runner: ubuntu-24.04, arch: x86_64}
+          - {runner: ubuntu-24.04-arm, arch: aarch64}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref || github.sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-wheels-${{ matrix.platform.arch }}
+          path: wheelhouse
+      - name: Exercise installed cuTile imports and distributed CPU runtimes
+        env:
+          PYTHON_VERSION: ${{ matrix.python.version }}
+          PYTHON_IMAGE: ${{ matrix.python.image }}
+          WITH_DRAGON: ${{ matrix.python.dragon }}
+        run: |
+          mkdir -p stack-reports
+          docker run --rm --shm-size=2g \
+            -e WHEEL_ABI="cp${PYTHON_VERSION/./}" \
+            -e WITH_DRAGON \
+            -e OMPI_ALLOW_RUN_AS_ROOT=1 \
+            -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
+            -e DRAGON_DEFAULT_SEG_SZ=536870912 \
+            -e DRAGON_INF_SEG_SZ=268435456 \
+            -e CUDA_VISIBLE_DEVICES="" \
+            -v "$PWD/wheelhouse:/wheels:ro" \
+            -v "$PWD/scripts/wheels:/checks:ro" \
+            -v "$PWD/stack-reports:/reports" \
+            "$PYTHON_IMAGE" \
+            sh -ec '
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                openmpi-bin=4.1.4-3+b1 libopenmpi3=4.1.4-3+b1
+              rm -rf /var/lib/apt/lists/*
+              set -- /wheels/*-"${WHEEL_ABI}"-*.whl
+              test "$#" = 1
+              extras="cutile,mpi"
+              if test "$WITH_DRAGON" = true; then
+                extras="$extras,dragon"
+              fi
+              python -m pip install --only-binary=:all: "$1[$extras]"
+              python -m pip check
+              python -I /checks/test_stack.py --mode imports \
+                --expect "$extras" --report /reports/imports.json
+              timeout --kill-after=15s 180s mpiexec --oversubscribe -n 2 \
+                python -I /checks/test_stack.py --mode mpi --backend cpu \
+                --workers 2 --report /reports/mpi.json
+              if test "$WITH_DRAGON" = true; then
+                timeout --kill-after=15s 180s dragon --single-node-override \
+                  python -I /checks/test_stack.py --mode dragon --backend cpu \
+                  --workers 2 --report /reports/dragon.json
+              fi
+            '
+      - name: Record the Python 3.14 Dragon limitation
+        if: matrix.python.version == '3.14'
+        run: >-
+          echo 'Python 3.14: cuTile imports and real MPI workers are required.
+          Dragon is excluded because upstream publishes no compatible wheel.
+          These CPU jobs do not qualify GPU execution.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: cuphoton-runtime-checks-cp${{ matrix.python.version }}-${{ matrix.platform.arch }}
+          path: stack-reports/*.json
+          if-no-files-found: error
+
+  distributions:
+    needs: [sdist, wheels, install, runtimes]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref || github.sha }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-sdist
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-wheels-x86_64
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cuphoton-wheels-aarch64
+          path: dist
+      - run: python scripts/wheels/check_distributions.py dist
+      - run: uvx --isolated --from twine==6.2.0 twine check --strict dist/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record source identity and artifact hashes
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          python scripts/wheels/release.py record dist provenance.json
+          cat provenance.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuphoton-build-provenance
+          path: provenance.json
+          if-no-files-found: error
+          retention-days: 30
