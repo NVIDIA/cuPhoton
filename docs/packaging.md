@@ -164,17 +164,20 @@ Configure these Trusted Publishers in the respective package-index accounts:
 | Workflow filename | `publish.yml` | `publish.yml` |
 | GitHub environment | `pypi` | `testpypi` |
 
-Require a reviewer for each GitHub environment and allow deployments from
-branch `main` and tags matching `v*`. Keep self-review available when the release
-operator is the sole reviewer. Project owners register each publisher on its
-index; GitHub environment configuration alone does not grant upload access.
+Require at least one reviewer other than the release operator for each GitHub
+environment and enable **Prevent self-review**. Allow deployments from branch
+`main` and tags matching `v*`. Protect release tags with a ruleset that restricts
+creation to authorized release maintainers and prevents tag updates and deletion.
+Project owners register each publisher on its index; GitHub environment
+configuration alone does not grant upload access.
 No stored API token is needed. See the [PyPI Trusted Publisher setup
 instructions](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
 
 Pushing `v0.1.3rc0` or `v0.1.3` starts `publish.yml`. It validates the tag and
 requires its commit to belong to `main` or `0.1.x`, builds the six native wheels
 from one versioned source archive, and tests their clean installation. It then
-waits at the `pypi` environment for approval. No release tags are created by the
+waits at the `testpypi` environment for approval. PyPI publication requires an
+explicit manual dispatch with `target=pypi`. No release tags are created by the
 workflow.
 
 1. Download `cuphoton-distributions` and `cuphoton-build-provenance` from the
@@ -183,14 +186,14 @@ workflow.
 2. Qualify those exact binaries on both GPU architectures as described above.
    The environment reviewer checks those results and hashes before approving
    the upload. CPU CI success does not establish GPU correctness.
-3. To rehearse on TestPyPI before approving PyPI, dispatch `publish.yml` from
-   `main` with the same `version`, `target=testpypi`, and the original release
-   `run-id`. This reuses its artifacts even while its PyPI job awaits approval.
-4. Verify the TestPyPI downloads against the recorded hashes, then approve the
-   original PyPI job. Alternatively, cancel that waiting job before dispatching
-   with `target=pypi` and the same original build run ID. Publishing runs for
-   one version and destination are serialized, so leaving the original waiting
-   would block the replacement. The replacement promotes the identical files.
+3. Approve the tag-triggered TestPyPI upload and verify its downloads against
+   the recorded hashes.
+4. Dispatch `publish.yml` from `main` with the same `version`, `target=pypi`,
+   and the original release `run-id`. This promotes the identical files and
+   requires a separate approval from a non-operator reviewer on `pypi`.
+
+Publishing runs for one version and destination are serialized. Cancel an
+existing waiting run before dispatching a replacement for that destination.
 
 Manual dispatch without `run-id` builds the supplied existing tag and publishes
 to the selected environment after approval. Dispatch with `run-id` always uses

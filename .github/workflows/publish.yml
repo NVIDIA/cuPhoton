@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ inputs.target || 'pypi' }}-${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+  group: publish-${{ inputs.target || 'testpypi' }}-${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
   cancel-in-progress: false
 
 jobs:
@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       sha: ${{ steps.release.outputs.sha }}
       tag: ${{ steps.release.outputs.tag }}
-      target: ${{ inputs.target || 'pypi' }}
+      target: ${{ inputs.target || 'testpypi' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
