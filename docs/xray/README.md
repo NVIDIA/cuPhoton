@@ -204,5 +204,6 @@ See [Data and artifact contracts](../data-artifacts.md#xray-hdf5-and-trace-produ
 
 - [Environment setup](ENVIRONMENT.md)
 - [GPU-first behavior](GPU-FIRST.md)
+- [Running and interpreting XRay benchmarks](LINEAR-PREDICTION-BENCHMARKS.md)
 - [Distributed detector artifacts](DISTRIBUTED-DETECTOR-ARTIFACTS.md)
 - [Validation visualization](VALIDATION-VIZ.md)
