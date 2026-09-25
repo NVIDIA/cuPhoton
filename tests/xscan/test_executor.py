@@ -133,6 +133,7 @@ def test_cli_dispatches_collective_preflight_and_preserves_batches(
         == 0
     )
     kwargs, spec = calls[0]
+    assert kwargs.get("prepare_on_root", False) == (runtime == "mpi")
     assert kwargs["run_id"] == "distributed"
     assert kwargs["output_root"] == tmp_path
     assert kwargs["benchmark"].warmup_rounds == 1

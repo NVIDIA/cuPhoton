@@ -111,6 +111,23 @@ def test_manifest_rejects_ambiguous_or_invalid_descriptors(tmp_path, defect):
         pipeline.load_pipeline_manifest(path)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda:1"])
+def test_manifest_rejects_device_before_item_preflight(
+    tmp_path, monkeypatch, device
+):
+    path, _, _ = _manifest(tmp_path)
+    data = json.loads(path.read_text())
+    data["configuration"]["device"] = device
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(
+        DevicePipelineItem,
+        "from_payload",
+        lambda _: pytest.fail("items parsed before device validation"),
+    )
+    with pytest.raises(ValueError, match="cuda:0"):
+        pipeline.load_pipeline_manifest(path)
+
+
 def test_preflight_agrees_across_ranks_and_hashes_only_on_root(
     tmp_path, monkeypatch
 ):

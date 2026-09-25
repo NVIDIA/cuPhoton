@@ -1024,6 +1024,8 @@ class InferRealBogusCommand(ExecutorOptions, XScanCommand):
                 raise CommandError(
                     "--output-dir is required for distributed inference"
                 )
+            if self.executor == "mpi":
+                executor_options["prepare_on_root"] = True
             output_dir = Path(self.output_dir).expanduser().resolve()
             self._call(
                 validate_identifier,

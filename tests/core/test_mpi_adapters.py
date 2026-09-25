@@ -43,6 +43,8 @@ def test_two_rank_adapters_publish_scientific_results(
     state = local()
     barrier = Barrier(2, timeout=10)
     messages = [None, None]
+    planning_ranks = []
+    input_load_ranks = []
 
     class Comm:
         def Get_rank(self):
@@ -96,6 +98,13 @@ def test_two_rank_adapters_publish_scientific_results(
         from ..xfit.test_executor import _input
 
         path = _input(tmp_path)
+        load_input = executor.load_xfit_dataset
+
+        def counted_load(*args, **kwargs):
+            input_load_ranks.append(state.rank)
+            return load_input(*args, **kwargs)
+
+        monkeypatch.setattr(executor, "load_xfit_dataset", counted_load)
 
         def cpu_fit(*args, **kwargs):
             result = fit_dipoles(*args, **{**kwargs, "backend": "numpy"})
@@ -105,6 +114,7 @@ def test_two_rank_adapters_publish_scientific_results(
         monkeypatch.setattr(executor, "collect_gpu_identity", gpu_identity)
 
         def prepare(rank):
+            planning_ranks.append(rank)
             return executor.prepare_xfit_workload(
                 input_path=path,
                 chunk_size=2,
@@ -125,6 +135,7 @@ def test_two_rank_adapters_publish_scientific_results(
         )
 
         def prepare(rank):
+            planning_ranks.append(rank)
             return executor.prepare_inference_workload(
                 run_dir=run_dir,
                 dataset_dir=dataset_dir,
@@ -137,6 +148,7 @@ def test_two_rank_adapters_publish_scientific_results(
         state.rank = rank
         return mpi.run_mpi_work_items(
             prepare_workload=prepare,
+            prepare_on_root=True,
             output_root=tmp_path,
             run_id="distributed",
             rank_setup_timeout_sec=1,
@@ -147,6 +159,10 @@ def test_two_rank_adapters_publish_scientific_results(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         root, peer = list(pool.map(run, (0, 1)))
+    assert planning_ranks == [0]
+    if component == "xfit":
+        # Rank zero plans once; each rank loads its worker input once.
+        assert sorted(input_load_ranks) == [0, 0, 1]
     assert peer is None
     assert root.status == "success", root.summary
     run_dir = tmp_path / "distributed"

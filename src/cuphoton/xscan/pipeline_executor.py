@@ -72,6 +72,8 @@ def load_pipeline_manifest(
         if field in configuration:
             configuration[field] = resolve(configuration[field])
     config = DevicePipelineConfig.from_payload(configuration)
+    if config.device != "cuda:0":
+        raise ValueError("device pipeline manifest device must be cuda:0")
     if not isinstance(payload["items"], list):
         raise ValueError("pipeline items must be a list")
     items = []
