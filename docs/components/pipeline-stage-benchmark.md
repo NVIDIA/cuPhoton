@@ -62,11 +62,11 @@ evidence and predictions.
 The separate-stage treatment starts one xPOIS child, one xFit child and one
 XScan child per complete round. Each child processes all image items in
 manifest order, keeping the candidate batch for each image unchanged. It
-writes lossless, uncompressed NPY arrays between stages. Those files include
-full subtraction images and fit residuals in addition to the compact
-scientific outputs shared with the pipeline. Their transfers, hashing and
-I/O are part of this treatment's cost. Its preliminary rounds prepare
-caches; subsequent measured rounds still create fresh processes.
+writes lossless, uncompressed NPY arrays between stages: extracted difference
+stamps for xFit, triplets and features for XScan, and the compact scientific
+outputs shared with the pipeline. Unused full subtraction images, basis
+kernels and fit residuals are not transferred or written. Its preliminary
+rounds prepare caches; subsequent measured rounds still create fresh processes.
 
 To inspect a manual round directly, invoke the command three times with
 `--stage xpois`, `--stage xfit` and `--stage xscan`, in that order. Supply the
@@ -86,6 +86,8 @@ does not become an xFit variance plane.
 | Pipeline `batch_seconds` | One ordered image batch through completed device work and per-item result JSON writes. Measured batches reuse the initialized, warmed worker. |
 | Pipeline `invocation_external_seconds` | Parent-observed process duration, including imports, setup, all warmup and measured rounds, final summary and process exit. |
 | Staged `batch_seconds` | Parent clock before launching xPOIS through successful XScan process exit, including all three process lifetimes and intermediate files. |
+| Staged `extra_hashing_seconds` | Intermediate-artifact SHA-256 reads/writes and original-input rechecks repeated by xFit/XScan, measured inside the raw batch timer. |
+| Staged `batch_seconds_without_extra_hashing` | Raw batch time minus that additional verification time; retains process startup, numerical work, transfers and file I/O. |
 | Staged per-process `external_seconds` | Parent-observed duration of that individual child, including imports and shutdown. |
 
 Stage summaries also record internal setup, reads, uploads, computation,
@@ -96,8 +98,13 @@ timers as isolated GPU kernel durations would be misleading. Use the
 completed batch timers for the main workflow comparison.
 
 The report's `fresh_stages_over_warm_pipeline_ratio` divides the median
-staged batch time by the median warm pipeline batch time. It includes
-repeated startup and file costs in the staged treatment. Keep setup and
+staged batch time **without extra hashing** by the median warm pipeline batch
+time. Both arms still include their common original-input hashes on read and
+once after execution; checkpoint/schema verification remains in setup. All
+verification still executes. The adjustment subtracts measured hash time; it
+is not a separate hash-disabled run and cannot undo cache effects caused by
+verification. `raw_fresh_stages_over_warm_pipeline_ratio` preserves the ratio
+of unadjusted medians. Both include repeated startup and file costs. Keep setup and
 whole-invocation measurements alongside that ratio when discussing a service
 that may process only a few batches.
 
@@ -114,14 +121,17 @@ arrays, including shapes, dtypes and NaN locations, plus matching candidate
 identity/order, fit metadata, subtraction diagnostics and predictions. It
 verifies retained file hashes and rechecks the original inputs. This checks
 equivalence between two compositions of the same algorithms; it does not
-independently establish their astronomical accuracy. Full intermediate
-images are retained by the staged treatment but are outside the pipeline's
-compact parity contract.
+independently establish their astronomical accuracy. Only arrays needed by
+the next stage or by this compact parity contract are retained.
 
 `manifest.json` records the configuration, ordered input descriptors and
 runtime settings. Treatment subdirectories retain each attempted round and
 child log. `parity.json` records numerical comparisons; a successful
-`report.json` contains all round times and the measured medians. A failure
+`report.json` contains all round times and the measured medians. Report-level
+provenance includes the selected GPU name/UUID, NVIDIA driver version, CUDA
+driver API/runtime versions and the imported CuPy version. Package discovery
+also records the installed distribution providing `cupy`. Driver-query
+failures are retained explicitly rather than silently omitting the field. A failure
 stops the run and leaves its logs and `failure.json` for inspection. A
 successful process exit alone does not satisfy the parity check.
 

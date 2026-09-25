@@ -88,6 +88,13 @@ def test_failed_stage_round_retains_completed_work(
         result = next(outcomes)
         if isinstance(result, BaseException):
             raise result
+        command = args[0]
+        stage = command[command.index("--stage") + 1]
+        root = Path(command[command.index("--output") + 1]) / stage
+        root.mkdir()
+        (root / "summary.json").write_text(
+            json.dumps({"extra_hashing_seconds": 0.0})
+        )
         return result
 
     monkeypatch.setattr(benchmark, "run_child", child)
@@ -182,3 +189,221 @@ def test_failed_pipeline_round_retains_completed_items(
     assert not (tmp_path / "round-001/item-0001.json").exists()
     assert not (tmp_path / "round-002").exists()
     assert not (tmp_path / "summary.json").exists()
+
+
+@pytest.fixture
+def benchmark_fixture(tmp_path: Path):
+    from cuphoton.xscan.pipeline_benchmark.fixture import prepare_fixture
+
+    return prepare_fixture(
+        tmp_path / "inputs",
+        images=1,
+        image_size=48,
+        candidates=2,
+        stamp_size=9,
+        seed=2026,
+        device="cuda:0",
+    )
+
+
+def test_prepare_fixture_has_repeatable_inputs_and_cpu_model(
+    tmp_path: Path, benchmark_fixture
+) -> None:
+    import torch
+
+    from cuphoton.xscan.pipeline_benchmark.fixture import prepare_fixture
+
+    config, items = benchmark.read_inputs(*benchmark_fixture)
+    other = prepare_fixture(
+        tmp_path / "repeat",
+        images=1,
+        image_size=48,
+        candidates=2,
+        stamp_size=9,
+        seed=2026,
+        device="cuda:0",
+    )
+    other_config, other_items = benchmark.read_inputs(*other)
+    assert items[0].candidates == other_items[0].candidates
+    for name in ("reference", "target", "variance", "fit_mask"):
+        left, right = getattr(items[0], name), getattr(other_items[0], name)
+        assert left.sha256 == right.sha256
+        np.testing.assert_array_equal(np.load(left.path), np.load(right.path))
+    models = [
+        torch.load(
+            Path(value.checkpoint_dir) / "checkpoint.pt", weights_only=False
+        )
+        for value in (config, other_config)
+    ]
+    assert models[0]["benchmark_fixture"]["trained"] is False
+    for key, value in models[0]["model_state"].items():
+        assert value.device.type == "cpu"
+        torch.testing.assert_close(
+            value, models[1]["model_state"][key], rtol=0, atol=0
+        )
+
+
+@pytest.mark.parametrize("order", ["pipeline-first", "staged-first"])
+def test_compare_cpu_orchestration_and_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    benchmark_fixture,
+    order: str,
+) -> None:
+    from cuphoton.xscan import device_pipeline
+    from cuphoton.xscan.pipeline_benchmark import stages
+
+    config, items = benchmark.read_inputs(*benchmark_fixture)
+    science = {name: np.array([0.25, 0.75]) for name in stages.SCIENCE_KEYS}
+    predictions = [
+        {
+            **candidate.to_payload(),
+            "logit": 0.25,
+            "probability": 0.75,
+            "decision": True,
+        }
+        for candidate in items[0].candidates
+    ]
+    metadata = {
+        "xpois": {"xpois_chi2": 1.0, "basis_terms": []},
+        "xfit": {"parameter_names": ["amplitude"], "feature_names": ["flux"]},
+        "xscan": {"predictions": predictions},
+    }
+    # Exercise the real file contracts, stage summaries, round bookkeeping and
+    # audit. Only CUDA computation and process launching are replaced on CPU.
+    monkeypatch.setattr(stages, "_setup", lambda *_: {})
+    monkeypatch.setattr(
+        stages,
+        "_run_item",
+        lambda stage, *_: (
+            {
+                key: value
+                for key, value in science.items()
+                if key.startswith(stage + ".")
+            },
+            metadata[stage],
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        device_pipeline,
+        "decode_device_pipeline_evidence",
+        lambda *_, **__: science,
+    )
+    launched = []
+
+    def child(command, log, *, timeout):
+        stage = command[command.index("--stage") + 1]
+        output = Path(command[command.index("--output") + 1])
+        launched.append(stage)
+        if stage != "pipeline":
+            stages.run_stage(stage, config, items, output)
+        else:
+            for index, phase in enumerate(("warmup", "measured")):
+                root = output / f"round-{index:03d}"
+                root.mkdir()
+                benchmark.write_json(
+                    root / "item-0000.json",
+                    {
+                        "item_id": items[0].item_id,
+                        "configuration_sha256": config.configuration_sha256,
+                        "predictions": predictions,
+                        "xpois": {"chi2": 1.0},
+                        "scientific_evidence": {
+                            "xpois": {"basis_terms": []},
+                            "parameter_names": ["amplitude"],
+                            "feature_names": ["flux"],
+                        },
+                    },
+                )
+            benchmark.write_json(
+                output / "summary.json",
+                {
+                    "device_provenance": {
+                        "gpu_uuid": "GPU-test",
+                        "gpu_name": "CPU test double",
+                    },
+                    "rounds": [
+                        {"phase": "warmup", "batch_seconds": 2.0},
+                        {"phase": "measured", "batch_seconds": 1.0},
+                    ],
+                },
+            )
+        return 0.1
+
+    monkeypatch.setattr(benchmark, "run_child", child)
+    monkeypatch.setattr(
+        benchmark.subprocess,
+        "run",
+        lambda *_, **__: SimpleNamespace(stdout="610.57.04\n"),
+    )
+    args = argparse.Namespace(
+        stage="compare",
+        output=tmp_path / "compare",
+        config=benchmark_fixture[0],
+        items=benchmark_fixture[1],
+        warmup=1,
+        repeat=1,
+        timeout=10,
+        order=order,
+    )
+    benchmark.run_benchmark(args)
+    report = json.loads((args.output / "report.json").read_text())
+    assert report["parity_passed"]
+    assert (
+        len(json.loads((args.output / "parity.json").read_text())["checks"])
+        == 2
+    )
+    assert launched.count("pipeline") == 1
+    assert (
+        launched.count("xpois")
+        == launched.count("xfit")
+        == launched.count("xscan")
+        == 2
+    )
+    assert (launched[0] == "pipeline") == (order == "pipeline-first")
+    assert report["provenance"]["device"]["driver_version"] == "610.57.04"
+    assert (
+        report["fresh_stages_over_warm_pipeline_ratio"]
+        < report["raw_fresh_stages_over_warm_pipeline_ratio"]
+    )
+    for row in report["staged"]["rounds"]:
+        assert row["extra_hashing_seconds"] > 0
+        assert row["batch_seconds_without_extra_hashing"] == pytest.approx(
+            row["batch_seconds"] - row["extra_hashing_seconds"]
+        )
+    # Candidate identity and exact scientific values both gate acceptance.
+    path = args.output / "pipeline/round-001/item-0000.json"
+    result = json.loads(path.read_text())
+    result["predictions"][0]["candidate_id"] = "changed"
+    benchmark.write_json(path, result)
+    with pytest.raises(ValueError, match="candidate identity"):
+        benchmark.audit(args)
+    result["predictions"] = predictions
+    benchmark.write_json(path, result)
+    monkeypatch.setattr(
+        device_pipeline,
+        "decode_device_pipeline_evidence",
+        lambda *_, **__: {
+            name: values + 1 for name, values in science.items()
+        },
+    )
+    assert not benchmark.audit(args)["passed"]
+    with pytest.raises(FileExistsError):
+        stages.run_stage(
+            "xpois", config, items, args.output / "staged/round-001"
+        )
+
+
+def test_provenance_discovers_the_installed_cupy_distribution(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        benchmark.importlib.metadata,
+        "packages_distributions",
+        lambda: {"cupy": ["cupy"]},
+    )
+    monkeypatch.setattr(
+        benchmark.importlib.metadata, "version", lambda name: "test-" + name
+    )
+    assert benchmark.provenance()["packages"]["cupy"] == "test-cupy"

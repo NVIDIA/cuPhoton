@@ -165,6 +165,9 @@ def pipeline_worker(args: SimpleNamespace) -> None:
         rounds.append(record)
         write_json(output / "timing.json", record)
         print(json.dumps(record), flush=True)
+    gpu_uuid = str(torch.cuda.get_device_properties(ordinal).uuid)
+    if not gpu_uuid.startswith(("GPU-", "MIG-")):
+        gpu_uuid = "GPU-" + gpu_uuid
     write_json(
         args.output / "summary.json",
         {
@@ -174,6 +177,14 @@ def pipeline_worker(args: SimpleNamespace) -> None:
             "configuration_sha256": config.configuration_sha256,
             "rounds": rounds,
             "gpu_name": torch.cuda.get_device_name(ordinal),
+            "device_provenance": {
+                "device": config.device,
+                "gpu_name": torch.cuda.get_device_name(ordinal),
+                "gpu_uuid": gpu_uuid,
+                "cuda_driver_api_version": cp.cuda.runtime.driverGetVersion(),
+                "cuda_runtime_version": cp.cuda.runtime.runtimeGetVersion(),
+                "cupy_version": cp.__version__,
+            },
         },
     )
 
@@ -263,6 +274,15 @@ def measure_stages(args: SimpleNamespace) -> dict[str, Any]:
             raise
         record["batch_seconds"] = time.perf_counter() - started
         record["status"] = "success"
+        record["extra_hashing_seconds"] = sum(
+            json.loads((root / stage / "summary.json").read_text())[
+                "extra_hashing_seconds"
+            ]
+            for stage in ("xpois", "xfit", "xscan")
+        )
+        record["batch_seconds_without_extra_hashing"] = (
+            record["batch_seconds"] - record["extra_hashing_seconds"]
+        )
         rounds.append(record)
         write_json(root / "timing.json", record)
         print(json.dumps({"treatment": "staged", **record}), flush=True)
@@ -380,7 +400,10 @@ def provenance() -> dict[str, Any]:
         "xscan/model.py",
     )
     packages = {}
-    for name in ("cuphoton", "numpy", "cupy-cuda13x", "torch"):
+    cupy_packages = importlib.metadata.packages_distributions().get(
+        "cupy", []
+    )
+    for name in ("cuphoton", "numpy", "torch", *cupy_packages):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -478,8 +501,44 @@ def run_benchmark(args: SimpleNamespace) -> None:
             report[name]["measured_batch_median_seconds"] = statistics.median(
                 values
             )
-        report["fresh_stages_over_warm_pipeline_ratio"] = (
+        report["staged"][
+            "measured_batch_median_seconds_without_extra_hashing"
+        ] = statistics.median(
+            row["batch_seconds_without_extra_hashing"]
+            for row in report["staged"]["rounds"]
+            if row["phase"] == "measured"
+        )
+        report["provenance"]["device"] = report["pipeline"][
+            "device_provenance"
+        ]
+        try:
+            driver = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=driver_version",
+                    "--format=csv,noheader",
+                    "--id=" + report["provenance"]["device"]["gpu_uuid"],
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            report["provenance"]["device"]["driver_version"] = None
+            report["provenance"]["device"]["driver_query_error"] = str(exc)
+        else:
+            report["provenance"]["device"]["driver_version"] = (
+                driver.stdout.strip()
+            )
+        report["raw_fresh_stages_over_warm_pipeline_ratio"] = (
             report["staged"]["measured_batch_median_seconds"]
+            / report["pipeline"]["measured_batch_median_seconds"]
+        )
+        report["fresh_stages_over_warm_pipeline_ratio"] = (
+            report["staged"][
+                "measured_batch_median_seconds_without_extra_hashing"
+            ]
             / report["pipeline"]["measured_batch_median_seconds"]
         )
         write_json(args.output / "report.json", report)

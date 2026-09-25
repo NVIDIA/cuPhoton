@@ -91,11 +91,29 @@ def _read_summary(root: Path, stage: str) -> dict[str, Any]:
     return value
 
 
-def _read_array(root: Path, descriptor: dict[str, Any]) -> np.ndarray:
+def _artifact_hash(
+    path: Path, timings: dict[str, float] | None = None
+) -> str:
+    started = time.perf_counter()
+    digest = file_sha256(path)
+    if timings is not None:
+        timings["artifact_hash_seconds"] = (
+            timings.get("artifact_hash_seconds", 0.0)
+            + time.perf_counter()
+            - started
+        )
+    return digest
+
+
+def _read_array(
+    root: Path,
+    descriptor: dict[str, Any],
+    timings: dict[str, float] | None = None,
+) -> np.ndarray:
     path = (root / descriptor["path"]).resolve()
     if not path.is_relative_to(root.resolve()):
         raise ValueError("intermediate artifact escapes its round directory")
-    if file_sha256(path) != descriptor["sha256"]:
+    if _artifact_hash(path, timings) != descriptor["sha256"]:
         raise ValueError(f"intermediate artifact hash changed: {path.name}")
     array = np.load(path, allow_pickle=False)
     if (
@@ -108,7 +126,7 @@ def _read_array(root: Path, descriptor: dict[str, Any]) -> np.ndarray:
         raise ValueError(
             f"intermediate artifact contract changed: {path.name}"
         )
-    if file_sha256(path) != descriptor["sha256"]:
+    if _artifact_hash(path, timings) != descriptor["sha256"]:
         raise ValueError(
             f"intermediate artifact changed while reading: {path.name}"
         )
@@ -116,7 +134,10 @@ def _read_array(root: Path, descriptor: dict[str, Any]) -> np.ndarray:
 
 
 def _write_arrays(
-    root: Path, directory: Path, arrays: dict[str, np.ndarray]
+    root: Path,
+    directory: Path,
+    arrays: dict[str, np.ndarray],
+    timings: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     directory.mkdir()
     artifacts = {}
@@ -129,7 +150,7 @@ def _write_arrays(
             np.save(stream, array, allow_pickle=False)
         artifacts[name] = {
             "path": str(path.relative_to(root)),
-            "sha256": file_sha256(path),
+            "sha256": _artifact_hash(path, timings),
             "dtype": array.dtype.str,
             "shape": list(array.shape),
             "nbytes": array.nbytes,
@@ -219,7 +240,7 @@ def _run_item(
 
     def previous(which: str, name: str) -> np.ndarray:
         return _read_array(
-            root, priors[which]["items"][index]["artifacts"][name]
+            root, priors[which]["items"][index]["artifacts"][name], timings
         )
 
     if stage == "xpois":
@@ -268,14 +289,8 @@ def _run_item(
             arrays = {
                 f"xpois.{name}": getattr(result, name)
                 for name in (
-                    "kernel",
-                    "matched",
-                    "residual",
-                    "fit_mask",
-                    "background",
                     "kernel_coefficients",
                     "background_coefficients",
-                    "basis_kernels",
                 )
             }
             arrays.update(stamps=stamps, difference=difference)
@@ -318,7 +333,7 @@ def _run_item(
             return {
                 **{
                     f"xfit.{name}": getattr(result, name)
-                    for name in (*XFIT_FIELDS, "residuals")
+                    for name in XFIT_FIELDS
                 },
                 "xfit.features": features.values,
             }, {
@@ -460,6 +475,7 @@ def run_stage(
                 root,
                 stage_dir / f"item-{index:04d}",
                 arrays,
+                timings,
             ),
         )
         _measure(
@@ -470,6 +486,11 @@ def run_stage(
                 when=f"during {stage} execution",
             ),
         )
+        # The pipeline and xPOIS both hash original inputs on read and once
+        # after execution. Only the later stages' rechecks are additional.
+        timings["extra_hashing_seconds"] = timings.get(
+            "artifact_hash_seconds", 0.0
+        ) + (timings["input_recheck_seconds"] if stage != "xpois" else 0.0)
         timings["wall_seconds"] = time.perf_counter() - item_started
         records.append(
             {
@@ -492,11 +513,18 @@ def run_stage(
             name: file_sha256(root / name / "summary.json") for name in priors
         },
         "items": records,
+        "extra_hashing_seconds": sum(
+            record["timings_seconds"]["extra_hashing_seconds"]
+            for record in records
+        ),
         "timing_note": (
             "Setup starts inside run_stage; parent process wall includes "
             "imports and shutdown. Compute/upload/download synchronize "
             "explicitly; these are host elapsed, not GPU-only. Wall excludes "
-            "this final summary write. NPY writes close without fsync."
+            "this final summary write. NPY writes close without fsync. "
+            "Extra hashing counts intermediate digests and original-input "
+            "rechecks in xFit/xScan; input hashes shared with the pipeline "
+            "remain in the adjusted comparison."
         ),
     }
     _write_json(stage_dir / "summary.json", summary)

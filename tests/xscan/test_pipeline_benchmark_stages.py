@@ -258,3 +258,19 @@ def test_setup_imports_only_its_numerical_runtime(
         assert runtime["torch"] is None
         assert runtime["cp"] is fake_cupy
         assert calls == [("cupy", 0), ("sync", 0)]
+
+
+def test_hash_accounting_counts_both_reads_and_the_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    ticks = iter(float(i) for i in range(6))
+    monkeypatch.setattr(stages.time, "perf_counter", lambda: next(ticks))
+    timings = {}
+    artifact = stages._write_arrays(
+        tmp_path, tmp_path / "arrays", {"values": np.arange(3)}, timings
+    )["values"]
+    assert timings["artifact_hash_seconds"] == 1.0
+    np.testing.assert_array_equal(
+        stages._read_array(tmp_path, artifact, timings), np.arange(3)
+    )
+    assert timings["artifact_hash_seconds"] == 3.0
