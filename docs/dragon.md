@@ -17,6 +17,9 @@ extensions are under review; their commands require the corresponding PRs:
 | [Repeated XPOIS rounds (#50)](https://github.com/NVIDIA/cuPhoton/pull/50) | `--warmup-rounds` and `--measure-rounds` reuse workers and CUDA contexts. Each worker has a command queue on its own host and repeats its assigned shard. |
 | [Shared executors (#54)](https://github.com/NVIDIA/cuPhoton/pull/54) and [component commands (#56)](https://github.com/NVIDIA/cuPhoton/pull/56) | xFit, XScan and `xscan run-pipeline` use the shared Dragon/MPI lifecycle. Dragon uses consumer-local command queues for both a single pass and repeated rounds; component workers retain their input/model context. |
 
+### Pending persistent behavior (#50, #54 and #56)
+
+The following behavior requires the open PRs linked above.
 Persistence does not remove all per-item work. XPOIS still reads, transfers and
 writes ordinary scientific artifacts each round. Standalone xFit retains its
 loaded host input; XScan retains metadata, its model and loader across tasks.
@@ -25,6 +28,8 @@ processes start before READY and persist across tasks and rounds. The combined
 pipeline keeps intermediate arrays inside each GPU worker while it
 processes an image pair. Each GPU handles complete items; these paths do not
 split one image across GPUs.
+
+### Launch descriptors on main
 
 Dragon workers load immutable, hash-checked launch descriptors from the shared
 filesystem. Launch arguments carry descriptor references rather than the full
@@ -66,8 +71,11 @@ output validation and cleanup checks. The Python TCP launch in the XPOIS guide
 remains an explicit alternative. Transport availability and the fastest queue
 layout depend on the Dragon build and workload.
 
-## Place command queues with their consumers
+## Pending command-queue protocol (#50 and #54)
 
+This section describes the implementations under review in
+[#50](https://github.com/NVIDIA/cuPhoton/pull/50) and
+[#54](https://github.com/NVIDIA/cuPhoton/pull/54). They are not yet on `main`.
 The repeated XPOIS and shared Dragon executors use a READY/command/result
 protocol. Each worker sends READY after initialization, then waits on its own
 command queue. The coordinator waits for all READY messages before releasing
@@ -114,7 +122,7 @@ uses only a result queue and needs no command-queue relocation. Neither path
 automatically changes the transport or raises the Python TCP thread ceiling;
 those remain launcher settings.
 
-The shared Dragon executor publishes terminal success only after worker
+The shared Dragon executor in pending #54 publishes terminal success only after worker
 shutdown and lifecycle audits. Per-round success does not establish a
 successful complete run. Silent worker exits and shutdown failures fail the
 run. After a reported round failure, healthy peers can finish and retain their
@@ -194,14 +202,24 @@ worker CPU budget and runtime versions constant. Rotate run order and retain
 the first command round as well as subsequent rounds. Record separately:
 
 - Launcher-to-exit wall time, including startup, warmup and shutdown.
-- Time from harness entry until all workers are ready.
+- Time from harness entry until all workers are ready. The product READY
+  protocol is introduced by pending #50 and #54; `main` does not expose this
+  boundary.
 - Whole-batch time from release through collection of worker completions.
 - Worker execution time, with the treatment of output and receipt writes.
 - Coordinator artifact audits, scientific finalization and shutdown.
 
-In persistent-round reports, `batch_wall_sec` stops at completion collection;
-coordinator artifact audits and scientific finalization follow it. The shared
-executor records component merging separately as `finalization_sec`. Keep
+### Pending executor timing fields (#50 and #54)
+
+The following report fields require the open executor PRs. On `main`,
+`summary.json` reports coordinator phases (`discovery`, `partition`, `setup`,
+`launch`, `worker_join`, `result_collection`, `cleanup`, `artifact_visibility`)
+and per-item timings; it has no `batch_wall_sec` or `finalization_sec`.
+
+In persistent-round reports introduced by #50 and #54, `batch_wall_sec` stops
+at completion collection; coordinator artifact audits and scientific
+finalization follow it. The shared executor in #54 records component merging
+separately as `finalization_sec`. Keep
 readiness and shutdown outside this batch interval, and measure external
 launcher-to-exit time independently. MPI finalization and process exit are
 outside the executor's reported coordinator time.
@@ -212,6 +230,8 @@ statistics; failed warmup rounds, measured rounds or cleanup invalidate the
 aggregate. A numerical warmup performed before READY in a separate harness
 does not necessarily warm the first command round. Match these policies before
 comparing results.
+
+### Interpreting comparisons
 
 Subtracting the longest worker duration from the whole-batch duration combines
 start skew, synchronization, receipt writes, serialization and collection. It
