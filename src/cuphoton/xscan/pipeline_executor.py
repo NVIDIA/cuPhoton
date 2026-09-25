@@ -63,7 +63,8 @@ def load_pipeline_manifest(
         if not isinstance(raw, str) or not raw:
             raise ValueError("manifest paths must be nonempty strings")
         value = Path(raw).expanduser()
-        return str((path.parent / value).resolve())
+        nested = path.parent / value
+        return str(nested.parent.resolve() / nested.name)
 
     configuration = json_mapping(
         payload["configuration"], field="configuration"

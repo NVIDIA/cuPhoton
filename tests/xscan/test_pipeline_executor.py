@@ -90,6 +90,41 @@ def test_manifest_paths_are_relative_to_manifest_not_cwd(
     assert pipeline.load_pipeline_manifest(path) == (config, (item,))
 
 
+@pytest.mark.parametrize("directory_symlink", [False, True])
+def test_manifest_preserves_npy_symlink_and_validates_target(
+    tmp_path, directory_symlink
+):
+    path, config, _ = _manifest(tmp_path)
+    image = tmp_path / "image.npy"
+    directory = tmp_path
+    input_path = "image.npy"
+    if directory_symlink:
+        directory = tmp_path / "store"
+        (directory / "nested").mkdir(parents=True)
+        (tmp_path / "inputs").symlink_to(
+            directory / "nested", target_is_directory=True
+        )
+        input_path = "inputs/../image.npy"
+    target = directory / "content-addressed-input"
+    image.rename(target)
+    image = directory / "image.npy"
+    image.symlink_to(target.name)
+    data = json.loads(path.read_text())
+    for role in ("reference", "target"):
+        data["items"][0][role]["path"] = input_path
+    path.write_text(json.dumps(data))
+
+    actual_config, items = pipeline.load_pipeline_manifest(path)
+    assert actual_config == config
+    assert items[0].reference.path == str(image)
+    assert items[0].target.path == str(image)
+    pipeline.prepare_pipeline_workload(items, config)
+
+    target.write_bytes(target.read_bytes()[:-1] + b"x")
+    with pytest.raises(RuntimeError, match="changed before"):
+        pipeline.prepare_pipeline_workload(items, config)
+
+
 @pytest.mark.parametrize(
     "defect", ["duplicate", "unknown", "schema", "items"]
 )
