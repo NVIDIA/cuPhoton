@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -805,3 +806,28 @@ def test_interrupted_worker_keeps_failed_close_evidence(
     )
     assert closed["status"] == "failed"
     assert closed["error"]["type"] == "KeyboardInterrupt"
+
+
+@pytest.mark.parametrize("initialized", [False, True])
+def test_binding_allows_torch_import_without_cuda(monkeypatch, initialized):
+    for name in ("cupy", "numba.cuda", "cuda.tile"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            cuda=SimpleNamespace(is_initialized=lambda: initialized)
+        ),
+    )
+    monkeypatch.setattr(
+        dragon.socket, "gethostname", lambda: "worker.example"
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3")
+    placement = dragon.Placement(0, "worker.example", 3)
+    if initialized:
+        with pytest.raises(RuntimeError, match="torch CUDA"):
+            dragon._validate_binding(placement, allow_loopback_alias=False)
+    else:
+        assert dragon._validate_binding(
+            placement, allow_loopback_alias=False
+        ) == ("worker.example", "3")

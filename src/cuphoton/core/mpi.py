@@ -29,6 +29,7 @@ from .benchmark import (
     build_benchmark_report,
 )
 from .bulk import (
+    WorkItem,
     atomic_write_json,
     error_payload,
     json_mapping,
@@ -46,6 +47,7 @@ from .execution import (
     execute_worker_round,
     finalize_round,
     prepare_run,
+    resolve_worker_factory,
 )
 
 
@@ -56,13 +58,16 @@ def run_mpi_work_items(
     run_id: str | None = None,
     rank_setup_timeout_sec: float = 600.0,
     benchmark: BenchmarkOptions | None = None,
+    prepare_on_root: bool = False,
 ) -> ExecutionResult | None:
     """Run under an external launcher with one prebound GPU per MPI rank.
 
     Startup, preflight, worker initialization and close failures are agreed
     collectively. Ordinary mode runs once; benchmark mode reuses the
     same worker object for every warmup and measured pass. The launcher owns
-    process failure detection and MPI shutdown.
+    process failure detection and MPI shutdown. With ``prepare_on_root``,
+    only rank zero plans the workload; JSON launch descriptors are broadcast
+    to peers, while scientific validators and finalizers remain on rank zero.
     """
 
     start = time.perf_counter()
@@ -111,14 +116,43 @@ def run_mpi_work_items(
     spec = None
     preflight_error = None
     try:
-        spec = prepare_workload(context.rank)
-        if not isinstance(spec, WorkloadSpec):
-            raise TypeError("prepare_workload must return WorkloadSpec")
-        if context.world_size > len(spec.items):
-            raise ValueError("MPI world size cannot exceed the item count")
+        if not prepare_on_root or context.rank == 0:
+            spec = prepare_workload(context.rank)
+            if not isinstance(spec, WorkloadSpec):
+                raise TypeError("prepare_workload must return WorkloadSpec")
+            if context.world_size > len(spec.items):
+                raise ValueError(
+                    "MPI world size cannot exceed the item count"
+                )
     except Exception as exc:
         preflight_error = error_payload(exc)
     _mpi_failure_consensus(comm, "MPI workload preflight", preflight_error)
+    _agree_payload(comm, {"prepare_on_root": prepare_on_root})
+    if prepare_on_root:
+        payload = comm.bcast(
+            spec.identity_payload() if context.rank == 0 else None, root=0
+        )
+        descriptor_error = None
+        try:
+            if context.rank != 0:
+                spec = WorkloadSpec(
+                    items=tuple(
+                        WorkItem.from_dict(item) for item in payload["items"]
+                    ),
+                    options_payload=payload["options"],
+                    manifest_payload=payload["manifest"],
+                    input_identity_payload=payload["input_identity"],
+                    manifest_sha256=payload["manifest_sha256"],
+                    backend=payload["backend"],
+                    worker_factory=resolve_worker_factory(
+                        payload["worker_factory"]
+                    ),
+                )
+        except Exception as exc:
+            descriptor_error = error_payload(exc)
+        _mpi_failure_consensus(
+            comm, "MPI workload descriptor", descriptor_error
+        )
     assert spec is not None
     _agree_payload(
         comm,

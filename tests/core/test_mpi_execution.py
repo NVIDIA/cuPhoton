@@ -54,8 +54,9 @@ def tracking_factory(options):
     "failure",
     [None, "preflight", "plan", "initialize", "item", "close", "unexpected"],
 )
+@pytest.mark.parametrize("prepare_on_root", [False, True])
 def test_two_rank_persistent_lifecycle_and_collective_failures(
-    monkeypatch, tmp_path, failure
+    monkeypatch, tmp_path, failure, prepare_on_root
 ):
     for name in tuple(os.environ):
         if name.startswith(
@@ -128,7 +129,7 @@ def test_two_rank_persistent_lifecycle_and_collective_failures(
 
     def prepare(rank):
         trace.append(("preflight", rank))
-        if failure == "preflight" and rank == 1:
+        if failure == "preflight" and rank == (0 if prepare_on_root else 1):
             raise ValueError("bad rank input")
         return workload(
             worker_factory=tracking_factory,
@@ -141,6 +142,7 @@ def test_two_rank_persistent_lifecycle_and_collective_failures(
         try:
             return mpi.run_mpi_work_items(
                 prepare_workload=prepare,
+                prepare_on_root=prepare_on_root,
                 output_root=tmp_path,
                 run_id="parallel",
                 rank_setup_timeout_sec=0.01,
@@ -153,6 +155,9 @@ def test_two_rank_persistent_lifecycle_and_collective_failures(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         root, peer = list(pool.map(run, (0, 1)))
+    assert sorted(event[1] for event in trace if event[0] == "preflight") == (
+        [0] if prepare_on_root else [0, 1]
+    )
     if failure in {"preflight", "plan"}:
         assert isinstance(root, RuntimeError)
         assert isinstance(peer, RuntimeError)

@@ -276,6 +276,13 @@ def run_dragon_work_items(
     Worker factories run only after host and singleton CUDA binding checks.
     Complete item descriptors live in hashed shared-filesystem launch files;
     control queues carry bounded round commands and completion receipts.
+
+    Successful runs explicitly close every worker before joining. On failure,
+    the coordinator stops the process group; a survivor blocked on its command
+    queue only runs ``worker.close()`` if Dragon's stop signal unwinds Python.
+    Forced process termination releases its CUDA resources, but application
+    cleanup and a CLOSED receipt are not guaranteed. Failed runs retain that
+    lifecycle error and cannot publish successful benchmark aggregates.
     """
 
     invocation_start = time.perf_counter()
@@ -904,9 +911,12 @@ def _validate_binding(
     visibility = _singleton_cuda_visibility(placement.gpu_id)
     premature = [
         name
-        for name in ("cupy", "numba.cuda", "cuda.tile", "torch")
+        for name in ("cupy", "numba.cuda", "cuda.tile")
         if name in sys.modules
     ]
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_initialized():
+        premature.append("torch CUDA")
     if premature:
         raise RuntimeError(
             "CUDA modules were imported before Dragon worker placement: "
