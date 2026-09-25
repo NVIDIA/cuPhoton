@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal, ParamSpec, TypeVar
 
 import numpy as np
 
+from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -22,6 +23,7 @@ from cuphoton.core.cli import (
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.executor import ExecutorOptions
 
 from ._types import (
     BACKEND_REQUESTS,
@@ -186,7 +188,7 @@ class DataValidateCommand(_ValidatedDatasetCommand):
         self._emit_json(payload)
 
 
-class FitDipolesCommand(_ValidatedDatasetCommand):
+class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     """Fit a batch of astronomical dipoles and persist safe artifacts."""
 
     output_dir = None
@@ -199,6 +201,13 @@ class FitDipolesCommand(_ValidatedDatasetCommand):
     g_tol = None
     max_evaluations = None
     use_finite_difference = None
+    chunk_size = None
+
+    class ChunkSizeArg(PositiveIntegerInvariant):
+        _arg = "--chunk-size"
+        _help = "Candidates per distributed task. [default: 256]"
+        _mandatory = False
+        _default = None
 
     class OutputDirArg(PathSpecInvariant):
         _arg = "--output-dir"
@@ -283,6 +292,59 @@ class FitDipolesCommand(_ValidatedDatasetCommand):
         )
 
     def run(self) -> None:
+        executor_options = self.executor_options()
+        if self.executor != "local":
+            from cuphoton.core.executors import run_workload
+
+            from .executor import prepare_xfit_workload
+
+            if self.executor == "mpi":
+                executor_options["prepare_on_root"] = True
+            output_dir = Path(self.output_dir).expanduser().resolve()
+            self._call(
+                validate_identifier,
+                output_dir.name,
+                field="--output-dir basename",
+            )
+            fit_options = {
+                name: getattr(self, name)
+                for name in (
+                    "model",
+                    "mode",
+                    "backend",
+                    "compute_dtype",
+                    "stamp_evaluation",
+                    "stamp_scale",
+                    "f_tol",
+                    "x_tol",
+                    "g_tol",
+                    "max_evaluations",
+                    "use_finite_difference",
+                )
+            }
+            result = self._call(
+                run_workload,
+                executor=self.executor,
+                prepare_workload=lambda rank: prepare_xfit_workload(
+                    input_path=self.input,
+                    chunk_size=self.chunk_size or 256,
+                    fit_options=fit_options,
+                    retain_input=rank == 0,
+                ),
+                output_root=output_dir.parent,
+                run_id=output_dir.name,
+                **executor_options,
+            )
+            if result is not None:
+                self._emit_json(result.to_dict())
+                if result.status != "success":
+                    raise CommandError("distributed xFit execution failed")
+            return
+        if self.chunk_size is not None:
+            raise CommandError(
+                "--chunk-size requires --executor dragon or mpi"
+            )
+
         from . import LMConfig, fit_dipoles
 
         dataset = self._load_dataset()

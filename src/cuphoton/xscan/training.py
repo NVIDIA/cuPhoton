@@ -11,7 +11,7 @@ import multiprocessing as mp
 import os
 import random
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
@@ -374,6 +374,7 @@ def make_dataloader(
     batch_size: int,
     shuffle: bool,
     performance: PerformanceConfig,
+    sampler: Sequence[int] | None = None,
 ) -> DataLoader[CollatedDatasetBatch]:
     kwargs: dict[str, Any] = {
         "batch_size": batch_size,
@@ -382,6 +383,8 @@ def make_dataloader(
         "pin_memory": performance.pin_memory,
         "persistent_workers": performance.persistent_workers,
     }
+    if sampler is not None:
+        kwargs["sampler"] = sampler
     if (
         performance.num_workers > 0
         and performance.worker_start_method is not None
@@ -1613,17 +1616,22 @@ def predict_dataset(
     device: torch.device,
     performance: PerformanceConfig | None = None,
     _loader: DataLoader[CollatedDatasetBatch] | None = None,
+    _metadata_rows: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_performance = normalize_performance_config(
         performance or PerformanceConfig(),
         device=device,
     )
     amp_dtype = resolve_amp_dtype(resolved_performance, device=device)
-    loader = _loader or make_dataloader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        performance=resolved_performance,
+    loader = (
+        _loader
+        if _loader is not None
+        else make_dataloader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            performance=resolved_performance,
+        )
     )
     logits_chunks = []
     label_chunks = []
@@ -1652,7 +1660,11 @@ def predict_dataset(
         if label_chunks
         else np.zeros((0,))
     )
-    rows = load_metadata_rows(dataset.dataset_dir)
+    rows = (
+        load_metadata_rows(dataset.dataset_dir)
+        if _metadata_rows is None
+        else _metadata_rows
+    )
     selected_rows = []
     for idx in dataset.indices.tolist():
         row = dict(rows[int(idx)])

@@ -545,6 +545,7 @@ def _observe_content_file(
     expected_sha256: str,
     description: str,
     cache: dict[Path, tuple[str, int]],
+    validate_content: bool = True,
 ) -> int:
     try:
         if not path.is_file():
@@ -556,7 +557,10 @@ def _observe_content_file(
         ) from exc
     observed = cache.get(path)
     if observed is None:
-        observed = (file_sha256(path), size_bytes)
+        observed = (
+            file_sha256(path) if validate_content else expected_sha256,
+            size_bytes,
+        )
         cache[path] = observed
     if observed != (expected_sha256, size_bytes):
         raise RuntimeError(f"{description} changed before Dragon launch")
@@ -565,6 +569,8 @@ def _observe_content_file(
 
 def _preflight_items(
     items: Sequence[DevicePipelineItem],
+    *,
+    validate_content: bool = True,
 ) -> tuple[tuple[WorkItem, ...], list[dict[str, Any]]]:
     if not items:
         raise ValueError("Dragon device pipeline items must not be empty")
@@ -586,6 +592,7 @@ def _preflight_items(
                 expected_sha256=descriptor.sha256,
                 description=f"{item.item_id} {role} input",
                 cache=observed_files,
+                validate_content=validate_content,
             )
             descriptor_payload = descriptor.to_payload()
             existing = by_path.get(descriptor.path)
@@ -623,6 +630,7 @@ def _preflight(
     items: Sequence[DevicePipelineItem],
     *,
     config: DevicePipelineConfig,
+    validate_content: bool = True,
 ) -> tuple[
     tuple[WorkItem, ...],
     dict[str, Any],
@@ -644,6 +652,7 @@ def _preflight(
         expected_sha256=config.checkpoint_sha256,
         description="XScan checkpoint",
         cache=observed_files,
+        validate_content=validate_content,
     )
     feature_schema_path = Path(config.feature_schema_path)
     feature_schema_size = _observe_content_file(
@@ -651,8 +660,11 @@ def _preflight(
         expected_sha256=config.feature_schema_sha256,
         description="xFit feature schema",
         cache=observed_files,
+        validate_content=validate_content,
     )
-    work_items, item_identities = _preflight_items(items)
+    work_items, item_identities = _preflight_items(
+        items, validate_content=validate_content
+    )
     manifest_payload = {
         "schema": DRAGON_DEVICE_PIPELINE_MANIFEST_SCHEMA,
         "backend": _BACKEND,
@@ -918,6 +930,7 @@ def _success_record_problems(
     output_root: Path,
     config: DevicePipelineConfig,
     items: Mapping[str, DevicePipelineItem],
+    run_dir: Path | None = None,
 ) -> tuple[str, ...]:
     problems: set[str] = set()
     item_id = record.get("item_id")
@@ -994,7 +1007,7 @@ def _success_record_problems(
         problems.add("summary_path")
         return tuple(sorted(problems))
     assert isinstance(summary_relative, str)
-    summary_path = output_root / run_id / summary_relative
+    summary_path = (run_dir or output_root / run_id) / summary_relative
     try:
         summary = read_json_mapping(summary_path)
         if file_sha256(summary_path) != metadata["summary_sha256"]:
@@ -1034,6 +1047,7 @@ def _failed_record_problems(
     *,
     output_root: Path,
     items: Mapping[str, DevicePipelineItem],
+    run_dir: Path | None = None,
 ) -> tuple[str, ...]:
     item_id = record.get("item_id")
     run_id = record.get("run_id")
@@ -1043,7 +1057,7 @@ def _failed_record_problems(
         or not isinstance(run_id, str)
     ):
         return ()
-    item_dir = output_root / run_id / "items" / item_id
+    item_dir = (run_dir or output_root / run_id) / "items" / item_id
     return ("failed_item_output",) if os.path.lexists(item_dir) else ()
 
 

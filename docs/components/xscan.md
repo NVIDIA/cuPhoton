@@ -236,6 +236,64 @@ The `*.blackwell.example.yaml` files demonstrate throughput-oriented settings
 for recent NVIDIA GPUs. Tune these starting points for your hardware and
 dataset.
 
+## Distributed inference
+
+`infer-real-bogus --executor dragon|mpi` scores a fixed split across GPUs.
+Each worker loads the checkpoint once and retains it across optional warmup
+and measured passes. Training and evaluation commands retain their existing
+local behavior. The default `--executor local` also preserves the original
+inference output location.
+
+Inputs, checkpoint, optional xFit feature bundle and output directory must
+reside on a filesystem shared by all workers. `--batch-size` retains its
+ordinary inference meaning. `--task-batches` groups whole minibatches into
+tasks; only the final task can contain the original final partial batch.
+Keep both values fixed when comparing worker counts. The merge restores
+selected-split order, original sample indices, labels and candidate metadata,
+and uses the same host probability calculation as local inference.
+The task count must be at least the MPI rank count. Dragon uses the smaller
+of the requested worker count and task count.
+
+Distributed inference defaults to `--num-workers 0`, independently of the
+checkpoint's loader setting. An explicit positive value creates persistent
+loader processes during worker setup; the loader and parsed metadata are
+reused across tasks and rounds. Workers retain inputs and model state, so
+their initial load is outside the timed rounds.
+
+Under a configured Dragon allocation:
+
+```bash
+dragon .venv/bin/cuphoton xscan infer-real-bogus \
+  --executor dragon --max-workers 8 \
+  --run-dir /shared/model --dataset-dir /shared/dataset --split test \
+  --batch-size 32 --task-batches 16 --num-workers 0 \
+  --output-dir /shared/results/inference-dragon \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+With Open MPI, the rank wrapper narrows GPU visibility before Python starts.
+The parent mask must list allocated GPUs in local-rank order:
+
+```bash
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xscan infer-real-bogus \
+  --executor mpi --run-dir /shared/model --dataset-dir /shared/dataset \
+  --split test --batch-size 32 --task-batches 16 --num-workers 0 \
+  --output-dir /shared/results/inference-mpi \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+Distributed inference requires a new `--output-dir`. Its basename is the run
+ID: 1–128 ASCII letters, digits, dots, underscores or hyphens, starting with
+a letter or digit. Each pass writes merged
+logits, labels, probabilities, sample indices and a summary under
+`rounds/<round-id>/scientific/`; warmup outputs are retained too. Without
+round flags, the single pass uses `scientific/`. The model directory remains
+unchanged. Execution receipts and timing are separate from these scientific
+outputs, and merging and validation occur after the timed worker phase.
+
 ## Persistent XPOIS, xFit and XScan pipeline
 
 The Python API in `cuphoton.xscan.device_pipeline` runs complete image pairs
@@ -355,6 +413,48 @@ Results include predictions, configuration/input hashes and compact
 scientific evidence; Dragon saves each result in
 `items/<item_id>/summary.json` and checks it again in the coordinator.
 The evidence decoder returns the 22 named arrays for comparison.
+
+The `run-pipeline` command accepts the same descriptors with either Dragon or
+MPI. Save the configuration and items above as a manifest:
+
+```python
+import json
+
+Path("pipeline.json").write_text(json.dumps({
+    "schema": "cuphoton.xscan.pipeline-manifest/v1",
+    "configuration": config.to_payload(),
+    "items": [item.to_payload() for item in items],
+}, indent=2) + "\n")
+```
+
+Paths may be absolute or relative to the manifest. All nodes must see the
+same source, inputs and output directory. Use your site's launcher settings;
+these examples run one warmup pass and two measured passes:
+
+```bash
+dragon cuphoton xscan run-pipeline --executor dragon \
+  --manifest pipeline.json --output-dir runs --name dragon-pipeline \
+  --max-workers 8 --warmup-rounds 1 --measure-rounds 2
+
+mpiexec -n 8 -x CUDA_VISIBLE_DEVICES cuphoton-openmpi-rank-exec -- \
+  cuphoton xscan run-pipeline --executor mpi \
+  --manifest pipeline.json --output-dir runs --name mpi-pipeline \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+The MPI example requires Open MPI and the allocation's visible GPU list on
+each node. Other MPI launchers must bind each rank to exactly one GPU before
+starting Python; do not use the Open MPI wrapper with MPICH. Each rank uses
+local `cuda:0`, and duplicate physical GPU assignments fail validation.
+
+Both executors initialize one worker context and reuse it across all items
+and rounds. Warmup outputs remain under `rounds/warmup-*`; measured outputs
+remain under `rounds/measure-*`. Each round retains ordinary item results and
+audit evidence. The parent `summary.json` separates readiness, batch time,
+artifact validation and cleanup. Batch time includes dispatch, input loading,
+numerical work and worker output publication; coordinator audits follow that
+timer. It is not kernel-only time. Failed rounds or cleanup invalidate the
+reported statistics. Omitting both round flags runs a single pass.
 
 The pipeline retains device owners through the blocking terminal copy and
 synchronizes failed work before reuse. Failed cleanup makes the context

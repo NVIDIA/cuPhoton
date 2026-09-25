@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -20,6 +21,7 @@ from cuphoton.core.cli import (
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.executor import ExecutorOptions
 
 T = TypeVar("T")
 _DEFAULT_REVIEW_DIR = os.environ.get("CUPHOTON_XSCAN_REVIEW_DIR")
@@ -888,7 +890,57 @@ class TrainInadaTripletCommand(_TrainCommand):
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
 
 
-class InferRealBogusCommand(XScanCommand):
+class RunPipelineCommand(ExecutorOptions, XScanCommand):
+    """Run complete XPOIS, xFit and XScan jobs in persistent GPU workers."""
+
+    manifest = None
+    output_dir = None
+    run_name = None
+
+    class ExecutorArg(ExecutorOptions.ExecutorArg):
+        _set = {"dragon", "mpi"}
+        _default = None
+        _mandatory = True
+        _help = (
+            "Distributed runtime: dragon or mpi, with its matching launcher."
+        )
+
+    class ManifestArg(PathSpecInvariant):
+        _arg = "--manifest"
+        _mandatory = True
+        _help = "JSON pipeline manifest with configuration and image pairs."
+
+    class OutputDirArg(PathSpecInvariant):
+        _arg = "--output-dir"
+        _mandatory = True
+        _help = "Parent directory for immutable pipeline runs."
+
+    class RunNameArg(StringInvariant):
+        _arg = "--name"
+        _default = None
+        _help = "Optional unique run identifier."
+
+    def run(self) -> None:
+        options = self.executor_options()
+        from .pipeline_executor import run_pipeline_manifest
+
+        result = self._call(
+            run_pipeline_manifest,
+            executor=self.executor,
+            manifest_path=Path(self.manifest),
+            output_root=Path(self.output_dir),
+            run_id=self.run_name,
+            **options,
+        )
+        if result is not None:
+            self._emit_json(result.to_dict())
+            if result.status != "success":
+                raise CommandError(
+                    f"Pipeline failed; inspect {result.summary_path}"
+                )
+
+
+class InferRealBogusCommand(ExecutorOptions, XScanCommand):
     """Run inference for a trained real-bogus model on one split."""
 
     run_dir = None
@@ -898,6 +950,22 @@ class InferRealBogusCommand(XScanCommand):
     num_workers = None
     use_x_fit_features = None
     x_fit_feature_dir = None
+    output_dir = None
+    task_batches = None
+
+    class OutputDirArg(PathSpecInvariant):
+        _arg = "--output-dir"
+        _help = "New execution directory; required with Dragon or MPI."
+        _mandatory = False
+        _default = None
+
+    class TaskBatchesArg(PositiveIntegerInvariant):
+        _arg = "--task-batches"
+        _help = (
+            "Whole inference minibatches per distributed task. [default: 16]"
+        )
+        _mandatory = False
+        _default = None
 
     class RunDirArg(PathSpecInvariant):
         _arg = "--run-dir"
@@ -923,7 +991,10 @@ class InferRealBogusCommand(XScanCommand):
 
     class NumWorkersArg(NonNegativeIntegerInvariant):
         _arg = "--num-workers"
-        _help = "Loader workers; 0 disables workers, omitted uses checkpoint."
+        _help = (
+            "Loader workers; 0 disables workers. Distributed inference "
+            "defaults to 0; local inference uses the checkpoint setting."
+        )
         _mandatory = False
         _default = None
 
@@ -943,6 +1014,51 @@ class InferRealBogusCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        executor_options = self.executor_options()
+        if self.executor != "local":
+            from cuphoton.core.executors import run_workload
+
+            from .executor import prepare_inference_workload
+
+            if self.output_dir is None:
+                raise CommandError(
+                    "--output-dir is required for distributed inference"
+                )
+            if self.executor == "mpi":
+                executor_options["prepare_on_root"] = True
+            output_dir = Path(self.output_dir).expanduser().resolve()
+            self._call(
+                validate_identifier,
+                output_dir.name,
+                field="--output-dir basename",
+            )
+            result = self._call(
+                run_workload,
+                executor=self.executor,
+                prepare_workload=lambda rank: prepare_inference_workload(
+                    run_dir=Path(self.run_dir).expanduser(),
+                    dataset_dir=Path(self.dataset_dir).expanduser(),
+                    split=self.split,
+                    batch_size=self.batch_size,
+                    task_batches=self.task_batches or 16,
+                    num_workers=self.num_workers,
+                    use_xfit_features=bool(self.use_x_fit_features),
+                    xfit_feature_dir=self._path(self.x_fit_feature_dir),
+                ),
+                output_root=output_dir.parent,
+                run_id=output_dir.name,
+                **executor_options,
+            )
+            if result is not None:
+                self._emit_json(result.to_dict())
+                if result.status != "success":
+                    raise CommandError("distributed xScan inference failed")
+            return
+        if self.output_dir is not None or self.task_batches is not None:
+            raise CommandError(
+                "--output-dir and --task-batches require "
+                "--executor dragon or mpi"
+            )
         result = self._call(
             infer_workflow,
             run_dir=Path(self.run_dir).expanduser(),

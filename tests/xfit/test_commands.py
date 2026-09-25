@@ -754,3 +754,55 @@ def test_command_help_exposes_stable_safe_input_options(capsys) -> None:
     assert "vignetted" in captured.out
     assert "finite-volume" in captured.out
     assert "--use-finite-difference" in captured.out
+
+
+@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+def test_distributed_output_name_is_validated_before_launch(
+    tmp_path, monkeypatch, capsys, runtime
+):
+    from cuphoton.core import executors
+
+    input_path = tmp_path / "input.npz"
+    _write_gaussian_input(input_path)
+    monkeypatch.setattr(
+        executors, "run_workload", lambda **kwargs: pytest.fail("launched")
+    )
+    rc = run_component(
+        "xfit",
+        [
+            "fit-dipoles",
+            "--input",
+            str(input_path),
+            "--model",
+            "gaussian",
+            "--backend",
+            "cupy",
+            "--executor",
+            runtime,
+            "--output-dir",
+            str(tmp_path / "invalid name"),
+        ],
+    )
+    assert rc != 0
+    assert "--output-dir basename" in capsys.readouterr().err
+
+
+def test_local_fitting_rejects_distributed_chunk_option(tmp_path, capsys):
+    input_path = tmp_path / "input.npz"
+    _write_gaussian_input(input_path)
+    rc = run_component(
+        "xfit",
+        [
+            "fit-dipoles",
+            "--input",
+            str(input_path),
+            "--model",
+            "gaussian",
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--chunk-size",
+            "1",
+        ],
+    )
+    assert rc != 0
+    assert "--chunk-size requires --executor" in capsys.readouterr().err
