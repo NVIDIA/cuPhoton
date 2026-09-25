@@ -236,11 +236,16 @@ def _dragon_launch_worker(
             "error": error_payload(exc),
         }
         if commands is not None:
+            puid = None
+            try:
+                puid = _dragon_process_id()
+            except Exception as identity_exc:
+                result["identity_error"] = error_payload(identity_exc)
             result.update(
                 kind="ready",
                 run_id=run_id,
                 round_id=None,
-                puid=_dragon_process_id(),
+                puid=puid,
             )
         try:
             atomic_write_json(

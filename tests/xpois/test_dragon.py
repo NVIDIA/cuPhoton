@@ -2751,10 +2751,16 @@ def test_generic_coordinator_runs_workload_terminal_validators(
 
 @pytest.mark.parametrize("failure", ["digest", "size", "symlink"])
 @pytest.mark.parametrize("rounds", [False, True])
+@pytest.mark.parametrize("identity_failure", [False, True])
 def test_launch_worker_retains_descriptor_failures(
-    monkeypatch, tmp_path, failure, rounds
+    monkeypatch, tmp_path, failure, rounds, identity_failure
 ) -> None:
-    monkeypatch.setattr(dragon_module, "_dragon_process_id", lambda: 1000)
+    def process_id():
+        if identity_failure:
+            raise RuntimeError("process identity unavailable")
+        return 1000
+
+    monkeypatch.setattr(dragon_module, "_dragon_process_id", process_id)
     run_dir = tmp_path / "run"
     descriptor = run_dir / "launch/worker-0000.json"
     atomic_write_json(descriptor, {"invalid": True}, overwrite=False)
@@ -2790,6 +2796,12 @@ def test_launch_worker_retains_descriptor_failures(
         assert result["kind"] == "ready"
         assert result["run_id"] == "run"
         assert result["round_id"] is None
+        assert result["puid"] == (None if identity_failure else 1000)
+        if identity_failure:
+            assert result["identity_error"]["message"] == (
+                "process identity unavailable"
+            )
+    assert result["error"]["type"] == "ValueError"
     receipt = json.loads(
         (run_dir / "launch/worker-0000-failure.json").read_text()
     )
