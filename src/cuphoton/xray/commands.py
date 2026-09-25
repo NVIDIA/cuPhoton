@@ -20,12 +20,20 @@ from cuphoton.core.cli import (
     NonNegativeIntegerInvariant,
     PairInvariant,
     PathValueInvariant,
+    PositiveIntegerInvariant,
     SequenceInvariant,
     SetInvariant,
     StringInvariant,
     VariablePositionalInvariant,
 )
 
+from ._cli_output import (
+    print_file_probe,
+    print_model_order_sweep_batch,
+    print_model_order_sweep_payload,
+    print_subspace_benchmark_batch,
+    print_validation_sweep,
+)
 from ._types import FIT_DIAGNOSTICS_LEVELS
 from .doctor import (
     collect_doctor_report,
@@ -593,6 +601,84 @@ class LinearPredictionSmokeCommand(_XRayCommand):
     class JsonArg(BoolInvariant):
         _arg = "--json"
         _help = "Emit machine-readable JSON."
+        _required = False
+
+
+class LinearPredictionValidateCommand(_XRayCommand):
+    _description_ = (
+        "Validate linear prediction on synthetic damped modes against "
+        "the Cramer-Rao bound."
+    )
+    _shortname_ = "lpv"
+    _handler_name_ = "_linear_prediction_validate"
+
+    samples = 96
+
+    class SamplesArg(IntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    components = 6
+
+    class ComponentsArg(PositiveIntegerInvariant):
+        _arg = "--components"
+        _help = "Number of SVD components to fit."
+        _required = False
+        _default = 6
+
+    trials = 200
+
+    class TrialsArg(PositiveIntegerInvariant):
+        _arg = "--trials"
+        _help = "Monte Carlo trials per signal-to-noise level."
+        _required = False
+        _default = 200
+
+    snr_db = "40,30,20,10"
+
+    class SnrDbArg(StringInvariant):
+        _arg = "--snr-db"
+        _help = "Comma-separated signal-to-noise levels in dB."
+        _required = False
+        _default = "40,30,20,10"
+
+    seed = 20260914
+
+    class SeedArg(IntegerInvariant):
+        _arg = "--seed"
+        _help = "Random seed for the noise draws."
+        _required = False
+        _default = 20260914
+
+    distortion = None
+
+    class DistortionArg(StringInvariant):
+        _arg = "--distortion"
+        _help = (
+            "Optional model mismatch as kind:amount, one of chirp, "
+            "gaussian_envelope, baseline_drift, clip, glitch "
+            "(for example chirp:0.05)."
+        )
+        _required = False
+        _default = None
+
+    output_dir = None
+
+    class OutputDirArg(PathValueInvariant):
+        _arg = "--output-dir"
+        _help = (
+            "Directory for summary.json and the validation figure "
+            "(created if needed; keep it outside the checkout)."
+        )
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Print the summary as JSON instead of the text report."
         _required = False
 
 
@@ -3668,8 +3754,8 @@ def _data_probe(args):
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        _print_file_probe("on", result.on)
-        _print_file_probe("off", result.off)
+        print_file_probe("on", result.on)
+        print_file_probe("off", result.off)
     return 0
 
 
@@ -4219,25 +4305,6 @@ def _detector_mask(args):
     return 0
 
 
-def _print_file_probe(label, probe):
-    print(f"{label}_path={probe.path}")
-    print(f"{label}_size_bytes={probe.size_bytes}")
-    print(f"{label}_schema={probe.schema}")
-    print(f"{label}_ipm_pairs={','.join(probe.ipm_pairs) or '-'}")
-    print(f"{label}_keys={','.join(probe.keys)}")
-    for dataset in probe.datasets:
-        shape = "x".join(str(dim) for dim in dataset.shape)
-        chunks = (
-            "-"
-            if dataset.chunks is None
-            else "x".join(str(dim) for dim in dataset.chunks)
-        )
-        print(
-            f"{label}_dataset={dataset.name} "
-            f"shape={shape} dtype={dataset.dtype} chunks={chunks}"
-        )
-
-
 def _linear_prediction_smoke(args):
     from .linear_prediction import (
         LinearPredictionComparison,
@@ -4317,6 +4384,53 @@ def _linear_prediction_smoke(args):
                 "rms_reconstruction_diff="
                 f"{payload['rms_reconstruction_diff']:.6g}"
             )
+    return 0
+
+
+def _linear_prediction_validate(args):
+    from .synthetic_validation import (
+        build_summary,
+        validation_sweep,
+        write_validation_run,
+    )
+
+    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+    distortion = None
+    if args.distortion:
+        try:
+            kind, amount = str(args.distortion).split(":", maxsplit=1)
+            if not kind.strip():
+                raise ValueError("missing distortion kind")
+            distortion = (kind.strip(), float(amount))
+        except ValueError as exc:
+            raise ValueError(
+                "--distortion must be kind:amount with a numeric amount "
+                "(for example chirp:0.05)"
+            ) from exc
+    sweeps = [
+        validation_sweep(
+            samples=args.samples,
+            snr_db=snr,
+            trials=args.trials,
+            n_components=args.components,
+            seed=args.seed,
+            distortion=distortion,
+        )
+    ]
+    if args.output_dir is not None:
+        summary = write_validation_run(args.output_dir, sweeps)
+    else:
+        summary = build_summary(sweeps)
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
+        return 0
+    print(f"samples={sweeps[0].samples}")
+    print(f"signal_rms={sweeps[0].signal_rms:.6g}")
+    for sweep in sweeps:
+        print_validation_sweep(sweep)
+    if args.output_dir is not None:
+        for key, name in summary["artifacts"].items():
+            print(f"{key}={name if name else 'not written'}")
     return 0
 
 
@@ -5347,9 +5461,9 @@ def _model_order_sweep(args):
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif payload["source"]["kind"] == "trace-npz-batch":
-        _print_model_order_sweep_batch(payload)
+        print_model_order_sweep_batch(payload)
     else:
-        _print_model_order_sweep_payload(payload)
+        print_model_order_sweep_payload(payload)
     return 0
 
 
@@ -5427,62 +5541,6 @@ def _model_order_sweep_batch_payload(
     }
 
 
-def _print_model_order_sweep_payload(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"samples={payload['samples']}")
-    print(f"roots_backend={payload['roots_backend']}")
-    print(f"best_components={payload['best_components']}")
-    print(f"best_selected_model_order={payload['best_selected_model_order']}")
-    print(f"best_rms_residual={payload['best_rms_residual']:.6g}")
-    print(
-        "best_reconstruction_rms_error="
-        f"{payload['best_reconstruction_rms_error']:.6g}"
-    )
-    for entry in payload["entries"]:
-        print(
-            f"components={entry['components']} "
-            f"selected_model_order={entry['selected_model_order']} "
-            f"rms_residual={entry['rms_residual']:.6g} "
-            "reconstruction_rms_error="
-            f"{entry['reconstruction_rms_error']:.6g} "
-            f"chi2={entry['chi2']:.6g} "
-            f"selected_roots={entry['selected_root_count']} "
-            f"decaying_roots={entry['decaying_root_count']}"
-        )
-
-
-def _print_model_order_sweep_batch(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"trace_count={payload['trace_count']}")
-    print(f"samples={payload['samples']}")
-    print(f"roots_backend={payload['roots_backend']}")
-    component_counts = ",".join(
-        str(item) for item in payload["component_counts"]
-    )
-    print(f"component_counts={component_counts}")
-    print(
-        "best_components_unique="
-        + ",".join(str(item) for item in payload["best_components_unique"])
-    )
-    print(
-        "best_selected_model_orders_unique="
-        + ",".join(
-            str(item) for item in payload["best_selected_model_orders_unique"]
-        )
-    )
-    for trace_payload in payload["traces"]:
-        print(f"trace_index={trace_payload['trace_index']}")
-        print(f"  best_components={trace_payload['best_components']}")
-        print(
-            "  best_selected_model_order="
-            f"{trace_payload['best_selected_model_order']}"
-        )
-        print(
-            "  best_reconstruction_rms_error="
-            f"{trace_payload['best_reconstruction_rms_error']:.6g}"
-        )
-
-
 def _subspace_benchmark(args):
     from .subspace import compare_subspace_methods
 
@@ -5550,7 +5608,7 @@ def _subspace_benchmark(args):
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif payload["source"]["kind"] == "trace-npz-batch":
-        _print_subspace_benchmark_batch(payload)
+        print_subspace_benchmark_batch(payload)
     else:
         print(f"source={payload['source']['kind']}")
         print(f"samples={payload['samples']}")
@@ -5678,32 +5736,6 @@ def _subspace_benchmark_batch_payload(
         "method_summary": summaries,
         "traces": tuple(trace_payloads),
     }
-
-
-def _print_subspace_benchmark_batch(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"trace_count={payload['trace_count']}")
-    print(f"samples={payload['samples']}")
-    print(f"model_order={payload['model_order']}")
-    print(f"components={payload['components']}")
-    print(
-        "baseline_rms_residual_range="
-        f"{payload['baseline_rms_residual_min']:.6g}:"
-        f"{payload['baseline_rms_residual_max']:.6g}"
-    )
-    for summary in payload["method_summary"]:
-        print(f"method={summary['method']}")
-        print(f"  svd_backend={summary['svd_backend']}")
-        print(f"  trace_count={summary['trace_count']}")
-        print(
-            "  rms_residual_range="
-            f"{summary['rms_residual_min']:.6g}:"
-            f"{summary['rms_residual_max']:.6g}"
-        )
-        print(
-            "  max_abs_reconstruction_diff_max="
-            f"{summary['max_abs_reconstruction_diff_max']:.6g}"
-        )
 
 
 def _subspace_acceptance(args):
