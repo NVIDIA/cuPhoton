@@ -169,7 +169,13 @@ def test_incomplete_matrix_is_not_promoted(monkeypatch, tmp_path, python):
 
 
 @pytest.mark.parametrize(
-    "targets", [("wheels", "conda"), ("conda", "wheels")]
+    "targets",
+    [
+        ("wheels", "conda"),
+        ("conda", "wheels"),
+        ("wheels", "conda", "conda"),
+        ("conda", "wheels", "wheels"),
+    ],
 )
 def test_packaging_targets_preserve_both_formats(tmp_path, targets):
     makefile = SCRIPT.parents[2] / "Makefile"
@@ -187,6 +193,7 @@ def test_packaging_targets_preserve_both_formats(tmp_path, targets):
                 printf source > dist/cuphoton-0.1.3.tar.gz
             else
                 test -f dist/cuphoton-0.1.3.tar.gz
+                test ! -e {wheel}
                 printf wheel > {wheel}
             fi
             """,
@@ -194,6 +201,7 @@ def test_packaging_targets_preserve_both_formats(tmp_path, targets):
             #!/bin/sh
             set -eu
             test -f dist/cuphoton-0.1.3.tar.gz
+            test ! -e {conda}
             mkdir -p dist/conda/linux-64
             printf conda > {conda}
             """,
@@ -213,6 +221,11 @@ def test_packaging_targets_preserve_both_formats(tmp_path, targets):
     (tmp_path / "dist").mkdir()
     stale_source = tmp_path / "dist/cuphoton-0.0.0.tar.gz"
     stale_source.write_text("stale source")
+    stale_wheel = tmp_path / "dist/cuphoton-0.0.0-old.whl"
+    stale_wheel.write_text("stale wheel")
+    stale_conda = tmp_path / "dist/conda/linux-64/cuphoton-0.0.0-old.conda"
+    stale_conda.parent.mkdir(parents=True)
+    stale_conda.write_text("stale conda")
 
     for target in (*targets, "package-check"):
         subprocess.run(
@@ -226,4 +239,6 @@ def test_packaging_targets_preserve_both_formats(tmp_path, targets):
     assert (tmp_path / wheel).read_text() == "wheel"
     assert (tmp_path / conda).read_text() == "conda"
     assert not stale_source.exists()
+    assert not stale_wheel.exists()
+    assert not stale_conda.exists()
     assert len(list((tmp_path / "dist").glob("*.tar.gz"))) == 1

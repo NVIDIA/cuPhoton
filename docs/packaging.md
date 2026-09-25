@@ -75,10 +75,11 @@ editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` is
 set. See [XDR source installation](components/xdr.md#native-extension-availability)
 for the explicit native development build.
 
-`make build`, `make wheels`, and `make conda` refresh the source archive while
-preserving existing wheel and conda artifacts. Use `make clean-dist` explicitly
-to remove all distributions. To reuse the wheel build's exact archive for conda,
-use the direct conda build command below.
+`make build` refreshes only the source archive. `make wheels` replaces cuPhoton
+wheels while preserving conda outputs; `make conda` replaces `dist/conda` while
+preserving wheels. Use `make clean-dist` explicitly to remove all distributions.
+To reuse the wheel build's exact archive for conda, use the direct conda build
+command below.
 
 The reusable `wheels.yml` workflow builds from one source archive on native
 x86-64 and ARM64 runners. It checks base imports inside cibuildwheel, then

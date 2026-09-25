@@ -77,9 +77,11 @@ build:
 	CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
 
 wheels: build
+	rm -f dist/cuphoton-*.whl
 	uv tool run --from cibuildwheel==4.2.1 cibuildwheel --platform linux --output-dir dist dist/*.tar.gz
 
 conda: build
+	rm -rf dist/conda
 	pixi exec --spec rattler-build=0.76.1 --spec python=3.12 -- python scripts/conda/build.py dist/*.tar.gz
 
 package-check: build
