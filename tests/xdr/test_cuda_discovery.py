@@ -322,8 +322,12 @@ def test_plain_python_prefix_is_not_treated_as_conda(conda_native_prefix):
         nvcomp_batch._preload_gpu_package_libraries()
 
 
+@pytest.mark.parametrize(
+    "missing_package",
+    [None, "nvidia.libnvcomp", "rapids_logger", "libkvikio"],
+)
 def test_gpu_wheels_remain_usable_inside_conda(
-    monkeypatch, tmp_path, conda_native_prefix
+    monkeypatch, tmp_path, conda_native_prefix, missing_package
 ):
     package_dirs = {}
     expected = []
@@ -333,6 +337,9 @@ def test_gpu_wheels_remain_usable_inside_conda(
         ("rapids_logger", "librapids_logger.so"),
         ("libkvikio", "libkvikio.so"),
     ):
+        if module == missing_package:
+            expected.append(conda_native_prefix / "lib" / library)
+            continue
         package = tmp_path / "site-packages" / module
         (package / "lib").mkdir(parents=True)
         path = package / "lib" / library

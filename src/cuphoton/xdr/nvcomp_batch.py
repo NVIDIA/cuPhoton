@@ -171,17 +171,13 @@ def _preload_gpu_package_libraries() -> None:
     nvcomp_base = _package_dir("nvidia.libnvcomp")
     rapids_logger_base = _package_dir("rapids_logger")
     kvikio_base = _package_dir("libkvikio")
-    prefix_libraries = False
+    prefix = Path(sys.prefix)
     if (
         nvcomp_base is None
         or rapids_logger_base is None
         or kvikio_base is None
     ):
-        prefix = Path(sys.prefix)
-        if (prefix / "conda-meta").is_dir():
-            nvcomp_base = rapids_logger_base = kvikio_base = prefix
-            prefix_libraries = True
-        else:
+        if not (prefix / "conda-meta").is_dir():
             raise ImportError(
                 "Could not find libkvikio, rapids-logger, or "
                 "nvidia-libnvcomp Python packages required by "
@@ -190,25 +186,25 @@ def _preload_gpu_package_libraries() -> None:
 
     libraries = [
         _find_library_path(
-            nvcomp_base,
+            nvcomp_base or prefix,
             ("libnvcomp.so.5", "libnvcomp.so"),
             env_var=_NVCOMP_LIB_ENV,
             description="nvCOMP library",
-            recursive=not prefix_libraries,
+            recursive=nvcomp_base is not None,
         ),
         _find_library_path(
-            rapids_logger_base,
+            rapids_logger_base or prefix,
             ("librapids_logger.so",),
             env_var=_RAPIDS_LOGGER_LIB_ENV,
             description="RAPIDS logger library",
-            recursive=not prefix_libraries,
+            recursive=rapids_logger_base is not None,
         ),
         _find_library_path(
-            kvikio_base,
+            kvikio_base or prefix,
             ("libkvikio.so",),
             env_var=_KVIKIO_LIB_ENV,
             description="KvikIO library",
-            recursive=not prefix_libraries,
+            recursive=kvikio_base is not None,
         ),
     ]
     for library in libraries:

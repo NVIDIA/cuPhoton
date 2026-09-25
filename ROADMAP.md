@@ -19,7 +19,8 @@ institutional adaptation.
 
 - Publish pip packages after release automation and provenance checks are
   established.
-- Add conda packaging with the same dependency-profile boundaries.
+- Ship conda packaging for the native I/O profile. A CPU-only conda package
+  and separate dependency profiles remain future work.
 - Keep experimental toolchain integrations, such as cuTile, isolated from the
   core install.
 

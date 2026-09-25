@@ -96,7 +96,9 @@ The `cuphoton` conda package includes the compiled XDR extension and depends on
 upstream conda packages for CFITSIO 4.7, CUDA 13, KvikIO 26.6, and nvCOMP 5.2.
 Conda installs those libraries into the environment; no manual CUDA paths
 are needed.
-Conda has no pip-style extras: this one package includes the native I/O stack.
+Conda has no pip-style extras: this package provides the native I/O profile
+only and requires CUDA 13 libraries. It does not provide a CPU-only install;
+use the base pip package for that profile.
 
 With uv and pixi installed, run on each native Linux architecture:
 
@@ -118,7 +120,13 @@ pixi exec --spec rattler-build=0.76.1 --spec python=3.12 -- \
 Use an output directory without existing cuPhoton packages. Outputs go under
 `linux-64` or `linux-aarch64`, with a `provenance.json` recording the source
 archive and package SHA256 values. Builds use strict channel priority with
-`rapidsai` before `conda-forge`, excluding `defaults`.
+`rapidsai` before `conda-forge`, excluding `defaults`. This order is required
+by the current installed-package solver; it also gives RAPIDS precedence for
+other packages present in both channels. Review the resolved environment
+before qualifying an artifact.
+The qualified conda nvCOMP build is 5.2.0.10, while the wheel environment uses
+5.2.0.13. Both stay within the required 5.2 ABI family and need independent
+artifact qualification; their patch versions are not interchangeable evidence.
 
 Create a local channel index so conda resolves the artifact's runtime
 dependencies. For downloaded CI artifacts, place the packages under
