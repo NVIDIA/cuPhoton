@@ -10,12 +10,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from threading import Barrier, Event
+from threading import Barrier, Event, local
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from cuphoton.core.benchmark import BenchmarkOptions
 from cuphoton.core.bulk import WorkItem
 from cuphoton.xpois import mpi
 from cuphoton.xpois.batch import BatchFitOptions
@@ -252,7 +253,7 @@ def _stage_file_rank(
                 "status": "failed",
                 "error": {"type": "OSError", "message": "cannot write"},
             },
-            "cannot persist MPI aggregate",
+            "cannot persist MPI aggregate: .*OSError.*cannot write",
         ),
     ],
 )
@@ -1025,12 +1026,34 @@ def test_file_preflight_peer_failure_does_not_wait_for_missing_rank(
     failure = {"type": "ValueError", "message": "peer preflight failed"}
     published = Barrier(2)
     original_publish = mpi._publish_file_preflight
+    original_consensus = mpi._file_preflight_consensus
+    original_wait = mpi._shared_filesystem_wait
+    state = local()
+    consensus_checked = Event()
 
     def publish(*args, **kwargs) -> None:
         original_publish(*args, **kwargs)
         published.wait(timeout=2)
 
     monkeypatch.setattr(mpi, "_publish_file_preflight", publish)
+
+    def consensus(*args, **kwargs):
+        consensus_checked.set()
+        state.checking_consensus = True
+        try:
+            return original_consensus(*args, **kwargs)
+        finally:
+            state.checking_consensus = False
+
+    def wait(deadline, delay):
+        # The peer may wait for the terminal marker; consensus must not
+        # wait for the absent third rank after both records are published.
+        if getattr(state, "checking_consensus", False):
+            pytest.fail("preflight consensus waited after a peer failure")
+        return original_wait(deadline, delay)
+
+    monkeypatch.setattr(mpi, "_file_preflight_consensus", consensus)
+    monkeypatch.setattr(mpi, "_shared_filesystem_wait", wait)
 
     def prepare(rank: int) -> str:
         try:
@@ -1051,11 +1074,10 @@ def test_file_preflight_peer_failure_does_not_wait_for_missing_rank(
             return str(exc)
         return "unexpected success"
 
-    start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(prepare, (0, 1)))
 
-    assert time.perf_counter() - start < 1.0
+    assert consensus_checked.is_set()
     assert all("peer preflight failed" in outcome for outcome in outcomes)
     marker = mpi.read_json_mapping(
         mpi._attempt_path(run_dir, run_id, attempt_id)
@@ -2907,6 +2929,300 @@ def test_singleton_collective_run_is_lazy_root_only_and_audited(
     assert run_record["rank_setup_timeout_sec"] == 600.0
     assert result.summary["rank_setup_timeout_sec"] == 600.0
     assert run_record["mpi4py_version"] == "4.test"
+
+
+@pytest.mark.parametrize("readiness_failure", [False, True])
+def test_benchmark_reuses_rank_and_gpu_with_audited_round_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, readiness_failure: bool
+) -> None:
+    _mpi_environment(monkeypatch)
+    _remove_cuda_modules(monkeypatch)
+    manifest = _write_manifest(tmp_path)
+    comm = _SingletonComm()
+    loads = []
+    identities = []
+    executions = []
+    clock = [0.0]
+    real_wait = mpi._wait_collective_artifacts
+    real_prepare = mpi._mpi_prepare_run
+
+    def load_api():
+        loads.append(True)
+        return mpi._MPIAPI(
+            SimpleNamespace(COMM_TYPE_SHARED=1), comm, "4.test", "Test MPI"
+        )
+
+    def gpu_identity(backend):
+        identities.append(backend)
+        clock[0] += 20.0
+        if readiness_failure:
+            raise RuntimeError("GPU initialization failed")
+        return _gpu()
+
+    def execute(item, output, options):
+        executions.append(output)
+        clock[0] += 2.0
+        return _item_runner(item, output, options)
+
+    def audit(*args, **kwargs):
+        clock[0] += 100.0
+        return real_wait(*args, **kwargs)
+
+    def prepare(*args, **kwargs):
+        if args[2].parent.name == "rounds":
+            clock[0] += 5.0
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(mpi, "_load_mpi_api", load_api)
+    monkeypatch.setattr(mpi, "_gpu_identity", gpu_identity)
+    monkeypatch.setattr(mpi, "run_image_pair_item", execute)
+    monkeypatch.setattr(mpi, "_wait_collective_artifacts", audit)
+    monkeypatch.setattr(mpi, "_mpi_prepare_run", prepare)
+    monkeypatch.setattr(
+        mpi,
+        "time",
+        SimpleNamespace(
+            perf_counter=lambda: clock[0],
+            monotonic=time.monotonic,
+            sleep=time.sleep,
+        ),
+    )
+    benchmark = BenchmarkOptions(warmup_rounds=1, measure_rounds=2)
+    result = mpi.run_mpi_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "runs",
+        run_id="repeated",
+        aggregation_mode="mpi",
+        rank_timeout_sec=None,
+        attempt_id=None,
+        options=_options(),
+        benchmark=benchmark,
+    )
+
+    assert result is not None
+    assert loads == [True]
+    assert identities == ["cupy"]
+    assert len(comm.split_calls) == 1
+    if readiness_failure:
+        assert result.status == "failed"
+        assert result.summary["benchmark"]["rounds"] == []
+        assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+        assert "GPU initialization failed" in str(result.summary)
+        assert executions == []
+        return
+    assert result.status == "success"
+    assert result.summary["startup_ready_sec"] == 20.0
+    report = result.summary["benchmark"]
+    assert report["measured_batch_wall_sec"] == {
+        "min": 2.0,
+        "median": 2.0,
+        "max": 2.0,
+    }
+    assert len(executions) == 3 and len(set(executions)) == 3
+    pids = set()
+    for planned, round_result in zip(benchmark.rounds(), report["rounds"]):
+        assert round_result["round_id"] == planned.round_id
+        assert round_result["batch_wall_sec"] == 2.0
+        assert round_result["worker_wall_max_sec"] == 2.0
+        summary = mpi.read_json_mapping(
+            result.run_dir / round_result["summary_path"]
+        )
+        assert summary["run_id"] == planned.run_id("repeated")
+        assert summary["terminal_record_audit"]["ok"] is True
+        assert summary["rank_result_audit"]["ok"] is True
+        pids.add(summary["rank_results"][0]["provenance"]["pid"])
+    assert len(pids) == 1
+    assert result.summary["coordinator_wall_sec"] == 341.0
+
+
+@pytest.mark.parametrize("benchmark", [None, BenchmarkOptions()])
+def test_benchmark_plan_consensus_rejects_mismatched_enablement(
+    benchmark: BenchmarkOptions | None,
+) -> None:
+    class DivergentComm:
+        def gather(self, value, root):
+            other_plan = (
+                None if benchmark else BenchmarkOptions().to_payload()
+            )
+            return [value, {**value, "rank": 1, "benchmark": other_plan}]
+
+        def bcast(self, value, root):
+            return value
+
+    with pytest.raises(RuntimeError, match="benchmark options differ"):
+        mpi._mpi_manifest_consensus(
+            DivergentComm(),
+            mpi._RankContext(0, 0, 2, "host", "test"),
+            SimpleNamespace(sha256="manifest"),
+            None,
+            "run",
+            Path("/shared/run"),
+            _options(),
+            "4.test",
+            "Test MPI",
+            benchmark=benchmark,
+        )
+
+
+def test_benchmark_rejects_file_aggregation_before_loading_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        mpi, "_load_mpi_api", lambda: pytest.fail("loaded MPI")
+    )
+    with pytest.raises(ValueError, match="require aggregation_mode='mpi'"):
+        mpi.run_mpi_image_pair_batch(
+            manifest_path=tmp_path / "unused.json",
+            output_root=tmp_path / "runs",
+            run_id="repeated",
+            aggregation_mode="files",
+            rank_timeout_sec=1.0,
+            attempt_id="attempt",
+            options=_options(),
+            benchmark=BenchmarkOptions(),
+        )
+    assert not (tmp_path / "runs").exists()
+
+
+def test_benchmark_invalid_options_enter_startup_consensus(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    comm = _SingletonComm()
+    monkeypatch.setattr(
+        mpi, "_load_mpi_api", lambda: mpi._MPIAPI(None, comm, "4.test", "MPI")
+    )
+    with pytest.raises(RuntimeError, match="rank-startup.*BenchmarkOptions"):
+        mpi.run_mpi_image_pair_batch(
+            manifest_path=tmp_path / "unused.json",
+            output_root=tmp_path / "runs",
+            run_id="repeated",
+            aggregation_mode="mpi",
+            rank_timeout_sec=None,
+            attempt_id=None,
+            options=_options(),
+            benchmark=object(),
+        )
+    assert comm.gather_calls == 1
+    assert not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize(
+    "failure_round", [None, "warmup-0000", "measure-0000", "invalid-receipt"]
+)
+def test_benchmark_two_ranks_stop_together_and_preserve_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure_round: str | None
+) -> None:
+    manifest = mpi.load_image_pair_manifest(_write_manifest(tmp_path, 2))
+    shards = mpi.partition_byte_balanced(manifest.work_items(), 2)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    barrier = Barrier(2, timeout=5)
+    shared = SimpleNamespace(gathered=[None, None], broadcast=None)
+    rank_local = local()
+    identities = []
+    executed = []
+
+    class ConcurrentComm:
+        def __init__(self, rank):
+            self.rank = rank
+
+        def Get_rank(self):
+            return self.rank
+
+        def Get_size(self):
+            return 2
+
+        def gather(self, value, root):
+            shared.gathered[self.rank] = value
+            barrier.wait()
+            result = list(shared.gathered) if self.rank == root else None
+            barrier.wait()
+            return result
+
+        def bcast(self, value, root):
+            if self.rank == root:
+                shared.broadcast = value
+            barrier.wait()
+            result = shared.broadcast
+            barrier.wait()
+            return result
+
+    def identity(backend):
+        rank = rank_local.rank
+        identities.append(rank)
+        return _gpu(f"GPU-{rank}")
+
+    def execute(item, output, options):
+        executed.append((rank_local.rank, output.parent.parent.name))
+        if (
+            rank_local.rank == 1
+            and output.parent.parent.name == failure_round
+        ):
+            raise RuntimeError("scientific work failed")
+        return _item_runner(item, output, options)
+
+    monkeypatch.setattr(mpi, "_gpu_identity", identity)
+    monkeypatch.setattr(mpi, "run_image_pair_item", execute)
+    if failure_round == "invalid-receipt":
+        aggregate = mpi._mpi_aggregate
+
+        def invalid_receipt(*args, **kwargs):
+            result = aggregate(*args, **kwargs)
+            if result is not None:
+                return replace(result, summary_path=tmp_path / "outside.json")
+            return result
+
+        monkeypatch.setattr(mpi, "_mpi_aggregate", invalid_receipt)
+    benchmark = BenchmarkOptions(warmup_rounds=1, measure_rounds=2)
+
+    def run(rank):
+        rank_local.rank = rank
+        context = mpi._RankContext(rank, rank, 2, "host", "test")
+        try:
+            return mpi._run_mpi_benchmark(
+                mpi._MPIAPI(None, ConcurrentComm(rank), "4.test", "Test MPI"),
+                context,
+                run_dir,
+                "concurrent",
+                manifest,
+                _options(),
+                shards,
+                str(rank),
+                benchmark,
+                mpi.timestamp_utc(),
+                time.perf_counter(),
+                0.1,
+            )
+        except Exception as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        root, peer = list(pool.map(run, range(2)))
+    assert isinstance(root, mpi.MPIBatchResult)
+    assert sorted(identities) == [0, 1]
+    report = root.summary["benchmark"]
+    if failure_round is None:
+        assert root.status == "success"
+        assert peer is None
+        assert len(report["rounds"]) == 3
+        assert len(executed) == 6
+    else:
+        assert root.status == "failed"
+        assert isinstance(peer, RuntimeError)
+        assert "benchmark 'concurrent' failed" in str(peer)
+        if failure_round == "invalid-receipt":
+            assert report["rounds"] == []
+            assert report["errors"][0]["phase"] == "warmup-0000"
+            assert len(executed) == 2
+            return
+        assert report["rounds"][-1]["round_id"] == failure_round
+        assert report["rounds"][-1]["status"] == "failed"
+        assert report["measured_batch_wall_sec"] is None
+        assert len(executed) == len(report["rounds"]) * 2
+        failure = mpi.read_json_mapping(
+            run_dir / "rounds" / failure_round / "records" / "pair-1.json"
+        )
+        assert failure["error"]["message"] == "scientific work failed"
 
 
 def test_collective_generated_run_uses_fully_resolved_output_path(
@@ -5169,3 +5485,18 @@ def test_collective_spatial_batch_audits_reported_solver(
         assert result.status == "failed"
         assert len(errors) == 1
         assert errors[0]["message"] == "record 0 has invalid field(s): solver"
+
+
+def test_item_record_filenames_bind_the_record_identity(tmp_path):
+    records = tmp_path / "records"
+    records.mkdir()
+    mpi.atomic_write_json(records / "one.json", {"item_id": "two"})
+    mpi.atomic_write_json(records / "two.json", {"item_id": "one"})
+    accepted, errors = mpi._read_mappings(
+        records, validate_item_filename=True
+    )
+    assert accepted == []
+    assert [error["path"] for error in errors] == ["one.json", "two.json"]
+    assert all(
+        "filename does not match" in error["message"] for error in errors
+    )

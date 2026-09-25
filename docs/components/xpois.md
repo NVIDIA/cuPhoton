@@ -649,6 +649,73 @@ backend. `--max-workers`, `--worker-timeout-sec`, and
 For a single-node launch, use `-s` instead of `-m -N 2 -w slurm`, while
 retaining `-t tcp -o tcp` to select TCP transport.
 
+### Repeat a batch in persistent workers
+
+Add `--warmup-rounds` or `--measure-rounds` to the same `fit-batch` command
+to measure repeated passes over the manifest. For example, the Dragon wrapper
+can run one warmup and three measured rounds on a single node:
+
+```bash
+.venv/bin/dragon -s -t tcp -o tcp examples/xpois/dragon_batch.py \
+  --backend cupy --manifest /shared/manifests/fixed-32.yaml \
+  --output-dir /shared/results/xpois-dragon --name repeated-dragon \
+  --max-workers 4 --warmup-rounds 1 --measure-rounds 3
+```
+
+Use the same two flags with a collective MPI launch:
+
+```bash
+mpirun -n 4 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xpois fit-batch --executor mpi \
+  --backend cupy --manifest /shared/manifests/fixed-32.yaml \
+  --output-dir /shared/results/xpois-mpi --name repeated-mpi \
+  --aggregation-mode mpi --warmup-rounds 1 --measure-rounds 3
+```
+
+File aggregation does not support synchronized rounds.
+Omitting both flags preserves the ordinary single-pass execution and artifact
+layout. Supplying either flag opts in; unspecified warmup and measured counts
+default to zero and one respectively.
+
+The same processes and GPU assignments remain alive across rounds. Every
+round runs the ordinary image-pair workflow, including input identity checks,
+input reads, host preparation, device transfers, numerical processing, and
+output writes. Imports, CUDA contexts, and runtime caches can stay warm; input
+arrays are not held on the device between rounds. Worker readiness includes
+GPU identity initialization, so zero warmup rounds does not mean cold CUDA.
+These are independent-image batch timings, not one image split across GPUs.
+
+Each round retains its normal outputs and audits under
+`rounds/warmup-0000/`, `rounds/measure-0000/`, and subsequent numbered
+directories. Its run ID identifies both the parent invocation and the round.
+The root `summary.json` contains a `benchmark` report with round receipts,
+phase-tagged failures, explicit timing definitions, and measured minimum,
+median, and maximum. An interrupted round can leave partial artifacts without
+a complete receipt.
+A failed warmup or measured round invalidates the aggregate. Dragon also
+requires successful worker exits and cleanup before accepting an aggregate.
+Failed and slow rounds remain in the evidence; no automatic
+outlier removal or relabeling as warmup occurs. A failed round stops further
+rounds after the normal shard processing and audits.
+
+`batch_wall_sec` starts before the coordinator releases a round and ends when
+all completion receipts arrive. It includes the normal durable item/worker
+record writes but excludes subsequent coordinator artifact audits. Readiness
+and function-level elapsed time are reported separately; Dragon also records
+process-group join and cleanup times. MPI process exit and finalization occur
+after the report, so check the launcher's status as well.
+`worker_wall_max_sec` is the longest worker-local round duration. Subtracting
+it from batch wall time gives a mixed remainder that includes scheduling,
+communication, and publication; it is not a transport-only measurement.
+External launch-to-exit wall time still requires timing the launcher.
+
+Dragon places each command queue on its consuming worker's host so idle
+workers do not occupy remote receive slots on the coordinator. Transport
+selection remains a launcher option; `--executor dragon` cannot change the
+transport of an already running Dragon session. The worker wall-time limit
+covers the entire invocation, including warmups and all measured rounds.
+
 ### Results and limits
 
 Both routes print a compact result containing the executor, run ID, run

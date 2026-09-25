@@ -87,6 +87,8 @@ def test_help_for_fit_batch_command(capsys) -> None:
     assert "--max-workers" in captured.out
     assert "--result-timeout-sec" in captured.out
     assert "--worker-timeout-sec" in captured.out
+    assert "--warmup-rounds" in captured.out
+    assert "--measure-rounds" in captured.out
     assert "--aggregation-mode" in captured.out
     assert "--rank-setup-timeout-sec" in captured.out
     assert "--rank-timeout-sec" in captured.out
@@ -479,6 +481,88 @@ def test_fit_batch_dispatches_dragon_with_effective_defaults(
     assert seen["max_workers"] is None
     assert seen["result_timeout_sec"] == 60.0
     assert seen["worker_timeout_sec"] == 3600.0
+    assert "benchmark" not in seen
+
+
+@pytest.mark.parametrize("executor", ["dragon", "mpi"])
+@pytest.mark.parametrize(
+    "flags,counts",
+    [
+        (["--warmup-rounds", "1", "--measure-rounds", "3"], (1, 3)),
+        (["--measure-rounds", "1"], (0, 1)),
+        (["--warmup-rounds", "0"], (0, 1)),
+    ],
+)
+def test_fit_batch_forwards_benchmark_to_existing_executor(
+    monkeypatch, tmp_path, executor, flags, counts
+):
+    from cuphoton.core.benchmark import BenchmarkOptions
+    from cuphoton.xpois import commands
+
+    seen = {}
+
+    def run(**kwargs):
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr(commands, f"_run_{executor}_image_pair_batch", run)
+    rc = _run_cli(
+        [
+            "fit-batch",
+            "--executor",
+            executor,
+            "--manifest",
+            str(tmp_path / "pairs.json"),
+            "--backend",
+            "cupy",
+            *flags,
+        ]
+    )
+    assert rc == 0
+    assert seen["benchmark"] == BenchmarkOptions(*counts)
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--measure-rounds", "0"],
+        ["--warmup-rounds", "-1"],
+        [
+            "--measure-rounds",
+            "2",
+            "--aggregation-mode",
+            "files",
+            "--name",
+            "repeated",
+            "--attempt-id",
+            "attempt-1",
+        ],
+    ],
+)
+def test_fit_batch_rejects_invalid_round_options_before_executor(
+    monkeypatch, tmp_path, flags
+):
+    from cuphoton.xpois import commands
+
+    def unexpected(**kwargs):
+        pytest.fail("invalid rounds reached runtime")
+
+    monkeypatch.setattr(commands, "_run_mpi_image_pair_batch", unexpected)
+    assert (
+        _run_cli(
+            [
+                "fit-batch",
+                "--executor",
+                "mpi",
+                "--manifest",
+                str(tmp_path / "pairs.json"),
+                "--backend",
+                "cupy",
+                *flags,
+            ]
+        )
+        != 0
+    )
 
 
 def test_fit_batch_dispatches_explicit_dragon_limits(

@@ -24,6 +24,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from cuphoton.core.benchmark import BenchmarkOptions, build_benchmark_report
 from cuphoton.core.bulk import (
     WorkItem,
     atomic_write_json,
@@ -125,16 +126,23 @@ def run_mpi_image_pair_batch(
     attempt_id: str | None,
     options: BatchFitOptions,
     rank_setup_timeout_sec: float = 600.0,
+    benchmark: BenchmarkOptions | None = None,
 ) -> MPIBatchResult | None:
     """Run byte-balanced XPOIS shards under an external MPI launcher."""
 
     started_at = timestamp_utc()
     start = time.perf_counter()
+    if benchmark is not None and aggregation_mode != "mpi":
+        raise ValueError("benchmark rounds require aggregation_mode='mpi'")
     api = None
     if aggregation_mode == "mpi":
         visibility = None
         startup_error = None
         try:
+            if benchmark is not None and not isinstance(
+                benchmark, BenchmarkOptions
+            ):
+                raise TypeError("benchmark must be BenchmarkOptions or None")
             visibility = _validate_rank_startup(
                 aggregation_mode,
                 rank_setup_timeout_sec,
@@ -227,6 +235,7 @@ def run_mpi_image_pair_batch(
             api.mpi4py_version,
             api.library_version,
             rank_setup_timeout_sec,
+            benchmark,
         )
         if manifest is None or shards is None or run_dir is None:
             raise RuntimeError(
@@ -281,6 +290,23 @@ def run_mpi_image_pair_batch(
             setup_error = error_payload(exc)
         assert manifest is not None
         assert shards is not None
+
+    if benchmark is not None:
+        assert api is not None
+        return _run_mpi_benchmark(
+            api,
+            context,
+            run_dir,
+            effective_run_id,
+            manifest,
+            options,
+            shards,
+            visibility,
+            benchmark,
+            started_at,
+            start,
+            rank_setup_timeout_sec,
+        )
 
     rank_run_dir = run_dir
     if api is None:
@@ -387,6 +413,181 @@ def _validate_rank_startup(
             + ", ".join(premature)
         )
     return visibility
+
+
+def _run_mpi_benchmark(
+    api: _MPIAPI,
+    context: _RankContext,
+    run_dir: Path,
+    run_id: str,
+    manifest: ImagePairManifest,
+    options: BatchFitOptions,
+    shards: Sequence[Sequence[WorkItem]],
+    visibility: str,
+    benchmark: BenchmarkOptions,
+    started_at: str,
+    start: float,
+    rank_setup_timeout_sec: float,
+) -> MPIBatchResult | None:
+    """Repeat the ordinary shard execution within the original MPI ranks."""
+
+    rounds: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    startup_ready_sec = None
+    phase = "setup"
+    try:
+        setup_error = None
+        gpu = None
+        try:
+            gpu = json_mapping(
+                _gpu_identity(options.backend), field="MPI GPU identity"
+            )
+            if context.rank == 0:
+                atomic_write_json(
+                    run_dir / "benchmark-plan.json", benchmark.to_payload()
+                )
+        except Exception as exc:
+            setup_error = error_payload(exc)
+        _mpi_failure_consensus(
+            api.comm, "MPI benchmark readiness", setup_error
+        )
+        assert gpu is not None
+        startup_ready_sec = time.perf_counter() - start
+
+        for planned in benchmark.rounds():
+            phase = planned.round_id
+            round_dir = run_dir / "rounds" / planned.round_id
+            round_run_id = planned.run_id(run_id)
+            round_started_at = timestamp_utc()
+            _mpi_prepare_run(
+                api.comm,
+                context,
+                round_dir,
+                round_run_id,
+                round_started_at,
+                manifest,
+                options,
+                api,
+                rank_setup_timeout_sec,
+                shards=shards,
+                start=time.perf_counter(),
+            )
+            # Run preparation includes a readiness gather. No rank starts
+            # work until root releases this round through the broadcast.
+            round_start = time.perf_counter()
+            api.comm.bcast(planned.round_id, root=0)
+            timing = {"release_sec": time.perf_counter() - round_start}
+            worker_start = time.perf_counter()
+            rank_result = _execute_rank(
+                run_id=round_run_id,
+                run_dir=round_dir,
+                manifest_sha256=manifest.sha256,
+                context=context,
+                items=shards[context.rank],
+                options=options,
+                visibility=visibility,
+                setup_error=None,
+                item_runner=run_image_pair_item,
+                gpu_identity_loader=lambda backend: gpu,
+            )
+            timing["worker_wall_sec"] = time.perf_counter() - worker_start
+            result = _mpi_aggregate(
+                api.comm,
+                context,
+                round_dir,
+                round_run_id,
+                manifest,
+                options,
+                shards,
+                rank_result,
+                round_started_at,
+                round_start,
+                api,
+                rank_setup_timeout_sec=rank_setup_timeout_sec,
+                benchmark_timing=timing,
+            )
+            round_decision = None
+            if context.rank == 0:
+                try:
+                    assert result is not None
+                    rounds.append(
+                        {
+                            **planned.to_payload(),
+                            "status": result.status,
+                            "batch_wall_sec": timing.pop("batch_wall_sec"),
+                            "worker_wall_max_sec": timing.pop(
+                                "worker_wall_max_sec"
+                            ),
+                            "summary_path": str(
+                                result.summary_path.relative_to(run_dir)
+                            ),
+                            "coordinator_timings_sec": timing,
+                        }
+                    )
+                    round_decision = {"status": result.status, "error": None}
+                except Exception as exc:
+                    round_decision = {
+                        "status": "failed",
+                        "error": error_payload(exc),
+                    }
+            round_decision = api.comm.bcast(round_decision, root=0)
+            if not isinstance(round_decision, Mapping):
+                raise RuntimeError("invalid MPI benchmark round decision")
+            if round_decision.get("error"):
+                raise RuntimeError(str(round_decision["error"]))
+            if round_decision.get("status") != "success":
+                break
+    except Exception as exc:
+        errors.append({"phase": phase, **error_payload(exc)})
+
+    result = None
+    decision = None
+    if context.rank == 0:
+        try:
+            report = build_benchmark_report(benchmark, rounds, errors=errors)
+            summary = {
+                "schema": "cuphoton.xpois.mpi-benchmark-summary/v1",
+                "executor": "mpi",
+                "status": report["status"],
+                "run_id": run_id,
+                "manifest_sha256": manifest.sha256,
+                "aggregation_mode": "mpi",
+                "world_size": context.world_size,
+                "mpi4py_version": api.mpi4py_version,
+                "mpi_library_version": api.library_version,
+                "options": options.to_payload(),
+                "rank_setup_timeout_sec": rank_setup_timeout_sec,
+                "started_at_utc": started_at,
+                "completed_at_utc": timestamp_utc(),
+                "coordinator_wall_sec": time.perf_counter() - start,
+                "startup_ready_sec": startup_ready_sec,
+                "benchmark": report,
+                "launcher_exit_note": (
+                    "Collective completion is not launcher process-exit "
+                    "proof."
+                ),
+            }
+            summary_path = run_dir / "summary.json"
+            atomic_write_json(summary_path, summary)
+            result = MPIBatchResult(
+                run_id, run_dir, summary_path, report["status"], summary
+            )
+            decision = {"status": result.status, "error": None}
+        except Exception as exc:
+            decision = {"status": "failed", "error": error_payload(exc)}
+            _aggregate_error(run_dir, run_id, decision["error"])
+    decision = api.comm.bcast(decision, root=0)
+    if not isinstance(decision, Mapping):
+        raise RuntimeError(
+            "MPI benchmark aggregate decision was not a mapping"
+        )
+    if decision.get("error"):
+        raise RuntimeError(
+            f"cannot persist MPI benchmark aggregate: {decision['error']}"
+        )
+    if context.rank != 0 and decision.get("status") != "success":
+        raise RuntimeError(f"MPI benchmark {run_id!r} failed")
+    return result
 
 
 def _mpi_failure_consensus(
@@ -524,6 +725,7 @@ def _mpi_manifest_consensus(
     mpi4py_version: str | None,
     library_version: str | None,
     rank_setup_timeout_sec: float = 600.0,
+    benchmark: BenchmarkOptions | None = None,
 ) -> None:
     local = {
         "rank": context.rank,
@@ -533,6 +735,7 @@ def _mpi_manifest_consensus(
             str(resolved_run_dir) if resolved_run_dir is not None else None
         ),
         "options": options.to_payload(),
+        "benchmark": benchmark.to_payload() if benchmark else None,
         "mpi4py_version": mpi4py_version,
         "mpi_library_version": _normalize_mpi_library_version(
             library_version
@@ -621,6 +824,11 @@ def _mpi_manifest_consensus(
                 item["options"] != records[0]["options"] for item in records
             ):
                 message = "XPOIS options differ across MPI ranks"
+            elif any(
+                item.get("benchmark") != records[0].get("benchmark")
+                for item in records
+            ):
+                message = "benchmark options differ across MPI ranks"
             elif any(
                 item.get("mpi4py_version") != records[0].get("mpi4py_version")
                 for item in records
@@ -1489,12 +1697,32 @@ def _mpi_aggregate(
     api: _MPIAPI,
     *,
     rank_setup_timeout_sec: float = 600.0,
+    benchmark_timing: dict[str, float] | None = None,
 ) -> MPIBatchResult | None:
-    gathered = comm.gather(dict(rank_result), root=0)
+    payload = dict(rank_result)
+    if benchmark_timing is not None:
+        payload = {
+            "rank_result": payload,
+            "worker_wall_sec": benchmark_timing.pop("worker_wall_sec"),
+        }
+    collection_start = time.perf_counter()
+    gathered = comm.gather(payload, root=0)
+    if benchmark_timing is not None:
+        collected_at = time.perf_counter()
+        benchmark_timing["collection_sec"] = collected_at - collection_start
+        benchmark_timing["batch_wall_sec"] = collected_at - start
     result = None
     decision = None
     if context.rank == 0:
         try:
+            if benchmark_timing is not None:
+                worker_times = [item["worker_wall_sec"] for item in gathered]
+                if not all(
+                    _finite_nonnegative(value) for value in worker_times
+                ):
+                    raise ValueError("invalid MPI benchmark worker duration")
+                benchmark_timing["worker_wall_max_sec"] = max(worker_times)
+                gathered = [item["rank_result"] for item in gathered]
             aggregation_errors = _wait_collective_artifacts(
                 run_dir,
                 shards,
@@ -1524,9 +1752,11 @@ def _mpi_aggregate(
     if not isinstance(decision, Mapping):
         raise RuntimeError("MPI aggregate decision was not a mapping")
     if decision.get("error"):
-        raise RuntimeError("cannot persist MPI aggregate")
+        raise RuntimeError(
+            f"cannot persist MPI aggregate: {decision['error']}"
+        )
     if context.rank != 0:
-        if decision.get("status") != "success":
+        if decision.get("status") != "success" and benchmark_timing is None:
             raise RuntimeError(f"MPI batch {run_id!r} failed")
         return None
     assert result is not None
@@ -1622,7 +1852,9 @@ def _finalize(
     rank_timeout_sec: float | None = None,
     rank_setup_timeout_sec: float | None = None,
 ) -> MPIBatchResult:
-    records, record_errors = _read_mappings(run_dir / "records")
+    records, record_errors = _read_mappings(
+        run_dir / "records", validate_item_filename=True
+    )
     expected_items = [item.item_id for shard in shards for item in shard]
     item_audit = audit_terminal_records(expected_items, records)
     record_errors.extend(
@@ -2191,12 +2423,17 @@ def _same_json_value(left: Any, right: Any) -> bool:
 
 def _read_mappings(
     directory: Path,
+    *,
+    validate_item_filename: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for path in sorted(directory.glob("*.json")):
         try:
-            records.append(_read_regular_mapping(path))
+            record = _read_regular_mapping(path)
+            if validate_item_filename and path.stem != record.get("item_id"):
+                raise ValueError("record filename does not match item_id")
+            records.append(record)
         except Exception as exc:
             errors.append({"path": path.name, **error_payload(exc)})
     return records, errors

@@ -12,6 +12,7 @@ from typing import Any, Callable, TypeVar
 
 from numpy.linalg import LinAlgError
 
+from cuphoton.core.benchmark import BenchmarkOptions
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -613,6 +614,28 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
     rank_timeout_sec = None
     attempt_id = None
     backend = None
+    warmup_rounds = None
+    measure_rounds = None
+
+    class WarmupRoundsArg(NonNegativeIntegerInvariant):
+        _arg = "--warmup-rounds"
+        _help = (
+            "Opt into persistent-worker benchmarking with this many warmup "
+            "passes over the manifest. Outputs are retained. "
+            "[default when benchmarking: 0]"
+        )
+        _mandatory = False
+        _default = None
+
+    class MeasureRoundsArg(PositiveIntegerInvariant):
+        _arg = "--measure-rounds"
+        _help = (
+            "Opt into persistent-worker benchmarking with this many measured "
+            "passes over the manifest. MPI requires aggregation mpi. "
+            "[default when benchmarking: 1]"
+        )
+        _mandatory = False
+        _default = None
 
     class ExecutorArg(SetInvariant):
         _arg = "--executor"
@@ -728,6 +751,11 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
             "run_id": self.run_name or None,
             "options": options,
         }
+        if self.warmup_rounds is not None or self.measure_rounds is not None:
+            common["benchmark"] = BenchmarkOptions(
+                warmup_rounds=self.warmup_rounds or 0,
+                measure_rounds=self.measure_rounds or 1,
+            )
         if self.executor == "dragon":
             result = self._call(
                 _run_dragon_image_pair_batch,
@@ -778,6 +806,18 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
             )
 
     def _validate_executor_options(self) -> None:
+        if (
+            self.executor == "mpi"
+            and self.aggregation_mode == "files"
+            and (
+                self.warmup_rounds is not None
+                or self.measure_rounds is not None
+            )
+        ):
+            raise CommandError(
+                "--warmup-rounds and --measure-rounds require MPI "
+                "--aggregation-mode mpi"
+            )
         if self.executor == "dragon":
             invalid = (
                 ("--aggregation-mode", self.aggregation_mode),
