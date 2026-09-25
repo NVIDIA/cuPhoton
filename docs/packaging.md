@@ -60,7 +60,7 @@ From the checkout, on each native Linux architecture with Docker and uv:
 ```bash
 make wheels
 python scripts/wheels/check_distributions.py dist --arch "$(uname -m)"
-uvx --from twine==6.2.0 twine check --strict dist/*
+uvx --from twine==6.2.0 twine check --strict dist/*.tar.gz dist/*.whl
 ```
 
 `make wheels` builds a source archive, then uses cibuildwheel 4.2.1 to build
@@ -74,6 +74,11 @@ The default `make build` produces only the source archive. Plain source and
 editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` is
 set. See [XDR source installation](components/xdr.md#native-extension-availability)
 for the explicit native development build.
+
+`make build`, `make wheels`, and `make conda` refresh the source archive while
+preserving existing wheel and conda artifacts. Use `make clean-dist` explicitly
+to remove all distributions. To reuse the wheel build's exact archive for conda,
+use the direct conda build command below.
 
 The reusable `wheels.yml` workflow builds from one source archive on native
 x86-64 and ARM64 runners. It checks base imports inside cibuildwheel, then

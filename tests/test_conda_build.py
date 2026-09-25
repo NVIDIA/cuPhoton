@@ -10,8 +10,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import sys
 import tarfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -163,3 +166,64 @@ def test_incomplete_matrix_is_not_promoted(monkeypatch, tmp_path, python):
         invoke(monkeypatch, archive, output, python)
 
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "targets", [("wheels", "conda"), ("conda", "wheels")]
+)
+def test_packaging_targets_preserve_both_formats(tmp_path, targets):
+    makefile = SCRIPT.parents[2] / "Makefile"
+    (tmp_path / "Makefile").write_text(makefile.read_text())
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    wheel = "dist/cuphoton-0.1.3-cp312-cp312-manylinux_2_28_x86_64.whl"
+    conda = "dist/conda/linux-64/cuphoton-0.1.3-py312_0.conda"
+    scripts = {
+        "uv": f"""\
+            #!/bin/sh
+            set -eu
+            mkdir -p dist
+            if test "$1" = build; then
+                printf source > dist/cuphoton-0.1.3.tar.gz
+            else
+                test -f dist/cuphoton-0.1.3.tar.gz
+                printf wheel > {wheel}
+            fi
+            """,
+        "pixi": f"""\
+            #!/bin/sh
+            set -eu
+            test -f dist/cuphoton-0.1.3.tar.gz
+            mkdir -p dist/conda/linux-64
+            printf conda > {conda}
+            """,
+        "uvx": """\
+            #!/bin/sh
+            set -eu
+            for argument do
+                case "$argument" in dist/*) test -f "$argument" ;; esac
+            done
+            """,
+    }
+    for name, content in scripts.items():
+        command = commands / name
+        command.write_text(textwrap.dedent(content))
+        command.chmod(0o755)
+    environment = {**os.environ, "PATH": f"{commands}:{os.environ['PATH']}"}
+    (tmp_path / "dist").mkdir()
+    stale_source = tmp_path / "dist/cuphoton-0.0.0.tar.gz"
+    stale_source.write_text("stale source")
+
+    for target in (*targets, "package-check"):
+        subprocess.run(
+            ["make", target],
+            cwd=tmp_path,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+
+    assert (tmp_path / wheel).read_text() == "wheel"
+    assert (tmp_path / conda).read_text() == "conda"
+    assert not stale_source.exists()
+    assert len(list((tmp_path / "dist").glob("*.tar.gz"))) == 1

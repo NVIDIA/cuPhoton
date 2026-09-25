@@ -72,7 +72,8 @@ test-cutile:
 clean-dist:
 	rm -rf dist
 
-build: clean-dist
+build:
+	rm -f dist/cuphoton-*.tar.gz
 	CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
 
 wheels: build
@@ -82,7 +83,7 @@ conda: build
 	pixi exec --spec rattler-build=0.76.1 --spec python=3.12 -- python scripts/conda/build.py dist/*.tar.gz
 
 package-check: build
-	uvx --isolated --from twine==6.2.0 twine check --strict dist/*
+	uvx --isolated --from twine==6.2.0 twine check --strict dist/*.tar.gz
 
 release-check:
 	$(MAKE) lock-check
@@ -90,7 +91,7 @@ release-check:
 	$(MAKE) ci-test-cpu
 	$(MAKE) wheels
 	python scripts/wheels/check_distributions.py dist --arch "$$(uname -m)"
-	uvx --isolated --from twine==6.2.0 twine check --strict dist/*
+	uvx --isolated --from twine==6.2.0 twine check --strict dist/*.tar.gz dist/*.whl
 
 ci-lint:
 	$(MAKE) lint
