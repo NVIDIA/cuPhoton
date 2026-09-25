@@ -47,10 +47,11 @@ SNR levels must be finite and produce finite, positive noise scales;
 numerical Jacobian of the model at the true parameters (all parameters free,
 including the constant) and returns the square root of the diagonal of its
 inverse per parameter. These are standard-deviation bounds; the summary
-also carries the squared value as `crlb_variance`. For a single undamped
-sinusoid the angular-frequency bound matches the closed form
-`24 sigma^2 / (A^2 dt^2 N (N^2 - 1))` (Kay, Estimation Theory, 1993) to
-within 3 percent, the difference being the freed decay and constant.
+also carries the squared value as `crlb_variance`. For the single undamped
+sinusoid test fixture, the angular-frequency bound matches the square root
+of the closed-form variance `24 sigma^2 / (A^2 dt^2 N (N^2 - 1))`
+(Kay, Estimation Theory, 1993) to within 3 percent. The numerical calculation
+also frees the decay and constant.
 
 ## Mode matching and statistics
 
