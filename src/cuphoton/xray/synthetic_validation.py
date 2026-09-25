@@ -222,9 +222,10 @@ def cramer_rao_bounds(
         with np.errstate(over="raise", divide="raise", invalid="raise"):
             fisher = jac.T @ jac / noise_variance
             sd = np.sqrt(np.diag(np.linalg.inv(fisher)))
-    except FloatingPointError as exc:
+    except (FloatingPointError, np.linalg.LinAlgError) as exc:
         raise ValueError(
-            "noise_sigma produces nonfinite Cramer-Rao bounds"
+            "noise_sigma or modes produce singular or nonfinite "
+            "Cramer-Rao bounds"
         ) from exc
     if not np.all(np.isfinite(sd)) or np.any(sd <= 0):
         raise ValueError("Cramer-Rao bounds must be finite and positive")

@@ -101,6 +101,19 @@ def test_integer_mode_parameters_have_the_same_bounds_as_floats():
         assert np.all(np.isfinite(actual[name]))
 
 
+@pytest.mark.parametrize(
+    "modes",
+    [
+        (DampedMode(0.0, 0.1, 2.0, 0.3),),
+        (DampedMode(1.0, 0.1, 2.0, 0.3),) * 2,
+    ],
+    ids=["zero-amplitude", "duplicate-modes"],
+)
+def test_bounds_reject_unidentifiable_modes(modes):
+    with pytest.raises(ValueError, match="Cramer-Rao bounds"):
+        cramer_rao_bounds(modes, 0.0, np.linspace(0.0, 9.5, 96), 0.01)
+
+
 @pytest.mark.parametrize("start", [0.0, 3.0])
 def test_chirp_integrates_the_requested_frequency_ramp(start):
     time = np.linspace(start, start + 10.0, 256)
