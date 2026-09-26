@@ -42,7 +42,11 @@ def _unique_mapping(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def load_pipeline_manifest(
     path: Path,
 ) -> tuple[DevicePipelineConfig, tuple[DevicePipelineItem, ...]]:
-    """Read config/items and resolve paths beside the manifest."""
+    """Read config/items and resolve NPY or FITS paths beside the manifest.
+
+    FITS descriptors retain explicit HDUs and reader policies. This function
+    parses compact metadata only; device reads occur after worker placement.
+    """
 
     path = path.expanduser().resolve()
     payload = json_mapping(

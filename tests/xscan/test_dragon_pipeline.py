@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import socket
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -39,6 +40,7 @@ from cuphoton.xscan.device_pipeline import (
     DevicePipelineTransferReceipt,
     DeviceXFitPipelineConfig,
     DeviceXPOISPipelineConfig,
+    FitsArrayDescriptor,
     NpyArrayDescriptor,
 )
 from cuphoton.xscan.xfit_features import FEATURE_NAMES, _canonical_feature_row
@@ -972,6 +974,79 @@ def test_publish_accepts_exact_transfer_bytes_for_all_input_roles(
         + 2 * len(FEATURE_NAMES) * 4
         + (evidence_elements - 4) * 8
     )
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_publish_binds_fits_reader_and_mixed_input_accounting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corrupt: bool
+) -> None:
+    from astropy.io import fits
+
+    from cuphoton.core.fits_io import read_fits_images
+
+    config = _config(tmp_path)
+    item = _item(tmp_path, "mixed")
+    path = tmp_path / "reference.fits"
+    fits.PrimaryHDU(np.zeros((31, 31), dtype=np.float64)).writeto(path)
+    item = replace(
+        item,
+        reference=FitsArrayDescriptor(
+            str(path),
+            file_sha256(path),
+            (31, 31),
+            "float64",
+            0,
+            "astropy",
+        ),
+    )
+    read = replace(
+        read_fits_images(path, (0,), reader="astropy"), device=True
+    )
+    payload = _fake_result_payload(item, config)
+    payload["transfers"].update(
+        {
+            "input_h2d_bytes": 31 * 31 * 8,
+            "reader_internal_transfers": "not-instrumented",
+            "fits_reads": [
+                {
+                    **read.metadata(),
+                    "path": str(path),
+                    "sha256": file_sha256(path),
+                    "roles": {"reference": 0},
+                }
+            ],
+        }
+    )
+    if corrupt:
+        payload["transfers"]["fits_reads"][0]["reader"] = "xdr"
+    payload = _seal_fake_result(payload)
+    monkeypatch.setattr(
+        dragon_pipeline,
+        "run_device_pipeline_item",
+        lambda *_args: SimpleNamespace(to_payload=lambda: payload),
+    )
+
+    def publish():
+        return dragon_pipeline._publish_item_result(
+            work_item=dragon_module.WorkItem(
+                item_id=item.item_id,
+                payload=item.to_payload(),
+                weight_bytes=1,
+            ),
+            item_dir=tmp_path / "item-output",
+            config=config,
+            context=SimpleNamespace(load_seconds=0.0),
+        )
+
+    if corrupt:
+        with pytest.raises(ValueError, match="reader receipt identity"):
+            publish()
+        assert not (tmp_path / "item-output").exists()
+    else:
+        metadata = publish()
+        assert (
+            metadata["device_pipeline"]["transfers"] == payload["transfers"]
+        )
 
 
 @pytest.mark.parametrize(

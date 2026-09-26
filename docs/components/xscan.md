@@ -47,6 +47,51 @@ The dataset builders under `examples/xscan/` translate caller-supplied
 NumPy, FITS, CSV, Parquet, or registry products into that contract. Paths in
 the examples are placeholders.
 
+Raw DES and LSSTComCam builder manifests accept `fits_reader: auto`,
+`astropy`, or `xdr`. Automatic reading uses xDataReader where supported and
+records the actual reader and fallback reason in the builder summary.
+`astropy` selects CPU decoding; `xdr` requires the GPU reader. Candidate
+cutouts remain bounded reads, and the prepared dataset format is unchanged.
+
+## Classify candidates directly from FITS
+
+`predict_fits` reads aligned image planes, crops candidate stamps on the GPU
+and calls the existing tensor inference path. It returns host logits and
+probabilities in candidate order, plus reader receipts. The channel order is
+search, template, then optional difference. Images must already share a pixel
+grid; the function does not align them, calculate a difference or apply masks.
+Selected stamps must contain finite values.
+
+```python
+from pathlib import Path
+import torch
+from cuphoton.xscan.config import PerformanceConfig
+from cuphoton.xscan.fits_inference import FitsPlane, predict_fits
+from cuphoton.xscan.training import load_model_from_checkpoint
+
+device = torch.device("cuda:0")
+model, _, performance = load_model_from_checkpoint(
+    Path("runs/model"), device=device,
+    performance_override=PerformanceConfig(),
+)
+result = predict_fits(
+    model=model, device=device, performance=performance,
+    search=FitsPlane("search.fits", hdu=1),
+    template=FitsPlane("template.fits", hdu=1),
+    difference=FitsPlane("difference.fits", hdu=1),
+    centers_yx=[(200, 300), (450, 600)],
+    candidate_ids=["candidate-a", "candidate-b"],
+    stamp_shape=(51, 51), fits_reader="auto",
+)
+```
+
+Omit `difference` for a pair model. Centers are integer, zero-based `(y, x)`
+coordinates and each stamp must fit inside the images. Optional
+`xfit_features` must be a contiguous float32 Torch CUDA tensor with one row
+per candidate, ready on the device's current Torch stream. The call retains
+DLPack owners until inference and the compact host transfer finish. Existing
+prepared-dataset training and inference continue to use their usual formats.
+
 ## Optional xFit fusion
 
 Export the exact difference stamps, fit them, then build a portable,
@@ -376,6 +421,36 @@ items = tuple(
 )
 ```
 
+FITS images use an explicit HDU and reader policy in the same item manifest:
+
+```python
+from cuphoton.core.fits_io import inspect_fits_image
+from cuphoton.xscan.device_pipeline import FitsArrayDescriptor
+
+
+def describe_fits(path, hdu, *, reader="auto"):
+    path = Path(path).resolve()
+    info = inspect_fits_image(path, hdu)
+    return FitsArrayDescriptor(
+        path=str(path), sha256=file_sha256(path), hdu=info.hdu,
+        shape=info.shape, dtype=info.dtype.str, reader=reader,
+    )
+```
+
+`reader="astropy"` decodes on the CPU and uploads to the worker GPU;
+`reader="xdr"` requires xDR. `auto` selects xDR for supported inputs and records
+the reason when preflight selects Astropy. A decode failure is propagated,
+rather than retried with another reader. Requested HDUs in one file share a
+read and must use the same reader policy. FITS payloads are loaded only after
+worker GPU placement, on the pipeline's producer stream.
+
+Inputs must already be registered to the same pixel grid and use compatible
+photometric units. Candidate coordinates, variance and masks refer to that
+grid; loading a FITS file does not perform reprojection or survey mask
+interpretation. A FITS `fit_mask` must contain `uint8` values 0 and 1. NPY
+boolean masks and existing NPY manifests remain supported. FITS descriptor
+dtypes describe decoded, scaled values in native byte order.
+
 For direct execution, import Torch before CuPy calls CUDA, bind both libraries
 to the configured device, and retain the context between items:
 
@@ -465,7 +540,13 @@ The pipeline retains device owners through the blocking terminal copy and
 synchronizes failed work before reuse. Failed cleanup makes the context
 unusable. Transfer receipts count pipeline-owned uploads and the packed
 terminal download; internal XPOIS/xFit control transfers are outside that
-count. Timings are host elapsed times, so distinguish model initialization,
+count. FITS reads have separate receipts with requested and actual readers,
+HDU identities, fallback reasons and decoded bytes. Reader-internal transfers
+are not counted by `input_h2d_bytes`, which covers pipeline-owned NPY uploads.
+Decoded bytes are not measured host-to-device or GDS traffic, and selecting
+xDR alone does not prove native GDS use. `input_read` includes FITS reading,
+decoding and reader stream completion; `input_h2d` measures NPY upload calls.
+Timings are host elapsed times, so distinguish model initialization,
 first-item compilation and warmed context reuse when comparing runs.
 
 ## Review workflow

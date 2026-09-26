@@ -223,6 +223,97 @@ class NpyArrayDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class FitsArrayDescriptor:
+    """One FITS image HDU with its decoded shape, dtype and reader policy.
+
+    Images must already share a pixel grid. The descriptor does not request
+    reprojection or interpret survey mask bits. Dtypes describe logical image
+    values after FITS scaling, in native byte order.
+    """
+
+    path: str
+    sha256: str
+    shape: tuple[int, int]
+    dtype: str
+    hdu: int
+    reader: Literal["astropy", "auto", "xdr"] = "auto"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, str):
+            raise TypeError("FITS descriptor path must be a string")
+        if not Path(self.path).is_absolute():
+            raise ValueError("FITS descriptor path must be absolute")
+        _require_sha256(self.sha256, field_name="FITS descriptor sha256")
+        object.__setattr__(
+            self,
+            "shape",
+            _require_shape(self.shape, field_name="FITS descriptor shape"),
+        )
+        if isinstance(self.hdu, bool) or not isinstance(self.hdu, int):
+            raise TypeError("FITS descriptor hdu must be an integer")
+        if self.hdu < 0:
+            raise ValueError("FITS descriptor hdu must be non-negative")
+        if self.reader not in {"astropy", "auto", "xdr"}:
+            raise ValueError("FITS reader must be astropy, auto or xdr")
+        if not isinstance(self.dtype, str):
+            raise TypeError("FITS descriptor dtype must be a string")
+        try:
+            dtype = np.dtype(self.dtype)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("FITS descriptor dtype is invalid") from exc
+        if dtype.kind not in "iuf" or dtype.fields or dtype.subdtype:
+            raise TypeError("FITS descriptor dtype must be numeric")
+        object.__setattr__(self, "dtype", dtype.newbyteorder("=").str)
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return an explicitly tagged FITS descriptor."""
+
+        return {
+            "format": "fits",
+            "path": self.path,
+            "sha256": self.sha256,
+            "shape": list(self.shape),
+            "dtype": self.dtype,
+            "hdu": self.hdu,
+            "reader": self.reader,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> FitsArrayDescriptor:
+        """Restore one strict FITS descriptor."""
+
+        values = _require_exact_fields(
+            payload,
+            expected=frozenset(
+                {
+                    "format",
+                    "path",
+                    "sha256",
+                    "shape",
+                    "dtype",
+                    "hdu",
+                    "reader",
+                }
+            ),
+            field_name="FITS descriptor",
+        )
+        if values.pop("format") != "fits":
+            raise ValueError("unsupported image descriptor format")
+        return cls(**values)
+
+
+ImageArrayDescriptor = NpyArrayDescriptor | FitsArrayDescriptor
+
+
+def _image_descriptor(payload: Mapping[str, Any]) -> ImageArrayDescriptor:
+    if not isinstance(payload, Mapping):
+        raise TypeError("image descriptor must be a mapping")
+    if payload.get("format") == "fits":
+        return FitsArrayDescriptor.from_payload(payload)
+    return NpyArrayDescriptor.from_payload(payload)
+
+
+@dataclass(frozen=True, slots=True)
 class DevicePipelineCandidate:
     """One order-preserving candidate center inside an image pair."""
 
@@ -276,11 +367,11 @@ class DevicePipelineItem:
     """One compact, independently executable image-pair descriptor."""
 
     item_id: str
-    reference: NpyArrayDescriptor
-    target: NpyArrayDescriptor
+    reference: ImageArrayDescriptor
+    target: ImageArrayDescriptor
     candidates: tuple[DevicePipelineCandidate, ...]
-    variance: NpyArrayDescriptor | None = None
-    fit_mask: NpyArrayDescriptor | None = None
+    variance: ImageArrayDescriptor | None = None
+    fit_mask: ImageArrayDescriptor | None = None
     schema: Literal["cuphoton.xscan.device-pipeline.item/v1"] = field(
         init=False,
         default=DEVICE_PIPELINE_ITEM_SCHEMA,
@@ -289,15 +380,17 @@ class DevicePipelineItem:
     def __post_init__(self) -> None:
         validate_identifier(self.item_id, field="item_id")
         for name in ("reference", "target"):
-            if not isinstance(getattr(self, name), NpyArrayDescriptor):
-                raise TypeError(f"{name} must be an NpyArrayDescriptor")
+            if not isinstance(
+                getattr(self, name), (NpyArrayDescriptor, FitsArrayDescriptor)
+            ):
+                raise TypeError(f"{name} must be an image array descriptor")
         for name in ("variance", "fit_mask"):
             value = getattr(self, name)
             if value is not None and not isinstance(
-                value, NpyArrayDescriptor
+                value, (NpyArrayDescriptor, FitsArrayDescriptor)
             ):
                 raise TypeError(
-                    f"{name} must be an NpyArrayDescriptor or None"
+                    f"{name} must be an image array descriptor or None"
                 )
         candidates = tuple(self.candidates)
         if not candidates:
@@ -363,17 +456,17 @@ class DevicePipelineItem:
         if not isinstance(candidates, list):
             raise TypeError("device pipeline candidates must be a list")
 
-        def optional_descriptor(value: Any) -> NpyArrayDescriptor | None:
+        def optional_descriptor(value: Any) -> ImageArrayDescriptor | None:
             if value is None:
                 return None
             if not isinstance(value, Mapping):
-                raise TypeError("optional NPY descriptors must be mappings")
-            return NpyArrayDescriptor.from_payload(value)
+                raise TypeError("optional image descriptors must be mappings")
+            return _image_descriptor(value)
 
         return cls(
             item_id=values["item_id"],
-            reference=NpyArrayDescriptor.from_payload(values["reference"]),
-            target=NpyArrayDescriptor.from_payload(values["target"]),
+            reference=_image_descriptor(values["reference"]),
+            target=_image_descriptor(values["target"]),
             variance=optional_descriptor(values["variance"]),
             fit_mask=optional_descriptor(values["fit_mask"]),
             candidates=tuple(
@@ -1843,11 +1936,17 @@ class DevicePipelineTransferReceipt:
     device_stage_internal_transfers: Literal["not-instrumented"] = (
         "not-instrumented"
     )
+    fits_reads: tuple[dict[str, Any], ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
         """Return deterministic transfer counters and their scope."""
 
-        return asdict(self)
+        payload = asdict(self)
+        del payload["fits_reads"]
+        if self.fits_reads:
+            payload["fits_reads"] = list(self.fits_reads)
+            payload["reader_internal_transfers"] = "not-instrumented"
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -2669,8 +2768,8 @@ def _validate_loaded_model_contract(
 
 def _item_inputs(
     item: DevicePipelineItem,
-) -> tuple[tuple[str, NpyArrayDescriptor], ...]:
-    values: list[tuple[str, NpyArrayDescriptor]] = [
+) -> tuple[tuple[str, ImageArrayDescriptor], ...]:
+    values: list[tuple[str, ImageArrayDescriptor]] = [
         ("reference", item.reference),
         ("target", item.target),
     ]
@@ -2693,12 +2792,17 @@ def _validate_item_contract(
             )
         dtype = np.dtype(descriptor.dtype)
         if name == "fit_mask":
-            if dtype != np.dtype(bool):
+            if isinstance(descriptor, FitsArrayDescriptor):
+                if dtype != np.dtype("uint8"):
+                    raise TypeError(
+                        "fit_mask FITS descriptor must use uint8 values 0/1"
+                    )
+            elif dtype != np.dtype(bool):
                 raise TypeError(
                     "fit_mask NPY descriptor must use boolean dtype"
                 )
         elif dtype.kind not in "iuf":
-            raise TypeError(f"{name} NPY descriptor must use a numeric dtype")
+            raise TypeError(f"{name} descriptor must use a numeric dtype")
     kernel_half_y = config.xpois.kernel_shape[0] // 2
     kernel_half_x = config.xpois.kernel_shape[1] // 2
     stamp_half_y = config.stamp_shape[0] // 2
@@ -2722,6 +2826,8 @@ def _read_item_inputs(
 ) -> dict[str, np.ndarray]:
     arrays: dict[str, np.ndarray] = {}
     for name, descriptor in _item_inputs(item):
+        if isinstance(descriptor, FitsArrayDescriptor):
+            continue
         path = Path(descriptor.path)
         if not path.is_file():
             raise FileNotFoundError(
@@ -2743,10 +2849,189 @@ def _read_item_inputs(
     return arrays
 
 
-def _verify_item_hashes(item: DevicePipelineItem, *, when: str) -> None:
-    for name, descriptor in _item_inputs(item):
+def _fits_input_groups(
+    item: DevicePipelineItem,
+) -> tuple[tuple[FitsArrayDescriptor, dict[str, FitsArrayDescriptor]], ...]:
+    """Group a file's HDUs without reading payloads or importing CUDA."""
+
+    groups: dict[str, dict[str, FitsArrayDescriptor]] = {}
+    for role, descriptor in _item_inputs(item):
+        if isinstance(descriptor, FitsArrayDescriptor):
+            group = groups.setdefault(descriptor.path, {})
+            for previous in group.values():
+                if (
+                    previous.sha256 != descriptor.sha256
+                    or previous.reader != descriptor.reader
+                    or (
+                        previous.hdu == descriptor.hdu
+                        and previous != descriptor
+                    )
+                ):
+                    raise ValueError("conflicting FITS input identities")
+            group[role] = descriptor
+    return tuple(
+        (next(iter(group.values())), group) for group in groups.values()
+    )
+
+
+def _validate_fits_reads(item: DevicePipelineItem, reads: Any) -> None:
+    """Bind reader receipts to the exact input HDUs and requested policy."""
+
+    groups = _fits_input_groups(item)
+    if not isinstance(reads, list) or len(reads) != len(groups):
+        raise ValueError("FITS reader receipt coverage differs")
+    for record, (descriptor, roles) in zip(reads, groups, strict=True):
+        record = _require_exact_fields(
+            record,
+            expected=frozenset(
+                {
+                    "path",
+                    "sha256",
+                    "roles",
+                    "reader",
+                    "requested_reader",
+                    "location",
+                    "fallback_reason",
+                    "hdus",
+                    "decoded_bytes",
+                }
+            ),
+            field_name="FITS reader receipt",
+        )
+        if (
+            record["path"] != descriptor.path
+            or record["sha256"] != descriptor.sha256
+            or record["roles"]
+            != {role: value.hdu for role, value in roles.items()}
+            or any(type(hdu) is not int for hdu in record["roles"].values())
+            or record["requested_reader"] != descriptor.reader
+            or record["location"] != "device"
+            or record["reader"] not in {"astropy", "xdr"}
+            or (
+                descriptor.reader != "auto"
+                and record["reader"] != descriptor.reader
+            )
+        ):
+            raise ValueError("FITS reader receipt identity differs")
+        reason = record["fallback_reason"]
+        fallback = (
+            descriptor.reader == "auto" and record["reader"] == "astropy"
+        )
+        if (fallback and (not isinstance(reason, str) or not reason)) or (
+            not fallback and reason is not None
+        ):
+            raise ValueError("FITS reader fallback reason differs")
+        hdus = {value.hdu: value for value in roles.values()}
+        if not isinstance(record["hdus"], list) or len(record["hdus"]) != len(
+            hdus
+        ):
+            raise ValueError("FITS reader HDU coverage differs")
+        for info, value in zip(record["hdus"], hdus.values(), strict=True):
+            info = _require_exact_fields(
+                info,
+                expected=frozenset({"hdu", "shape", "dtype", "compression"}),
+                field_name="FITS reader HDU",
+            )
+            if (
+                type(info["hdu"]) is not int
+                or info["hdu"] != value.hdu
+                or info["shape"] != list(value.shape)
+                or any(type(size) is not int for size in info["shape"])
+                or info["dtype"] != value.dtype
+                or not (
+                    info["compression"] is None
+                    or isinstance(info["compression"], str)
+                )
+            ):
+                raise ValueError("FITS reader HDU identity differs")
+        expected_bytes = sum(
+            math.prod(value.shape) * np.dtype(value.dtype).itemsize
+            for value in hdus.values()
+        )
+        if (
+            type(record["decoded_bytes"]) is not int
+            or record["decoded_bytes"] != expected_bytes
+        ):
+            raise ValueError("FITS decoded byte count differs")
+
+
+def _read_fits_device_inputs(
+    item: DevicePipelineItem,
+    *,
+    cp: Any,
+    stream: Any,
+    owners: list[Any] | None = None,
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """Read grouped HDUs directly onto the bound worker's producer stream."""
+
+    groups = _fits_input_groups(item)
+    if not groups:
+        return {}, ()
+
+    from cuphoton.core.fits_io import read_fits_images
+
+    arrays: dict[str, Any] = {}
+    receipts: list[dict[str, Any]] = []
+    for descriptor, roles in groups:
         if file_sha256(descriptor.path) != descriptor.sha256:
-            raise RuntimeError(f"{name} NPY input changed {when}")
+            raise RuntimeError("FITS input changed before execution")
+        hdus = tuple(dict.fromkeys(value.hdu for value in roles.values()))
+        result = read_fits_images(
+            descriptor.path,
+            hdus,
+            reader=descriptor.reader,
+            device=True,
+            stream=stream,
+        )
+        if owners is not None:
+            owners.append(result)
+        if len(result.arrays) != len(hdus):
+            raise RuntimeError("FITS reader returned different HDU coverage")
+        by_hdu = dict(zip(hdus, result.arrays, strict=True))
+        for role, value in roles.items():
+            array = by_hdu[value.hdu]
+            if not isinstance(array, cp.ndarray):
+                raise TypeError("FITS device reader must return CuPy arrays")
+            if (
+                tuple(array.shape) != value.shape
+                or array.dtype.str != value.dtype
+            ):
+                raise RuntimeError(
+                    f"{role} FITS shape or dtype changed before execution"
+                )
+            if role == "fit_mask" and not bool(
+                ((array == 0) | (array == 1)).all()
+            ):
+                raise ValueError("FITS fit_mask must contain only 0 and 1")
+            arrays[role] = cp.asarray(
+                array,
+                dtype=np.bool_ if role == "fit_mask" else np.float64,
+                order="C",
+            )
+            if owners is not None:
+                owners.append(arrays[role])
+        receipts.append(
+            {
+                **result.metadata(),
+                "path": descriptor.path,
+                "sha256": descriptor.sha256,
+                "roles": {role: value.hdu for role, value in roles.items()},
+            }
+        )
+    _validate_fits_reads(item, receipts)
+    return arrays, tuple(receipts)
+
+
+def _verify_item_hashes(item: DevicePipelineItem, *, when: str) -> None:
+    checked_fits: set[tuple[str, str]] = set()
+    for name, descriptor in _item_inputs(item):
+        if isinstance(descriptor, FitsArrayDescriptor):
+            key = (descriptor.path, descriptor.sha256)
+            if key in checked_fits:
+                continue
+            checked_fits.add(key)
+        if file_sha256(descriptor.path) != descriptor.sha256:
+            raise RuntimeError(f"{name} input changed {when}")
 
 
 def _extract_stamps(
@@ -2887,6 +3172,7 @@ def run_device_pipeline_item(
         input_h2d_bytes = sum(value.nbytes for value in host_inputs.values())
 
         leases: list[Any] = []
+        input_owners: list[Any] = []
         try:
             with context.producer_stream:
                 device_inputs = _timed(
@@ -2897,6 +3183,19 @@ def run_device_pipeline_item(
                         for name, value in host_inputs.items()
                     },
                 )
+                fits_inputs, fits_reads = _timed(
+                    timings,
+                    "input_read",
+                    lambda: _read_fits_device_inputs(
+                        item,
+                        cp=context.cp,
+                        stream=context.producer_stream,
+                        owners=input_owners,
+                    ),
+                )
+                # The reader completes decode before returning; these arrays
+                # remain owned through the existing blocking terminal copy.
+                device_inputs.update(fits_inputs)
                 components = [
                     functions.gaussian_basis_component(
                         sigma=sigma, degree=degree
@@ -3109,6 +3408,7 @@ def run_device_pipeline_item(
         )
         transfers = DevicePipelineTransferReceipt(
             input_h2d_bytes=input_h2d_bytes,
+            fits_reads=fits_reads,
             terminal_d2h_bytes=terminal_d2h_bytes,
             dlpack_shared_bytes=int(
                 stamps.nbytes
@@ -3168,6 +3468,8 @@ __all__ = [
     "DeviceWorkerContext",
     "DeviceXFitPipelineConfig",
     "DeviceXPOISPipelineConfig",
+    "FitsArrayDescriptor",
+    "ImageArrayDescriptor",
     "NpyArrayDescriptor",
     "decode_device_pipeline_evidence",
     "run_device_pipeline_item",
