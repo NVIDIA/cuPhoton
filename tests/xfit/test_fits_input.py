@@ -286,12 +286,23 @@ def test_npz_and_fits_cli_keep_identical_numeric_outputs(
             np.testing.assert_array_equal(left[name], right[name])
 
 
-def test_fits_distributed_finalizer_preserves_ordinary_outputs(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("retain_input", [True, False])
+def test_fits_distributed_finalizer_reuses_only_retained_audit_stamps(
+    tmp_path, monkeypatch, retain_input
 ):
+    import cuphoton.xfit.fits_input as source
+
     path, _, _, _, _ = _input(tmp_path)
     original = executor.load_xfit_dataset
     monkeypatch.setattr(executor, "collect_gpu_identity", lambda _: {})
+    decodes = []
+    original_read = source.read_fits_images
+
+    def decode(*args, **kwargs):
+        decodes.append(True)
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(source, "read_fits_images", decode)
 
     def read(path, **kwargs):
         dataset = original(
@@ -326,28 +337,47 @@ def test_fits_distributed_finalizer_preserves_ordinary_outputs(
         input_path=path,
         chunk_size=1,
         fit_options={"backend": "cupy", "max_evaluations": 2},
+        retain_input=retain_input,
     )
+    assert not decodes
     worker = spec.worker_factory(spec.options_payload)
-    output = tmp_path / "round"
-    records = []
-    for item in spec.items:
-        worker.run_item(item, output / "items" / item.item_id)
-        records.append({"item_id": item.item_id, "status": "success"})
-    result = spec.finalize_round(output, records)
-    assert result["candidate_count"] == 2
-    assert pq.read_table(output / "scientific/fits.parquet")[
-        "candidate_id"
-    ].to_pylist() == ["z", "a"]
-    summary = json.loads((output / "scientific/summary.json").read_text())
-    assert "fits_reads" not in summary["inputs"]
-    assert (
-        summary["inputs"]["fits_finalizer_audit_reads"][0]["reader"]
-        == "astropy"
-    )
-    receipts = summary["inputs"]["fits_worker_setup_reads"]
-    assert receipts == result["fits_worker_setup_reads"]
-    assert len(receipts) == 2
-    assert all(row["reads"][0]["reader"] == "xdr" for row in receipts)
+    assert len(decodes) == 1
+    baseline = None
+    for index in range(2):
+        output = tmp_path / f"round-{index}"
+        records = []
+        for item in spec.items:
+            worker.run_item(item, output / "items" / item.item_id)
+            records.append({"item_id": item.item_id, "status": "success"})
+        result = spec.finalize_round(output, records)
+        assert result["candidate_count"] == 2
+        table = pq.read_table(output / "scientific/fits.parquet")
+        assert table["candidate_id"].to_pylist() == ["z", "a"]
+        if baseline is None:
+            baseline = table
+        assert table.schema == baseline.schema
+        for name in table.column_names:
+            np.testing.assert_array_equal(
+                table[name].to_numpy(), baseline[name].to_numpy()
+            )
+        summary = json.loads((output / "scientific/summary.json").read_text())
+        assert "fits_reads" not in summary["inputs"]
+        audit = summary["inputs"]["fits_finalizer_audit_reads"][0]
+        assert audit["reader"] == "astropy"
+        assert audit["reused"] == (retain_input and index > 0)
+        receipts = summary["inputs"]["fits_worker_setup_reads"]
+        assert receipts == result["fits_worker_setup_reads"]
+        assert len(receipts) == 2
+        assert all(row["reads"][0]["reader"] == "xdr" for row in receipts)
+        assert len(decodes) == (2 if retain_input else index + 2)
+    image = tmp_path / "plane-0.fits"
+    before = image.stat()
+    with fits.open(image, mode="update") as hdus:
+        hdus[1].data[3, 4] += 1
+    assert image.stat().st_size == before.st_size
+    os.utime(image, ns=(before.st_atime_ns, before.st_mtime_ns))
+    with pytest.raises(ValueError, match="referenced FITS input changed"):
+        spec.finalize_round(tmp_path / "changed", records)
     worker.close()
 
 

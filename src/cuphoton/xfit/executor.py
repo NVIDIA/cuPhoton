@@ -481,6 +481,7 @@ def finalize_xfit_round(
     items: Sequence[WorkItem],
     options: Mapping[str, Any],
     _dataset: XFitDataset | None = None,
+    _audit_reused: bool = False,
 ) -> Mapping[str, Any]:
     """Restore candidate order and publish ordinary xFit artifacts."""
     expected = {item.item_id for item in items}
@@ -500,7 +501,19 @@ def finalize_xfit_round(
         _check_input_stat(options)
         if file_sha256(dataset.path) != options["input_sha256"]:
             raise ValueError("xFit input archive changed after planning")
+        if dataset.input_sources:
+            from .fits_input import check_fits_sources
+
+            check_fits_sources(dataset.input_sources, hashes=True)
         _check_input_stat(options)
+    if dataset.input_sources:
+        dataset = replace(
+            dataset,
+            reader_metadata=tuple(
+                {**read, "reused": _audit_reused}
+                for read in dataset.reader_metadata
+            ),
+        )
     ordered = sorted(items, key=lambda item: item.payload["start"])
     chunks = []
     worker_reads: list[dict[str, Any]] | None = (
@@ -617,6 +630,26 @@ def prepare_xfit_workload(
             return [str(exc)]
         return []
 
+    def finalize(round_dir, records):
+        nonlocal retained_dataset
+        audit_reused = retained_dataset is not None and bool(
+            retained_dataset.input_sources
+        )
+        if (
+            retain_input
+            and retained_dataset is None
+            and "input_sources" in options
+        ):
+            retained_dataset = _load_input(options)
+        return finalize_xfit_round(
+            round_dir,
+            records,
+            items=items,
+            options=options,
+            _dataset=retained_dataset,
+            _audit_reused=audit_reused,
+        )
+
     manifest = {
         "schema": "cuphoton.xfit.executor-manifest/v1",
         "items": [item.to_dict() for item in items],
@@ -634,11 +667,5 @@ def prepare_xfit_workload(
         backend=backend,
         worker_factory=create_xfit_worker,
         success_record_validator=validate,
-        finalize_round=lambda round_dir, records: finalize_xfit_round(
-            round_dir,
-            records,
-            items=items,
-            options=options,
-            _dataset=retained_dataset,
-        ),
+        finalize_round=finalize,
     )
