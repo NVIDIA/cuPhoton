@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -283,6 +284,7 @@ def reproject_fits(
     mask_hdu: int | None = None,
     interpolation: str = "lanczos3",
     backend: str | None = None,
+    fits_reader: str = "auto",
     mapping_grid_step: int = 100,
     area_scaling: bool = True,
 ) -> ReprojectionResult:
@@ -315,7 +317,20 @@ def reproject_fits(
         Host-resident reprojected image, optional mask, and metadata.
     """
 
-    image, source_wcs, _, _ = load_fits_image_with_wcs(path, hdu=hdu)
+    backend = resolve_backend(backend)
+    reader = (
+        "astropy"
+        if fits_reader == "auto" and backend == "cpu"
+        else fits_reader
+    )
+    fits_reads: list[dict[str, Any]] = []
+    image, source_wcs, _, _ = load_fits_image_with_wcs(
+        path,
+        hdu=hdu,
+        fits_reader=reader,
+        device=backend == "cupy",
+        read_metadata=fits_reads,
+    )
     if grid is None:
         grid = _default_grid_from_wcs(source_wcs, image.shape)
 
@@ -328,7 +343,13 @@ def reproject_fits(
 
     mask = None
     if mask_path is not None:
-        mask, _, _ = load_fits_mask(mask_path, hdu=mask_hdu)
+        mask, _, _ = load_fits_mask(
+            mask_path,
+            hdu=mask_hdu,
+            fits_reader=reader,
+            device=backend == "cupy",
+            read_metadata=fits_reads,
+        )
     spec = ReprojectionSpec(
         mapping=mapping,
         output_bbox=bbox,
@@ -344,6 +365,8 @@ def reproject_fits(
     )
     result.metadata.update(
         {
+            "fits_reader": fits_reader,
+            "fits_reads": fits_reads,
             "path": str(Path(path).expanduser().resolve()),
             "grid_crval": list(grid.crval),
             "grid_pixel_scale_arcsec": grid.pixel_scale_arcsec,
@@ -438,6 +461,9 @@ def build_stack_spec_from_fits(
     interpolation: str = "lanczos3",
     mapping_grid_step: int = 100,
     area_scaling: bool = True,
+    fits_reader: str = "astropy",
+    device: bool = False,
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[list[np.ndarray], StackReprojectionSpec]:
     """Load FITS images and build a common stack-reprojection specification.
 
@@ -470,7 +496,16 @@ def build_stack_spec_from_fits(
         raise ValueError(
             "build_stack_spec_from_fits requires at least one path"
         )
-    payloads = [load_fits_image_with_wcs(path, hdu=hdu) for path in paths]
+    payloads = [
+        load_fits_image_with_wcs(
+            path,
+            hdu=hdu,
+            fits_reader=fits_reader,
+            device=device,
+            read_metadata=read_metadata,
+        )
+        for path in paths
+    ]
     if grid is None:
         grid = _default_grid_from_wcs(payloads[0][1], payloads[0][0].shape)
 

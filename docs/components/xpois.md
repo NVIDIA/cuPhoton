@@ -40,6 +40,20 @@ Spatial ALS fits instead save the line bases and coefficient fields plus
 `kernel_center.npy`, a clearly named preview evaluated at the image center.
 Auto-stamp fitting also saves the selected-region metadata.
 
+## FITS reading
+
+GPU workflows use `--fits-reader auto` to decode supported FITS images with
+xDataReader. Use `--fits-reader astropy` for CPU decoding or `--fits-reader xdr`
+to require xDataReader. With `--backend cpu`, automatic reading uses Astropy.
+The option also applies to batch, MPI and Dragon execution. NPY inputs keep
+their existing loading path.
+
+Image, variance and mask HDU selection stays the same. `summary.json` records
+`fits_reader` and `fits_reads`, including the reader used and any fallback.
+xPois retains host input arrays for its existing solvers: xDR accelerates
+FITS decoding and copies decoded arrays back to the host. Reader speedup and
+complete fit speedup should be measured separately.
+
 ## Fit and subtract
 
 ```bash

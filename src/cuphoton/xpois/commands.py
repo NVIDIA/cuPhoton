@@ -318,6 +318,18 @@ class _KernelSolveOptionsCommand(XPOISCommand):
 
 
 class _SpatialSolverOptionsCommand(_KernelSolveOptionsCommand):
+    fits_reader = None
+
+    class FitsReaderArg(SetInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS decompression reader. CPU auto uses Astropy. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
+        _set = {"auto", "astropy", "xdr"}
+
     solver = None
     spatial_degree = None
     als_iterations = None
@@ -542,6 +554,7 @@ class FitKernelCommand(_FitCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            fits_reader=self.fits_reader,
             review=not self.no_review,
             solver=self.solver,
             spatial_degree=self.spatial_degree,
@@ -596,6 +609,7 @@ class SubtractCommand(_FitCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            fits_reader=self.fits_reader,
             review=not self.no_review,
             solver=self.solver,
             spatial_degree=self.spatial_degree,
@@ -748,6 +762,7 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            fits_reader=self.fits_reader,
             solver=self.solver,
             spatial_degree=self.spatial_degree,
             als_iterations=self.als_iterations,
@@ -966,6 +981,7 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backends=self._csv_backends(self.backends),
+            fits_reader=self.fits_reader,
             reference_backend=self.reference_backend,
             repeats=self.repeats,
             warmup=self.warmup,
