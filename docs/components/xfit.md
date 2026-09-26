@@ -221,11 +221,15 @@ of the requested worker count and task count.
 The same executor commands accept a FITS candidate manifest. Planning checks
 headers, candidate bounds and source hashes without decoding image pixels.
 Each bound worker reads the candidate region and retains its stamps during
-worker setup, before measured rounds. Ordinary artifact finalization reads
-host stamps for per-candidate input hashes after the timed worker phase.
+worker setup, before measured rounds. The first ordinary artifact finalization
+reads host stamps for per-candidate input hashes after the timed worker phase.
+The coordinator retains these stamps for later rounds and verifies referenced
+file hashes before reuse. Setting `retain_input=False` in the workload API
+instead reloads the host stamps each round.
 Worker item receipts retain `fits_setup_reads`; the merged scientific
 summary separates `fits_worker_setup_reads` from
-`fits_finalizer_audit_reads`. Each read identifies its source and plane role.
+`fits_finalizer_audit_reads`. Each read identifies its source and plane role;
+the audit receipt's `reused` flag distinguishes retained data from a new read.
 These setup/finalization reads are separate from reported worker timing;
 include them explicitly when measuring a complete ingestion-to-result run.
 All referenced FITS files must be visible to every worker and the coordinator.
