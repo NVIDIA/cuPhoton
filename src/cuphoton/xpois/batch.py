@@ -441,6 +441,7 @@ class BatchFitOptions:
     background_degree: int = 0
     flux_conserve: bool = False
     backend: str = "cupy"
+    fits_reader: str = "auto"
     solver: str = "constant"
     spatial_degree: int | None = None
     als_iterations: int | None = None
@@ -498,6 +499,8 @@ class BatchFitOptions:
             )
         if self.mask_policy not in _MASK_POLICIES:
             raise ValueError(f"unsupported mask policy: {self.mask_policy}")
+        if self.fits_reader not in {"auto", "astropy", "xdr"}:
+            raise ValueError(f"unsupported FITS reader: {self.fits_reader}")
         if self.backend not in _SUPPORTED_BACKENDS:
             raise ValueError(f"unsupported fit backend: {self.backend}")
         if self.solver not in _SUPPORTED_SOLVERS:
@@ -855,6 +858,7 @@ def run_image_pair_item(
             background_degree=options.background_degree,
             flux_conserve=options.flux_conserve,
             backend=options.backend,
+            fits_reader=options.fits_reader,
             solver=options.solver,
             spatial_degree=options.spatial_degree,
             als_iterations=options.als_iterations,

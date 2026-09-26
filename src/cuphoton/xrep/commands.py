@@ -161,6 +161,7 @@ class _SharedReprojectionCommand(XRepCommand):
     input = None
     hdu = None
     backend = None
+    fits_reader = None
     interpolation = None
     grid_crval_ra = None
     grid_crval_dec = None
@@ -178,6 +179,16 @@ class _SharedReprojectionCommand(XRepCommand):
         _help = "Optional explicit FITS HDU index."
         _mandatory = False
         _default = None
+
+    class FitsReaderArg(SetInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS decompression reader. CPU auto uses Astropy. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
+        _set = {"auto", "astropy", "xdr"}
 
     class BackendArg(AutoBackendInvariant):
         _arg = "--backend"
@@ -314,6 +325,7 @@ class ReprojectImageCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             backend=self.backend,
+            fits_reader=self.fits_reader,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -359,6 +371,7 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
             target_wcs_path=self._path(self.target_wcs),
             target_hdu=self.target_hdu,
             backend=self.backend,
+            fits_reader=self.fits_reader,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -404,6 +417,7 @@ class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             backend=self.backend,
+            fits_reader=self.fits_reader,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -488,6 +502,7 @@ class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             variants=self._csv_backend_variants(self.variants),
+            fits_reader=self.fits_reader,
             reference_variant=self.reference_variant,
             mask_cases=self._csv_mask_cases(self.mask_cases),
             interpolation=self.interpolation,
@@ -569,6 +584,7 @@ class CompareBackendsCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             backends=self._csv_backends(self.backends),
+            fits_reader=self.fits_reader,
             reference_backend=self.reference_backend,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,

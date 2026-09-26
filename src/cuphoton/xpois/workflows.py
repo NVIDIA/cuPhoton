@@ -108,6 +108,7 @@ class _PreparedKernelInputs:
     fit_mask_kind: str | None
     fit_mask_metadata: dict[str, Any] | None
     input_read_sec: float
+    fits_reads: list[dict[str, Any]]
     preprocess_sec: float
 
 
@@ -136,9 +137,11 @@ def _prepare_kernel_inputs(
     kernel_shape: tuple[int, int],
     fit_positions_path: Path | None = None,
     review: bool = False,
+    fits_reader: str = "astropy",
 ) -> _PreparedKernelInputs:
     prepare_start = time.perf_counter()
     input_read_sec = 0.0
+    fits_reads: list[dict[str, Any]] = []
     if variance_hdu is not None and variance_path is None:
         raise ValueError("variance_hdu requires a variance image path")
     if fit_mask_path is not None and fit_positions_path is not None:
@@ -195,10 +198,14 @@ def _prepare_kernel_inputs(
         reference, _, used_reference_hdu = load_image_with_wcs(
             reference_path,
             hdu=reference_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         target, _, used_target_hdu = load_image_with_wcs(
             target_path,
             hdu=target_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         variance = None
         used_variance_hdu = None
@@ -206,6 +213,8 @@ def _prepare_kernel_inputs(
             variance, _, used_variance_hdu = load_variance_with_wcs(
                 variance_path,
                 hdu=variance_hdu,
+                fits_reader=fits_reader,
+                read_metadata=fits_reads,
             )
     finally:
         input_read_sec += time.perf_counter() - input_read_start
@@ -239,11 +248,15 @@ def _prepare_kernel_inputs(
             ) = load_mask_with_planes(
                 reference_mask_source,
                 hdu=reference_mask_hdu,
+                fits_reader=fits_reader,
+                read_metadata=fits_reads,
             )
             target_mask, used_target_mask_hdu, target_plane_map = (
                 load_mask_with_planes(
                     target_mask_source,
                     hdu=target_mask_hdu,
+                    fits_reader=fits_reader,
+                    read_metadata=fits_reads,
                 )
             )
         finally:
@@ -376,6 +389,7 @@ def _prepare_kernel_inputs(
         fit_mask_kind=fit_mask_kind,
         fit_mask_metadata=fit_mask_metadata,
         input_read_sec=input_read_sec,
+        fits_reads=fits_reads,
         preprocess_sec=preprocess_sec,
     )
 
@@ -410,6 +424,7 @@ def run_constant_kernel_fit(
     background_degree: int,
     flux_conserve: bool,
     backend: str = "auto",
+    fits_reader: str = "auto",
     review: bool = True,
     solver: str = "constant",
     spatial_degree: int | None = None,
@@ -471,6 +486,11 @@ def run_constant_kernel_fit(
 
     try:
         prepared = _prepare_kernel_inputs(
+            fits_reader=(
+                "astropy"
+                if fits_reader == "auto" and backend == "cpu"
+                else fits_reader
+            ),
             reference_path=reference_path,
             target_path=target_path,
             reference_hdu=reference_hdu,
@@ -725,6 +745,8 @@ def run_constant_kernel_fit(
             "background_degree": background_degree,
             "flux_conserve": flux_conserve,
             "requested_backend": backend,
+            "fits_reader": fits_reader,
+            "fits_reads": prepared.fits_reads,
             "backend": result.backend,
             "device": runtime["device"],
             "dtype": str(result.matched.dtype),
@@ -857,6 +879,7 @@ def benchmark_constant_kernel_backends(
     flux_conserve: bool = False,
     backends: list[str] | tuple[str, ...] = ("cpu", "cupy"),
     reference_backend: str = "cpu",
+    fits_reader: str = "auto",
     repeats: int = 3,
     warmup: int = 1,
     atol: float = 1e-8,
@@ -908,6 +931,11 @@ def benchmark_constant_kernel_backends(
 
     try:
         prepared = _prepare_kernel_inputs(
+            fits_reader=(
+                "astropy"
+                if fits_reader == "auto" and backend_names == ["cpu"]
+                else fits_reader
+            ),
             reference_path=reference_path,
             target_path=target_path,
             reference_hdu=reference_hdu,
@@ -1084,6 +1112,8 @@ def benchmark_constant_kernel_backends(
             "background_degree": background_degree,
             "flux_conserve": flux_conserve,
             "backends": backend_names,
+            "fits_reader": fits_reader,
+            "fits_reads": prepared.fits_reads,
             "reference_backend": reference_backend,
             "runtimes": {
                 backend: runtime_metadata(
