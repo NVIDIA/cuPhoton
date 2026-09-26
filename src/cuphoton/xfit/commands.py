@@ -61,7 +61,11 @@ class PathSpecInvariant(StringInvariant):
 
 
 class ExistingNPZInvariant(ExistingPathInvariant):
-    _type_desc = "existing .npz path"
+    _type_desc = "existing .npz or FITS manifest .json path"
+
+
+class FitsReaderInvariant(SetInvariant):
+    _set = frozenset({"auto", "astropy", "xdr"})
 
 
 class ModelInvariant(SetInvariant):
@@ -135,7 +139,7 @@ class DataInspectCommand(XFitCommand):
 
     class InputArg(ExistingNPZInvariant):
         _arg = "--input"
-        _help = "Input .npz containing candidate_id and images arrays."
+        _help = "Input candidate .npz or FITS candidate manifest .json."
         _mandatory = True
 
     def run(self) -> None:
@@ -147,11 +151,20 @@ class _ValidatedDatasetCommand(XFitCommand):
     input = None
     model = None
     mode = None
+    fits_reader = None
 
     class InputArg(ExistingNPZInvariant):
         _arg = "--input"
-        _help = "Input .npz containing candidate_id and images arrays."
+        _help = "Input candidate .npz or FITS candidate manifest .json."
         _mandatory = True
+
+    class FitsReaderArg(FitsReaderInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS input reader: auto, astropy, or xdr. [default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
 
     class ModelArg(ModelInvariant):
         _arg = "--model"
@@ -164,12 +177,17 @@ class _ValidatedDatasetCommand(XFitCommand):
         _mandatory = False
         _default = "difference"
 
-    def _load_dataset(self) -> XFitDataset:
+    def _load_dataset(self, *, device: bool = False) -> XFitDataset:
+        reader = self.fits_reader
+        if not device and reader == "auto":
+            reader = "astropy"
         return self._call(
             load_xfit_dataset,
             self.input,
             model=self.model,
             mode=self.mode,
+            reader=reader,
+            device=device,
         )
 
 
@@ -320,6 +338,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                     "g_tol",
                     "max_evaluations",
                     "use_finite_difference",
+                    "fits_reader",
                 )
             }
             result = self._call(
@@ -347,7 +366,12 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
 
         from . import LMConfig, fit_dipoles
 
-        dataset = self._load_dataset()
+        device = False
+        if Path(self.input).suffix.lower() == ".json":
+            from .backend import resolve_backend
+
+            device = self._call(resolve_backend, self.backend).name != "numpy"
+        dataset = self._load_dataset(device=device)
         fit_images = (
             dataset.images
             if self.compute_dtype == "input"
@@ -390,6 +414,11 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             "model": self.model,
             "mode": self.mode,
             "backend": self.backend,
+            **(
+                {"fits_reader": self.fits_reader}
+                if dataset.input_sources
+                else {}
+            ),
             "compute_dtype": {
                 "requested": self.compute_dtype,
                 "resolved": result.dtype,
