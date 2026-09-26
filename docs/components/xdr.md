@@ -41,6 +41,8 @@ reads of uncompressed cutouts use Astropy's section access. Tile-compressed
 cutouts can use xDR. Device reads finish before returning, including reads on
 an explicitly supplied CuPy stream.
 
+The pipeline and applicable standalone FITS workflows expose this reader
+policy. Prepared NPY, NPZ, and HDF5 inputs retain their existing readers.
 Reader receipts describe decoded arrays and reader selection; they do not
 measure physical storage traffic. Establish native GDS with process-local
 cuFile counters for the measured reads, distinguishing P2PDMA/NVFS from POSIX
