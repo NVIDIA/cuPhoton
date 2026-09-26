@@ -636,13 +636,19 @@ def test_terminal_summary_is_absent_until_cleanup(
     monkeypatch.setattr(_Worker, "close", inspect_close)
     monkeypatch.setattr(group_type, "join", inspect_join)
     monkeypatch.setattr(group_type, "close", inspect_group_close)
-    result = _run(tmp_path)
+    # Check cleanup ordering without imposing a short filesystem deadline.
+    result = _run(tmp_path, result_timeout=5.0)
     assert not any(exists for _, exists in observations)
     assert [phase for phase, _ in observations].count("worker_close") == 2
     assert ("join", False) in observations or close_failure
     assert ("group_close", False) in observations
     assert result.status == ("failed" if close_failure else "success")
-    assert len(result.summary["closed_messages"]) == 2
+    assert len(result.summary["closed_messages"]) == 2, result.summary
+    if close_failure:
+        assert all(
+            message["error"]["message"] == "synthetic worker close failure"
+            for message in result.summary["closed_messages"]
+        )
     assert all(not thread.is_alive() for thread in state.groups[0].threads)
     assert json.loads(result.summary_path.read_text()) == result.summary
 
