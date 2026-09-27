@@ -120,6 +120,8 @@ class GaussianDipoleModel:
         theta: BackendArray,
         x_center: BackendArray,
         y_center: BackendArray,
+        *,
+        derivatives: bool = True,
     ) -> tuple[BackendArray, ...]:
         ap = self._ap
         x, y = self._coordinates()
@@ -156,6 +158,8 @@ class GaussianDipoleModel:
             )
             unit = ap.exp(exponent)
             star = amplitude * unit
+            if not derivatives:
+                return (star,)
             d_amplitude = unit
             d_sigma_x = star * x_rotated * x_rotated / (sigma_x**3)
             d_sigma_y = star * y_rotated * y_rotated / (sigma_y**3)
@@ -203,6 +207,7 @@ class GaussianDipoleModel:
             common[:, 3],
             parameters[:, 4],
             parameters[:, 5],
+            derivatives=False,
         )[0]
         negative = self._star_with_derivatives(
             common[:, 0],
@@ -211,6 +216,7 @@ class GaussianDipoleModel:
             common[:, 3],
             parameters[:, 6],
             parameters[:, 7],
+            derivatives=False,
         )[0]
         difference = positive - negative
         if mode == "difference":
