@@ -89,6 +89,29 @@ def test_device_fit_numeric_codes_and_host_reasons_are_stable() -> None:
 
 
 @pytest.mark.parametrize("mode", ["difference", "split"])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_gaussian_values_match_derivative_path(mode: str, dtype) -> None:
+    model = GaussianDipoleModel((11, 15), dtype=dtype)
+    parameters = np.concatenate(
+        [_gaussian_truth(dtype), _gaussian_truth(dtype)]
+    )
+    parameters[2, 1:3] = np.finfo(dtype).tiny
+    parameters[3, 1:3] = np.finfo(dtype).max
+    positive = model._star_with_derivatives(
+        *(parameters[:, column] for column in (0, 1, 2, 3, 4, 5))
+    )[0]
+    negative = model._star_with_derivatives(
+        *(parameters[:, column] for column in (0, 1, 2, 3, 6, 7))
+    )[0]
+    expected = positive - negative
+    if mode == "split":
+        expected = np.stack((expected, positive, negative), axis=1)
+    actual = model.evaluate(parameters, mode=mode)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("mode", ["difference", "split"])
 def test_gaussian_analytic_jacobian_matches_finite_difference(mode) -> None:
     model = GaussianDipoleModel((8, 11), dtype=np.float64)
     parameters = np.asarray([[2.3, 1.2, 1.8, 0.37, 1.1, -0.7, -1.4, 0.55]])
