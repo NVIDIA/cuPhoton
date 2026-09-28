@@ -111,7 +111,8 @@ def refine_modes_batched(
     converged = xp.zeros(b, dtype=bool)
     eye = xp.eye(theta.shape[1], dtype=xp.float64)[None, :, :]
     iterations = 0
-    for iterations in range(1, max_iter + 1):
+    for _ in range(max_iter):
+        iterations += 1
         scale = xp.sqrt(xp.sum(jac * jac, axis=1))
         scale = xp.where(scale > 0, scale, 1.0)
         scaled_jac = jac / scale[:, None, :]
