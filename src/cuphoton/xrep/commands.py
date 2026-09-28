@@ -163,7 +163,6 @@ class _SharedReprojectionCommand(XRepCommand):
     input: str | None = None  # type: ignore[assignment]
     hdu = None
     backend = None
-    fits_reader = None
     interpolation = None
     grid_crval_ra = None
     grid_crval_dec = None
@@ -181,16 +180,6 @@ class _SharedReprojectionCommand(XRepCommand):
         _help = "Optional explicit FITS HDU index."
         _mandatory = False
         _default = None
-
-    class FitsReaderArg(SetInvariant):
-        _arg = "--fits-reader"
-        _help = (
-            "FITS decompression reader. CPU auto uses Astropy. "
-            "[default: %default]"
-        )
-        _mandatory = False
-        _default = "auto"
-        _set = {"auto", "astropy", "xdr"}
 
     class BackendArg(AutoBackendInvariant):
         _arg = "--backend"
@@ -294,7 +283,21 @@ class InspectImageCommand(_SharedReprojectionCommand):
         self._emit_json(payload)
 
 
-class ReprojectImageCommand(_SharedReprojectionCommand):
+class _FitsReprojectionCommand(_SharedReprojectionCommand):
+    fits_reader = None
+
+    class FitsReaderArg(SetInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS decompression reader. CPU auto uses Astropy. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
+        _set = {"auto", "astropy", "xdr"}
+
+
+class ReprojectImageCommand(_FitsReprojectionCommand):
     """Reproject one FITS image onto one shared grid."""
 
     input: str | None = None
@@ -341,7 +344,7 @@ class ReprojectImageCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class ReprojectStackCommand(_SharedReprojectionCommand):
+class ReprojectStackCommand(_FitsReprojectionCommand):
     """Reproject multiple FITS inputs onto one shared grid."""
 
     inputs: str | None = None
@@ -388,7 +391,7 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
+class BenchmarkReprojectImageCommand(_FitsReprojectionCommand):
     """Benchmark one FITS reprojection and report split timing summaries."""
 
     input: str | None = None
@@ -437,7 +440,7 @@ class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
+class BenchmarkBackendVariantsCommand(_FitsReprojectionCommand):
     """Benchmark cached-geometry backend variants and parity."""
 
     input: str | None = None
@@ -529,7 +532,7 @@ class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class CompareBackendsCommand(_SharedReprojectionCommand):
+class CompareBackendsCommand(_FitsReprojectionCommand):
     """Run one FITS reprojection across backends and report parity metrics."""
 
     input: str | None = None
