@@ -12,6 +12,41 @@ Current scope:
 - pipelined loading with `batch_to_device_stream`
 - explicit `NotImplementedError` for unsupported compression formats
 
+## Read FITS images in a workflow
+
+The shared FITS reader selects explicit image HDUs and returns NumPy or CuPy
+arrays. Inspecting the headers does not decompress image pixels:
+
+```python
+from cuphoton.core.fits_io import inspect_fits_images, read_fits_images
+
+planes = inspect_fits_images("exposure.fits")
+result = read_fits_images(
+    "exposure.fits", [planes[0].hdu], reader="auto", device=True
+)
+image = result.arrays[0]  # CuPy array, ready for use
+print(result.metadata())  # Actual reader and any fallback reason
+```
+
+`reader="astropy"` decodes on the CPU; `reader="xdr"` requires the GPU reader.
+`reader="auto"` uses xDR for supported lossless images when its dependencies,
+native planner, and CUDA device are available. Scaling, integer nulls,
+quantization, unsupported compression, and externally compressed files use
+Astropy. Read errors propagate after the selected reader starts. With
+`device=False`, the returned arrays reside on the host, including an explicit
+download when xDR decoded them. Integer masks retain their width and bits.
+
+Use `section=(slice(y0, y1), slice(x0, x1))` for bounded cutouts. Automatic
+reads of uncompressed cutouts use Astropy's section access. Tile-compressed
+cutouts can use xDR. Device reads finish before returning, including reads on
+an explicitly supplied CuPy stream.
+
+Reader receipts describe decoded arrays and reader selection; they do not
+measure physical storage traffic. Establish native GDS with process-local
+cuFile counters for the measured reads, distinguishing P2PDMA/NVFS from POSIX
+fallback. The legacy `is_gds_active` probe requires `nvidia-fs` and can report
+false on working P2PDMA configurations that do not use that module.
+
 ## HDF5 migration
 
 `cuphoton.xdr.load_hdf5` and the `hdf5` installation extra have been removed.
