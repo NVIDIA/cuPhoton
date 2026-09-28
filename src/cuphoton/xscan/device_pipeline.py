@@ -25,17 +25,21 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal, SupportsIndex
 
 import numpy as np
 
 from cuphoton.core.artifacts import file_sha256
 from cuphoton.core.bulk import json_mapping, validate_identifier
 
-DEVICE_PIPELINE_CONFIG_SCHEMA = "cuphoton.xscan.device-pipeline.config/v2"
-DEVICE_PIPELINE_ITEM_SCHEMA = "cuphoton.xscan.device-pipeline.item/v1"
-DEVICE_PIPELINE_RESULT_SCHEMA = "cuphoton.xscan.device-pipeline.result/v2"
-DEVICE_PIPELINE_EVIDENCE_SCHEMA = (
+DEVICE_PIPELINE_CONFIG_SCHEMA: Final = (
+    "cuphoton.xscan.device-pipeline.config/v2"
+)
+DEVICE_PIPELINE_ITEM_SCHEMA: Final = "cuphoton.xscan.device-pipeline.item/v1"
+DEVICE_PIPELINE_RESULT_SCHEMA: Final = (
+    "cuphoton.xscan.device-pipeline.result/v2"
+)
+DEVICE_PIPELINE_EVIDENCE_SCHEMA: Final = (
     "cuphoton.xscan.device-pipeline.scientific-evidence/v1"
 )
 
@@ -2502,7 +2506,7 @@ class DeviceWorkerContext:
             load_seconds=time.perf_counter() - started,
         )
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError(
             "DeviceWorkerContext cannot be pickled; initialize it inside "
             "the bound worker process"

@@ -312,6 +312,9 @@ def summarize_linear_prediction_profile_lines(
                 scalar_match.group("value")
             )
 
+    processing_tiles: int | None
+    tile_processing_seconds: float | None
+    command_real_seconds: float | None
     if processing_lines:
         processing_tiles = processing_tiles_total
         tile_processing_seconds = tile_processing_seconds_total

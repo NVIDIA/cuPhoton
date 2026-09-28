@@ -61,7 +61,9 @@ def _feature_schema(root: Path, stamp_size: int) -> Path:
     calibration = root / "schema-calibration"
     calibration.mkdir()
     truth = np.array([[1.0, 1.6, 1.2, 0.2, 1.5, 0.6, -1.5, -0.6]])
-    stamps = GaussianDipoleModel((stamp_size, stamp_size)).evaluate(truth)
+    stamps = np.asarray(
+        GaussianDipoleModel((stamp_size, stamp_size)).evaluate(truth)
+    )
     stamps += np.random.default_rng(0).normal(0.0, 0.001, stamps.shape)
     np.save(calibration / "difference.npy", stamps, allow_pickle=False)
     (calibration / "metadata.jsonl").write_text(

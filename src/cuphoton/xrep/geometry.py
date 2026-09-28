@@ -68,8 +68,11 @@ class Grid:
             [u.Unit(unit).to(u.deg) for unit in wcs.wcs.cunit]
         )
         scale_matrix = wcs.pixel_scale_matrix * to_degrees[:, None]
+        crval_x, crval_y = (
+            float(value) for value in wcs.wcs.crval * to_degrees
+        )
         return cls(
-            crval=tuple(float(value) for value in wcs.wcs.crval * to_degrees),
+            crval=(crval_x, crval_y),
             pixel_scale_arcsec=float(
                 np.sqrt(abs(np.linalg.det(scale_matrix))) * 3600.0
             ),
@@ -339,6 +342,7 @@ def bbox_wcs(grid: Grid, bbox: BBox) -> WCS:
         WCS whose local pixel coordinates align with the shared grid.
     """
 
+    assert grid.wcs is not None  # Grid.__post_init__ supplies a WCS.
     wcs = grid.wcs.deepcopy()
     wcs.wcs.crpix -= bbox.origin
     if wcs.sip is not None:

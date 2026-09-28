@@ -9,8 +9,21 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
+
+
+class ResidualHotspot(TypedDict):
+    """Numeric summary of one connected residual excursion."""
+
+    bbox_y0y1x0x1: list[int]
+    pixel_count: int
+    peak_yx: list[int]
+    centroid_yx: list[float]
+    peak_abs_sigma: float
+    peak_residual: float
+    mean_residual: float
 
 
 def _component_coordinates(
@@ -38,7 +51,7 @@ def write_review_metadata(
     run_name: str,
     residual: np.ndarray,
     review_metrics: dict[str, float | int],
-) -> tuple[dict[str, str], list[dict[str, object]]]:
+) -> tuple[dict[str, str], list[ResidualHotspot]]:
     """Persist numeric residual-hotspot metadata without static plots."""
 
     robust_sigma = max(float(review_metrics["robust_sigma"]), 1.0e-12)
@@ -79,7 +92,7 @@ def identify_residual_hotspots(
     robust_sigma: float,
     threshold_sigma: float = 5.0,
     max_regions: int = 8,
-) -> list[dict[str, object]]:
+) -> list[ResidualHotspot]:
     """Identify the strongest connected residual excursions."""
 
     from scipy import ndimage
@@ -94,7 +107,7 @@ def identify_residual_hotspots(
     if not np.any(mask):
         return []
     labels, count = ndimage.label(mask)
-    hotspots: list[dict[str, object]] = []
+    hotspots: list[ResidualHotspot] = []
     for ys, xs in _component_coordinates(labels, count):
         local_sigma = sigma[ys, xs]
         local_residual = residual[ys, xs]

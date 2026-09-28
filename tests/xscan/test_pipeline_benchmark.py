@@ -299,7 +299,7 @@ def test_compare_cpu_orchestration_and_audit(
         if stage != "pipeline":
             stages.run_stage(stage, config, items, output)
         else:
-            for index, phase in enumerate(("warmup", "measured")):
+            for index, _phase in enumerate(("warmup", "measured")):
                 root = output / f"round-{index:03d}"
                 root.mkdir()
                 benchmark.write_json(

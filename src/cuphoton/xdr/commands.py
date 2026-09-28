@@ -57,7 +57,7 @@ class BenchmarkFitsCommand(InvariantAwareCommand):
     fits_file: list[str] | None = None
     scan_dir: str | None = None
     max_files: int | None = None
-    hdu_indices: list[int] | tuple[int, ...] = (1,)
+    hdu_indices = "1"
     iterations = 5
     prefetch_depth = 2
     decode_batch_files = 1

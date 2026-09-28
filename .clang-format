@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+BasedOnStyle: LLVM
+Standard: c++17
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+AlignAfterOpenBracket: false
+AlignOperands: DontAlign
+AllowShortFunctionsOnASingleLine: Empty
+BinPackArguments: false
+BinPackParameters: OnePerLine
+BreakAfterOpenBracketFunction: true
+BreakBeforeBinaryOperators: NonAssignment
+BreakConstructorInitializers: BeforeColon
+BreakStringLiterals: false
+BreakTemplateDeclarations: Yes
+PackConstructorInitializers: Never
+PointerAlignment: Left
+ReflowComments: Never
+SortIncludes: Never
+SpacesBeforeTrailingComments: 2

@@ -20,11 +20,12 @@ from __future__ import annotations
 import queue
 import threading
 from collections import deque
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Protocol
 
 import numpy as np
 
@@ -99,13 +100,24 @@ class _PlannedFile:
     total_bytes: int
 
 
+class _SliceableBuffer(Protocol):
+    def __getitem__(self, key: slice, /) -> object: ...
+
+
+class _GpuCompletion(Protocol):
+    @property
+    def done(self) -> bool: ...
+
+    def synchronize(self) -> None: ...
+
+
 @dataclass
 class PrefetchedFile:
     """One file fully staged into a pinned host buffer, ready to consume."""
 
     path: str
     file_index: int
-    host_buf: object  # pinned uint8 host buffer or native device batch buffer
+    host_buf: _SliceableBuffer  # pinned host or native device batch buffer
     hdus: list[_HduPlan]
     buffer_base_offset: int = 0
     hdu_header_sizes: dict[int, np.ndarray] | None = None
@@ -127,6 +139,7 @@ def _probe_output_specs(
     planned = _plan_file(first_path, 0, hdu_indices, section=section)
     for hdu in planned.hdus:
         if hdu.kind == "comp":
+            assert hdu.plan is not None
             specs.append(
                 _OutputSpec(
                     shape=tuple(int(v) for v in hdu.plan["out_shape"]),
@@ -134,6 +147,7 @@ def _probe_output_specs(
                 )
             )
         elif hdu.kind == "image":
+            assert hdu.image_shape is not None
             if section is not None:
                 raise NotImplementedError(
                     "section= is supported on compressed image HDUs only"
@@ -176,7 +190,7 @@ def _prepare_output_arrays(out, specs: Sequence[_OutputSpec], n_files: int):
             f"out must contain {len(specs)} array(s), got {len(outs)}"
         )
 
-    for slot, (arr, spec) in enumerate(zip(outs, specs)):
+    for slot, (arr, spec) in enumerate(zip(outs, specs, strict=True)):
         expected_shape = (n_files,) + spec.shape
         expected_dtype = cp.dtype(spec.dtype_char)
         if arr.shape != expected_shape or arr.dtype != expected_dtype:
@@ -238,7 +252,7 @@ class _CompBatchEntry:
     """Compressed HDU work item to include in one nvCOMP decode batch."""
 
     plan_item: _HduPlan
-    file_host_buf: object
+    file_host_buf: _SliceableBuffer
     out: object
     file_buffer_offset: int = 0
     header_sizes: np.ndarray | None = None
@@ -248,9 +262,9 @@ class _CompBatchEntry:
 class _GpuBatchHandle:
     """Lifetime guard for one submitted GPU batch."""
 
-    event: object | None
+    event: _GpuCompletion | None
     keepalive: list
-    stream: object
+    stream: _GpuCompletion
     device_id: int | None = None
     actively_awaited: bool = False
 
@@ -429,6 +443,7 @@ def _parse_hdu_header_sizes(
         if hdu.kind != "comp":
             continue
 
+        assert hdu.plan is not None
         hdu_base = int(hdu.file_host_offset)
         hdu_nbytes = int(hdu.heap_span_len)
         hdu_end = hdu_base + hdu_nbytes
@@ -606,6 +621,7 @@ def _consume_comp_batch(
     ):
         device_backed = False
 
+    d_concat: cp.ndarray
     if device_backed:
         d_concat = shared_device_buf
     else:
@@ -623,7 +639,9 @@ def _consume_comp_batch(
     have_all_header_sizes = all(
         entry.header_sizes is not None for entry in entries
     )
-    header_sizes_parts = [] if have_all_header_sizes else None
+    header_sizes_parts: list[np.ndarray] | None = (
+        [] if have_all_header_sizes else None
+    )
 
     comp_cursor = 0
     tile_cursor = 0
@@ -633,6 +651,8 @@ def _consume_comp_batch(
         for entry in entries:
             plan_item = entry.plan_item
             plan = plan_item.plan
+            assert plan is not None
+            assert plan_item.heap_rel_offsets is not None
             buf_start = int(entry.file_buffer_offset) + int(
                 plan_item.file_host_offset
             )
@@ -658,6 +678,7 @@ def _consume_comp_batch(
             lengths_parts.append(plan["sel_lengths"])
             out_bytes_parts.append(plan["out_bytes"])
             if header_sizes_parts is not None:
+                assert entry.header_sizes is not None
                 header_sizes_parts.append(entry.header_sizes)
             postprocess_ranges.append(
                 (
@@ -705,6 +726,7 @@ def _consume_comp_batch(
             local_tile_offsets = (
                 tile_byte_offsets_np[tile_start:tile_end] - decoded_start
             )
+            assert entry.plan_item.plan is not None
             GpuCompImageReader.postprocess_decoded_tiles(
                 d_pixels[decoded_start:decoded_end],
                 local_tile_offsets,
@@ -1163,7 +1185,7 @@ def _wait_for_all_gpu_batches(
             # so make one best-effort synchronization attempt per stream.
             by_stream: dict[
                 tuple[int | None, int],
-                tuple[object, list[_GpuBatchHandle]],
+                tuple[_GpuCompletion, list[_GpuBatchHandle]],
             ] = {}
             for handle in unresolved:
                 stream_key = (handle.device_id, id(handle.stream))
@@ -1640,8 +1662,8 @@ def batch_to_device_stream(
     """
 
     hdu_indices = tuple(int(i) for i in hdu_indices)
-    paths = [Path(p) for p in paths]
-    n_files = len(paths)
+    resolved_paths = [Path(p) for p in paths]
+    n_files = len(resolved_paths)
     if n_files == 0:
         raise ValueError("paths is empty")
     if prefetch_depth < 1:
@@ -1670,12 +1692,14 @@ def batch_to_device_stream(
         native_batcher
     )
 
-    specs = _probe_output_specs(paths[0], hdu_indices, section=section)
+    specs = _probe_output_specs(
+        resolved_paths[0], hdu_indices, section=section
+    )
     outs = _prepare_output_arrays(out, specs, n_files)
 
     if NativeBatchBuilder is not None:
         _consume_native_batches(
-            paths,
+            resolved_paths,
             hdu_indices,
             outs,
             decode_batch_files=decode_batch_files,
@@ -1690,7 +1714,7 @@ def batch_to_device_stream(
         return tuple(outs)
 
     _consume_python_batches(
-        paths,
+        resolved_paths,
         hdu_indices,
         outs,
         prefetch_depth=prefetch_depth,

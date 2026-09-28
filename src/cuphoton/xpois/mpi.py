@@ -397,6 +397,7 @@ def run_mpi_image_pair_batch(
                 "cannot publish MPI rank-zero completion"
             ) from exc
         raise
+    assert rank_timeout_sec is not None
     return _file_aggregate(
         context,
         run_dir,
@@ -530,7 +531,9 @@ def _run_mpi_benchmark(
                 rank_setup_timeout_sec=rank_setup_timeout_sec,
                 benchmark_timing=timing,
             )
-            round_decision = None
+            round_decision: dict[str, str | dict[str, str] | None] | None = (
+                None
+            )
             if context.rank == 0:
                 try:
                     assert result is not None
@@ -565,7 +568,7 @@ def _run_mpi_benchmark(
         errors.append({"phase": phase, **error_payload(exc)})
 
     result = None
-    decision = None
+    decision: dict[str, str | dict[str, str] | None] | None = None
     if context.rank == 0:
         try:
             report = build_benchmark_report(benchmark, rounds, errors=errors)
@@ -598,8 +601,9 @@ def _run_mpi_benchmark(
             )
             decision = {"status": result.status, "error": None}
         except Exception as exc:
-            decision = {"status": "failed", "error": error_payload(exc)}
-            _aggregate_error(run_dir, run_id, decision["error"])
+            error = error_payload(exc)
+            decision = {"status": "failed", "error": error}
+            _aggregate_error(run_dir, run_id, error)
     decision = api.comm.bcast(decision, root=0)
     if not isinstance(decision, Mapping):
         raise RuntimeError(
@@ -1672,7 +1676,7 @@ def _mpi_aggregate(
         benchmark_timing["collection_sec"] = collected_at - collection_start
         benchmark_timing["batch_wall_sec"] = collected_at - start
     result = None
-    decision = None
+    decision: dict[str, str | dict[str, str] | None] | None = None
     if context.rank == 0:
         try:
             if benchmark_timing is not None:
@@ -1706,8 +1710,9 @@ def _mpi_aggregate(
             )
             decision = {"status": result.status, "error": None}
         except Exception as exc:
-            decision = {"status": "failed", "error": error_payload(exc)}
-            _aggregate_error(run_dir, run_id, decision["error"])
+            error = error_payload(exc)
+            decision = {"status": "failed", "error": error}
+            _aggregate_error(run_dir, run_id, error)
     decision = comm.bcast(decision, root=0)
     if not isinstance(decision, Mapping):
         raise RuntimeError("MPI aggregate decision was not a mapping")
@@ -1928,7 +1933,7 @@ def _audit_ranks(
     setup_failed_candidates: set[int] = set()
     write_failed_candidates: list[dict[str, Any]] = []
     physical: list[tuple[int, str, frozenset[tuple[str, str]]]] = []
-    for result, rank in zip(results, ranks):
+    for result, rank in zip(results, ranks, strict=True):
         if rank not in expected:
             continue
         shard = shards[rank]
@@ -1937,7 +1942,7 @@ def _audit_ranks(
         write_errors = result.get("record_write_errors")
         write_error_ids: set[str] = set()
         write_errors_valid = isinstance(write_errors, list)
-        if write_errors_valid:
+        if isinstance(write_errors, list):
             for error in write_errors:
                 if (
                     not isinstance(error, Mapping)
@@ -2419,8 +2424,8 @@ def _wait_collective_artifacts(
         failed_paths, declared_errors = _declared_collective_write_failures(
             shards, rank_results
         )
-        for path in failed_paths:
-            expected.pop(path, None)
+        for failed_path in failed_paths:
+            expected.pop(failed_path, None)
     deadline = time.monotonic() + timeout
     delay = _POLL_INITIAL_SEC
     missing: list[str] = []
@@ -3205,6 +3210,7 @@ def _file_launch_id(environ: Mapping[str, str], launcher: str) -> str:
 
     explicit = environ.get("CUPHOTON_MPI_LAUNCH_ID")
     namespace = environ.get("PMIX_NAMESPACE")
+    parts: tuple[str, ...]
     if explicit is not None:
         parts = ("explicit", explicit)
     elif namespace:
@@ -3415,6 +3421,8 @@ def _repair_committed_file_attempt(
     if not isinstance(aggregation_errors, list):
         mismatches.append("summary.aggregation_errors")
     if not mismatches:
+        assert isinstance(item_audit, Mapping)
+        assert isinstance(rank_audit, Mapping)
         success = (
             item_audit.get("ok") is True
             and not item_audit.get("failed_item_ids")

@@ -19,13 +19,13 @@ from .invariants import (
 class ExecutorOptions:
     """Keep local command defaults and validate runtime-specific options."""
 
-    executor = None
-    max_workers = None
-    worker_timeout_sec = None
-    result_timeout_sec = None
-    rank_setup_timeout_sec = None
-    warmup_rounds = None
-    measure_rounds = None
+    executor: str | None = None
+    max_workers: int | None = None
+    worker_timeout_sec: float | None = None
+    result_timeout_sec: float | None = None
+    rank_setup_timeout_sec: float | None = None
+    warmup_rounds: int | None = None
+    measure_rounds: int | None = None
 
     class ExecutorArg(SetInvariant):
         _arg = "--executor"
@@ -33,7 +33,7 @@ class ExecutorOptions:
             "Execution runtime: local, dragon, or mpi. [default: %default]"
         )
         _set = {"local", "dragon", "mpi"}
-        _default = "local"
+        _default: str | None = "local"
 
     class MaxWorkersArg(PositiveIntegerInvariant):
         _arg = "--max-workers"
@@ -107,7 +107,7 @@ class ExecutorOptions:
             )
         if self.executor == "local":
             return {}
-        options = {
+        options: dict[str, int | float | BenchmarkOptions | None] = {
             name: value
             for name, value in (
                 dragon if self.executor == "dragon" else mpi

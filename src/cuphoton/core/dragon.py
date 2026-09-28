@@ -355,7 +355,7 @@ def run_dragon_work_items(
             ignore_error_on_exit=False,
             walltime=worker_timeout_sec,
         )
-        for placement, shard in zip(placements, shards):
+        for placement, shard in zip(placements, shards, strict=True):
             policy = api.Policy(
                 placement=api.Policy.Placement.HOST_NAME,
                 host_name=placement.host,
@@ -797,7 +797,7 @@ def _collect_messages(
                 raise RuntimeError(
                     f"Dragon worker exited before {kind} completion: "
                     f"{missing_exits}"
-                )
+                ) from None
             observed_exits = None
             continue
         worker_id = _strict_integer(message.get("worker_id"))
@@ -990,6 +990,7 @@ def _workload_worker(
         results_queue.put(ready, timeout=timeout)
         if ready["status"] != "success":
             raise RuntimeError("Dragon worker initialization failed")
+        assert worker is not None
         benchmark = (
             BenchmarkOptions(**descriptor["benchmark"])
             if descriptor["benchmark"]

@@ -61,7 +61,7 @@ The extras are composable:
 
 | Extra | Adds |
 | --- | --- |
-| `dev` | pytest, Ruff, pre-commit, and packaging checks |
+| `dev` | pytest, Ruff, mypy, pre-commit, and packaging checks |
 | `photometry` | Photutils background, detection, and aperture routines |
 | `io` | CuPy, KvikIO, cuFile, and nvCOMP for native XDR |
 | `torch` | CPU-capable PyTorch |

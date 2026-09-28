@@ -24,6 +24,7 @@ def run_workload(
 ) -> ExecutionResult | None:
     """Run one component's workload through the selected external launcher."""
 
+    run: Callable[..., ExecutionResult | None]
     if executor == "dragon":
         from .dragon import run_dragon_work_items as run
     elif executor == "mpi":

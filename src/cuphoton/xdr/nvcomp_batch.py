@@ -22,8 +22,8 @@ import os
 import platform
 import struct
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -794,35 +794,33 @@ def gpu_gzip_decompress_batch(
     import cupy as cp
 
     concat_size = int(d_concat.size)
-    rel_offsets, lengths = _validate_tile_ranges(
+    offset_array, length_array = _validate_tile_ranges(
         rel_offsets,
         lengths,
         concat_size,
         minimum_length=20 if gzip_wrapped else 0,
     )
-    n = rel_offsets.size
-    uncompressed_sizes = np.asarray(uncompressed_sizes)
-    if uncompressed_sizes.ndim != 1:
+    n = offset_array.size
+    size_array = np.asarray(uncompressed_sizes)
+    if size_array.ndim != 1:
         raise ValueError("uncompressed_sizes must be 1D")
-    if uncompressed_sizes.size != n:
+    if size_array.size != n:
         raise ValueError(
             "uncompressed_sizes must have one entry per compressed tile"
         )
-    uncompressed_sizes = _integer_values_as_int64(
-        uncompressed_sizes, "uncompressed_sizes"
-    )
-    if np.any(uncompressed_sizes < 0):
+    size_array = _integer_values_as_int64(size_array, "uncompressed_sizes")
+    if np.any(size_array < 0):
         raise ValueError("uncompressed_sizes must be nonnegative")
 
     if gzip_wrapped:
         if header_sizes is None:
             header_sizes = _compute_header_sizes_from_device(
                 d_concat,
-                rel_offsets,
-                lengths,
+                offset_array,
+                length_array,
                 _ranges_validated=True,
             )
-        header_sizes = _validate_gzip_header_sizes(header_sizes, lengths)
+        header_sizes = _validate_gzip_header_sizes(header_sizes, length_array)
         trailer_sizes = np.full(n, 8, dtype=np.int64)
     else:
         if header_sizes is not None:
@@ -830,14 +828,14 @@ def gpu_gzip_decompress_batch(
         header_sizes = np.zeros(n, dtype=np.int64)
         trailer_sizes = np.zeros(n, dtype=np.int64)
 
-    deflate_offsets = rel_offsets + header_sizes
-    deflate_lengths = lengths - header_sizes - trailer_sizes
+    deflate_offsets = offset_array + header_sizes
+    deflate_lengths = length_array - header_sizes - trailer_sizes
     if np.any(deflate_lengths < 0):
         raise ValueError(
             "negative DEFLATE payload length — malformed gzip tile?"
         )
 
-    out_offsets, total = _checked_output_offsets(uncompressed_sizes)
+    out_offsets, total = _checked_output_offsets(size_array)
 
     # Pick the backend.
     if use_cpp_helper is True:
@@ -901,7 +899,7 @@ def gpu_gzip_decompress_batch(
             deflate_lengths,
             d_out_ptr,
             out_offsets,
-            uncompressed_sizes,
+            size_array,
             stream_ptr,
         )
         return d_out, out_offsets
@@ -919,7 +917,7 @@ def gpu_gzip_decompress_batch(
     ]
     out_arrays = [
         nvcomp.as_array(
-            d_out[out_offsets[i] : out_offsets[i] + uncompressed_sizes[i]]
+            d_out[out_offsets[i] : out_offsets[i] + size_array[i]]
         )
         for i in range(n)
     ]

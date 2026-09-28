@@ -19,9 +19,10 @@ constant-kernel model.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view

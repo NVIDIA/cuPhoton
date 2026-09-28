@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels conda release-check ci-lint ci-test-cpu hooks
+.PHONY: sync sync-gpu sync-cutile lock lock-check lint typecheck format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels conda release-check ci-lint ci-test-cpu hooks
 
 CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
@@ -25,9 +25,12 @@ lock:
 lock-check:
 	uv lock --check
 
-lint:
+lint: typecheck
 	$(UV_RUN) --extra dev ruff check .
 	$(UV_RUN) --extra dev ruff format --check .
+
+typecheck:
+	$(UV_RUN) --extra dev mypy
 
 format:
 	$(UV_RUN) --extra dev ruff check --fix .

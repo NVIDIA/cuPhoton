@@ -12,7 +12,7 @@ import time
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -822,6 +822,7 @@ def run_reproject_stack(
             target_wcs_path, hdu=target_hdu
         )
         grid = Grid.from_wcs(target_wcs)
+        assert grid.wcs is not None
         if grid.wcs.sip is not None and mapping_grid_step > 1:
             warnings.warn(
                 "target WCS carries SIP distortion but mapping_grid_step is "
@@ -832,6 +833,7 @@ def run_reproject_stack(
                 stacklevel=2,
             )
         output_bbox = BBox(0, 0, target_image.shape[1], target_image.shape[0])
+        assert grid.wcs is not None
         target = {
             "path": str(target_wcs_path.expanduser().resolve()),
             "hdu": used_hdu,
@@ -1285,11 +1287,11 @@ def _temporary_environ(updates: dict[str, str]):
             os.environ[key] = value
         yield
     finally:
-        for key, value in previous.items():
-            if value is None:
+        for key, previous_value in previous.items():
+            if previous_value is None:
                 os.environ.pop(key, None)
             else:
-                os.environ[key] = value
+                os.environ[key] = previous_value
 
 
 def _compare_reprojection_results(
@@ -1438,7 +1440,7 @@ def _resolve_run_dir(
         else ApplicationContext.for_component("xrep").runs_dir
     )
     root.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_name = name or f"{prefix}-{timestamp}"
     run_dir = root / run_name
     if run_dir.exists():
@@ -1490,4 +1492,4 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

@@ -17,10 +17,16 @@ a rank-one separable-kernel alternating least-squares extension:
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from numbers import Integral, Real
-from typing import Any, Iterable, Literal, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    SupportsIndex,
+)
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -285,7 +291,7 @@ class DeviceConstantKernelFitResult:
         if not isinstance(self.flux_conserve, bool):
             raise TypeError("flux_conserve must be boolean")
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError(
             "DeviceConstantKernelFitResult cannot be pickled; keep device "
             "results inside the producing process"
@@ -732,7 +738,9 @@ def build_gaussian_polynomial_basis(
         )
     ]
 
-    for index, (kernel, term) in enumerate(zip(raw_kernels, raw_terms)):
+    for index, (kernel, term) in enumerate(
+        zip(raw_kernels, raw_terms, strict=True)
+    ):
         if index == flux_reference_index:
             continue
         kernel_sum = float(kernel.sum())
@@ -1201,7 +1209,7 @@ def solve_separable_kernel(
     converged = False
     last_chi2: float | None = None
     row_count = int(mask_arr.sum())
-    for iteration in range(max_iterations):
+    for _iteration in range(max_iterations):
         vertical_kernel = np.tensordot(
             vertical_coeffs,
             vertical_basis,
@@ -1301,7 +1309,7 @@ def solve_separable_kernel(
         chi2=chi2,
         dof=dof,
         fit_pixel_count=int(row_count),
-        iterations=iteration + 1,
+        iterations=_iteration + 1,
         converged=converged,
         flux_conserve=flux_conserve,
     )
@@ -1418,7 +1426,7 @@ def _build_line_basis(
     if length <= 0:
         raise ValueError("line basis length must be positive")
     x_coords = np.arange(length, dtype=np.float64) - length // 2
-    basis_rows = []
+    basis_rows: list[np.ndarray] = []
     for component in components:
         if not isinstance(component.sigma, Real) or isinstance(
             component.sigma,
@@ -2180,7 +2188,10 @@ def _load_cutile() -> tuple[Any, Any]:
 
 @lru_cache(maxsize=1)
 def _cutile_mma_normal_equations_kernel() -> Any:
-    _, ct = _load_cutile()
+    if TYPE_CHECKING:
+        import cuda.tile as ct
+    else:
+        _, ct = _load_cutile()
 
     @ct.kernel
     def kernel(

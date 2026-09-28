@@ -18,11 +18,11 @@ import platform
 import statistics
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Sequence
+from typing import TypedDict
 
 from cuphoton import __version__, xdr
 from cuphoton.xdr import (
@@ -153,6 +153,16 @@ def failed_phase_from_exception(
     )
 
 
+class _BatchOptions(TypedDict):
+    hdu_indices: tuple[int, ...]
+    prefetch_depth: int
+    decode_batch_files: int
+    batch_queue_depth: int
+    native_read_threads: int
+    native_plan_threads: int
+    native_batcher: str | bool
+
+
 def parse_hdu_indices(value: str) -> tuple[int, ...]:
     try:
         indices = tuple(
@@ -168,7 +178,12 @@ def parse_hdu_indices(value: str) -> tuple[int, ...]:
 
 
 def parse_native_batcher(value: str) -> str | bool:
-    return {"auto": "auto", "on": True, "off": False}[value]
+    choices: dict[str, str | bool] = {
+        "auto": "auto",
+        "on": True,
+        "off": False,
+    }
+    return choices[value]
 
 
 def discover_fits_paths(
@@ -250,7 +265,7 @@ def bench_native_plan(
                 times.append((time.perf_counter() - t0) * 1000.0)
             summaries = [
                 summarize_planned_file(path, item, hdu_indices)
-                for path, item in zip(paths, planned)
+                for path, item in zip(paths, planned, strict=False)
             ]
         except Exception as exc:
             return (
@@ -405,7 +420,7 @@ def bench_batch_load(
 ) -> PhaseResult:
     fn = batch_to_device_stream if use_stream else batch_to_device
     phase = "batch_to_device_stream" if use_stream else "batch_to_device"
-    kwargs = dict(
+    kwargs: _BatchOptions = dict(
         hdu_indices=tuple(hdu_indices),
         prefetch_depth=prefetch_depth,
         decode_batch_files=decode_batch_files,

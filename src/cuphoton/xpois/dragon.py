@@ -544,7 +544,7 @@ def run_dragon_work_items(
             walltime=worker_timeout_sec,
         )
         lifecycle_phase = "process_setup"
-        for placement, shard in zip(selected, shards):
+        for placement, shard in zip(selected, shards, strict=True):
             descriptor_path = (
                 run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
             )
@@ -741,7 +741,7 @@ def run_dragon_work_items(
             "backend": backend,
             "solver": normalized_options.get("solver"),
         }
-        for placement, shard in zip(selected, shards)
+        for placement, shard in zip(selected, shards, strict=True)
         for item in shard
     }
     record_errors.extend(
@@ -828,7 +828,7 @@ def run_dragon_work_items(
                 "weight_bytes": sum(item.weight_bytes for item in shard),
                 "item_ids_sha256": _item_ids_sha256(shard),
             }
-            for placement, shard in zip(selected, shards)
+            for placement, shard in zip(selected, shards, strict=True)
         ],
         "shard_results": sorted(shard_results, key=_shard_result_sort_key),
         "queue_result_count": queue_result_count,
@@ -890,7 +890,7 @@ def _run_dragon_rounds(
             walltime=worker_timeout,
         )
         phase = "process_setup"
-        for placement, shard in zip(placements, shards):
+        for placement, shard in zip(placements, shards, strict=True):
             descriptor_path = (
                 run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
             )
@@ -1334,7 +1334,7 @@ def _audit_batch_records(
             "backend": options.backend,
             "solver": options.solver,
         }
-        for placement, shard in zip(placements, shards)
+        for placement, shard in zip(placements, shards, strict=True)
         for item in shard
     }
     errors.extend(
@@ -1770,7 +1770,7 @@ def _load_terminal_records(
                 raise ValueError("record item_id differs from its filename")
             records.append(record)
         except Exception as exc:
-            error = {
+            error: dict[str, str | bool] = {
                 "record_path": str(path.relative_to(run_dir)),
                 **error_payload(exc),
             }
@@ -1798,7 +1798,9 @@ def _wait_terminal_artifacts(
         worker_id = _strict_integer(result.get("worker_id"))
         if worker_id is not None:
             reporting.add(worker_id)
-        worker_items = assigned.get(worker_id, set())
+        worker_items = (
+            assigned.get(worker_id, set()) if worker_id is not None else set()
+        )
         if result.get("provenance") is None and isinstance(
             result.get("error"), Mapping
         ):
@@ -2127,7 +2129,7 @@ def _audit_shard_results(
         record_write_errors = result.get("record_write_errors")
         write_error_ids: set[str] = set()
         write_errors_valid = isinstance(record_write_errors, list)
-        if write_errors_valid:
+        if isinstance(record_write_errors, list):
             shard_item_ids = {item.item_id for item in shard}
             for error in record_write_errors:
                 if (

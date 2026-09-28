@@ -707,7 +707,7 @@ def batched_levenberg_marquardt(
                     raise ValueError(
                         "jacobian must return shape "
                         "(batch, parameters, observations)"
-                    )
+                    ) from None
                 if not _finite(jacobian, ap):
                     continue
                 jacobians[row] = jacobian[0]

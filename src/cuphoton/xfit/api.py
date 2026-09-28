@@ -10,7 +10,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import IntEnum
 from types import ModuleType
-from typing import Any, Literal, cast
+from typing import Any, Literal, SupportsIndex, cast
 
 import numpy as np
 
@@ -281,7 +281,7 @@ class DeviceDipoleFitResult:
                     f"{name} must have {expected_dtype.name} dtype"
                 )
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError(
             "DeviceDipoleFitResult cannot be pickled; keep device results "
             "inside the producing process"
@@ -739,7 +739,7 @@ def _fit_dipoles_backend(
         return physical
 
     def evaluate_model(parameters: BackendArray) -> BackendArray:
-        if gaussian_model:
+        if isinstance(selected_model, GaussianDipoleModel):
             return selected_model._evaluate_positive_unchecked(
                 parameters, mode=mode
             )
@@ -758,6 +758,7 @@ def _fit_dipoles_backend(
         def jacobian(
             parameters: BackendArray, *, indices: BackendArray
         ) -> BackendArray:
+            assert isinstance(selected_model, GaussianDipoleModel)
             physical = model_parameters(parameters)
             value = selected_model._jacobian_positive_unchecked(
                 physical, mode=mode

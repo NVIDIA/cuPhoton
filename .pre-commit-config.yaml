@@ -35,8 +35,26 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
 
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v22.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c, cuda]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
   - repo: local
     hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run --locked --extra dev mypy
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        always_run: true
       - id: uv-lock-check
         name: uv lock is current
         entry: uv lock --check

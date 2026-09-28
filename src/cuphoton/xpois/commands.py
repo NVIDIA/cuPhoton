@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from numpy.linalg import LinAlgError
 
@@ -150,8 +151,8 @@ class _KernelSolveOptionsCommand(XPOISCommand):
     run_name = None
     kernel_height = None
     kernel_width = None
-    basis_sigmas = None
-    basis_degrees = None
+    basis_sigmas: str | None = None
+    basis_degrees: str | None = None
     background_degree = None
     flux_conserve = None
 
@@ -273,6 +274,8 @@ class _KernelSolveOptionsCommand(XPOISCommand):
         _default = False
 
     def _components(self) -> list[GaussianBasisComponent]:
+        assert self.basis_degrees is not None
+        assert self.basis_sigmas is not None
         try:
             sigmas = [
                 float(item)
@@ -304,12 +307,13 @@ class _KernelSolveOptionsCommand(XPOISCommand):
             )
         return [
             GaussianBasisComponent(sigma=sigma, degree=degree)
-            for sigma, degree in zip(sigmas, degrees)
+            for sigma, degree in zip(sigmas, degrees, strict=True)
         ]
 
     def _output_root(self) -> Path:
         if self.output_dir is not None:
             return Path(self.output_dir).expanduser()
+        assert self.context is not None
         return self.context.runs_dir
 
 
@@ -385,8 +389,8 @@ class _SpatialSolverOptionsCommand(_KernelSolveOptionsCommand):
 
 
 class _KernelSolveCommand(_SpatialSolverOptionsCommand):
-    reference = None
-    target = None
+    reference: str | None = None
+    target: str | None = None
     reference_hdu = None
     target_hdu = None
     variance = None
@@ -507,6 +511,8 @@ class FitKernelCommand(_FitCommand):
     """
 
     def run(self) -> None:
+        assert self.reference is not None
+        assert self.target is not None
         result = self._call(
             run_constant_kernel_fit,
             reference_path=Path(self.reference).expanduser(),
@@ -559,6 +565,8 @@ class SubtractCommand(_FitCommand):
     """
 
     def run(self) -> None:
+        assert self.reference is not None
+        assert self.target is not None
         result = self._call(
             run_constant_kernel_fit,
             reference_path=Path(self.reference).expanduser(),
@@ -605,7 +613,7 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
     """Fit an image-pair manifest with a selected distributed executor."""
 
     executor = None
-    manifest = None
+    manifest: str | None = None
     max_workers = None
     result_timeout_sec = None
     worker_timeout_sec = None
@@ -720,6 +728,7 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
         _metavar = "{cupy,cutile,numba-cuda}"
 
     def run(self) -> None:
+        assert self.manifest is not None
         self._validate_executor_options()
         components = self._components()
         options = self._call(
@@ -818,6 +827,7 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
                 "--warmup-rounds and --measure-rounds require MPI "
                 "--aggregation-mode mpi"
             )
+        invalid: tuple[tuple[str, object], ...]
         if self.executor == "dragon":
             invalid = (
                 ("--aggregation-mode", self.aggregation_mode),
@@ -877,7 +887,7 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
     under the run directory.
     """
 
-    backends = None
+    backends: str | None = None
     reference_backend = None
     repeats = None
     warmup = None
@@ -924,6 +934,9 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
         _min = 0.0
 
     def run(self) -> None:
+        assert self.backends is not None
+        assert self.reference is not None
+        assert self.target is not None
         result = self._call(
             benchmark_constant_kernel_backends,
             reference_path=Path(self.reference).expanduser(),
@@ -975,7 +988,7 @@ class EvaluateSubtractionCommand(XPOISCommand):
     reproducible even after the run is moved.
     """
 
-    run_dir = None
+    run_dir: str | None = None
 
     class RunDirArg(PathSpecInvariant):
         _arg = "--run-dir"
@@ -983,6 +996,7 @@ class EvaluateSubtractionCommand(XPOISCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.run_dir is not None
         result = self._call(
             evaluate_subtraction_run,
             Path(self.run_dir).expanduser(),
@@ -998,7 +1012,7 @@ class ReviewBokehCommand(XPOISCommand):
     `review_bokeh.html` path as JSON.
     """
 
-    run_dir = None
+    run_dir: str | None = None
 
     class RunDirArg(PathSpecInvariant):
         _arg = "--run-dir"
@@ -1006,6 +1020,7 @@ class ReviewBokehCommand(XPOISCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.run_dir is not None
         result = self._call(
             rebuild_interactive_review,
             Path(self.run_dir).expanduser(),

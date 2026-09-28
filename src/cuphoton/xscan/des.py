@@ -742,6 +742,13 @@ def write_canonical_dataset(
     write_metadata_jsonl(root / "metadata.jsonl", metadata_rows)
     maybe_write_metadata_parquet(root / "metadata.parquet", metadata_rows)
 
+    saved = {
+        "search": "search.npy",
+        "template": "template.npy",
+        "labels": "labels.npy",
+        "split": "split.npy",
+        "metadata_jsonl": "metadata.jsonl",
+    }
     summary = {
         "dataset_dir": str(root),
         "dataset_kind": dataset_kind,
@@ -749,18 +756,12 @@ def write_canonical_dataset(
         "sample_count": int(search.shape[0]),
         "input_mode": "triplet" if has_difference else "pair",
         "builder_summary": builder_summary or {},
-        "saved": {
-            "search": "search.npy",
-            "template": "template.npy",
-            "labels": "labels.npy",
-            "split": "split.npy",
-            "metadata_jsonl": "metadata.jsonl",
-        },
+        "saved": saved,
     }
     if has_difference:
-        summary["saved"]["difference"] = "difference.npy"
+        saved["difference"] = "difference.npy"
     if (root / "metadata.parquet").exists():
-        summary["saved"]["metadata_parquet"] = "metadata.parquet"
+        saved["metadata_parquet"] = "metadata.parquet"
 
     (root / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
@@ -985,7 +986,7 @@ def match_fake_to_cutout(
         ):
             continue
         distance = (fake_x - center_x) ** 2 + (fake_y - center_y) ** 2
-        if best is None or distance < best_distance:
+        if best_distance is None or distance < best_distance:
             best = row
             best_distance = distance
     return best
@@ -1027,7 +1028,7 @@ def detect_search_sources(
         0.0,
     )
     amplitude = float(np.max(np.abs(background_subtracted)))
-    numeric_rms_floor = np.finfo(np.float32).eps * amplitude
+    numeric_rms_floor = float(np.finfo(np.float32).eps) * amplitude
     effective_rms = max(float(np.median(finite_rms)), numeric_rms_floor)
     threshold = float(threshold_sigma) * effective_rms
     objects = detect_sources(

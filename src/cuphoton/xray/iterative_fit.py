@@ -315,7 +315,7 @@ def iterative_fit(
         isinstance(components, bool)
         or not isinstance(components, Integral)
         or components < 1
-        or 4 * components + 1 > len(time_host)
+        or 4 * int(components) + 1 > len(time_host)
     ):
         raise ValueError(
             "components must be a positive integer "

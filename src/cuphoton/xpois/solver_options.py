@@ -38,12 +38,26 @@ def resolve_spatial_als_config(
                 "spatial ALS options require solver='spatial-als'"
             )
         return None
+    defaults = SpatialALSConfig()
     return SpatialALSConfig(
         background_degree=background_degree,
         flux_conserve=flux_conserve,
-        **{
-            key: value
-            for key, value in spatial_options.items()
-            if value is not None
-        },
+        spatial_degree=(
+            defaults.spatial_degree
+            if spatial_degree is None
+            else spatial_degree
+        ),
+        max_iterations=(
+            defaults.max_iterations
+            if als_iterations is None
+            else als_iterations
+        ),
+        tolerance=(
+            defaults.tolerance if als_tolerance is None else als_tolerance
+        ),
+        regularization=(
+            defaults.regularization
+            if als_regularization is None
+            else als_regularization
+        ),
     )

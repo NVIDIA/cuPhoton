@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from cuphoton.core.cli import (
     BoolInvariant,
@@ -158,7 +159,8 @@ class XRepCommand(InvariantAwareCommand):
 
 
 class _SharedReprojectionCommand(XRepCommand):
-    input = None
+    # These declarative options reuse framework stream/name attributes.
+    input: str | None = None  # type: ignore[assignment]
     hdu = None
     backend = None
     interpolation = None
@@ -168,7 +170,7 @@ class _SharedReprojectionCommand(XRepCommand):
     mapping_grid_step = None
     disable_area_scaling = None
     output_dir = None
-    name = None
+    name: str | None = None  # type: ignore[assignment]
     write_fits = None
     repeats = None
     warmup = None
@@ -261,7 +263,7 @@ class _SharedReprojectionCommand(XRepCommand):
 class InspectImageCommand(_SharedReprojectionCommand):
     """Inspect a FITS image and report its default reprojection grid."""
 
-    input = None
+    input: str | None = None
 
     class InputArg(ExistingPathSpecInvariant):
         _arg = "--input"
@@ -269,6 +271,7 @@ class InspectImageCommand(_SharedReprojectionCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.input is not None
         payload = self._call(
             inspect_image,
             Path(self.input).expanduser(),
@@ -283,7 +286,7 @@ class InspectImageCommand(_SharedReprojectionCommand):
 class ReprojectImageCommand(_SharedReprojectionCommand):
     """Reproject one FITS image onto one shared grid."""
 
-    input = None
+    input: str | None = None
     mask = None
     mask_hdu = None
 
@@ -305,6 +308,7 @@ class ReprojectImageCommand(_SharedReprojectionCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.input is not None
         result = self._call(
             run_reproject_image,
             input_path=Path(self.input).expanduser(),
@@ -328,7 +332,7 @@ class ReprojectImageCommand(_SharedReprojectionCommand):
 class ReprojectStackCommand(_SharedReprojectionCommand):
     """Reproject multiple FITS inputs onto one shared grid."""
 
-    inputs = None
+    inputs: str | None = None
     target_wcs = None
     target_hdu = None
 
@@ -350,6 +354,7 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.inputs is not None
         result = self._call(
             run_reproject_stack,
             input_paths=self._csv_paths(self.inputs),
@@ -373,7 +378,7 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
 class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
     """Benchmark one FITS reprojection and report split timing summaries."""
 
-    input = None
+    input: str | None = None
     mask = None
     mask_hdu = None
 
@@ -395,6 +400,7 @@ class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.input is not None
         result = self._call(
             benchmark_reproject_image,
             input_path=Path(self.input).expanduser(),
@@ -420,12 +426,12 @@ class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
 class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
     """Benchmark cached-geometry backend variants and parity."""
 
-    input = None
+    input: str | None = None
     mask = None
     mask_hdu = None
-    variants = None
+    variants: str | None = None
     reference_variant = None
-    mask_cases = None
+    mask_cases: str | None = None
     atol = None
     rtol = None
 
@@ -479,6 +485,9 @@ class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
         _min = 0.0
 
     def run(self) -> None:
+        assert self.input is not None
+        assert self.mask_cases is not None
+        assert self.variants is not None
         result = self._call(
             benchmark_backend_variants_reproject_image,
             input_path=Path(self.input).expanduser(),
@@ -508,10 +517,10 @@ class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
 class CompareBackendsCommand(_SharedReprojectionCommand):
     """Run one FITS reprojection across backends and report parity metrics."""
 
-    input = None
+    input: str | None = None
     mask = None
     mask_hdu = None
-    backends = None
+    backends: str | None = None
     reference_backend = None
     atol = None
     rtol = None
@@ -560,6 +569,8 @@ class CompareBackendsCommand(_SharedReprojectionCommand):
         _min = 0.0
 
     def run(self) -> None:
+        assert self.backends is not None
+        assert self.input is not None
         result = self._call(
             compare_backends_reproject_image,
             input_path=Path(self.input).expanduser(),

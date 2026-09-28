@@ -1292,7 +1292,7 @@ def _staging_plan_samples(
     shuffle: bool,
 ) -> LsstComCamStagingPlanSamples:
     if candidate_catalog_path is None:
-        available = [
+        available: list[dict[str, Any]] = [
             {
                 "pair": pair,
                 "candidate_row": None,
@@ -1996,7 +1996,7 @@ def _split_fractions_from_manifest(
     values = tuple(float(value) for value in raw)
     if not math.isclose(sum(values), 1.0, rel_tol=0.0, abs_tol=1e-6):
         raise ValueError("split_fractions must sum to 1.0")
-    return values
+    return (values[0], values[1], values[2])
 
 
 def _select_fits_image_hdu(hdul, hdu: str | int):
@@ -2019,7 +2019,8 @@ def _select_fits_image_hdu(hdul, hdu: str | int):
 
 
 def _fits_hdu_image_shape(image_hdu) -> tuple[int, int]:
-    return tuple(int(value) for value in image_hdu.shape)
+    height, width = (int(value) for value in image_hdu.shape)
+    return (height, width)
 
 
 def _fits_image_shape(path: Path, *, hdu: str | int) -> tuple[int, int]:
@@ -2530,7 +2531,7 @@ def _sort_key(row: dict[str, Any]) -> tuple[str, ...]:
 
 def _registry_row_preference_key(row: dict[str, Any]) -> tuple[int, int, str]:
     value = row.get("mtime_ns")
-    if _is_missing(value):
+    if value is None or _is_missing(value):
         mtime_ns = -1
         has_mtime = 0
     else:
@@ -2592,6 +2593,8 @@ def _canonical_filter_value(value: Any) -> str | None:
 def _numeric_range_bound(value: Any, *, column: str) -> float:
     canonical = _canonical_filter_value(value)
     try:
+        if canonical is None:
+            raise TypeError("missing numeric bound")
         return float(canonical)
     except (TypeError, ValueError) as exc:
         raise ValueError(

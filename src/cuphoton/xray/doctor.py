@@ -177,9 +177,9 @@ def format_doctor_text(report: DoctorReport):
         )
     lines.append("")
     lines.append("Executables:")
-    for probe in report.executables:
-        state = "ok" if probe.available else "missing"
-        lines.append(f"  {state:7} {probe.name}")
+    for executable in report.executables:
+        state = "ok" if executable.available else "missing"
+        lines.append(f"  {state:7} {executable.name}")
     lines.append("")
     lines.append(f"CUDA visibility: {report.cuda_visibility}")
     return "\n".join(lines)

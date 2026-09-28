@@ -15,9 +15,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -471,7 +473,8 @@ def run_stage(
         artifacts = _measure(
             timings,
             "write_seconds",
-            lambda: _write_arrays(
+            partial(
+                _write_arrays,
                 root,
                 stage_dir / f"item-{index:04d}",
                 arrays,
@@ -481,7 +484,8 @@ def run_stage(
         _measure(
             timings,
             "input_recheck_seconds",
-            lambda: pipeline._verify_item_hashes(
+            partial(
+                pipeline._verify_item_hashes,
                 item,
                 when=f"during {stage} execution",
             ),

@@ -20,7 +20,7 @@ import yaml
 from cuphoton.core.cli import ApplicationContext
 
 from .butler import build_hsc_fits_registry
-from .config import dump_config, load_training_config
+from .config import TrainingConfig, dump_config, load_training_config
 from .dataset import (
     StampDataset,
     build_dataset_from_manifest,
@@ -71,7 +71,7 @@ from .training import (
     train_classifier,
     xfit_fit_coverage,
 )
-from .types import InputMode, MissingPolicy
+from .types import InputMode, MissingPolicy, TrainingMode
 
 if TYPE_CHECKING:
     from .xfit_features import XFitFeatureMatrix
@@ -237,6 +237,7 @@ def load_hsc_xpois_sweep_variants(
     payload = (
         yaml.safe_load(sweep_config_path.read_text(encoding="utf-8")) or {}
     )
+    variant_rows: object
     if isinstance(payload, list):
         variant_rows = payload
     elif isinstance(payload, dict):
@@ -1599,7 +1600,9 @@ def reproduce_hsc_comparison_workflow(
         ]
     )
 
-    training_variants = [
+    training_variants: list[
+        tuple[str, str, InputMode, TrainingMode, Path | None, Path]
+    ] = [
         (
             "pair",
             "pair",
@@ -1685,6 +1688,7 @@ def reproduce_hsc_comparison_workflow(
                 ),
             )
             seeded.model = replace(base_config.model, input_mode=input_mode)
+            assert seeded.output_root is not None
             run_dir = resolve_run_dir(
                 Path(seeded.output_root),
                 seeded.run_name,
@@ -1972,7 +1976,7 @@ def reproduce_hsc_xpois_sweep_workflow(
         [dataset_refs[label] for label in aggregate["stable_variants"]]
     )
 
-    training_variants = [
+    training_variants: list[tuple[str, InputMode, Path]] = [
         (
             "pair",
             "pair",
@@ -1983,15 +1987,12 @@ def reproduce_hsc_xpois_sweep_workflow(
             "triplet",
             triplet_config,
         ),
-    ] + [
-        (
-            label,
-            "triplet",
-            triplet_config,
-        )
+    ]
+    training_variants.extend(
+        (label, "triplet", triplet_config)
         for label in aggregate["stable_variants"]
         if label.startswith("triplet_xpois_")
-    ]
+    )
 
     for label, input_mode, config_path in training_variants:
         base_config = load_training_config(config_path)
@@ -2006,6 +2007,7 @@ def reproduce_hsc_xpois_sweep_workflow(
                 run_name=f"{label}-seed-{seed}",
             )
             seeded.model = replace(base_config.model, input_mode=input_mode)
+            assert seeded.output_root is not None
             run_dir = resolve_run_dir(
                 Path(seeded.output_root),
                 seeded.run_name,
@@ -2090,7 +2092,7 @@ def reproduce_inada_workflow(
     nodiff_pair_config: Path | None,
     seeds: list[int],
 ) -> dict[str, Any]:
-    jobs = []
+    jobs: list[tuple[str, Path, InputMode]] = []
     if pair_config is not None:
         jobs.append(("autoscan_pair", pair_config, "pair"))
     if triplet_config is not None:
@@ -2274,7 +2276,7 @@ def reproduce_pair_triplet_workflow(
         "jobs": {},
     }
 
-    training_variants = [
+    training_variants: list[tuple[str, InputMode, Path, TrainingConfig]] = [
         ("pair", "pair", pair_config, pair_base_config),
         ("triplet", "triplet", triplet_config, triplet_base_config),
     ]
@@ -2290,6 +2292,7 @@ def reproduce_pair_triplet_workflow(
                 run_name=f"{label}-seed-{seed}",
             )
             seeded.model = replace(base_config.model, input_mode=input_mode)
+            assert seeded.output_root is not None
             run_dir = resolve_run_dir(
                 Path(seeded.output_root),
                 seeded.run_name,
