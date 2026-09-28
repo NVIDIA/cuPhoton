@@ -402,7 +402,7 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
         if fits_reader is None
         else fits_reader
     )
-    fits_reads = []
+    fits_reads: list[dict[str, Any]] = []
     registry_path = _registry_path_from_manifest(payload)
     sample_count = int(payload.get("sample_count", payload.get("limit", 8)))
     if sample_count <= 0:

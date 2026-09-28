@@ -96,7 +96,7 @@ def build_autoscan_dataset_from_raw(
         if fits_reader is None
         else fits_reader
     )
-    fits_reads = []
+    fits_reads: list[dict[str, Any]] = []
     rows = load_table_rows(resolve_required_path(manifest, "records_path"))
     if not rows:
         raise ValueError("records_path did not contain any rows")
@@ -258,7 +258,7 @@ def build_nodiff_dataset_from_raw(
         if fits_reader is None
         else fits_reader
     )
-    fits_reads = []
+    fits_reads: list[dict[str, Any]] = []
     exposures = load_table_rows(
         resolve_required_path(manifest, "exposures_path")
     )
@@ -1091,19 +1091,30 @@ def load_stamp_array(path: str | Path) -> np.ndarray:
     return np.asarray(array, dtype=np.float32)
 
 
+def _resolve_fits_hdu(path: Path, hdu: str | int | None) -> int | None:
+    if isinstance(hdu, str):
+        from astropy.io import fits
+
+        with fits.open(path, memmap=False, lazy_load_hdus=True) as hdus:
+            return hdus.index_of(hdu)
+    return hdu
+
+
 def load_stamp_or_image_cutout(
     path: str | Path,
     *,
     stamp_size: int,
     center_x: Any | None,
     center_y: Any | None,
-    hdu: int | None = None,
+    hdu: str | int | None = None,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
 ) -> np.ndarray:
     resolved = Path(path).expanduser().resolve()
     if resolved.suffix.lower() in {".fits", ".fit", ".fts"}:
-        info = inspect_fits_image(resolved, hdu=hdu)
+        info = inspect_fits_image(
+            resolved, hdu=_resolve_fits_hdu(resolved, hdu)
+        )
         section = None
         if (
             center_x is not None
@@ -1151,7 +1162,7 @@ def load_stamp_or_image_cutout(
 
 def load_image_array(
     path: str | Path,
-    hdu: int | None = None,
+    hdu: str | int | None = None,
     *,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
@@ -1162,7 +1173,9 @@ def load_image_array(
     if suffix == ".npy":
         return np.asarray(np.load(resolved, allow_pickle=False))
     if suffix in {".fits", ".fit", ".fts"}:
-        info = inspect_fits_image(resolved, hdu=hdu)
+        info = inspect_fits_image(
+            resolved, hdu=_resolve_fits_hdu(resolved, hdu)
+        )
         result = read_fits_images(resolved, [info.hdu], reader=fits_reader)
         if read_metadata is not None:
             read_metadata.append(result.metadata())

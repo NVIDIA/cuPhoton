@@ -435,3 +435,96 @@ def test_gpu_fits_ingress_preserves_lossless_pixels(inputs, reader):
         if role == "fit_mask":
             wanted = wanted.astype(bool)
         np.testing.assert_array_equal(cp.asnumpy(arrays[role]), wanted)
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+@pytest.mark.parametrize("reader", ["astropy", "auto", "xdr"])
+def test_staged_xpois_decodes_all_fits_roles(
+    inputs, tmp_path, monkeypatch, mixed, reader
+):
+    from cuphoton import xpois
+    from cuphoton.core import fits_io
+    from cuphoton.xscan.pipeline_benchmark import stages
+
+    item, config = inputs
+    item = pipeline.DevicePipelineItem.from_payload(
+        item.to_payload(), fits_reader=reader
+    )
+    original = fits_io.read_fits_images
+    expected = original(item.reference.path, [1, 2, 1, 3], reader="astropy")
+    if mixed:
+        replacements = {}
+        for role, array in zip(
+            ("reference", "target"), expected.arrays[:2], strict=True
+        ):
+            path = tmp_path / f"{role}.npy"
+            np.save(path, array)
+            replacements[role] = pipeline.NpyArrayDescriptor(
+                str(path), file_sha256(path), array.shape, array.dtype.str
+            )
+        item = replace(item, **replacements)
+    calls = []
+    stream = object()
+
+    def device_read(path, hdus, **options):
+        calls.append((tuple(hdus), options["reader"]))
+        assert options["device"] and options["stream"] is stream
+        result = original(path, hdus, reader="astropy")
+        return replace(
+            result,
+            reader="xdr" if reader == "xdr" else "astropy",
+            requested_reader=reader,
+            device=True,
+            fallback_reason="test CPU reader" if reader == "auto" else None,
+        )
+
+    monkeypatch.setattr(fits_io, "read_fits_images", device_read)
+    solved = []
+
+    def solve(reference, target, _basis, **options):
+        solved.append(True)
+        for actual, wanted in zip(
+            (reference, target, options["variance"], options["fit_mask"]),
+            expected.arrays,
+            strict=True,
+        ):
+            np.testing.assert_array_equal(actual, wanted)
+        assert options["fit_mask"].dtype == np.bool_
+        return SimpleNamespace(
+            residual=target - reference,
+            kernel_coefficients=np.ones(1),
+            background_coefficients=np.zeros(1),
+            chi2=1.0,
+            dof=1,
+            fit_pixel_count=1,
+            basis_terms=(),
+            solver="test",
+            backend="test",
+            flux_conserve=False,
+        )
+
+    monkeypatch.setattr(xpois, "solve_constant_kernel_device", solve)
+    cp = SimpleNamespace(
+        ndarray=np.ndarray,
+        asarray=np.asarray,
+        asnumpy=np.asarray,
+        empty=np.empty,
+        float64=np.float64,
+        float32=np.float32,
+        cuda=SimpleNamespace(
+            Device=lambda: SimpleNamespace(synchronize=lambda: None),
+            get_current_stream=lambda: stream,
+        ),
+    )
+    _, metadata, timings = stages._run_item(
+        "xpois", item, config, {"cp": cp, "torch": None}, tmp_path, {}, 0
+    )
+    assert solved == [True]
+    assert calls == [((1, 3) if mixed else (1, 2, 3), reader)]
+    assert metadata["fits_reads"][0]["requested_reader"] == reader
+    assert metadata["fits_reads"][0]["roles"] == (
+        {"variance": 1, "fit_mask": 3}
+        if mixed
+        else {"reference": 1, "target": 2, "variance": 1, "fit_mask": 3}
+    )
+    assert timings["read_seconds"] >= 0

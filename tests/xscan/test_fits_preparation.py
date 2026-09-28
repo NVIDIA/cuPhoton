@@ -14,22 +14,26 @@ from astropy.io import fits
 from cuphoton.xscan import des, lsstcomcam, workflows
 
 
+@pytest.mark.parametrize("hdu_selector", [None, 1, "SCI"])
 @pytest.mark.parametrize("compressed", [False, True])
 def test_des_fits_stamp_reads_only_requested_section(
-    tmp_path, monkeypatch, compressed
+    tmp_path, monkeypatch, compressed, hdu_selector
 ):
     path = tmp_path / "image.fits"
     image = np.arange(900, dtype=np.float32).reshape(30, 30)
     hdu = (
-        fits.CompImageHDU(image, compression_type="GZIP_2", quantize_level=0)
+        fits.CompImageHDU(
+            image, name="SCI", compression_type="GZIP_2", quantize_level=0
+        )
         if compressed
-        else fits.ImageHDU(image)
+        else fits.ImageHDU(image, name="SCI")
     )
     fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path)
     original = des.read_fits_images
     sections = []
 
     def record(*args, **kwargs):
+        assert args[1] == [1]
         sections.append(kwargs["section"])
         return original(*args, **kwargs)
 
@@ -38,6 +42,7 @@ def test_des_fits_stamp_reads_only_requested_section(
     stamp = des.load_stamp_or_image_cutout(
         path,
         stamp_size=5,
+        hdu=hdu_selector,
         center_x=15,
         center_y=13,
         fits_reader="astropy",
@@ -115,6 +120,9 @@ def fits_dataset_builder(request, tmp_path, monkeypatch):
                 "y": 4,
             }
         ]
+        manifest.update(
+            search_hdu="IMAGE", template_hdu="IMAGE", difference_hdu="IMAGE"
+        )
         module = des
         expected_reads = 3
         if request.param == "autoscan":
@@ -214,3 +222,14 @@ def test_dataset_rejects_invalid_fits_reader_before_loading_inputs(
             fits_reader=override,
         )
     assert not output_dir.exists()
+
+
+def test_des_load_image_preserves_named_hdu(tmp_path):
+    path = tmp_path / "image.fits"
+    image = np.arange(30, dtype=np.float32).reshape(5, 6)
+    fits.HDUList(
+        [fits.PrimaryHDU(), fits.ImageHDU(image, name="SCI")]
+    ).writeto(path)
+    np.testing.assert_array_equal(
+        des.load_image_array(path, hdu="SCI", fits_reader="astropy"), image
+    )
