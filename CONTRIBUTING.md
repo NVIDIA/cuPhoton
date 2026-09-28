@@ -100,6 +100,26 @@ Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 Validation logs should be clean. If warnings are expected, describe them in the
 pull request.
 
+### GPU CI
+
+Pull requests first run CPU and package checks on GitHub-hosted runners.
+GPU CI starts when `copy-pr-bot` copies a vetted revision to
+`pull-request/<number>` in this repository. Ready PRs from verified NVIDIA
+contributors with signed commits sync automatically. Draft PRs need an
+explicit maintainer trigger; each new external contribution revision needs
+maintainer approval before it can run on a GPU.
+
+The required `ci-required` check combines CPU, package, and GPU results for
+that revision. The initial `ci-pr-checks` result does not satisfy the merge
+gate. Pushes to `main` and `0.1.x` also run the GPU checks.
+
+The GPU job uses one L40G with Python 3.12 and the locked CUDA 13 dependencies.
+It checks CuPy/PyTorch execution, runs six xFit GPU parity cases, and runs
+all five synthetic quickstarts with `--require-gpu`. Missing CUDA support or
+skipped parity cases fail the job. JUnit results and quickstart summaries are
+uploaded with the tested commit SHA. GPU jobs run one at a time; a new
+revision cancels the previous workflow for the same branch.
+
 ## Pull Requests
 
 Developer workflow for code contributions:
