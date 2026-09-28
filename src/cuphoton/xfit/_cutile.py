@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import math
-from functools import lru_cache
-from typing import Any
+from functools import cache
+from typing import TYPE_CHECKING, Any
 
 from ._types import BackendArray, FitMode
 
@@ -35,9 +35,12 @@ def _load_cutile() -> tuple[Any, Any]:
     return cp, ct
 
 
-@lru_cache(maxsize=None)
+@cache
 def _gaussian_normal_equations_kernel() -> Any:
-    _, ct = _load_cutile()
+    if TYPE_CHECKING:
+        import cuda.tile as ct
+    else:
+        _, ct = _load_cutile()
 
     @ct.kernel
     def kernel(

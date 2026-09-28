@@ -3050,7 +3050,9 @@ def test_benchmark_reuses_rank_and_gpu_with_audited_round_artifacts(
     }
     assert len(executions) == 3 and len(set(executions)) == 3
     pids = set()
-    for planned, round_result in zip(benchmark.rounds(), report["rounds"]):
+    for planned, round_result in zip(
+        benchmark.rounds(), report["rounds"], strict=True
+    ):
         assert round_result["round_id"] == planned.round_id
         assert round_result["batch_wall_sec"] == 2.0
         assert round_result["worker_wall_max_sec"] == 2.0

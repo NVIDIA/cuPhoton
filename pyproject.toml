@@ -74,10 +74,12 @@ dragon = [
   "dragonhpc>=0.14.2,<0.15",
 ]
 dev = [
+  "mypy==1.19.1",
   "setuptools>=83.0.0",
   "pre-commit>=4.0",
   "pytest>=8.3",
   "ruff>=0.15.12",
+  "types-PyYAML>=6.0.12",
 ]
 
 [project.urls]
@@ -136,10 +138,33 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
+# Runtime callers inspect expanded aliases with get_args()/get_origin().
+"src/cuphoton/xfit/_types.py" = ["UP040"]
+"src/cuphoton/xray/_types.py" = ["UP040"]
+"src/cuphoton/xscan/types.py" = ["UP040"]
 "src/cuphoton/xpois/review_bokeh.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/cuphoton"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+
+# Scientific and GPU libraries without consistent stubs across dev profiles.
+# Skip their implementations even when installed so CPU and GPU checks agree.
+[[tool.mypy.overrides]]
+module = [
+  "astropy.*", "bokeh.*", "cuda.*", "cupy.*", "cupyx.*", "dragon.*",
+  "h5py.*", "kvikio.*", "mpi4py.*", "numba.*", "nvidia.*", "nvtx.*",
+  "pandas.*", "photutils.*", "PIL.*", "pyarrow.*", "pybind11.*",
+  "scipy.*", "setuptools.*", "torch.*",
+]
+follow_imports = "skip"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"

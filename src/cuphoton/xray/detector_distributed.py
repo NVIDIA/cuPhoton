@@ -659,7 +659,7 @@ def _write_or_submit_slurm_plan(
             encoding="utf-8",
         )
         merge_script_path.chmod(0o755)
-    payload = {
+    payload: dict[str, Any] = {
         "kind": "xray-detector-artifact-slurm-plan",
         "plan_path": str(plan_path),
         "script_path": str(script_path),
@@ -1041,7 +1041,7 @@ def _plan_x_shards(
 
 
 def _json_safe_options(options: dict[str, Any]) -> dict[str, Any]:
-    payload = {}
+    payload: dict[str, Any] = {}
     for key, value in options.items():
         if isinstance(value, Path):
             payload[key] = str(value)

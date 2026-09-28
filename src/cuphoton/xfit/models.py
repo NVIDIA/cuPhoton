@@ -41,10 +41,12 @@ def _dtype(value: npt.DTypeLike) -> np.dtype[Any]:
     return dtype
 
 
-def _split_weights(value: tuple[float, float, float]) -> tuple[float, ...]:
+def _split_weights(
+    value: tuple[float, float, float],
+) -> tuple[float, float, float]:
     if len(value) != 3:
         raise ValueError("split_weights must contain three values")
-    weights = tuple(float(item) for item in value)
+    weights = (float(value[0]), float(value[1]), float(value[2]))
     if not np.isfinite(weights).all() or min(weights) < 0:
         raise ValueError("split_weights must be finite and nonnegative")
     return weights
@@ -172,22 +174,22 @@ class GaussianDipoleModel:
         self, parameters: ArrayLike, *, validate: bool
     ) -> BackendArray:
         ap = self._ap
-        parameters = ap.asarray(parameters, dtype=self.dtype)
-        if parameters.ndim != 2 or parameters.shape[1] != 8:
+        parameters_array = ap.asarray(parameters, dtype=self.dtype)
+        if parameters_array.ndim != 2 or parameters_array.shape[1] != 8:
             raise ValueError("Gaussian parameters must have shape (batch, 8)")
         if validate:
-            portable = as_numpy(parameters)
+            portable = as_numpy(parameters_array)
             if not np.isfinite(portable).all():
                 raise ValueError(
                     "Gaussian parameters must contain only finite values"
                 )
             if np.any(portable[:, 1:3] <= 0):
                 raise ValueError("sigma_x and sigma_y must be positive")
-        return parameters
+        return parameters_array
 
     def _evaluate(
         self,
-        parameters: BackendArray,
+        parameters: ArrayLike,
         *,
         mode: FitMode,
         validate: bool,
@@ -231,7 +233,7 @@ class GaussianDipoleModel:
 
     def _jacobian(
         self,
-        parameters: BackendArray,
+        parameters: ArrayLike,
         *,
         mode: FitMode,
         validate: bool,
@@ -525,14 +527,18 @@ class StampDipoleModel:
 
         _validate_mode(mode)
         ap = self._ap
-        parameters = ap.asarray(parameters, dtype=self.dtype)
-        if parameters.ndim != 2 or parameters.shape[1] != 5:
+        parameters_array = ap.asarray(parameters, dtype=self.dtype)
+        if parameters_array.ndim != 2 or parameters_array.shape[1] != 5:
             raise ValueError("stamp parameters must have shape (batch, 5)")
         positive = self._star(
-            parameters[:, 0], parameters[:, 1], parameters[:, 4]
+            parameters_array[:, 0],
+            parameters_array[:, 1],
+            parameters_array[:, 4],
         )
         negative = self._star(
-            parameters[:, 2], parameters[:, 3], parameters[:, 4]
+            parameters_array[:, 2],
+            parameters_array[:, 3],
+            parameters_array[:, 4],
         )
         difference = positive - negative
         if mode == "difference":

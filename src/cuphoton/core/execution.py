@@ -48,9 +48,13 @@ class Worker(Protocol):
     physical ``uuid`` or ``pci_bus_id`` string.
     """
 
-    gpu_identity: Mapping[str, Any]
+    @property
+    def gpu_identity(self) -> Mapping[str, Any]:
+        """Return the physical GPU identity established during startup."""
 
-    def run_item(self, item: WorkItem, output_dir: Path) -> Mapping[str, Any]:
+    def run_item(
+        self, item: WorkItem, output_dir: Path, /
+    ) -> Mapping[str, Any]:
         """Execute an item and durably publish ``output_dir/summary.json``.
 
         Return JSON metadata with ``run_dir`` and ``summary_path`` equal to
@@ -282,9 +286,10 @@ def execute_worker_round(
             record["status"] = "success"
         except Exception as exc:
             record["status"] = "failed"
-            record["error"] = error_payload(exc)
+            error = error_payload(exc)
             if getattr(exc, "__notes__", None):
-                record["error"]["notes"] = "\n".join(map(str, exc.__notes__))
+                error["notes"] = "\n".join(map(str, exc.__notes__))
+            record["error"] = error
         record.update(identity)
         record.update(
             worker_seconds=time.perf_counter() - item_started,
@@ -331,7 +336,7 @@ def execute_worker_round(
 
 
 def audit_worker_provenance(
-    provenances: Sequence[Mapping[str, Any]],
+    provenances: Sequence[object],
     *,
     backend: str,
     expected_worker_count: int,
@@ -377,7 +382,7 @@ def audit_worker_provenance(
             or tokens[0].strip().startswith("-")
         ):
             invalid.append("cuda_visible_devices")
-        ids = frozenset()
+        ids: frozenset[tuple[str, str]] = frozenset()
         expected_backend = "cupy" if backend == "cutile" else backend
         if not isinstance(gpu, Mapping):
             invalid.append("gpu")
@@ -407,6 +412,7 @@ def audit_worker_provenance(
                 }
             )
         else:
+            assert isinstance(host, str)
             identities.append((value["worker_id"], host, ids))
     for index, (worker_id, host, ids) in enumerate(identities):
         for other_id, other_host, other_ids in identities[:index]:
@@ -698,7 +704,9 @@ def _record_problems(
     if assignment is None:
         problems.append("item_id")
     else:
-        for field, value in zip(("worker_id", "weight_bytes"), assignment):
+        for field, value in zip(
+            ("worker_id", "weight_bytes"), assignment, strict=True
+        ):
             if type(record.get(field)) is not int or record[field] != value:
                 problems.append(field)
     if not _finite_nonnegative(record.get("worker_seconds")):
@@ -736,7 +744,7 @@ def _worker_result_problems(
     results: Sequence[Mapping[str, Any]],
     records: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    errors = []
+    errors: list[dict[str, Any]] = []
     identifiers = [
         value.get("worker_id") if isinstance(value, Mapping) else None
         for value in results
@@ -778,7 +786,10 @@ def _worker_result_problems(
             and error.get("item_id") in {item.item_id for item in shard}
             for error in writes
         )
-        failed_count = counts["failed"] + (len(writes) if valid_writes else 0)
+        failed_count = counts["failed"]
+        if valid_writes:
+            assert isinstance(writes, list)
+            failed_count += len(writes)
         checks = {
             "schema": result.get("schema") == WORKER_SCHEMA,
             "run_id": result.get("run_id") == run_id,

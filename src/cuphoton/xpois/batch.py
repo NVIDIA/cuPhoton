@@ -822,7 +822,9 @@ def run_image_pair_item(
     _verify_input_identities(identities)
     components = [
         GaussianBasisComponent(sigma=sigma, degree=degree)
-        for sigma, degree in zip(options.basis_sigmas, options.basis_degrees)
+        for sigma, degree in zip(
+            options.basis_sigmas, options.basis_degrees, strict=True
+        )
     ]
     workflow_error: Exception | None = None
     try:
@@ -1017,11 +1019,9 @@ def _probe_array_shape(
 
     with fits.open(path, memmap=True, lazy_load_hdus=False) as hdul:
         candidates = [
-            (index, _fits_image_shape(item))
+            (index, shape)
             for index, item in enumerate(hdul)
-        ]
-        candidates = [
-            (index, shape) for index, shape in candidates if shape is not None
+            if (shape := _fits_image_shape(item)) is not None
         ]
         if hdu is not None:
             if hdu >= len(hdul):

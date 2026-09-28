@@ -25,7 +25,9 @@ def _receipts(options):
             "worker_wall_max_sec": duration / 2,
             "summary_path": f"rounds/{item.round_id}/summary.json",
         }
-        for item, duration in zip(options.rounds(), (100.0, 20.0, 2.0, 4.0))
+        for item, duration in zip(
+            options.rounds(), (100.0, 20.0, 2.0, 4.0), strict=False
+        )
     ]
 
 

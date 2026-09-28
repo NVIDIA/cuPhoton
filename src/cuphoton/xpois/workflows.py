@@ -11,10 +11,11 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -496,6 +497,7 @@ def run_constant_kernel_fit(
             fit_positions_path=fit_positions_path,
         )
         solve_start = time.perf_counter()
+        result: ConstantKernelFitResult | SpatialALSFitResult
         if solver == "constant":
             result = solve_constant_kernel(
                 prepared.reference,
@@ -571,6 +573,8 @@ def run_constant_kernel_fit(
         residual_mean = float(np.mean(fit_region_residual))
         residual_std = float(np.std(fit_region_residual))
         if review:
+            assert prepared.raw_reference is not None
+            assert prepared.raw_target is not None
             review_metrics = {
                 "residual_mean": residual_mean,
                 "residual_std": residual_std,
@@ -956,9 +960,9 @@ def benchmark_constant_kernel_backends(
                 time.perf_counter() - sync_start
             )
 
-            def solve_backend() -> (
-                ConstantKernelFitResult | SpatialALSFitResult
-            ):
+            def solve_backend(
+                backend: str = backend,
+            ) -> ConstantKernelFitResult | SpatialALSFitResult:
                 return _solve_benchmark_model(
                     solver=solver,
                     reference=prepared.reference,
@@ -1163,6 +1167,7 @@ def benchmark_constant_kernel_backends(
         }
         if solver == "spatial-als":
             assert als_config is not None
+            assert isinstance(reference_result, SpatialALSFitResult)
             summary["spatial_als"] = {
                 "spatial_degree": als_config.spatial_degree,
                 "spatial_terms": [
@@ -1480,7 +1485,7 @@ def _validate_run_name(name: str) -> str:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _resolve_crop_metadata(
@@ -1500,6 +1505,9 @@ def _resolve_crop_metadata(
         raise ValueError("Specify either all crop parameters or none of them")
     if crop_y0 is None:
         return None
+    assert crop_x0 is not None
+    assert crop_height is not None
+    assert crop_width is not None
     return {
         "y0": int(crop_y0),
         "x0": int(crop_x0),
@@ -1772,7 +1780,7 @@ def _summarize_backend_timing_rows(
 
 
 def _median_speedups(
-    timings: dict[str, dict[str, Any] | None],
+    timings: Mapping[str, dict[str, Any] | None],
     *,
     reference_backend: str,
 ) -> dict[str, float | None]:
@@ -2256,6 +2264,7 @@ def _apply_mask_policy(
     if mask_arr.shape != image_arr.shape:
         raise ValueError("mask array shape does not match the image shape")
 
+    metadata: dict[str, str | list[str] | list[int] | float | None]
     if mask_policy == MASK_POLICY_STRICT:
         bad_mask = mask_arr != 0
         metadata = {

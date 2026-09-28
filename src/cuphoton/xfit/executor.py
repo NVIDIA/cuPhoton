@@ -176,7 +176,8 @@ def _chunk_dataset(
         candidate_id=dataset.candidate_id[start:stop],
         images=dataset.images[start:stop],
         initial=initial,
-        **auxiliaries,
+        mask=auxiliaries["mask"],
+        variance=auxiliaries["variance"],
     )
 
 
@@ -185,7 +186,8 @@ class XFitWorker:
 
     def __init__(self, options: Mapping[str, Any]) -> None:
         self.options = dict(options)
-        self.dataset = _load_input(options)
+        dataset = _load_input(options)
+        self.dataset: XFitDataset | None = dataset
         self.settings = options["fit_options"]
         self.gpu_identity = collect_gpu_identity(self.settings["backend"])
         self.config = LMConfig(
@@ -200,15 +202,16 @@ class XFitWorker:
         )
         self.model: Any = "gaussian"
         if self.settings["model"] == "stamp":
-            basis = np.asarray(self.dataset.stamp_basis)
+            basis = np.asarray(dataset.stamp_basis)
             self.model = StampDipoleModel(
                 basis[0] if basis.ndim == 3 else basis,
-                image_shape=tuple(self.dataset.images.shape[-2:]),
+                image_shape=tuple(dataset.images.shape[-2:]),
                 evaluation=self.settings["stamp_evaluation"],
                 scale=self.settings["stamp_scale"],
             )
 
     def run_item(self, item: WorkItem, item_dir: Path) -> Mapping[str, Any]:
+        assert self.dataset is not None
         started = time.perf_counter()
         start, stop = _range(item, self.options)
         dataset = _chunk_dataset(self.dataset, start, stop)
@@ -236,10 +239,11 @@ class XFitWorker:
         _check_input_stat(self.options)
         item_dir.mkdir(parents=True, exist_ok=False)
         archive = item_dir / "result.npz"
+        # Result array names never include the NumPy option allow_pickle.
         np.savez_compressed(
             archive,
             candidate_id=dataset.candidate_id,
-            **{
+            **{  # type: ignore[arg-type]
                 name: np.asarray(getattr(result, name))
                 for name in _ARRAY_FIELDS
             },
@@ -466,12 +470,31 @@ def finalize_xfit_round(
         name: np.concatenate([chunk[name] for chunk in chunks])
         for name in _ARRAY_FIELDS
     }
-    values["uncertainty_reason"] = tuple(
-        values["uncertainty_reason"].tolist()
-    )
     result = DipoleFitResult(
-        **values,
-        **{**metadata, "parameter_names": tuple(metadata["parameter_names"])},
+        parameters=values["parameters"],
+        status=values["status"],
+        converged=values["converged"],
+        evaluations=values["evaluations"],
+        residual_norm=values["residual_norm"],
+        chi_square=values["chi_square"],
+        valid_pixel_count=values["valid_pixel_count"],
+        valid_pixel_fraction=values["valid_pixel_fraction"],
+        null_chi_square=values["null_chi_square"],
+        delta_chi_square=values["delta_chi_square"],
+        fractional_null_improvement=values["fractional_null_improvement"],
+        degrees_of_freedom=values["degrees_of_freedom"],
+        reduced_chi_square=values["reduced_chi_square"],
+        covariance=values["covariance"],
+        standard_errors=values["standard_errors"],
+        uncertainty_valid=values["uncertainty_valid"],
+        residuals=values["residuals"],
+        uncertainty_reason=tuple(values["uncertainty_reason"].tolist()),
+        parameter_names=tuple(metadata["parameter_names"]),
+        backend=metadata["backend"],
+        device=metadata["device"],
+        dtype=metadata["dtype"],
+        model=metadata["model"],
+        mode=metadata["mode"],
     )
     output = round_dir / "scientific"
     summary = write_fit_artifacts(
@@ -512,8 +535,7 @@ def prepare_xfit_workload(
     items, options, dataset = _plan_xfit_chunks(
         input_path, chunk_size=chunk_size, fit_options=fit_options
     )
-    if not retain_input:
-        dataset = None
+    retained_dataset = dataset if retain_input else None
     by_id = {item.item_id: item for item in items}
 
     def validate(record, round_dir):
@@ -541,6 +563,10 @@ def prepare_xfit_workload(
         worker_factory=create_xfit_worker,
         success_record_validator=validate,
         finalize_round=lambda round_dir, records: finalize_xfit_round(
-            round_dir, records, items=items, options=options, _dataset=dataset
+            round_dir,
+            records,
+            items=items,
+            options=options,
+            _dataset=retained_dataset,
         ),
     )

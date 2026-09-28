@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import ModuleType
+from typing import Protocol, cast
 
 import numpy as np
 
@@ -76,11 +77,15 @@ def resolve_backend(name: BackendRequest = "auto") -> Backend:
         return Backend("numpy", np, "cpu")
 
 
+class _DeviceArray(Protocol):
+    def get(self) -> np.ndarray: ...
+
+
 def as_numpy(value: ArrayLike) -> np.ndarray:
     """Copy an array-backend value into a portable NumPy array."""
 
     if type(value).__module__.split(".", maxsplit=1)[0] == "cupy":
-        return np.asarray(value.get())
+        return np.asarray(cast(_DeviceArray, value).get())
     return np.asarray(value)
 
 

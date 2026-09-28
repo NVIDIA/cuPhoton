@@ -112,7 +112,8 @@ std::vector<FilePlan> parse_file_plans(py::sequence file_plans) {
         for (py::handle span_obj : spans) {
             py::sequence span = py::reinterpret_borrow<py::sequence>(span_obj);
             if (py::len(span) != 3) {
-                throw std::invalid_argument("native read spans must be (file_offset, nbytes, host_offset)");
+                throw std::invalid_argument(
+                    "native read spans must be (file_offset, nbytes, host_offset)");
             }
             ReadSpan rs;
             rs.file_offset = as_u64(span[0], "file_offset");
@@ -217,13 +218,10 @@ std::string fits_status_text(int status) {
     return std::string(text);
 }
 
-[[noreturn]] void throw_fits_error(
-    const std::string& path,
-    const char* context,
-    int status) {
+[[noreturn]] void throw_fits_error(const std::string& path, const char* context, int status) {
     throw std::runtime_error(
-        path + ": CFITSIO error in " + context + " (status="
-        + std::to_string(status) + ", " + fits_status_text(status) + ")");
+        path + ": CFITSIO error in " + context + " (status=" + std::to_string(status) + ", "
+        + fits_status_text(status) + ")");
 }
 
 void check_fits(int status, const std::string& path, const char* context) {
@@ -275,9 +273,7 @@ LONGLONG read_key_lnglng_required(fitsfile* fptr, const std::string& path, const
 }
 
 std::optional<LONGLONG> read_key_lnglng_optional(
-    fitsfile* fptr,
-    const std::string& path,
-    const char* key) {
+    fitsfile* fptr, const std::string& path, const char* key) {
     LONGLONG value = 0;
     int status = 0;
     fits_read_key_lnglng(fptr, key, &value, nullptr, &status);
@@ -289,10 +285,7 @@ std::optional<LONGLONG> read_key_lnglng_optional(
 }
 
 double read_key_dbl_optional(
-    fitsfile* fptr,
-    const std::string& path,
-    const char* key,
-    double default_value) {
+    fitsfile* fptr, const std::string& path, const char* key, double default_value) {
     double value = default_value;
     int status = 0;
     fits_read_key_dbl(fptr, key, &value, nullptr, &status);
@@ -304,9 +297,7 @@ double read_key_dbl_optional(
 }
 
 std::optional<std::string> read_key_str_optional(
-    fitsfile* fptr,
-    const std::string& path,
-    const char* key) {
+    fitsfile* fptr, const std::string& path, const char* key) {
     char value[FLEN_VALUE] = {0};
     int status = 0;
     fits_read_key_str(fptr, key, value, nullptr, &status);
@@ -326,10 +317,7 @@ std::string read_key_str_required(fitsfile* fptr, const std::string& path, const
 }
 
 bool read_key_logical_optional(
-    fitsfile* fptr,
-    const std::string& path,
-    const char* key,
-    bool default_value) {
+    fitsfile* fptr, const std::string& path, const char* key, bool default_value) {
     int value = default_value ? 1 : 0;
     int status = 0;
     fits_read_key_log(fptr, key, &value, nullptr, &status);
@@ -403,15 +391,13 @@ void append_compact_read_spans(
         const auto end = off + length;
         if (off > span_end) {
             const auto span_len = span_end - span_start;
-            file_spans.push_back(
-                ReadSpan{span_start, span_len, file_host_base + span_host_offset});
+            file_spans.push_back(ReadSpan{span_start, span_len, file_host_base + span_host_offset});
             cursor += span_len;
             span_start = off;
             span_end = end;
             span_host_offset = cursor;
         }
-        rel_offsets[tile_pos] =
-            static_cast<std::int64_t>(span_host_offset + (off - span_start));
+        rel_offsets[tile_pos] = static_cast<std::int64_t>(span_host_offset + (off - span_start));
         if (end > span_end) {
             span_end = end;
         }
@@ -433,10 +419,10 @@ SectionSpec parse_section(py::object section_obj) {
     }
 
     auto parse_one = [](py::handle obj,
-                        std::int64_t& start,
-                        std::int64_t& stop,
-                        bool& stop_set,
-                        const char* axis) {
+                         std::int64_t& start,
+                         std::int64_t& stop,
+                         bool& stop_set,
+                         const char* axis) {
         if (!py::isinstance<py::slice>(obj)) {
             throw std::invalid_argument(std::string("section ") + axis + " entry must be a slice");
         }
@@ -511,10 +497,7 @@ NativeHduPlan plan_image_hdu(
     hdu.image_bzero = read_key_dbl_optional(fptr, path, "BZERO", 0.0);
     hdu.image_bscale = read_key_dbl_optional(fptr, path, "BSCALE", 1.0);
 
-    file_spans.push_back(ReadSpan{
-        static_cast<std::uint64_t>(datastart),
-        nbytes,
-        file_host_offset});
+    file_spans.push_back(ReadSpan{static_cast<std::uint64_t>(datastart), nbytes, file_host_offset});
     return hdu;
 }
 
@@ -534,8 +517,8 @@ void build_tile_grid_2d(
         roi_r1 = section.row_stop_set ? section.row_stop : H;
         roi_c0 = section.col_start;
         roi_c1 = section.col_stop_set ? section.col_stop : W;
-        if (!(0 <= roi_r0 && roi_r0 < roi_r1 && roi_r1 <= H
-              && 0 <= roi_c0 && roi_c0 < roi_c1 && roi_c1 <= W)) {
+        if (!(0 <= roi_r0 && roi_r0 < roi_r1 && roi_r1 <= H && 0 <= roi_c0 && roi_c0 < roi_c1
+                && roi_c1 <= W)) {
             throw std::runtime_error("section out of bounds for compressed image");
         }
     }
@@ -630,8 +613,8 @@ NativeHduPlan plan_compressed_hdu(
         throw std::runtime_error(path + ": ZSCALE column exists but ZZERO is missing");
     }
     if (hdu.quantized) {
-        const auto zquantiz = uppercase_ascii(
-            read_key_str_optional(fptr, path, "ZQUANTIZ").value_or("NO_DITHER"));
+        const auto zquantiz =
+            uppercase_ascii(read_key_str_optional(fptr, path, "ZQUANTIZ").value_or("NO_DITHER"));
         if (zquantiz != "NO_DITHER" && zquantiz != "NONE") {
             throw std::runtime_error(path + ": dithered ZQUANTIZ is not supported");
         }
@@ -705,8 +688,7 @@ NativePlannedFile plan_native_file_cfitsio(
         NativeHduPlan hdu;
         const bool zimage = read_key_logical_optional(fptr.get(), path, "ZIMAGE", false);
         if (zimage) {
-            hdu = plan_compressed_hdu(
-                fptr.get(), path, hdu_index, section, cursor, planned.spans);
+            hdu = plan_compressed_hdu(fptr.get(), path, hdu_index, section, cursor, planned.spans);
         } else if (hdu_type == IMAGE_HDU) {
             hdu = plan_image_hdu(fptr.get(), path, hdu_index, cursor, planned.spans);
         } else {
@@ -802,12 +784,7 @@ py::tuple py_planned_file(const NativePlannedFile& planned) {
         spans.append(py::make_tuple(span.file_offset, span.nbytes, span.host_offset));
     }
 
-    return py::make_tuple(
-        planned.path,
-        planned.file_index,
-        hdus,
-        spans,
-        planned.total_bytes);
+    return py::make_tuple(planned.path, planned.file_index, hdus, spans, planned.total_bytes);
 }
 
 py::list plan_native_files(
@@ -902,10 +879,11 @@ py::list plan_native_files(
 
 class NativeBatchBuilder {
 public:
-    NativeBatchBuilder(std::size_t decode_batch_files,
-                      std::size_t batch_queue_depth,
-                      std::size_t native_read_threads,
-                      int device_id)
+    NativeBatchBuilder(
+        std::size_t decode_batch_files,
+        std::size_t batch_queue_depth,
+        std::size_t native_read_threads,
+        int device_id)
         : decode_batch_files_(decode_batch_files),
           batch_queue_depth_(batch_queue_depth),
           native_read_threads_(native_read_threads),
@@ -1025,7 +1003,7 @@ public:
             std::unique_lock<std::mutex> lock(mutex_);
             cv_ready_.wait(lock, [&] {
                 return stop_ || error_ || completed_.count(next_emit_batch_id_) > 0
-                       || (input_closed_ && outstanding_batches_ == 0);
+                    || (input_closed_ && outstanding_batches_ == 0);
             });
 
             if (completed_.count(next_emit_batch_id_) > 0) {
@@ -1054,9 +1032,8 @@ public:
             files.append(py::make_tuple(file.file_index, file.batch_offset));
         }
         auto holder = new std::shared_ptr<ReadyBatch>(batch);
-        py::capsule owner(holder, [](void* p) {
-            delete reinterpret_cast<std::shared_ptr<ReadyBatch>*>(p);
-        });
+        py::capsule owner(
+            holder, [](void* p) { delete reinterpret_cast<std::shared_ptr<ReadyBatch>*>(p); });
         std::uintptr_t ptr = 0;
         std::size_t nbytes = 0;
         if (batch->device_buffer.owner) {
@@ -1107,7 +1084,8 @@ private:
                 throw std::runtime_error("native batch device buffer is not allocated");
             }
             auto dst = static_cast<void*>(
-                batch->device_buffer.data + task.batch_offset + static_cast<std::size_t>(span.host_offset));
+                batch->device_buffer.data + task.batch_offset
+                + static_cast<std::size_t>(span.host_offset));
             auto future = file_handle.pread(
                 dst,
                 static_cast<std::size_t>(span.nbytes),
@@ -1194,9 +1172,8 @@ private:
                 ReadTask task;
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    cv_not_empty_.wait(lock, [&] {
-                        return stop_ || !pending_.empty() || input_closed_;
-                    });
+                    cv_not_empty_.wait(
+                        lock, [&] { return stop_ || !pending_.empty() || input_closed_; });
                     if (stop_ || (pending_.empty() && input_closed_)) {
                         break;
                     }
@@ -1237,44 +1214,60 @@ private:
     std::atomic<std::uint64_t> device_batches_{0};
 };
 
-
-
 void bind_io(py::module_& m) {
     py::class_<NativeBatchBuilder>(m, "NativeBatchBuilder")
-        .def(py::init<std::size_t, std::size_t, std::size_t, int>(),
-             py::arg("decode_batch_files"),
-             py::arg("batch_queue_depth"),
-             py::arg("native_read_threads"),
-             py::arg("device_id") = -1,
-             "Background native worker pool that builds KvikIO device file batches.")
-        .def("submit_batch", &NativeBatchBuilder::submit_batch,
-             py::arg("batch_id"),
-             py::arg("file_plans"),
-             "Submit one planned batch of files for native KvikIO reads.")
-        .def("close_input", &NativeBatchBuilder::close_input,
-             "Signal that no more batches will be submitted.")
-        .def("next_batch", &NativeBatchBuilder::next_batch,
-             "Return the next ready batch as (owner, device_ptr, device_nbytes, files), or None.")
-        .def("request_stop", &NativeBatchBuilder::request_stop,
-             "Stop the background builder and join its native threads.")
-        .def("pool_stats", &NativeBatchBuilder::pool_stats,
-             "Return native device buffer pool statistics for this builder's CUDA device.")
-        .def("device_pool_stats", &NativeBatchBuilder::device_pool_stats,
-             "Return native device buffer pool statistics for this builder's CUDA device.")
-        .def("pinned_pool_stats", &NativeBatchBuilder::pinned_pool_stats,
-             "Return legacy pinned host buffer pool statistics for this builder's CUDA device.")
-        .def("io_stats", &NativeBatchBuilder::io_stats,
-             "Return native KvikIO read statistics for this builder.");
+        .def(
+            py::init<std::size_t, std::size_t, std::size_t, int>(),
+            py::arg("decode_batch_files"),
+            py::arg("batch_queue_depth"),
+            py::arg("native_read_threads"),
+            py::arg("device_id") = -1,
+            "Background native worker pool that builds KvikIO device file batches.")
+        .def(
+            "submit_batch",
+            &NativeBatchBuilder::submit_batch,
+            py::arg("batch_id"),
+            py::arg("file_plans"),
+            "Submit one planned batch of files for native KvikIO reads.")
+        .def(
+            "close_input",
+            &NativeBatchBuilder::close_input,
+            "Signal that no more batches will be submitted.")
+        .def(
+            "next_batch",
+            &NativeBatchBuilder::next_batch,
+            "Return the next ready batch as (owner, device_ptr, device_nbytes, files), or None.")
+        .def(
+            "request_stop",
+            &NativeBatchBuilder::request_stop,
+            "Stop the background builder and join its native threads.")
+        .def(
+            "pool_stats",
+            &NativeBatchBuilder::pool_stats,
+            "Return native device buffer pool statistics for this builder's CUDA device.")
+        .def(
+            "device_pool_stats",
+            &NativeBatchBuilder::device_pool_stats,
+            "Return native device buffer pool statistics for this builder's CUDA device.")
+        .def(
+            "pinned_pool_stats",
+            &NativeBatchBuilder::pinned_pool_stats,
+            "Return legacy pinned host buffer pool statistics for this builder's CUDA device.")
+        .def(
+            "io_stats",
+            &NativeBatchBuilder::io_stats,
+            "Return native KvikIO read statistics for this builder.");
     m.attr("NativeBatchReader") = m.attr("NativeBatchBuilder");
 
-    m.def("plan_native_files", &plan_native_files,
-          py::arg("paths"),
-          py::arg("file_indices"),
-          py::arg("hdu_indices"),
-          py::arg("native_plan_threads"),
-          py::arg("section") = py::none(),
-          "Plan ImageHDU/CompImageHDU GDS reads with CFITSIO in native worker threads.");
+    m.def(
+        "plan_native_files",
+        &plan_native_files,
+        py::arg("paths"),
+        py::arg("file_indices"),
+        py::arg("hdu_indices"),
+        py::arg("native_plan_threads"),
+        py::arg("section") = py::none(),
+        "Plan ImageHDU/CompImageHDU GDS reads with CFITSIO in native worker threads.");
 }
-
 
 }  // namespace xdr_gpu

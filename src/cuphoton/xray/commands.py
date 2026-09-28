@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import asdict as dataclass_asdict
 from pathlib import Path
+from typing import Any
 
 from cuphoton.core.cli import (
     BoolInvariant,
@@ -115,14 +116,15 @@ class ReportCommand(_XRayCommand):
     _shortname_ = None
     _handler_name_ = "_report"
 
-    input = None
+    # Handler options intentionally reuse the framework stream names.
+    input: Path | None = None  # type: ignore[assignment]
 
     class InputArg(PathValueInvariant):
         _arg = "-i/--input"
         _help = "Run output directory containing analysis artifacts."
         _required = True
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "-o/--output"
@@ -163,7 +165,7 @@ class ValidationVizCommand(_XRayCommand):
         _help = "Directory containing extracted trace NPZ files."
         _required = False
 
-    profile_log = []
+    profile_log: list[Path] = []
 
     class ProfileLogArg(SequenceInvariant):
         _arg = "--profile-log"
@@ -172,7 +174,7 @@ class ValidationVizCommand(_XRayCommand):
         _item_type = Path
         _default = []
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
@@ -285,7 +287,7 @@ class PhononVizCommand(_XRayCommand):
         _help = "Exclusive last detector row for detector artifact mode."
         _required = False
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
@@ -453,7 +455,7 @@ class WorkflowVizCommand(_XRayCommand):
         _item_type = int
         _metavar = ("WIDTH", "HEIGHT")
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -487,7 +489,7 @@ class WorkflowVizCommand(_XRayCommand):
         _help = "Disable the reference off-signal shift used for ratios."
         _required = False
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
@@ -1832,7 +1834,7 @@ class ModelOrderSweepCommand(_XRayCommand):
         _help = "Absolute detector row to extract inside the ROI."
         _required = False
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2029,7 +2031,7 @@ class SubspaceBenchmarkCommand(_XRayCommand):
         _help = "Absolute detector row to extract inside the ROI."
         _required = False
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2327,7 +2329,7 @@ class ExtractTraceCommand(_XRayCommand):
         _help = "Laser-off HDF5 filename or absolute path."
         _required = True
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
@@ -2380,7 +2382,7 @@ class ExtractTraceCommand(_XRayCommand):
         _required = False
         _item_type = int
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2493,7 +2495,7 @@ class DetectorArtifactsCommand(_XRayCommand):
         _default = (16, 16)
         _metavar = ("WIDTH", "HEIGHT")
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2896,7 +2898,7 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _default = (16, 16)
         _metavar = ("WIDTH", "HEIGHT")
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -3210,7 +3212,7 @@ class DetectorArtifactMergeCommand(_XRayCommand):
         _help = "Distributed plan JSON containing shard output directories."
         _required = False
 
-    shard_dir = []
+    shard_dir: list[Path] = []
 
     class ShardDirArg(SequenceInvariant):
         _arg = "--shard-dir"
@@ -3387,7 +3389,7 @@ class RoiCandidatesCommand(_XRayCommand):
         _required = False
         _default = 10
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -3447,7 +3449,7 @@ class DetectorMaskCommand(_XRayCommand):
         _required = False
         _default = 16
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -6071,7 +6073,7 @@ def _load_trace_npz(path: Path):
             )
         time = np.asarray(loaded["time"], dtype=float)
         trace = np.asarray(loaded["trace"], dtype=float)
-        source = {
+        source: dict[str, Any] = {
             "kind": "trace-npz",
             "path": str(trace_path),
         }

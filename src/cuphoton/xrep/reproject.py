@@ -258,7 +258,7 @@ def reproject_array_device(
     if prepared is None:
         prepared = prepare_reprojection(
             spec,
-            source_shape=tuple(int(value) for value in source.shape),
+            source_shape=(int(source.shape[0]), int(source.shape[1])),
             xp=_prepare_array_module(backend),
         )
     if not hasattr(backend_impl, "reproject_device"):

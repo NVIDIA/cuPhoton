@@ -913,6 +913,7 @@ def linear_prediction_variable_artifacts_cupy_batched(
     else:
         from cupyx.scipy.signal import savgol_filter as cupy_savgol_filter
 
+        assert polyorder is not None
         filtered = _savgol_cupy_batched(
             gpu_traces,
             window_length=window_length,
@@ -1047,8 +1048,8 @@ def linear_prediction_batched_legacy_tiles_cupy(
         raise ValueError("time must be one-dimensional")
 
     row_counts = []
-    flat_roots = []
-    flat_singular_values = []
+    flat_roots: list[cp.ndarray] = []
+    flat_singular_values: list[cp.ndarray] = []
     for tile, roots, singular_values in zip(
         tiles,
         root_tiles,
@@ -1381,6 +1382,7 @@ def benchmark_linear_prediction_p1_batch(
                     np.max(np.abs(cpu_coefficients - gpu_coefficients))
                 )
             if roots_backend == "eigvals":
+                assert batched_result is not None
                 gpu_eigenvalues = np.stack(
                     [
                         _sort_complex(row)

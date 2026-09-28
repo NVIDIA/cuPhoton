@@ -13,7 +13,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -22,6 +22,9 @@ from cuphoton.core.bulk import WorkItem, atomic_write_json, read_json_mapping
 
 from .hsc import prediction_group_indices
 from .metrics import sigmoid
+
+if TYPE_CHECKING:
+    from .dataset import StampDataset
 
 _SCHEMA = "cuphoton.xscan.executor-chunk/v1"
 _OUTPUT_ARRAYS = ("logits", "labels", "probabilities", "sample_index")
@@ -240,7 +243,7 @@ class XScanInferenceWorker:
             xfit_feature_dir=feature_dir,
             use_xfit_features=options["use_xfit_features"],
         )
-        self.dataset = _checkpoint_dataset(
+        self.dataset: StampDataset | None = _checkpoint_dataset(
             checkpoint=checkpoint,
             dataset_dir=Path(options["dataset_dir"]),
             split=options["split"],
@@ -253,7 +256,9 @@ class XScanInferenceWorker:
             raise ValueError(
                 "XScan worker split differs from planned sample order"
             )
-        self.metadata_rows = load_metadata_rows(Path(options["dataset_dir"]))
+        self.metadata_rows: list[dict[str, Any]] | None = load_metadata_rows(
+            Path(options["dataset_dir"])
+        )
         self.summary = {
             "workflow": "infer",
             "run_dir": options["run_dir"],
@@ -297,6 +302,7 @@ class XScanInferenceWorker:
     def run_item(self, item: WorkItem, item_dir: Path) -> Mapping[str, Any]:
         from .training import predict_dataset
 
+        assert self.dataset is not None
         started = time.perf_counter()
         start, stop = _range(item, self.options)
         _check_inputs(self.options)

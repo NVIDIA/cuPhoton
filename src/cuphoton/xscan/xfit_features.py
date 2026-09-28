@@ -11,10 +11,11 @@ import math
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence, cast
+from typing import Any, Literal, SupportsIndex, cast
 
 import numpy as np
 import pyarrow as pa
@@ -307,7 +308,7 @@ class DeviceXFitFeatures:
         if not self.values.flags.c_contiguous:
             raise ValueError("values must be C-contiguous")
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError(
             "DeviceXFitFeatures cannot be pickled; keep device features "
             "inside the producing process"
@@ -2592,7 +2593,7 @@ def _validate_canonical_schema(raw: dict[str, Any]) -> XFitFeatureSchema:
 def _load_bundle_array(
     feature_root: Path,
     schema: XFitFeatureSchema,
-    key: str,
+    key: Literal["candidate_id", "features", "input_image_sha256"],
 ) -> tuple[np.ndarray, str]:
     artifact = schema["artifacts"][key]
     artifact_name = artifact["name"]

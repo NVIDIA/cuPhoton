@@ -15,6 +15,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
+from numpy.typing import DTypeLike
 
 from cuphoton import __version__ as CUPHOTON_VERSION
 from cuphoton.core.runtime import runtime_metadata
@@ -115,12 +116,12 @@ _FIT_DIAGNOSTIC_RAGGED_GROUPS = {
     "p2_singular_value_offsets": ("p2_singular_values",),
 }
 
-_ITERATIVE_DIAGNOSTIC_DTYPES = {
+_ITERATIVE_DIAGNOSTIC_DTYPES: dict[str, DTypeLike] = {
     name: dtype
     for name, dtype in _FIT_DIAGNOSTIC_DTYPES.items()
     if not name.startswith(("p1_", "p2_")) and name != "selected_model_order"
 }
-_ITERATIVE_CONVERGENCE_DTYPES = {
+_ITERATIVE_CONVERGENCE_DTYPES: dict[str, DTypeLike] = {
     "converged": np.int8,
     "optimizer_status": np.dtype("U32"),
     "iterations": np.int64,
@@ -352,6 +353,7 @@ def build_detector_artifacts_cupy(
             "shard_index and shard_count must be provided together"
         )
     if shard_index is not None:
+        assert shard_count is not None
         _require_nonnegative("shard_index", shard_index)
         _require_positive("shard_count", shard_count)
         if shard_index >= shard_count:
@@ -867,12 +869,14 @@ def build_detector_artifacts_cupy(
         },
     }
     if fit_method == "iterative":
+        assert iterative_options is not None
         manifest["fit_method"] = fit_method
         manifest["iterative_options"] = iterative_options.to_dict()
         manifest["frequency_semantics"] = (
             "fitted modal frequencies in cycles per delay unit"
         )
     if shard_index is not None:
+        assert shard_count is not None
         manifest["shard"] = {
             "index": int(shard_index),
             "count": int(shard_count),
@@ -1355,8 +1359,8 @@ def merge_detector_artifact_shards(
         manifest_path=target_output / "manifest.json",
         shard_count=len(shards),
         shape=shape,
-        roi_lower=global_roi_lower,
-        roi_dim=global_roi_dim,
+        roi_lower=(global_roi_lower[0], global_roi_lower[1]),
+        roi_dim=(global_roi_dim[0], global_roi_dim[1]),
         elapsed_s=float(merge_elapsed),
     )
 
@@ -2014,7 +2018,7 @@ def _open_hdf5_block_reader(
 
 def _hdf5_reader_runtime(*, hdf5_reader: str, h5py) -> dict[str, Any]:
     config = h5py.get_config()
-    runtime = {
+    runtime: dict[str, Any] = {
         "backend": (
             "h5py" if hdf5_reader == "h5py" else "h5py-worker-threads"
         ),
@@ -2118,7 +2122,7 @@ def _fit_detector_row(
         if not result.converged:
             raise _IterativeFitConvergenceError(result)
         fft_freq, fft_value = _tdsfft_cupy(cp, time_gpu, trace_gpu)
-        row = {
+        row: dict[str, Any] = {
             "freq": _pad_abs(
                 result.angular_frequency / (2 * np.pi), padded_length
             ),
@@ -3654,7 +3658,8 @@ def _write_npz_atomic(path: Path, arrays: dict[str, np.ndarray]) -> None:
     temporary.unlink(missing_ok=True)
     try:
         with temporary.open("wb") as stream:
-            np.savez(stream, **arrays)
+            # Array names never include the NumPy option allow_pickle.
+            np.savez(stream, **arrays)  # type: ignore[arg-type]
             stream.flush()
         temporary.replace(path)
     finally:

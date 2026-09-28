@@ -964,7 +964,7 @@ def test_shard_result_audit_rejects_duplicate_physical_gpu_identity(
     )
     results = [
         _valid_shard_result(shard, placement, backend=backend)
-        for shard, placement in zip(shards, placements)
+        for shard, placement in zip(shards, placements, strict=True)
     ]
     for worker_id, result in enumerate(results):
         provenance = result["provenance"]
@@ -1009,7 +1009,7 @@ def test_shard_result_audit_allows_distinct_mig_uuids_sharing_pci(
     )
     results = [
         _valid_shard_result(shard, placement, backend=backend)
-        for shard, placement in zip(shards, placements)
+        for shard, placement in zip(shards, placements, strict=True)
     ]
     for worker_id, result in enumerate(results):
         gpu = result["provenance"]["gpu"]
@@ -1046,7 +1046,7 @@ def test_shard_result_audit_rejects_incomparable_same_host_identity(
     )
     results = [
         _valid_shard_result(shard, placement, backend=backend)
-        for shard, placement in zip(shards, placements)
+        for shard, placement in zip(shards, placements, strict=True)
     ]
     results[0]["provenance"]["gpu"]["pci_bus_id"] = None
     results[1]["provenance"]["gpu"]["uuid"] = None
@@ -1086,7 +1086,7 @@ def test_shard_result_audit_rejects_duplicate_uuid_across_hosts(
     )
     results = [
         _valid_shard_result(shard, placement, backend=backend)
-        for shard, placement in zip(shards, placements)
+        for shard, placement in zip(shards, placements, strict=True)
     ]
     for result in results:
         result["provenance"]["gpu"]["uuid"] = "GPU-shared"

@@ -43,4 +43,4 @@ uv pip install --python "$PYTHON" \
 exec env CUPHOTON_XDR_BUILD_EXT=1 uv pip install \
     --python "$PYTHON" \
     --no-build-isolation \
-    -e "$ROOT_DIR[io]"
+    -e "${ROOT_DIR}[io]"

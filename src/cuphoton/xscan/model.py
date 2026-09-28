@@ -661,7 +661,7 @@ class PairDecoder(nn.Module):
             ]
         )
         linear_in_features = output_nc * sum(
-            height * width for height, width in zip(hs, ws)
+            height * width for height, width in zip(hs, ws, strict=False)
         )
         self.lin_1 = nn.Linear(linear_in_features, 256)
         self.lin_2 = nn.Linear(256, 1)
@@ -738,7 +738,7 @@ class TripletDecoder(nn.Module):
             ]
         )
         linear_in_features = output_nc * sum(
-            height * width for height, width in zip(hs, ws)
+            height * width for height, width in zip(hs, ws, strict=False)
         )
         self.lin_1 = nn.Linear(linear_in_features, 256)
         self.lin_2 = nn.Linear(256, 1)

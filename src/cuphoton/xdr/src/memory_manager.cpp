@@ -37,7 +37,9 @@ struct PinnedHostBuffer {
             return;
         }
         void* ptr = nullptr;
-        check_cuda(cudaHostAlloc(&ptr, capacity, cudaHostAllocDefault), "cudaHostAlloc native batch buffer");
+        check_cuda(
+            cudaHostAlloc(&ptr, capacity, cudaHostAllocDefault),
+            "cudaHostAlloc native batch buffer");
         data = static_cast<std::uint8_t*>(ptr);
     }
 
@@ -61,8 +63,7 @@ public:
         if (nbytes == 0) {
             auto* empty = new PinnedHostBuffer(device_id, 0);
             return std::shared_ptr<PinnedHostBuffer>(
-                empty,
-                [](PinnedHostBuffer* ptr) { delete ptr; });
+                empty, [](PinnedHostBuffer* ptr) { delete ptr; });
         }
 
         {
@@ -211,15 +212,12 @@ private:
     }
 
     std::shared_ptr<PinnedHostBuffer> make_shared_from_raw(
-        std::unique_ptr<PinnedHostBuffer> buffer,
-        std::size_t logical_size) {
+        std::unique_ptr<PinnedHostBuffer> buffer, std::size_t logical_size) {
         buffer->size = logical_size;
         PinnedHostBuffer* raw = buffer.release();
-        return std::shared_ptr<PinnedHostBuffer>(
-            raw,
-            [](PinnedHostBuffer* ptr) {
-                native_pinned_pool().release(std::unique_ptr<PinnedHostBuffer>(ptr));
-            });
+        return std::shared_ptr<PinnedHostBuffer>(raw, [](PinnedHostBuffer* ptr) {
+            native_pinned_pool().release(std::unique_ptr<PinnedHostBuffer>(ptr));
+        });
     }
 
     py::dict stats_for_locked(int device_id) {
@@ -251,9 +249,7 @@ private:
         return out;
     }
 
-    void clear_locked(
-        int device_id,
-        std::vector<std::unique_ptr<PinnedHostBuffer>>& to_free) {
+    void clear_locked(int device_id, std::vector<std::unique_ptr<PinnedHostBuffer>>& to_free) {
         auto it = caches_.find(device_id);
         if (it == caches_.end()) {
             return;
@@ -281,8 +277,8 @@ private:
         const long pages = ::sysconf(_SC_PHYS_PAGES);
         const long page_size = ::sysconf(_SC_PAGE_SIZE);
         if (pages > 0 && page_size > 0) {
-            const auto ram_bytes = static_cast<unsigned long long>(pages)
-                                   * static_cast<unsigned long long>(page_size);
+            const auto ram_bytes =
+                static_cast<unsigned long long>(pages) * static_cast<unsigned long long>(page_size);
             const auto quarter = ram_bytes / 4;
             if (quarter < static_cast<unsigned long long>(default_cap)) {
                 default_cap = static_cast<std::size_t>(quarter);
@@ -366,9 +362,7 @@ public:
     std::shared_ptr<DeviceBuffer> acquire(int device_id, std::size_t nbytes) {
         if (nbytes == 0) {
             auto* empty = new DeviceBuffer(device_id, 0);
-            return std::shared_ptr<DeviceBuffer>(
-                empty,
-                [](DeviceBuffer* ptr) { delete ptr; });
+            return std::shared_ptr<DeviceBuffer>(empty, [](DeviceBuffer* ptr) { delete ptr; });
         }
 
         {
@@ -514,15 +508,12 @@ private:
     }
 
     std::shared_ptr<DeviceBuffer> make_shared_from_raw(
-        std::unique_ptr<DeviceBuffer> buffer,
-        std::size_t logical_size) {
+        std::unique_ptr<DeviceBuffer> buffer, std::size_t logical_size) {
         buffer->size = logical_size;
         DeviceBuffer* raw = buffer.release();
-        return std::shared_ptr<DeviceBuffer>(
-            raw,
-            [](DeviceBuffer* ptr) {
-                native_device_pool().release(std::unique_ptr<DeviceBuffer>(ptr));
-            });
+        return std::shared_ptr<DeviceBuffer>(raw, [](DeviceBuffer* ptr) {
+            native_device_pool().release(std::unique_ptr<DeviceBuffer>(ptr));
+        });
     }
 
     py::dict stats_for_locked(int device_id) {
@@ -554,9 +545,7 @@ private:
         return out;
     }
 
-    void clear_locked(
-        int device_id,
-        std::vector<std::unique_ptr<DeviceBuffer>>& to_free) {
+    void clear_locked(int device_id, std::vector<std::unique_ptr<DeviceBuffer>>& to_free) {
         auto it = caches_.find(device_id);
         if (it == caches_.end()) {
             return;
@@ -615,8 +604,6 @@ DeviceBufferPool& native_device_pool() {
     return *pool;
 }
 
-
-
 NativeDeviceAllocation acquire_native_device_allocation(int device_id, std::size_t nbytes) {
     auto buffer = native_device_pool().acquire(device_id, nbytes);
     NativeDeviceAllocation allocation;
@@ -652,34 +639,38 @@ py::tuple acquire_native_device_buffer(std::size_t nbytes, int device_id) {
         allocation = acquire_native_device_allocation(device_id, nbytes);
     }
     auto holder = new std::shared_ptr<void>(std::move(allocation.owner));
-    py::capsule owner(holder, [](void* p) {
-        delete reinterpret_cast<std::shared_ptr<void>*>(p);
-    });
-    return py::make_tuple(owner, reinterpret_cast<std::uintptr_t>(allocation.data), allocation.size);
+    py::capsule owner(holder, [](void* p) { delete reinterpret_cast<std::shared_ptr<void>*>(p); });
+    return py::make_tuple(
+        owner, reinterpret_cast<std::uintptr_t>(allocation.data), allocation.size);
 }
 
 void bind_memory_manager(py::module_& m) {
-    m.def("native_pinned_pool_stats",
-          [](int device_id) { return native_pinned_pool_stats_dict(device_id); },
-          py::arg("device_id") = -1,
-          "Return legacy process-wide pinned host buffer pool statistics. device_id=-1 sums all devices.");
-    m.def("clear_native_pinned_pool",
-          [](int device_id) { clear_native_pinned_pool_impl(device_id); },
-          py::arg("device_id") = -1,
-          "Free idle process-wide pinned host buffers. device_id=-1 clears all devices.");
-    m.def("native_device_pool_stats",
-          [](int device_id) { return native_device_pool_stats_dict(device_id); },
-          py::arg("device_id") = -1,
-          "Return process-wide native device buffer pool statistics. device_id=-1 sums all devices.");
-    m.def("clear_native_device_pool",
-          [](int device_id) { clear_native_device_pool_impl(device_id); },
-          py::arg("device_id") = -1,
-          "Free idle process-wide native device buffers. device_id=-1 clears all devices.");
-    m.def("acquire_native_device_buffer", &acquire_native_device_buffer,
-          py::arg("nbytes"),
-          py::arg("device_id") = -1,
-          "Acquire a uint8-sized native pooled device buffer as (owner, ptr, nbytes).");
+    m.def(
+        "native_pinned_pool_stats",
+        [](int device_id) { return native_pinned_pool_stats_dict(device_id); },
+        py::arg("device_id") = -1,
+        "Return legacy process-wide pinned host buffer pool statistics. device_id=-1 sums all devices.");
+    m.def(
+        "clear_native_pinned_pool",
+        [](int device_id) { clear_native_pinned_pool_impl(device_id); },
+        py::arg("device_id") = -1,
+        "Free idle process-wide pinned host buffers. device_id=-1 clears all devices.");
+    m.def(
+        "native_device_pool_stats",
+        [](int device_id) { return native_device_pool_stats_dict(device_id); },
+        py::arg("device_id") = -1,
+        "Return process-wide native device buffer pool statistics. device_id=-1 sums all devices.");
+    m.def(
+        "clear_native_device_pool",
+        [](int device_id) { clear_native_device_pool_impl(device_id); },
+        py::arg("device_id") = -1,
+        "Free idle process-wide native device buffers. device_id=-1 clears all devices.");
+    m.def(
+        "acquire_native_device_buffer",
+        &acquire_native_device_buffer,
+        py::arg("nbytes"),
+        py::arg("device_id") = -1,
+        "Acquire a uint8-sized native pooled device buffer as (owner, ptr, nbytes).");
 }
-
 
 }  // namespace xdr_gpu

@@ -34,7 +34,7 @@ class HscNpyStore:
     metadata: dict[str, Any]
 
     @classmethod
-    def open(cls, base: str | Path) -> "HscNpyStore":
+    def open(cls, base: str | Path) -> HscNpyStore:
         root = resolve_hsc_npy_dir(base)
         metadata = json.loads((root / "metadata.json").read_text())
         images = np.load(root / "images.npy", mmap_mode="r")
@@ -355,11 +355,11 @@ def load_hsc_catalog_candidates(
                     flux = None
         if flux_min is not None and (flux is None or not np.isfinite(flux)):
             continue
-        if flux_min is not None and flux < flux_min:
+        if flux_min is not None and flux is not None and flux < flux_min:
             continue
         if flux_max is not None and (flux is None or not np.isfinite(flux)):
             continue
-        if flux_max is not None and flux > flux_max:
+        if flux_max is not None and flux is not None and flux > flux_max:
             continue
 
         extendedness = None
@@ -374,13 +374,21 @@ def load_hsc_catalog_candidates(
             extendedness is None or not np.isfinite(extendedness)
         ):
             continue
-        if extendedness_min is not None and extendedness < extendedness_min:
+        if (
+            extendedness_min is not None
+            and extendedness is not None
+            and extendedness < extendedness_min
+        ):
             continue
         if extendedness_max is not None and (
             extendedness is None or not np.isfinite(extendedness)
         ):
             continue
-        if extendedness_max is not None and extendedness > extendedness_max:
+        if (
+            extendedness_max is not None
+            and extendedness is not None
+            and extendedness > extendedness_max
+        ):
             continue
 
         object_id = None
@@ -704,7 +712,7 @@ def tile_group(center_y: int, center_x: int, tile_size: int) -> str:
 def assign_split(
     group: str, seed: int, fractions: tuple[float, float, float]
 ) -> int:
-    digest = hashlib.sha1(f"{seed}:{group}".encode("utf-8")).digest()
+    digest = hashlib.sha1(f"{seed}:{group}".encode()).digest()
     number = int.from_bytes(digest[:8], byteorder="big", signed=False)
     value = number / float(2**64 - 1)
     train_frac, val_frac, _ = fractions

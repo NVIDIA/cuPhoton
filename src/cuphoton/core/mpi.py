@@ -129,9 +129,11 @@ def run_mpi_work_items(
     _mpi_failure_consensus(comm, "MPI workload preflight", preflight_error)
     _agree_payload(comm, {"prepare_on_root": prepare_on_root})
     if prepare_on_root:
-        payload = comm.bcast(
-            spec.identity_payload() if context.rank == 0 else None, root=0
-        )
+        payload = None
+        if context.rank == 0:
+            assert spec is not None
+            payload = spec.identity_payload()
+        payload = comm.bcast(payload, root=0)
         descriptor_error = None
         try:
             if context.rank != 0:

@@ -1246,7 +1246,11 @@ def _display_value(value: Any) -> str:
 
 def _row_axis_values(records: tuple[TraceRecord, ...]) -> list[float]:
     if all(record.row_y is not None for record in records):
-        return [float(record.row_y) for record in records]
+        return [
+            float(record.row_y)
+            for record in records
+            if record.row_y is not None
+        ]
     return [float(index) for index, _record in enumerate(records)]
 
 

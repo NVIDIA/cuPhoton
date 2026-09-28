@@ -56,7 +56,8 @@ def find_value_drop_position(
         )
 
     coefficients, _pcov = opt.curve_fit(_cubic, delay, signal)
-    fit = tuple(float(value) for value in coefficients)
+    a, b, c, d = (float(value) for value in coefficients)
+    fit = (a, b, c, d)
     drop = fit[3] < 0
     change = "drop" if drop else "rise"
 

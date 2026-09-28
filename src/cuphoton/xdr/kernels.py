@@ -15,7 +15,7 @@ import functools
 import numpy as np
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _byteswap_kernel(itemsize: int):
     """Return an in-place byteswap kernel for an item size.
 
@@ -139,7 +139,7 @@ def scatter_tiles_2d(
     )
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _scatter_tiles_2d_kernel(itemsize: int):
     import cupy as cp
 
@@ -186,7 +186,7 @@ def _scatter_tiles_2d_kernel(itemsize: int):
     return cp.RawKernel(src, f"scatter_tiles_{itemsize}")
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _unshuffle_gzip2_kernel(itemsize: int):
     import cupy as cp
 
@@ -246,7 +246,7 @@ def unshuffle_gzip2_tiles(
     )
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _dequantize_int_to_float_kernel(int_itemsize: int, float_dtype_char: str):
     """Per-tile `out[p] = (float)int_buf[p] * zscale[t] + zzero[t]`.
 

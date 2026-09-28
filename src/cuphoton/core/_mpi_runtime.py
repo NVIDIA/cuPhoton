@@ -11,7 +11,7 @@ import socket
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, TypeGuard
 
 from .bulk import error_payload
 
@@ -104,7 +104,7 @@ def _mpi_failure_consensus(
         raise RuntimeError(str(decision["error"]))
 
 
-def _valid_error(value: Any) -> bool:
+def _valid_error(value: object) -> TypeGuard[Mapping[str, object]]:
     return isinstance(value, Mapping) and all(
         isinstance(value.get(field), str) and bool(value[field])
         for field in ("type", "message")
@@ -199,7 +199,7 @@ def _local_rank(
         ),
     }
     keys = keys_by_launcher.get(
-        launcher,
+        launcher or "",
         (
             "OMPI_COMM_WORLD_LOCAL_RANK",
             "PMIX_LOCAL_RANK",

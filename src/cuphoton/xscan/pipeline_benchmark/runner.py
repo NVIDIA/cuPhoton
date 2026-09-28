@@ -399,7 +399,7 @@ def provenance() -> dict[str, Any]:
         "xscan/training.py",
         "xscan/model.py",
     )
-    packages = {}
+    packages: dict[str, str | None] = {}
     cupy_packages = importlib.metadata.packages_distributions().get(
         "cupy", []
     )

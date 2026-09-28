@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from pathlib import Path
 from types import ModuleType
-from typing import Any, TextIO
+from typing import Any, Literal, TextIO
 
 from .component import ComponentSpec
 from .context import ApplicationContext
@@ -172,6 +172,23 @@ def collect_invariants(
 class Command(AbstractContextManager["Command"], abc.ABC):
     """Context-managed command with a deterministic execution lifecycle."""
 
+    input: TextIO
+    output: TextIO
+    error: TextIO
+    component: ComponentSpec | None
+    context: ApplicationContext | None
+    arguments: list[Any]
+    options: dict[str, Any]
+    result: Any
+    load_order: list[str]
+    _pending_values: dict[str, Any]
+    _exit_callbacks: list[
+        tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]
+    ]
+    _chained_commands: list[Command]
+    _lifecycle_state: str
+    _invariant_map: dict[str, type[Invariant]]
+
     _log_level_ = True
     _quiet_ = False
     _verbose_ = False
@@ -224,7 +241,7 @@ class Command(AbstractContextManager["Command"], abc.ABC):
     def __enter__(self) -> Command:
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> bool:
+    def __exit__(self, exc_type, exc, traceback) -> Literal[False]:
         self._run_exit_callbacks()
         return False
 

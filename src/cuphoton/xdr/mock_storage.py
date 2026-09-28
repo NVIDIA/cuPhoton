@@ -128,7 +128,7 @@ class StorageCache:
                 while pos < nbytes:
                     got = f.readinto(view[pos:])
                     if not got:
-                        raise IOError(
+                        raise OSError(
                             f"short read on {path} at {pos}/{nbytes}"
                         )
                     pos += got

@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Literal, ParamSpec, TypeVar
+from typing import Any, Literal, ParamSpec, TypeVar
 
 import numpy as np
 
@@ -31,6 +32,11 @@ from ._types import (
     FIT_MODES,
     MODEL_NAMES,
     STAMP_EVALUATIONS,
+    BackendRequest,
+    ComputeDType,
+    FitMode,
+    ModelName,
+    StampEvaluation,
 )
 from .io import (
     XFitDataset,
@@ -131,7 +137,8 @@ class XFitCommand(InvariantAwareCommand):
 class DataInspectCommand(XFitCommand):
     """Inspect a pickle-free NPZ of numeric or Unicode arrays."""
 
-    input = None
+    # This CLI path intentionally replaces the base command input stream.
+    input: str | None = None  # type: ignore[assignment]
 
     class InputArg(ExistingNPZInvariant):
         _arg = "--input"
@@ -139,14 +146,16 @@ class DataInspectCommand(XFitCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.input is not None
         dataset = self._call(load_xfit_dataset, self.input)
         self._emit_json(inspect_xfit_dataset(dataset))
 
 
 class _ValidatedDatasetCommand(XFitCommand):
-    input = None
-    model = None
-    mode = None
+    # This CLI path intentionally replaces the base command input stream.
+    input: str | None = None  # type: ignore[assignment]
+    model: ModelName | None = None
+    mode: FitMode | None = None
 
     class InputArg(ExistingNPZInvariant):
         _arg = "--input"
@@ -165,6 +174,7 @@ class _ValidatedDatasetCommand(XFitCommand):
         _default = "difference"
 
     def _load_dataset(self) -> XFitDataset:
+        assert self.input is not None
         return self._call(
             load_xfit_dataset,
             self.input,
@@ -191,11 +201,11 @@ class DataValidateCommand(_ValidatedDatasetCommand):
 class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     """Fit a batch of astronomical dipoles and persist safe artifacts."""
 
-    output_dir = None
-    backend = None
-    compute_dtype = None
-    stamp_evaluation = None
-    stamp_scale = None
+    output_dir: str | None = None
+    backend: BackendRequest | None = None
+    compute_dtype: ComputeDType | None = None
+    stamp_evaluation: StampEvaluation | None = None
+    stamp_scale: float | None = None
     f_tol = None
     x_tol = None
     g_tol = None
@@ -281,6 +291,8 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         if self.model == "gaussian":
             return "gaussian"
 
+        assert self.stamp_evaluation is not None
+        assert self.stamp_scale is not None
         basis = np.asarray(dataset.stamp_basis)
         if basis.ndim == 3:
             basis = basis[0]
@@ -300,6 +312,10 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
 
             if self.executor == "mpi":
                 executor_options["prepare_on_root"] = True
+            assert self.output_dir is not None
+            assert self.input is not None
+            assert self.executor is not None
+            input_path = Path(self.input)
             output_dir = Path(self.output_dir).expanduser().resolve()
             self._call(
                 validate_identifier,
@@ -322,11 +338,11 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                     "use_finite_difference",
                 )
             }
-            result = self._call(
+            execution_result = self._call(
                 run_workload,
                 executor=self.executor,
                 prepare_workload=lambda rank: prepare_xfit_workload(
-                    input_path=self.input,
+                    input_path=input_path,
                     chunk_size=self.chunk_size or 256,
                     fit_options=fit_options,
                     retain_input=rank == 0,
@@ -335,9 +351,9 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                 run_id=output_dir.name,
                 **executor_options,
             )
-            if result is not None:
-                self._emit_json(result.to_dict())
-                if result.status != "success":
+            if execution_result is not None:
+                self._emit_json(execution_result.to_dict())
+                if execution_result.status != "success":
                     raise CommandError("distributed xFit execution failed")
             return
         if self.chunk_size is not None:
@@ -347,6 +363,10 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
 
         from . import LMConfig, fit_dipoles
 
+        assert self.output_dir is not None
+        assert self.mode is not None
+        assert self.backend is not None
+        assert self.compute_dtype is not None
         dataset = self._load_dataset()
         fit_images = (
             dataset.images

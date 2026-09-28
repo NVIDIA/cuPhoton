@@ -16,7 +16,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, SupportsIndex, cast
 
 import numpy as np
 import torch
@@ -67,7 +67,9 @@ def val_bce_with_logits(logits: np.ndarray, labels: np.ndarray) -> float:
     )
 
 
-def selection_value(metric_name: str, raw_value: object) -> float | None:
+def selection_value(
+    metric_name: str, raw_value: float | str | None
+) -> float | None:
     """Direction-normalized selection score (higher is always better).
 
     Loss metrics are negated so the shared ``> best`` comparison maximizes
@@ -225,7 +227,7 @@ class CupyTorchView:
     tensor: torch.Tensor
     _owner: Any = dataclass_field(repr=False, compare=False)
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError(
             "CuPy-to-Torch views cannot be pickled; keep the owner and "
             "tensor inside the producing process"
@@ -714,9 +716,9 @@ def check_training_label_provenance(dataset_dir: Path) -> dict[str, Any]:
         errors.append("split_group_crosses_splits")
     if cross_split_entities:
         errors.append("stable_entity_crosses_splits")
-    if labels is not None and int(label_counts[0]) == 0:
+    if label_counts is not None and int(label_counts[0]) == 0:
         errors.append("negative_labels_missing")
-    if labels is not None and int(label_counts[1]) == 0:
+    if label_counts is not None and int(label_counts[1]) == 0:
         errors.append("positive_labels_missing")
 
     return {
@@ -727,8 +729,12 @@ def check_training_label_provenance(dataset_dir: Path) -> dict[str, Any]:
         "sample_count": sample_count,
         "labels_binary": labels_binary,
         "label_counts": {
-            "negative": int(label_counts[0]) if labels is not None else None,
-            "positive": int(label_counts[1]) if labels is not None else None,
+            "negative": int(label_counts[0])
+            if label_counts is not None
+            else None,
+            "positive": int(label_counts[1])
+            if label_counts is not None
+            else None,
         },
         "label_sources": dict(sorted(label_sources.items())),
         "placeholder_label_source": LSSTCOMCAM_PLACEHOLDER_LABEL_SOURCE,
@@ -1316,7 +1322,9 @@ def train_classifier(
         )
         if improved:
             best_selection = current_selection
-            best_metric_value = float(epoch_metrics[selection_metric])
+            metric_value = epoch_metrics[selection_metric]
+            assert metric_value is not None
+            best_metric_value = float(metric_value)
             best_val_auc = epoch_metrics["val_roc_auc"]
             best_epoch = epoch + 1
             epochs_without_improvement = 0
@@ -1340,9 +1348,12 @@ def train_classifier(
         }
         best_epoch = len(history)
         last = history[-1] if history else None
-        best_metric_value = (
-            float(last[selection_metric]) if last is not None else None
-        )
+        if last is not None:
+            metric_value = last[selection_metric]
+            assert metric_value is not None
+            best_metric_value = float(metric_value)
+        else:
+            best_metric_value = None
         best_val_auc = last["val_roc_auc"] if last is not None else None
     early_stopping["best_epoch"] = best_epoch
     checkpoint = {

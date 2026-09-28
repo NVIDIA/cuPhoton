@@ -15,7 +15,7 @@ import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -242,14 +242,14 @@ def new_run_id(prefix: str) -> str:
     """Create a collision-resistant UTC run identity."""
 
     validate_identifier(prefix, field="run prefix")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}-{stamp}-{uuid.uuid4().hex[:8]}"
 
 
 def timestamp_utc() -> str:
     """Return the current timezone-aware UTC timestamp."""
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def numba_pci_bus_id(device: Any) -> str:

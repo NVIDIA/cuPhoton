@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
@@ -528,7 +529,7 @@ def write_fit_artifacts(
         "schema_version": 1,
         "workflow": "fit-dipoles",
         "package_version": __version__,
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "input": str(dataset.path),
         "model": str(result.model),
         "mode": str(result.mode),

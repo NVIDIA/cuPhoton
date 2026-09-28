@@ -31,7 +31,8 @@ namespace xdr_gpu {
 inline void check_nvcomp(nvcompStatus_t s, const char* ctx) {
     if (s != nvcompSuccess) {
         throw std::runtime_error(
-            std::string("nvcomp error in ") + ctx + ": status=" + std::to_string(static_cast<int>(s)));
+            std::string("nvcomp error in ") + ctx
+            + ": status=" + std::to_string(static_cast<int>(s)));
     }
 }
 
@@ -74,14 +75,7 @@ void batch_deflate_decompress(
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_sizes,
     std::uintptr_t stream_ptr) {
     batch_deflate_decompress_impl(
-        d_concat_ptr,
-        rel_offsets,
-        lengths,
-        d_out_ptr,
-        out_offsets,
-        out_sizes,
-        stream_ptr,
-        false);
+        d_concat_ptr, rel_offsets, lengths, d_out_ptr, out_offsets, out_sizes, stream_ptr, false);
 }
 
 py::object batch_deflate_decompress_pooled(
@@ -93,14 +87,7 @@ py::object batch_deflate_decompress_pooled(
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_sizes,
     std::uintptr_t stream_ptr) {
     return batch_deflate_decompress_impl(
-        d_concat_ptr,
-        rel_offsets,
-        lengths,
-        d_out_ptr,
-        out_offsets,
-        out_sizes,
-        stream_ptr,
-        true);
+        d_concat_ptr, rel_offsets, lengths, d_out_ptr, out_offsets, out_sizes, stream_ptr, true);
 }
 
 py::object batch_deflate_decompress_impl(
@@ -126,7 +113,7 @@ py::object batch_deflate_decompress_impl(
 
     // Build host-side pointer/size arrays.
     std::vector<const void*> h_comp_ptrs(n);
-    std::vector<void*>       h_out_ptrs(n);
+    std::vector<void*> h_out_ptrs(n);
     std::vector<std::size_t> h_comp_sizes(n);
     std::vector<std::size_t> h_out_sizes(n);
 
@@ -139,23 +126,23 @@ py::object batch_deflate_decompress_impl(
     std::size_t total_uncomp = 0;
     for (std::size_t i = 0; i < n; ++i) {
         if (ro(i) < 0 || ln(i) < 0 || oo(i) < 0 || os(i) < 0) {
-            throw std::invalid_argument(
-                "per-tile offsets and sizes must be non-negative");
+            throw std::invalid_argument("per-tile offsets and sizes must be non-negative");
         }
-        h_comp_ptrs[i]  = reinterpret_cast<const void*>(d_concat_ptr + static_cast<std::size_t>(ro(i)));
-        h_out_ptrs[i]   = reinterpret_cast<void*>(d_out_ptr + static_cast<std::size_t>(oo(i)));
+        h_comp_ptrs[i] =
+            reinterpret_cast<const void*>(d_concat_ptr + static_cast<std::size_t>(ro(i)));
+        h_out_ptrs[i] = reinterpret_cast<void*>(d_out_ptr + static_cast<std::size_t>(oo(i)));
         h_comp_sizes[i] = static_cast<std::size_t>(ln(i));
-        h_out_sizes[i]  = static_cast<std::size_t>(os(i));
+        h_out_sizes[i] = static_cast<std::size_t>(os(i));
         max_uncomp = std::max(max_uncomp, h_out_sizes[i]);
         total_uncomp += h_out_sizes[i];
     }
 
     // Allocate device-side mirror arrays + temp in one stream-ordered batch.
-    void* d_comp_ptrs  = nullptr;
-    void* d_out_ptrs   = nullptr;
+    void* d_comp_ptrs = nullptr;
+    void* d_out_ptrs = nullptr;
     void* d_comp_sizes = nullptr;
-    void* d_out_sizes  = nullptr;
-    void* d_temp       = nullptr;
+    void* d_out_sizes = nullptr;
+    void* d_temp = nullptr;
 
     auto opts = nvcompBatchedDeflateDecompressDefaultOpts;
     // The hardware backend requires non-stream-ordered scratch plus explicit
@@ -163,8 +150,10 @@ py::object batch_deflate_decompress_impl(
     // ownership and reporting semantics are implemented together.
     opts.backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
     std::size_t temp_bytes = 0;
-    check_nvcomp(nvcompBatchedDeflateDecompressGetTempSizeAsync(
-        n, max_uncomp, opts, &temp_bytes, total_uncomp), "get temp size");
+    check_nvcomp(
+        nvcompBatchedDeflateDecompressGetTempSizeAsync(
+            n, max_uncomp, opts, &temp_bytes, total_uncomp),
+        "get temp size");
 
     std::vector<std::shared_ptr<void>> pooled_keepalive;
     if (use_native_pool) {
@@ -188,42 +177,61 @@ py::object batch_deflate_decompress_impl(
             pooled_keepalive.push_back(std::move(temp.owner));
         }
     } else {
-        check_cuda(cudaMallocAsync(&d_comp_ptrs,  n * sizeof(void*),       stream), "alloc comp_ptrs");
-        check_cuda(cudaMallocAsync(&d_out_ptrs,   n * sizeof(void*),       stream), "alloc out_ptrs");
-        check_cuda(cudaMallocAsync(&d_comp_sizes, n * sizeof(std::size_t), stream), "alloc comp_sizes");
-        check_cuda(cudaMallocAsync(&d_out_sizes,  n * sizeof(std::size_t), stream), "alloc out_sizes");
+        check_cuda(cudaMallocAsync(&d_comp_ptrs, n * sizeof(void*), stream), "alloc comp_ptrs");
+        check_cuda(cudaMallocAsync(&d_out_ptrs, n * sizeof(void*), stream), "alloc out_ptrs");
+        check_cuda(
+            cudaMallocAsync(&d_comp_sizes, n * sizeof(std::size_t), stream), "alloc comp_sizes");
+        check_cuda(
+            cudaMallocAsync(&d_out_sizes, n * sizeof(std::size_t), stream), "alloc out_sizes");
         if (temp_bytes > 0) {
             check_cuda(cudaMallocAsync(&d_temp, temp_bytes, stream), "alloc temp");
         }
     }
 
     try {
-        check_cuda(cudaMemcpyAsync(d_comp_ptrs,  h_comp_ptrs.data(),  n * sizeof(void*),
-                                   cudaMemcpyHostToDevice, stream), "copy comp_ptrs");
-        check_cuda(cudaMemcpyAsync(d_out_ptrs,   h_out_ptrs.data(),   n * sizeof(void*),
-                                   cudaMemcpyHostToDevice, stream), "copy out_ptrs");
-        check_cuda(cudaMemcpyAsync(d_comp_sizes, h_comp_sizes.data(), n * sizeof(std::size_t),
-                                   cudaMemcpyHostToDevice, stream), "copy comp_sizes");
-        check_cuda(cudaMemcpyAsync(d_out_sizes,  h_out_sizes.data(),  n * sizeof(std::size_t),
-                                   cudaMemcpyHostToDevice, stream), "copy out_sizes");
+        check_cuda(
+            cudaMemcpyAsync(
+                d_comp_ptrs, h_comp_ptrs.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream),
+            "copy comp_ptrs");
+        check_cuda(
+            cudaMemcpyAsync(
+                d_out_ptrs, h_out_ptrs.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream),
+            "copy out_ptrs");
+        check_cuda(
+            cudaMemcpyAsync(
+                d_comp_sizes,
+                h_comp_sizes.data(),
+                n * sizeof(std::size_t),
+                cudaMemcpyHostToDevice,
+                stream),
+            "copy comp_sizes");
+        check_cuda(
+            cudaMemcpyAsync(
+                d_out_sizes,
+                h_out_sizes.data(),
+                n * sizeof(std::size_t),
+                cudaMemcpyHostToDevice,
+                stream),
+            "copy out_sizes");
 
         // Release the GIL around the nvcomp call so Python threads (prefetcher)
         // can progress while the async kernel launches + returns.
         {
             py::gil_scoped_release release;
-            check_nvcomp(nvcompBatchedDeflateDecompressAsync(
-                static_cast<const void* const*>(d_comp_ptrs),
-                static_cast<const std::size_t*>(d_comp_sizes),
-                static_cast<const std::size_t*>(d_out_sizes),
-                nullptr,                     // device_uncompressed_chunk_bytes — optional for CUDA backend
-                n,
-                d_temp,
-                temp_bytes,
-                static_cast<void* const*>(d_out_ptrs),
-                opts,
-                nullptr,                     // device_statuses — optional
-                stream
-            ), "nvcompBatchedDeflateDecompressAsync");
+            check_nvcomp(
+                nvcompBatchedDeflateDecompressAsync(
+                    static_cast<const void* const*>(d_comp_ptrs),
+                    static_cast<const std::size_t*>(d_comp_sizes),
+                    static_cast<const std::size_t*>(d_out_sizes),
+                    nullptr,  // device_uncompressed_chunk_bytes — optional for CUDA backend
+                    n,
+                    d_temp,
+                    temp_bytes,
+                    static_cast<void* const*>(d_out_ptrs),
+                    opts,
+                    nullptr,  // device_statuses — optional
+                    stream),
+                "nvcompBatchedDeflateDecompressAsync");
         }
     } catch (...) {
         if (use_native_pool) {
@@ -233,8 +241,7 @@ py::object batch_deflate_decompress_impl(
     }
 
     if (use_native_pool) {
-        auto holder = new std::vector<std::shared_ptr<void>>(
-            std::move(pooled_keepalive));
+        auto holder = new std::vector<std::shared_ptr<void>>(std::move(pooled_keepalive));
         return py::capsule(holder, [](void* p) {
             delete reinterpret_cast<std::vector<std::shared_ptr<void>>*>(p);
         });
@@ -242,15 +249,14 @@ py::object batch_deflate_decompress_impl(
 
     // Stream-ordered frees — nvcomp consumes its inputs asynchronously and
     // these frees will be sequenced after the kernel completes.
-    if (d_temp)   cudaFreeAsync(d_temp,       stream);
-    cudaFreeAsync(d_comp_ptrs,  stream);
-    cudaFreeAsync(d_out_ptrs,   stream);
+    if (d_temp)
+        cudaFreeAsync(d_temp, stream);
+    cudaFreeAsync(d_comp_ptrs, stream);
+    cudaFreeAsync(d_out_ptrs, stream);
     cudaFreeAsync(d_comp_sizes, stream);
-    cudaFreeAsync(d_out_sizes,  stream);
+    cudaFreeAsync(d_out_sizes, stream);
     return py::none();
 }
-
-
 
 }  // namespace xdr_gpu
 
@@ -260,27 +266,29 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
     xdr_gpu::bind_io(m);
     xdr_gpu::bind_memory_manager(m);
 
-    m.def("batch_deflate_decompress", &xdr_gpu::batch_deflate_decompress,
-          py::arg("d_concat_ptr"),
-          py::arg("rel_offsets"),
-          py::arg("lengths"),
-          py::arg("d_out_ptr"),
-          py::arg("out_offsets"),
-          py::arg("out_sizes"),
-          py::arg("stream_ptr") = 0,
-          "Batched DEFLATE decompress across N tiles packed in one device buffer.\n"
-          "Caller must have already stripped the RFC-1952 gzip wrapper from each\n"
-          "tile (advance rel_offsets past the header, shorten lengths by header+8)."
-    );
-    m.def("batch_deflate_decompress_pooled", &xdr_gpu::batch_deflate_decompress_pooled,
-          py::arg("d_concat_ptr"),
-          py::arg("rel_offsets"),
-          py::arg("lengths"),
-          py::arg("d_out_ptr"),
-          py::arg("out_offsets"),
-          py::arg("out_sizes"),
-          py::arg("stream_ptr") = 0,
-          "Batched DEFLATE decompress using native pooled scratch buffers.\n"
-          "Returns an owner capsule that must stay alive until stream work completes."
-    );
+    m.def(
+        "batch_deflate_decompress",
+        &xdr_gpu::batch_deflate_decompress,
+        py::arg("d_concat_ptr"),
+        py::arg("rel_offsets"),
+        py::arg("lengths"),
+        py::arg("d_out_ptr"),
+        py::arg("out_offsets"),
+        py::arg("out_sizes"),
+        py::arg("stream_ptr") = 0,
+        "Batched DEFLATE decompress across N tiles packed in one device buffer.\n"
+        "Caller must have already stripped the RFC-1952 gzip wrapper from each\n"
+        "tile (advance rel_offsets past the header, shorten lengths by header+8).");
+    m.def(
+        "batch_deflate_decompress_pooled",
+        &xdr_gpu::batch_deflate_decompress_pooled,
+        py::arg("d_concat_ptr"),
+        py::arg("rel_offsets"),
+        py::arg("lengths"),
+        py::arg("d_out_ptr"),
+        py::arg("out_offsets"),
+        py::arg("out_sizes"),
+        py::arg("stream_ptr") = 0,
+        "Batched DEFLATE decompress using native pooled scratch buffers.\n"
+        "Returns an owner capsule that must stay alive until stream work completes.");
 }

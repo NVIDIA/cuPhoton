@@ -297,7 +297,7 @@ print(
     f"converged: {bool(result.converged[0])}"
 )
 for name, start, fitted in zip(
-    model.parameter_names, initial[0], result.parameters[0]
+    model.parameter_names, initial[0], result.parameters[0], strict=True
 ):
     # Orientation is unconstrained for these nearly circular lobes.
     if name != "theta":

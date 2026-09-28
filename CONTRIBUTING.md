@@ -51,8 +51,15 @@ profile is CUDA 13.
 
 ```bash
 uv sync --locked --extra dev --extra torch --extra viz --extra photometry
-uv run --locked --extra dev pre-commit install
+make hooks
 ```
+
+`make hooks` installs Git's pre-commit hook using this clone's development
+environment and checks the tracked files. Each contributor runs it in their
+own clone; generated files under `.git/hooks` are never committed. For linked
+worktrees, install hooks from the primary checkout and keep its `.venv`
+available, since Git shares hooks between worktrees. Rerun `make hooks` after
+moving the clone or recreating that environment.
 
 For CUDA 13 development:
 
@@ -76,6 +83,19 @@ make lint
 make test-cpu
 make build
 ```
+
+Ruff formats Python and checks imports, common bugs (`B`), and syntax upgrades
+for Python 3.12 (`UP`). Mypy checks annotated Python code throughout
+`src/cuphoton`; `make typecheck` runs it separately. Scientific and GPU imports
+without consistent typing support are skipped, so type checks do not require
+CUDA. Unannotated function bodies are not yet checked.
+
+The full pre-commit suite also runs clang-format on C/C++/CUDA sources and
+ShellCheck on shell scripts, including extensionless scripts with a shell
+shebang. `.clang-format` preserves the existing four-space indentation,
+attached braces, and pointer/reference spacing. Hook tools are installed
+automatically by pre-commit; no system clang-format or ShellCheck is required.
+Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 
 Validation logs should be clean. If warnings are expected, describe them in the
 pull request.

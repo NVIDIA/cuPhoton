@@ -1087,7 +1087,7 @@ def write_raw_autoscan_image_manifest(root: Path) -> Path:
     rows = []
     coords = [(20, 20), (20, 40), (40, 20), (40, 40)]
     labels = [1, 0, 1, 0]
-    for idx, ((y0, x0), label) in enumerate(zip(coords, labels)):
+    for idx, ((y0, x0), label) in enumerate(zip(coords, labels, strict=True)):
         search = np.zeros((64, 64), dtype=np.float32)
         template = np.zeros((64, 64), dtype=np.float32)
         difference = np.zeros((64, 64), dtype=np.float32)

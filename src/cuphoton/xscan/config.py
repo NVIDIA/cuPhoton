@@ -158,6 +158,10 @@ def dump_config(path: Path, config: Any) -> None:
     """Write a dataclass or mapping as human-readable YAML."""
 
     if is_dataclass(config):
+        if isinstance(config, type):
+            raise TypeError(
+                "asdict() should be called on dataclass instances"
+            )
         payload = asdict(config)
     else:
         payload = config
