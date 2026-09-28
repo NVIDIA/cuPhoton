@@ -109,6 +109,12 @@ contributors with signed commits sync automatically. Draft PRs need an
 explicit maintainer trigger; each new external contribution revision needs
 maintainer approval before it can run on a GPU.
 
+After reviewing the current diff, a maintainer can request a bot copy with
+`/ok to test <full-head-SHA>`. A maintainer can also push that same reviewed
+commit to `pull-request/<number>` directly. Confirm that the copied SHA
+matches the current PR head; a passing result for an older revision does
+not qualify new changes.
+
 The required `ci-required` check combines CPU, package, and GPU results for
 that revision. The initial `ci-pr-checks` result does not satisfy the merge
 gate. Pushes to `main` and `0.1.x` also run the GPU checks.

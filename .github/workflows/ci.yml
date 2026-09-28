@@ -85,7 +85,7 @@ jobs:
 
   test-gpu:
     name: xFit and GPU quickstarts / L40G / py3.12
-    # Only vetted copies and protected branches may use self-hosted GPUs.
+    # Only vetted copies and maintained branches may use self-hosted GPUs.
     if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     runs-on: linux-amd64-gpu-l40g-latest-1
     timeout-minutes: 20
