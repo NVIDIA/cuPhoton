@@ -6,7 +6,7 @@ name: ci
 
 on:
   push:
-    branches: [main, 0.1.x]
+    branches: [main, 0.1.x, "pull-request/[0-9]+"]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
@@ -83,6 +83,88 @@ jobs:
           python examples/run_quickstarts.py --profile cpu
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
 
+  test-gpu:
+    name: xFit and GPU quickstarts / L40G / py3.12
+    # Only vetted copies and maintained branches may use self-hosted GPUs.
+    if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
+    runs-on: linux-amd64-gpu-l40g-latest-1
+    timeout-minutes: 20
+    concurrency:
+      group: cuphoton-gpu
+      queue: max
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Record source and GPU
+        run: |
+          git rev-parse HEAD
+          nvidia-smi
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - run: uv python install 3.12
+      - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+      - name: Require working CUDA 13 and GPU kernels
+        run: |
+          uv run --no-sync python - <<'PY'
+          import cupy as cp
+          import torch
+
+          cp.show_config()
+          assert cp.cuda.runtime.getDeviceCount() >= 1
+          assert 13000 <= cp.cuda.runtime.runtimeGetVersion() < 14000
+          values = cp.arange(16, dtype=cp.float64)
+          assert float(cp.sum(values * values).item()) == 1240.0
+          assert torch.cuda.is_available()
+          tensor = torch.from_dlpack(values)
+          assert tensor.is_cuda
+          assert float((tensor * tensor).sum().item()) == 1240.0
+          print("CuPy and PyTorch CUDA kernels and DLPack passed")
+          PY
+      - name: Run xFit GPU parity tests
+        run: >-
+          uv run --no-sync pytest -q -rs
+          --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
+          tests/xfit/test_models.py::test_cupy_fit_matches_numpy_when_cuda_is_available
+          tests/xfit/test_models.py::test_cupy_finite_difference_theta_fix_matches_numpy
+          tests/xfit/test_models.py::test_fit_dipoles_device_matches_portable_result_without_bulk_d2h
+          tests/xfit/test_solver.py::test_cupy_tall_jacobian_diagnostics_match_numpy
+      - name: Require all selected tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert len(cases) == 6, len(cases)
+          assert not report.findall(".//skipped"), "GPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print("All 6 selected tests passed without skips")
+          PY
+      - name: Run synthetic GPU quickstarts
+        run: >-
+          uv run --no-sync python examples/run_quickstarts.py
+          --require-gpu --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-l40g-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/xfit-gpu.xml
+            ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
   package:
     name: native distributions
     uses: ./.github/workflows/wheels.yml
@@ -92,8 +174,9 @@ jobs:
     uses: ./.github/workflows/conda.yml
 
   ci-required:
-    name: ci-required
-    needs: [lint, test-cpu, package, conda]
+    # PR checks do not satisfy the merge gate before GPU qualification.
+    name: ${{ github.event_name == 'pull_request' && 'ci-pr-checks' || 'ci-required' }}
+    needs: [lint, test-cpu, test-gpu, package, conda]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -102,9 +185,16 @@ jobs:
         env:
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
+          GPU_RESULT: ${{ needs.test-gpu.result }}
+          REQUIRE_GPU: ${{ github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton' }}
           PACKAGE_RESULT: ${{ needs.package.result }}
           CONDA_RESULT: ${{ needs.conda.result }}
         run: |
           for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done
+          if [ "${REQUIRE_GPU}" = true ]; then
+            test "${GPU_RESULT}" = success || exit 1
+          else
+            test "${GPU_RESULT}" = skipped || exit 1
+          fi
