@@ -6,6 +6,8 @@
 """Load, align, subtract, fit, and plot a synthetic pair of FITS images.
 
 Three static stars and one moving source illustrate cuPhoton's imaging APIs.
+An intentionally broad trial kernel leaves visible subtraction and fit
+residuals. Set KERNEL_SIGMA = SEEING_SIGMA for a well-matched comparison.
 
 Run from the repository root:
 
@@ -31,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage import shift as ndshift
 
@@ -71,6 +73,9 @@ CRVAL = (150.0, 2.0)
 PIXEL_SCALE = 0.2  # arcsec / pixel
 SCIENCE_SHIFT = (20.0, -32.0)  # dy, dx; large enough to see by eye
 SEEING_SIGMA = 0.65  # extra Gaussian blur applied to the science frame
+# Keep the original trial kernel to illustrate an imperfect PSF match.
+# Set this to SEEING_SIGMA and rerun for the matched-kernel comparison.
+KERNEL_SIGMA = 1.6
 
 
 def gaussian2d(shape, y0, x0, amp, sigma):
@@ -128,14 +133,25 @@ def stretch_div(arr, limit=None):
     return (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
 
 
-def panel(arr, diverging=False, size=256, limit=None):
+def label_panel(im, label):
+    if label is None:
+        return im
+    canvas = Image.new("RGB", (im.width, im.height + 52), (255, 255, 255))
+    canvas.paste(im, (0, 52))
+    ImageDraw.Draw(canvas).multiline_text(
+        (8, 6), label, fill="black", font=ImageFont.load_default(size=16)
+    )
+    return canvas
+
+
+def panel(arr, diverging=False, size=256, limit=None, label=None):
     data = stretch_div(arr, limit=limit) if diverging else stretch_gray(arr)
     mode = "RGB" if diverging else "L"
     im = Image.fromarray(data, mode=mode).convert("RGB")
-    return im.resize((size, size), Image.NEAREST)
+    return label_panel(im.resize((size, size), Image.NEAREST), label)
 
 
-def panel_kernel(arr, size=256, zoom=10):
+def panel_kernel(arr, size=256, zoom=10, label=None):
     """Zoom a small kernel by an integer factor and center it."""
     k = np.asarray(arr)
     im = Image.fromarray(stretch_gray(k), mode="L").convert("RGB")
@@ -144,21 +160,42 @@ def panel_kernel(arr, size=256, zoom=10):
     x = (size - im.width) // 2
     y = (size - im.height) // 2
     canvas.paste(im, (x, y))
+    return label_panel(canvas, label)
+
+
+def residual_colorbar(limit, size=256):
+    """Show the residual panel's symmetric range in image units."""
+    canvas = Image.new("RGB", (112, size + 52), "white")
+    gradient = np.linspace(limit, -limit, size)[:, None]
+    bar = Image.fromarray(stretch_div(gradient, limit=limit)).resize(
+        (18, size), Image.NEAREST
+    )
+    canvas.paste(bar, (0, 52))
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default(size=16)
+    draw.text((0, 6), "Residual\nscale", fill="black", font=font)
+    for y, text in (
+        (52, f"+{limit:.3g}"),
+        (52 + size // 2 - 8, "0"),
+        (52 + size - 18, f"-{limit:.3g}"),
+    ):
+        draw.text((24, y), text, fill="black", font=font)
     return canvas
 
 
 def show_row(*ims, path=None, gap=16):
-    tiles = [np.array(im.convert("RGB")) for im in ims]
-    h, w = tiles[0].shape[:2]
     canvas = Image.new(
         "RGB",
-        (len(tiles) * w + (len(tiles) - 1) * gap, h),
+        (
+            sum(im.width for im in ims) + (len(ims) - 1) * gap,
+            max(im.height for im in ims),
+        ),
         (255, 255, 255),
     )
     x = 0
-    for tile in tiles:
-        canvas.paste(Image.fromarray(tile), (x, 0))
-        x += w + gap
+    for im in ims:
+        canvas.paste(im, (x, 0))
+        x += im.width + gap
     if path is not None:
         canvas.save(path)
         print("wrote", path)
@@ -212,7 +249,7 @@ fit_mask[105:142, 93:132] = False
 fit = solve_constant_kernel(
     reference,
     target,
-    [GaussianBasisComponent(sigma=SEEING_SIGMA, degree=0)],
+    [GaussianBasisComponent(sigma=KERNEL_SIGMA, degree=1)],
     kernel_shape=(15, 15),
     background_degree=0,
     flux_conserve=True,
@@ -223,6 +260,7 @@ print(
     f"kernel backend: {fit.backend}; sum: {float(fit.kernel.sum()):.8f}; "
     f"fit pixels: {int(fit.fit_pixel_count)}"
 )
+print(f"trial kernel sigma: {KERNEL_SIGMA}; planted blur: {SEEING_SIGMA}")
 # No variance is supplied, so chi2 is an unweighted sum of squares here.
 print("static-scene residual RMS:", np.sqrt(fit.chi2 / fit.fit_pixel_count))
 
@@ -266,16 +304,17 @@ for name, start, fitted in zip(
         print(f"{name:10s}  initial={start:7.3f}  fit={fitted:7.3f}")
 
 # Use the planted scene only to check the recovered fit.
-expected_sigma = np.hypot(MOVER_NEW[3], SEEING_SIGMA)
+science_sigma = np.hypot(MOVER_NEW[3], SEEING_SIGMA)
+template_sigma = np.hypot(MOVER_OLD[3], KERNEL_SIGMA)
 print(
-    f"expected sigma: {expected_sigma:.6f}; "
+    f"approximate lobe widths: science={science_sigma:.6f}, "
+    f"matched template={template_sigma:.6f}; "
     f"fitted sigma_x/sigma_y: {result.parameters[0, 1:3]}"
 )
 stamp_peak = float(np.max(np.abs(stamp)))
-print(
-    "max dipole residual / stamp peak:",
-    float(np.max(np.abs(result.residuals[0]))) / stamp_peak,
-)
+residual_peak = float(np.max(np.abs(result.residuals[0])))
+residual_fraction = residual_peak / stamp_peak
+print(f"max dipole residual / stamp peak: {residual_fraction:.4%}")
 # Planted centers in stamp coordinates: x_pos, y_pos, x_neg, y_neg.
 truth_xy = np.array(
     [
@@ -293,24 +332,55 @@ host = images.get()
 model_img = np.asarray(model.evaluate(result.parameters, mode="difference"))[
     0
 ]
+# XFIT returns model minus data; display data minus model, as in XPOIS.
+fit_residual = -result.residuals[0]
+# Share the stamp/model scale; stretch the residual to show its structure.
+# The floor matches stretch_div and gives a finite range for an exact fit.
+residual_limit = max(residual_peak, 1e-8)
 show_row(
-    panel(host[0]), panel(host[1]), path=WORK / "figs" / "01_loaded_fits.png"
+    panel(host[0], label="Template (t0)"),
+    panel(host[1], label="Science (t1)\nshifted and blurred"),
+    path=WORK / "figs" / "01_loaded_fits.png",
 )
 show_row(
-    panel(reference),
-    panel(target),
+    panel(reference, label="Aligned template"),
+    panel(target, label="Aligned science"),
     path=WORK / "figs" / "02_xrep_aligned.png",
 )
 show_row(
-    panel_kernel(fit.kernel),
-    panel(fit.matched),
-    panel(fit.residual, diverging=True),
+    panel_kernel(
+        fit.kernel, label=f"Fitted kernel\ntrial sigma: {KERNEL_SIGMA:g}"
+    ),
+    panel(fit.matched, label="Matched template"),
+    panel(
+        fit.residual,
+        diverging=True,
+        label="Difference image\nscience - matched template",
+    ),
     path=WORK / "figs" / "03_subtraction.png",
 )
 show_row(
-    panel(stamp, diverging=True, limit=stamp_peak),
-    panel(model_img, diverging=True, limit=stamp_peak),
-    # XFIT returns model minus data; display data minus model, as in XPOIS.
-    panel(-result.residuals[0], diverging=True, limit=stamp_peak),
+    panel(
+        stamp,
+        diverging=True,
+        limit=stamp_peak,
+        label=f"Difference stamp\nrange: +/- {stamp_peak:.3g}",
+    ),
+    panel(
+        model_img,
+        diverging=True,
+        limit=stamp_peak,
+        label=f"xFit model\nrange: +/- {stamp_peak:.3g}",
+    ),
+    panel(
+        fit_residual,
+        diverging=True,
+        limit=residual_limit,
+        label=(
+            "Fit residual (data - model)\n"
+            f"peak error: {residual_fraction:.3%}"
+        ),
+    ),
+    residual_colorbar(residual_limit),
     path=WORK / "figs" / "04_dipole.png",
 )
