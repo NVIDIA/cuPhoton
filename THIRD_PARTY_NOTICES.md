@@ -11,7 +11,9 @@ by the PEP 517 build frontend and are not locked by `uv.lock`; they are labeled
 `not locked` below.
 
 Git-derived package versions use the MIT-licensed build tools
-`setuptools-scm==10.3.4` and its `vcs-versioning` dependency. They are not
+[`setuptools-scm==10.3.4`](https://pypi.org/project/setuptools-scm/10.3.4/)
+and its [`vcs-versioning==2.5.0`](https://pypi.org/project/vcs-versioning/2.5.0/)
+dependency in native wheel builds. They are not
 included in the installed runtime dependencies. Native wheel builds pin both
 tools in `scripts/wheels/build-requirements.txt`; isolated source builds
 resolve build requirements separately from `uv.lock`.
@@ -97,6 +99,17 @@ base requirements.
 | `pycapnp>=2.0.0,<2.2.0` | `2.1.0` | [BSD-2-Clause](https://github.com/capnproto/pycapnp/blob/3a3adfb5f1a8d1b52c98e4984f38ceb5b89a94a6/LICENSE.md) | Python bindings; also inspect the Cap'n Proto code included in the native extension. |
 | `paramiko>=3.5.1` | `5.0.0` | [LGPL-2.1](https://github.com/paramiko/paramiko/blob/710cc5c02e2ded370d8d24e261e2baa8317a20fa/LICENSE) | SSH support; its cryptographic dependencies carry separate licenses. |
 | `shtab>=1.6.0` | `1.12.1` | [MPL-2.0](https://github.com/tqdm/shtab/blob/e1ab40616e77298204a61e1aad50d6f6e90e9217/LICENCE) | Shell completion. |
+
+Paramiko is a Python SSH library used by Dragon's SSH orchestration tools.
+Dragon loads it through Python imports at runtime; it is not statically linked
+into cuPhoton's native extension. cuPhoton does not modify or bundle Paramiko
+source or binaries. Paramiko is installed separately with Dragon's dependencies,
+and its upstream wheel includes Python source and its LGPL license.
+
+shtab is a Python library used by Dragon to generate shell completions. cuPhoton
+does not modify or bundle shtab. The separately installed `shtab==1.12.1` wheel
+includes its Python source files and MPL-2.0 license. The corresponding source
+archive is available from the [shtab 1.12.1 release](https://pypi.org/project/shtab/1.12.1/#files).
 
 The same environment resolved the following additional Python packages
 through Paramiko. Optional extras and other environments can resolve a

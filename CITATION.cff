@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 cff-version: 1.2.0
 message: "If you use cuPhoton, please cite this software release."
 title: "cuPhoton: GPU-accelerated astronomy and imaging reference workflows"
