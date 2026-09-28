@@ -413,7 +413,7 @@ def reproject_stack(
 
     results = tuple(
         reproject_array(
-            np.asarray(source),
+            source,
             member,
             source_mask=mask,
             backend=backend,

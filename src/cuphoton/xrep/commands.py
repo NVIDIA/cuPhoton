@@ -300,7 +300,6 @@ class _FitsReprojectionCommand(_SharedReprojectionCommand):
 class ReprojectImageCommand(_FitsReprojectionCommand):
     """Reproject one FITS image onto one shared grid."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
 
@@ -394,7 +393,6 @@ class ReprojectStackCommand(_FitsReprojectionCommand):
 class BenchmarkReprojectImageCommand(_FitsReprojectionCommand):
     """Benchmark one FITS reprojection and report split timing summaries."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
 
@@ -443,7 +441,6 @@ class BenchmarkReprojectImageCommand(_FitsReprojectionCommand):
 class BenchmarkBackendVariantsCommand(_FitsReprojectionCommand):
     """Benchmark cached-geometry backend variants and parity."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
     variants: str | None = None
@@ -535,7 +532,6 @@ class BenchmarkBackendVariantsCommand(_FitsReprojectionCommand):
 class CompareBackendsCommand(_FitsReprojectionCommand):
     """Run one FITS reprojection across backends and report parity metrics."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
     backends: str | None = None
