@@ -118,6 +118,70 @@ and pickle-backed inputs are rejected. A successful fit writes
 `fit-arrays.npz`; residuals remain numeric arrays within the NPZ
 archive.
 
+### FITS images and candidate positions
+
+To fit directly from aligned FITS images, pass a JSON candidate manifest
+instead of preparing an NPZ of stamps:
+
+```json
+{
+  "schema": "cuphoton.xfit.fits-input/v1",
+  "mode": "difference",
+  "stamp_shape": [51, 51],
+  "images": [
+    {
+      "path": "difference.fits",
+      "hdu": 1,
+      "mask_hdu": 2,
+      "variance_hdu": 3,
+      "bad_mask_bits": 15
+    }
+  ],
+  "candidates": [
+    {"candidate_id": "source-a", "x": 100, "y": 200},
+    {"candidate_id": "source-b", "x": 300, "y": 400}
+  ]
+}
+```
+
+```bash
+cuphoton xfit fit-dipoles --input candidates.json \
+  --model gaussian --mode difference --backend cupy \
+  --fits-reader auto --output-dir fit-run
+```
+
+FITS paths resolve relative to the manifest. HDUs are zero-based integer
+indices. Candidate centers are zero-based integer `(x, y)` pixels;
+`stamp_shape` is odd positive `[height, width]`. Candidate IDs retain their
+order and must be unique integers or unique strings. Stamps that extend
+outside an image are rejected.
+
+Difference mode reads one supplied difference plane. Split mode reads exactly
+three supplied planes in **difference, positive, negative** order. All planes
+must already be aligned and have matching dimensions. This route performs
+no registration, image subtraction, candidate detection or background removal.
+
+Mask and variance HDUs are optional. A mask pixel is included when none of
+its `bad_mask_bits` are set; omit that field to exclude every nonzero mask
+pixel. The example value `15` selects bits 0–3; choose the bits appropriate
+for your own data. No instrument-specific mask policy is assumed. Split mode
+requires variance on every plane or on none. Nonfinite values retain the
+ordinary xFit validation rules described above.
+
+Optional `initial` is a numeric array with one parameter row per candidate,
+using the same stamp-local model coordinates as NPZ inputs. Sampled-stamp
+models accept `"stamp_basis": {"path": "psf.fits", "hdu": 0}`.
+
+`--fits-reader auto` selects xDR for supported inputs when its GPU dependencies
+are available. `astropy` selects CPU FITS decoding; `xdr` requires the xDR
+route and reports unsupported inputs. GPU fits crop and retain stamps on
+device. The reader uses the candidate bounding region where supported;
+explicit xDR reads uncompressed images in full before cropping. For sparse
+candidates in uncompressed images, the Astropy section route can be faster.
+Selecting xDR does not assert native GPUDirect Storage use. Run artifacts
+record the selected reader and any automatic fallback. Existing NPZ loading
+is unaffected by this option.
+
 Input archives contain candidate identifiers and exact image pixels. Fit
 artifacts contain identifiers, hashes, parameters, uncertainties, covariance,
 and optional residuals. Confirm that the underlying data and metadata are cleared
@@ -153,6 +217,22 @@ count. Keep it fixed for matched comparisons; candidate IDs and input order
 are restored in the merged artifacts.
 The task count must be at least the MPI rank count. Dragon uses the smaller
 of the requested worker count and task count.
+
+The same executor commands accept a FITS candidate manifest. Planning checks
+headers, candidate bounds and source hashes without decoding image pixels.
+Each bound worker reads the candidate region and retains its stamps during
+worker setup, before measured rounds. The first ordinary artifact finalization
+reads host stamps for per-candidate input hashes after the timed worker phase.
+The coordinator retains these stamps for later rounds and verifies referenced
+file hashes before reuse. Setting `retain_input=False` in the workload API
+instead reloads the host stamps each round.
+Worker item receipts retain `fits_setup_reads`; the merged scientific
+summary separates `fits_worker_setup_reads` from
+`fits_finalizer_audit_reads`. Each read identifies its source and plane role;
+the audit receipt's `reused` flag distinguishes retained data from a new read.
+These setup/finalization reads are separate from reported worker timing;
+include them explicitly when measuring a complete ingestion-to-result run.
+All referenced FITS files must be visible to every worker and the coordinator.
 
 Under an allocation with Dragon configured, run one warmup and two measured
 passes with workers retained across all three passes:

@@ -61,6 +61,7 @@ _DEFAULTS = {
     "g_tol": None,
     "max_evaluations": None,
     "use_finite_difference": False,
+    "fits_reader": "auto",
 }
 
 
@@ -85,7 +86,7 @@ def plan_xfit_chunks(
 
 def _plan_xfit_chunks(
     input_path: Path, *, chunk_size: int, fit_options: Mapping[str, Any]
-) -> tuple[tuple[WorkItem, ...], dict[str, Any], XFitDataset]:
+) -> tuple[tuple[WorkItem, ...], dict[str, Any], XFitDataset | None]:
 
     if (
         isinstance(chunk_size, bool)
@@ -100,24 +101,53 @@ def _plan_xfit_chunks(
     )
     if settings["compute_dtype"] not in {"input", "float32", "float64"}:
         raise ValueError("unsupported xFit compute dtype")
-    dataset = load_xfit_dataset(
-        input_path, model=settings["model"], mode=settings["mode"]
-    )
-    if not dataset.batch_size:
+    if settings["fits_reader"] not in {"auto", "astropy", "xdr"}:
+        raise ValueError("unsupported xFit FITS reader")
+    fits_plan = None
+    if Path(input_path).suffix.lower() == ".json":
+        from .fits_input import plan_fits_input
+
+        fits_plan = plan_fits_input(
+            input_path, model=settings["model"], mode=settings["mode"]
+        )
+        dataset = None
+        path = fits_plan.path
+        input_hash = fits_plan.sha256
+        count = fits_plan.batch_size
+        candidate_ids = fits_plan.candidate_id
+        input_dtype = fits_plan.dtype
+        bytes_per_candidate = (
+            int(np.prod(fits_plan.images_shape[1:])) * input_dtype.itemsize
+        )
+    else:
+        dataset = load_xfit_dataset(
+            input_path, model=settings["model"], mode=settings["mode"]
+        )
+        path = dataset.path
+        input_hash = dataset.input_archive_sha256
+        count = dataset.batch_size
+        candidate_ids = dataset.candidate_id
+        input_dtype = dataset.images.dtype
+        bytes_per_candidate = (
+            int(np.prod(dataset.images.shape[1:])) * input_dtype.itemsize
+        )
+    if not count:
         raise ValueError("distributed xFit requires at least one candidate")
     options = {
-        "input_path": str(dataset.path),
-        "input_sha256": dataset.input_archive_sha256,
-        "candidate_count": dataset.batch_size,
+        "input_path": str(path),
+        "input_sha256": input_hash,
+        "candidate_count": count,
         "chunk_size": chunk_size,
         "result_dtype": (
-            str(_floating_dtype(dataset.images))
+            str(_floating_dtype(np.empty(0, dtype=input_dtype)))
             if settings["compute_dtype"] == "input"
             else settings["compute_dtype"]
         ),
         "fit_options": settings,
     }
-    stat = dataset.path.stat()
+    if fits_plan is not None:
+        options["input_sources"] = list(fits_plan.sources)
+    stat = path.stat()
     options["input_stat"] = {
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
@@ -130,26 +160,37 @@ def _plan_xfit_chunks(
                 "start": start,
                 "stop": stop,
                 "candidate_ids_sha256": array_sha256(
-                    dataset.candidate_id[start:stop]
+                    candidate_ids[start:stop]
                 ),
                 "configuration_sha256": options["configuration_sha256"],
             },
-            int(dataset.images[start:stop].nbytes),
+            (stop - start) * bytes_per_candidate,
         )
-        for start in range(0, dataset.batch_size, chunk_size)
-        for stop in (min(start + chunk_size, dataset.batch_size),)
+        for start in range(0, count, chunk_size)
+        for stop in (min(start + chunk_size, count),)
     )
-    if file_sha256(dataset.path) != dataset.input_archive_sha256:
+    if file_sha256(path) != input_hash:
         raise ValueError("xFit input archive changed while planning")
     _check_input_stat(options)
     return items, options, dataset
 
 
-def _load_input(options: Mapping[str, Any]) -> XFitDataset:
+def _load_input(options: Mapping[str, Any], *, device=False) -> XFitDataset:
     settings = options["fit_options"]
+    reader_options = {}
+    if "input_sources" in options:
+        reader_options = {
+            "reader": settings["fits_reader"] if device else "astropy",
+            "device": device,
+        }
     dataset = load_xfit_dataset(
-        options["input_path"], model=settings["model"], mode=settings["mode"]
+        options["input_path"],
+        model=settings["model"],
+        mode=settings["mode"],
+        **reader_options,
     )
+    if list(dataset.input_sources) != options.get("input_sources", []):
+        raise ValueError("xFit referenced FITS input changed after planning")
     if dataset.input_archive_sha256 != options["input_sha256"]:
         raise ValueError("xFit input archive changed after planning")
     if file_sha256(dataset.path) != options["input_sha256"]:
@@ -186,10 +227,10 @@ class XFitWorker:
 
     def __init__(self, options: Mapping[str, Any]) -> None:
         self.options = dict(options)
-        dataset = _load_input(options)
-        self.dataset: XFitDataset | None = dataset
         self.settings = options["fit_options"]
         self.gpu_identity = collect_gpu_identity(self.settings["backend"])
+        dataset = _load_input(options, device=True)
+        self.dataset: XFitDataset | None = dataset
         self.config = LMConfig(
             **{
                 name: self.settings[name]
@@ -253,6 +294,11 @@ class XFitWorker:
             "item_id": item.item_id,
             **dict(item.payload),
             "input_sha256": self.options["input_sha256"],
+            **(
+                {"fits_setup_reads": list(self.dataset.reader_metadata)}
+                if self.dataset.input_sources
+                else {}
+            ),
             "result_sha256": file_sha256(archive),
             "result_metadata": {
                 name: list(result.parameter_names)
@@ -292,6 +338,10 @@ def _check_input_stat(options: Mapping[str, Any]) -> None:
         "input_stat"
     ]:
         raise ValueError("xFit input archive changed during execution")
+    if "input_sources" in options:
+        from .fits_input import check_fits_sources
+
+        check_fits_sources(options["input_sources"])
 
 
 def _range(item: WorkItem, options: Mapping[str, Any]) -> tuple[int, int]:
@@ -387,6 +437,11 @@ def _effective_config(
         "model": settings["model"],
         "mode": settings["mode"],
         "backend": settings["backend"],
+        **(
+            {"fits_reader": settings["fits_reader"]}
+            if dataset.input_sources
+            else {}
+        ),
         "compute_dtype": {
             "requested": settings["compute_dtype"],
             "resolved": result.dtype,
@@ -426,6 +481,7 @@ def finalize_xfit_round(
     items: Sequence[WorkItem],
     options: Mapping[str, Any],
     _dataset: XFitDataset | None = None,
+    _audit_reused: bool = False,
 ) -> Mapping[str, Any]:
     """Restore candidate order and publish ordinary xFit artifacts."""
     expected = {item.item_id for item in items}
@@ -445,9 +501,24 @@ def finalize_xfit_round(
         _check_input_stat(options)
         if file_sha256(dataset.path) != options["input_sha256"]:
             raise ValueError("xFit input archive changed after planning")
+        if dataset.input_sources:
+            from .fits_input import check_fits_sources
+
+            check_fits_sources(dataset.input_sources, hashes=True)
         _check_input_stat(options)
+    if dataset.input_sources:
+        dataset = replace(
+            dataset,
+            reader_metadata=tuple(
+                {**read, "reused": _audit_reused}
+                for read in dataset.reader_metadata
+            ),
+        )
     ordered = sorted(items, key=lambda item: item.payload["start"])
     chunks = []
+    worker_reads: list[dict[str, Any]] | None = (
+        [] if dataset.input_sources else None
+    )
     metadata = None
     next_row = 0
     for item in ordered:
@@ -455,6 +526,14 @@ def finalize_xfit_round(
         if start != next_row:
             raise ValueError("xFit chunks overlap or omit candidate rows")
         current_metadata, arrays = _read_result(item, round_dir, options)
+        if worker_reads is not None:
+            receipt = read_json_mapping(
+                round_dir / "items" / item.item_id / "summary.json"
+            )
+            reads = receipt.get("fits_setup_reads")
+            if not isinstance(reads, list) or not reads:
+                raise ValueError("xFit chunk is missing FITS reader receipts")
+            worker_reads.append({"item_id": item.item_id, "reads": reads})
         if metadata is not None and current_metadata != metadata:
             raise ValueError("xFit result metadata differs across chunks")
         metadata = current_metadata
@@ -502,11 +581,17 @@ def finalize_xfit_round(
         dataset=dataset,
         result=result,
         effective_config=_effective_config(options, dataset, result, output),
+        fits_worker_setup_reads=worker_reads,
     )
     return {
         "summary_path": "scientific/summary.json",
         "candidate_count": dataset.batch_size,
         "artifact_sha256": summary["artifact_sha256"],
+        **(
+            {"fits_worker_setup_reads": worker_reads}
+            if worker_reads is not None
+            else {}
+        ),
     }
 
 
@@ -545,6 +630,26 @@ def prepare_xfit_workload(
             return [str(exc)]
         return []
 
+    def finalize(round_dir, records):
+        nonlocal retained_dataset
+        audit_reused = retained_dataset is not None and bool(
+            retained_dataset.input_sources
+        )
+        if (
+            retain_input
+            and retained_dataset is None
+            and "input_sources" in options
+        ):
+            retained_dataset = _load_input(options)
+        return finalize_xfit_round(
+            round_dir,
+            records,
+            items=items,
+            options=options,
+            _dataset=retained_dataset,
+            _audit_reused=audit_reused,
+        )
+
     manifest = {
         "schema": "cuphoton.xfit.executor-manifest/v1",
         "items": [item.to_dict() for item in items],
@@ -562,11 +667,5 @@ def prepare_xfit_workload(
         backend=backend,
         worker_factory=create_xfit_worker,
         success_record_validator=validate,
-        finalize_round=lambda round_dir, records: finalize_xfit_round(
-            round_dir,
-            records,
-            items=items,
-            options=options,
-            _dataset=retained_dataset,
-        ),
+        finalize_round=finalize,
     )
