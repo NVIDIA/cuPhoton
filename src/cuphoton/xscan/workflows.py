@@ -748,10 +748,12 @@ def build_raw_autoscan_workflow(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> WorkflowResult:
     result = build_autoscan_dataset_from_raw(
         manifest_path=manifest_path,
         output_dir=output_dir,
+        fits_reader=fits_reader,
     )
     return WorkflowResult(run_dir=result.output_dir, summary=result.summary)
 
@@ -760,10 +762,12 @@ def build_raw_nodiff_workflow(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> WorkflowResult:
     result = build_nodiff_dataset_from_raw(
         manifest_path=manifest_path,
         output_dir=output_dir,
+        fits_reader=fits_reader,
     )
     return WorkflowResult(run_dir=result.output_dir, summary=result.summary)
 
@@ -796,10 +800,12 @@ def build_lsstcomcam_smoke_workflow(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> WorkflowResult:
     result = build_lsstcomcam_smoke_dataset_from_manifest(
         manifest_path=manifest_path,
         output_dir=output_dir,
+        fits_reader=fits_reader,
     )
     return WorkflowResult(run_dir=result.output_dir, summary=result.summary)
 

@@ -121,6 +121,143 @@ def test_fits_preflight_multiple_hdus_count_file_once(inputs):
         )
 
 
+@pytest.mark.parametrize("reader", [None, "auto", "astropy", "xdr"])
+def test_manifest_reader_override_preserves_input_and_records_policy(
+    inputs, tmp_path, reader
+):
+    item, config = inputs
+    payload = item.to_payload()
+    roles = ("reference", "target", "variance", "fit_mask")
+    for role in roles:
+        payload[role]["reader"] = "xdr"
+    manifest = tmp_path / "manifest.json"
+    original = json.dumps(
+        {
+            "schema": pipeline_executor.PIPELINE_MANIFEST_SCHEMA,
+            "configuration": config.to_payload(),
+            "items": [payload],
+        }
+    )
+    manifest.write_text(original)
+    _, (loaded,) = pipeline_executor.load_pipeline_manifest(
+        manifest, fits_reader=reader
+    )
+    expected = "xdr" if reader is None else reader
+    work, identities = dragon_pipeline._preflight_items((loaded,))
+    restored = pipeline.DevicePipelineItem.from_payload(work[0].payload)
+    assert {getattr(restored, role).reader for role in roles} == {expected}
+    assert {
+        image["reader"] for image in identities[0]["files"][0]["images"]
+    } == {expected}
+    assert manifest.read_text() == original
+
+
+def test_reader_override_only_changes_fits_descriptors(inputs):
+    item, _ = inputs
+    npy = pipeline.NpyArrayDescriptor(
+        path="/variance.npy", sha256="c" * 64, shape=(31, 31), dtype="float64"
+    )
+    item = replace(item, variance=npy, fit_mask=None)
+    payload = item.to_payload()
+    payload["reference"]["reader"] = "invalid"
+    loaded = pipeline.DevicePipelineItem.from_payload(
+        payload, fits_reader="astropy"
+    )
+    assert loaded.reference.reader == loaded.target.reader == "astropy"
+    assert loaded.variance == npy and loaded.fit_mask is None
+    assert payload["reference"]["reader"] == "invalid"
+    for invalid in ("gds", "", [], True):
+        with pytest.raises(ValueError, match="FITS reader"):
+            pipeline.DevicePipelineItem.from_payload(
+                payload, fits_reader=invalid
+            )
+
+
+def test_benchmark_stage_uses_effective_fits_policy(
+    inputs, tmp_path, monkeypatch
+):
+    from cuphoton.xscan.pipeline_benchmark import runner, stages
+
+    item, config = inputs
+    config_path = tmp_path / "configuration.json"
+    items_path = tmp_path / "items.json"
+    config_path.write_text(json.dumps(config.to_payload()))
+    original = json.dumps([item.to_payload()])
+    items_path.write_text(original)
+    received = []
+    monkeypatch.setattr(
+        stages, "run_stage", lambda *args: received.append(args)
+    )
+    runner.run_benchmark(
+        SimpleNamespace(
+            output=tmp_path / "staged",
+            config=config_path,
+            items=items_path,
+            fits_reader="astropy",
+            repeat=1,
+            warmup=1,
+            timeout=10,
+            stage="xpois",
+        )
+    )
+    _, _, (loaded,), _ = received[0]
+    assert {
+        getattr(loaded, role).reader
+        for role in ("reference", "target", "variance", "fit_mask")
+    } == {"astropy"}
+    assert items_path.read_text() == original
+
+
+@pytest.mark.parametrize("executor", ["mpi", "dragon"])
+def test_pipeline_override_reaches_workload_identity_on_every_rank(
+    inputs, tmp_path, monkeypatch, executor
+):
+    item, config = inputs
+    checkpoint = tmp_path / "checkpoint.pt"
+    schema = tmp_path / "schema.json"
+    checkpoint.write_bytes(b"checkpoint")
+    schema.write_text("{}")
+    config = replace(
+        config,
+        checkpoint_sha256=file_sha256(checkpoint),
+        feature_schema_sha256=file_sha256(schema),
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": pipeline_executor.PIPELINE_MANIFEST_SCHEMA,
+                "configuration": config.to_payload(),
+                "items": [item.to_payload()],
+            }
+        )
+    )
+    original = pipeline_executor.prepare_pipeline_workload((item,), config)
+
+    def run(**kwargs):
+        assert kwargs["executor"] == executor
+        assert "fits_reader" not in kwargs
+        root = kwargs["prepare_workload"](0)
+        peer = kwargs["prepare_workload"](1)
+        assert root.identity_payload() == peer.identity_payload()
+        assert root.manifest_sha256 != original.manifest_sha256
+        payload = root.items[0].payload
+        for role in ("reference", "target", "variance", "fit_mask"):
+            assert payload[role]["reader"] == "astropy"
+        return "completed"
+
+    monkeypatch.setattr("cuphoton.core.executors.run_workload", run)
+    assert (
+        pipeline_executor.run_pipeline_manifest(
+            executor=executor,
+            manifest_path=manifest,
+            output_root=tmp_path / "runs",
+            fits_reader="astropy",
+        )
+        == "completed"
+    )
+
+
 def test_fits_worker_grouped_device_read_and_receipt(inputs, monkeypatch):
     from cuphoton.core import fits_io
 

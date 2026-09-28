@@ -26,6 +26,7 @@ from cuphoton.core.cli import (
     StringInvariant,
 )
 from cuphoton.core.cli.executor import ExecutorOptions
+from cuphoton.core.cli.fits import FitsReaderOptions
 
 T = TypeVar("T")
 _DEFAULT_REVIEW_DIR = os.environ.get("CUPHOTON_XSCAN_REVIEW_DIR")
@@ -487,7 +488,9 @@ class DataBuildAutoscanCommand(_PreparedDatasetBuildCommand):
         self._emit_json(result.summary)
 
 
-class DataBuildAutoscanRawCommand(_PreparedDatasetBuildCommand):
+class DataBuildAutoscanRawCommand(
+    FitsReaderOptions, _PreparedDatasetBuildCommand
+):
     """Build a canonical autoScan dataset from raw detection records."""
 
     def run(self) -> None:
@@ -497,6 +500,7 @@ class DataBuildAutoscanRawCommand(_PreparedDatasetBuildCommand):
             build_raw_autoscan_workflow,
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
+            fits_reader=self.fits_reader,
         )
         self._emit_json(result.summary)
 
@@ -516,7 +520,9 @@ class DataBuildNodiffCommand(_PreparedDatasetBuildCommand):
         self._emit_json(result.summary)
 
 
-class DataBuildNodiffRawCommand(_PreparedDatasetBuildCommand):
+class DataBuildNodiffRawCommand(
+    FitsReaderOptions, _PreparedDatasetBuildCommand
+):
     """Build a canonical no-Diff dataset from raw search/template images."""
 
     def run(self) -> None:
@@ -526,6 +532,7 @@ class DataBuildNodiffRawCommand(_PreparedDatasetBuildCommand):
             build_raw_nodiff_workflow,
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
+            fits_reader=self.fits_reader,
         )
         self._emit_json(result.summary)
 
@@ -560,7 +567,9 @@ class DataBuildHscCommand(_PreparedDatasetBuildCommand):
         self._emit_json(result.summary)
 
 
-class DataBuildLsstcomcamSmokeCommand(_PreparedDatasetBuildCommand):
+class DataBuildLsstcomcamSmokeCommand(
+    FitsReaderOptions, _PreparedDatasetBuildCommand
+):
     """Build a tiny registry-backed LSSTComCam smoke dataset."""
 
     def run(self) -> None:
@@ -570,6 +579,7 @@ class DataBuildLsstcomcamSmokeCommand(_PreparedDatasetBuildCommand):
             build_lsstcomcam_smoke_workflow,
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
+            fits_reader=self.fits_reader,
         )
         self._emit_json(result.summary)
 
@@ -928,7 +938,7 @@ class TrainInadaTripletCommand(_TrainCommand):
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
 
 
-class RunPipelineCommand(ExecutorOptions, XScanCommand):
+class RunPipelineCommand(FitsReaderOptions, ExecutorOptions, XScanCommand):
     """Run complete XPOIS, xFit and XScan jobs in persistent GPU workers."""
 
     manifest: str | None = None
@@ -970,6 +980,7 @@ class RunPipelineCommand(ExecutorOptions, XScanCommand):
             manifest_path=Path(self.manifest),
             output_root=Path(self.output_dir),
             run_id=self.run_name,
+            fits_reader=self.fits_reader,
             **options,
         )
         if result is not None:
@@ -2240,7 +2251,7 @@ class ReproduceHscXPOISSweepCommand(XScanCommand):
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
 
 
-class BenchmarkPipelineCommand(XScanCommand):
+class BenchmarkPipelineCommand(FitsReaderOptions, XScanCommand):
     """Compare the device pipeline with separate file-mediated stages."""
 
     _name_ = "benchmark-pipeline"
@@ -2356,6 +2367,7 @@ class BenchmarkPipelineCommand(XScanCommand):
                 output=Path(self.output).expanduser(),
                 config=self._path(self.config),
                 items=self._path(self.items),
+                fits_reader=self.fits_reader,
                 images=self.images,
                 image_size=self.image_size,
                 candidates=self.candidates,

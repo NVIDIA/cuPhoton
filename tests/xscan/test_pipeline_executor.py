@@ -336,12 +336,15 @@ def test_pipeline_command_forwards_execution_options(
                 "1",
                 "--measure-rounds",
                 "3",
+                "--fits-reader",
+                "astropy",
             ],
         )
         == 0
     )
     assert json.loads(capsys.readouterr().out) == {"executor": executor}
     assert seen["run_id"] == "qualified"
+    assert seen["fits_reader"] == "astropy"
     assert seen["benchmark"].to_payload() == {
         "warmup_rounds": 1,
         "measure_rounds": 3,

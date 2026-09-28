@@ -78,6 +78,43 @@ def test_child_timeout_is_not_success(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("treatment", ["pipeline", "staged"])
+def test_reader_override_is_forwarded_to_benchmark_children(
+    tmp_path, monkeypatch, treatment
+):
+    commands = []
+
+    def child(command, log, **kwargs):
+        commands.append(command)
+        assert command[command.index("--fits-reader") + 1] == "astropy"
+        stage = command[command.index("--stage") + 1]
+        root = Path(command[command.index("--output") + 1])
+        if stage != "pipeline":
+            root = root / stage
+            root.mkdir()
+        (root / "summary.json").write_text(
+            json.dumps({"extra_hashing_seconds": 0.0})
+        )
+        return 0.1
+
+    monkeypatch.setattr(benchmark, "run_child", child)
+    args = SimpleNamespace(
+        output=tmp_path,
+        config=tmp_path / "config.json",
+        items=tmp_path / "items.json",
+        fits_reader="astropy",
+        warmup=1,
+        repeat=1,
+        timeout=10,
+    )
+    if treatment == "pipeline":
+        benchmark.measure_pipeline(args)
+        assert len(commands) == 1
+    else:
+        benchmark.measure_stages(args)
+        assert len(commands) == 6
+
+
 def test_failed_stage_round_retains_completed_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -157,7 +194,9 @@ def test_failed_pipeline_round_retains_completed_items(
     config = SimpleNamespace(
         device="cuda:0", inference_policy={"worker_cpu_threads": 1}
     )
-    monkeypatch.setattr(benchmark, "read_inputs", lambda *_: (config, [0, 1]))
+    monkeypatch.setattr(
+        benchmark, "read_inputs", lambda *_, **__: (config, [0, 1])
+    )
     monkeypatch.setattr(
         device_pipeline,
         "DeviceWorkerContext",

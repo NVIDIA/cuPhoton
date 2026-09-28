@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from cuphoton.core.fits_io import read_fits_images
+from cuphoton.core.fits_io import read_fits_images, validate_fits_reader
 
 from .butler import (
     _is_missing,
@@ -394,9 +394,14 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     payload = load_manifest(manifest_path)
-    fits_reader = payload.get("fits_reader", "auto")
+    fits_reader = validate_fits_reader(
+        payload.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
     fits_reads = []
     registry_path = _registry_path_from_manifest(payload)
     sample_count = int(payload.get("sample_count", payload.get("limit", 8)))

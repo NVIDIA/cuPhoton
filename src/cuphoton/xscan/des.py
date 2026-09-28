@@ -15,7 +15,11 @@ import numpy as np
 import yaml
 
 from cuphoton._photometry import detect_sources, estimate_background
-from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
+from cuphoton.core.fits_io import (
+    inspect_fits_image,
+    read_fits_images,
+    validate_fits_reader,
+)
 
 from .dataset import (
     INDEX_TO_SPLIT,
@@ -84,9 +88,14 @@ def build_autoscan_dataset_from_raw(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     manifest = load_manifest(manifest_path)
-    fits_reader = manifest.get("fits_reader", "auto")
+    fits_reader = validate_fits_reader(
+        manifest.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
     fits_reads = []
     rows = load_table_rows(resolve_required_path(manifest, "records_path"))
     if not rows:
@@ -241,9 +250,14 @@ def build_nodiff_dataset_from_raw(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     manifest = load_manifest(manifest_path)
-    fits_reader = manifest.get("fits_reader", "auto")
+    fits_reader = validate_fits_reader(
+        manifest.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
     fits_reads = []
     exposures = load_table_rows(
         resolve_required_path(manifest, "exposures_path")

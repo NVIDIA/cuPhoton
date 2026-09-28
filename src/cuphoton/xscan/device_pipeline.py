@@ -432,8 +432,15 @@ class DevicePipelineItem:
         }
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> DevicePipelineItem:
-        """Restore one strict item from JSON-compatible values."""
+    def from_payload(
+        cls, payload: Mapping[str, Any], *, fits_reader: str | None = None
+    ) -> DevicePipelineItem:
+        """Restore an item, optionally overriding its FITS reader policies."""
+
+        if fits_reader is not None:
+            from cuphoton.core.fits_io import validate_fits_reader
+
+            validate_fits_reader(fits_reader)
 
         values = _require_exact_fields(
             payload,
@@ -456,17 +463,26 @@ class DevicePipelineItem:
         if not isinstance(candidates, list):
             raise TypeError("device pipeline candidates must be a list")
 
+        def descriptor(value: Any) -> ImageArrayDescriptor:
+            if (
+                fits_reader is not None
+                and isinstance(value, Mapping)
+                and value.get("format") == "fits"
+            ):
+                value = {**value, "reader": fits_reader}
+            return _image_descriptor(value)
+
         def optional_descriptor(value: Any) -> ImageArrayDescriptor | None:
             if value is None:
                 return None
             if not isinstance(value, Mapping):
                 raise TypeError("optional image descriptors must be mappings")
-            return _image_descriptor(value)
+            return descriptor(value)
 
         return cls(
             item_id=values["item_id"],
-            reference=_image_descriptor(values["reference"]),
-            target=_image_descriptor(values["target"]),
+            reference=descriptor(values["reference"]),
+            target=descriptor(values["target"]),
             variance=optional_descriptor(values["variance"]),
             fit_mask=optional_descriptor(values["fit_mask"]),
             candidates=tuple(

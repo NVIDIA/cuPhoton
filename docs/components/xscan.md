@@ -53,6 +53,16 @@ records the actual reader and fallback reason in the builder summary.
 `astropy` selects CPU decoding; `xdr` requires the GPU reader. Candidate
 cutouts remain bounded reads, and the prepared dataset format is unchanged.
 
+The raw builders (`data-build-autoscan-raw`, `data-build-nodiff-raw`, and
+`data-build-lsstcomcam-smoke`) also accept `--fits-reader auto|astropy|xdr`.
+An explicit option overrides the manifest for that run; omitting it preserves
+the manifest policy, which defaults to `auto`. For example:
+
+```bash
+cuphoton xscan data-build-autoscan-raw --manifest des.json \
+  --output-dir dataset --fits-reader astropy
+```
+
 ## Classify candidates directly from FITS
 
 `predict_fits` reads aligned image planes, crops candidate stamps on the GPU
@@ -443,6 +453,21 @@ the reason when preflight selects Astropy. A decode failure is propagated,
 rather than retried with another reader. Requested HDUs in one file share a
 read and must use the same reader policy. FITS payloads are loaded only after
 worker GPU placement, on the pipeline's producer stream.
+
+`run-pipeline` and `benchmark-pipeline` accept the same `--fits-reader` option.
+An explicit value overrides every FITS descriptor, including variance and
+masks, before work is sent to MPI or Dragon workers or benchmark children.
+The effective policies are retained in workload identities and read receipts.
+Omitting the option preserves per-descriptor choices; NPY inputs are unchanged.
+
+```bash
+mpiexec -n 2 cuphoton xscan run-pipeline --executor mpi \
+  --manifest pipeline.json --output-dir runs --fits-reader astropy
+```
+
+`astropy` disables xDR decoding while retaining GPU computation. xDR can use
+ordinary file I/O without native GPUDirect Storage: set
+`KVIKIO_COMPAT_MODE=ON` in the worker environment to require compatibility I/O.
 
 Inputs must already be registered to the same pixel grid and use compatible
 photometric units. Candidate coordinates, variance and masks refer to that

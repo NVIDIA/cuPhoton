@@ -211,6 +211,17 @@ def _read_xdr(path: Path, hdus: tuple[int, ...], *, section, stream):
     )
 
 
+def validate_fits_reader(reader: str) -> str:
+    """Validate one explicit FITS reader policy without importing CUDA."""
+    if not isinstance(reader, str) or reader not in {
+        "astropy",
+        "auto",
+        "xdr",
+    }:
+        raise ValueError("FITS reader must be astropy, auto, or xdr")
+    return reader
+
+
 def read_fits_images(
     path: str | Path,
     hdus: Sequence[int],
@@ -228,8 +239,7 @@ def read_fits_images(
     rejects unsupported semantics or unavailable dependencies before reading
     pixels. All returned device arrays are ready on return.
     """
-    if reader not in {"astropy", "auto", "xdr"}:
-        raise ValueError("FITS reader must be astropy, auto, or xdr")
+    validate_fits_reader(reader)
     selectors = tuple(hdus)
     if not selectors:
         raise ValueError("At least one FITS HDU must be selected")
