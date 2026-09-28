@@ -477,7 +477,9 @@ def validation_sweep(
     ]
     rng = np.random.default_rng(seed)
     levels = []
-    for snr, sigma, bounds in zip(snr_db, noise_sigmas, bounds_per_level):
+    for snr, sigma, bounds in zip(
+        snr_db, noise_sigmas, bounds_per_level, strict=True
+    ):
         found: list[dict[str, list[float]]] = [
             {name: [] for name in PARAMETERS} for _ in modes
         ]
@@ -565,7 +567,7 @@ def _source_provenance() -> tuple[str | None, bool | None]:
     """Revision and tracked-file dirtiness for this module's checkout."""
     try:
         source = Path(__file__).resolve()
-        options = {
+        options: dict[str, Any] = {
             "cwd": source.parent,
             "capture_output": True,
             "text": True,
