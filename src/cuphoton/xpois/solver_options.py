@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Shared XPOIS solver-option validation."""
+"""Shared xPois solver-option validation."""
 
 from __future__ import annotations
 

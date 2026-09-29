@@ -186,7 +186,7 @@ def test_comp_reader_retains_buffers_through_completion(
         assert quarantine[0].keepalive is keepalives[0]
         assert "decode-scratch" in quarantine[0].keepalive
         # Both standalone and batched reads must respect the same gate.
-        with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+        with pytest.raises(RuntimeError, match="previous xDR GPU work"):
             comp_reader.read(**kwargs)
         assert len(keepalives) == 1
     else:
@@ -355,7 +355,7 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
         assert len(partial_owner_refs) == 1
         assert partial_owner_refs[0]() is not None
 
-    with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+    with pytest.raises(RuntimeError, match="previous xDR GPU work"):
         comp_reader.read(**kwargs)
     assert load_count() == 1
     assert stream.synchronize_calls == 0
@@ -363,7 +363,7 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
 
     stream.done = True
     if error_stage != "decode":
-        with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+        with pytest.raises(RuntimeError, match="previous xDR GPU work"):
             comp_reader.read(**kwargs)
         assert load_count() == 1
         assert quarantine == [completion]
@@ -373,7 +373,7 @@ def test_comp_reader_early_failure_quarantines_without_waiting(
         if error_stage == "load":
             # The load never returned its handle: even an idle CUDA stream
             # cannot establish completion of the unknown partial I/O.
-            with pytest.raises(RuntimeError, match="previous XDR GPU work"):
+            with pytest.raises(RuntimeError, match="previous xDR GPU work"):
                 comp_reader.read(**kwargs)
             assert load_count() == 1
             assert quarantine == [completion]

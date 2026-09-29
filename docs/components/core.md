@@ -1,8 +1,8 @@
 # Core
 
 `cuphoton.core` owns the command-line, context, path, logging, invariant,
-and shared Dragon/MPI execution framework. Component algorithms, datasets,
-scientific validation, and output formatting remain in their owning
+shared FITS reading, and Dragon/MPI execution framework. Component algorithms,
+datasets, scientific validation, and output formatting remain in their owning
 `cuphoton.*` namespaces.
 
 ## What it provides
@@ -11,9 +11,11 @@ scientific validation, and output formatting remain in their owning
   registry;
 - root, group, and command help through one `cuphoton` entry point;
 - class-based command discovery and invariant-backed option validation;
-- consistent version, error, and logging behavior; and
+- consistent version, error, and logging behavior;
 - side-effect-free resolution of component XDG config, state, data, run, and
-  log paths.
+  log paths;
+- shared host/device FITS image reading with explicit reader provenance; and
+- persistent Dragon/MPI worker lifecycle and result validation.
 
 The public surface is pinned by the CLI contract tests. Five groups also
 support a component-level `version` command; xDataReader is the exception.
@@ -25,7 +27,32 @@ completions. Coordinator artifact audits and scientific output merging follow
 that interval; `finalization_sec` measures the component's merge separately.
 Inputs retained by an adapter are loaded during worker setup. A round summary
 records a completed pass, while the root terminal summary is published after
-worker shutdown and the executor's lifecycle checks.
+worker cleanup and the executor's lifecycle checks. MPI process finalization
+and launcher exit occur after the executor returns.
+
+## Shared FITS reading
+
+`cuphoton.core.fits_io` inspects two-dimensional FITS image HDUs and reads
+selected planes to NumPy or CuPy arrays. It supplies the FITS reader used by
+xPois, xRep, xFit, xScan, and the combined imaging pipeline.
+
+`inspect_fits_images` and `inspect_fits_image` inspect image headers without
+decoding pixels. `read_fits_images` accepts HDU indices, a reader policy, and
+an optional bounded `(y, x)` section. Results preserve HDU order and integer
+mask values, use native byte order, and include headers and read provenance.
+`FitsReadResult.metadata()` records the requested and actual readers, fallback
+reason, array location, shapes, dtypes, and decoded byte count.
+
+The low-level API defaults to `reader="astropy"` and host arrays. A workflow
+can request `auto` to choose xDR for supported images when its native extension
+and GPU dependencies are available, or `xdr` to require that path. Unsupported
+scaling, null values, compression, and uncompressed image sections use Astropy
+under `auto`; explicit `xdr` rejects them before payload reading. Read errors
+after reader selection propagate to the caller. Choosing xDR does not establish
+that the storage transfer used GPUDirect Storage.
+
+See the [FITS input contract](../data-artifacts.md) and
+[xDR installation requirements](xdr.md#native-extension-availability).
 
 ## Public facade
 

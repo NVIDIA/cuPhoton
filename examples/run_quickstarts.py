@@ -583,7 +583,7 @@ def _run_xray(
         result = linear_prediction_numpy(pair.delay, pair.ratio_minus_one, 4)
     else:
         raise RuntimeError(
-            f"XRay does not support quickstart backend {backend}"
+            f"xRay does not support quickstart backend {backend}"
         )
 
     delay_path = artifact_dir / "delay.npy"

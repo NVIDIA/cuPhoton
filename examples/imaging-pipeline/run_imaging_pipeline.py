@@ -17,7 +17,7 @@ Run from the repository root:
         examples/imaging-pipeline/run_imaging_pipeline.py
 
 The full walkthrough requires Linux and a CUDA 13-capable NVIDIA GPU.
-The XDR load step allocates a CuPy batch and has no CPU fallback.
+The xDR load step allocates a CuPy batch and has no CPU fallback.
 See docs/components/xdr.md for the native extension's CUDA headers and
 thread-safe CFITSIO build prerequisites.
 
@@ -242,7 +242,7 @@ aligned = reproject_stack(native, spec, backend="auto")
 print(aligned.images.shape, aligned.backend)
 reference, target = aligned.images
 
-# === XPOIS ===
+# === xPois ===
 # Fit only the static scene, excluding both mover positions and their wings.
 fit_mask = np.ones(SHAPE, dtype=bool)
 fit_mask[105:142, 93:132] = False
@@ -332,7 +332,7 @@ host = images.get()
 model_img = np.asarray(model.evaluate(result.parameters, mode="difference"))[
     0
 ]
-# XFIT returns model minus data; display data minus model, as in XPOIS.
+# XFIT returns model minus data; display data minus model, as in xPois.
 fit_residual = -result.residuals[0]
 # Share the stamp/model scale; stretch the residual to show its structure.
 # The floor matches stretch_div and gives a finite range for an exact fit.

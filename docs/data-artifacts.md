@@ -10,8 +10,8 @@ Individual commands may accept additional fields; use `<command> help
 - Image coordinates use `(y, x)` array order unless an option explicitly asks
   for `(x, y)` pixel coordinates.
 - Inputs must be finite unless a command documents a NaN policy.
-- Variance arrays use squared image units and must be positive on fitted
-  pixels.
+- Variance arrays use squared image units. Fit weights require positive
+  variance on fitted pixels; xRep also accepts zero variance for propagation.
 - Boolean fit masks use `True` for selected pixels. Instrument bit masks must
   be translated with the command's mask policy.
 - Keep units and coordinate frames in FITS headers or adjacent metadata,
@@ -19,7 +19,8 @@ Individual commands may accept additional fields; use `<command> help
 
 ## xFit dipole batches
 
-xFit reads `.npz` archives with pickle disabled. The archive requires a unique
+xFit reads pickle-free `.npz` archives or JSON manifests describing FITS
+planes and candidate positions. The archive requires a unique
 one-dimensional `candidate_id` array and floating-point `images`. Difference
 images have shape `(batch, y, x)`; split images have shape
 `(batch, 3, y, x)` with channels ordered as difference, positive, and
@@ -34,11 +35,22 @@ over all three planes. This interpretation also wins when `batch == 3`; use
 The command rejects standalone `.npy` inputs, object arrays, and archives that
 require pickle. Callers supply the observational data.
 
+FITS manifests use schema `cuphoton.xfit.fits-input/v1`. They specify one
+difference plane or three split planes in difference, positive, negative
+order; all planes share an already aligned pixel grid. Each candidate has a
+unique integer or string ID and integer zero-based `(x, y)` center, with an
+odd `[height, width]` stamp fully inside the image. Paths resolve relative to
+the manifest, and HDU indices are zero-based. Optional variance and integer
+mask HDUs come from the same file as their image plane. `bad_mask_bits`
+selects excluded bits; without it, any nonzero mask pixel is excluded. Split
+mode requires variance for every plane or none. See the
+[complete FITS manifest example](components/xfit.md#fits-images-and-candidate-positions).
+
 A successful `fit-dipoles` run contains:
 
 | File | Meaning |
 | --- | --- |
-| `summary.json` | requested and resolved model/backend, input and compute dtypes, device, input-archive hash, input counts, artifact paths, and artifact hashes |
+| `summary.json` | requested and resolved model/backend, input and compute dtypes, device, input-archive or manifest hash, input counts, artifact paths, and artifact hashes; FITS inputs also record source hashes and read receipts |
 | `effective-config.yaml` | validated options used for the fit |
 | `fits.parquet` | one row per candidate with an exact input-stamp hash, parameters, status, convergence, valid-pixel coverage, fitted and zero-signal chi-square statistics, and uncertainties |
 | `fit-arrays.npz` | candidate indices and IDs, covariance matrices, and residual arrays without pickled objects |
@@ -47,15 +59,15 @@ Covariance uses supplied variances when present and residual scaling
 otherwise. Non-converged or rank-deficient fits retain status information and
 mark their uncertainties invalid.
 
-For distributed xFit and XScan inference, `summary.json` is the terminal
+For distributed xFit and xScan inference, `summary.json` is the terminal
 execution summary. Merged scientific artifacts live in `scientific/` for
 ordinary runs or `rounds/<round-id>/scientific/` for benchmark runs. Round
 summaries describe individual passes; only the root summary includes the
 executor's final lifecycle status. Warmup artifacts are retained.
 
-## XScan HSC NPY inputs
+## xScan HSC NPY inputs
 
-XScan accepts an HSC NPY directory directly or as `HSC_npy` beneath a supplied
+xScan accepts an HSC NPY directory directly or as `HSC_npy` beneath a supplied
 base directory. The directory contains `metadata.json` and these arrays:
 
 | File | Axis order | Meaning |
@@ -71,7 +83,7 @@ Spatial dimensions and exposure counts must agree across corresponding
 arrays. Treat the directory as caller-supplied data and keep it outside the
 repository.
 
-## XPOIS image pairs
+## xPois image pairs
 
 `reference` and `target` are two-dimensional arrays with the same shape. An
 optional target variance image, used for fit weights and chi-square, and
@@ -148,7 +160,7 @@ observations. `parity.ok` gates arrays, scalars, exact fields, and fit
 masks; the objective history, condition number, iteration count, and
 convergence flag are reported as non-gating diagnostics.
 
-## XScan datasets
+## xScan datasets
 
 A prepared dataset directory contains:
 
@@ -172,7 +184,7 @@ and a summary that records the selected device and split. Review annotations
 are separate append-only artifacts and should retain reviewer and source-run
 provenance.
 
-### xFit feature bundles for XScan
+### xFit feature bundles for xScan
 
 `cuphoton xscan data-export-xfit-input` writes a pickle-free `.npz` containing
 numeric or Unicode arrays: unique `candidate_id` and exact float `images` rows from
@@ -192,20 +204,20 @@ Construct an archive manually when initial parameters or a stamp basis are
 required.
 
 `cuphoton xscan data-build-xfit-features` joins a completed difference-mode
-xFit run to a prepared XScan dataset by `candidate_id` and writes a new bundle
+xFit run to a prepared xScan dataset by `candidate_id` and writes a new bundle
 directory. It verifies the xFit artifact hashes and binds every matched row to
-the exact XScan `difference.npy` stamp by a dtype-, shape-, and content-aware
+the exact xScan `difference.npy` stamp by a dtype-, shape-, and content-aware
 hash:
 
 | File | Meaning |
 | --- | --- |
-| `candidate-id.npy` | numeric or Unicode candidate IDs in exact XScan metadata order, loaded with pickle disabled |
+| `candidate-id.npy` | numeric or Unicode candidate IDs in exact xScan metadata order, loaded with pickle disabled |
 | `features.npy` | row-aligned float32 feature matrix, loaded read-only through a memory map so split datasets and data-loader workers share the same file-backed values |
 | `input-image-sha256.npy` | fixed-width ASCII SHA-256 values for the exact difference stamps, loaded with pickle disabled |
 | `schema.json` | ordered feature contract, bounded transforms, source SHA-256 hashes, missing policy, and join diagnostics |
 
-The candidate array must exactly match XScan metadata order when loaded.
-Duplicate XScan rows may reuse one fit only when the duplicate stamps, splits,
+The candidate array must exactly match xScan metadata order when loaded.
+Duplicate xScan rows may reuse one fit only when the duplicate stamps, splits,
 and split groups are identical; duplicate xFit candidate IDs are rejected.
 The default `missing_policy: error` requires every dataset row to have a fit.
 `indicator` instead emits finite zero features with
@@ -238,6 +250,18 @@ Real/bogus training requires separately reviewed labels. Rubin
 support workflow checks. Partition reviewed labels into train/validation/test
 groups by DiaObject or an equivalent stable source identity.
 
+### Direct FITS inference
+
+The [xScan FITS inference API](components/xscan.md#classify-candidates-directly-from-fits)
+accepts explicit `FitsPlane` descriptors and integer zero-based `(y, x)`
+candidate centers. Channels are search, template, then optional difference.
+Unlike an xFit split input, these are classifier image channels. The caller
+supplies aligned images with the checkpoint's expected pixel preprocessing.
+The API loads full selected HDUs, extracts odd-sized float32 stamps on one
+GPU and returns host logits and probabilities in candidate order, with
+reader receipts. This path does not produce a prepared training dataset or
+interpret instrument mask bits.
+
 ## xRep FITS and arrays
 
 CLI inputs are two-dimensional FITS images with a celestial WCS. Optional masks
@@ -250,9 +274,9 @@ Single-image runs write `artifacts/reprojected.npy`, an optional `mask.npy`, and
 bounding box, and timings. FITS output is optional. Stack runs use
 `reprojected_stack.npy` and an optional mask stack on one shared grid.
 
-## XRay HDF5 and trace products
+## xRay HDF5 and trace products
 
-XRay probes an HDF5 file before selecting a supported image cube, scan/delay
+xRay probes an HDF5 file before selecting a supported image cube, scan/delay
 axis, entry counts, and intensity-normalization fields. On/off cubes must use
 the same schema and image shape. Detector ROIs are supplied as `(x, y)` origins
 and `(width, height)` dimensions; generated NumPy images remain row-major.
@@ -264,7 +288,7 @@ logs, and a merged manifest. Preserve the ROI, excluded rows, normalization,
 fit parameters, shard ranges, and package/hardware details with published
 results.
 
-XRay detector artifacts from the optional iterative fitter use manifest
+xRay detector artifacts from the optional iterative fitter use manifest
 version 3, including the fitting method and iterative controls in the
 configuration and resume identity. Existing linear-prediction artifacts keep
 their version 2 representation. The numerical diagnostic sidecar also

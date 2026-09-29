@@ -64,6 +64,8 @@ more than one license.
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
 | `dev` | `pytest>=8.3` | `9.1.1` | `MIT` | [pytest](https://github.com/pytest-dev/pytest) | `uv / PyPI` |
 | `dev` | `ruff>=0.15.12` | `0.15.20` | `MIT` | [Ruff](https://github.com/astral-sh/ruff) | `uv / PyPI` |
+| `dev` | `mypy==1.19.1` | `1.19.1` | `MIT` | [mypy](https://github.com/python/mypy) | `uv / PyPI` |
+| `dev` | `types-PyYAML>=6.0.12` | `6.0.12.20260906` | `Apache-2.0` | [typeshed](https://github.com/python/typeshed) | `uv / PyPI` |
 
 ## Optional distributed runtime inventory
 
@@ -74,7 +76,7 @@ Both are installed from upstream distributions and recorded in `uv.lock`;
 neither is bundled in the cuPhoton wheel. The MPI implementation remains
 site-provided. The inventoried versions do not establish compatibility with every Python version,
 transport, or cluster configuration. See the
-[XPOIS launch documentation](docs/components/xpois.md#launch-with-dragon)
+[xPois launch documentation](docs/components/xpois.md#launch-with-dragon)
 for a Dragon launch example.
 
 | Runtime | Inventoried versions | License and upstream notices | Use and distribution |
@@ -215,7 +217,7 @@ For a CPU-only development environment, replace `gpu` with `torch`.
 
 `make build` creates a source distribution containing cuPhoton's extension
 sources and the pinned native build recipe. `make wheels` builds the native
-Linux wheels from that archive. Each wheel includes the XDR extension and a
+Linux wheels from that archive. Each wheel includes the xDR extension and a
 privately renamed CFITSIO shared library, with the license notice above. The
 source archive and wheels include `LICENSE` and this notice file.
 

@@ -369,13 +369,13 @@ def audit(args: SimpleNamespace) -> dict[str, Any]:
             }
             for name, value in result["xpois"].items():
                 if metadata["xpois"][f"xpois_{name}"] != value:
-                    raise ValueError(f"xPOIS {name} differs")
+                    raise ValueError(f"xPois {name} differs")
             evidence = result["scientific_evidence"]
             if (
                 metadata["xpois"]["basis_terms"]
                 != evidence["xpois"]["basis_terms"]
             ):
-                raise ValueError("xPOIS basis metadata differs")
+                raise ValueError("xPois basis metadata differs")
             for name in ("parameter_names", "feature_names"):
                 if metadata["xfit"][name] != evidence[name]:
                     raise ValueError(f"xFit {name} differs")

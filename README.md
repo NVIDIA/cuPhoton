@@ -6,26 +6,36 @@ teams that want working implementations they can run, inspect, and adapt to
 their own instruments and data products. The curated Python exports and
 structured run artifacts provide integration points for those workflows.
 
-cuPhoton releases are currently alpha-quality, and interfaces may evolve.
-It is not a stable application framework, and the scientific assumptions in
-each workflow must be checked against the target use case.
-
 ## Choose a workflow
 
 | If you have... | Use... | You get... |
 | --- | --- | --- |
 | FITS files whose pixels you need on a GPU | [xDataReader](docs/components/xdr.md) | Decoded and scaled device arrays |
 | Images with different pixel-to-sky mappings | [xRep](docs/components/xrep.md) | Images resampled onto a common sky grid |
-| An aligned reference image and a new observation | [XPOIS](docs/components/xpois.md) | A matched reference and a difference image |
+| An aligned reference image and a new observation | [xPois](docs/components/xpois.md) | A matched reference and a difference image |
 | Small cutouts containing positive/negative residuals | [xFit](docs/components/xfit.md) | Fitted positions, amplitudes, shapes, uncertainties, and fit status |
-| Candidate cutouts to score, or reviewed examples to train on | [XScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
-| X-ray detector images sampled over experimental delay | [XRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
+| Candidate cutouts to score, or reviewed examples to train on | [xScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
+| X-ray detector images sampled over experimental delay | [xRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
 
 Each component can be used independently. An optical workflow can combine
-loading, reprojection, subtraction, and candidate analysis; XRay handles a
+loading, reprojection, subtraction, and candidate analysis; xRay handles a
 separate kind of experimental data. See [how the components fit
 together](docs/architecture.md#how-the-science-components-fit-together) for
 the data flow and the adapters needed between stages.
+
+## Upcoming 0.1.3 release
+
+The current checkout includes the changes planned for 0.1.3:
+
+- Shared FITS reading across the imaging workflows, including candidate
+  manifests for xFit and direct FITS inference through xScan's Python API.
+- A reusable GPU context connecting xPois, xFit, and xScan, with persistent
+  Dragon or MPI workers for supported batch workflows.
+- Native Linux wheels and Conda packages, spatially varying image matching,
+  optional cuTile fitting, and expanded xRay fitting and diagnostics.
+
+See the [changelog](CHANGELOG.md) for migration details. Until the release is
+published, use the source checkout instructions below.
 
 ## Start here
 
@@ -39,8 +49,8 @@ uv sync --locked --extra dev --extra gpu --extra viz
 uv run python examples/run_quickstarts.py
 ```
 
-The quickstart creates synthetic inputs for xRep, XPOIS, xFit, XScan, and
-XRay, then writes results to `quickstart-output/`. xDataReader has a separate
+The quickstart creates synthetic inputs for xRep, xPois, xFit, xScan, and
+xRay, then writes results to `quickstart-output/`. xDataReader has a separate
 [native GPU setup](docs/components/xdr.md#install). The JSON summary records
 the requested profile, the backend and device selected for each component,
 and the artifact paths. The default `auto` profile prefers a GPU and reports
@@ -50,10 +60,12 @@ For a deterministic CPU run:
 
 ```bash
 uv sync --locked --extra dev --extra torch --extra viz --extra photometry
-uv run python examples/run_quickstarts.py --profile cpu
+uv run python examples/run_quickstarts.py --profile cpu \
+  --output-dir quickstart-cpu-output
 ```
 
-Use `--require-gpu` to require GPU execution. See
+Each run needs a new output directory. To require GPU execution, restore the
+GPU profile above and run with `--require-gpu` and a new `--output-dir`. See
 [Quickstarts](docs/quickstarts.md) for individual components and output
 contracts.
 
@@ -61,7 +73,7 @@ For a synthetic imaging walkthrough from FITS loading through alignment,
 subtraction, dipole fitting, and plotting, run the
 [notebook](examples/imaging-pipeline/run_imaging_pipeline.ipynb) or equivalent
 [script](examples/imaging-pipeline/run_imaging_pipeline.py). Both include setup
-instructions and require a CUDA 13-capable NVIDIA GPU and XDR's native extension.
+instructions and require a CUDA 13-capable NVIDIA GPU and xDR's native extension.
 
 ## Components
 
@@ -84,9 +96,9 @@ pixel scale, rotation, and position; matching the images' blur is a separate
 operation. Outputs include the reprojected arrays, optional masks, and grid
 metadata.
 
-### XPOIS: subtract a matched reference to reveal changes
+### xPois: subtract a matched reference to reveal changes
 
-XPOIS (`cuphoton.xpois`) starts with aligned reference and target images. It
+xPois (`cuphoton.xpois`) starts with aligned reference and target images. It
 fits a convolution kernel and background correction to match their blur,
 brightness scale, and background, then subtracts the matched reference.
 Unchanged sources should largely cancel, leaving a difference image for
@@ -100,23 +112,27 @@ a small positional mismatch or a moving source can produce one. xFit
 (`cuphoton.xfit`) fits models to batches of small image cutouts, called
 stamps. It returns positions, amplitudes, and shape parameters with residuals,
 uncertainties, and fit status. These measurements describe the candidate and
-can optionally become inputs to an XScan classifier.
+can optionally become inputs to an xScan classifier.
+Supply stamps as arrays or an NPZ archive, or use a FITS candidate manifest
+to select image regions, variance planes, and masks directly from local files.
 
-### XScan: score candidates and collect review labels
+### xScan: score candidates and collect review labels
 
-XScan (`cuphoton.xscan`) trains and evaluates real/bogus classifiers and runs
+xScan (`cuphoton.xscan`) trains and evaluates real/bogus classifiers and runs
 inference on candidate stamps. Models use search and template images,
 optionally a difference image, and explicitly selected xFit features.
 Real/bogus scores help prioritize plausible detections over artifacts for
-further scientific classification. XScan also produces review material for
+further scientific classification. xScan also produces review material for
 inspecting predictions and collecting labels. Training requires reviewed
 labels and suitable train/validation/test splits.
+The Python `predict_fits` API scores caller-selected candidates from FITS
+images on a CUDA device. The `infer-real-bogus` command uses packaged datasets.
 
-### XRay: measure oscillations in detector signals
+### xRay: measure oscillations in detector signals
 
-XRay (`cuphoton.xray`) analyzes X-ray detector measurements sampled over
+xRay (`cuphoton.xray`) analyzes X-ray detector measurements sampled over
 experimental delay. In a pump/probe experiment, one pulse excites a sample
-and another measures its response after a controlled delay. XRay extracts
+and another measures its response after a controlled delay. xRay extracts
 and normalizes signal traces from selected detector regions, then uses linear
 prediction to estimate their oscillatory modes. Outputs include frequencies,
 amplitudes, fit diagnostics, and detector review maps. Interpreting those
@@ -128,10 +144,16 @@ application context, logging, and invariant checks. Each science component
 owns its algorithms and data contracts. The [glossary](docs/glossary.md)
 explains the scientific and file-format terms used here.
 
+The imaging workflows share a FITS reader policy: Astropy supplies the CPU
+path and xDR supplies eligible GPU reads. Reader selection is separate from
+the numerical backend. Read receipts record the requested and actual reader,
+selected HDUs, and any fallback reason; see
+[FITS reading in a workflow](docs/components/xdr.md#read-fits-images-in-a-workflow).
+
 ## Installation profiles
 
 The base install contains the shared CPU data and scientific stack. Optional
-extras are deliberately separated by purpose:
+extras add the runtime and development dependencies for each workflow.
 
 CPython 3.12 through 3.14 is supported on Linux, including the experimental
 cuTile backend. Dragon currently requires Python 3.12 or 3.13 because its
@@ -141,7 +163,7 @@ upstream release has no Python 3.14 wheel.
 | --- | --- |
 | `dev` | Tests, formatting, linting, and build tools |
 | `photometry` | Photutils source detection, backgrounds, and aperture measurements |
-| `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for XDR |
+| `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for xDR |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
 | `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch and Numba-CUDA |
 | `cutile` | Experimental `cuda.tile` backend and CuPy |
@@ -149,7 +171,7 @@ upstream release has no Python 3.14 wheel.
 | `dragon` | DragonHPC runtime on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |
 
-Linux x86-64 and ARM64 wheels include the native XDR extension and a private,
+Linux x86-64 and ARM64 wheels include the native xDR extension and a private,
 thread-safe CFITSIO library. After the first PyPI release is published, install
 it with the commands below. Until then, use the checkout instructions above:
 
@@ -185,8 +207,8 @@ uv sync --locked --extra dev --extra gpu --extra cutile
 
 Only CUDA 13 dependency variants are supported by this release.
 
-Source checkouts require an explicit native XDR build. See the
-[XDR installation guide](docs/components/xdr.md) and
+Source checkouts require an explicit native xDR build. See the
+[xDR installation guide](docs/components/xdr.md) and
 [native wheel build and release procedure](docs/packaging.md).
 
 ## Python and command-line interfaces

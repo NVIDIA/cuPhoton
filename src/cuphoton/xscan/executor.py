@@ -77,9 +77,9 @@ def _check_inputs(
             stat.st_size != identity["size"]
             or stat.st_mtime_ns != identity["mtime_ns"]
         ):
-            raise ValueError(f"XScan input changed: {path.name}")
+            raise ValueError(f"xScan input changed: {path.name}")
         if hash_content and file_sha256(path) != identity["sha256"]:
-            raise ValueError(f"XScan input checksum changed: {path.name}")
+            raise ValueError(f"xScan input checksum changed: {path.name}")
 
 
 def _indices(options: Mapping[str, Any]) -> np.ndarray:
@@ -135,7 +135,7 @@ def plan_inference_chunks(
     selected = _indices(options)
     if not selected.size:
         raise ValueError(
-            "distributed XScan inference requires a non-empty split"
+            "distributed xScan inference requires a non-empty split"
         )
     options["sample_count"] = int(selected.size)
     options["sample_indices_sha256"] = array_sha256(selected)
@@ -148,7 +148,7 @@ def plan_inference_chunks(
             after.st_size,
             after.st_mtime_ns,
         ):
-            raise ValueError("XScan input changed during planning")
+            raise ValueError("xScan input changed during planning")
         identities.append(
             {
                 "path": str(path),
@@ -254,7 +254,7 @@ class XScanInferenceWorker:
             != options["sample_indices_sha256"]
         ):
             raise ValueError(
-                "XScan worker split differs from planned sample order"
+                "xScan worker split differs from planned sample order"
             )
         self.metadata_rows: list[dict[str, Any]] | None = load_metadata_rows(
             Path(options["dataset_dir"])
@@ -313,7 +313,7 @@ class XScanInferenceWorker:
             != item.payload["sample_indices_sha256"]
         ):
             raise ValueError(
-                "XScan item sample order differs from its descriptor"
+                "xScan item sample order differs from its descriptor"
             )
         self.sample_positions[:] = range(start, stop)
         prediction_started = time.perf_counter()
@@ -391,7 +391,7 @@ def _range(item: WorkItem, options: Mapping[str, Any]) -> tuple[int, int]:
         or item.payload.get("configuration_sha256")
         != options["configuration_sha256"]
     ):
-        raise ValueError("invalid XScan chunk or minibatch boundary")
+        raise ValueError("invalid xScan chunk or minibatch boundary")
     return start, stop
 
 
@@ -404,22 +404,22 @@ def _read_result(item: WorkItem, round_dir: Path, options: Mapping[str, Any]):
         **dict(item.payload),
     }
     if any(summary.get(key) != value for key, value in expected.items()):
-        raise ValueError("XScan chunk summary identity mismatch")
+        raise ValueError("xScan chunk summary identity mismatch")
     start, stop = _range(item, options)
     arrays = {}
     for name in _OUTPUT_ARRAYS:
         path = item_dir / f"{name}.npy"
         if file_sha256(path) != summary["artifact_sha256"].get(name):
-            raise ValueError("XScan chunk result checksum mismatch")
+            raise ValueError("xScan chunk result checksum mismatch")
         values = np.load(path, allow_pickle=False)
         if values.shape != (stop - start,):
-            raise ValueError("XScan chunk row count mismatch")
+            raise ValueError("xScan chunk row count mismatch")
         arrays[name] = values
     if (
         array_sha256(arrays["sample_index"])
         != item.payload["sample_indices_sha256"]
     ):
-        raise ValueError("XScan chunk sample identity mismatch")
+        raise ValueError("xScan chunk sample identity mismatch")
     probabilities = arrays["probabilities"]
     if (
         arrays["logits"].dtype != np.dtype("float64")
@@ -427,7 +427,7 @@ def _read_result(item: WorkItem, round_dir: Path, options: Mapping[str, Any]):
         or not np.all(np.isfinite(arrays["logits"]))
         or not np.all(np.isfinite(probabilities))
     ):
-        raise ValueError("XScan chunk scores must be finite float64 arrays")
+        raise ValueError("xScan chunk scores must be finite float64 arrays")
     try:
         # NumPy exp dispatch can differ by a few ULP between hosts. Retain
         # the worker's original probabilities and bound only this audit.
@@ -436,7 +436,7 @@ def _read_result(item: WorkItem, round_dir: Path, options: Mapping[str, Any]):
         )
     except AssertionError as exc:
         raise ValueError(
-            "XScan chunk probabilities differ from the host sigmoid "
+            "xScan chunk probabilities differ from the host sigmoid "
             "by more than 4 ULP"
         ) from exc
     return summary, arrays
@@ -457,7 +457,7 @@ def finalize_inference_round(
         or any(record.get("status") != "success" for record in records)
     ):
         raise ValueError(
-            "XScan merge requires one successful result per chunk"
+            "xScan merge requires one successful result per chunk"
         )
     _check_inputs(options, hash_content=True)
     selected = _indices(options)
@@ -476,7 +476,7 @@ def finalize_inference_round(
     for item in sorted(items, key=lambda item: item.payload["start"]):
         start, stop = _range(item, options)
         if start != next_row:
-            raise ValueError("XScan chunks overlap or omit sample rows")
+            raise ValueError("xScan chunks overlap or omit sample rows")
         summary, arrays = _read_result(item, round_dir, options)
         expected_rows = [
             {**metadata[int(index)], "sample_index": int(index)}
@@ -493,7 +493,7 @@ def finalize_inference_round(
             )
         ):
             raise ValueError(
-                "XScan chunk sample identities or labels differ from input"
+                "xScan chunk sample identities or labels differ from input"
             )
         current_summary = summary["inference_summary"]
         if (
@@ -501,14 +501,14 @@ def finalize_inference_round(
             and current_summary != inference_summary
         ):
             raise ValueError(
-                "XScan checkpoint, feature or performance settings "
+                "xScan checkpoint, feature or performance settings "
                 "differ across workers"
             )
         inference_summary = current_summary
         chunks.append(arrays)
         next_row = stop
     if next_row != options["sample_count"] or inference_summary is None:
-        raise ValueError("XScan chunks do not cover the selected split")
+        raise ValueError("xScan chunks do not cover the selected split")
     output = round_dir / "scientific"
     output.mkdir(exist_ok=False)
     checksums = {}

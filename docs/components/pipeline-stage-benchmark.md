@@ -1,7 +1,7 @@
 # Pipeline versus separate-stage benchmark
 
-This benchmark compares one persistent GPU worker running xPOIS, xFit and
-XScan with three fresh processes that exchange intermediate arrays through
+This benchmark compares one persistent GPU worker running xPois, xFit and
+xScan with three fresh processes that exchange intermediate arrays through
 files. Both treatments use the same device numerical APIs, inputs,
 checkpoint and per-image candidate batches. The comparison measures the
 combined cost of process lifetime, transfers and intermediate artifacts.
@@ -50,6 +50,29 @@ files when running the reversed comparison. Use the same CPU affinity,
 thread settings and GPU, without another workload running concurrently.
 `--timeout` bounds each child invocation; its default is 600 seconds.
 
+### Use existing FITS inputs
+
+Supplied item descriptors can reference FITS HDUs as described in the
+[persistent pipeline guide](xscan.md#persistent-xpois-xfit-and-xscan-pipeline).
+The generated fixture remains NPY-based. With FITS descriptors, use
+`--fits-reader astropy`, `auto` or `xdr` to override every descriptor's reader
+policy in both treatments, including variance and fit-mask planes. Omitting
+the option preserves the policies in the item manifest:
+
+```bash
+uv run --locked --extra gpu cuphoton xscan benchmark-pipeline \
+  --output /tmp/cuphoton-fits-astropy \
+  --config /path/to/config.json --items /path/to/fits-items.json \
+  --fits-reader astropy --warmup 1 --repeat 3
+```
+
+For a reader comparison, rerun with the same configuration, items and
+treatment order, a new output directory and a different reader selection.
+Keep input encoding and cache state comparable. xDR supports compatibility
+I/O as well as native GDS; reader selection alone does not identify the
+storage path. FITS read receipts record logical decoded bytes and fallback
+reasons, not measured disk or PCIe traffic.
+
 ## What each treatment runs
 
 The pipeline initializes `DeviceWorkerContext` once, performs its warmup
@@ -59,11 +82,11 @@ difference fitting, xFit feature conversion and model inference. Device
 arrays pass to PyTorch through DLPack. The result contains compact scientific
 evidence and predictions.
 
-The separate-stage treatment starts one xPOIS child, one xFit child and one
-XScan child per complete round. Each child processes all image items in
+The separate-stage treatment starts one xPois child, one xFit child and one
+xScan child per complete round. Each child processes all image items in
 manifest order, keeping the candidate batch for each image unchanged. It
 writes lossless, uncompressed NPY arrays between stages: extracted difference
-stamps for xFit, triplets and features for XScan, and the compact scientific
+stamps for xFit, triplets and features for xScan, and the compact scientific
 outputs shared with the pipeline. Unused full subtraction images, basis
 kernels and fit residuals are not transferred or written. Its preliminary
 rounds prepare caches; subsequent measured rounds still create fresh processes.
@@ -75,7 +98,7 @@ commands reject changed upstream artifacts and refuse to overwrite a stage.
 
 Both treatments use float64 subtraction and xFit inputs, unweighted xFit
 stamps, float32 triplets/features, and the same GPU sigmoid. Inference forces
-AMP, TF32, compilation and cuDNN benchmarking off. An xPOIS variance plane
+AMP, TF32, compilation and cuDNN benchmarking off. An xPois variance plane
 does not become an xFit variance plane.
 
 ## Read the timers
@@ -85,8 +108,8 @@ does not become an xFit variance plane.
 | Pipeline `setup_seconds` / `context_load_seconds` | Worker setup and context/model initialization, recorded separately from numerical warmup and measured batches. The external invocation also includes interpreter startup. |
 | Pipeline `batch_seconds` | One ordered image batch through completed device work and per-item result JSON writes. Measured batches reuse the initialized, warmed worker. |
 | Pipeline `invocation_external_seconds` | Parent-observed process duration, including imports, setup, all warmup and measured rounds, final summary and process exit. |
-| Staged `batch_seconds` | Parent clock before launching xPOIS through successful XScan process exit, including all three process lifetimes and intermediate files. |
-| Staged `extra_hashing_seconds` | Intermediate-artifact SHA-256 reads/writes and original-input rechecks repeated by xFit/XScan, measured inside the raw batch timer. |
+| Staged `batch_seconds` | Parent clock before launching xPois through successful xScan process exit, including all three process lifetimes and intermediate files. |
+| Staged `extra_hashing_seconds` | Intermediate-artifact SHA-256 reads/writes and original-input rechecks repeated by xFit/xScan, measured inside the raw batch timer. |
 | Staged `batch_seconds_without_extra_hashing` | Raw batch time minus that additional verification time; retains process startup, numerical work, transfers and file I/O. |
 | Staged per-process `external_seconds` | Parent-observed duration of that individual child, including imports and shutdown. |
 

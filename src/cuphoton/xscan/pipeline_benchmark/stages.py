@@ -506,7 +506,7 @@ def run_stage(
                 when=f"during {stage} execution",
             ),
         )
-        # The pipeline and xPOIS both hash original inputs on read and once
+        # The pipeline and xPois both hash original inputs on read and once
         # after execution. Only the later stages' rechecks are additional.
         timings["extra_hashing_seconds"] = timings.get(
             "artifact_hash_seconds", 0.0

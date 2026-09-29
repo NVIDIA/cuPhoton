@@ -1,10 +1,10 @@
-# XScan
+# xScan
 
 `cuphoton.xscan` packages transient image stamps, trains and evaluates
 PyTorch real/bogus classifiers, and creates numeric or Bokeh review artifacts.
 The umbrella CLI group is `cuphoton xscan`.
 
-XScan is CLI-first because dataset provenance, split controls, and run
+xScan is CLI-first because dataset provenance, split controls, and run
 artifacts are part of the reproducible workflow. Internal model modules
 provide extension points for custom workflows, but are not a broad stable API.
 
@@ -48,10 +48,12 @@ NumPy, FITS, CSV, Parquet, or registry products into that contract. Paths in
 the examples are placeholders.
 
 Raw DES and LSSTComCam builder manifests accept `fits_reader: auto`,
-`astropy`, or `xdr`. Automatic reading uses xDataReader where supported and
+`astropy`, or `xdr`. Automatic reading uses xDR where supported and
 records the actual reader and fallback reason in the builder summary.
 `astropy` selects CPU decoding; `xdr` requires the GPU reader. Candidate
 cutouts remain bounded reads, and the prepared dataset format is unchanged.
+Automatic uncompressed cutouts use Astropy sections. Explicit `xdr` requires
+supported tile-compressed cutouts and rejects uncompressed section reads.
 
 The raw builders (`data-build-autoscan-raw`, `data-build-nodiff-raw`, and
 `data-build-lsstcomcam-smoke`) also accept `--fits-reader auto|astropy|xdr`.
@@ -65,12 +67,16 @@ cuphoton xscan data-build-autoscan-raw --manifest des.json \
 
 ## Classify candidates directly from FITS
 
-`predict_fits` reads aligned image planes, crops candidate stamps on the GPU
-and calls the existing tensor inference path. It returns host logits and
-probabilities in candidate order, plus reader receipts. The channel order is
-search, template, then optional difference. Images must already share a pixel
-grid; the function does not align them, calculate a difference or apply masks.
-Selected stamps must contain finite values.
+`predict_fits` requires CuPy, PyTorch and an explicit CUDA device such as
+`cuda:0`, including when Astropy decodes the FITS files. It reads full selected
+image HDUs, crops candidate stamps on the GPU and calls the existing tensor
+inference path. Allow GPU memory for the full planes and the candidate batch.
+It returns host logits and probabilities in candidate order, plus reader
+receipts. The channel order is search, template, then optional difference.
+Images must already share a pixel
+grid and use the preprocessing expected by the checkpoint. The function does
+not align them, calculate a difference, normalize pixels or apply masks.
+Selected stamps are converted to float32 and must contain finite values.
 
 ```python
 from pathlib import Path
@@ -96,9 +102,10 @@ result = predict_fits(
 ```
 
 Omit `difference` for a pair model. Centers are integer, zero-based `(y, x)`
-coordinates and each stamp must fit inside the images. Optional
-`xfit_features` must be a contiguous float32 Torch CUDA tensor with one row
-per candidate, ready on the device's current Torch stream. The call retains
+coordinates and each stamp must fit inside the images. Stamp dimensions must
+be positive odd integers; candidate IDs must be unique integers or nonempty
+strings. Optional `xfit_features` must be a contiguous float32 Torch CUDA
+tensor with one row per candidate, ready on the device's current Torch stream. The call retains
 DLPack owners until inference and the compact host transfer finish. Existing
 prepared-dataset training and inference continue to use their usual formats.
 
@@ -174,9 +181,9 @@ local paths, depending on the stage. Confirm that their source data and metadata
 are cleared for release before publishing generated artifacts.
 
 The builder accepts difference-mode xFit runs and joins `fits.parquet` to
-XScan metadata by `candidate_id`. It also verifies that each fit row was
+xScan metadata by `candidate_id`. It also verifies that each fit row was
 computed from the exact `difference.npy` stamp, including dtype and shape,
-and validates the hashes recorded by the xFit run. Pair and triplet XScan
+and validates the hashes recorded by the xFit run. Pair and triplet xScan
 models can both consume this same difference-fit sidecar. The new output
 directory contains standalone `candidate-id.npy`, `features.npy`, and
 `input-image-sha256.npy` arrays plus `schema.json`. The arrays are
@@ -282,7 +289,7 @@ Use fixed, group-aware splits that keep related samples from crossing train,
 validation, and test sets. Record the seed, model config, selected checkpoint,
 device, label source, and dataset summary. Use reviewed real/bogus labels for
 training and evaluation; Rubin `candidate_isDipole` flags and placeholder
-`label.npy` values serve smoke tests. Split by DiaObject, or an equivalent
+`labels.npy` values serve smoke tests. Split by DiaObject, or an equivalent
 stable source group, before model selection. Training rejects `split_group`
 values that cross splits and also rejects cross-split Rubin DiaObject IDs when
 those fields are present.
@@ -349,7 +356,7 @@ round flags, the single pass uses `scientific/`. The model directory remains
 unchanged. Execution receipts and timing are separate from these scientific
 outputs, and merging and validation occur after the timed worker phase.
 
-## Persistent XPOIS, xFit and XScan pipeline
+## Persistent xPois, xFit and xScan pipeline
 
 For a reproducible comparison with separately launched stages and intermediate
 files, see the [pipeline stage benchmark](pipeline-stage-benchmark.md). It
@@ -357,8 +364,8 @@ checks the same scientific outputs while reporting startup and warm execution
 separately.
 
 The Python API in `cuphoton.xscan.device_pipeline` runs complete image pairs
-through constant-kernel XPOIS, stamp extraction, Gaussian difference-mode
-xFit, feature conversion and triplet XScan inference. A `DeviceWorkerContext`
+through constant-kernel xPois, stamp extraction, Gaussian difference-mode
+xFit, feature conversion and triplet xScan inference. A `DeviceWorkerContext`
 loads the model once and accepts serial jobs on one CUDA device. This path
 requires CUDA 13, CuPy and Torch (`uv sync --locked --extra gpu`).
 
@@ -371,7 +378,7 @@ policy. This policy does not enable PyTorch's deterministic-algorithm mode.
 Prepare descriptors from caller-owned NPY images; this example uses an
 existing 63-pixel checkpoint and an interior candidate in images of at least
 95 by 95 pixels. Change the candidate coordinates and kernel settings for
-your data. Optional item `variance` and `fit_mask` descriptors apply to XPOIS;
+your data. Optional item `variance` and `fit_mask` descriptors apply to xPois;
 xFit consumes unweighted difference stamps.
 
 ```python
@@ -461,12 +468,16 @@ The effective policies are retained in workload identities and read receipts.
 Omitting the option preserves per-descriptor choices; NPY inputs are unchanged.
 
 ```bash
-mpiexec -n 2 cuphoton xscan run-pipeline --executor mpi \
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpiexec -n 2 -x CUDA_VISIBLE_DEVICES cuphoton-openmpi-rank-exec -- \
+  cuphoton xscan run-pipeline --executor mpi \
   --manifest pipeline.json --output-dir runs --fits-reader astropy
 ```
 
-`astropy` disables xDR decoding while retaining GPU computation. xDR can use
-ordinary file I/O without native GPUDirect Storage: set
+This example uses Open MPI and its rank wrapper to bind each process to one
+GPU before Python starts. `astropy` selects CPU FITS decoding while retaining
+GPU computation. xDR can use ordinary file I/O without native GPUDirect
+Storage: set
 `KVIKIO_COMPAT_MODE=ON` in the worker environment to require compatibility I/O.
 
 Inputs must already be registered to the same pixel grid and use compatible
@@ -564,7 +575,7 @@ reported statistics. Omitting both round flags runs a single pass.
 The pipeline retains device owners through the blocking terminal copy and
 synchronizes failed work before reuse. Failed cleanup makes the context
 unusable. Transfer receipts count pipeline-owned uploads and the packed
-terminal download; internal XPOIS/xFit control transfers are outside that
+terminal download; internal xPois/xFit control transfers are outside that
 count. FITS reads have separate receipts with requested and actual readers,
 HDU identities, fallback reasons and decoded bytes. Reader-internal transfers
 are not counted by `input_h2d_bytes`, which covers pipeline-owned NPY uploads.

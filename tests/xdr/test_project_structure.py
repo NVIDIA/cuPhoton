@@ -19,7 +19,7 @@ def test_setup_defaults_to_pure_python(monkeypatch):
         setup_arguments.update(kwargs)
 
     def reject_native_helper_load(*args, **kwargs):
-        raise AssertionError("the default build loaded the native XDR helper")
+        raise AssertionError("the default build loaded the native xDR helper")
 
     monkeypatch.delenv("CUPHOTON_XDR_BUILD_EXT", raising=False)
     monkeypatch.setattr(setuptools, "setup", capture_setup)

@@ -85,10 +85,10 @@
 
 **Stamp**
 : A small image cutout around a candidate or another selected location. xFit
-  and XScan operate on batches of stamps.
+  and xScan operate on batches of stamps.
 
 **Trace**
-: A one-dimensional signal across time or experimental delay. XRay extracts
+: A one-dimensional signal across time or experimental delay. xRay extracts
   traces from selected detector regions across a delay scan.
 
 **Variance**
@@ -98,5 +98,5 @@
 **WCS**
 : World Coordinate System metadata that maps image pixels to sky coordinates.
 
-**XRay**
+**xRay**
 : The cuPhoton component for X-ray trace and detector artifact analysis.

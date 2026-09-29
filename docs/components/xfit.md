@@ -93,7 +93,7 @@ Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
 statistical calibration of the reported covariance requires a caller-supplied
 weighting model that accounts for that dependence. `uncertainty_valid` reports
-numerical and rank validity. The XScan feature adapter requires difference-mode
+numerical and rank validity. The xScan feature adapter requires difference-mode
 xFit runs.
 
 ## CLI and artifacts
@@ -172,15 +172,17 @@ Optional `initial` is a numeric array with one parameter row per candidate,
 using the same stamp-local model coordinates as NPZ inputs. Sampled-stamp
 models accept `"stamp_basis": {"path": "psf.fits", "hdu": 0}`.
 
-`--fits-reader auto` selects xDR for supported inputs when its GPU dependencies
-are available. `astropy` selects CPU FITS decoding; `xdr` requires the xDR
-route and reports unsupported inputs. GPU fits crop and retain stamps on
-device. The reader uses the candidate bounding region where supported;
-explicit xDR reads uncompressed images in full before cropping. For sparse
-candidates in uncompressed images, the Astropy section route can be faster.
+`--fits-reader auto` uses Astropy for NumPy fits and selects xDR for supported
+GPU-fit inputs when its dependencies are available. `astropy` selects CPU
+FITS decoding; `xdr` requires the xDR route and reports unsupported inputs.
+GPU fits crop and retain stamps on device. The reader uses one bounding
+rectangle enclosing all candidate stamps where supported. Automatic reads
+of uncompressed cutouts use Astropy sections; explicit xDR reads those
+images in full before cropping. Widely separated candidates can therefore
+read much of an image even when the stamps are small.
 Selecting xDR does not assert native GPUDirect Storage use. Run artifacts
-record the selected reader and any automatic fallback. Existing NPZ loading
-is unaffected by this option.
+record the manifest and source-file hashes, selected reader and any automatic
+fallback. Existing NPZ loading is unaffected by this option.
 
 Input archives contain candidate identifiers and exact image pixels. Fit
 artifacts contain identifiers, hashes, parameters, uncertainties, covariance,

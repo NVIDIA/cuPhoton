@@ -34,7 +34,7 @@ def test_build_validation_viz_writes_bokeh_html(tmp_path):
     assert result.fit_count == 2
     assert output.exists()
     text = output.read_text(encoding="utf-8")
-    assert "XRay Validation Review" in text
+    assert "xRay Validation Review" in text
     assert "Reference Plot Coverage" in text
     assert "Trace matrix" in text
     assert "Delay waterfall lineouts" in text

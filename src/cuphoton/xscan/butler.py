@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional FITS-registry integration for XScan HSC manifests."""
+"""Optional FITS-registry integration for xScan HSC manifests."""
 
 from __future__ import annotations
 

@@ -7,7 +7,7 @@
 Run with python -I, using mpiexec or dragon for the corresponding mode.
 CPU runtime checks execute xPois in real workers; --backend cupy exercises
 the GPU-only product executors. Run test_installed.py --mode gpu separately
-to qualify native XDR, CFITSIO, KvikIO, and nvCOMP on the same wheel.
+to qualify native xDR, CFITSIO, KvikIO, and nvCOMP on the same wheel.
 """
 
 from __future__ import annotations

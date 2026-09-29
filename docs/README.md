@@ -11,35 +11,42 @@ and [what an exposure contains](architecture.md#what-an-exposure-contains).
 Then run a synthetic quickstart and read the contract for the component you
 intend to adapt.
 
+The [0.1.3 changelog](../CHANGELOG.md) summarizes the upcoming release and
+its migration requirements.
+
 ## First run
 
 - [Getting started](getting-started.md): prerequisites and installation
   profiles.
+- [Packaging](packaging.md): native wheels, Conda packages, source builds,
+  and release procedures.
 - [Quickstarts](quickstarts.md): data-independent CPU and GPU smoke runs.
 - Imaging walkthrough:
   [notebook](../examples/imaging-pipeline/run_imaging_pipeline.ipynb) and
   [script](../examples/imaging-pipeline/run_imaging_pipeline.py) with setup for
   synthetic FITS loading, alignment, subtraction, dipole fitting, and plotting;
-  requires a CUDA 13-capable NVIDIA GPU and XDR's native extension.
+  requires a CUDA 13-capable NVIDIA GPU and xDR's native extension.
 - [Command-line index](cli.md): the umbrella executable and command groups.
 
 ## Workflow guides
 
 - [Core](components/core.md): shared CLI and configuration behavior.
-- [xDataReader](components/xdr.md): GPU-native FITS loading with GDS and
-  nvCOMP.
+- [xDataReader](components/xdr.md): GPU FITS loading and the shared
+  Astropy/xDR reader interface; native GDS depends on the storage setup.
 - [xFit](components/xfit.md): batched nonlinear least-squares dipole fitting.
-- [XPOIS](components/xpois.md): kernel fitting and image subtraction.
-- [XScan](components/xscan.md): transient datasets, classification,
+- [xPois](components/xpois.md): kernel fitting and image subtraction.
+- [xScan](components/xscan.md): transient datasets, classification,
   evaluation, and review.
 - [xRep (xReproject)](components/xrep.md): FITS/WCS reprojection.
-- [XRay](xray/README.md): X-ray trace and detector analysis.
+- [xRay](xray/README.md): X-ray trace and detector analysis.
 
 ## Adapting and validating
 
 - [Architecture](architecture.md): package boundaries and execution model.
 - [Dragon transport and coordination](dragon.md): execution models,
   consumer-local queues, transport selection, and timing boundaries.
+- [Pipeline stage benchmark](components/pipeline-stage-benchmark.md): compare
+  a persistent GPU pipeline with separate stages and inspect transfer costs.
 - [Adapting the workflows](adapting-workflows.md): a practical extension
   process.
 - [Data and artifact contracts](data-artifacts.md): shapes, files, metadata,

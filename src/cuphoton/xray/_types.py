@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared static and runtime type contracts for XRay."""
+"""Shared static and runtime type contracts for xRay."""
 
 from __future__ import annotations
 

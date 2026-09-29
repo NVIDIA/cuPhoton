@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Invariant-backed commands for the XRay CLI surface."""
+"""Invariant-backed commands for the xRay CLI surface."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ _KNOWN_COMMAND_EXCEPTIONS = (
 
 
 class _XRayCommand(InvariantAwareCommand):
-    """Run one XRay domain handler with invariant-backed options."""
+    """Run one xRay domain handler with invariant-backed options."""
 
     _log_level_ = False
     _quiet_ = False
@@ -181,13 +181,13 @@ class ValidationVizCommand(_XRayCommand):
         _help = "Output standalone HTML path."
         _required = True
 
-    title = "XRay Validation Review"
+    title = "xRay Validation Review"
 
     class TitleArg(StringInvariant):
         _arg = "--title"
         _help = "Dashboard title."
         _required = False
-        _default = "XRay Validation Review"
+        _default = "xRay Validation Review"
 
     components = 30
 
@@ -294,13 +294,13 @@ class PhononVizCommand(_XRayCommand):
         _help = "Output standalone HTML path."
         _required = True
 
-    title = "XRay Phonon Dispersion"
+    title = "xRay Phonon Dispersion"
 
     class TitleArg(StringInvariant):
         _arg = "--title"
         _help = "Dashboard title."
         _required = False
-        _default = "XRay Phonon Dispersion"
+        _default = "xRay Phonon Dispersion"
 
     components = 30
 
@@ -351,7 +351,7 @@ class PhononVizCommand(_XRayCommand):
 
 
 class WorkflowVizCommand(_XRayCommand):
-    _description_ = "Build a linked XRay workflow visualization workbench."
+    _description_ = "Build a linked xRay workflow visualization workbench."
     _shortname_ = "wv"
     _handler_name_ = "_workflow_viz"
 
@@ -496,13 +496,13 @@ class WorkflowVizCommand(_XRayCommand):
         _help = "Output standalone HTML path."
         _required = True
 
-    title = "XRay Workflow Workbench"
+    title = "xRay Workflow Workbench"
 
     class TitleArg(StringInvariant):
         _arg = "--title"
         _help = "Dashboard title."
         _required = False
-        _default = "XRay Workflow Workbench"
+        _default = "xRay Workflow Workbench"
 
     components = 30
 

@@ -164,7 +164,7 @@ def build_validation_viz(
     trace_paths: tuple[Path, ...] = (),
     trace_dir: Path | None = None,
     profile_logs: tuple[Path, ...] = (),
-    title: str = "XRay Validation Review",
+    title: str = "xRay Validation Review",
     components: int = 30,
     roots_backend: str = "eigvals",
     max_traces: int = 16,
@@ -494,7 +494,7 @@ def _hero_html(
         f"<div class='xray-hero' style='{hero_style}'>"
         f"<h1 style='{h1_style}'>{html.escape(title)}</h1>"
         f"<p class='xray-subtitle' style='{subtitle_style}'>"
-        "Human validation surface for extracted XRay traces, fitted "
+        "Human validation surface for extracted xRay traces, fitted "
         "reconstructions, LPF mode metrics, residuals, spectra, and "
         "profile timing."
         "</p>"

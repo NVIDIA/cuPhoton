@@ -139,7 +139,7 @@ class XFitCommand(InvariantAwareCommand):
 
 
 class DataInspectCommand(XFitCommand):
-    """Inspect a pickle-free NPZ of numeric or Unicode arrays."""
+    """Inspect an NPZ candidate batch or FITS candidate manifest."""
 
     # This CLI path intentionally replaces the base command input stream.
     input: str | None = None  # type: ignore[assignment]
@@ -203,7 +203,7 @@ class _ValidatedDatasetCommand(XFitCommand):
 
 
 class DataValidateCommand(_ValidatedDatasetCommand):
-    """Validate an xFit NPZ input for a selected model and image mode."""
+    """Validate an xFit NPZ or FITS input for a model and image mode."""
 
     def run(self) -> None:
         dataset = self._load_dataset()

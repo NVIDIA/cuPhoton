@@ -22,10 +22,10 @@ python -m pip install cuphoton
 python -m pip install 'cuphoton[io]'  # Native GPU FITS loading
 ```
 
-The Linux x86-64 and ARM64 wheels include the XDR extension and private
+The Linux x86-64 and ARM64 wheels include the xDR extension and private
 CFITSIO. `io` installs the CUDA 13 runtime dependencies; no compiler or local
 CUDA toolkit is needed. GPU execution still requires a compatible NVIDIA
-driver. See [XDR](components/xdr.md) for GPUDirect Storage requirements.
+driver. See [xDR](components/xdr.md) for GPUDirect Storage requirements.
 
 Install `cuphoton[photometry]` for source detection, background estimation,
 and aperture photometry. It uses Photutils, which currently requires a C
@@ -63,13 +63,25 @@ The extras are composable:
 | --- | --- |
 | `dev` | pytest, Ruff, mypy, pre-commit, and packaging checks |
 | `photometry` | Photutils background, detection, and aperture routines |
-| `io` | CuPy, KvikIO, cuFile, and nvCOMP for native XDR |
+| `io` | CuPy, KvikIO, cuFile, and nvCOMP for native xDR |
 | `torch` | CPU-capable PyTorch |
 | `gpu` | `io`, `photometry`, CUDA 13 PyTorch, and Numba-CUDA |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `mpi` | mpi4py bindings; an MPI runtime and launcher are also required |
 | `dragon` | DragonHPC; Python 3.12 or 3.13 |
 | `viz` | Bokeh and Pillow |
+
+`uv sync` installs an editable Python package from the checkout. Selecting
+`io` or `gpu` installs the runtime dependencies but does not compile xDR.
+For native FITS loading, follow the
+[xDR source build instructions](components/xdr.md#native-extension-availability).
+The shared FITS reader can use Astropy without that extension; an explicit
+`--fits-reader xdr` requires the extension and a working GPU.
+
+When changing profiles, include every extra you want to retain in `uv sync`.
+See [uv's syncing guide](https://docs.astral.sh/uv/concepts/projects/sync/)
+for exact synchronization behavior. After syncing, `uv run --no-sync` runs
+commands in that prepared environment.
 
 For cuTile backend development:
 
@@ -95,7 +107,8 @@ MPI module or install a compatible MPI runtime and launcher, then verify
 from a checkout, or use the activated environment's Python for a wheel install.
 Use the same runtime with `mpiexec` on every node. Follow
 [mpi4py's installation guide](https://mpi4py.readthedocs.io/en/stable/install.html)
-for site-specific builds. MPI file aggregation does not import mpi4py.
+for site-specific builds. xPois's `--aggregation-mode files` does not import
+mpi4py; shared component MPI executors require it.
 
 DragonHPC 0.14.2 provides Linux x86-64 and ARM64 wheels for Python 3.12 and
 3.13, but no Python 3.14 wheel. Installing `[dragon]` on Python 3.14 fails
@@ -124,15 +137,27 @@ compiler does not require adding the toolkit's libraries to `LD_LIBRARY_PATH`.
 
 ## Verify the checkout
 
+After selecting a development profile above:
+
 ```bash
-uv run python -c 'import cuphoton; print(cuphoton.__version__)'
-uv run cuphoton xray doctor
-uv run python examples/run_quickstarts.py --profile cpu
+uv run --no-sync python -c 'import cuphoton; print(cuphoton.__version__)'
+uv run --no-sync cuphoton xray doctor
+uv run --no-sync python examples/run_quickstarts.py --profile cpu
 ```
 
-`cuphoton xray doctor` reports optional GPU and visualization capabilities. The
-quickstart summary reports the backend and device actually used by every
-selected component.
+The xScan quickstart requires PyTorch, included in both development profiles
+above. With the GPU profile, require GPU execution with:
+
+```bash
+uv run --no-sync python examples/run_quickstarts.py --require-gpu \
+  --output-dir quickstart-gpu-output
+```
+
+`cuphoton xray doctor` reports xRay's optional GPU and visualization
+dependencies. The quickstart summary reports the backend and device actually
+used by every selected component. Quickstart success does not establish native
+xDR availability: xRep's automatic FITS reader can use Astropy. Verify native
+loading separately with the [xDR guide](components/xdr.md).
 
 ## Editable pip installation
 

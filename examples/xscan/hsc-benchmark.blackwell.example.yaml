@@ -12,7 +12,7 @@ negative_count: 512
 stamp_size: 51
 difference_context_size: 101
 template_source: median
-# Build a triplet dataset using an XPOIS difference image.
+# Build a triplet dataset using an xPois difference image.
 include_difference: true
 difference_mode: xpois
 mask_mode: non_conservative

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Portable, row-aligned xFit feature bundles for XScan."""
+"""Portable, row-aligned xFit feature bundles for xScan."""
 
 from __future__ import annotations
 
@@ -227,7 +227,7 @@ _PARAMETER_FEATURE_NAMES = (
 
 @dataclass(frozen=True, slots=True)
 class XFitFeatureMatrix:
-    """Loaded XScan-row-aligned scalar features."""
+    """Loaded xScan-row-aligned scalar features."""
 
     dataset_dir: Path
     candidate_id: np.ndarray
@@ -246,7 +246,7 @@ class XFitFeatureMatrix:
 
 @dataclass(frozen=True, slots=True)
 class DeviceXFitFeatures:
-    """Canonical XScan xFit features retained on one CUDA device.
+    """Canonical xScan xFit features retained on one CUDA device.
 
     ``values`` owns a contiguous ``(batch, 17)`` float32 CuPy array. The
     result is an in-process device object, not an interprocess payload or an
@@ -563,7 +563,7 @@ def _load_dataset_metadata(
     root = dataset_dir.expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(
-            f"XScan dataset directory does not exist: {root}"
+            f"xScan dataset directory does not exist: {root}"
         )
     jsonl_path = root / "metadata.jsonl"
     candidate_values: list[Any] | np.ndarray
@@ -586,7 +586,7 @@ def _load_dataset_metadata(
                         )
                     if "candidate_id" not in row:
                         raise ValueError(
-                            "XScan metadata row "
+                            "xScan metadata row "
                             f"{len(candidate_values)} is missing candidate_id"
                         )
                     candidate_values.append(row["candidate_id"])
@@ -594,18 +594,18 @@ def _load_dataset_metadata(
                     split_group_values.append(row.get("split_group"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError(
-                f"cannot read XScan metadata: {jsonl_path}"
+                f"cannot read xScan metadata: {jsonl_path}"
             ) from exc
     else:
         parquet_path = root / "metadata.parquet"
         if not parquet_path.is_file():
             raise FileNotFoundError(
-                "XScan dataset lacks metadata.jsonl or metadata.parquet: "
+                "xScan dataset lacks metadata.jsonl or metadata.parquet: "
                 f"{root}"
             )
         schema_names = set(pq.read_schema(parquet_path).names)
         if "candidate_id" not in schema_names:
-            raise ValueError("XScan metadata is missing candidate_id")
+            raise ValueError("xScan metadata is missing candidate_id")
         columns = [
             name
             for name in ("candidate_id", "split", "split_group")
@@ -625,7 +625,7 @@ def _load_dataset_metadata(
             else [None] * row_count
         )
     if len(candidate_values) == 0:
-        raise ValueError("XScan metadata contains no rows")
+        raise ValueError("xScan metadata contains no rows")
     candidate_id = _candidate_array(candidate_values, allow_duplicates=True)
     split = np.asarray(split_values, dtype=object)
     split_group = np.asarray(split_group_values, dtype=object)
@@ -634,7 +634,7 @@ def _load_dataset_metadata(
         search = np.load(search_path, mmap_mode="r", allow_pickle=False)
         if search.shape[0] != candidate_id.shape[0]:
             raise ValueError(
-                "XScan metadata row count does not match search.npy"
+                "xScan metadata row count does not match search.npy"
             )
     return candidate_id, split, split_group
 
@@ -651,7 +651,7 @@ def _load_dataset_contract(
     difference_path = dataset_dir / "difference.npy"
     if not difference_path.is_file():
         raise FileNotFoundError(
-            "XScan xFit features require dataset difference.npy"
+            "xScan xFit features require dataset difference.npy"
         )
     try:
         difference = np.load(
@@ -659,12 +659,12 @@ def _load_dataset_contract(
         )
     except ValueError as exc:
         raise ValueError(
-            "XScan difference.npy must be a pickle-free numeric array"
+            "xScan difference.npy must be a pickle-free numeric array"
         ) from exc
     expected_shape = (candidate_id.shape[0], *image_shape)
     if difference.shape != expected_shape or difference.dtype.kind != "f":
         raise ValueError(
-            "XScan difference.npy must be a floating array with shape "
+            "xScan difference.npy must be a floating array with shape "
             f"{expected_shape}"
         )
     image_hashes = np.empty(candidate_id.shape[0], dtype="S64")
@@ -678,7 +678,7 @@ def _load_dataset_contract(
             continue
         if image_hashes[first_row] != image_hashes[row_index]:
             raise ValueError(
-                "duplicate XScan candidate_id rows must have identical "
+                "duplicate xScan candidate_id rows must have identical "
                 "difference.npy stamps"
             )
         first_identity = (split[first_row], split_group[first_row])
@@ -688,7 +688,7 @@ def _load_dataset_contract(
             or first_identity != row_identity
         ):
             raise ValueError(
-                "duplicate XScan candidate_id rows must have the same split "
+                "duplicate xScan candidate_id rows must have the same split "
                 "and split_group"
             )
     return _DatasetContract(
@@ -755,7 +755,7 @@ def _summary_contract(
         raise ValueError("xFit summary model must be 'gaussian' or 'stamp'")
     if mode != "difference":
         raise ValueError(
-            "XScan xFit features require a difference-mode xFit run"
+            "xScan xFit features require a difference-mode xFit run"
         )
     expected_parameters = (
         _GAUSSIAN_PARAMETERS if model == "gaussian" else _STAMP_PARAMETERS
@@ -1165,7 +1165,7 @@ def _validate_live_feature_source(
     result: DipoleFitResult | DeviceDipoleFitResult,
 ) -> tuple[str, ...]:
     if result.mode != "difference":
-        raise ValueError("XScan xFit features require difference-mode fits")
+        raise ValueError("xScan xFit features require difference-mode fits")
     if result.model not in {"gaussian", "stamp"}:
         raise ValueError("xFit result model must be 'gaussian' or 'stamp'")
     expected_parameters = (
@@ -1188,7 +1188,7 @@ def transform_xfit_result_features(
     image_shape: tuple[int, int],
     variance_present: bool,
 ) -> np.ndarray:
-    """Transform a portable xFit result into canonical XScan features.
+    """Transform a portable xFit result into canonical xScan features.
 
     This live-result adapter calls the same row transform used by
     :func:`build_xfit_feature_bundle`. Residual images are neither required
@@ -1881,7 +1881,7 @@ def export_xfit_input(
     difference_path = dataset_root / "difference.npy"
     if not difference_path.is_file():
         raise FileNotFoundError(
-            "XScan xFit export requires dataset difference.npy"
+            "xScan xFit export requires dataset difference.npy"
         )
     try:
         difference = np.load(
@@ -1889,7 +1889,7 @@ def export_xfit_input(
         )
     except ValueError as exc:
         raise ValueError(
-            "XScan difference.npy must be a pickle-free numeric array"
+            "xScan difference.npy must be a pickle-free numeric array"
         ) from exc
     if (
         difference.ndim != 3
@@ -1897,7 +1897,7 @@ def export_xfit_input(
         or any(size == 0 for size in difference.shape)
     ):
         raise ValueError(
-            "XScan difference.npy must be a floating array with shape "
+            "xScan difference.npy must be a floating array with shape "
             "(sample, y, x)"
         )
     dataset = _load_dataset_contract(
@@ -2041,7 +2041,7 @@ def build_xfit_feature_bundle(
     output_dir: str | Path,
     missing_policy: MissingPolicy = "error",
 ) -> XFitFeatureSchema:
-    """Build finite, pickle-free xFit features in XScan row order."""
+    """Build finite, pickle-free xFit features in xScan row order."""
 
     if missing_policy not in {"error", "indicator"}:
         raise ValueError("missing_policy must be 'error' or 'indicator'")
@@ -2207,7 +2207,7 @@ def build_xfit_feature_bundle(
     missing_candidate_id = np.unique(dataset_candidate_id[~matched])
     if missing_candidate_id.size and missing_policy == "error":
         raise ValueError(
-            "xFit run is missing XScan candidate_id value(s): "
+            "xFit run is missing xScan candidate_id value(s): "
             + ", ".join(str(value) for value in missing_candidate_id[:8])
         )
     matched_dataset_rows = np.flatnonzero(matched)
@@ -2218,7 +2218,7 @@ def build_xfit_feature_bundle(
         if mismatched.size:
             row_index = int(mismatched[0])
             raise ValueError(
-                "xFit input_image_sha256 does not match the XScan "
+                "xFit input_image_sha256 does not match the xScan "
                 "difference.npy stamp for candidate_id "
                 f"{dataset_candidate_id[row_index]!r}"
             )
@@ -2631,7 +2631,7 @@ def load_xfit_feature_matrix(
     feature_dir: str | Path,
     expected_feature_names: Sequence[str] | None = None,
 ) -> XFitFeatureMatrix:
-    """Load and validate one feature bundle against XScan metadata order."""
+    """Load and validate one feature bundle against xScan metadata order."""
 
     feature_root = Path(feature_dir).expanduser().resolve()
     schema_path = feature_root / SCHEMA_ARTIFACT_NAME
@@ -2676,7 +2676,7 @@ def load_xfit_feature_matrix(
         or not np.array_equal(candidate_id, dataset_candidate_id)
     ):
         raise ValueError(
-            "xFit feature candidate_id order does not match XScan metadata"
+            "xFit feature candidate_id order does not match xScan metadata"
         )
     if (
         input_image_sha256.shape != candidate_id.shape
@@ -2692,7 +2692,7 @@ def load_xfit_feature_matrix(
         )
         if recorded.encode("ascii") != dataset.image_sha256[row_index]:
             raise ValueError(
-                "xFit feature bundle does not match the current XScan "
+                "xFit feature bundle does not match the current xScan "
                 "difference.npy stamp at row "
                 f"{row_index}"
             )

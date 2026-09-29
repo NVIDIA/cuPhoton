@@ -1,11 +1,11 @@
-# XRay
+# xRay
 
 `cuphoton.xray` provides X-ray trace extraction, linear prediction, optional
 iterative fitting, detector artifact generation, numerical validation, and
 standalone review views. It is available through the `cuphoton xray` command
 group.
 
-XRay is GPU-first for high-throughput detector work. Supported operations fall
+xRay is GPU-first for high-throughput detector work. Supported operations fall
 back to NumPy for CPU smoke and correctness runs; commands that require a GPU
 report that requirement explicitly.
 
@@ -15,12 +15,16 @@ report that requirement explicitly.
 # CUDA 13
 uv sync --locked --extra dev --extra gpu --extra viz
 uv run cuphoton xray doctor
-uv run python examples/run_quickstarts.py --component xray --require-gpu
+uv run python examples/run_quickstarts.py --component xray --require-gpu \
+  --output-dir /tmp/xray-gpu-quickstart
 
 # CPU
 uv sync --locked --extra dev --extra viz
-uv run python examples/run_quickstarts.py --component xray --profile cpu
+uv run python examples/run_quickstarts.py --component xray --profile cpu \
+  --output-dir /tmp/xray-cpu-quickstart
 ```
+
+Choose a new output directory for each quickstart run.
 
 ## Command groups
 
@@ -43,13 +47,18 @@ uv run cuphoton xray help extract-trace
 
 ## Single-node HDF5 workflow
 
-XRay recognizes two on/off cube layouts. Both files in a pair must use the
-same schema and array shapes.
+xRay recognizes two on/off cube layouts. Both files in a pair must use the
+same schema, matching array shapes and matching delay coordinates.
 
 | Schema | Image cube | Delay axis | Entry counts | Normalization |
 | --- | --- | --- | --- | --- |
 | `cropped-cube` | `imgs` `(frame, y, x)` | `scan_var` `(frame,)` | `bin_count` `(frame,)` | `i0` and `i0_ipm3` `(frame,)`; `ROI` is also required |
 | `legate-cube` | `jungfrau1M_data` `(frame, y, x)` | `binVar_bins` `(frame,)` | `nEntries` `(frame,)` | `ipm3__sum`/`ipm2__sum`, or `ipm5__sum`/`ipm4__sum`, each `(frame,)` |
+
+Image sums are divided by `i0` for `cropped-cube`, or by `ipm2__sum`
+(`ipm4__sum` for the alternate pair) for `legate-cube`. Delay coordinates
+retain the input file's units. ROI origins use `(x, y)` and dimensions use
+`(width, height)`; `--row-y` selects an absolute detector row within the ROI.
 
 Probe first, extract a small row batch, and inspect model-order behavior before
 running the detector-wide GPU path:
@@ -75,8 +84,19 @@ uv run cuphoton xray detector-artifacts \
 ```
 
 `--zero-offset-index 0` is illustrative; select a physically appropriate fit
-start for the input scan. Start with a representative ROI and inspect the
-manifest, fit-status array, and numerical outputs before scaling out.
+start for the input scan. The index addresses the delay axis after
+`--drop-leading` (default: 1). Detector fitting also drops the last sample by
+default (`--fit-trailing-drop 1`) and needs at least 16 samples in the fitted
+window. Start with a representative ROI and inspect the manifest, fit-status
+array, and numerical outputs before scaling out.
+
+For each detector row, the worker fits one trace per x tile and broadcasts
+the result across that tile's columns. `--tile-shape` defaults to `16 16`;
+`--integrate` controls the neighboring-row integration radius (default: 3).
+These settings change the spatial support and amplitude of the traces.
+The extracted traces above select individual rows without that integration,
+so compare them with detector fits only after matching the normalization,
+smoothing, spatial integration and fitted sample window.
 
 For Python A/B checks, pass `batch_rows=False` to
 `cuphoton.xray.detector_artifacts.build_detector_artifacts_cupy` to force
@@ -142,12 +162,16 @@ This method uses a Levenberg-Marquardt iteration with analytic derivatives.
 Positive decay rates use a logarithmic parameter; an arctangent transform
 keeps frequency inside the configured bounds. Automatic initial guesses
 come from the trace's spectrum. The model has `4 * components + 1`
-parameters; choose a small mode count relative to the available samples.
+parameters and requires at least that many samples; choose a small mode count
+relative to the available samples.
 It can converge to a local minimum, especially for overlapping modes or
 poorly resolved frequencies.
 
-Frequency bounds apply to the signed internal frequency. A negative
-`min_frequency` can move the lower optimization boundary away from zero.
+`max_frequency=None` uses the sampling Nyquist frequency, `0.5 / sample_spacing`.
+Explicit bounds must satisfy `-Nyquist <= min_frequency < max_frequency <= Nyquist`
+with a positive upper bound. Frequency bounds apply to the signed internal
+frequency. A negative `min_frequency` can move the lower optimization
+boundary away from zero.
 Returned modes use nonnegative frequencies and amplitudes, with phases
 adjusted to preserve the reconstructed signal.
 
@@ -178,7 +202,9 @@ row fits run on the CPU to avoid per-iteration GPU synchronization; this
 does not change the standalone API's explicit GPU option. The iterative
 method returns modal center frequencies directly.
 The amplitude threshold still controls the displayed signal selection.
-Failed convergence counts against the detector's fit-failure budget.
+Failed convergence counts against the detector's fit-failure budget
+(`--max-fit-failures`, default: 0). A nonzero `--p2-ridge-alpha` applies only
+to linear prediction and cannot be combined with iterative fitting.
 Use a bounded region and inspect reconstructions and recovered modes before
 running a whole detector.
 
