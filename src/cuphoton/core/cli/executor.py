@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ..benchmark import BenchmarkOptions
 from .command import CommandError
 from .invariants import (
@@ -13,6 +15,7 @@ from .invariants import (
     NonNegativeIntegerInvariant,
     PositiveIntegerInvariant,
     SetInvariant,
+    StringInvariant,
 )
 
 
@@ -26,6 +29,8 @@ class ExecutorOptions:
     rank_setup_timeout_sec: float | None = None
     warmup_rounds: int | None = None
     measure_rounds: int | None = None
+    workers_per_gpu: int | None = None
+    mps_pipe_directory: str | None = None
 
     class ExecutorArg(SetInvariant):
         _arg = "--executor"
@@ -42,9 +47,25 @@ class ExecutorOptions:
 
     class WorkerTimeoutSecArg(FloatInvariant):
         _arg = "--worker-timeout-sec"
-        _help = "Dragon worker lifetime across all rounds. [default: 3600]"
+        _help = "Dragon or local GPU worker lifetime. [default: 3600]"
         _default = None
         _min = 0.001
+
+    class WorkersPerGpuArg(PositiveIntegerInvariant):
+        _arg = "--workers-per-gpu"
+        _help = (
+            "Maximum workers sharing each GPU with Dragon or a local "
+            "pipeline executor. [default: 1]"
+        )
+        _default = None
+
+    class MpsPipeDirectoryArg(StringInvariant):
+        _arg = "--mps-pipe-directory"
+        _help = (
+            "Existing MPS v2 pipe directory for Dragon or process workers; "
+            "require every worker to connect to that service."
+        )
+        _default = None
 
     class ResultTimeoutSecArg(FloatInvariant):
         _arg = "--result-timeout-sec"
@@ -77,22 +98,32 @@ class ExecutorOptions:
     def executor_options(self) -> dict:
         """Reject ignored flags before loading a numerical runtime."""
 
-        dragon = {
+        dragon_only = {
             "max_workers": self.max_workers,
-            "worker_timeout_sec": self.worker_timeout_sec,
             "result_timeout_sec": self.result_timeout_sec,
         }
+        sharing = {
+            "workers_per_gpu": self.workers_per_gpu,
+            "worker_timeout_sec": self.worker_timeout_sec,
+        }
+        mps = {"mps_pipe_directory": self.mps_pipe_directory}
+        dragon = {**dragon_only, **sharing, **mps}
         mpi = {"rank_setup_timeout_sec": self.rank_setup_timeout_sec}
         rounds = {
             "warmup_rounds": self.warmup_rounds,
             "measure_rounds": self.measure_rounds,
         }
+        invalid: Mapping[str, str | int | float | None]
         if self.executor == "local":
             invalid = {**dragon, **mpi, **rounds}
         elif self.executor == "dragon":
             invalid = mpi
         elif self.executor == "mpi":
             invalid = dragon
+        elif self.executor == "processes":
+            invalid = {**dragon_only, **mpi}
+        elif self.executor == "threads":
+            invalid = {**dragon_only, **mpi, **mps}
         else:
             raise CommandError("executor must be local, dragon, or mpi")
         supplied = [
@@ -107,11 +138,16 @@ class ExecutorOptions:
             )
         if self.executor == "local":
             return {}
-        options: dict[str, int | float | BenchmarkOptions | None] = {
+        by_executor: dict[str, Mapping[str, str | int | float | None]] = {
+            "dragon": dragon,
+            "mpi": mpi,
+            "processes": {**sharing, **mps},
+            "threads": sharing,
+        }
+        runtime_options = by_executor[self.executor]
+        options: dict[str, str | int | float | BenchmarkOptions | None] = {
             name: value
-            for name, value in (
-                dragon if self.executor == "dragon" else mpi
-            ).items()
+            for name, value in runtime_options.items()
             if value is not None
         }
         options["benchmark"] = (
