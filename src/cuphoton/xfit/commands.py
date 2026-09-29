@@ -259,6 +259,14 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         _mandatory = False
         _default = "auto"
 
+    class FusionArg(BoolInvariant):
+        _arg = "--fusion"
+        _help = (
+            "Fuse Gaussian evaluation; requires --backend cupy or cutile."
+        )
+        _mandatory = False
+        _default = False
+
     class ComputeDtypeArg(ComputeDtypeInvariant):
         _arg = "--compute-dtype"
         _help = (
@@ -266,12 +274,6 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         )
         _mandatory = False
         _default = "input"
-
-    class FusionArg(BoolInvariant):
-        _arg = "--fusion"
-        _help = "Fuse Gaussian evaluation with the cutile backend."
-        _mandatory = False
-        _default = False
 
     class StampEvaluationArg(StampEvaluationInvariant):
         _arg = "--stamp-evaluation"
@@ -345,16 +347,20 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         )
 
     def run(self) -> None:
+        from . import LMConfig
         from .api import _validate_fusion
 
         assert self.backend is not None
+        assert self.model is not None
         assert self.fusion is not None
         self._call(
             _validate_fusion,
             self.fusion,
             backend=self.backend,
-            gaussian_model=self.model == "gaussian",
-            use_finite_difference=bool(self.use_finite_difference),
+            model=self.model,
+            config=LMConfig(
+                use_finite_difference=bool(self.use_finite_difference)
+            ),
         )
         executor_options = self.executor_options()
         if self.executor != "local":
@@ -416,7 +422,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                 "--chunk-size requires --executor dragon or mpi"
             )
 
-        from . import LMConfig, fit_dipoles
+        from . import fit_dipoles
         from .api import _validate_execution_options
 
         assert self.output_dir is not None
