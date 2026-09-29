@@ -287,3 +287,60 @@ def test_provenance_host_equivalence_preserves_domains(hosts, duplicate):
         identities, backend="cupy", expected_worker_count=2
     )
     assert bool(errors) is duplicate
+
+
+@pytest.mark.parametrize(
+    ("gpu_ids", "groups", "passes"),
+    [
+        ((0, 1, 0, 1), (0, 1, 0, 1), True),
+        ((0, 1, 0, 1), None, False),
+        ((0, 1, 2, 1), (0, 1, 0, 1), False),
+        ((0, 0, 0, 0), (0, 1, 0, 1), False),
+    ],
+)
+def test_provenance_requires_exact_requested_gpu_sharing(
+    gpu_ids, groups, passes
+):
+    values = [
+        provenance(index, FakeWorker({"uuid": f"GPU-{gpu}"}).gpu_identity)
+        for index, gpu in enumerate(gpu_ids)
+    ]
+    # READY messages need not arrive in worker order.
+    errors = execution.audit_worker_provenance(
+        values[::-1],
+        backend="cupy",
+        expected_worker_count=4,
+        gpu_groups=groups,
+    )
+    assert (not errors) is passes
+
+
+@pytest.mark.parametrize("groups", [(0,), (0, True), (0, -1), (0, "1"), "01"])
+def test_provenance_rejects_invalid_gpu_groups(groups):
+    with pytest.raises(ValueError, match="gpu_groups"):
+        execution.audit_worker_provenance(
+            [], backend="cupy", expected_worker_count=2, gpu_groups=groups
+        )
+
+
+def test_shared_gpu_round_still_audits_and_finalizes_all_items(tmp_path):
+    run_dir = tmp_path / "run"
+    spec, shards, results = stage(
+        run_dir,
+        workload(
+            finalize_round=lambda path, records: {"count": len(records)}
+        ),
+    )
+    results[1]["provenance"]["gpu"]["uuid"] = "GPU-0"
+    atomic_write_json(run_dir / "workers" / "worker-0001.json", results[1])
+    report = execution.finalize_round(
+        run_dir,
+        "run",
+        spec,
+        shards,
+        results,
+        artifact_timeout_sec=0.01,
+        gpu_groups=(0, 0),
+    )
+    assert report["status"] == "success", report["errors"]
+    assert report["result"] == {"count": 2}

@@ -188,7 +188,9 @@ def test_preflight_rejects_changed_input_on_root(tmp_path):
         pipeline.prepare_pipeline_workload((item,), config)
 
 
-@pytest.mark.parametrize("executor", ["dragon", "mpi"])
+@pytest.mark.parametrize(
+    "executor", ["dragon", "mpi", "processes", "threads"]
+)
 def test_entrypoint_prepares_inside_runtime_callback(
     tmp_path, monkeypatch, executor
 ):
@@ -202,7 +204,12 @@ def test_entrypoint_prepares_inside_runtime_callback(
         assert spec.options_payload["configuration"] == config.to_payload()
         return "result"
 
-    monkeypatch.setattr("cuphoton.core.executors.run_workload", run)
+    monkeypatch.setattr(
+        "cuphoton.xscan.sharing.run_shared_pipeline"
+        if executor in {"processes", "threads"}
+        else "cuphoton.core.executors.run_workload",
+        run,
+    )
     assert (
         pipeline.run_pipeline_manifest(
             executor=executor,
@@ -376,3 +383,131 @@ def test_pipeline_command_rejects_wrong_executor_limits_before_runtime(
         )
         != 0
     )
+
+
+@pytest.mark.parametrize(
+    ("executor", "extra", "expected"),
+    [
+        ("dragon", ["--workers-per-gpu", "4"], {"workers_per_gpu": 4}),
+        (
+            "processes",
+            [
+                "--workers-per-gpu",
+                "2",
+                "--mps-pipe-directory",
+                "/tmp/test-mps",
+            ],
+            {"workers_per_gpu": 2, "mps_pipe_directory": "/tmp/test-mps"},
+        ),
+        (
+            "threads",
+            ["--workers-per-gpu", "3", "--require-free-threaded"],
+            {"workers_per_gpu": 3, "require_free_threaded": True},
+        ),
+    ],
+)
+def test_cli_selects_sharing_logic(
+    tmp_path, monkeypatch, executor, extra, expected
+):
+    calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "run_pipeline_manifest",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    assert (
+        run_component(
+            "xscan",
+            [
+                "run-pipeline",
+                "--executor",
+                executor,
+                "--manifest",
+                str(tmp_path / "manifest.json"),
+                "--output-dir",
+                str(tmp_path / "runs"),
+                "--worker-timeout-sec",
+                "30",
+                *extra,
+            ],
+        )
+        == 0
+    )
+    assert len(calls) == 1
+    assert calls[0]["executor"] == executor
+    assert calls[0]["worker_timeout_sec"] == 30.0
+    for name, value in expected.items():
+        assert calls[0][name] == value
+
+
+@pytest.mark.parametrize(
+    ("executor", "flags"),
+    [
+        ("mpi", ["--workers-per-gpu", "2"]),
+        ("processes", ["--require-free-threaded"]),
+        ("threads", ["--mps-pipe-directory", "/tmp/test-mps"]),
+        ("threads", ["--workers-per-gpu", "0"]),
+    ],
+)
+def test_cli_rejects_invalid_sharing_before_launch(
+    tmp_path, monkeypatch, executor, flags
+):
+    monkeypatch.setattr(
+        pipeline,
+        "run_pipeline_manifest",
+        lambda **kwargs: pytest.fail("invalid sharing flags reached runtime"),
+    )
+    assert (
+        run_component(
+            "xscan",
+            [
+                "run-pipeline",
+                "--executor",
+                executor,
+                "--manifest",
+                str(tmp_path / "manifest.json"),
+                "--output-dir",
+                str(tmp_path / "runs"),
+                *flags,
+            ],
+        )
+        != 0
+    )
+
+
+def test_threads_reject_fits_before_scientific_preflight(
+    tmp_path, monkeypatch
+):
+    path, config, item = _manifest(tmp_path)
+    monkeypatch.setattr(
+        pipeline,
+        "load_pipeline_manifest",
+        lambda *args, **kwargs: (
+            config,
+            (
+                SimpleNamespace(
+                    reference=object(),
+                    target=item.target,
+                    variance=None,
+                    fit_mask=None,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "prepare_pipeline_workload",
+        lambda *args, **kwargs: pytest.fail(
+            "FITS reached threaded preflight"
+        ),
+    )
+    monkeypatch.setattr(
+        "cuphoton.xscan.sharing.run_shared_pipeline",
+        lambda **kwargs: kwargs["prepare_workload"](0),
+    )
+    with pytest.raises(ValueError, match="prepared NPY"):
+        pipeline.run_pipeline_manifest(
+            executor="threads",
+            manifest_path=path,
+            output_root=tmp_path / "runs",
+        )

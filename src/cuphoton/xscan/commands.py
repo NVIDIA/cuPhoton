@@ -944,14 +944,24 @@ class RunPipelineCommand(FitsReaderOptions, ExecutorOptions, XScanCommand):
     manifest: str | None = None
     output_dir: str | None = None
     run_name = None
+    require_free_threaded = None
 
     class ExecutorArg(ExecutorOptions.ExecutorArg):
-        _set = {"dragon", "mpi"}
+        _set = {"dragon", "mpi", "processes", "threads"}
         _default = None
         _mandatory = True
         _help = (
-            "Distributed runtime: dragon or mpi, with its matching launcher."
+            "GPU runtime: dragon or mpi with its launcher, or local "
+            "processes or threads on one visible GPU."
         )
+
+    class RequireFreeThreadedArg(BoolInvariant):
+        _arg = "--require-free-threaded"
+        _help = (
+            "Require the threads executor to keep the Python GIL disabled. "
+            "The interpreter and its extensions must support free threading."
+        )
+        _default = False
 
     class ManifestArg(PathSpecInvariant):
         _arg = "--manifest"
@@ -972,6 +982,12 @@ class RunPipelineCommand(FitsReaderOptions, ExecutorOptions, XScanCommand):
         assert self.manifest is not None
         assert self.output_dir is not None
         options = self.executor_options()
+        if self.require_free_threaded:
+            if self.executor != "threads":
+                raise CommandError(
+                    "--require-free-threaded requires --executor threads"
+                )
+            options["require_free_threaded"] = True
         from .pipeline_executor import run_pipeline_manifest
 
         result = self._call(

@@ -220,6 +220,12 @@ are restored in the merged artifacts.
 The task count must be at least the MPI rank count. Dragon uses the smaller
 of the requested worker count and task count.
 
+With Dragon, `--workers-per-gpu` allows multiple workers per GPU and
+`--mps-pipe-directory` requires each worker to connect to an existing MPS v2
+service. `--max-workers` caps the total worker count. See
+[GPU sharing](xscan.md#share-a-gpu-between-image-pairs) for service setup and
+connection requirements.
+
 The same executor commands accept a FITS candidate manifest. Planning checks
 headers, candidate bounds and source hashes without decoding image pixels.
 Each bound worker reads the candidate region and retains its stamps during
