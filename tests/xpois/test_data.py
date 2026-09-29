@@ -49,6 +49,7 @@ class BlockImageDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, BlockImageDependencies())
 import numpy as np
 import cuphoton.xpois as xpois
+from cuphoton.xpois.batch import _probe_array_shape
 from cuphoton.xpois.data import load_mask_with_planes, load_variance_with_wcs
 
 root = Path(sys.argv[1])
@@ -60,6 +61,8 @@ assert image.dtype == variance.dtype == np.dtype('float64')
 assert mask.dtype == np.dtype('int64')
 loaded = (('image', image), ('variance', variance), ('mask', mask))
 for name, actual in loaded:
+    shape = _probe_array_shape(root / (name + '.npy'), None, kind=name)
+    assert shape == (4, 5)
     np.testing.assert_array_equal(
         actual, np.load(root / (name + '.npy'), allow_pickle=False)
     )
