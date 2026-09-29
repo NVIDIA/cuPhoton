@@ -121,10 +121,12 @@ standalone raw-comparison and Alard--Lupton review servers are available as
 command-specific contracts. See [xScan](components/xscan.md).
 
 `infer-real-bogus --executor dragon|mpi` distributes complete minibatches;
-`run-pipeline --executor dragon|mpi` distributes complete image pairs through
-xPois, xFit and xScan. Optional round flags retain the workers across passes.
-These commands require a shared input/output filesystem and the matching
-runtime launcher.
+`run-pipeline --executor dragon|mpi|processes|threads` distributes complete
+image pairs through xPois, xFit and xScan. Optional round flags retain the
+workers across passes. Dragon and MPI require a shared input/output
+filesystem and the matching runtime launcher. The local `processes` and
+`threads` pipeline executors share one visible GPU; see
+[GPU sharing](components/xscan.md#share-a-gpu-between-image-pairs).
 
 `infer-real-bogus` consumes packaged datasets. Direct FITS candidate scoring
 uses the CUDA Python API `cuphoton.xscan.fits_inference.predict_fits`.

@@ -9,6 +9,7 @@ import multiprocessing
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,6 +134,105 @@ def test_actual_device_count_and_free_threading_are_verified_after_imports(
         )
         assert result.status == "failed"
         assert "GIL to remain disabled" in str(result.summary)
+
+
+def test_threads_keep_successful_items_when_a_first_item_fails(
+    tmp_path, cpu_runtime
+):
+    spec = workload(tmp_path, cpu_runtime, fail_item="0")
+    result = sharing.run_shared_pipeline(
+        prepare_workload=lambda rank: spec,
+        output_root=tmp_path,
+        executor="threads",
+        workers_per_gpu=2,
+        worker_timeout_sec=10,
+    )
+    assert result.status == "failed"
+    records = [
+        read_json_mapping(path)
+        for path in (result.run_dir / "records").glob("*.json")
+    ]
+    assert len(records) == len(spec.items)
+    assert {
+        record["item_id"]
+        for record in records
+        if record["status"] == "failed"
+    } == {"0"}
+    assert result.summary["terminal_record_audit"]["ok"]
+    assert "BrokenBarrierError" not in str(result.summary)
+    assert not multiprocessing.active_children()
+
+
+@pytest.mark.parametrize("executor", ["processes", "threads"])
+def test_initialization_failure_still_closes_healthy_workers(
+    tmp_path, cpu_runtime, executor
+):
+    spec = workload(
+        tmp_path, cpu_runtime, failure="initialize", failure_worker_id=0
+    )
+    result = sharing.run_shared_pipeline(
+        prepare_workload=lambda rank: spec,
+        output_root=tmp_path,
+        executor=executor,
+        workers_per_gpu=2,
+        worker_timeout_sec=10,
+    )
+    assert result.status == "failed"
+    assert "initialization failed" in str(result.summary)
+    traces = sorted(
+        path.read_text().splitlines()
+        for path in (tmp_path / "trace").iterdir()
+    )
+    assert traces == [["initialize"], ["initialize", "close"]]
+    assert all(
+        error["phase"] == "startup" for error in result.summary["errors"]
+    )
+    assert not multiprocessing.active_children()
+
+
+@pytest.mark.parametrize("failed_start", [0, 1])
+def test_process_start_failure_preserves_error_and_closes_started_workers(
+    tmp_path, cpu_runtime, monkeypatch, failed_start
+):
+    spec = workload(tmp_path, cpu_runtime)
+    context = multiprocessing.get_context("spawn")
+    created = 0
+
+    def process(**kwargs):
+        nonlocal created
+        child = context.Process(**kwargs)
+        if created == failed_start:
+
+            def fail_start():
+                raise OSError("process could not start")
+
+            monkeypatch.setattr(child, "start", fail_start)
+        created += 1
+        return child
+
+    monkeypatch.setattr(
+        sharing.multiprocessing,
+        "get_context",
+        lambda method: SimpleNamespace(Pipe=context.Pipe, Process=process),
+    )
+    result = sharing.run_shared_pipeline(
+        prepare_workload=lambda rank: spec,
+        output_root=tmp_path,
+        executor="processes",
+        workers_per_gpu=2,
+        worker_timeout_sec=10,
+    )
+    assert result.status == "failed"
+    assert "process could not start" in str(result.summary)
+    assert all(
+        error["phase"] == "startup" for error in result.summary["errors"]
+    )
+    traces = [
+        path.read_text().splitlines()
+        for path in (tmp_path / "trace").iterdir()
+    ]
+    assert traces == [["initialize", "close"]] * failed_start
+    assert not multiprocessing.active_children()
 
 
 def test_worker_count_is_capped_by_item_count(tmp_path, cpu_runtime):

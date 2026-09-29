@@ -45,7 +45,9 @@ class Worker:
             time.sleep(30)
         if self.options.get("failure") == "exit":
             os._exit(7)
-        if self.options.get("failure") == "item":
+        if self.options.get("failure") == "item" or (
+            self.options.get("fail_item") == item.item_id
+        ):
             raise ValueError("item failed")
         output_dir.mkdir()
         atomic_write_json(output_dir / "summary.json", item.payload)
@@ -72,6 +74,20 @@ def factory(options):
 def process_entry(connections, payload, worker_ids, threaded):
     from cuphoton.xscan import sharing
 
+    worker_loop = sharing._worker_loop
+
+    def run_worker(connection, worker_payload, worker_id, *args):
+        options = dict(worker_payload["options"])
+        if options.get("failure_worker_id", worker_id) != worker_id:
+            options.pop("failure", None)
+        worker_loop(
+            connection,
+            {**worker_payload, "options": options},
+            worker_id,
+            *args,
+        )
+
+    sharing._worker_loop = run_worker
     count = payload["options"].get("device_count", 1)
     pool = SimpleNamespace(
         malloc=lambda size: None, free_all_blocks=lambda: None

@@ -125,7 +125,7 @@ class ExecutorOptions:
         elif self.executor == "threads":
             invalid = {**dragon_only, **mpi, **mps}
         else:
-            raise CommandError("executor must be local, dragon, or mpi")
+            raise CommandError(f"unsupported executor: {self.executor}")
         supplied = [
             "--" + name.replace("_", "-")
             for name, value in invalid.items()
