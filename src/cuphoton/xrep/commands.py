@@ -283,10 +283,23 @@ class InspectImageCommand(_SharedReprojectionCommand):
         self._emit_json(payload)
 
 
-class ReprojectImageCommand(_SharedReprojectionCommand):
+class _FitsReprojectionCommand(_SharedReprojectionCommand):
+    fits_reader = None
+
+    class FitsReaderArg(SetInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS decompression reader. CPU auto uses Astropy. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
+        _set = {"auto", "astropy", "xdr"}
+
+
+class ReprojectImageCommand(_FitsReprojectionCommand):
     """Reproject one FITS image onto one shared grid."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
 
@@ -318,6 +331,7 @@ class ReprojectImageCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             backend=self.backend,
+            fits_reader=self.fits_reader,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -329,7 +343,7 @@ class ReprojectImageCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class ReprojectStackCommand(_SharedReprojectionCommand):
+class ReprojectStackCommand(_FitsReprojectionCommand):
     """Reproject multiple FITS inputs onto one shared grid."""
 
     inputs: str | None = None
@@ -364,6 +378,7 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
             target_wcs_path=self._path(self.target_wcs),
             target_hdu=self.target_hdu,
             backend=self.backend,
+            fits_reader=self.fits_reader,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -375,10 +390,9 @@ class ReprojectStackCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
+class BenchmarkReprojectImageCommand(_FitsReprojectionCommand):
     """Benchmark one FITS reprojection and report split timing summaries."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
 
@@ -410,6 +424,7 @@ class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             backend=self.backend,
+            fits_reader=self.fits_reader,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -423,10 +438,9 @@ class BenchmarkReprojectImageCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
+class BenchmarkBackendVariantsCommand(_FitsReprojectionCommand):
     """Benchmark cached-geometry backend variants and parity."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
     variants: str | None = None
@@ -497,6 +511,7 @@ class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             variants=self._csv_backend_variants(self.variants),
+            fits_reader=self.fits_reader,
             reference_variant=self.reference_variant,
             mask_cases=self._csv_mask_cases(self.mask_cases),
             interpolation=self.interpolation,
@@ -514,10 +529,9 @@ class BenchmarkBackendVariantsCommand(_SharedReprojectionCommand):
         self._emit_json(result.summary)
 
 
-class CompareBackendsCommand(_SharedReprojectionCommand):
+class CompareBackendsCommand(_FitsReprojectionCommand):
     """Run one FITS reprojection across backends and report parity metrics."""
 
-    input: str | None = None
     mask = None
     mask_hdu = None
     backends: str | None = None
@@ -580,6 +594,7 @@ class CompareBackendsCommand(_SharedReprojectionCommand):
             mask_path=self._path(self.mask),
             mask_hdu=self.mask_hdu,
             backends=self._csv_backends(self.backends),
+            fits_reader=self.fits_reader,
             reference_backend=self.reference_backend,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,

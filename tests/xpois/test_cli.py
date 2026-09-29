@@ -134,6 +134,8 @@ def test_fit_kernel_forwards_spatial_solver_options(
             str(target),
             "--solver",
             "spatial-als",
+            "--fits-reader",
+            "xdr",
             "--backend",
             "cupy",
             "--spatial-degree",
@@ -152,6 +154,7 @@ def test_fit_kernel_forwards_spatial_solver_options(
     assert json.loads(captured.out) == {"solver": "spatial-als"}
     assert seen["solver"] == "spatial-als"
     assert seen["backend"] == "cupy"
+    assert seen["fits_reader"] == "xdr"
     assert seen["spatial_degree"] == 3
     assert seen["als_iterations"] == 17
     assert seen["als_tolerance"] == pytest.approx(2e-7)

@@ -22,6 +22,19 @@ uv run python examples/run_quickstarts.py \
 Automatic selection prefers CuPy, then CUDA PyTorch, then CPU. The resolved
 backend and timings are written to `summary.json`.
 
+## FITS reading
+
+`--fits-reader auto` uses xDataReader for supported FITS images on GPU
+workflows and Astropy on CPU workflows. `--fits-reader astropy` selects CPU
+decoding; `--fits-reader xdr` requires xDataReader. CuPy reprojection consumes
+decoded device arrays directly. Output images retain the usual host-array and
+FITS contracts. Summaries record the selected reader and any fallback under
+`fits_reads`.
+
+WCS mapping and target-grid setup read headers and dimensions without
+decompressing image pixels. Reading with xDataReader does not by itself imply
+native GPUDirect Storage; its ordinary-I/O path also accelerates decompression.
+
 ## Inspect and reproject one image
 
 The FITS input must contain a 2D image and a valid celestial WCS in the selected
