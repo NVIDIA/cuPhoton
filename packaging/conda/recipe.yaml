@@ -40,6 +40,7 @@ requirements:
     - python
     - astropy-base >=6.1.4
     - h5py >=3.10
+    - hdf5 >=2.1
     - numexpr >=2.10
     - numpy >=2.0,<2.6
     - pandas >=2.2

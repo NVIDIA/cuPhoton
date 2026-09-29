@@ -18,11 +18,19 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/conda/build.py"
 SPEC = importlib.util.spec_from_file_location("conda_build", SCRIPT)
 conda_build = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(conda_build)
+
+
+def test_recipe_requires_hdf5_2_1_or_newer():
+    recipe = SCRIPT.parents[2] / "packaging/conda/recipe.yaml"
+    metadata = yaml.safe_load(recipe.read_text())
+
+    assert "hdf5 >=2.1" in metadata["requirements"]["run"]
 
 
 def source_archive(directory, version):
