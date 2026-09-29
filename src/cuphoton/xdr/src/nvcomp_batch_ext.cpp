@@ -219,7 +219,8 @@ py::object batch_decompress_impl(
     // Keep this path on CUDA until that ownership contract is supported.
     opts.backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
     auto gzip_opts = nvcompBatchedGzipDecompressDefaultOpts;
-    gzip_opts.backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
+    // Let nvCOMP use compatible hardware engines and fall back to CUDA.
+    gzip_opts.backend = NVCOMP_DECOMPRESS_BACKEND_DEFAULT;
     // NAIVE accepts byte-aligned FITS gzip tile starts. LOOKAHEAD requires
     // additional input alignment and is intended for much larger chunks.
     gzip_opts.algorithm = NVCOMP_GZIP_DECOMPRESS_ALGORITHM_NAIVE;

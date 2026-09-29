@@ -49,6 +49,11 @@ These controls apply when the existing reader policy selects xDR. Reader
 selection and CPU fallback remain controlled by `--fits-reader`. Invalid options
 fail during validation; decode, I/O, and CUDA failures propagate to the caller.
 
+For `GZIP_1` and `GZIP_2`, the native decoder lets nvCOMP select a compatible
+hardware decompression engine when available. It falls back to CUDA
+decompression when the device or buffers do not support that path. Backend
+selection is automatic and preserves the decoded pixel values.
+
 ## Read FITS images in a workflow
 
 The shared FITS reader selects explicit image HDUs and returns NumPy or CuPy
