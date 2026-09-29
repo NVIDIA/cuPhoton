@@ -482,9 +482,47 @@ def batched_levenberg_marquardt(
             valid_normal_equations = finite_rows(gradient) & finite_rows(
                 hessian
             )
-            status[active_indices[~valid_normal_equations]] = int(
-                LMStatus.INVALID_RESIDUAL
-            )
+            fallback_positions = ap.flatnonzero(~valid_normal_equations)
+            if fallback_positions.shape[0] > 0:
+                # Finite analytic derivatives can overflow their products.
+                # Recover the ordinary path's finite-Jacobian predicate and
+                # let its gradient/solve decisions handle those products.
+                fallback_indices = active_indices[fallback_positions]
+                fallback_jacobian = _call_jacobian(
+                    problem,
+                    x_active[fallback_positions],
+                    fallback_indices,
+                )
+                if fallback_jacobian.shape != (
+                    fallback_positions.shape[0],
+                    n,
+                    m,
+                ):
+                    raise ValueError(
+                        "jacobian must return shape "
+                        "(batch, parameters, observations)"
+                    )
+                valid_fallback = finite_rows(fallback_jacobian)
+                status[fallback_indices[~valid_fallback]] = int(
+                    LMStatus.INVALID_RESIDUAL
+                )
+                recovered_positions = fallback_positions[valid_fallback]
+                if recovered_positions.shape[0] > 0:
+                    recovered_indices = fallback_indices[valid_fallback]
+                    fallback_jacobian = fallback_jacobian[valid_fallback]
+                    gradient = gradient.copy()
+                    hessian = hessian.copy()
+                    gradient[recovered_positions] = ap.einsum(
+                        "knm,km->kn",
+                        fallback_jacobian,
+                        residual_active[recovered_positions],
+                    )
+                    hessian[recovered_positions] = ap.einsum(
+                        "knm,kpm->knp", fallback_jacobian, fallback_jacobian
+                    )
+                    valid_normal_equations[recovered_positions] = True
+                    jacobians[recovered_indices] = fallback_jacobian
+                    jacobian_current[recovered_indices] = True
             active_indices = active_indices[valid_normal_equations]
             if active_indices.shape[0] == 0:
                 continue
