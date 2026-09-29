@@ -1,4 +1,4 @@
-# xRep (xReproject)
+# xRep
 
 `cuphoton.xrep` reprojects two-dimensional images onto celestial WCS grids.
 It can derive a north-up grid or use an existing image as the destination.
@@ -20,20 +20,21 @@ uv run python examples/run_quickstarts.py \
 ```
 
 Automatic selection prefers CuPy, then CUDA PyTorch, then CPU. The resolved
-backend and timings are written to `summary.json`.
+backend and timings are written to `summary.json`. Explicit `--backend torch`
+can also run on a CPU-only host; `--backend cpu` selects the NumPy reference.
 
 ## FITS reading
 
-`--fits-reader auto` uses xDataReader for supported FITS images on GPU
+`--fits-reader auto` uses xDR for supported FITS images on GPU
 workflows and Astropy on CPU workflows. `--fits-reader astropy` selects CPU
-decoding; `--fits-reader xdr` requires xDataReader. CuPy reprojection consumes
+decoding; `--fits-reader xdr` requires xDR. CuPy reprojection consumes
 decoded device arrays directly. Output images retain the usual host-array and
 FITS contracts. Summaries record the selected reader and any fallback under
 `fits_reads`.
 
 WCS mapping and target-grid setup read headers and dimensions without
-decompressing image pixels. Reading with xDataReader does not by itself imply
-native GPUDirect Storage; its ordinary-I/O path also accelerates decompression.
+decompressing image pixels. Reading with xDR does not by itself imply native
+GPUDirect Storage; it can also decode images using KvikIO compatibility I/O.
 
 ## Inspect and reproject one image
 
@@ -101,7 +102,6 @@ a separate stack member.
 
 Python callers can pass `Grid.from_wcs(target_wcs)` and
 `output_bbox=BBox(0, 0, width, height)` to `build_stack_spec_from_fits`.
-
 
 ## Compare implementations
 

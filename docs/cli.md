@@ -16,6 +16,17 @@ uv run cuphoton xpois help fit-kernel
 Access each component through the fixed command groups: `xdr`, `xfit`, `xpois`,
 `xscan`, `xrep`, and `xray`.
 
+FITS-consuming commands may expose `--fits-reader auto|astropy|xdr` separately
+from the compute backend. GPU workflows use `auto` to prefer xDR when the
+requested read is supported and the GPU dependencies are available. The
+shared reader records why it falls back to Astropy. CPU xFit, xPois, and xRep
+workflows resolve `auto` directly to Astropy. Explicit `xdr` requires an
+eligible read. The pipeline commands preserve each manifest's reader policy
+unless an override is supplied.
+Check command help for the applicable default and the
+[FITS reader guide](components/xdr.md#read-fits-images-in-a-workflow) for
+scaling, compression, and section-read rules.
+
 ## xDataReader: `cuphoton xdr`
 
 `benchmark-fits` runs the GPU-native FITS loading benchmark for individual
@@ -29,9 +40,11 @@ See [xDataReader](components/xdr.md).
 
 ## xFit: `cuphoton xfit`
 
-`data-inspect` and `data-validate` check pickle-free NPZ dipole batches
-whose arrays are numeric or Unicode; `fit-dipoles` fits sampled-stamp or
-analytic Gaussian models and writes portable fit and uncertainty artifacts.
+`data-inspect` and `data-validate` check dipole inputs: pickle-free NPZ batches
+of numeric or Unicode arrays, or JSON FITS candidate manifests. `fit-dipoles`
+fits sampled-stamp or analytic Gaussian models and writes portable fit and
+uncertainty artifacts. FITS manifests select image HDUs and candidate regions;
+`--fits-reader` controls loading independently of `--backend`.
 `fit-dipoles --executor dragon|mpi` distributes candidate chunks; local
 execution remains the default. `--warmup-rounds` or `--measure-rounds` opts
 into persistent workers and a separate artifact directory for each round.
@@ -105,6 +118,11 @@ command-specific contracts. See [xScan](components/xscan.md).
 xPois, xFit and xScan. Optional round flags retain the workers across passes.
 These commands require a shared input/output filesystem and the matching
 runtime launcher.
+
+`infer-real-bogus` consumes packaged datasets. Direct FITS candidate scoring
+uses the CUDA Python API `cuphoton.xscan.fits_inference.predict_fits`.
+`run-pipeline` accepts NPY or FITS image descriptors in its manifest and
+`benchmark-pipeline` compares the persistent pipeline with separate stages.
 
 ## xRep: `cuphoton xrep`
 

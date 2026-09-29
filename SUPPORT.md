@@ -8,7 +8,7 @@ the service or compatibility guarantees of a supported NVIDIA product.
 
 - Search existing [GitHub issues](https://github.com/NVIDIA/cuPhoton/issues).
 - Open a bug report with a minimal reproducer and the output of the relevant
-  `<command> --version` and environment checks.
+  `cuphoton --version` and environment checks.
 - Open a feature request for a workflow or data-contract proposal.
 - Use a pull request for a concrete fix or documented extension.
 

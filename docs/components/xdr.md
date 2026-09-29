@@ -1,4 +1,4 @@
-# xDataReader
+# xDR
 
 `cuphoton.xdr` provides GPU-oriented FITS loading. It uses native CFITSIO
 planning plus KvikIO, nvCOMP, and CuPy to load supported image HDUs directly
@@ -28,6 +28,7 @@ image = result.arrays[0]  # CuPy array, ready for use
 print(result.metadata())  # Actual reader and any fallback reason
 ```
 
+The Python reader defaults to `reader="astropy"` and `device=False`.
 `reader="astropy"` decodes on the CPU; `reader="xdr"` requires the GPU reader.
 `reader="auto"` uses xDR for supported lossless images when its dependencies,
 native planner, and CUDA device are available. Scaling, integer nulls,
@@ -36,10 +37,12 @@ Astropy. Read errors propagate after the selected reader starts. With
 `device=False`, the returned arrays reside on the host, including an explicit
 download when xDR decoded them. Integer masks retain their width and bits.
 
-Use `section=(slice(y0, y1), slice(x0, x1))` for bounded cutouts. Automatic
-reads of uncompressed cutouts use Astropy's section access. Tile-compressed
-cutouts can use xDR. Device reads finish before returning, including reads on
-an explicitly supplied CuPy stream.
+Use `section=(slice(y0, y1), slice(x0, x1))` for bounded cutouts with unit-step
+slices. Automatic reads of uncompressed cutouts use Astropy's section access;
+the shared reader rejects explicit xDR requests for those sections.
+Supported tile-compressed cutouts can use xDR. Device output requires CuPy
+and a usable CUDA device even when Astropy performs decoding. Device reads
+finish before returning, including reads on an explicitly supplied CuPy stream.
 
 The pipeline and applicable standalone FITS workflows expose this reader
 policy. Prepared NPY, NPZ, and HDF5 inputs retain their existing readers.
@@ -48,6 +51,28 @@ measure physical storage traffic. Establish native GDS with process-local
 cuFile counters for the measured reads, distinguishing P2PDMA/NVFS from POSIX
 fallback. The legacy `is_gds_active` probe requires `nvidia-fs` and can report
 false on working P2PDMA configurations that do not use that module.
+
+## Load a batch onto the GPU
+
+The lower-level xDR APIs load the same HDU indices from every input file.
+Files must have matching shapes and dtypes at each selected HDU:
+
+```python
+from cuphoton.xdr import batch_to_device
+
+(images,) = batch_to_device(
+    ["exposure-1.fits", "exposure-2.fits"], hdu_indices=[1]
+)
+first_image = images[0]
+```
+
+The result is a tuple of CuPy arrays, one per selected HDU, each with shape
+`(file, y, x)`. `batch_to_device_stream` exposes the same stacked result with
+prefetch, decode-batch and queue controls. Both accept preallocated `out`
+arrays and a CuPy `stream`. Their `section` option applies to compressed
+image HDUs. Use the shared reader above when you need automatic Astropy
+fallback and FITS semantic checks. The exported `open_gpu` function is not
+implemented; use one of these readers instead.
 
 ## HDF5 migration
 
@@ -192,12 +217,13 @@ raw-read phase; failed planning also prevents that phase from running.
 
 ### Benchmarking with cached input
 
-`benchmark-fits --mock-storage {device,host}` serves repeat reads of each
-file from an in-memory cache, so runs measure decode and kernel cost
-independent of disk throughput. `device` replays from GPU memory at HBM
-bandwidth, isolating decompression cost and modeling an ideally fast GDS
-path; `host` replays from pinned host memory over PCIe, modeling what a
-properly working GDS path would deliver on the same hardware. The same
-behavior is available programmatically through the
+`benchmark-fits --mock-storage {device,host}` preloads an in-memory cache
+before its timed phases. `device` replays from GPU memory to measure decode
+and kernel costs
+without disk reads; `host` replays from pinned host memory and includes
+host-to-device transfer. Neither mode measures native GDS or storage
+throughput. The same behavior is available programmatically through the
 `cuphoton.xdr.mock_storage` context manager, or transparently by setting
 `CUPHOTON_XDR_MOCK_STORAGE=device` or `host` to set the benchmark's default.
+In a custom benchmark, populate the cache before measuring repeat reads;
+the first access otherwise includes a real file read.

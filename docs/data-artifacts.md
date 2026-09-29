@@ -10,8 +10,8 @@ Individual commands may accept additional fields; use `<command> help
 - Image coordinates use `(y, x)` array order unless an option explicitly asks
   for `(x, y)` pixel coordinates.
 - Inputs must be finite unless a command documents a NaN policy.
-- Variance arrays use squared image units and must be positive on fitted
-  pixels.
+- Variance arrays use squared image units. Fit weights require positive
+  variance on fitted pixels; xRep also accepts zero variance for propagation.
 - Boolean fit masks use `True` for selected pixels. Instrument bit masks must
   be translated with the command's mask policy.
 - Keep units and coordinate frames in FITS headers or adjacent metadata,
@@ -19,7 +19,8 @@ Individual commands may accept additional fields; use `<command> help
 
 ## xFit dipole batches
 
-xFit reads `.npz` archives with pickle disabled. The archive requires a unique
+xFit reads pickle-free `.npz` archives or JSON manifests describing FITS
+planes and candidate positions. The archive requires a unique
 one-dimensional `candidate_id` array and floating-point `images`. Difference
 images have shape `(batch, y, x)`; split images have shape
 `(batch, 3, y, x)` with channels ordered as difference, positive, and
@@ -34,11 +35,22 @@ over all three planes. This interpretation also wins when `batch == 3`; use
 The command rejects standalone `.npy` inputs, object arrays, and archives that
 require pickle. Callers supply the observational data.
 
+FITS manifests use schema `cuphoton.xfit.fits-input/v1`. They specify one
+difference plane or three split planes in difference, positive, negative
+order; all planes share an already aligned pixel grid. Each candidate has a
+unique integer or string ID and integer zero-based `(x, y)` center, with an
+odd `[height, width]` stamp fully inside the image. Paths resolve relative to
+the manifest, and HDU indices are zero-based. Optional variance and integer
+mask HDUs come from the same file as their image plane. `bad_mask_bits`
+selects excluded bits; without it, any nonzero mask pixel is excluded. Split
+mode requires variance for every plane or none. See the
+[complete FITS manifest example](components/xfit.md#fits-images-and-candidate-positions).
+
 A successful `fit-dipoles` run contains:
 
 | File | Meaning |
 | --- | --- |
-| `summary.json` | requested and resolved model/backend, input and compute dtypes, device, input-archive hash, input counts, artifact paths, and artifact hashes |
+| `summary.json` | requested and resolved model/backend, input and compute dtypes, device, input-archive or manifest hash, input counts, artifact paths, and artifact hashes; FITS inputs also record source hashes and read receipts |
 | `effective-config.yaml` | validated options used for the fit |
 | `fits.parquet` | one row per candidate with an exact input-stamp hash, parameters, status, convergence, valid-pixel coverage, fitted and zero-signal chi-square statistics, and uncertainties |
 | `fit-arrays.npz` | candidate indices and IDs, covariance matrices, and residual arrays without pickled objects |
@@ -237,6 +249,18 @@ Real/bogus training requires separately reviewed labels. Rubin
 `candidate_isDipole` describes a dipole classification, and placeholder labels
 support workflow checks. Partition reviewed labels into train/validation/test
 groups by DiaObject or an equivalent stable source identity.
+
+### Direct FITS inference
+
+The [xScan FITS inference API](components/xscan.md#classify-candidates-directly-from-fits)
+accepts explicit `FitsPlane` descriptors and integer zero-based `(y, x)`
+candidate centers. Channels are search, template, then optional difference.
+Unlike an xFit split input, these are classifier image channels. The caller
+supplies aligned images with the checkpoint's expected pixel preprocessing.
+The API loads full selected HDUs, extracts odd-sized float32 stamps on one
+GPU and returns host logits and probabilities in candidate order, with
+reader receipts. This path does not produce a prepared training dataset or
+interpret instrument mask bits.
 
 ## xRep FITS and arrays
 

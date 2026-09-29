@@ -1,18 +1,20 @@
 # Citation
 
-If cuPhoton contributes to a publication, cite the v0.1.2 software release and
-record the exact commit used in the methods or software-availability section.
+If cuPhoton contributes to a publication, cite the version you used and
+record the exact commit in the methods or software-availability section.
+For a development checkout, include the full version reported by
+`cuphoton --version` and the output of `git rev-parse HEAD`.
 
-Suggested citation:
+Suggested citation for the upcoming 0.1.3 release:
 
 > NVIDIA Corporation. *cuPhoton: GPU-accelerated astronomy and imaging
-> reference workflows*. Version 0.1.2, 2026.
+> reference workflows*. Version 0.1.3, 2026.
 > https://github.com/NVIDIA/cuPhoton
 
 The repository also contains machine-readable citation metadata in
 [`CITATION.cff`](CITATION.cff). GitHub can export that record in common
 bibliography formats.
 
-There is no archived DOI for this release. If a later release publishes one,
-prefer the DOI for that release while retaining the exact version or commit
-used.
+The current citation metadata does not include an archived DOI. If the
+release you use publishes one, prefer its DOI while retaining the exact
+version or commit used.

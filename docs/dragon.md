@@ -158,8 +158,9 @@ a separate harness experiment, with one invocation per configuration.
 Later two-node/eight-GPU product checks covered xPois, standalone xFit and
 xScan, and the combined pipeline under Dragon and MPI. They established
 numerical parity, persistent identities and cleanup for the tested revisions.
-They predate later lifecycle, loader and input-ownership fixes; they do not
-qualify the final implementations in #50/#54/#56.
+They predate later lifecycle, loader and input-ownership fixes and describe
+the tested revisions. Revalidate the installed release before using those
+measurements to characterize current executor behavior.
 
 ### 256-GPU follow-up
 

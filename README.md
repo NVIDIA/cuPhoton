@@ -23,6 +23,20 @@ separate kind of experimental data. See [how the components fit
 together](docs/architecture.md#how-the-science-components-fit-together) for
 the data flow and the adapters needed between stages.
 
+## Upcoming 0.1.3 release
+
+The current checkout includes the changes planned for 0.1.3:
+
+- Shared FITS reading across the imaging workflows, including candidate
+  manifests for xFit and direct FITS inference through xScan's Python API.
+- A reusable GPU context connecting xPois, xFit, and xScan, with persistent
+  Dragon or MPI workers for supported batch workflows.
+- Native Linux wheels and Conda packages, spatially varying image matching,
+  optional cuTile fitting, and expanded xRay fitting and diagnostics.
+
+See the [changelog](CHANGELOG.md) for migration details. Until the release is
+published, use the source checkout instructions below.
+
 ## Start here
 
 [uv](https://docs.astral.sh/uv/) manages the supported development
@@ -46,10 +60,12 @@ For a deterministic CPU run:
 
 ```bash
 uv sync --locked --extra dev --extra torch --extra viz --extra photometry
-uv run python examples/run_quickstarts.py --profile cpu
+uv run python examples/run_quickstarts.py --profile cpu \
+  --output-dir quickstart-cpu-output
 ```
 
-Use `--require-gpu` to require GPU execution. See
+Each run needs a new output directory. To require GPU execution, restore the
+GPU profile above and run with `--require-gpu` and a new `--output-dir`. See
 [Quickstarts](docs/quickstarts.md) for individual components and output
 contracts.
 
@@ -97,6 +113,8 @@ a small positional mismatch or a moving source can produce one. xFit
 stamps. It returns positions, amplitudes, and shape parameters with residuals,
 uncertainties, and fit status. These measurements describe the candidate and
 can optionally become inputs to an xScan classifier.
+Supply stamps as arrays or an NPZ archive, or use a FITS candidate manifest
+to select image regions, variance planes, and masks directly from local files.
 
 ### xScan: score candidates and collect review labels
 
@@ -107,6 +125,8 @@ Real/bogus scores help prioritize plausible detections over artifacts for
 further scientific classification. xScan also produces review material for
 inspecting predictions and collecting labels. Training requires reviewed
 labels and suitable train/validation/test splits.
+The Python `predict_fits` API scores caller-selected candidates from FITS
+images on a CUDA device. The `infer-real-bogus` command uses packaged datasets.
 
 ### xRay: measure oscillations in detector signals
 
@@ -124,10 +144,16 @@ application context, logging, and invariant checks. Each science component
 owns its algorithms and data contracts. The [glossary](docs/glossary.md)
 explains the scientific and file-format terms used here.
 
+The imaging workflows share a FITS reader policy: Astropy supplies the CPU
+path and xDR supplies eligible GPU reads. Reader selection is separate from
+the numerical backend. Read receipts record the requested and actual reader,
+selected HDUs, and any fallback reason; see
+[FITS reading in a workflow](docs/components/xdr.md#read-fits-images-in-a-workflow).
+
 ## Installation profiles
 
 The base install contains the shared CPU data and scientific stack. Optional
-extras are deliberately separated by purpose:
+extras add the runtime and development dependencies for each workflow.
 
 CPython 3.12 through 3.14 is supported on Linux, including the experimental
 cuTile backend. Dragon currently requires Python 3.12 or 3.13 because its

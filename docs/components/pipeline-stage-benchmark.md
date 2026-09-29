@@ -50,6 +50,29 @@ files when running the reversed comparison. Use the same CPU affinity,
 thread settings and GPU, without another workload running concurrently.
 `--timeout` bounds each child invocation; its default is 600 seconds.
 
+### Use existing FITS inputs
+
+Supplied item descriptors can reference FITS HDUs as described in the
+[persistent pipeline guide](xscan.md#persistent-xpois-xfit-and-xscan-pipeline).
+The generated fixture remains NPY-based. With FITS descriptors, use
+`--fits-reader astropy`, `auto` or `xdr` to override every descriptor's reader
+policy in both treatments, including variance and fit-mask planes. Omitting
+the option preserves the policies in the item manifest:
+
+```bash
+uv run --locked --extra gpu cuphoton xscan benchmark-pipeline \
+  --output /tmp/cuphoton-fits-astropy \
+  --config /path/to/config.json --items /path/to/fits-items.json \
+  --fits-reader astropy --warmup 1 --repeat 3
+```
+
+For a reader comparison, rerun with the same configuration, items and
+treatment order, a new output directory and a different reader selection.
+Keep input encoding and cache state comparable. xDR supports compatibility
+I/O as well as native GDS; reader selection alone does not identify the
+storage path. FITS read receipts record logical decoded bytes and fallback
+reasons, not measured disk or PCIe traffic.
+
 ## What each treatment runs
 
 The pipeline initializes `DeviceWorkerContext` once, performs its warmup

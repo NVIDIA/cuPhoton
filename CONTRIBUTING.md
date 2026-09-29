@@ -148,9 +148,11 @@ performance review before accepting a change.
 - Include a Developer Certificate of Origin sign-off on commits:
 
 ```bash
-git commit -s -m "Short imperative summary"
+git commit -sS -m "Short imperative summary"
 ```
 
+- Configure a Git signing key before committing; `-S` adds the cryptographic
+  signature and `-s` adds the DCO trailer.
 - Write commit titles in imperative mood.
 - Target the `main` branch.
 

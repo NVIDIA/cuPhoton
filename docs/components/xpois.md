@@ -43,16 +43,18 @@ Auto-stamp fitting also saves the selected-region metadata.
 ## FITS reading
 
 GPU workflows use `--fits-reader auto` to decode supported FITS images with
-xDataReader. Use `--fits-reader astropy` for CPU decoding or `--fits-reader xdr`
-to require xDataReader. With `--backend cpu`, automatic reading uses Astropy.
+xDR. Use `--fits-reader astropy` for CPU decoding or `--fits-reader xdr`
+to require xDR. With `--backend cpu`, automatic reading uses Astropy.
 The option also applies to batch, MPI and Dragon execution. NPY inputs keep
 their existing loading path.
 
 Image, variance and mask HDU selection stays the same. `summary.json` records
 `fits_reader` and `fits_reads`, including the reader used and any fallback.
-xPois retains host input arrays for its existing solvers: xDR accelerates
-FITS decoding and copies decoded arrays back to the host. Reader speedup and
-complete fit speedup should be measured separately.
+The standalone fitting workflows retain host input arrays: xDR accelerates
+FITS decoding and copies decoded arrays back to the host before fitting.
+The [persistent imaging pipeline](xscan.md#persistent-xpois-xfit-and-xscan-pipeline)
+instead retains decoded images on the worker GPU. Measure reader time and
+complete fit time separately.
 
 ## Fit and subtract
 

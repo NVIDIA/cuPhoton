@@ -48,10 +48,12 @@ NumPy, FITS, CSV, Parquet, or registry products into that contract. Paths in
 the examples are placeholders.
 
 Raw DES and LSSTComCam builder manifests accept `fits_reader: auto`,
-`astropy`, or `xdr`. Automatic reading uses xDataReader where supported and
+`astropy`, or `xdr`. Automatic reading uses xDR where supported and
 records the actual reader and fallback reason in the builder summary.
 `astropy` selects CPU decoding; `xdr` requires the GPU reader. Candidate
 cutouts remain bounded reads, and the prepared dataset format is unchanged.
+Automatic uncompressed cutouts use Astropy sections. Explicit `xdr` requires
+supported tile-compressed cutouts and rejects uncompressed section reads.
 
 The raw builders (`data-build-autoscan-raw`, `data-build-nodiff-raw`, and
 `data-build-lsstcomcam-smoke`) also accept `--fits-reader auto|astropy|xdr`.
@@ -65,12 +67,16 @@ cuphoton xscan data-build-autoscan-raw --manifest des.json \
 
 ## Classify candidates directly from FITS
 
-`predict_fits` reads aligned image planes, crops candidate stamps on the GPU
-and calls the existing tensor inference path. It returns host logits and
-probabilities in candidate order, plus reader receipts. The channel order is
-search, template, then optional difference. Images must already share a pixel
-grid; the function does not align them, calculate a difference or apply masks.
-Selected stamps must contain finite values.
+`predict_fits` requires CuPy, PyTorch and an explicit CUDA device such as
+`cuda:0`, including when Astropy decodes the FITS files. It reads full selected
+image HDUs, crops candidate stamps on the GPU and calls the existing tensor
+inference path. Allow GPU memory for the full planes and the candidate batch.
+It returns host logits and probabilities in candidate order, plus reader
+receipts. The channel order is search, template, then optional difference.
+Images must already share a pixel
+grid and use the preprocessing expected by the checkpoint. The function does
+not align them, calculate a difference, normalize pixels or apply masks.
+Selected stamps are converted to float32 and must contain finite values.
 
 ```python
 from pathlib import Path
@@ -96,9 +102,10 @@ result = predict_fits(
 ```
 
 Omit `difference` for a pair model. Centers are integer, zero-based `(y, x)`
-coordinates and each stamp must fit inside the images. Optional
-`xfit_features` must be a contiguous float32 Torch CUDA tensor with one row
-per candidate, ready on the device's current Torch stream. The call retains
+coordinates and each stamp must fit inside the images. Stamp dimensions must
+be positive odd integers; candidate IDs must be unique integers or nonempty
+strings. Optional `xfit_features` must be a contiguous float32 Torch CUDA
+tensor with one row per candidate, ready on the device's current Torch stream. The call retains
 DLPack owners until inference and the compact host transfer finish. Existing
 prepared-dataset training and inference continue to use their usual formats.
 
@@ -282,7 +289,7 @@ Use fixed, group-aware splits that keep related samples from crossing train,
 validation, and test sets. Record the seed, model config, selected checkpoint,
 device, label source, and dataset summary. Use reviewed real/bogus labels for
 training and evaluation; Rubin `candidate_isDipole` flags and placeholder
-`label.npy` values serve smoke tests. Split by DiaObject, or an equivalent
+`labels.npy` values serve smoke tests. Split by DiaObject, or an equivalent
 stable source group, before model selection. Training rejects `split_group`
 values that cross splits and also rejects cross-split Rubin DiaObject IDs when
 those fields are present.
@@ -461,12 +468,16 @@ The effective policies are retained in workload identities and read receipts.
 Omitting the option preserves per-descriptor choices; NPY inputs are unchanged.
 
 ```bash
-mpiexec -n 2 cuphoton xscan run-pipeline --executor mpi \
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpiexec -n 2 -x CUDA_VISIBLE_DEVICES cuphoton-openmpi-rank-exec -- \
+  cuphoton xscan run-pipeline --executor mpi \
   --manifest pipeline.json --output-dir runs --fits-reader astropy
 ```
 
-`astropy` disables xDR decoding while retaining GPU computation. xDR can use
-ordinary file I/O without native GPUDirect Storage: set
+This example uses Open MPI and its rank wrapper to bind each process to one
+GPU before Python starts. `astropy` selects CPU FITS decoding while retaining
+GPU computation. xDR can use ordinary file I/O without native GPUDirect
+Storage: set
 `KVIKIO_COMPAT_MODE=ON` in the worker environment to require compatibility I/O.
 
 Inputs must already be registered to the same pixel grid and use compatible

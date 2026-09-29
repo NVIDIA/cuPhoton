@@ -5,8 +5,8 @@ contract explicit and staging institution-specific inputs separately.
 
 ## 1. Establish a baseline
 
-Run the synthetic CPU quickstart and save its `summary.json` outside the
-repository:
+Install the [CPU quickstart environment](quickstarts.md#run-all-components),
+then save a synthetic baseline and its `summary.json` outside the repository:
 
 ```bash
 uv run python examples/run_quickstarts.py \
@@ -14,8 +14,9 @@ uv run python examples/run_quickstarts.py \
   --output-dir /tmp/cuphoton-baseline
 ```
 
-If the target system has CUDA, run the same component with `--require-gpu` and
-compare shapes, finite-value checks, scientific metrics, and timings.
+If the target system has CUDA, use the GPU environment and rerun with
+`--profile auto --require-gpu` in a new output directory. Compare shapes,
+finite-value checks, scientific metrics, and timings.
 
 ## 2. Map the local data contract
 

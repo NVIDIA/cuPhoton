@@ -8,7 +8,8 @@ array scripts.
 ## Inspect an in-memory dry run
 
 `dry-run` builds the plan in memory and prints it with the rendered local/Slurm
-scripts as JSON:
+scripts as JSON. It reads the input files to determine shapes and fingerprints,
+but does not launch workers or write run files:
 
 ```bash
 uv run cuphoton xray detector-artifact-distributed \
@@ -25,6 +26,25 @@ uv run cuphoton xray detector-artifact-distributed \
 
 Review the global ROI, tile shape, shard ranges, worker commands,
 normalization, fit parameters, and concurrency.
+
+## Reuse detector normalization
+
+Each worker needs a normalization shift from the full detector, even when
+fitting only one shard. Compute it once on the CPU to avoid repeating that
+full input scan in every worker:
+
+```bash
+uv run cuphoton xray detector-artifact-normalize \
+  --h5dir /path/to/hdf5 --fon run-on.h5 --foff run-off.h5 \
+  --output-dir /path/to/artifacts/run-001-normalization --json
+```
+
+Add `--normalization-cache /path/to/artifacts/run-001-normalization` to each
+planning or launch command below. The cache contains `normalization.json`
+and `normalization.npz`. Use the same input pair, `--drop-leading` and
+zero-offset settings for cache creation and workers; incompatible caches
+are rejected. If selecting `--zero-offset-index` manually, set it in both
+commands and interpret it after the leading samples have been dropped.
 
 ## Persist a local plan
 
@@ -110,6 +130,12 @@ uv run cuphoton xray detector-artifact-distributed \
 Inspect the emitted scripts before adding `--submit`. With both `--submit` and
 `--merge`, the launcher submits the merge as an `afterok` dependency when the
 array submission returns a job ID.
+
+The example permits eight concurrent array tasks, each requesting one GPU
+on one node. The Python environment, working directory and all input/output
+paths in the plan must be accessible from the compute nodes. The merge
+script uses the scheduler's default resources; adjust it for the site when
+submitting rendered scripts manually.
 
 ## Merge an existing plan
 

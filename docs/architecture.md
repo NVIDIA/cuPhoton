@@ -29,7 +29,7 @@ looks for changes between observations might connect them as follows:
 local FITS images
     |
     v
-xDataReader: decode and load pixels onto the GPU
+shared FITS reader: Astropy on CPU or xDataReader on GPU
     |
     v
 xRep: resample onto a common sky grid, when needed
@@ -109,6 +109,10 @@ invariant evaluation. The six science namespaces own their domain models,
 algorithms, adapters, workflow configuration, and workflows. They share
 Core's public CLI facade.
 
+Core also supplies FITS metadata inspection and reader selection, plus the
+shared Dragon/MPI execution machinery. Components retain their scientific
+input validation and choose how to divide work among those executors.
+
 xDataReader, xFit, xPois, and xRep expose a curated Python surface
 for embedding numerical operations. xScan and xRay are primarily
 CLI-first, with internal modules available as extension points for workflow
@@ -123,14 +127,25 @@ can export a pickle-free input archive of numeric and Unicode arrays for
 xFit, revalidates stamp hashes whenever a feature bundle is loaded, and pins
 the bundle identity in fusion checkpoints.
 
+For a GPU pipeline within one process, `DeviceWorkerContext` connects a
+constant-kernel xPois solve, Gaussian xFit measurements, and an xScan
+checkpoint. It accepts aligned inputs and caller-selected candidate
+coordinates, retains intermediate device arrays, and copies the final scores
+and compact fit results to the host. This path requires a triplet fusion
+checkpoint and its training feature schema. See the
+[persistent imaging pipeline](components/xscan.md#persistent-xpois-xfit-and-xscan-pipeline)
+for its input and checkpoint requirements.
+
 ## Data movement and execution
 
 File loading, numerical computation, and worker coordination are distinct
 parts of a run:
 
-- At the file boundary, xDataReader reads and decodes supported FITS images
-  into GPU arrays. Storage and driver support determine the transfer path.
-  Check the I/O configuration when measuring native GPUDirect Storage.
+- At the file boundary, the shared reader inspects FITS headers before
+  choosing Astropy or xDR. `auto` selects an eligible reader and records any
+  fallback reason; explicit `xdr` requires supported inputs and GPU
+  dependencies. Read receipts report decoded bytes, while storage and driver
+  support determine whether transfers use native GPUDirect Storage.
 - At the array boundary, reprojection, convolution, fitting, and inference
   consume different shapes and metadata. Each API's input and return types
   define where its arrays reside and which transfers an application needs.
@@ -142,15 +157,14 @@ parts of a run:
 ## Execution policy
 
 Where a component accepts `auto`, it selects the most capable installed
-backend in its documented order and records the resolution. The intended
-orders are:
+backend in its documented order and records the resolution. The automatic
+choices for numerical work are:
 
 | Component | Automatic order |
 | --- | --- |
-| xDataReader | KvikIO, nvCOMP, and CuPy on CUDA 13 |
 | xFit | CuPy, then NumPy |
-| xPois | Constant: CuPy, Numba-CUDA, then CPU; spatial ALS: CuPy, then CPU |
-| xScan | PyTorch CUDA, then PyTorch CPU |
+| xPois | Constant: CuPy, Numba-CUDA, then CPU; spatial ALS and Gaussian-polynomial: CuPy, then CPU |
+| xScan | Packaged inference: PyTorch CUDA, then PyTorch CPU; FITS inference and the device pipeline require explicit CUDA |
 | xRep | CuPy, PyTorch CUDA, then CPU |
 | xRay | CuPy, then NumPy for supported operations |
 
@@ -158,6 +172,10 @@ Select cuTile explicitly after checking compiler/runtime compatibility for
 the environment. Use the workflow summary to inspect its resolved execution
 settings. Record the backend, device, dtype, and relevant hardware when
 comparing runs.
+
+xDataReader itself requires CUDA 13. Its shared FITS adapter can select an
+Astropy read independently of the compute backend, including reading on the
+CPU and uploading the result for GPU computation.
 
 ## Configuration and artifacts
 

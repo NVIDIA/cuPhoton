@@ -1,6 +1,6 @@
 # Native packages
 
-Release artifacts are six Linux wheels (CPython 3.12, 3.13, and 3.14 on
+The release build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
 x86-64 and ARM64) plus one source archive. Wheels target glibc 2.28 or later.
 The runtime dependencies may impose a newer glibc floor; the installed-wheel
 CI tests use Debian 12. Native conda builds cover the same six Python and
@@ -42,14 +42,14 @@ when an RC tag and a final tag refer to the same commit. A final release needs
 a new build and qualification because its version and metadata change; do not
 rename RC wheels.
 
-An exact RC pin works without `--pre`:
+Once a candidate is published to PyPI, an exact RC pin works without `--pre`:
 
 ```bash
-python -m pip install 'cuphoton[dev,gpu,io,photometry]==0.1.3rc0'
+python -m pip install 'cuphoton[gpu]==0.1.3rc0'
 ```
 
-`gpu` already includes `io` and `photometry`, so `[dev,gpu]` is equivalent.
-Add `viz` for visualization dependencies. Use `--pre` when selecting the newest
+`gpu` includes `io` and `photometry`. Add `dev` for development tools and
+`viz` for visualization dependencies. Use `--pre` when selecting the newest
 available prerelease instead of pinning one. Each changed candidate needs a
 new RC number: PyPI does not allow replacing an uploaded filename.
 
@@ -93,8 +93,9 @@ The installed-wheel runtime matrix also requires cuTile imports and two real
 MPI workers on every Python/architecture pair. Python 3.12 and 3.13 require
 two real Dragon workers as well; upstream Dragon has no Python 3.14 wheel.
 These workers solve generated xPois inputs on the CPU and check numerical
-results, distinct processes, and MPI collectives. JSON receipts are retained
-as CI artifacts. These checks do not establish GPU executor correctness.
+results, distinct processes, and MPI collectives. They use small launcher
+probes; the cuPhoton batch-executor checks run with the GPU backend described
+below. JSON receipts are retained as CI artifacts.
 
 ## Build and install conda packages
 
@@ -229,7 +230,7 @@ From outside the checkout, using the installed environment's Python:
 python -I /checks/test_installed.py --mode gpu --output /results/xdr.json
 python -I /checks/test_stack.py --mode gpu --report /results/compute.json
 
-# One rank per visible GPU; this example needs two CUDA 13-capable GPUs.
+# Open MPI: one rank per visible GPU; this example needs two GPUs.
 CUDA_VISIBLE_DEVICES=0,1 timeout --kill-after=15s 180s mpiexec -n 2 \
   cuphoton-openmpi-rank-exec -- python -I /checks/test_stack.py \
   --mode mpi --backend cupy --workers 2 --report /results/mpi-gpu.json
@@ -242,14 +243,26 @@ CUDA_VISIBLE_DEVICES=0,1 timeout --kill-after=15s 180s dragon --single-node-over
 
 For a one-GPU host, use one visible device, `mpiexec -n 1`, and `--workers 1`
 for both executors. Record that as single-worker acceptance, not multi-GPU
-qualification. Use `--backend cpu --workers 2` with the two launchers to
-repeat the CPU runtime checks without GPU requirements.
+qualification. The rank helper uses Open MPI's local-rank variables. For other
+MPI implementations, use the launcher's device binding described in the
+[MPI guide](components/xpois.md#launch-with-mpi).
+
+To repeat the CPU runtime probes without GPUs, omit the GPU rank helper:
+
+```bash
+CUDA_VISIBLE_DEVICES= timeout --kill-after=15s 180s mpiexec -n 2 \
+  python -I /checks/test_stack.py --mode mpi --backend cpu \
+  --workers 2 --report /results/mpi-cpu.json
+CUDA_VISIBLE_DEVICES= timeout --kill-after=15s 180s dragon --single-node-override \
+  python -I /checks/test_stack.py --mode dragon --backend cpu \
+  --workers 2 --report /results/dragon-cpu.json
+```
 
 The compute check solves the same known xPois problem with CPU, CuPy,
 Numba-CUDA, and cuTile, and checks CuPy-to-PyTorch GPU inference through
-xScan's DLPack bridge. The executor checks run cuPhoton's real MPI/Dragon
-batch paths and verify saved numerical outputs. Missing selected runtimes,
-GPU support, worker results, or compiler tools fail instead of skipping.
+xScan's DLPack bridge. With `--backend cupy`, the executor checks run cuPhoton's
+MPI/Dragon batch paths and verify saved numerical outputs. Missing selected
+runtimes, GPU support, worker results, or compiler tools fail instead of skipping.
 Retain these JSON receipts with the wheel hashes and native xDR receipts.
 
 ## Publish the qualified artifacts
