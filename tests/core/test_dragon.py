@@ -37,7 +37,9 @@ class _Worker:
             "backend": options["backend"],
             "device_index": 0,
             "name": "fake-gpu",
-            "uuid": f"GPU-{self.placement.worker_id}",
+            "uuid": (
+                f"GPU-00000000-0000-0000-0000-{self.placement.gpu_id:012x}"
+            ),
             "pci_bus_id": f"0000:{self.placement.gpu_id:02x}:00.0",
             "identity_error": None,
         }
@@ -251,9 +253,13 @@ def _run(
     large=False,
     validator=None,
     finalizer=None,
+    workers_per_gpu=1,
+    items=None,
+    mps_pipe_directory=None,
 ):
     spec = WorkloadSpec(
-        items=(
+        items=items
+        or (
             WorkItem("one", {"value": "x" * 300_000 if large else 1}, 12),
             WorkItem("two", {"value": 2}, 6),
         ),
@@ -274,7 +280,217 @@ def _run(
         result_timeout_sec=result_timeout,
         worker_timeout_sec=worker_timeout,
         benchmark=benchmark,
+        workers_per_gpu=workers_per_gpu,
+        mps_pipe_directory=mps_pipe_directory,
     )
+
+
+def test_shared_gpu_workers_remain_persistent_and_keep_disjoint_shards(
+    monkeypatch, tmp_path
+):
+    state = _install_runtime(monkeypatch)
+    result = _run(
+        tmp_path,
+        worker_count=None,
+        workers_per_gpu=2,
+        items=tuple(
+            WorkItem(f"item-{index}", {"value": index}) for index in range(5)
+        ),
+        benchmark=BenchmarkOptions(0, 2),
+    )
+    assert result.status == "success", result.summary
+    assert result.summary["worker_count"] == 4
+    assert result.summary["gpu_count"] == 2
+    assert result.summary["workers_per_gpu"] == 2
+    assert [value["gpu_id"] for value in result.summary["placements"]] == [
+        3,
+        7,
+        3,
+        7,
+    ]
+    assert sorted(state.factories) == sorted(state.closed) == [0, 1, 2, 3]
+    assert len(state.calls) == 10
+    for round_info in result.summary["benchmark"]["rounds"]:
+        summary = json.loads(
+            (result.run_dir / round_info["summary_path"]).read_text()
+        )
+        assert summary["terminal_record_audit"]["ok"]
+        assert len(summary["records"]) == 5
+
+
+def test_shared_gpu_max_workers_is_still_total_process_cap(
+    monkeypatch, tmp_path
+):
+    _install_runtime(monkeypatch)
+    result = _run(
+        tmp_path,
+        worker_count=3,
+        workers_per_gpu=4,
+        items=tuple(
+            WorkItem(f"item-{index}", {"value": index}) for index in range(5)
+        ),
+    )
+    assert result.status == "success", result.summary
+    assert result.summary["worker_count"] == 3
+    assert [value["gpu_id"] for value in result.summary["placements"]] == [
+        3,
+        7,
+        3,
+    ]
+
+
+def test_shared_placements_visit_each_host_and_gpu_before_reusing():
+    available = tuple(
+        dragon.Placement(index, host, gpu)
+        for index, (host, gpu) in enumerate((("a", 3), ("a", 7), ("b", 4)))
+    )
+    selected = dragon._select_gpu_placements(available, 5, workers_per_gpu=2)
+    assert [(value.host, value.gpu_id) for value in selected] == [
+        ("a", 3),
+        ("b", 4),
+        ("a", 7),
+        ("a", 3),
+        ("b", 4),
+    ]
+
+
+@pytest.mark.parametrize("workers_per_gpu", [0, -1, True, 1.5])
+def test_invalid_sharing_count_fails_before_workload_preparation(
+    workers_per_gpu,
+):
+    def unexpected(rank):
+        pytest.fail(
+            "invalid sharing count must fail before workload preparation"
+        )
+
+    with pytest.raises(ValueError, match="workers_per_gpu"):
+        dragon.run_dragon_work_items(
+            prepare_workload=unexpected,
+            output_root=None,
+            workers_per_gpu=workers_per_gpu,
+        )
+
+
+@pytest.mark.parametrize("connected", [True, False])
+def test_requested_mps_is_checked_after_worker_cuda_initialization(
+    monkeypatch, tmp_path, connected
+):
+    state = _install_runtime(monkeypatch)
+    pipe_directory = str(tmp_path / "mps")
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", "previous-directory")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "previous-device")
+    monkeypatch.setattr(
+        dragon,
+        "_mps_gpu_uuid",
+        lambda gpu_id: f"GPU-00000000-0000-0000-0000-{gpu_id:012x}",
+    )
+    checked = []
+    resolve = dragon.resolve_worker_factory
+
+    def resolve_factory(reference):
+        assert os.environ["CUDA_MPS_PIPE_DIRECTORY"] == pipe_directory
+        assert os.environ["CUDA_VISIBLE_DEVICES"].startswith("GPU-")
+        return resolve(reference)
+
+    monkeypatch.setattr(dragon, "resolve_worker_factory", resolve_factory)
+
+    def require_client(pid):
+        assert state.factories
+        assert os.environ["CUDA_MPS_PIPE_DIRECTORY"] == pipe_directory
+        checked.append(pid)
+        if not connected:
+            raise RuntimeError("worker did not connect to MPS")
+        return {
+            "pipe_directory": pipe_directory,
+            "server_pid": 456,
+            "client_pid": pid,
+        }
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cuphoton.core.mps",
+        SimpleNamespace(require_mps_client=require_client),
+    )
+    result = _run(tmp_path, mps_pipe_directory=pipe_directory)
+    assert len(checked) == 2
+    assert result.status == ("success" if connected else "failed")
+    assert sorted(state.closed) == [0, 1]
+    assert result.summary["mps_pipe_directory"] == pipe_directory
+    if connected:
+        assert all(
+            message["provenance"]["mps_pipe_directory"] == pipe_directory
+            and message["provenance"]["mps"]
+            == {
+                "pipe_directory": pipe_directory,
+                "server_pid": 456,
+                "client_pid": message["provenance"]["pid"],
+            }
+            for message in result.summary["ready_messages"]
+        )
+
+
+@pytest.mark.parametrize("defect", [None, "gpu", "client", "server", "pipe"])
+def test_mps_provenance_binds_actual_device_and_verified_client(defect):
+    requested_uuid = "GPU-00000000-0000-0000-0000-000000000003"
+    actual_uuid = "00000000000000000000000000000003"
+    value = {
+        "worker_id": 0,
+        "pid": 123,
+        "requested_host": "worker.example",
+        "hostname": "worker.example",
+        "requested_gpu_id": 3,
+        "requested_gpu_uuid": requested_uuid,
+        "cuda_visible_devices": requested_uuid,
+        "mps_pipe_directory": "/tmp/mps",
+        "mps": {
+            "pipe_directory": "/tmp/other"
+            if defect == "pipe"
+            else "/tmp/mps",
+            "server_pid": True if defect == "server" else 456,
+            "client_pid": 124 if defect == "client" else 123,
+        },
+        "gpu": {
+            "backend": "cupy",
+            "device_index": 0,
+            "identity_error": None,
+            "uuid": "00000000000000000000000000000000"
+            if defect == "gpu"
+            else actual_uuid,
+        },
+    }
+    assert dragon._valid_shard_provenance(
+        value,
+        placement=dragon.Placement(0, "worker.example", 3),
+        allow_loopback_alias=False,
+        backend="cupy",
+        mps_pipe_directory="/tmp/mps",
+    ) is (defect is None)
+
+
+@pytest.mark.parametrize("reported_index", [3, 0])
+def test_mps_uuid_lookup_queries_only_the_requested_dragon_ordinal(
+    monkeypatch, reported_index
+):
+    expected = "GPU-00000000-0000-0000-0000-000000000003"
+
+    def query(argv, **options):
+        assert argv == [
+            "nvidia-smi",
+            "--id=3",
+            "--query-gpu=index,uuid",
+            "--format=csv,noheader,nounits",
+        ]
+        assert options["timeout"] == 10
+        return SimpleNamespace(
+            returncode=0, stdout=f"{reported_index}, {expected}\n"
+        )
+
+    monkeypatch.setattr(dragon.subprocess, "run", query)
+    if reported_index == 3:
+        assert dragon._mps_gpu_uuid(3) == expected
+    else:
+        with pytest.raises(RuntimeError, match="requested Dragon GPU"):
+            dragon._mps_gpu_uuid(3)
 
 
 def test_persistent_workers_use_bounded_descriptors_and_all_rounds(
