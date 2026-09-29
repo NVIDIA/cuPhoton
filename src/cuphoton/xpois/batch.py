@@ -17,7 +17,6 @@ from typing import Any
 
 import numpy as np
 import yaml
-from astropy.io import fits
 
 from cuphoton.core.bulk import WorkItem, validate_identifier
 
@@ -1021,6 +1020,8 @@ def _probe_array_shape(
             raise ValueError(f"{path} is not a 2D image")
         return (int(array.shape[0]), int(array.shape[1]))
 
+    from astropy.io import fits
+
     with fits.open(path, memmap=True, lazy_load_hdus=False) as hdul:
         candidates = [
             (index, shape)
@@ -1070,6 +1071,8 @@ def _probe_array_shape(
 
 
 def _fits_image_shape(hdu: Any) -> tuple[int, int] | None:
+    from astropy.io import fits
+
     if not isinstance(
         hdu,
         (fits.PrimaryHDU, fits.ImageHDU, fits.CompImageHDU),
