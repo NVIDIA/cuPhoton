@@ -8,17 +8,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from astropy.wcs import WCS
 
 from cuphoton.core.cli import ApplicationContext
-from cuphoton.core.fits_io import (
-    inspect_fits_image,
-    inspect_fits_images,
-    read_fits_images,
-)
+
+if TYPE_CHECKING:
+    from astropy.wcs import WCS
 
 FITS_SUFFIXES = {".fits", ".fit", ".fts"}
 MASK_EXTENSION_NAMES = {
@@ -222,6 +219,8 @@ def load_fit_positions(
 
 
 def _load_plane(path, hdu, *, reader, dtype, read_metadata):
+    from cuphoton.core.fits_io import read_fits_images
+
     result = read_fits_images(path, [hdu], reader=reader)
     if read_metadata is not None:
         read_metadata.append(result.metadata())
@@ -252,6 +251,10 @@ def load_image_with_wcs(
         )
     if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported image format: {resolved}")
+    from astropy.wcs import WCS
+
+    from cuphoton.core.fits_io import inspect_fits_image
+
     info = inspect_fits_image(resolved, hdu=hdu)
     array = _load_plane(
         resolved,
@@ -281,6 +284,8 @@ def load_variance_with_wcs(
         )
     if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported image format: {resolved}")
+    from cuphoton.core.fits_io import inspect_fits_images
+
     images = inspect_fits_images(resolved)
     named = [
         info
@@ -339,6 +344,8 @@ def load_mask_with_planes(
         )
     if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported mask format: {resolved}")
+    from cuphoton.core.fits_io import inspect_fits_image, inspect_fits_images
+
     if hdu is None:
         named = [
             info
