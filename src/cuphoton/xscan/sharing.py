@@ -94,7 +94,11 @@ class _FirstUseWorker:
             except BaseException:
                 self.barrier.abort()
                 raise
-            self.barrier.wait()
+            try:
+                self.barrier.wait()
+            except threading.BrokenBarrierError:
+                # Another thread's failure must not discard this result.
+                pass
             return result
         return self.worker.run_item(item, output_dir)
 
@@ -270,6 +274,12 @@ def _collect(
                     continue
             message = connection.recv()
             if message.get("phase") != phase:
+                if phase == "closed" and message.get("phase") in {
+                    "ready",
+                    "round",
+                }:
+                    # A failed collection can leave peer receipts queued.
+                    continue
                 raise RuntimeError(
                     f"worker {worker_id} sent an unexpected {phase} receipt"
                 )
@@ -565,30 +575,51 @@ def run_shared_pipeline(
             raise
     finally:
         close_started = time.perf_counter()
-        try:
-            for connection in parents:
+        for connection in children:
+            connection.close()
+        active_parents = parents[: len(owners)]
+        close_deadline = (
+            min(deadline, time.monotonic() + 2.0) if errors else deadline
+        )
+        for connection in active_parents:
+            try:
                 connection.send({"phase": "close"})
-            closed = _collect(
-                parents,
-                owners,
-                "closed",
-                min(deadline - time.monotonic(), 1.0)
-                if errors
-                else deadline - time.monotonic(),
-            )
-            errors.extend(
-                {"phase": "close", "worker_id": index, **receipt["error"]}
-                for index, receipt in enumerate(closed)
-                if receipt.get("error") is not None
-            )
-        except Exception as exc:
-            errors.append({"phase": "close", **error_payload(exc)})
+            except (BrokenPipeError, EOFError, OSError):
+                # A failed worker may already have sent its closed receipt.
+                pass
+        for index, (connection, owner) in enumerate(
+            zip(active_parents, owners, strict=True)
+        ):
+            try:
+                receipt = _collect(
+                    [connection],
+                    [owner],
+                    "closed",
+                    close_deadline - time.monotonic(),
+                )[0]
+                if receipt.get("error") is not None:
+                    errors.append(
+                        {
+                            "phase": "close",
+                            "worker_id": index,
+                            **receipt["error"],
+                        }
+                    )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "phase": "close",
+                        "worker_id": index,
+                        **error_payload(exc),
+                    }
+                )
         errors.extend(
             _stop_processes(
                 processes,
-                0.0
-                if errors
-                else max(0.0, min(deadline - time.monotonic(), 5.0)),
+                max(
+                    0.0,
+                    min(deadline - time.monotonic(), 2.0 if errors else 5.0),
+                ),
             )
         )
         for connection in (*parents, *children):

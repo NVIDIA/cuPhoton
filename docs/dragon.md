@@ -32,8 +32,9 @@ The shared executor accepts `--workers-per-gpu` to place several independent
 workers on each GPU; its default is one. `--max-workers` remains a total
 process cap. See [GPU sharing](components/xscan.md#share-a-gpu-between-image-pairs)
 for CLI and Python examples, local process/thread modes, and external MPS
-connection checks. This option applies to the shared component executor;
-the standalone XPOIS batch API retains its existing placement behavior.
+connection checks. These sharing and MPS options apply to `xfit fit-dipoles`,
+`xscan infer-real-bogus`, and `xscan run-pipeline` with `--executor dragon`.
+The standalone XPOIS batch API retains its existing placement behavior.
 
 ### Launch descriptors
 
