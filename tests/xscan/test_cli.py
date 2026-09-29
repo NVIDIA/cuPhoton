@@ -55,6 +55,35 @@ def _run_cli(argv: list[str]) -> int:
     return run_component("xscan", argv)
 
 
+@pytest.mark.parametrize(
+    "command,workflow",
+    [
+        ("data-build-autoscan-raw", "build_raw_autoscan_workflow"),
+        ("data-build-nodiff-raw", "build_raw_nodiff_workflow"),
+        ("data-build-lsstcomcam-smoke", "build_lsstcomcam_smoke_workflow"),
+    ],
+)
+@pytest.mark.parametrize("reader", [None, "auto", "astropy", "xdr"])
+def test_fits_builder_cli_reader_override(
+    monkeypatch, command, workflow, reader
+):
+    received = []
+
+    def build(**kwargs):
+        received.append(kwargs)
+        return SimpleNamespace(summary={})
+
+    monkeypatch.setattr(xscan_commands, workflow, build)
+    args = [command, "--manifest", "inputs.json", "--output-dir", "dataset"]
+    if reader is not None:
+        args.extend(["--fits-reader", reader])
+    assert _run_cli(args) == 0
+    assert received[0]["fits_reader"] == reader
+    received.clear()
+    assert _run_cli([*args, "--fits-reader", "gds"]) != 0
+    assert not received
+
+
 def test_default_output_root_uses_product_state_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

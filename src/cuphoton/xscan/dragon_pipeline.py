@@ -36,7 +36,11 @@ from .device_pipeline import (
     DevicePipelineConfig,
     DevicePipelineItem,
     DeviceWorkerContext,
+    FitsArrayDescriptor,
+    ImageArrayDescriptor,
     NpyArrayDescriptor,
+    _fits_input_groups,
+    _validate_fits_reads,
     decode_device_pipeline_evidence,
     run_device_pipeline_item,
 )
@@ -250,6 +254,7 @@ def _expected_input_h2d_bytes(item: DevicePipelineItem) -> int:
             else np.dtype(np.float64).itemsize
         )
         for name, descriptor in _item_descriptors(item)
+        if isinstance(descriptor, NpyArrayDescriptor)
     )
 
 
@@ -375,9 +380,13 @@ def _strict_device_pipeline_result_payload(
             raise ValueError("device pipeline prediction decision differs")
         predictions.append(prediction)
 
+    fits_groups = _fits_input_groups(item)
+    transfer_fields = _TRANSFER_FIELDS
+    if fits_groups:
+        transfer_fields |= {"fits_reads", "reader_internal_transfers"}
     transfers = _exact_mapping(
         values["transfers"],
-        expected=_TRANSFER_FIELDS,
+        expected=transfer_fields,
         field="device pipeline transfer receipt",
     )
     for name in (
@@ -401,6 +410,10 @@ def _strict_device_pipeline_result_payload(
         or transfers["device_stage_internal_transfers"] != "not-instrumented"
     ):
         raise ValueError("device pipeline transfer receipt differs")
+    if fits_groups:
+        if transfers["reader_internal_transfers"] != "not-instrumented":
+            raise ValueError("FITS reader transfer accounting differs")
+        _validate_fits_reads(item, transfers["fits_reads"])
 
     timings = _exact_mapping(
         values["timings"],
@@ -520,8 +533,8 @@ def _strict_device_pipeline_result_payload(
 
 def _item_descriptors(
     item: DevicePipelineItem,
-) -> tuple[tuple[str, NpyArrayDescriptor], ...]:
-    values: list[tuple[str, NpyArrayDescriptor]] = [
+) -> tuple[tuple[str, ImageArrayDescriptor], ...]:
+    values: list[tuple[str, ImageArrayDescriptor]] = [
         ("reference", item.reference),
         ("target", item.target),
     ]
@@ -584,6 +597,7 @@ def _preflight_items(
     work_items: list[WorkItem] = []
     identities: list[dict[str, Any]] = []
     for item in items:
+        _fits_input_groups(item)
         by_path: dict[str, dict[str, Any]] = {}
         for role, descriptor in _item_descriptors(item):
             path = Path(descriptor.path)
@@ -596,6 +610,48 @@ def _preflight_items(
             )
             descriptor_payload = descriptor.to_payload()
             existing = by_path.get(descriptor.path)
+            if isinstance(descriptor, FitsArrayDescriptor):
+                if validate_content:
+                    from cuphoton.core.fits_io import inspect_fits_image
+
+                    info = inspect_fits_image(path, descriptor.hdu)
+                    if (
+                        tuple(info.shape) != descriptor.shape
+                        or np.dtype(info.dtype).newbyteorder("=").str
+                        != descriptor.dtype
+                    ):
+                        raise ValueError("FITS HDU shape or dtype differs")
+                    if (
+                        descriptor.reader == "xdr"
+                        and info.xdr_unsupported_reason
+                    ):
+                        raise ValueError(info.xdr_unsupported_reason)
+                if existing is None:
+                    existing = {
+                        "format": "fits",
+                        "path": descriptor.path,
+                        "sha256": descriptor.sha256,
+                        "size_bytes": size_bytes,
+                        "images": [],
+                    }
+                    by_path[descriptor.path] = existing
+                elif existing.get("format") != "fits":
+                    raise ValueError("one input path has conflicting formats")
+                for image in existing["images"]:
+                    if image["hdu"] == descriptor.hdu:
+                        image["roles"].append(role)
+                        break
+                else:
+                    existing["images"].append(
+                        {
+                            "hdu": descriptor.hdu,
+                            "shape": list(descriptor.shape),
+                            "dtype": descriptor.dtype,
+                            "reader": descriptor.reader,
+                            "roles": [role],
+                        }
+                    )
+                continue
             if existing is None:
                 by_path[descriptor.path] = {
                     **descriptor_payload,
@@ -603,6 +659,8 @@ def _preflight_items(
                     "roles": [role],
                 }
             else:
+                if existing.get("format") == "fits":
+                    raise ValueError("one input path has conflicting formats")
                 observed_descriptor = {
                     name: existing[name]
                     for name in ("path", "sha256", "shape", "dtype")

@@ -28,7 +28,12 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
-def read_inputs(config_path: Path, items_path: Path) -> tuple[Any, list[Any]]:
+def read_inputs(
+    config_path: Path,
+    items_path: Path,
+    *,
+    fits_reader: str | None = None,
+) -> tuple[Any, list[Any]]:
     from cuphoton.xscan.device_pipeline import (
         DevicePipelineConfig,
         DevicePipelineItem,
@@ -38,7 +43,7 @@ def read_inputs(config_path: Path, items_path: Path) -> tuple[Any, list[Any]]:
         json.loads(config_path.read_text())
     )
     items = [
-        DevicePipelineItem.from_payload(value)
+        DevicePipelineItem.from_payload(value, fits_reader=fits_reader)
         for value in json.loads(items_path.read_text())
     ]
     if not items or len({item.item_id for item in items}) != len(items):
@@ -114,7 +119,11 @@ def pipeline_worker(args: SimpleNamespace) -> None:
         run_device_pipeline_item,
     )
 
-    config, items = read_inputs(args.config, args.items)
+    config, items = read_inputs(
+        args.config,
+        args.items,
+        fits_reader=getattr(args, "fits_reader", None),
+    )
     ordinal = int(config.device.split(":")[1])
     torch.set_num_threads(config.inference_policy["worker_cpu_threads"])
     torch.cuda.set_device(ordinal)
@@ -192,6 +201,7 @@ def pipeline_worker(args: SimpleNamespace) -> None:
 def measure_pipeline(args: SimpleNamespace) -> dict[str, Any]:
     output = args.output / "pipeline"
     output.mkdir()
+    reader = getattr(args, "fits_reader", None)
     elapsed = run_child(
         [
             *CLI,
@@ -207,6 +217,7 @@ def measure_pipeline(args: SimpleNamespace) -> dict[str, Any]:
             str(args.warmup),
             "--repeat",
             str(args.repeat),
+            *(["--fits-reader", reader] if reader is not None else []),
         ],
         output / "process.log",
         timeout=args.timeout,
@@ -219,6 +230,7 @@ def measure_pipeline(args: SimpleNamespace) -> dict[str, Any]:
 def measure_stages(args: SimpleNamespace) -> dict[str, Any]:
     output = args.output / "staged"
     output.mkdir()
+    reader = getattr(args, "fits_reader", None)
     rounds = []
     for index in range(args.warmup + args.repeat):
         root = output / f"round-{index:03d}"
@@ -245,6 +257,11 @@ def measure_stages(args: SimpleNamespace) -> dict[str, Any]:
                         str(args.items),
                         "--output",
                         str(root),
+                        *(
+                            ["--fits-reader", reader]
+                            if reader is not None
+                            else []
+                        ),
                     ],
                     root / f"{stage}.log",
                     timeout=args.timeout,
@@ -300,7 +317,11 @@ def audit(args: SimpleNamespace) -> dict[str, Any]:
 
     from .stages import load_science_arrays
 
-    config, items = read_inputs(args.config, args.items)
+    config, items = read_inputs(
+        args.config,
+        args.items,
+        fits_reader=getattr(args, "fits_reader", None),
+    )
     checks = []
     for index in range(args.warmup + args.repeat):
         root = args.output / "staged" / f"round-{index:03d}"
@@ -449,7 +470,11 @@ def run_benchmark(args: SimpleNamespace) -> None:
         else:
             from .stages import run_stage
 
-            config, items = read_inputs(args.config, args.items)
+            config, items = read_inputs(
+                args.config,
+                args.items,
+                fits_reader=getattr(args, "fits_reader", None),
+            )
             run_stage(args.stage, config, items, args.output)
         return
     args.output.mkdir(parents=True, exist_ok=False)
@@ -467,7 +492,11 @@ def run_benchmark(args: SimpleNamespace) -> None:
                 device=args.device,
             )
         args.config, args.items = args.config.resolve(), args.items.resolve()
-        config, items = read_inputs(args.config, args.items)
+        config, items = read_inputs(
+            args.config,
+            args.items,
+            fits_reader=getattr(args, "fits_reader", None),
+        )
         report: dict[str, Any] = {
             "schema": "cuphoton.pipeline-stage-benchmark/v1",
             "provenance": provenance(),

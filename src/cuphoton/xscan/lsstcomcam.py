@@ -18,6 +18,8 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.core.fits_io import read_fits_images, validate_fits_reader
+
 from .butler import (
     _is_missing,
     _jsonable,
@@ -392,8 +394,15 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     payload = load_manifest(manifest_path)
+    fits_reader = validate_fits_reader(
+        payload.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
+    fits_reads: list[dict[str, Any]] = []
     registry_path = _registry_path_from_manifest(payload)
     sample_count = int(payload.get("sample_count", payload.get("limit", 8)))
     if sample_count <= 0:
@@ -531,6 +540,8 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
             Path(str(visit_row["path"])),
             hdu=image_hdu,
             stamp_size=stamp_size,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
             center_x=sample.center_x,
             center_y=sample.center_y,
         )
@@ -538,6 +549,8 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
             Path(str(difference_row["path"])),
             hdu=difference_hdu,
             stamp_size=stamp_size,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
             center_x=search_stamp.center_x,
             center_y=search_stamp.center_y,
         )
@@ -631,6 +644,8 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
     summary = {
         "dataset_dir": str(output_dir),
         "dataset_kind": LSSTCOMCAM_SMOKE_DATASET_KIND,
+        "fits_reader": fits_reader,
+        "fits_reads": fits_reads,
         "manifest_path": str(manifest_path.expanduser().resolve()),
         "registry_path": str(selection.registry_path),
         "registry_filters": selection.filters,
@@ -1609,6 +1624,8 @@ def read_fits_stamp(
     stamp_size: int,
     center_x: int | None = None,
     center_y: int | None = None,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> FitsStamp:
     """Read a small centered FITS stamp without materializing full images."""
     try:
@@ -1634,11 +1651,16 @@ def read_fits_stamp(
                 f"stamp centered at x={center_x}, y={center_y} with "
                 f"size={stamp_size} does not fit inside {path}"
             )
-        section = getattr(image_hdu, "section", None)
-        if section is not None:
-            data = section[y0:y1, x0:x1]
-        else:
-            data = image_hdu.data[y0:y1, x0:x1]
+        used_hdu = hdul.index_of(image_hdu)
+        result = read_fits_images(
+            path,
+            [used_hdu],
+            reader=fits_reader,
+            section=(slice(y0, y1), slice(x0, x1)),
+        )
+        if read_metadata is not None:
+            read_metadata.append(result.metadata())
+        data = result.arrays[0]
         return FitsStamp(
             data=np.asarray(data, dtype=np.float32),
             center_x=center_x,

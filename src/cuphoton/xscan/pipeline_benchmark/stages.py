@@ -261,6 +261,21 @@ def _run_item(
             sync,
         )
 
+        input_owners: list[Any] = []
+        fits_inputs, fits_reads = _measure(
+            timings,
+            "fits_read_seconds",
+            lambda: pipeline._read_fits_device_inputs(
+                item,
+                cp=cp,
+                stream=cp.cuda.get_current_stream(),
+                owners=input_owners,
+            ),
+            sync,
+        )
+        timings["read_seconds"] += timings.pop("fits_read_seconds")
+        device.update(fits_inputs)
+
         def compute() -> tuple[dict[str, Any], dict[str, Any]]:
             result = solve_constant_kernel_device(
                 device["reference"],
@@ -297,6 +312,7 @@ def _run_item(
             }
             arrays.update(stamps=stamps, difference=difference)
             return arrays, {
+                "fits_reads": list(fits_reads),
                 "xpois_chi2": float(result.chi2),
                 "xpois_dof": result.dof,
                 "xpois_fit_pixel_count": result.fit_pixel_count,

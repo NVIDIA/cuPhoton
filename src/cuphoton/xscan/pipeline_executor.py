@@ -41,8 +41,15 @@ def _unique_mapping(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def load_pipeline_manifest(
     path: Path,
+    *,
+    fits_reader: str | None = None,
 ) -> tuple[DevicePipelineConfig, tuple[DevicePipelineItem, ...]]:
-    """Read config/items and resolve paths beside the manifest."""
+    """Read config/items and resolve NPY or FITS paths beside the manifest.
+
+    FITS descriptors retain explicit HDUs and reader policies unless an
+    override is supplied. This function
+    parses compact metadata only; device reads occur after worker placement.
+    """
 
     path = path.expanduser().resolve()
     payload = json_mapping(
@@ -86,7 +93,9 @@ def load_pipeline_manifest(
                 if "path" in descriptor:
                     descriptor["path"] = resolve(descriptor["path"])
                 item[role] = descriptor
-        items.append(DevicePipelineItem.from_payload(item))
+        items.append(
+            DevicePipelineItem.from_payload(item, fits_reader=fits_reader)
+        )
     return config, tuple(items)
 
 
@@ -199,6 +208,7 @@ def run_pipeline_manifest(
     manifest_path: Path,
     output_root: Path,
     run_id: str | None = None,
+    fits_reader: str | None = None,
     **options: Any,
 ) -> ExecutionResult | None:
     """Run an XPOIS/xFit/XScan manifest through the selected executor."""
@@ -206,7 +216,9 @@ def run_pipeline_manifest(
     from cuphoton.core.executors import run_workload
 
     def prepare(rank: int):
-        config, items = load_pipeline_manifest(manifest_path)
+        config, items = load_pipeline_manifest(
+            manifest_path, fits_reader=fits_reader
+        )
         return prepare_pipeline_workload(items, config, rank=rank)
 
     return run_workload(

@@ -32,6 +32,7 @@ def test_benchmark_defaults_and_path_conversion(monkeypatch):
         "output": Path("~/bench").expanduser(),
         "config": None,
         "items": None,
+        "fits_reader": None,
         "images": 4,
         "image_size": 256,
         "candidates": 9,
@@ -82,6 +83,8 @@ def test_benchmark_child_options(monkeypatch):
                 "2",
                 "--repeat",
                 "4",
+                "--fits-reader",
+                "astropy",
             ],
         )
         == 0
@@ -90,6 +93,7 @@ def test_benchmark_child_options(monkeypatch):
     assert args.output == Path("result")
     assert args.config == Path("~/config.json").expanduser()
     assert args.items == Path("~/items.json").expanduser()
+    assert args.fits_reader == "astropy"
     assert (args.stage, args.order, args.timeout) == (
         "xfit",
         "staged-first",
