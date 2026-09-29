@@ -651,6 +651,7 @@ class DeviceXFitPipelineConfig:
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
     backend: Literal["cupy", "native"] = "cupy"
+    fusion: bool = False
 
     def __post_init__(self) -> None:
         if self.model != "gaussian":
@@ -661,6 +662,12 @@ class DeviceXFitPipelineConfig:
             raise ValueError("xfit backend must be 'cupy' or 'native'")
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
+        if not isinstance(self.fusion, bool):
+            raise TypeError("xfit fusion must be boolean")
+        if self.fusion and self.backend != "cupy":
+            raise ValueError("xfit fusion requires backend='cupy'")
+        if self.fusion and self.use_finite_difference:
+            raise ValueError("xfit fusion requires analytic derivatives")
         if self.backend == "native" and self.use_finite_difference:
             raise ValueError(
                 "native xfit does not support finite differences"
@@ -715,6 +722,8 @@ class DeviceXFitPipelineConfig:
         payload = asdict(self)
         if self.backend == "cupy":
             del payload["backend"]
+        if not self.fusion:
+            del payload["fusion"]
         return payload
 
     def execution_payload(self) -> dict[str, Any]:
@@ -723,6 +732,8 @@ class DeviceXFitPipelineConfig:
         payload: dict[str, Any] = {}
         if self.backend != "cupy":
             payload["backend"] = self.backend
+        if self.fusion:
+            payload["fusion"] = True
         return payload
 
     def solver_payload(self) -> dict[str, Any]:
@@ -732,6 +743,7 @@ class DeviceXFitPipelineConfig:
         del payload["model"]
         del payload["mode"]
         payload.pop("backend", None)
+        payload.pop("fusion", None)
         return payload
 
     @classmethod
@@ -742,6 +754,7 @@ class DeviceXFitPipelineConfig:
 
         values = json_mapping(payload, field="device pipeline xfit config")
         values.setdefault("backend", "cupy")
+        values.setdefault("fusion", False)
         expected = frozenset(value.name for value in fields(cls))
         values = _require_exact_fields(
             values,
