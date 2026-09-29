@@ -21,11 +21,9 @@ from .kernels import (
     byteswap_inplace,
     dequantize_int_to_float,
     scatter_tiles_2d,
-    unshuffle_gzip2_tiles,
 )
 from .nvcomp_batch import (
     _native_device_empty,
-    _native_device_empty_uint8,
     gpu_gzip_decompress_batch,
 )
 
@@ -168,8 +166,8 @@ def _validate_comp_geometry(
 class GpuCompImageReader:
     """Read a GZIP_1 (M3) / GZIP_2 (M4) CompImageHDU into a cupy.ndarray.
 
-    Pipeline: GDS heap read -> nvCOMP batched DEFLATE -> device-side byteswap
-    -> (GZIP_2 unshuffle, M4) -> scatter into output image.
+    Pipeline: GDS heap read -> nvCOMP batched DEFLATE -> fused device-side
+    unshuffle, byteswap and scatter into the output image.
     """
 
     SUPPORTED_GZIP = frozenset({"GZIP_1", "GZIP_2"})
@@ -483,31 +481,7 @@ class GpuCompImageReader:
             if keepalive is not None:
                 keepalive.extend([d_tile_offsets, d_tile_byte_lengths])
 
-            # 1. GZIP_2: byte-plane unshuffle per tile.
-            if plan["compression_type"] == "GZIP_2" and plan["itemsize"] > 1:
-                d_inter = (
-                    _native_device_empty_uint8(d_pixels.nbytes).reshape(
-                        d_pixels.shape
-                    )
-                    if use_native_pool
-                    else cp.empty_like(d_pixels)
-                )
-                if keepalive is not None:
-                    keepalive.append(d_inter)
-                unshuffle_gzip2_tiles(
-                    d_pixels,
-                    d_inter,
-                    d_tile_offsets,
-                    d_tile_byte_lengths,
-                    plan["itemsize"],
-                )
-                d_pixels = d_inter
-
-            # 2. Byteswap (FITS on-disk is big-endian, host is little-endian).
-            if plan["itemsize"] > 1:
-                byteswap_inplace(d_pixels, plan["itemsize"])
-
-            # 3. Scatter tiles into int/float output.
+            # Restore pixel order and native byte order while scattering.
             d_origins_r = cp.asarray(plan["origins_r"])
             d_origins_c = cp.asarray(plan["origins_c"])
             d_heights = cp.asarray(plan["heights"])
@@ -531,6 +505,7 @@ class GpuCompImageReader:
                 d_pixels,
                 d_scatter_target,
                 d_tile_offsets,
+                d_tile_byte_lengths,
                 d_origins_r,
                 d_origins_c,
                 d_heights,
@@ -539,9 +514,10 @@ class GpuCompImageReader:
                 d_src_off_c,
                 d_tile_full_w,
                 scatter_itemsize,
+                shuffled=plan["compression_type"] == "GZIP_2",
             )
 
-            # 4. Dequantize int -> float when ZSCALE/ZZERO are present.
+            # Dequantize int -> float when ZSCALE/ZZERO are present.
             if plan["quantized"]:
                 d_sel_zscale = cp.asarray(plan["sel_zscale"])
                 d_sel_zzero = cp.asarray(plan["sel_zzero"])
