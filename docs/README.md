@@ -43,6 +43,8 @@ its migration requirements.
 ## Adapting and validating
 
 - [Architecture](architecture.md): package boundaries and execution model.
+- [Distributed execution](distributed-execution.md): prepare a pipeline
+  manifest and launch MPI or Dragon workers using Slurm or SSH host files.
 - [Dragon transport and coordination](dragon.md): execution models,
   consumer-local queues, transport selection, and timing boundaries.
 - [Pipeline stage benchmark](components/pipeline-stage-benchmark.md): compare

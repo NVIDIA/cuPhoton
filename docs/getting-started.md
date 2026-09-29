@@ -113,7 +113,7 @@ mpi4py; shared component MPI executors require it.
 DragonHPC 0.14.2 provides Linux x86-64 and ARM64 wheels for Python 3.12 and
 3.13, but no Python 3.14 wheel. Installing `[dragon]` on Python 3.14 fails
 instead of silently omitting Dragon. Use the installed `dragon` launcher and
-the [distributed launch examples](components/xpois.md#launch-with-dragon).
+the [distributed launch guide](distributed-execution.md).
 Both executors need the same environment on every participating node.
 
 The `cutile` extra installs cuda-tile 1.6 or newer and CuPy on Python
