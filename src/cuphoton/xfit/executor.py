@@ -25,7 +25,12 @@ from cuphoton.core.bulk import (
     read_json_mapping,
 )
 
-from .api import DipoleFitResult, _floating_dtype, fit_dipoles
+from .api import (
+    DipoleFitResult,
+    _floating_dtype,
+    _validate_fusion,
+    fit_dipoles,
+)
 from .io import (
     XFitDataset,
     _broadcast_image_auxiliary,
@@ -61,6 +66,7 @@ _DEFAULTS = {
     "g_tol": None,
     "max_evaluations": None,
     "use_finite_difference": False,
+    "fusion": False,
     "fits_reader": "auto",
 }
 
@@ -275,6 +281,7 @@ class XFitWorker:
             mode=self.settings["mode"],
             backend=self.settings["backend"],
             config=self.config,
+            fusion=self.settings["fusion"],
         )
         solve_seconds = time.perf_counter() - solve_start
         _check_input_stat(self.options)
@@ -437,6 +444,7 @@ def _effective_config(
         "model": settings["model"],
         "mode": settings["mode"],
         "backend": settings["backend"],
+        "fusion": settings["fusion"],
         **(
             {"fits_reader": settings["fits_reader"]}
             if dataset.input_sources
@@ -607,6 +615,14 @@ def prepare_xfit_workload(
 
     settings = {**_DEFAULTS, **fit_options}
     backend = settings["backend"]
+    _validate_fusion(
+        settings["fusion"],
+        backend=backend,
+        model=settings["model"],
+        config=LMConfig(
+            use_finite_difference=settings["use_finite_difference"]
+        ),
+    )
     if backend not in {"cupy", "cutile"}:
         raise ValueError("distributed xFit requires backend cupy or cutile")
     if backend == "cutile" and settings["model"] == "stamp":

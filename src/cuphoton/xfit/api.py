@@ -603,6 +603,27 @@ def _validate_cupy_stamp_model_dtype(
         )
 
 
+def _validate_fusion(
+    fusion: bool,
+    *,
+    backend: BackendRequest,
+    model: ModelName | GaussianDipoleModel | StampDipoleModel,
+    config: LMConfig | None,
+) -> None:
+    if not isinstance(fusion, bool):
+        raise TypeError("fusion must be boolean")
+    if not fusion:
+        return
+    if backend != "cupy":
+        raise ValueError("fusion requires backend='cupy'")
+    if isinstance(model, StampDipoleModel) or (
+        isinstance(model, str) and model != "gaussian"
+    ):
+        raise ValueError("fusion supports only the Gaussian model")
+    if config is not None and config.use_finite_difference:
+        raise ValueError("fusion does not support finite-difference fitting")
+
+
 def _fit_dipoles_backend(
     images: ArrayLike,
     *,
@@ -613,6 +634,7 @@ def _fit_dipoles_backend(
     mode: FitMode = "difference",
     resolved: Backend,
     config: LMConfig | None = None,
+    fusion: bool = False,
 ) -> _BackendDipoleFitResult:
     """Fit dipoles while retaining all result arrays in ``resolved``."""
 
@@ -789,8 +811,23 @@ def _fit_dipoles_backend(
                 mode=mode,
             )
 
+    if fusion:
+        from ._cupy_fused import GaussianFusedProblem
+
+        fused = GaussianFusedProblem(
+            ap,
+            images_array,
+            weights,
+            image_shape=(height, width),
+            mode=mode,
+        )
+        residual_function = fused.residual
+        normal_equations = fused.normal_equations
+    else:
+        residual_function = residual
+
     problem = BatchedLeastSquaresProblem(
-        residual,
+        residual_function,
         jacobian_function,
         normal_equations=normal_equations,
     )
@@ -987,6 +1024,7 @@ def fit_dipoles(
     mode: FitMode = "difference",
     backend: BackendRequest = "auto",
     config: LMConfig | None = None,
+    fusion: bool = False,
 ) -> DipoleFitResult:
     """Fit batched Gaussian or sampled-stamp dipoles.
 
@@ -1008,8 +1046,12 @@ def fit_dipoles(
     treats all three planes as independent; when difference equals positive
     minus negative, the reported degrees of freedom and uncertainties are not
     statistically calibrated for that dependence.
+
+    ``fusion=True`` selects fused Gaussian residual and normal-equation
+    kernels with ``backend="cupy"``. It requires analytic derivatives.
     """
 
+    _validate_fusion(fusion, backend=backend, model=model, config=config)
     if backend == "cutile" and isinstance(model, StampDipoleModel):
         # Report the model restriction before the finite-difference one:
         # sampled-stamp fits always difference the residual.
@@ -1034,6 +1076,7 @@ def fit_dipoles(
         mode=mode,
         resolved=resolved,
         config=config,
+        fusion=fusion,
     )
     return _materialize_dipole_fit_result(backend_result)
 
@@ -1047,6 +1090,7 @@ def fit_dipoles_device(
     variance: ArrayLike | None = None,
     mode: FitMode = "difference",
     config: LMConfig | None = None,
+    fusion: bool = False,
 ) -> DeviceDipoleFitResult:
     """Fit dipoles while keeping every result array on the active GPU.
 
@@ -1054,6 +1098,8 @@ def fit_dipoles_device(
     selector. NumPy inputs are copied to the active device. Existing CuPy
     inputs must already reside on that device and are checked before any input
     conversion. Input arrays are borrowed and are not mutated.
+    ``fusion=True`` selects fused Gaussian residual and normal-equation
+    kernels; sampled stamps and finite differences require ``fusion=False``.
 
     The solver may copy per-fit status, evaluation counts and boolean
     diagnostic masks to the host for control flow. Parameters, residuals,
@@ -1067,6 +1113,7 @@ def fit_dipoles_device(
     from another stream. Retain the result until its consumers have finished.
     """
 
+    _validate_fusion(fusion, backend="cupy", model=model, config=config)
     cp = _load_cupy()
     active_device_id = _active_cupy_device_id(cp)
     for name, value in (
@@ -1097,6 +1144,7 @@ def fit_dipoles_device(
         mode=mode,
         resolved=resolve_backend("cupy"),
         config=config,
+        fusion=fusion,
     )
     return DeviceDipoleFitResult(
         parameters=result.parameters,

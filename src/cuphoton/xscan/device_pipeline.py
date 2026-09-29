@@ -619,6 +619,7 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
+    fusion: bool = False
 
     def __post_init__(self) -> None:
         if self.model != "gaussian":
@@ -670,11 +671,18 @@ class DeviceXFitPipelineConfig:
             )
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
+        if not isinstance(self.fusion, bool):
+            raise TypeError("xfit fusion must be boolean")
+        if self.fusion and self.use_finite_difference:
+            raise ValueError("xfit fusion requires analytic derivatives")
 
     def to_payload(self) -> dict[str, Any]:
         """Return JSON-compatible LM settings."""
 
-        return asdict(self)
+        payload = asdict(self)
+        if not self.fusion:
+            del payload["fusion"]
+        return payload
 
     def solver_payload(self) -> dict[str, Any]:
         """Return only fields accepted by :class:`LMConfig`."""
@@ -682,6 +690,7 @@ class DeviceXFitPipelineConfig:
         payload = self.to_payload()
         del payload["model"]
         del payload["mode"]
+        payload.pop("fusion", None)
         return payload
 
     @classmethod
@@ -692,7 +701,7 @@ class DeviceXFitPipelineConfig:
 
         expected = frozenset(value.name for value in fields(cls))
         values = _require_exact_fields(
-            payload,
+            {"fusion": False, **payload},
             expected=expected,
             field_name="device pipeline xfit config",
         )
@@ -3261,6 +3270,7 @@ def run_device_pipeline_item(
                         model=context.config.xfit.model,
                         mode=context.config.xfit.mode,
                         config=context.solver_config,
+                        fusion=context.config.xfit.fusion,
                     ),
                 )
                 features = _timed(
