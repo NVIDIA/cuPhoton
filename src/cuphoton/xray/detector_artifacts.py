@@ -26,6 +26,17 @@ from .detector_mask import (
     excluded_row_mask,
     format_y_ranges,
 )
+from .detector_storage import (
+    ARTIFACT_LAYOUTS,
+    SPECTRAL_ARRAYS,
+    SPECTRAL_LAYOUT_FILE,
+    TileRowArray,
+    create_detector_spectra,
+    detector_array_exists,
+    load_detector_array,
+    read_spectral_layout,
+    spectral_path,
+)
 from .hdf5 import probe_hdf5_file
 from .linear_prediction import (
     _linear_prediction_p1_impl,
@@ -304,6 +315,7 @@ def build_detector_artifacts_cupy(
     max_tiles: int | None = None,
     normalization_cache: Path | str | None = None,
     fit_diagnostics: FitDiagnosticsLevel = "none",
+    artifact_layout: str = "dense",
     shard_index: int | None = None,
     shard_count: int | None = None,
     global_roi_lower: tuple[int, int] | None = None,
@@ -315,7 +327,8 @@ def build_detector_artifacts_cupy(
     ``freq_all.npy``, ``amp_all.npy``, ``fft_all.npy``, ``fft_freq_all.npy``,
     and ``amp_all_sum_filtered.npy``. Each fitted detector row is broadcast
     across the x-columns of its tile, preserving the current vertical-strip
-    science path.
+    science path. Set ``artifact_layout="tile-rows"`` to store each row
+    spectrum once per tile; use ``load_detector_array`` for pixel slices.
 
     Set ``batch_rows=False`` to force the serial row loop for A/B checks
     and diagnostics. The default batches eligible rows and retains the
@@ -323,6 +336,8 @@ def build_detector_artifacts_cupy(
     and distinguished by its configuration and resume identities.
     """
 
+    if artifact_layout not in ARTIFACT_LAYOUTS:
+        raise ValueError("artifact_layout must be dense or tile-rows")
     _require_positive("tile width", tile_shape[0])
     _require_positive("tile height", tile_shape[1])
     _require_nonnegative("drop_leading", drop_leading)
@@ -546,13 +561,13 @@ def build_detector_artifacts_cupy(
             )
             output = Path(staging_dir.name)
             shape = (roi_height, roi_width, padded_length)
-            freq_all = _open_output_array(output / "freq_all.npy", shape)
-            amp_all = _open_output_array(output / "amp_all.npy", shape)
-            fft_all = _open_output_array(output / "fft_all.npy", shape)
-            fft_freq_all = _open_output_array(
-                output / "fft_freq_all.npy",
-                shape,
-            )
+            x_edges = None
+            if artifact_layout == "tile-rows":
+                x_edges = np.append(
+                    np.arange(0, roi_width, tile_shape[0]), roi_width
+                )
+            spectra = create_detector_spectra(output, shape, x_edges=x_edges)
+            freq_all, amp_all, fft_all, fft_freq_all = spectra.values()
             fit_status = _open_output_array(
                 output / FIT_STATUS_FILE,
                 (roi_height, roi_width),
@@ -745,7 +760,14 @@ def build_detector_artifacts_cupy(
                         fft_all,
                         fft_freq_all,
                         output_y=output_y,
-                        output_x=output_x,
+                        output_x=(
+                            slice(
+                                (x0 - roi_x) // tile_shape[0],
+                                (x0 - roi_x) // tile_shape[0] + 1,
+                            )
+                            if artifact_layout == "tile-rows"
+                            else output_x
+                        ),
                         row=row,
                     )
                     fit_status[output_y, output_x] = FIT_STATUS_OK
@@ -790,7 +812,7 @@ def build_detector_artifacts_cupy(
 
             amp_sum = _write_amp_sum_filtered(
                 output / "amp_all_sum_filtered.npy",
-                amp_all,
+                load_detector_array(output / "amp_all.npy"),
                 amp_threshold=amp_threshold,
             )
             amp_sum.flush()
@@ -868,6 +890,15 @@ def build_detector_artifacts_cupy(
             "failed": FIT_STATUS_FAILED,
         },
     }
+    if artifact_layout != "dense":
+        manifest["artifact_layout"] = artifact_layout
+        manifest["spectral_layout"] = SPECTRAL_LAYOUT_FILE
+        manifest["arrays"] = [
+            spectral_path(Path(f"{name}.npy"), artifact_layout).name
+            if name in SPECTRAL_ARRAYS
+            else f"{name}.npy"
+            for name in DETECTOR_ARRAYS
+        ] + [FIT_STATUS_FILE]
     if fit_method == "iterative":
         assert iterative_options is not None
         manifest["fit_method"] = fit_method
@@ -1195,14 +1226,15 @@ def merge_detector_artifact_shards(
         dir=target_output.parent,
     )
     output = Path(staging_dir.name)
+    x_edges = None
+    if first.get("artifact_layout", "dense") == "tile-rows":
+        boundaries = [0]
+        for shard in shards:
+            _shape, edges = read_spectral_layout(shard["path"])
+            boundaries.extend((edges[1:] + boundaries[-1]).tolist())
+        x_edges = np.asarray(boundaries, dtype=np.int64)
     arrays = {
-        "freq_all": _open_output_array(output / "freq_all.npy", shape),
-        "amp_all": _open_output_array(output / "amp_all.npy", shape),
-        "fft_all": _open_output_array(output / "fft_all.npy", shape),
-        "fft_freq_all": _open_output_array(
-            output / "fft_freq_all.npy",
-            shape,
-        ),
+        **create_detector_spectra(output, shape, x_edges=x_edges),
         "amp_all_sum_filtered": _open_output_array(
             output / "amp_all_sum_filtered.npy",
             (global_height, global_width),
@@ -1216,6 +1248,7 @@ def merge_detector_artifact_shards(
     _zero_output_arrays(*arrays.values())
 
     origin_x, _origin_y = global_roi_lower
+    spectral_offset = 0
     for shard in shards:
         manifest = shard["manifest"]
         shard_path = shard["path"]
@@ -1223,11 +1256,18 @@ def merge_detector_artifact_shards(
         shard_width = int(manifest["roi_dim"][0])
         output_x = slice(shard_x - origin_x, shard_x - origin_x + shard_width)
         for name in ("freq_all", "amp_all", "fft_all", "fft_freq_all"):
-            source = np.load(shard_path / f"{name}.npy", mmap_mode="r")
+            source = load_detector_array(shard_path / f"{name}.npy")
+            spectral_x = output_x
+            if isinstance(source, TileRowArray):
+                source = source.values
+                spectral_x = slice(
+                    spectral_offset, spectral_offset + source.shape[1]
+                )
             target = arrays[name]
             for start in range(0, global_height, chunk_rows):
                 stop = min(global_height, start + chunk_rows)
-                target[start:stop, output_x, :] = source[start:stop, :, :]
+                target[start:stop, spectral_x, :] = source[start:stop, :, :]
+        spectral_offset += source.shape[1]
         source_2d = np.load(
             shard_path / "amp_all_sum_filtered.npy",
             mmap_mode="r",
@@ -1336,6 +1376,14 @@ def merge_detector_artifact_shards(
             "shard_count": int(len(shards)),
         }
     )
+    if x_edges is not None:
+        manifest["spectral_layout"] = SPECTRAL_LAYOUT_FILE
+        manifest["arrays"] = [
+            spectral_path(Path(f"{name}.npy"), "tile-rows").name
+            if name in SPECTRAL_ARRAYS
+            else f"{name}.npy"
+            for name in DETECTOR_ARRAYS
+        ] + [FIT_STATUS_FILE]
     if fit_diagnostics_metadata is not None:
         manifest["fit_diagnostics"] = fit_diagnostics_metadata
     manifest["resume_identity"] = detector_artifact_resume_identity(manifest)
@@ -1456,15 +1504,17 @@ def compare_detector_artifacts(
     for name in DETECTOR_ARRAYS:
         left_path = reference / f"{name}.npy"
         right_path = candidate / f"{name}.npy"
-        if not left_path.exists() or not right_path.exists():
+        if not detector_array_exists(left_path) or not detector_array_exists(
+            right_path
+        ):
             array_stats[name] = {
                 "present": False,
-                "reference_exists": left_path.exists(),
-                "candidate_exists": right_path.exists(),
+                "reference_exists": detector_array_exists(left_path),
+                "candidate_exists": detector_array_exists(right_path),
             }
             continue
-        left = np.load(left_path, mmap_mode="r")
-        right = np.load(right_path, mmap_mode="r")
+        left = load_detector_array(left_path)
+        right = load_detector_array(right_path)
         array_stats[name] = _compare_arrays(
             left,
             right,
@@ -2710,14 +2760,18 @@ def _compare_filtered_modes(
         "candidate_amp": candidate / "amp_all.npy",
         "candidate_freq": candidate / "freq_all.npy",
     }
-    missing = [name for name, path in paths.items() if not path.exists()]
+    missing = [
+        name
+        for name, path in paths.items()
+        if not detector_array_exists(path)
+    ]
     if missing:
         return {"present": False, "missing": missing}
 
-    ref_amp = np.load(paths["reference_amp"], mmap_mode="r")
-    ref_freq = np.load(paths["reference_freq"], mmap_mode="r")
-    cand_amp = np.load(paths["candidate_amp"], mmap_mode="r")
-    cand_freq = np.load(paths["candidate_freq"], mmap_mode="r")
+    ref_amp = load_detector_array(paths["reference_amp"])
+    ref_freq = load_detector_array(paths["reference_freq"])
+    cand_amp = load_detector_array(paths["candidate_amp"])
+    cand_freq = load_detector_array(paths["candidate_freq"])
     crop = _reference_crop(
         tuple(ref_amp.shape),
         tuple(cand_amp.shape),
@@ -3195,11 +3249,14 @@ def _validate_artifact_files(
     output_shape = tuple(int(value) for value in manifest["output_shape"])
     roi_dim = tuple(int(value) for value in manifest["roi_dim"])
     expected_2d = (roi_dim[1], roi_dim[0])
-    for name in ("freq_all", "amp_all", "fft_all", "fft_freq_all"):
+    layout = manifest.get("artifact_layout", "dense")
+    if layout not in ARTIFACT_LAYOUTS:
+        raise ValueError("unsupported detector artifact layout")
+    for name in SPECTRAL_ARRAYS:
         array_path = path / f"{name}.npy"
-        if not array_path.exists():
+        if not spectral_path(array_path, layout).exists():
             raise ValueError(f"missing shard array: {array_path}")
-        if tuple(np.load(array_path, mmap_mode="r").shape) != output_shape:
+        if tuple(load_detector_array(array_path).shape) != output_shape:
             raise ValueError(f"shard array shape mismatch: {array_path}")
     for name in ("amp_all_sum_filtered.npy", FIT_STATUS_FILE):
         array_path = path / name
@@ -3457,6 +3514,8 @@ def _detector_artifact_stable_manifest_keys(
         "max_tiles",
     )
     payload = {key: manifest.get(key) for key in keys}
+    if manifest.get("artifact_layout", "dense") != "dense":
+        payload["artifact_layout"] = manifest["artifact_layout"]
     # Omitted or enabled batching retains the pre-opt-out identity.
     if not manifest.get("batch_rows", True):
         payload["batch_rows"] = False
@@ -3555,6 +3614,8 @@ def detector_artifact_resume_identity(manifest: dict[str, Any]) -> str:
         "shard",
     )
     payload = {key: manifest.get(key) for key in keys}
+    if manifest.get("artifact_layout", "dense") != "dense":
+        payload["artifact_layout"] = manifest["artifact_layout"]
     # Omitted or enabled batching retains the pre-opt-out identity.
     if not manifest.get("batch_rows", True):
         payload["batch_rows"] = False
@@ -3618,6 +3679,11 @@ def _file_content_hash(path: Path, *, size: int) -> tuple[str, str]:
 def _clear_detector_artifact_outputs(output: Path) -> None:
     for name in DETECTOR_ARRAYS:
         (output / f"{name}.npy").unlink(missing_ok=True)
+    for name in SPECTRAL_ARRAYS:
+        spectral_path(output / f"{name}.npy", "tile-rows").unlink(
+            missing_ok=True
+        )
+    (output / SPECTRAL_LAYOUT_FILE).unlink(missing_ok=True)
     (output / FIT_STATUS_FILE).unlink(missing_ok=True)
     (output / FIT_DIAGNOSTICS_FILE).unlink(missing_ok=True)
     (output / "manifest.json").unlink(missing_ok=True)
@@ -3641,10 +3707,13 @@ def _publish_detector_artifact_outputs(source: Path, target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     _clear_detector_artifact_outputs(target)
     for name in DETECTOR_ARRAYS:
-        shutil.move(
-            str(source / f"{name}.npy"),
-            str(target / f"{name}.npy"),
-        )
+        source_path = source / f"{name}.npy"
+        if not source_path.exists():
+            source_path = spectral_path(source_path, "tile-rows")
+        shutil.move(str(source_path), str(target / source_path.name))
+    layout_path = source / SPECTRAL_LAYOUT_FILE
+    if layout_path.exists():
+        shutil.move(str(layout_path), str(target / SPECTRAL_LAYOUT_FILE))
     shutil.move(str(source / FIT_STATUS_FILE), str(target / FIT_STATUS_FILE))
     diagnostics_path = source / FIT_DIAGNOSTICS_FILE
     if diagnostics_path.exists():

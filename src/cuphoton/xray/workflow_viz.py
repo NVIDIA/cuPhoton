@@ -22,6 +22,7 @@ from .detector_mask import (
 from .detector_mask import (
     excluded_row_mask as detector_excluded_row_mask,
 )
+from .detector_storage import load_detector_array
 from .validation_viz import (
     TraceRecord,
     _fit_traces,
@@ -1035,8 +1036,8 @@ def _detector_artifact_view(
             float(display_x),
         )
 
-    freq_all = np.load(root / "freq_all.npy", mmap_mode="r")
-    amp_all = np.load(root / "amp_all.npy", mmap_mode="r")
+    freq_all = load_detector_array(root / "freq_all.npy")
+    amp_all = load_detector_array(root / "amp_all.npy")
     if freq_all.shape != amp_all.shape or freq_all.ndim != 3:
         raise ValueError("detector artifact freq_all/amp_all shapes differ")
     height, width, depth = freq_all.shape
@@ -1086,8 +1087,8 @@ def _detector_filtered_phonon_data(
     if amp_threshold is None:
         return _empty_filtered_phonon_data()
     root = Path(detector_artifact_dir)
-    freq_all = np.load(root / "freq_all.npy", mmap_mode="r")
-    amp_all = np.load(root / "amp_all.npy", mmap_mode="r")
+    freq_all = load_detector_array(root / "freq_all.npy")
+    amp_all = load_detector_array(root / "amp_all.npy")
     if freq_all.shape != amp_all.shape or freq_all.ndim != 3:
         raise ValueError("detector artifact freq_all/amp_all shapes differ")
     height, width, depth = freq_all.shape

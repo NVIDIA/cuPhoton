@@ -141,11 +141,17 @@ def test_distributed_resume_identity_includes_diagnostics_and_ridge(tmp_path):
         },
     )
 
+    compact = build_detector_artifact_distributed_plan(
+        **common, detector_options={"artifact_layout": "tile-rows"}
+    )
     identities = {
         plan["shards"][0]["resume_identity"]
-        for plan in (baseline, summary, ridge)
+        for plan in (baseline, summary, ridge, compact)
     }
-    assert len(identities) == 3
+    assert len(identities) == 4
+    command = compact["commands"][0]
+    assert command[command.index("--artifact-layout") + 1] == "tile-rows"
+    assert "--artifact-layout" not in baseline["commands"][0]
     assert "--fit-diagnostics" not in baseline["commands"][0]
     assert "--p2-ridge-alpha" not in baseline["commands"][0]
     assert "--fit-diagnostics" in summary["commands"][0]
@@ -399,7 +405,8 @@ def test_detector_artifact_normalize_cli_writes_cache(tmp_path, capsys):
     assert str(tmp_path.resolve()) not in json.dumps(manifest)
 
 
-def test_merge_detector_artifact_shards(tmp_path):
+@pytest.mark.parametrize("artifact_layout", ["dense", "tile-rows"])
+def test_merge_detector_artifact_shards(tmp_path, artifact_layout):
     left = _write_shard(
         tmp_path / "left",
         index=0,
@@ -419,6 +426,31 @@ def test_merge_detector_artifact_shards(tmp_path):
         fill=2.0,
     )
 
+    from cuphoton.xray.detector_storage import (
+        create_detector_spectra,
+        load_detector_array,
+    )
+
+    if artifact_layout == "tile-rows":
+        for root in (left, right):
+            path = root / "manifest.json"
+            manifest = json.loads(path.read_text())
+            shape = tuple(manifest["output_shape"])
+            spectra = create_detector_spectra(
+                root, shape, x_edges=np.asarray([0, shape[1]])
+            )
+            for name, values in spectra.items():
+                source = root / f"{name}.npy"
+                values[:] = np.load(source)[:, :1]
+                values.flush()
+                source.unlink()
+            manifest["artifact_layout"] = artifact_layout
+            manifest["resume_identity"] = detector_artifact_resume_identity(
+                manifest
+            )
+            manifest["config_hash"] = _detector_artifact_config_hash(manifest)
+            path.write_text(json.dumps(manifest))
+
     result = merge_detector_artifact_shards(
         shard_dirs=(right, left),
         output_dir=tmp_path / "merged",
@@ -426,10 +458,15 @@ def test_merge_detector_artifact_shards(tmp_path):
 
     assert result.shape == (2, 5, 4)
     assert detector_artifact_complete(tmp_path / "merged") is True
-    amp = np.load(tmp_path / "merged" / "amp_all.npy")
+    amp = load_detector_array(tmp_path / "merged" / "amp_all.npy")
     np.testing.assert_allclose(amp[:, :3, :], 1.0)
     np.testing.assert_allclose(amp[:, 3:, :], 2.0)
     manifest = json.loads((tmp_path / "merged" / "manifest.json").read_text())
+    if artifact_layout == "tile-rows":
+        assert manifest["spectral_layout"] == "spectral-layout.json"
+        assert "amp_all.tile-rows.npy" in manifest["arrays"]
+        assert "amp_all.npy" not in manifest["arrays"]
+        np.testing.assert_array_equal(amp.x_edges, [0, 3, 5])
     assert manifest["artifact_role"] == "merged-shards"
     assert manifest["roi_lower"] == [0, 0]
     assert manifest["roi_dim"] == [5, 2]

@@ -260,8 +260,7 @@ class PhononVizCommand(_XRayCommand):
     class DetectorArtifactDirArg(PathValueInvariant):
         _arg = "--detector-artifact-dir"
         _help = (
-            "Directory containing freq_all.npy, amp_all.npy, "
-            "fft_all.npy, and fft_freq_all.npy from a dumped "
+            "Directory containing dense or tile-row spectra from a dumped "
             "detector-wide analysis run."
         )
         _required = False
@@ -392,8 +391,7 @@ class WorkflowVizCommand(_XRayCommand):
     class DetectorArtifactDirArg(PathValueInvariant):
         _arg = "--detector-artifact-dir"
         _help = (
-            "Optional directory containing detector-wide freq_all.npy "
-            "and amp_all.npy for trace proxy context."
+            "Optional detector artifact directory for trace proxy context."
         )
         _required = False
 
@@ -2656,6 +2654,16 @@ class DetectorArtifactsCommand(_XRayCommand):
         _required = False
         _default = 0
 
+    artifact_layout = "dense"
+
+    class ArtifactLayoutArg(SetInvariant):
+        _arg = "--artifact-layout"
+        _help = "Store dense pixel arrays or one spectrum per tile row."
+        _required = False
+        _set = {"dense", "tile-rows"}
+        _default = "dense"
+        _metavar = "{dense,tile-rows}"
+
     fit_diagnostics = "none"
 
     class FitDiagnosticsArg(SetInvariant):
@@ -3042,6 +3050,16 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _arg = "--max-fit-failures"
         _required = False
         _default = 0
+
+    artifact_layout = "dense"
+
+    class ArtifactLayoutArg(SetInvariant):
+        _arg = "--artifact-layout"
+        _help = "Store dense pixel arrays or one spectrum per tile row."
+        _required = False
+        _set = {"dense", "tile-rows"}
+        _default = "dense"
+        _metavar = "{dense,tile-rows}"
 
     fit_diagnostics = "none"
 
@@ -3924,6 +3942,7 @@ def _detector_artifacts(args):
         max_tiles=args.max_tiles,
         normalization_cache=args.normalization_cache,
         fit_diagnostics=args.fit_diagnostics,
+        artifact_layout=args.artifact_layout,
         shard_index=args.shard_index,
         shard_count=args.shard_count,
         global_roi_lower=(
@@ -4012,6 +4031,7 @@ def _detector_artifact_distributed(args):
         "amp_threshold": args.amp_threshold,
         "max_fit_failures": args.max_fit_failures,
         "fit_diagnostics": args.fit_diagnostics,
+        "artifact_layout": args.artifact_layout,
         "hdf5_reader": args.hdf5_reader,
         "hdf5_reader_workers": args.hdf5_reader_workers,
         "max_tiles": args.max_tiles,

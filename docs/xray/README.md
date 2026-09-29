@@ -98,6 +98,28 @@ The extracted traces above select individual rows without that integration,
 so compare them with detector fits only after matching the normalization,
 smoothing, spatial integration and fitted sample window.
 
+Add `--artifact-layout tile-rows` to store each spectrum once per x tile.
+The four spectral files then use the suffix `.tile-rows.npy`, with logical
+shape and x boundaries in `spectral-layout.json`. This is lossless: fitted
+values, masks, and pixel coordinates remain identical. A full tile with
+width 16 stores one sixteenth of the spectral values. The default `dense`
+layout writes the usual `.npy` arrays for direct NumPy consumers.
+
+Comparison, visualization, resume, and distributed merging support both
+layouts. Compact shards remain compact when merged. Use the shared loader
+for bounded pixel slices from either layout:
+
+```python
+from cuphoton.xray.detector_storage import load_detector_array
+
+amplitudes = load_detector_array("artifacts/amp_all.npy")
+column = amplitudes[:, 12, :]  # Only this column is expanded.
+```
+
+The compact reader supports integer and slice indexing, including negative
+indices and steps. Request bounded slices when exporting dense pixel data;
+reading the full logical cube expands its repeated columns in memory.
+
 For Python A/B checks, pass `batch_rows=False` to
 `cuphoton.xray.detector_artifacts.build_detector_artifacts_cupy` to force
 the serial row loop. The default, `True`, batches eligible rows. The manifest

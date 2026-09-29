@@ -56,6 +56,7 @@ _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
     "hdf5_reader_workers": 2,
     "max_tiles": None,
     "fit_diagnostics": "none",
+    "artifact_layout": "dense",
 }
 
 
@@ -186,6 +187,8 @@ def build_detector_artifact_distributed_plan(
     options = dict(_DETECTOR_OPTION_DEFAULTS)
     options.update(detector_options or {})
     options["tile_shape"] = tuple(tile_shape)
+    if options["artifact_layout"] not in {"dense", "tile-rows"}:
+        raise ValueError("artifact_layout must be dense or tile-rows")
     if options["fit_diagnostics"] not in FIT_DIAGNOSTICS_LEVELS:
         raise ValueError(
             "fit_diagnostics must be one of: "
@@ -835,6 +838,8 @@ def _request_manifest_for_shard(
     if options.get("fit_method") == "iterative":
         manifest["fit_method"] = "iterative"
         manifest["iterative_options"] = options["iterative_options"]
+    if options.get("artifact_layout", "dense") != "dense":
+        manifest["artifact_layout"] = options["artifact_layout"]
     return manifest
 
 
@@ -933,6 +938,8 @@ def _append_detector_worker_options(
             cmd.extend([flag, str(value)])
     for item in options.get("exclude_y", ()) or ():
         cmd.extend(["--exclude-y", str(item)])
+    if options.get("artifact_layout", "dense") != "dense":
+        cmd.extend(["--artifact-layout", str(options["artifact_layout"])])
     if options.get("fit_diagnostics", "none") != "none":
         cmd.extend(["--fit-diagnostics", str(options["fit_diagnostics"])])
     if float(options.get("p2_ridge_alpha", 0.0)) != 0.0:

@@ -3,7 +3,9 @@
 `cuphoton xray detector-artifact-distributed` divides a detector ROI into
 x-axis shards and either plans or launches the same `detector-artifacts`
 worker command for each shard. It supports local GPU assignment and Slurm
-array scripts.
+array scripts. Add `--artifact-layout tile-rows` to store one spectrum per
+x tile row in each worker and the merged output. The default `dense` layout
+writes pixel-shaped NPY arrays. Resume identities distinguish the layouts.
 
 ## Inspect an in-memory dry run
 
