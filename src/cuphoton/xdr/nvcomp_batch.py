@@ -24,7 +24,6 @@ import struct
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 
@@ -821,7 +820,7 @@ def gpu_gzip_decompress_batch(
     uncompressed_sizes: Sequence[int],
     *,
     gzip_wrapped: bool = True,
-    gzip_decoder: Literal["auto", "gzip", "deflate"] = "auto",
+    gzip_decoder: str = "auto",
     use_cpp_helper: str | bool = "auto",
     use_native_pool: bool = False,
     keepalive: list | None = None,
