@@ -671,3 +671,74 @@ def test_gpu_library_preload_orders_kvikio_dependency_first(
         "librapids_logger.so",
         "libkvikio.so",
     ]
+
+
+@pytest.mark.parametrize("decoder", ["invalid", "", True])
+def test_gpu_batch_rejects_invalid_decoder_before_import(decoder):
+    with pytest.raises(ValueError, match="gzip_decoder must be"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            None, [], [], [], gzip_decoder=decoder
+        )
+
+
+def test_gpu_batch_rejects_gzip_decoder_for_raw_input():
+    with pytest.raises(ValueError, match="requires gzip_wrapped=True"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            None, [], [], [], gzip_wrapped=False, gzip_decoder="gzip"
+        )
+
+
+@pytest.mark.parametrize("extension", [None, SimpleNamespace()])
+def test_forced_gzip_rejects_missing_native_capability(
+    monkeypatch, extension
+):
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace())
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setattr(
+        nvcomp_batch, "_warn_python_fallback_once", lambda: None
+    )
+    with pytest.raises(
+        RuntimeError, match="requires a native extension with Gzip"
+    ):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            SimpleNamespace(size=20),
+            [0],
+            [20],
+            [1],
+            header_sizes=[10],
+            gzip_decoder="gzip",
+        )
+
+
+def test_auto_decoder_propagates_native_gzip_error(monkeypatch):
+    def fail_decode(*args):
+        raise RuntimeError("native gzip decode failed")
+
+    extension = SimpleNamespace(
+        batch_gzip_decompress=fail_decode,
+        batch_deflate_decompress=lambda *args: pytest.fail(
+            "must not retry decode"
+        ),
+    )
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            empty=lambda *args, **kwargs: SimpleNamespace(
+                data=SimpleNamespace(ptr=200)
+            ),
+            uint8=np.uint8,
+            cuda=SimpleNamespace(
+                get_current_stream=lambda: SimpleNamespace(ptr=0)
+            ),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="native gzip decode failed"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            SimpleNamespace(size=20, data=SimpleNamespace(ptr=100)),
+            [0],
+            [20],
+            [1],
+            header_sizes=[10],
+        )
