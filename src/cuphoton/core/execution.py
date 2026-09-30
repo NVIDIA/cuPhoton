@@ -43,9 +43,10 @@ SUMMARY_SCHEMA = "cuphoton.core.execution-summary/v1"
 class Worker(Protocol):
     """Worker-local state constructed after placement and CUDA binding.
 
-    ``gpu_identity`` must contain ``backend`` (``cupy`` for ``cutile``
-    or ``native``), ``device_index=0``, ``identity_error=None``, and at least
-    one non-empty physical ``uuid`` or ``pci_bus_id`` string.
+    ``gpu_identity`` must contain ``backend`` (``cupy`` for ``cutile``,
+    ``native``, or ``numba-cuda-mlir``), ``device_index=0``,
+    ``identity_error=None``, and at least one non-empty physical ``uuid``
+    or ``pci_bus_id`` string.
     """
 
     @property
@@ -118,6 +119,7 @@ class WorkloadSpec:
             "cupy",
             "cutile",
             "native",
+            "numba-cuda-mlir",
             "numba-cuda",
             "torch",
         }:
@@ -417,7 +419,9 @@ def audit_worker_provenance(
             invalid.append("cuda_visible_devices")
         ids: frozenset[tuple[str, str]] = frozenset()
         expected_backend = (
-            "cupy" if backend in {"cutile", "native"} else backend
+            "cupy"
+            if backend in {"cutile", "native", "numba-cuda-mlir"}
+            else backend
         )
         if not isinstance(gpu, Mapping):
             invalid.append("gpu")

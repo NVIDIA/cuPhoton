@@ -184,7 +184,7 @@ def main() -> None:
     parser.add_argument(
         "--backend",
         action="append",
-        choices=("numpy", "cupy", "cutile", "native"),
+        choices=("numpy", "cupy", "cutile", "native", "numba-cuda-mlir"),
     )
     parser.add_argument("--compare-native", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
