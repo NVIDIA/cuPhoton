@@ -63,12 +63,25 @@ def batch_to_device(
     section : tuple of slice or None
         Optional 2D ROI applied uniformly to the CompImageHDUs.
     parallel : bool
-    When True, use the streaming batch reader. Set False for a depth-1 path
-    that preserves the existing API without requiring Astropy HDU objects.
+        True uses the configured streaming batch reader. False sets queue
+        depths and ``decode_batch_files`` to one and selects Python
+        prefetching; decoding still runs on the GPU with the requested
+        runtime choices.
     prefetch_depth, decode_batch_files, batch_queue_depth,
-    native_read_threads, native_plan_threads, native_batcher, postprocess,
-    gzip_decoder, decompression_backend
-        Passed through to `batch_to_device_stream` when ``parallel=True``.
+    native_read_threads, native_plan_threads, native_batcher
+        Scheduling controls for `batch_to_device_stream`. ``parallel=False``
+        overrides the depths and native batcher as described above.
+    postprocess : {"auto", "fused", "separate"}
+        ``auto`` (default) uses fused FITS pixel restoration. ``separate``
+        selects individual unshuffle, byteswap and scatter kernels.
+    gzip_decoder : {"auto", "gzip", "deflate"}
+        ``auto`` prefers native Gzip, with aligned raw DEFLATE fallback.
+        ``gzip`` requires native Gzip support; ``deflate`` selects raw decode.
+    decompression_backend : {"auto", "cuda"}
+        ``auto`` lets native Gzip select compatible hardware with CUDA
+        fallback. ``cuda`` requires a native helper with backend selection.
+        Native raw DEFLATE uses CUDA in either mode. All three runtime
+        controls apply with either value of ``parallel``.
 
     Returns
     -------

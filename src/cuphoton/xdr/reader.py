@@ -446,7 +446,9 @@ class GpuCompImageReader:
         and `rel_offsets[i]` is the start offset of tile i inside `d_concat`.
         `lengths` and `out_bytes` are per-tile compressed and decompressed
         byte counts. Returns concatenated decompressed bytes plus per-tile
-        offsets into that output buffer.
+        offsets into that output buffer. ``gzip_decoder`` and
+        ``decompression_backend`` use the choices documented by
+        :func:`cuphoton.xdr.batch_to_device_stream`.
         """
         normalize_xdr_options(
             {
@@ -608,6 +610,8 @@ class GpuCompImageReader:
         of the tiles referenced in `plan["sel_*"]`; `rel_offsets[i]` is the
         start offset of tile i inside `d_concat`. This is what the prefetch
         consumer calls after staging its pinned host heap to device.
+        ``postprocess``, ``gzip_decoder`` and ``decompression_backend`` use
+        the choices documented by :func:`cuphoton.xdr.batch_to_device_stream`.
         """
         normalize_xdr_options(
             {
@@ -662,7 +666,20 @@ class GpuCompImageReader:
             kvikio `CompatModeManager` setup per HDU). If `None`, a fresh
             loader is created for this call. Closure is deferred if
             failure leaves its I/O completion unknown.
+        postprocess : {"auto", "fused", "separate"}
+            ``auto`` (default) and ``fused`` restore FITS pixels in one
+            kernel; ``separate`` uses individual restoration kernels.
+        gzip_decoder : {"auto", "gzip", "deflate"}
+            ``auto`` prefers native Gzip with aligned DEFLATE fallback.
+            ``gzip`` requires native Gzip support; ``deflate`` selects
+            aligned raw DEFLATE decoding.
+        decompression_backend : {"auto", "cuda"}
+            ``auto`` lets native Gzip select compatible hardware with CUDA
+            fallback. ``cuda`` requires a native helper with backend
+            selection. Native raw DEFLATE uses CUDA in either mode.
 
+        Notes
+        -----
         With an explicit stream, independent reads can submit while this call
         waits for GDS I/O. Reads without a stream retain the submission lock.
 

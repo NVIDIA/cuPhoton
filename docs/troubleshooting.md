@@ -69,6 +69,18 @@ another reader. Check file accessibility, the selected HDU, and the native
 error. GPUDirect Storage also requires host and storage configuration; use
 `KVIKIO_COMPAT_MODE=ON` for ordinary file I/O when GDS is not configured.
 
+### An explicit compression choice is unavailable
+
+`--xdr-gzip-decoder gzip` requires native Gzip support;
+`--xdr-decompression-backend cuda` requires an extension with backend selection.
+An importable extension may predate those entry points. After updating a source
+checkout, rebuild it with the [native build instructions](components/xdr.md#native-extension-availability)
+in the environment running your command. Use `auto` when capability fallback
+is acceptable. A Python prefetcher still performs GPU decoding, and an `auto`
+backend in a report does not prove that a hardware decompression engine ran.
+See [runtime choices](components/xdr.md#runtime-choices) for the separate
+reader, decoder and backend policies.
+
 ## A command rejected the input
 
 Use the component inspection or validation command before the expensive step.

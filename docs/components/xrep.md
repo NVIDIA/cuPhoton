@@ -32,11 +32,19 @@ decoded device arrays directly. Output images retain the usual host-array and
 FITS contracts. Summaries record the selected reader and any fallback under
 `fits_reads`.
 
-FITS-consuming commands also accept `--xdr-postprocess auto|fused|separate`
-for xDR's pixel conversion path. Python FITS APIs and workflow helpers accept
-`xdr_options={"postprocess": "separate"}` (or `auto`/`fused`) and carry that
-choice through image, mask, and stack reads. Omitted options use xDR defaults;
-CPU Astropy reads retain their existing behavior.
+FITS-consuming commands, including benchmarks and backend comparisons,
+accept `--xdr-postprocess`, `--xdr-gzip-decoder`, and
+`--xdr-decompression-backend`. Python FITS APIs and workflow helpers accept
+the corresponding `xdr_options` keys `postprocess`, `gzip_decoder`, and
+`decompression_backend`. For example, use `--xdr-decompression-backend cuda`
+or `xdr_options={"decompression_backend": "cuda"}` to select CUDA
+decompression when the reader uses xDR. See
+[xDR runtime choices](xdr.md#runtime-choices) for values and automatic
+capability selection.
+
+The same choices reach image, mask, and stack reads. Omitted keys use xDR
+defaults; `fits_reader` continues to select the reader. Header-only WCS
+inspection does not use these decompression controls.
 
 WCS mapping and target-grid setup read headers and dimensions without
 decompressing image pixels. Reading with xDR does not by itself imply native
