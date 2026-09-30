@@ -202,7 +202,6 @@ def main() -> None:
         help="Restrict all workers together to this many inherited CPUs.",
     )
     parser.add_argument("--batch", type=int, action="append")
-    parser.add_argument("--fusion", action="store_true")
     parser.add_argument(
         "--dtype", choices=("float32", "float64"), default="float64"
     )
@@ -220,7 +219,7 @@ def main() -> None:
         help="Per-round wait, including cold compilation (default: 180).",
     )
     parser.add_argument(
-        "--fusion", action="store_true", help="Use fused cutile evaluation."
+        "--fusion", action="store_true", help="Use fused CuPy or cuTile Gaussian evaluation."
     )
     args = parser.parse_args()
     if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
