@@ -110,6 +110,28 @@ jobs:
           enable-cache: false
       - run: uv python install 3.12
       - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+      - name: Build native xFit with CUDA 13 compiler wheels
+        env:
+          CUPHOTON_XFIT_BUILD_EXT: "1"
+          CUPHOTON_XFIT_CUDA_ARCHS: "89"
+        run: |
+          uv pip install --python .venv/bin/python --no-deps \
+            nvidia-cuda-nvcc==13.0.88 \
+            nvidia-cuda-crt==13.0.88 \
+            nvidia-nvvm==13.0.88
+          export CUDA_HOME="$(
+            .venv/bin/python -c \
+              'import sysconfig; print(sysconfig.get_path("purelib") + "/nvidia/cu13")'
+          )"
+          export CUPHOTON_XFIT_CCCL_ROOT="$(
+            .venv/bin/python -c \
+              'from importlib.metadata import distribution; print(distribution("cupy-cuda13x").locate_file("cupy/_core/include/cupy/_cccl"))'
+          )"
+          export LD_LIBRARY_PATH="$CUDA_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          "$CUDA_HOME/bin/nvcc" --version
+          uv pip install --python .venv/bin/python --no-deps \
+            --no-cache --reinstall -e .
+          printf '%s\n' "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
       - name: Require working CUDA 13 and GPU kernels
         run: |
           uv run --no-sync python - <<'PY'
@@ -150,6 +172,26 @@ jobs:
           assert not report.findall(".//error")
           print("All 6 selected tests passed without skips")
           PY
+      - name: Run native xFit GPU tests
+        run: >-
+          uv run --no-sync pytest -q -rs
+          --junitxml="${RUNNER_TEMP}/xfit-native-gpu.xml"
+          tests/xfit/test_native.py
+      - name: Require native tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-native-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert cases, "Native xFit tests must execute"
+          assert not report.findall(".//skipped"), "Native xFit tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print(f"All {len(cases)} native xFit tests passed without skips")
+          PY
       - name: Run synthetic GPU quickstarts
         run: >-
           uv run --no-sync python examples/run_quickstarts.py
@@ -161,6 +203,7 @@ jobs:
           name: gpu-l40g-${{ github.sha }}
           path: |
             ${{ runner.temp }}/xfit-gpu.xml
+            ${{ runner.temp }}/xfit-native-gpu.xml
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
           if-no-files-found: error
           retention-days: 14

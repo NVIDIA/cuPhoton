@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -414,6 +415,7 @@ def provenance() -> dict[str, Any]:
         "xpois/ois.py",
         "xfit/api.py",
         "xfit/backend.py",
+        "xfit/_native.py",
         "xfit/models.py",
         "xfit/solver.py",
         "xscan/xfit_features.py",
@@ -437,6 +439,10 @@ def provenance() -> dict[str, Any]:
         "CUPY_CACHE_DIR",
         "CUDA_CACHE_PATH",
     )
+    native_extension = importlib.util.find_spec("cuphoton.xfit._native_ext")
+    native_origin = (
+        None if native_extension is None else native_extension.origin
+    )
     return {
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -451,6 +457,14 @@ def provenance() -> dict[str, Any]:
             name: file_sha256(package_root / name)
             for name in numerical_sources
         },
+        "native_source_sha256": {
+            path.name: file_sha256(path)
+            for path in sorted((package_root / "xfit/src").glob("native*"))
+            if path.suffix in {".cu", ".cpp", ".h"}
+        },
+        "native_extension_sha256": (
+            None if native_origin is None else file_sha256(native_origin)
+        ),
     }
 
 

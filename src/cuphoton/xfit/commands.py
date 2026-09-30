@@ -246,7 +246,8 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     class BackendArg(BackendInvariant):
         _arg = "--backend"
         _help = (
-            "Array backend: auto, numpy, cupy, or cutile. [default: %default]"
+            "Fit backend: auto, numpy, cupy, cutile, or native. "
+            "[default: %default]"
         )
         _mandatory = False
         _default = "auto"
@@ -382,11 +383,28 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             )
 
         from . import LMConfig, fit_dipoles
+        from .api import _validate_execution_options
 
         assert self.output_dir is not None
         assert self.mode is not None
         assert self.backend is not None
         assert self.compute_dtype is not None
+        resolved_finite_difference = (
+            self.use_finite_difference or self.model == "stamp"
+        )
+        config = LMConfig(
+            f_tol=self.f_tol,
+            x_tol=self.x_tol,
+            g_tol=self.g_tol,
+            max_evaluations=self.max_evaluations,
+            use_finite_difference=resolved_finite_difference,
+        )
+        self._call(
+            _validate_execution_options,
+            self.model,
+            self.backend,
+            config,
+        )
         device = False
         assert self.input is not None
         if Path(self.input).suffix.lower() == ".json":
@@ -404,16 +422,6 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             raise CommandError(
                 f"output directory already exists: {output_dir}"
             )
-        resolved_finite_difference = (
-            self.use_finite_difference or self.model == "stamp"
-        )
-        config = LMConfig(
-            f_tol=self.f_tol,
-            x_tol=self.x_tol,
-            g_tol=self.g_tol,
-            max_evaluations=self.max_evaluations,
-            use_finite_difference=resolved_finite_difference,
-        )
         result = self._call(
             fit_dipoles,
             fit_images,
