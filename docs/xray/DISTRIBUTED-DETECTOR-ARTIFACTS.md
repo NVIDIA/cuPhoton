@@ -10,11 +10,10 @@ writes pixel-shaped NPY arrays for existing NumPy consumers. Use
 distinguish the layouts, so changing the option rebuilds existing shards.
 Merging requires all shards to use the same layout and preserves that layout.
 
-From Python, call
-`cuphoton.xray.detector_distributed.build_detector_artifact_distributed_plan`
-with `detector_options={"artifact_layout": "tile-rows"}` or
-`detector_options={"artifact_layout": "dense"}`. The plan carries this choice
-to every local or Slurm worker before resume decisions are made.
+The examples below select compact output explicitly. Use the shared
+[`load_detector_array` reader](README.md#single-node-hdf5-workflow) for bounded
+ROI reads from either format. The compact spectral files and their
+`spectral-layout.json` must stay together.
 
 ## Inspect an in-memory dry run
 
@@ -31,12 +30,42 @@ uv run cuphoton xray detector-artifact-distributed \
   --run-label run-001 \
   --shard-count 4 \
   --gpus 4 \
+  --artifact-layout tile-rows \
   --executor dry-run \
   --json > /tmp/run-001-dry-run.json
 ```
 
 Review the global ROI, tile shape, shard ranges, worker commands,
 normalization, fit parameters, and concurrency.
+
+From Python, put the layout in `detector_options` when building the plan:
+
+```python
+from cuphoton.xray.detector_distributed import (
+    build_detector_artifact_distributed_plan,
+    run_detector_artifact_distributed,
+)
+
+plan = build_detector_artifact_distributed_plan(
+    h5dir="/path/to/hdf5",
+    fon="run-on.h5",
+    foff="run-off.h5",
+    output_dir="/path/to/artifacts/run-001",
+    run_label="run-001",
+    shard_count=4,
+    gpus=4,
+    detector_options={"artifact_layout": "tile-rows"},
+)
+preview = run_detector_artifact_distributed(
+    plan=plan, executor="dry-run", submit=False, merge=True, resume=True,
+)
+print(preview.payload["local_script"])
+```
+
+Use `detector_options={"artifact_layout": "dense"}` for dense output. The plan
+carries the choice to every local or Slurm worker before resume decisions.
+After reviewing the plan, set `executor="local", submit=True` in the runner
+call to launch local workers with the same merge and resume settings.
 
 ## Reuse detector normalization
 
@@ -71,6 +100,7 @@ uv run cuphoton xray detector-artifact-distributed \
   --run-label run-001 \
   --shard-count 4 \
   --gpus 4 \
+  --artifact-layout tile-rows \
   --executor local \
   --json
 ```
@@ -102,6 +132,7 @@ uv run cuphoton xray detector-artifact-distributed \
   --run-label run-001 \
   --shard-count 4 \
   --gpus 4 \
+  --artifact-layout tile-rows \
   --executor local \
   --submit \
   --merge \
@@ -130,6 +161,7 @@ uv run cuphoton xray detector-artifact-distributed \
   --run-label run-001 \
   --shard-count 8 \
   --gpus 8 \
+  --artifact-layout tile-rows \
   --executor slurm \
   --slurm-partition gpu \
   --slurm-time 01:00:00 \
@@ -158,6 +190,8 @@ uv run cuphoton xray detector-artifact-merge \
   --json
 ```
 
+The merge infers the layout from the shards and writes the corresponding
+spectral files and layout metadata; it has no separate layout switch.
 Alternatively, repeat `--shard-dir` for every shard directory. Strict merging
 requires the manifest shard count and input count to agree; `--no-strict`
 relaxes the count check. Every merge still requires matching input
