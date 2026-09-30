@@ -16,14 +16,14 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
 
-def _load_xdr_build_helpers():
-    module_path = ROOT / "src" / "cuphoton" / "xdr" / "setup_package.py"
+def _load_build_helpers(component):
+    module_path = ROOT / "src" / "cuphoton" / component / "setup_package.py"
     spec = importlib.util.spec_from_file_location(
-        "_cuphoton_xdr_setup_package", module_path
+        f"_cuphoton_{component}_setup_package", module_path
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(
-            f"Cannot load xDataReader build helpers: {module_path}"
+            f"Cannot load {component} build helpers: {module_path}"
         )
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -31,18 +31,27 @@ def _load_xdr_build_helpers():
     return module
 
 
-def _get_ext_modules():
-    mode = os.environ.get("CUPHOTON_XDR_BUILD_EXT", "0").strip().lower()
+def _build_enabled(variable):
+    mode = os.environ.get(variable, "0").strip().lower()
     if mode in _FALSE_VALUES:
-        return []
+        return False
 
     if mode not in _TRUE_VALUES:
         raise RuntimeError(
-            "CUPHOTON_XDR_BUILD_EXT must be one of: "
+            f"{variable} must be one of: "
             + ", ".join(sorted(_FALSE_VALUES | _TRUE_VALUES))
         )
 
-    return _load_xdr_build_helpers().get_extensions()
+    return True
 
 
-setup(ext_modules=_get_ext_modules())
+extensions = []
+commands = {}
+if _build_enabled("CUPHOTON_XDR_BUILD_EXT"):
+    extensions.extend(_load_build_helpers("xdr").get_extensions())
+if _build_enabled("CUPHOTON_XFIT_BUILD_EXT"):
+    xfit = _load_build_helpers("xfit")
+    extensions.extend(xfit.get_extensions())
+    commands["build_ext"] = xfit.CUDABuildExt
+
+setup(ext_modules=extensions, cmdclass=commands)

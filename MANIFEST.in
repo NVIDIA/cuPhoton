@@ -4,6 +4,7 @@
 
 include *.md
 exclude AGENTS.md
+exclude goal-*.md
 exclude CHANGELOG.md
 exclude CLAUDE.md
 exclude RELEASING.md
@@ -28,3 +29,4 @@ recursive-include examples *.py *.yaml
 recursive-include examples/distributed-pipeline *.json *.txt *.license
 recursive-include tests *.py
 recursive-include src/cuphoton/xdr/src *.cpp *.h *.sh
+recursive-include src/cuphoton/xfit/src *.cpp *.cu *.h

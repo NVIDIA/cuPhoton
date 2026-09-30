@@ -667,6 +667,43 @@ def batched_levenberg_marquardt(
                 LMStatus.NO_PROGRESS
             )
 
+    return _finalize_lm(
+        problem,
+        x,
+        residuals,
+        status,
+        evaluations,
+        jacobians,
+        jacobian_current,
+        diagnostics_current,
+        settings,
+        ap,
+    )
+
+
+def _finalize_lm(
+    problem: BatchedLeastSquaresProblem,
+    x: BackendArray,
+    residuals: BackendArray,
+    status: BackendArray,
+    evaluations: BackendArray,
+    jacobians: BackendArray,
+    jacobian_current: BackendArray,
+    diagnostics_current: BackendArray,
+    settings: _Settings,
+    ap: ModuleType,
+) -> LMResult:
+    """Finish Python or native iterations using the same diagnostic SVD."""
+
+    k, n = x.shape
+    m = residuals.shape[1]
+    dtype = np.dtype(x.dtype)
+    eps = float(np.finfo(dtype).eps)
+    indices = ap.arange(k, dtype=np.int64)
+
+    def finite_rows(value: BackendArray) -> BackendArray:
+        return ap.isfinite(value).reshape(value.shape[0], -1).all(axis=1)
+
     gradients = ap.full((k, n), ap.nan, dtype=dtype)
     hessians = ap.full((k, n, n), ap.nan, dtype=dtype)
     covariance = ap.full((k, n, n), ap.nan, dtype=dtype)

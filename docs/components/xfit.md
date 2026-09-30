@@ -87,6 +87,103 @@ uv run --locked --python 3.12 --extra gpu --extra cutile \
   python examples/xfit/benchmark_gaussian.py --dtype float64
 ```
 
+### Optional native CUDA backend
+
+`backend="native"` runs Gaussian LM iterations in CUDA C++ and keeps input
+preparation and final rank/covariance diagnostics on the existing CuPy path.
+It supports float32 and float64 images in difference and split modes, with
+analytic derivatives. It uses cuBLAS for normal equations and pivoted linear
+solves. Sampled-stamp models, custom Gaussian subclasses, and finite-difference
+fitting require another backend.
+`auto` keeps its existing CuPy/NumPy selection.
+
+Build the optional extension from source on Linux with a CUDA 13 toolkit,
+cuBLAS 13, and a C++17 compiler. Select the CCCL headers bundled with the
+installed CuPy wheel to preserve its reduction order. This header lookup does
+not import CuPy or initialize CUDA. For example:
+
+```bash
+uv sync --locked --python 3.12 --extra gpu
+export CUPHOTON_XFIT_CCCL_ROOT="$(
+  .venv/bin/python -c 'from importlib.metadata import distribution; print(
+    distribution("cupy-cuda13x").locate_file("cupy/_core/include/cupy/_cccl"))'
+)"
+export CUDA_HOME=/usr/local/cuda-13.0
+CUPHOTON_XFIT_BUILD_EXT=1 CUPHOTON_XFIT_CUDA_ARCHS=120 \
+  uv build --wheel --python .venv/bin/python
+```
+
+The architecture setting accepts comma-separated CUDA architecture numbers;
+`120` targets compute capability 12.0. The build also retains PTX for its
+highest selected architecture. Its default is `75`. Install the wheel into
+the matching Python environment together with CuPy for CUDA 13. The CUDA
+runtime and cuBLAS libraries (`libcudart.so.13`, `libcublas.so.13`, and
+`libcublasLt.so.13`) must be on the loader's library path, for
+example through `LD_LIBRARY_PATH="$CUDA_HOME/lib64"`. Ordinary and
+free-threaded CPython require separate wheels. Base installations and CPU
+imports do not require this extension or a CUDA toolkit.
+
+The public CUDA 13 compiler wheels provide another build option. Using the
+same environment and CCCL header setting, install the compiler tools and
+rebuild the editable installation:
+
+```bash
+uv pip install --python .venv/bin/python --no-deps \
+  nvidia-cuda-nvcc==13.0.88 \
+  nvidia-cuda-crt==13.0.88 \
+  nvidia-nvvm==13.0.88
+export CUDA_HOME="$(
+  .venv/bin/python -c \
+    'import sysconfig; print(sysconfig.get_path("purelib") + "/nvidia/cu13")'
+)"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+CUPHOTON_XFIT_BUILD_EXT=1 CUPHOTON_XFIT_CUDA_ARCHS=120 \
+  uv pip install --python .venv/bin/python --no-deps \
+    --no-cache --reinstall -e .
+```
+
+Select an architecture supported by your GPU; this example targets compute
+capability 12.0. These compiler packages supplement the CUDA runtime installed
+by the GPU extra. They still require a system C++17 compiler. The build links
+the versioned runtime and cuBLAS libraries directly; unversioned symlinks are
+unnecessary.
+Keep the runtime library path set when running native fits. After this editable
+build, use `uv run --no-sync` to preserve the selected installation.
+
+```bash
+cuphoton xfit fit-dipoles \
+  --input /path/to/dipoles.npz --output-dir /path/to/native-fit \
+  --model gaussian --backend native
+```
+
+Both `fit_dipoles` and `fit_dipoles_device` accept `backend="native"`.
+Device results retain CuPy arrays and record the selected execution backend.
+Each calling thread reuses an independent native workspace. A native call
+waits for its producer stream, detaches Python
+thread state while iterating, and completes its CUDA work before returning
+or raising an error. Inputs must remain unchanged for the call's duration.
+The existing residual-evaluation budget bounds the loop; Python interrupts
+are reported after the native call drains its work.
+
+The synthetic benchmark checks complete fit outputs and reports individual
+rounds, worker GIL state, warmup, and materialization timings:
+
+```bash
+python examples/xfit/benchmark_gaussian.py \
+  --compare-native --batch 256 --workers 4 --cpus 8 \
+  --execution threads --rounds 5
+```
+
+Use the same batch and CPU budget with `--execution processes` for the process
+control. An externally managed MPS service can supply the MPS treatment; the
+benchmark does not start or stop that service. Worker count changes the fit
+batch size in this example; compare execution modes at the same worker count
+to keep that numerical boundary fixed. Native iteration CUDA-event
+times include gaps between launches and are separate from end-to-end fit
+and process-communication timings.
+The default per-round wait is 180 seconds. `--timeout-seconds` allows longer
+cold compilation; worker cleanup may take additional time after a timeout.
+
 Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
 statistical calibration of the reported covariance requires a caller-supplied
@@ -210,11 +307,11 @@ for the stable shapes and output fields.
 
 `fit-dipoles --executor dragon|mpi` distributes independent candidate chunks
 across GPUs. The default `--executor local` retains the original batch fit.
-Distributed fitting requires `--backend cupy` or `--backend cutile`, a shared
-filesystem for the input and output, and the same installed environment on
-every worker. `--chunk-size` sets candidates per task independently of worker
-count. Keep it fixed for matched comparisons; candidate IDs and input order
-are restored in the merged artifacts.
+Distributed fitting requires `--backend cupy`, `--backend cutile`, or
+`--backend native`, a shared filesystem for the input and output, and the same
+installed environment on every worker. `--chunk-size` sets candidates per task
+independently of worker count. Keep it fixed for matched comparisons; candidate
+IDs and input order are restored in the merged artifacts.
 The task count must be at least the MPI rank count. Dragon uses the smaller
 of the requested worker count and task count.
 

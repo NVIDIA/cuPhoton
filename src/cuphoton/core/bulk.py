@@ -344,7 +344,7 @@ __all__ = [
 def collect_gpu_identity(backend: str) -> dict[str, Any]:
     """Collect stable device identity after caller-established placement."""
 
-    if backend in {"auto", "cupy", "cutile"}:
+    if backend in {"auto", "cupy", "cutile", "native"}:
         try:
             return _collect_cupy_identity()
         except (ImportError, OSError, RuntimeError):

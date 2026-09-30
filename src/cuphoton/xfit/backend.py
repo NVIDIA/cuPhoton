@@ -66,10 +66,16 @@ def resolve_backend(name: BackendRequest = "auto") -> Backend:
         return _cupy_backend(require_device=True)
     if name == "cutile":
         return _cutile_backend()
+    if name == "native":
+        from ._native import load_extension
+
+        load_extension()
+        backend = _cupy_backend(require_device=True, name="native")
+        return backend
     if name != "auto":
         raise ValueError(
             f"unsupported xFit backend {name!r}; expected auto, "
-            "numpy, cupy, or cutile"
+            "numpy, cupy, cutile, or native"
         )
     try:
         return _cupy_backend(require_device=True)
