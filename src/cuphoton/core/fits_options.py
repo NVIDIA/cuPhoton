@@ -8,6 +8,7 @@ from collections.abc import Mapping
 
 XDR_OPTION_CHOICES = {
     "postprocess": frozenset({"auto", "fused", "separate"}),
+    "gzip_decoder": frozenset({"auto", "gzip", "deflate"}),
 }
 
 
