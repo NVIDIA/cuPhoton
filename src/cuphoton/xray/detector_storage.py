@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Never
 
 import numpy as np
 
@@ -37,6 +37,15 @@ class TileRowArray:
         self.x_edges = x_edges
         self.dtype = values.dtype
 
+    def __len__(self) -> int:
+        return self.shape[0]
+
+    def __array__(self, dtype: Any = None, copy: bool | None = None) -> Never:
+        raise TypeError(
+            "index a bounded slice before converting detector spectra to a "
+            "NumPy array; array[:] expands the full logical cube"
+        )
+
     def __getitem__(self, key: Any) -> np.ndarray:
         indices = key if isinstance(key, tuple) else (key,)
         if any(value is Ellipsis for value in indices):
@@ -51,11 +60,13 @@ class TileRowArray:
                 )
             indices = tuple(expanded)
         if len(indices) > 3 or any(
-            not isinstance(value, (int, np.integer, slice))
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, np.integer, slice))
             for value in indices
         ):
             raise IndexError(
-                "detector spectra support integer and slice indexing"
+                "detector spectra support integer and slice indexing, "
+                "not boolean or advanced indexing"
             )
         y, x, z = indices + (slice(None),) * (3 - len(indices))
         if isinstance(x, slice):
@@ -102,6 +113,12 @@ def read_spectral_layout(
         raise ValueError("unsupported detector spectral layout")
     shape = payload.get("shape")
     edges = payload.get("x_edges")
+    return _validate_spectral_shape_edges(shape, edges)
+
+
+def _validate_spectral_shape_edges(
+    shape: Any, edges: Any
+) -> tuple[tuple[int, int, int], np.ndarray]:
     if (
         not isinstance(shape, list)
         or len(shape) != 3
@@ -146,6 +163,9 @@ def create_detector_spectra(
     layout = "dense" if x_edges is None else "tile-rows"
     physical_shape = shape
     if x_edges is not None:
+        shape, x_edges = _validate_spectral_shape_edges(
+            list(shape), x_edges.tolist()
+        )
         physical_shape = (shape[0], len(x_edges) - 1, shape[2])
         payload = {
             "schema": "cuphoton.xray.tile-rows/v1",

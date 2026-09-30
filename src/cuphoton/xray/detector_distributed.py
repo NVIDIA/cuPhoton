@@ -33,6 +33,7 @@ from .detector_artifacts import (
     validate_detector_fit_options,
 )
 from .detector_mask import format_y_ranges, parse_y_ranges
+from .detector_storage import ARTIFACT_LAYOUTS
 from .hdf5 import probe_hdf5_file
 
 _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
@@ -192,7 +193,7 @@ def build_detector_artifact_distributed_plan(
     options = dict(_DETECTOR_OPTION_DEFAULTS)
     options.update(detector_options or {})
     options["tile_shape"] = tuple(tile_shape)
-    if options["artifact_layout"] not in {"dense", "tile-rows"}:
+    if options["artifact_layout"] not in ARTIFACT_LAYOUTS:
         raise ValueError("artifact_layout must be dense or tile-rows")
     if options["fit_diagnostics"] not in FIT_DIAGNOSTICS_LEVELS:
         raise ValueError(

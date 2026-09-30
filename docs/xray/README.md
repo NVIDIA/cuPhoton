@@ -149,6 +149,8 @@ saved ROI. For absolute detector coordinates, subtract the manifest's
 
 The compact reader supports integer and slice indexing, including negative
 indices and steps. Slice first to obtain NumPy arrays for downstream consumers.
+Implicit conversion such as `np.asarray(amplitudes)` or `np.nanmax(amplitudes)`
+raises `TypeError`; apply NumPy operations to a selected slice instead.
 Request bounded slices when exporting dense pixel data; `amplitudes[:, :, :]`
 expands the full logical cube and its repeated columns in memory. Compact
 storage reduces spectral bytes written, but full expansion can take longer

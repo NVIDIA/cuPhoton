@@ -3251,9 +3251,15 @@ def _validate_artifact_files(
     output_shape = tuple(int(value) for value in manifest["output_shape"])
     roi_dim = tuple(int(value) for value in manifest["roi_dim"])
     expected_2d = (roi_dim[1], roi_dim[0])
+    if len(output_shape) != 3 or output_shape[:2] != expected_2d:
+        raise ValueError(f"shard output_shape does not match roi_dim: {path}")
     layout = manifest.get("artifact_layout", "dense")
     if layout not in ARTIFACT_LAYOUTS:
         raise ValueError("unsupported detector artifact layout")
+    if layout == "tile-rows" and not (path / SPECTRAL_LAYOUT_FILE).exists():
+        raise ValueError(
+            f"missing shard spectral layout: {path / SPECTRAL_LAYOUT_FILE}"
+        )
     for name in SPECTRAL_ARRAYS:
         array_path = path / f"{name}.npy"
         if not spectral_path(array_path, layout).exists():
@@ -3710,7 +3716,7 @@ def _publish_detector_artifact_outputs(source: Path, target: Path) -> None:
     _clear_detector_artifact_outputs(target)
     for name in DETECTOR_ARRAYS:
         source_path = source / f"{name}.npy"
-        if not source_path.exists():
+        if name in SPECTRAL_ARRAYS and not source_path.exists():
             source_path = spectral_path(source_path, "tile-rows")
         shutil.move(str(source_path), str(target / source_path.name))
     layout_path = source / SPECTRAL_LAYOUT_FILE

@@ -33,6 +33,11 @@ from cuphoton.xray.detector_distributed import (
     build_detector_artifact_distributed_plan,
     render_local_shell_script,
 )
+from cuphoton.xray.detector_storage import (
+    SPECTRAL_LAYOUT_FILE,
+    create_detector_spectra,
+    load_detector_array,
+)
 
 
 def main(argv=None, *, program_name=None):
@@ -440,6 +445,7 @@ def test_merge_detector_artifact_shards(tmp_path, artifact_layout):
         roi_dim=(3, 2),
         global_roi_dim=(5, 2),
         fill=1.0,
+        artifact_layout=artifact_layout,
     )
     right = _write_shard(
         tmp_path / "right",
@@ -449,32 +455,8 @@ def test_merge_detector_artifact_shards(tmp_path, artifact_layout):
         roi_dim=(2, 2),
         global_roi_dim=(5, 2),
         fill=2.0,
+        artifact_layout=artifact_layout,
     )
-
-    from cuphoton.xray.detector_storage import (
-        create_detector_spectra,
-        load_detector_array,
-    )
-
-    if artifact_layout == "tile-rows":
-        for root in (left, right):
-            path = root / "manifest.json"
-            manifest = json.loads(path.read_text())
-            shape = tuple(manifest["output_shape"])
-            spectra = create_detector_spectra(
-                root, shape, x_edges=np.asarray([0, shape[1]])
-            )
-            for name, values in spectra.items():
-                source = root / f"{name}.npy"
-                values[:] = np.load(source)[:, :1]
-                values.flush()
-                source.unlink()
-            manifest["artifact_layout"] = artifact_layout
-            manifest["resume_identity"] = detector_artifact_resume_identity(
-                manifest
-            )
-            manifest["config_hash"] = _detector_artifact_config_hash(manifest)
-            path.write_text(json.dumps(manifest))
 
     result = merge_detector_artifact_shards(
         shard_dirs=(right, left),
@@ -614,7 +596,13 @@ def test_merge_detector_artifact_shards_combines_full_diagnostics(tmp_path):
         )
 
 
-def test_merge_rejects_shards_from_different_inputs(tmp_path):
+@pytest.mark.parametrize(
+    ("input_identity", "artifact_layout"),
+    [("dataset-b", "dense"), ("dataset-a", "tile-rows")],
+)
+def test_merge_rejects_incompatible_shards(
+    tmp_path, input_identity, artifact_layout
+):
     left = _write_shard(
         tmp_path / "left",
         index=0,
@@ -633,7 +621,8 @@ def test_merge_rejects_shards_from_different_inputs(tmp_path):
         roi_dim=(1, 2),
         global_roi_dim=(2, 2),
         fill=2.0,
-        input_identity="dataset-b",
+        input_identity=input_identity,
+        artifact_layout=artifact_layout,
     )
 
     with pytest.raises(ValueError, match="configuration mismatch"):
@@ -641,6 +630,66 @@ def test_merge_rejects_shards_from_different_inputs(tmp_path):
             shard_dirs=(left, right),
             output_dir=tmp_path / "merged",
         )
+    assert not (tmp_path / "merged").exists()
+
+
+@pytest.mark.parametrize("artifact_layout", ["dense", "tile-rows"])
+def test_merge_rejects_spectral_shape_inconsistent_with_roi(
+    tmp_path, artifact_layout
+):
+    shard = _write_shard(
+        tmp_path / "shard",
+        index=0,
+        count=1,
+        roi_lower=(0, 0),
+        roi_dim=(3, 2),
+        global_roi_dim=(3, 2),
+        fill=1.0,
+        artifact_layout=artifact_layout,
+    )
+    manifest_path = shard / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["output_shape"] = [2, 4, 4]
+    arrays = create_detector_spectra(
+        shard,
+        (2, 4, 4),
+        x_edges=np.asarray([0, 4])
+        if artifact_layout == "tile-rows"
+        else None,
+    )
+    for array in arrays.values():
+        array[:] = 1.0
+        array.flush()
+    manifest_path.write_text(json.dumps(manifest))
+    assert not detector_artifact_complete(shard)
+    with pytest.raises(
+        ValueError, match="output_shape does not match roi_dim"
+    ):
+        merge_detector_artifact_shards(
+            shard_dirs=(shard,), output_dir=tmp_path / "merged"
+        )
+    assert not (tmp_path / "merged").exists()
+    assert not list(tmp_path.glob(".merged.tmp-*"))
+
+
+def test_merge_reports_missing_compact_layout(tmp_path):
+    shard = _write_shard(
+        tmp_path / "shard",
+        index=0,
+        count=1,
+        roi_lower=(0, 0),
+        roi_dim=(3, 2),
+        global_roi_dim=(3, 2),
+        fill=1.0,
+        artifact_layout="tile-rows",
+    )
+    (shard / SPECTRAL_LAYOUT_FILE).unlink()
+    assert not detector_artifact_complete(shard)
+    with pytest.raises(ValueError, match="missing shard spectral layout"):
+        merge_detector_artifact_shards(
+            shard_dirs=(shard,), output_dir=tmp_path / "merged"
+        )
+    assert not (tmp_path / "merged").exists()
 
 
 def test_merge_rejects_shard_missing_identity_fields(tmp_path):
@@ -809,13 +858,22 @@ def _write_shard(
     fill: float,
     input_identity: str = "dataset-a",
     resume_identity: str | None = None,
+    artifact_layout: str = "dense",
 ) -> Path:
     root.mkdir(parents=True)
     height = roi_dim[1]
     width = roi_dim[0]
     shape = (height, width, 4)
-    for name in ("freq_all", "amp_all", "fft_all", "fft_freq_all"):
-        np.save(root / f"{name}.npy", np.full(shape, fill))
+    spectra = create_detector_spectra(
+        root,
+        shape,
+        x_edges=np.asarray([0, width])
+        if artifact_layout == "tile-rows"
+        else None,
+    )
+    for array in spectra.values():
+        array[:] = fill
+        array.flush()
     np.save(root / "amp_all_sum_filtered.npy", np.full((height, width), fill))
     np.save(
         root / FIT_STATUS_FILE,
@@ -879,6 +937,8 @@ def _write_shard(
             "x_range": [roi_lower[0], roi_lower[0] + roi_dim[0]],
         },
     }
+    if artifact_layout != "dense":
+        manifest["artifact_layout"] = artifact_layout
     manifest["resume_identity"] = (
         detector_artifact_resume_identity(manifest)
         if resume_identity is None

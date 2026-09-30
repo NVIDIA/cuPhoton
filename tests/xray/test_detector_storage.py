@@ -60,6 +60,7 @@ def test_tile_row_slices_preserve_bytes_and_dense_consumers(
     array = load_detector_array(compact / "amp_all.npy")
     reference = load_detector_array(dense / "amp_all.npy")
     assert isinstance(array, TileRowArray)
+    assert len(array) == reference.shape[0]
     assert isinstance(array.values, np.memmap)
     assert array.values.shape == (3, 2, 5)
     for key in (
@@ -110,6 +111,49 @@ def test_tile_row_slices_preserve_bytes_and_dense_consumers(
     assert left.keys() == right.keys()
     for key in left:
         np.testing.assert_array_equal(left[key], right[key])
+
+
+@pytest.mark.parametrize(
+    "operation", [np.asarray, np.nanmax, np.count_nonzero]
+)
+def test_compact_reader_requires_explicit_slice_for_numpy(
+    tmp_path, operation
+):
+    _dense, compact = _write_pair(tmp_path)
+    array = load_detector_array(compact / "amp_all.npy")
+    with pytest.raises(TypeError, match="bounded slice"):
+        operation(array)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [True, (slice(None), True, slice(None)), (Ellipsis, np.bool_(False))],
+)
+def test_compact_reader_rejects_boolean_indexing(tmp_path, key):
+    _dense, compact = _write_pair(tmp_path)
+    array = load_detector_array(compact / "amp_all.npy")
+    with pytest.raises(IndexError, match="not boolean"):
+        array[key]
+
+
+@pytest.mark.parametrize(
+    "edges", [[0, 3], [0, 4, 3, 7], [False, True], [[0, 3, 7]]]
+)
+def test_compact_writer_rejects_invalid_edges_before_writing(tmp_path, edges):
+    with pytest.raises(ValueError, match="shape or x edges"):
+        create_detector_spectra(
+            tmp_path, (3, 7, 5), x_edges=np.asarray(edges)
+        )
+    assert not list(tmp_path.iterdir())
+
+
+def test_publish_missing_pixel_map_reports_its_dense_filename(tmp_path):
+    _dense, compact = _write_pair(tmp_path)
+    missing = compact / "amp_all_sum_filtered.npy"
+    missing.unlink()
+    with pytest.raises(FileNotFoundError) as error:
+        _publish_detector_artifact_outputs(compact, tmp_path / "published")
+    assert error.value.filename == str(missing)
 
 
 def test_republishing_clears_old_storage_layout(tmp_path):
