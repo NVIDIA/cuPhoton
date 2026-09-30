@@ -49,10 +49,14 @@ These controls apply when the existing reader policy selects xDR. Reader
 selection and CPU fallback remain controlled by `--fits-reader`. Invalid options
 fail during validation; decode, I/O, and CUDA failures propagate to the caller.
 
-For `GZIP_1` and `GZIP_2`, the native decoder lets nvCOMP select a compatible
-hardware decompression engine when available. It falls back to CUDA
-decompression when the device or buffers do not support that path. Backend
-selection is automatic and preserves the decoded pixel values.
+For native Gzip decoding, `decompression_backend="auto"` lets nvCOMP select
+a compatible hardware decompression engine, with CUDA fallback when the
+device or buffers do not support that path. Set `decompression_backend="cuda"`
+to use CUDA kernels explicitly; this requires a native extension with backend
+selection support. Workflow APIs and descriptors accept
+`xdr_options={"decompression_backend": "cuda"}`, and the CLI exposes
+`--xdr-decompression-backend {auto,cuda}`. Backend selection preserves the
+decoded pixel values. Native raw DEFLATE uses CUDA in either mode.
 
 ## Read FITS images in a workflow
 

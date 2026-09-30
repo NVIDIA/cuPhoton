@@ -38,6 +38,17 @@ class XdrOptionsMixin:
         _set = XDR_OPTION_CHOICES["gzip_decoder"]
         _default = None
 
+    xdr_decompression_backend = None
+
+    class XdrDecompressionBackendArg(SetInvariant):
+        _arg = "--xdr-decompression-backend"
+        _help = (
+            "xDR decompression backend: auto or cuda. Omitted preserves "
+            "manifest choices; applies when the FITS reader uses xDR."
+        )
+        _set = XDR_OPTION_CHOICES["decompression_backend"]
+        _default = None
+
 
 def xdr_options_from_cli(command) -> dict[str, str]:
     """Collect explicit flags without replacing omitted manifest choices."""

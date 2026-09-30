@@ -164,6 +164,7 @@ class _BatchOptions(TypedDict):
     native_batcher: str | bool
     postprocess: str
     gzip_decoder: str
+    decompression_backend: str
 
 
 def parse_hdu_indices(value: str) -> tuple[int, ...]:
@@ -422,6 +423,7 @@ def bench_batch_load(
     data_mb: float,
     postprocess: str = "auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ) -> PhaseResult:
     fn = batch_to_device_stream if use_stream else batch_to_device
     phase = "batch_to_device_stream" if use_stream else "batch_to_device"
@@ -435,13 +437,14 @@ def bench_batch_load(
         native_batcher=native_batcher,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
+        decompression_backend=decompression_backend,
     )
 
     times: list[float] = []
     note = (
         f"{len(paths)} files x {len(tuple(hdu_indices))} HDUs, "
         f"native_batcher={native_batcher}, postprocess={postprocess}, "
-        f"gzip_decoder={gzip_decoder}"
+        f"gzip_decoder={gzip_decoder}, backend={decompression_backend}"
     )
     with nvtx_range(f"xdr.{phase}"):
         try:
@@ -564,6 +567,7 @@ def run_benchmark(
     native_batcher: str = "auto",
     postprocess: str = "auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
     mock_storage_kind: str | None = None,
     skip_gds_read: bool = False,
     output_json: Path | None = None,
@@ -577,7 +581,11 @@ def run_benchmark(
     """
 
     normalize_xdr_options(
-        {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+        {
+            "postprocess": postprocess,
+            "gzip_decoder": gzip_decoder,
+            "decompression_backend": decompression_backend,
+        }
     )
     paths = resolve_paths(
         fits_files,
@@ -656,6 +664,7 @@ def run_benchmark(
                 native_batcher=resolved_native_batcher,
                 postprocess=postprocess,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 use_stream=False,
                 data_mb=total_data_mb,
             )
@@ -673,6 +682,7 @@ def run_benchmark(
                 native_batcher=resolved_native_batcher,
                 postprocess=postprocess,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 use_stream=True,
                 data_mb=total_data_mb,
             )
@@ -717,6 +727,7 @@ def run_benchmark(
                     "native_batcher": native_batcher,
                     "postprocess": postprocess,
                     "gzip_decoder": gzip_decoder,
+                    "decompression_backend": decompression_backend,
                     "native_batcher_enabled": batcher_enabled,
                     "native_batcher_error": batcher_error,
                     "skip_gds_read": skip_gds_read,

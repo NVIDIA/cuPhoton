@@ -50,7 +50,8 @@ py::object batch_decompress_impl(
         out_sizes,
     std::uintptr_t stream_ptr,
     bool use_native_pool,
-    bool gzip_wrapped);
+    bool gzip_wrapped,
+    const std::string& decompression_backend);
 
 // Batched DEFLATE decompress across N tiles packed inside one device buffer.
 //
@@ -83,7 +84,8 @@ void batch_deflate_decompress(
         out_offsets,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
         out_sizes,
-    std::uintptr_t stream_ptr) {
+    std::uintptr_t stream_ptr,
+    const std::string& decompression_backend) {
     batch_decompress_impl(
         d_concat_ptr,
         rel_offsets,
@@ -93,7 +95,8 @@ void batch_deflate_decompress(
         out_sizes,
         stream_ptr,
         false,
-        false);
+        false,
+        decompression_backend);
 }
 
 py::object batch_deflate_decompress_pooled(
@@ -107,7 +110,8 @@ py::object batch_deflate_decompress_pooled(
         out_offsets,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
         out_sizes,
-    std::uintptr_t stream_ptr) {
+    std::uintptr_t stream_ptr,
+    const std::string& decompression_backend) {
     return batch_decompress_impl(
         d_concat_ptr,
         rel_offsets,
@@ -117,7 +121,8 @@ py::object batch_deflate_decompress_pooled(
         out_sizes,
         stream_ptr,
         true,
-        false);
+        false,
+        decompression_backend);
 }
 
 py::object batch_gzip_decompress(
@@ -132,7 +137,8 @@ py::object batch_gzip_decompress(
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
         out_sizes,
     std::uintptr_t stream_ptr,
-    bool use_native_pool) {
+    bool use_native_pool,
+    const std::string& decompression_backend) {
     return batch_decompress_impl(
         d_concat_ptr,
         rel_offsets,
@@ -142,7 +148,8 @@ py::object batch_gzip_decompress(
         out_sizes,
         stream_ptr,
         use_native_pool,
-        true);
+        true,
+        decompression_backend);
 }
 
 py::object batch_decompress_impl(
@@ -158,7 +165,17 @@ py::object batch_decompress_impl(
         out_sizes,
     std::uintptr_t stream_ptr,
     bool use_native_pool,
-    bool gzip_wrapped) {
+    bool gzip_wrapped,
+    const std::string& decompression_backend) {
+    nvcompDecompressBackend_t backend;
+    if (decompression_backend == "auto") {
+        backend = NVCOMP_DECOMPRESS_BACKEND_DEFAULT;
+    } else if (decompression_backend == "cuda") {
+        backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
+    } else {
+        throw std::invalid_argument(
+            "decompression_backend must be 'auto' or 'cuda'");
+    }
     const std::size_t n = static_cast<std::size_t>(rel_offsets.size());
     if (lengths.size() != static_cast<py::ssize_t>(n)
         || out_offsets.size() != static_cast<py::ssize_t>(n)
@@ -215,12 +232,11 @@ py::object batch_decompress_impl(
     void* d_actual_sizes = nullptr;
 
     auto opts = nvcompBatchedDeflateDecompressDefaultOpts;
-    // The hardware backend requires non-stream-ordered scratch allocations.
-    // Keep this path on CUDA until that ownership contract is supported.
+    // Raw DEFLATE retains its CUDA path in either mode.
     opts.backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
     auto gzip_opts = nvcompBatchedGzipDecompressDefaultOpts;
-    // Let nvCOMP use compatible hardware engines and fall back to CUDA.
-    gzip_opts.backend = NVCOMP_DECOMPRESS_BACKEND_DEFAULT;
+    // DEFAULT selects compatible hardware and falls back to CUDA otherwise.
+    gzip_opts.backend = backend;
     // NAIVE accepts byte-aligned FITS gzip tile starts. LOOKAHEAD requires
     // additional input alignment and is intended for much larger chunks.
     gzip_opts.algorithm = NVCOMP_GZIP_DECOMPRESS_ALGORITHM_NAIVE;
@@ -410,6 +426,8 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
     m.doc() =
         "Batched Gzip/DEFLATE decompression — device-pointer interface to nvcomp.";
 
+    m.attr("supports_decompression_backend") = true;
+
     xdr_gpu::bind_io(m);
     xdr_gpu::bind_memory_manager(m);
 
@@ -423,6 +441,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("out_offsets"),
         py::arg("out_sizes"),
         py::arg("stream_ptr") = 0,
+        py::arg("decompression_backend") = "auto",
         "Batched DEFLATE decompress across N tiles packed in one device buffer.\n"
         "Caller must have already stripped the RFC-1952 gzip wrapper from each\n"
         "tile (advance rel_offsets past the header, shorten lengths by header+8).");
@@ -436,6 +455,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("out_offsets"),
         py::arg("out_sizes"),
         py::arg("stream_ptr") = 0,
+        py::arg("decompression_backend") = "auto",
         "Batched DEFLATE decompress using native pooled scratch buffers.\n"
         "Returns an owner capsule that must stay alive until stream work completes.");
     m.def(
@@ -449,6 +469,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("out_sizes"),
         py::arg("stream_ptr") = 0,
         py::arg("use_native_pool") = false,
+        py::arg("decompression_backend") = "auto",
         "Batched Gzip decompress including RFC-1952 headers and trailers.\n"
         "Pooled calls return an owner capsule retained until stream completion.");
 }

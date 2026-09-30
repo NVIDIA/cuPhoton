@@ -44,6 +44,7 @@ def batch_to_device(
     native_batcher: str | bool = "auto",
     postprocess: str = "auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ):
     """Load image HDUs from FITS files into stacked device arrays.
 
@@ -66,7 +67,7 @@ def batch_to_device(
     that preserves the existing API without requiring Astropy HDU objects.
     prefetch_depth, decode_batch_files, batch_queue_depth,
     native_read_threads, native_plan_threads, native_batcher, postprocess,
-    gzip_decoder
+    gzip_decoder, decompression_backend
         Passed through to `batch_to_device_stream` when ``parallel=True``.
 
     Returns
@@ -92,6 +93,7 @@ def batch_to_device(
         native_batcher=native_batcher,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
+        decompression_backend=decompression_backend,
         section=section,
         stream=stream,
     )
