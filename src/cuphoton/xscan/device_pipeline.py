@@ -650,17 +650,28 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
-    backend: Literal["cupy", "native"] = "cupy"
+    backend: Literal["cupy", "cutile", "native"] = "cupy"
+    fusion: bool = False
 
     def __post_init__(self) -> None:
         if self.model != "gaussian":
             raise ValueError("xfit model must be 'gaussian'")
         if self.mode != "difference":
             raise ValueError("xfit mode must be 'difference'")
-        if self.backend not in ("cupy", "native"):
-            raise ValueError("xfit backend must be 'cupy' or 'native'")
+        if self.backend not in ("cupy", "cutile", "native"):
+            raise ValueError(
+                "xfit backend must be 'cupy', 'cutile' or 'native'"
+            )
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
+        if not isinstance(self.fusion, bool):
+            raise TypeError("xfit fusion must be boolean")
+        if self.fusion and self.backend != "cutile":
+            raise ValueError("xfit fusion requires backend='cutile'")
+        if self.backend == "cutile" and self.use_finite_difference:
+            raise ValueError(
+                "xfit backend='cutile' does not support finite differences"
+            )
         if self.backend == "native" and self.use_finite_difference:
             raise ValueError(
                 "native xfit does not support finite differences"
@@ -715,6 +726,8 @@ class DeviceXFitPipelineConfig:
         payload = asdict(self)
         if self.backend == "cupy":
             del payload["backend"]
+        if not self.fusion:
+            del payload["fusion"]
         return payload
 
     def execution_payload(self) -> dict[str, Any]:
@@ -723,6 +736,8 @@ class DeviceXFitPipelineConfig:
         payload: dict[str, Any] = {}
         if self.backend != "cupy":
             payload["backend"] = self.backend
+        if self.fusion:
+            payload["fusion"] = True
         return payload
 
     def solver_payload(self) -> dict[str, Any]:
@@ -732,6 +747,7 @@ class DeviceXFitPipelineConfig:
         del payload["model"]
         del payload["mode"]
         payload.pop("backend", None)
+        payload.pop("fusion", None)
         return payload
 
     @classmethod
@@ -740,9 +756,10 @@ class DeviceXFitPipelineConfig:
     ) -> DeviceXFitPipelineConfig:
         """Restore exact LM settings from JSON-compatible values."""
 
+        expected = frozenset(value.name for value in fields(cls))
         values = json_mapping(payload, field="device pipeline xfit config")
         values.setdefault("backend", "cupy")
-        expected = frozenset(value.name for value in fields(cls))
+        values.setdefault("fusion", False)
         values = _require_exact_fields(
             values,
             expected=expected,
@@ -1079,9 +1096,10 @@ def _device_pipeline_evidence_layout_contract(
         "mode": "difference",
         "dtype": "float64",
     }
-    if xfit["backend"] not in ("cupy", "native"):
+    if xfit["backend"] not in ("cupy", "cutile", "native"):
         raise ValueError(
-            "scientific evidence xfit.backend must be 'cupy' or 'native'"
+            "scientific evidence xfit.backend must be 'cupy', 'cutile' "
+            "or 'native'"
         )
     for name, expected in expected_xfit.items():
         if xfit[name] != expected:
@@ -2158,6 +2176,7 @@ def _pack_scientific_evidence(
     candidate_count: int,
     kernel_shape: tuple[int, int],
     flux_conserve: bool,
+    xfit_backend: Literal["cupy", "cutile", "native"] = "cupy",
 ) -> _PackedScientificEvidence:
     """Pack all parity evidence on the producer stream as float64."""
 
@@ -2183,7 +2202,8 @@ def _pack_scientific_evidence(
         str(xfit_result.mode),
         str(xfit_result.dtype),
     )
-    if xfit_contract[0] not in ("cupy", "native") or xfit_contract[1:] != (
+    if xfit_contract != (
+        xfit_backend,
         "levenberg-marquardt",
         "gaussian",
         "difference",
@@ -3352,6 +3372,7 @@ def run_device_pipeline_item(
                         candidate_count=len(item.candidates),
                         kernel_shape=context.config.xpois.kernel_shape,
                         flux_conserve=context.config.xpois.flux_conserve,
+                        xfit_backend=context.config.xfit.backend,
                     ),
                 )
                 evidence_layout = _append_prediction_evidence_layout(
