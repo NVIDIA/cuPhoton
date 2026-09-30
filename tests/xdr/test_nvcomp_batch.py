@@ -961,3 +961,60 @@ def test_forced_cuda_rejects_missing_native_capability(
             header_sizes=[10],
             decompression_backend="cuda",
         )
+
+
+@pytest.mark.parametrize("backend", ["auto", "cuda"])
+@pytest.mark.parametrize("route", ["gzip", "deflate", "deflate_pooled"])
+def test_native_backend_forwarding(monkeypatch, backend, route):
+    calls = []
+    output = SimpleNamespace(data=SimpleNamespace(ptr=200))
+    owner = object()
+    pooled = route.endswith("_pooled")
+
+    def record(*args, **kwargs):
+        calls.append((args, kwargs))
+        return owner if pooled else None
+
+    entrypoint = {
+        "gzip": "batch_gzip_decompress",
+        "deflate": "batch_deflate_decompress",
+        "deflate_pooled": "batch_deflate_decompress_pooled",
+    }[route]
+    extension = SimpleNamespace(
+        supports_decompression_backend=True, **{entrypoint: record}
+    )
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setattr(
+        nvcomp_batch, "_native_device_empty_uint8", lambda *a, **k: output
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            empty=lambda *a, **k: output,
+            uint8=np.uint8,
+            cuda=SimpleNamespace(
+                get_current_stream=lambda: SimpleNamespace(ptr=300)
+            ),
+        ),
+    )
+    keepalive = [] if pooled else None
+    actual, _ = nvcomp_batch.gpu_gzip_decompress_batch(
+        SimpleNamespace(size=20, data=SimpleNamespace(ptr=100)),
+        [0],
+        [20],
+        [8],
+        gzip_wrapped=route == "gzip",
+        header_sizes=[10] if route == "gzip" else None,
+        use_native_pool=pooled,
+        keepalive=keepalive,
+        decompression_backend=backend,
+    )
+
+    assert actual is output
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[6] == 300
+    assert kwargs == {"decompression_backend": backend}
+    if pooled:
+        assert keepalive == [output, owner]

@@ -71,8 +71,10 @@ py::object batch_decompress_impl(
 //       Per-tile uncompressed size (must match actual decompressed size).
 //   stream_ptr   : uintptr_t
 //       CUDA stream. 0 = default stream.
+//   decompression_backend : string
+//       Validated as "auto" or "cuda". Raw DEFLATE always uses CUDA.
 //
-// Raises on nvcomp / CUDA failure. Returns None.
+// Raises on nvCOMP / CUDA launch failure. Returns None; execution is asynchronous.
 void batch_deflate_decompress(
     std::uintptr_t d_concat_ptr,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
@@ -125,6 +127,9 @@ py::object batch_deflate_decompress_pooled(
         decompression_backend);
 }
 
+// Gzip uses the same pointer/size arrays, with offsets and lengths covering
+// complete RFC-1952 streams. "auto" permits compatible hardware with CUDA
+// fallback; "cuda" selects CUDA. A pooled owner must survive stream completion.
 py::object batch_gzip_decompress(
     std::uintptr_t d_concat_ptr,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
@@ -444,7 +449,8 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("decompression_backend") = "auto",
         "Batched DEFLATE decompress across N tiles packed in one device buffer.\n"
         "Caller must have already stripped the RFC-1952 gzip wrapper from each\n"
-        "tile (advance rel_offsets past the header, shorten lengths by header+8).");
+        "tile (advance rel_offsets past the header, shorten lengths by header+8).\n"
+        "decompression_backend accepts auto/cuda; raw DEFLATE always uses CUDA.");
     m.def(
         "batch_deflate_decompress_pooled",
         &xdr_gpu::batch_deflate_decompress_pooled,
@@ -457,7 +463,8 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("stream_ptr") = 0,
         py::arg("decompression_backend") = "auto",
         "Batched DEFLATE decompress using native pooled scratch buffers.\n"
-        "Returns an owner capsule that must stay alive until stream work completes.");
+        "Returns an owner capsule that must stay alive until stream work completes.\n"
+        "decompression_backend accepts auto/cuda; raw DEFLATE always uses CUDA.");
     m.def(
         "batch_gzip_decompress",
         &xdr_gpu::batch_gzip_decompress,
@@ -471,5 +478,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("use_native_pool") = false,
         py::arg("decompression_backend") = "auto",
         "Batched Gzip decompress including RFC-1952 headers and trailers.\n"
-        "Pooled calls return an owner capsule retained until stream completion.");
+        "Pooled calls return an owner capsule retained until stream completion.\n"
+        "decompression_backend=auto permits compatible hardware with CUDA fallback;\n"
+        "cuda selects CUDA explicitly.");
 }
