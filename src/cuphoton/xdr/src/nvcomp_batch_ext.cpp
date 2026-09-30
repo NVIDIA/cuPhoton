@@ -130,6 +130,9 @@ py::object batch_deflate_decompress_impl(
         }
         h_comp_ptrs[i] =
             reinterpret_cast<const void*>(d_concat_ptr + static_cast<std::size_t>(ro(i)));
+        if (reinterpret_cast<std::uintptr_t>(h_comp_ptrs[i]) % 4 != 0) {
+            throw std::invalid_argument("raw DEFLATE inputs must be 4-byte aligned");
+        }
         h_out_ptrs[i] = reinterpret_cast<void*>(d_out_ptr + static_cast<std::size_t>(oo(i)));
         h_comp_sizes[i] = static_cast<std::size_t>(ln(i));
         h_out_sizes[i] = static_cast<std::size_t>(os(i));
@@ -143,11 +146,12 @@ py::object batch_deflate_decompress_impl(
     void* d_comp_sizes = nullptr;
     void* d_out_sizes = nullptr;
     void* d_temp = nullptr;
+    void* d_statuses = nullptr;
+    void* d_actual_sizes = nullptr;
 
     auto opts = nvcompBatchedDeflateDecompressDefaultOpts;
-    // The hardware backend requires non-stream-ordered scratch plus explicit
-    // actual-size and status buffers. Keep this path on CUDA until those
-    // ownership and reporting semantics are implemented together.
+    // The hardware backend requires non-stream-ordered scratch allocations.
+    // Keep this path on CUDA until that ownership contract is supported.
     opts.backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
     std::size_t temp_bytes = 0;
     check_nvcomp(
@@ -156,39 +160,67 @@ py::object batch_deflate_decompress_impl(
         "get temp size");
 
     std::vector<std::shared_ptr<void>> pooled_keepalive;
-    if (use_native_pool) {
-        int device_id = -1;
-        check_cuda(cudaGetDevice(&device_id), "cudaGetDevice native nvcomp scratch");
-        auto comp_ptrs = acquire_native_device_allocation(device_id, n * sizeof(void*));
-        auto out_ptrs = acquire_native_device_allocation(device_id, n * sizeof(void*));
-        auto comp_sizes = acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
-        auto out_sizes_buf = acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
-        d_comp_ptrs = comp_ptrs.data;
-        d_out_ptrs = out_ptrs.data;
-        d_comp_sizes = comp_sizes.data;
-        d_out_sizes = out_sizes_buf.data;
-        pooled_keepalive.push_back(std::move(comp_ptrs.owner));
-        pooled_keepalive.push_back(std::move(out_ptrs.owner));
-        pooled_keepalive.push_back(std::move(comp_sizes.owner));
-        pooled_keepalive.push_back(std::move(out_sizes_buf.owner));
-        if (temp_bytes > 0) {
-            auto temp = acquire_native_device_allocation(device_id, temp_bytes);
-            d_temp = temp.data;
-            pooled_keepalive.push_back(std::move(temp.owner));
+    auto release_async_scratch = [&]() {
+        for (void* ptr : {d_temp,
+                 d_comp_ptrs,
+                 d_out_ptrs,
+                 d_comp_sizes,
+                 d_out_sizes,
+                 d_statuses,
+                 d_actual_sizes}) {
+            if (ptr != nullptr) {
+                cudaFreeAsync(ptr, stream);
+            }
         }
-    } else {
-        check_cuda(cudaMallocAsync(&d_comp_ptrs, n * sizeof(void*), stream), "alloc comp_ptrs");
-        check_cuda(cudaMallocAsync(&d_out_ptrs, n * sizeof(void*), stream), "alloc out_ptrs");
-        check_cuda(
-            cudaMallocAsync(&d_comp_sizes, n * sizeof(std::size_t), stream), "alloc comp_sizes");
-        check_cuda(
-            cudaMallocAsync(&d_out_sizes, n * sizeof(std::size_t), stream), "alloc out_sizes");
-        if (temp_bytes > 0) {
-            check_cuda(cudaMallocAsync(&d_temp, temp_bytes, stream), "alloc temp");
-        }
-    }
+    };
 
     try {
+        if (use_native_pool) {
+            int device_id = -1;
+            check_cuda(cudaGetDevice(&device_id), "cudaGetDevice native nvcomp scratch");
+            auto comp_ptrs = acquire_native_device_allocation(device_id, n * sizeof(void*));
+            auto out_ptrs = acquire_native_device_allocation(device_id, n * sizeof(void*));
+            auto comp_sizes = acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
+            auto out_sizes_buf =
+                acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
+            auto statuses = acquire_native_device_allocation(device_id, n * sizeof(nvcompStatus_t));
+            auto actual_sizes =
+                acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
+            d_comp_ptrs = comp_ptrs.data;
+            d_out_ptrs = out_ptrs.data;
+            d_comp_sizes = comp_sizes.data;
+            d_out_sizes = out_sizes_buf.data;
+            d_statuses = statuses.data;
+            d_actual_sizes = actual_sizes.data;
+            pooled_keepalive.push_back(std::move(comp_ptrs.owner));
+            pooled_keepalive.push_back(std::move(out_ptrs.owner));
+            pooled_keepalive.push_back(std::move(comp_sizes.owner));
+            pooled_keepalive.push_back(std::move(out_sizes_buf.owner));
+            pooled_keepalive.push_back(std::move(statuses.owner));
+            pooled_keepalive.push_back(std::move(actual_sizes.owner));
+            if (temp_bytes > 0) {
+                auto temp = acquire_native_device_allocation(device_id, temp_bytes);
+                d_temp = temp.data;
+                pooled_keepalive.push_back(std::move(temp.owner));
+            }
+        } else {
+            check_cuda(cudaMallocAsync(&d_comp_ptrs, n * sizeof(void*), stream), "alloc comp_ptrs");
+            check_cuda(cudaMallocAsync(&d_out_ptrs, n * sizeof(void*), stream), "alloc out_ptrs");
+            check_cuda(
+                cudaMallocAsync(&d_comp_sizes, n * sizeof(std::size_t), stream),
+                "alloc comp_sizes");
+            check_cuda(
+                cudaMallocAsync(&d_out_sizes, n * sizeof(std::size_t), stream), "alloc out_sizes");
+            check_cuda(
+                cudaMallocAsync(&d_statuses, n * sizeof(nvcompStatus_t), stream), "alloc statuses");
+            check_cuda(
+                cudaMallocAsync(&d_actual_sizes, n * sizeof(std::size_t), stream),
+                "alloc actual sizes");
+            if (temp_bytes > 0) {
+                check_cuda(cudaMallocAsync(&d_temp, temp_bytes, stream), "alloc temp");
+            }
+        }
+
         check_cuda(
             cudaMemcpyAsync(
                 d_comp_ptrs, h_comp_ptrs.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream),
@@ -218,43 +250,44 @@ py::object batch_deflate_decompress_impl(
         // can progress while the async kernel launches + returns.
         {
             py::gil_scoped_release release;
+            // Supply both output buffers for nvCOMP 5.2 compatibility.
             check_nvcomp(
                 nvcompBatchedDeflateDecompressAsync(
                     static_cast<const void* const*>(d_comp_ptrs),
                     static_cast<const std::size_t*>(d_comp_sizes),
                     static_cast<const std::size_t*>(d_out_sizes),
-                    nullptr,  // device_uncompressed_chunk_bytes — optional for CUDA backend
+                    static_cast<std::size_t*>(d_actual_sizes),
                     n,
                     d_temp,
                     temp_bytes,
                     static_cast<void* const*>(d_out_ptrs),
                     opts,
-                    nullptr,  // device_statuses — optional
+                    static_cast<nvcompStatus_t*>(d_statuses),
                     stream),
                 "nvcompBatchedDeflateDecompressAsync");
+        }
+
+        if (use_native_pool) {
+            auto holder = std::make_unique<std::vector<std::shared_ptr<void>>>();
+            py::capsule owner(holder.get(), [](void* p) {
+                delete reinterpret_cast<std::vector<std::shared_ptr<void>>*>(p);
+            });
+            holder->swap(pooled_keepalive);
+            holder.release();
+            return owner;
         }
     } catch (...) {
         if (use_native_pool) {
             cudaStreamSynchronize(stream);
+        } else {
+            release_async_scratch();
         }
         throw;
     }
 
-    if (use_native_pool) {
-        auto holder = new std::vector<std::shared_ptr<void>>(std::move(pooled_keepalive));
-        return py::capsule(holder, [](void* p) {
-            delete reinterpret_cast<std::vector<std::shared_ptr<void>>*>(p);
-        });
-    }
-
     // Stream-ordered frees — nvcomp consumes its inputs asynchronously and
     // these frees will be sequenced after the kernel completes.
-    if (d_temp)
-        cudaFreeAsync(d_temp, stream);
-    cudaFreeAsync(d_comp_ptrs, stream);
-    cudaFreeAsync(d_out_ptrs, stream);
-    cudaFreeAsync(d_comp_sizes, stream);
-    cudaFreeAsync(d_out_sizes, stream);
+    release_async_scratch();
     return py::none();
 }
 

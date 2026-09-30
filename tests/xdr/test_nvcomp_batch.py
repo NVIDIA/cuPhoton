@@ -532,7 +532,7 @@ def test_gpu_batch_retains_output_before_native_launch(monkeypatch):
 
     with pytest.raises(RuntimeError, match="native launch failed"):
         nvcomp_batch.gpu_gzip_decompress_batch(
-            SimpleNamespace(size=20, data=SimpleNamespace(ptr=100)),
+            SimpleNamespace(size=20, data=SimpleNamespace(ptr=102)),
             [0],
             [20],
             [1],
