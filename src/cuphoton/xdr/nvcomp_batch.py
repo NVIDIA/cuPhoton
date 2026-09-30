@@ -22,12 +22,13 @@ import os
 import platform
 import struct
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 
-_DEFLATE_CODEC = None
+_DEFLATE_CODEC_CACHE = threading.local()
 _REPACK_DEFLATE_KERNEL = None
 _CPP_EXT = None
 _CPP_EXT_PROBED = False
@@ -225,18 +226,39 @@ def _preload_cpp_ext_libraries() -> None:
     _CPP_EXT_LIBS_PRELOADED = True
 
 
-def _get_codec():
-    """Return a cached nvcomp deflate+RAW codec. Creating a codec allocates a
-    CUDA stream (~3-4 ms); cache it."""
-    global _DEFLATE_CODEC
-    if _DEFLATE_CODEC is None:
+class _StreamBoundCodec:
+    """Destroy the codec before releasing its CuPy stream owner."""
+
+    def __init__(self, stream, device_id):
         import nvidia.nvcomp as nvcomp
 
-        _DEFLATE_CODEC = nvcomp.Codec(
+        self.stream = stream
+        self.device_id = device_id
+        self.codec = nvcomp.Codec(
             algorithm="deflate",
             bitstream_kind=nvcomp.BitstreamKind.RAW,
+            cuda_stream=int(stream.ptr),
         )
-    return _DEFLATE_CODEC
+
+    def __del__(self):
+        self.codec = None
+
+
+def _get_codec():
+    """Reuse one codec per thread, bound to its current device and stream."""
+    import cupy as cp
+
+    stream = cp.cuda.get_current_stream()
+    device_id = cp.cuda.runtime.getDevice()
+    cached = getattr(_DEFLATE_CODEC_CACHE, "entry", None)
+    if (
+        cached is None
+        or cached.device_id != device_id
+        or cached.stream.ptr != stream.ptr
+    ):
+        cached = _StreamBoundCodec(stream, device_id)
+        _DEFLATE_CODEC_CACHE.entry = cached
+    return cached.codec
 
 
 def _try_get_cpp_ext():
@@ -756,6 +778,8 @@ def _checked_output_offsets(
 
 def _align_deflate_inputs(d_concat, offsets, lengths):
     """Pack raw DEFLATE payloads at nvCOMP's required four-byte alignment."""
+    offsets = np.asarray(offsets, dtype=np.int64)
+    lengths = np.asarray(lengths, dtype=np.int64)
     if not np.any((int(d_concat.data.ptr) + offsets) % 4):
         return d_concat, offsets, ()
 
@@ -833,7 +857,8 @@ def gpu_gzip_decompress_batch(
     d_concat : cupy.ndarray (uint8)
         Contiguous device buffer with concatenated compressed tile bytes.
     rel_offsets, lengths, uncompressed_sizes
-        Per-tile metadata arrays.
+        Per-tile metadata arrays. Decoded sizes must match the stream
+        contents.
     gzip_wrapped : bool
         If True (default), each tile is an RFC 1952 gzip stream; the
         native gzip decoder consumes its header and trailer directly. Older
@@ -855,7 +880,8 @@ def gpu_gzip_decompress_batch(
     header_sizes : array-like of int64 or None
         Optional precomputed per-tile gzip header lengths. When provided,
         the blocking device-to-host header probe is skipped. Only valid when
-        ``gzip_wrapped=True``.
+        ``gzip_wrapped=True``. These lengths locate raw DEFLATE payloads;
+        the native Gzip decoder parses the intact headers itself.
 
     Returns
     -------
@@ -863,6 +889,13 @@ def gpu_gzip_decompress_batch(
         Contiguous device buffer with decompressed tile bytes concatenated.
     out_offsets : numpy.ndarray (int64)
         Start offset of each decompressed tile inside ``d_out``.
+
+    Notes
+    -----
+    Inputs must contain valid compressed tiles and matching size metadata.
+    Header checks do not validate the compressed body or its checksum.
+    The Python fallback uses the current CuPy stream. Callers using an
+    externally owned stream must keep its underlying CUDA stream alive.
     """
     if gzip_decoder not in ("auto", "gzip", "deflate"):
         raise ValueError("gzip_decoder must be 'auto', 'gzip', or 'deflate'")
@@ -933,7 +966,7 @@ def gpu_gzip_decompress_batch(
         ext = None
     else:
         ext = _try_get_cpp_ext()
-        if ext is None:
+        if ext is None and gzip_decoder != "gzip":
             _warn_python_fallback_once()
 
     gzip_fn = getattr(ext, "batch_gzip_decompress", None)
@@ -1001,7 +1034,7 @@ def gpu_gzip_decompress_batch(
                     deflate_lengths,
                     d_out_ptr,
                     out_offsets,
-                    uncompressed_sizes,
+                    size_array,
                     stream_ptr,
                 )
                 keepalive.append(scratch_owner)
