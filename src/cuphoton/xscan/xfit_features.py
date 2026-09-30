@@ -1292,12 +1292,16 @@ def _validate_device_feature_source(
     if result.solver != "levenberg-marquardt":
         raise ValueError("xFit device result solver is unsupported")
     if (
-        result.backend not in {"cupy", "cutile", "native"}
+        result.backend not in {"cupy", "cutile", "native", "numba-cuda-mlir"}
         or result.result_location != "device"
     ):
         raise ValueError("xFit result must be a CuPy device result")
     if result.backend == "cutile" and result.model != "gaussian":
         raise ValueError("cuTile xFit features require the Gaussian model")
+    if result.backend == "numba-cuda-mlir" and result.model != "gaussian":
+        raise ValueError(
+            "Numba-CUDA-MLIR xFit results require a Gaussian model"
+        )
     parameter_names = _validate_live_feature_source(result)
     if int(result.device_id) != active_device_id:
         raise ValueError(

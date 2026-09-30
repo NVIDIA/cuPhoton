@@ -66,8 +66,9 @@ def _input(tmp_path, *, mode="difference", auxiliary="candidate"):
         ("gaussian", True, "does not support finite-difference fitting"),
     ],
 )
-def test_preflight_rejects_unsupported_cutile_settings(
-    tmp_path, monkeypatch, model, finite_difference, message
+@pytest.mark.parametrize("backend", ["cutile", "numba-cuda-mlir"])
+def test_preflight_rejects_unsupported_specialized_settings(
+    tmp_path, monkeypatch, model, finite_difference, message, backend
 ):
     def unexpected_load(*args, **kwargs):
         pytest.fail("invalid settings must fail before reading input")
@@ -77,7 +78,7 @@ def test_preflight_rejects_unsupported_cutile_settings(
         executor.prepare_xfit_workload(
             input_path=tmp_path / "missing.npz",
             fit_options={
-                "backend": "cutile",
+                "backend": backend,
                 "model": model,
                 "use_finite_difference": finite_difference,
             },
@@ -86,9 +87,7 @@ def test_preflight_rejects_unsupported_cutile_settings(
 
 @pytest.mark.parametrize("backend", ["auto", "numpy"])
 def test_preflight_rejects_cpu_backend_before_input_reads(tmp_path, backend):
-    with pytest.raises(
-        ValueError, match="requires backend cupy, cutile, or native"
-    ):
+    with pytest.raises(ValueError, match="requires backend cupy"):
         executor.prepare_xfit_workload(
             input_path=tmp_path / "missing.npz",
             fit_options={"backend": backend},
@@ -159,13 +158,18 @@ def test_finalizer_retains_planning_input_and_still_checks_content(
     worker.close()
 
 
-@pytest.mark.parametrize("fusion", [False, True])
-def test_preflight_accepts_analytic_gaussian_cutile(tmp_path, fusion):
+@pytest.mark.parametrize(
+    "backend,fusion",
+    [("cutile", False), ("cutile", True), ("numba-cuda-mlir", False)],
+)
+def test_preflight_accepts_analytic_gaussian_specialized(
+    tmp_path, backend, fusion
+):
     spec = executor.prepare_xfit_workload(
         input_path=_input(tmp_path),
-        fit_options={"backend": "cutile", "fusion": fusion},
+        fit_options={"backend": backend, "fusion": fusion},
     )
-    assert spec.backend == "cutile"
+    assert spec.backend == backend
     assert spec.options_payload["fit_options"]["fusion"] is fusion
 
 
@@ -196,9 +200,12 @@ def test_preflight_rejects_invalid_fusion_before_input_reads(
 @pytest.mark.parametrize(
     "runtime,rank", [("dragon", 0), ("mpi", 0), ("mpi", 1)]
 )
-@pytest.mark.parametrize("fusion", [False, True])
+@pytest.mark.parametrize(
+    "backend,fusion",
+    [("cupy", False), ("cutile", True), ("numba-cuda-mlir", False)],
+)
 def test_cli_dispatches_collective_preflight_and_preserves_options(
-    tmp_path, monkeypatch, capsys, runtime, rank, fusion
+    tmp_path, monkeypatch, capsys, runtime, rank, backend, fusion
 ):
     from types import SimpleNamespace
 
@@ -238,7 +245,7 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
                 "--model",
                 "gaussian",
                 "--backend",
-                "cutile" if fusion else "cupy",
+                backend,
                 *(["--fusion"] if fusion else []),
                 "--executor",
                 runtime,
@@ -263,6 +270,8 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
     assert kwargs["benchmark"].warmup_rounds == 1
     assert kwargs["benchmark"].measure_rounds == 2
     assert len(spec.items) == 2
+    assert spec.backend == backend
+    assert spec.options_payload["fit_options"]["backend"] == backend
     assert spec.options_payload["fit_options"]["max_evaluations"] == 10
     assert spec.options_payload["fit_options"]["fusion"] is fusion
     assert json.loads(capsys.readouterr().out)["status"] == "success"

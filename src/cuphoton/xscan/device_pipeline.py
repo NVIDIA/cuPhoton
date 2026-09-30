@@ -638,7 +638,7 @@ class DeviceXPOISPipelineConfig:
 
 @dataclass(frozen=True, slots=True)
 class DeviceXFitPipelineConfig:
-    """Levenberg-Marquardt controls for Gaussian difference fitting."""
+    """Backend and LM controls for Gaussian difference fitting."""
 
     model: Literal["gaussian"] = "gaussian"
     mode: Literal["difference"] = "difference"
@@ -651,7 +651,7 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
-    backend: Literal["cupy", "cutile", "native"] = "cupy"
+    backend: Literal["cupy", "cutile", "native", "numba-cuda-mlir"] = "cupy"
     fusion: bool = False
 
     def __post_init__(self) -> None:
@@ -659,9 +659,15 @@ class DeviceXFitPipelineConfig:
             raise ValueError("xfit model must be 'gaussian'")
         if self.mode != "difference":
             raise ValueError("xfit mode must be 'difference'")
-        if self.backend not in ("cupy", "cutile", "native"):
+        if self.backend not in (
+            "cupy",
+            "cutile",
+            "native",
+            "numba-cuda-mlir",
+        ):
             raise ValueError(
-                "xfit backend must be 'cupy', 'cutile' or 'native'"
+                "xfit backend must be 'cupy', 'cutile', 'native', "
+                "or 'numba-cuda-mlir'"
             )
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
@@ -677,9 +683,12 @@ class DeviceXFitPipelineConfig:
             raise ValueError(
                 "xfit backend='cutile' does not support finite differences"
             )
-        if self.backend == "native" and self.use_finite_difference:
+        if (
+            self.backend in {"native", "numba-cuda-mlir"}
+            and self.use_finite_difference
+        ):
             raise ValueError(
-                "native xfit does not support finite differences"
+                f"{self.backend} xfit does not support finite differences"
             )
         for name in ("f_tol", "x_tol", "g_tol", "finite_difference_step"):
             value = getattr(self, name)
@@ -1101,11 +1110,8 @@ def _device_pipeline_evidence_layout_contract(
         "mode": "difference",
         "dtype": "float64",
     }
-    if xfit["backend"] not in ("cupy", "cutile", "native"):
-        raise ValueError(
-            "scientific evidence xfit.backend must be 'cupy', 'cutile' "
-            "or 'native'"
-        )
+    if xfit["backend"] not in ("cupy", "cutile", "native", "numba-cuda-mlir"):
+        raise ValueError("scientific evidence xfit.backend is unsupported")
     for name, expected in expected_xfit.items():
         if xfit[name] != expected:
             raise ValueError(
@@ -2181,7 +2187,9 @@ def _pack_scientific_evidence(
     candidate_count: int,
     kernel_shape: tuple[int, int],
     flux_conserve: bool,
-    xfit_backend: Literal["cupy", "cutile", "native"] = "cupy",
+    xfit_backend: Literal[
+        "cupy", "cutile", "native", "numba-cuda-mlir"
+    ] = "cupy",
 ) -> _PackedScientificEvidence:
     """Pack all parity evidence on the producer stream as float64."""
 
