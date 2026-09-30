@@ -114,8 +114,9 @@ The supported FITS compression formats remain `GZIP_1` and `GZIP_2`.
 
 nvCOMP selects an engine for each native Gzip call. Its
 [Decompression Engine FAQ](https://docs.nvidia.com/cuda/nvcomp/decompression_engine_faq.html)
-lists B200, B300, GB200 and GB300 support; other Blackwell GPUs need not have
-this engine. The compressed data, output and decoded-size buffers must all
+lists B200, B300, GB200 and GB300 support. GB10 and RTX PRO 6000 Blackwell
+use CUDA kernels; the Blackwell name alone does not imply engine support.
+The compressed data, output and decoded-size buffers must all
 use compatible allocations. B200 has a 4 MiB hardware chunk limit; the limit
 on a device is available through `CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH`.
 Use `decompression_backend="cuda"` when comparing execution paths or reading
