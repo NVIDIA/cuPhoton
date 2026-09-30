@@ -73,5 +73,8 @@ See the [component guides](docs/README.md#workflow-guides),
 - Detector processing batches eligible row traces and FFTs. Detector maps
   retain the row-within-tile fit granularity; each row result is repeated
   across that tile's columns.
+- Detector artifacts support lossless `tile-rows` storage for compact spectra
+  and bounded pixel reads through the shared loader. Dense NPY output remains
+  the default for existing consumers.
 
 See the [xRay guide](docs/xray/README.md) for numerical contracts and options.

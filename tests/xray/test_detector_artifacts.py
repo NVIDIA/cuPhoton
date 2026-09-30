@@ -637,7 +637,10 @@ def test_fit_error_types_include_cupy_runtime_and_memory_errors():
     assert FakeDriverError in errors
 
 
-def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
+@pytest.mark.parametrize("artifact_layout", ["dense", "tile-rows"])
+def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(
+    tmp_path, artifact_layout
+):
     cupy = pytest.importorskip("cupy")
     try:
         if cupy.cuda.runtime.getDeviceCount() < 1:
@@ -666,6 +669,7 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
         savgol_polyorder=3,
         amp_threshold=0.01,
         fit_diagnostics="summary",
+        artifact_layout=artifact_layout,
         hdf5_reader="hdf5-ts-funcwrap",
         hdf5_reader_workers=2,
     )
@@ -698,8 +702,10 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
         manifest["fit_diagnostics"]["artifact_config_hash"]
         == manifest["config_hash"]
     )
-    freq_all = np.load(output / "freq_all.npy", mmap_mode="r")
-    amp_all = np.load(output / "amp_all.npy", mmap_mode="r")
+    from cuphoton.xray.detector_storage import load_detector_array
+
+    freq_all = load_detector_array(output / "freq_all.npy")
+    amp_all = load_detector_array(output / "amp_all.npy")
     amp_sum = np.load(output / "amp_all_sum_filtered.npy", mmap_mode="r")
     fit_status = np.load(output / FIT_STATUS_FILE, mmap_mode="r")
     assert freq_all.shape == (4, 4, 24)
@@ -711,8 +717,48 @@ def test_build_detector_artifacts_cupy_smoke_with_threaded_reader(tmp_path):
         np.testing.assert_array_equal(data["fit_status"], [FIT_STATUS_OK] * 8)
         np.testing.assert_array_equal(data["tile_x_start"], [0] * 4 + [2] * 4)
         np.testing.assert_array_equal(data["detector_y"], [0, 1, 2, 3] * 2)
-    assert np.count_nonzero(amp_all) > 0
+    assert np.count_nonzero(amp_all[:]) > 0
     np.testing.assert_allclose(freq_all[:, 0, :], freq_all[:, 1, :])
+
+
+def test_tile_rows_match_dense_nonzero_roi_and_partial_tile(tmp_path):
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except cp.cuda.runtime.CUDARuntimeError as exc:
+        pytest.skip(f"CUDA runtime unavailable: {exc}")
+    from cuphoton.xray.detector_storage import load_detector_array
+
+    _write_synthetic_hdf5_pair(tmp_path, samples=48, rows=5, cols=10)
+    for layout in ("dense", "tile-rows"):
+        build_detector_artifacts_cupy(
+            h5dir=tmp_path,
+            fon="on.h5",
+            foff="off.h5",
+            output_dir=tmp_path / layout,
+            roi_lower=(3, 1),
+            roi_dim=(7, 3),
+            tile_shape=(3, 2),
+            exclude_y=(AxisRange(2, 3),),
+            drop_leading=0,
+            zero_offset_index=0,
+            integrate_pixels=0,
+            components=6,
+            artifact_layout=layout,
+        )
+    for name in DETECTOR_ARRAYS:
+        dense = load_detector_array(tmp_path / "dense" / f"{name}.npy")
+        compact = load_detector_array(tmp_path / "tile-rows" / f"{name}.npy")
+        assert (
+            np.asarray(dense[:]).tobytes() == np.asarray(compact[:]).tobytes()
+        )
+    manifest = json.loads(
+        (tmp_path / "tile-rows" / "manifest.json").read_text()
+    )
+    assert manifest["roi_lower"] == [3, 1]
+    assert manifest["output_shape"] == [3, 7, 24]
+    assert detector_artifact_complete(tmp_path / "tile-rows")
 
 
 @pytest.mark.parametrize(
@@ -1578,8 +1624,9 @@ def test_iterative_detector_dispatch_and_convergence_diagnostics(
         assert "selected_model_order" not in data.files
 
 
-def test_detector_artifacts_cli_forwards_iterative_controls(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize("artifact_layout", [None, "dense", "tile-rows"])
+def test_detector_artifacts_cli_forwards_fit_and_storage_controls(
+    tmp_path, monkeypatch, capsys, artifact_layout
 ):
     import cuphoton.xray.detector_artifacts as artifacts
 
@@ -1608,12 +1655,18 @@ def test_detector_artifacts_cli_forwards_iterative_controls(
                 "40",
                 "--iterative-amplitude-l2",
                 "0.02",
+                *(
+                    ["--artifact-layout", artifact_layout]
+                    if artifact_layout is not None
+                    else []
+                ),
                 "--json",
             ]
         )
         == 0
     )
     assert json.loads(capsys.readouterr().out) == {"complete": True}
+    assert captured["artifact_layout"] == (artifact_layout or "dense")
     assert captured["fit_method"] == "iterative"
     assert captured["iterative_options"].max_iterations == 40
     assert captured["iterative_options"].amplitude_l2 == 0.02

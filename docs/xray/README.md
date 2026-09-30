@@ -80,7 +80,7 @@ uv run cuphoton xray detector-artifacts \
   --h5dir /path/to/input --fon on.h5 --foff off.h5 \
   --output-dir /path/to/artifacts --roi-lower 0 0 --roi-dim 64 64 \
   --zero-offset-index 0 --components 6 \
-  --fit-diagnostics summary --json
+  --fit-diagnostics summary --artifact-layout tile-rows --json
 ```
 
 `--zero-offset-index 0` is illustrative; select a physically appropriate fit
@@ -97,6 +97,65 @@ These settings change the spatial support and amplitude of the traces.
 The extracted traces above select individual rows without that integration,
 so compare them with detector fits only after matching the normalization,
 smoothing, spatial integration and fitted sample window.
+
+The example uses `--artifact-layout tile-rows` to store each spectrum once
+per x tile.
+The four spectral files then use the suffix `.tile-rows.npy`, with logical
+shape and x boundaries in `spectral-layout.json`. This is lossless: fitted
+values, masks, and pixel coordinates remain identical. A full tile with
+width 16 stores one sixteenth of the spectral values. The default `dense`
+layout writes the usual `.npy` arrays for direct NumPy consumers. Dense
+remains the compatibility default because compact storage changes filenames
+and requires the shared loader. Select the output format explicitly for each
+run; pass `--artifact-layout dense` to request the original layout.
+
+The equivalent GPU producer call from Python is:
+
+```python
+from cuphoton.xray.detector_artifacts import build_detector_artifacts_cupy
+
+result = build_detector_artifacts_cupy(
+    h5dir="/path/to/input",
+    fon="on.h5",
+    foff="off.h5",
+    output_dir="/path/to/artifacts",
+    roi_lower=(0, 0),
+    roi_dim=(64, 64),
+    zero_offset_index=0,
+    components=6,
+    fit_diagnostics="summary",
+    artifact_layout="tile-rows",  # Use "dense" for pixel-shaped NPY files.
+)
+print(result.manifest_path)
+```
+
+Comparison, visualization, resume, and distributed merging support both
+layouts. Compact shards remain compact when merged. Use the shared loader
+for bounded pixel slices from either layout:
+
+```python
+from cuphoton.xray.detector_storage import load_detector_array
+
+amplitudes = load_detector_array("/path/to/artifacts/amp_all.npy")
+column = amplitudes[:, 12, :]  # Only this column is expanded.
+roi = amplitudes[0:8, 8:16, :32]  # (y, x, spectral sample)
+```
+
+Pass the logical filename `amp_all.npy` even when the stored file is
+`amp_all.tile-rows.npy`. Keep `spectral-layout.json` with the spectral files;
+the loader uses it to reconstruct pixel positions. Indices are local to the
+saved ROI. For absolute detector coordinates, subtract the manifest's
+`roi_lower` origin, recorded as `(x, y)`, before indexing in `(y, x)` order.
+
+The compact reader supports integer and slice indexing, including negative
+indices and steps. Slice first to obtain NumPy arrays for downstream consumers.
+Implicit conversion such as `np.asarray(amplitudes)` or `np.nanmax(amplitudes)`
+raises `TypeError`; apply NumPy operations to a selected slice instead.
+Request bounded slices when exporting dense pixel data; `amplitudes[:, :, :]`
+expands the full logical cube and its repeated columns in memory. Compact
+storage reduces spectral bytes written, but full expansion can take longer
+than reading dense output. Choose dense when direct NumPy access or repeated
+full-cube reads matter more than artifact size.
 
 For Python A/B checks, pass `batch_rows=False` to
 `cuphoton.xray.detector_artifacts.build_detector_artifacts_cupy` to force
