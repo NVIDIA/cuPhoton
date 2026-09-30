@@ -44,6 +44,7 @@ def main() -> None:
         "--backend", action="append", choices=("numpy", "cupy", "cutile")
     )
     parser.add_argument("--batch", type=int, action="append")
+    parser.add_argument("--fusion", action="store_true")
     parser.add_argument(
         "--dtype", choices=("float32", "float64"), default="float64"
     )
@@ -61,7 +62,11 @@ def main() -> None:
         parser.error("--batch must be positive")
     if args.warmup < 0:
         parser.error("--warmup must be nonnegative")
-    backends = args.backend or ["cupy", "cutile"]
+    backends = args.backend or (
+        ["cupy"] if args.fusion else ["cupy", "cutile"]
+    )
+    if args.fusion and any(backend != "cupy" for backend in backends):
+        parser.error("--fusion requires --backend cupy")
     batches = args.batch or [1, 16, 256, 4096]
     dtype = np.dtype(args.dtype)
 
@@ -70,6 +75,16 @@ def main() -> None:
             batch, (args.height, args.width), dtype, args.mode
         )
         for backend in backends:
+            start = time.perf_counter()
+            result = fit_dipoles(
+                images,
+                model="gaussian",
+                initial=initial,
+                mode=args.mode,
+                backend=backend,
+                fusion=args.fusion,
+            )
+            cold_milliseconds = 1.0e3 * (time.perf_counter() - start)
             for _ in range(args.warmup):
                 result = fit_dipoles(
                     images,
@@ -77,6 +92,7 @@ def main() -> None:
                     initial=initial,
                     mode=args.mode,
                     backend=backend,
+                    fusion=args.fusion,
                 )
             samples = []
             for _ in range(args.repeat):
@@ -87,12 +103,16 @@ def main() -> None:
                     initial=initial,
                     mode=args.mode,
                     backend=backend,
+                    fusion=args.fusion,
                 )
                 samples.append(1.0e3 * (time.perf_counter() - start))
             print(
                 json.dumps(
                     {
                         "backend": backend,
+                        "fusion": args.fusion,
+                        "cold_milliseconds": cold_milliseconds,
+                        "milliseconds_samples": samples,
                         "batch": batch,
                         "dtype": dtype.name,
                         "mode": args.mode,
