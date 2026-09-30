@@ -262,7 +262,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     class FusionArg(BoolInvariant):
         _arg = "--fusion"
         _help = (
-            "Fuse Gaussian residuals and normal equations; "
+            "Fuse Gaussian residuals and analytic Jacobians; "
             "requires --backend cupy."
         )
         _mandatory = False
