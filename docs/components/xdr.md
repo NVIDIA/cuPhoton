@@ -17,8 +17,12 @@ Current scope:
 
 The default `postprocess="auto"` uses fused unshuffle, byte-order conversion,
 and scatter for supported GZIP FITS tiles. `"fused"` selects that path explicitly;
-`"separate"` restores those steps with individual kernels for comparison.
+`"separate"` runs those steps with individual kernels for comparison.
 Both preserve FITS values, including integer masks and floating-point bits.
+Both leave the decoded input buffer unchanged. The separate path allocates
+another buffer the size of the decoded tiles and copies GZIP_1 input before
+byte-order conversion. Its timings therefore include that copy and are not
+an exact baseline for the former in-place GZIP_1 implementation.
 
 ```python
 from cuphoton.xdr import batch_to_device

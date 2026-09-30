@@ -120,7 +120,8 @@ def scatter_tiles_2d(
     """
 
     pix_stride_out = d_out.strides[0]  # row stride in bytes
-    assert d_out.strides[1] == itemsize, "output pixels must be contiguous"
+    if d_out.strides[1] != itemsize:
+        raise ValueError("output pixels must be contiguous")
     n_tiles = tile_byte_offsets.size
 
     kern = _scatter_tiles_2d_kernel(itemsize, shuffled)
@@ -224,7 +225,8 @@ def scatter_native_tiles_2d(
     """
 
     pix_stride_out = d_out.strides[0]  # row stride in bytes
-    assert d_out.strides[1] == itemsize, "d_out must be C-contiguous"
+    if d_out.strides[1] != itemsize:
+        raise ValueError("output pixels must be contiguous")
     n_tiles = tile_byte_offsets.size
 
     kern = _scatter_native_tiles_2d_kernel(itemsize)

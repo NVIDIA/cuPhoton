@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cuphoton.xdr.kernels import scatter_tiles_2d
+from cuphoton.xdr.kernels import scatter_native_tiles_2d, scatter_tiles_2d
 from cuphoton.xdr.reader import GpuCompImageReader
 
 
@@ -59,19 +59,19 @@ def test_scatter_restores_fits_pixels(
 
 
 @pytest.mark.parametrize("postprocess", ["auto", "separate"])
-@pytest.mark.parametrize("dtype", ["f4", "f8"])
 @pytest.mark.parametrize("compression", ["GZIP_1", "GZIP_2"])
 def test_scatter_preserves_nondithered_dequantization(
-    cp, dtype, compression, postprocess
+    cp, compression, postprocess
 ):
-    itemsize = np.dtype(dtype).itemsize
-    image = np.arange(-150, 173, dtype=f"i{itemsize}").reshape(17, 19)
+    # FITS quantization stores int32 tiles, including for float64 images.
+    # This checks the supported float32 layout, not synthetic int64 tiles.
+    image = np.arange(-150, 173, dtype="i4").reshape(17, 19)
     section = np.s_[3:15, 5:18]
     raw, offsets, plan = _decoded_tiles(image, compression, section)
     plan.update(
         quantized=True,
-        dtype_char=dtype,
-        zbitpix=-8 * itemsize,
+        dtype_char="f4",
+        zbitpix=-32,
         sel_zscale=np.full(len(offsets), 0.5),
         sel_zzero=np.full(len(offsets), 2.0),
     )
@@ -79,8 +79,32 @@ def test_scatter_preserves_nondithered_dequantization(
         cp.asarray(raw), offsets, plan, postprocess=postprocess
     )
     np.testing.assert_array_equal(
-        cp.asnumpy(result), image[section].astype(dtype) * 0.5 + 2
+        cp.asnumpy(result), image[section].astype("f4") * 0.5 + 2
     )
+
+
+@pytest.mark.parametrize(
+    "scatter", [scatter_tiles_2d, scatter_native_tiles_2d]
+)
+def test_scatter_rejects_noncontiguous_output_pixels(scatter):
+    # Validation must not depend on GPU imports or Python assertions.
+    arguments = dict(
+        d_tiles_concat=None,
+        d_out=np.empty((2, 8), dtype="i4")[:, ::2],
+        tile_byte_offsets=None,
+        tile_origins_row=None,
+        tile_origins_col=None,
+        tile_heights=None,
+        tile_widths=None,
+        tile_src_off_row=None,
+        tile_src_off_col=None,
+        tile_full_widths=None,
+        itemsize=4,
+    )
+    if scatter is scatter_tiles_2d:
+        arguments.update(tile_byte_lengths=None, shuffled=False)
+    with pytest.raises(ValueError, match="output pixels must be contiguous"):
+        scatter(**arguments)
 
 
 def test_scatter_respects_output_row_stride(cp):

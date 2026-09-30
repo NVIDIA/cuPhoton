@@ -471,7 +471,13 @@ class GpuCompImageReader:
         keepalive=None,
         postprocess: str = "auto",
     ):
-        """Restore FITS pixels; auto uses the fused kernel."""
+        """Restore FITS pixels without modifying the decoded input buffer.
+
+        ``auto`` uses the fused kernel. ``separate`` uses individual kernels
+        and an extra decoded-buffer allocation; GZIP_1 also requires a copy.
+        This comparison mode preserves the input, unlike the former in-place
+        GZIP_1 path, so its timings are not an exact historical baseline.
+        """
         normalize_xdr_options({"postprocess": postprocess})
         import cupy as cp
 

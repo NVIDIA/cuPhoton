@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional FITS reader overrides for manifest-driven commands."""
+"""Optional FITS reader overrides shared by FITS-consuming commands."""
 
 from cuphoton.core.fits_options import (
     XDR_OPTION_CHOICES,
@@ -21,7 +21,8 @@ class XdrOptionsMixin:
         _arg = "--xdr-postprocess"
         _help = (
             "xDR postprocessing: auto, fused, or separate. Omitted preserves "
-            "manifest choices; applies when the FITS reader uses xDR."
+            "input choices or uses xDR defaults; applies when the FITS "
+            "reader uses xDR."
         )
         _set = XDR_OPTION_CHOICES["postprocess"]
         _default = None
