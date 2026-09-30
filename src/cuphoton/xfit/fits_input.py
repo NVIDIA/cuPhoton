@@ -15,6 +15,10 @@ import numpy as np
 
 from cuphoton.core.artifacts import file_sha256
 from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
+from cuphoton.core.fits_options import (
+    merge_xdr_options,
+    normalize_xdr_options,
+)
 
 from ._types import FIT_MODES
 
@@ -33,6 +37,7 @@ class FitsInputPlan:
     sources: tuple[dict[str, Any], ...]
     initial: np.ndarray | None
     stamp_basis: dict[str, Any] | None
+    xdr_options: dict[str, str]
 
     @property
     def batch_size(self) -> int:
@@ -58,7 +63,7 @@ def _integer(value, name, *, minimum=0):
 
 
 def _plane(value, root, *, name, auxiliary=True):
-    keys = {"path", "hdu"}
+    keys = {"path", "hdu", "xdr_options"}
     if auxiliary:
         keys |= {"mask_hdu", "variance_hdu", "bad_mask_bits"}
     _mapping(value, keys, required=("path", "hdu"), name=name)
@@ -67,6 +72,8 @@ def _plane(value, root, *, name, auxiliary=True):
     path = Path(value["path"]).expanduser()
     path = (root / path).resolve()
     result = {**value, "path": str(path)}
+    if "xdr_options" in result:
+        result["xdr_options"] = normalize_xdr_options(result["xdr_options"])
     image = inspect_fits_image(path, _integer(value["hdu"], "hdu"))
     for key in ("mask_hdu", "variance_hdu"):
         if key not in value:
@@ -103,6 +110,7 @@ def plan_fits_input(path, *, mode=None, model=None) -> FitsInputPlan:
             "candidates",
             "initial",
             "stamp_basis",
+            "xdr_options",
         },
         required=("schema", "mode", "stamp_shape", "images", "candidates"),
         name="FITS manifest",
@@ -235,6 +243,7 @@ def plan_fits_input(path, *, mode=None, model=None) -> FitsInputPlan:
         tuple(sources),
         initial,
         basis,
+        normalize_xdr_options(data.get("xdr_options")),
     )
 
 
@@ -293,12 +302,26 @@ def _candidate_stamps(result, keys, plan, *, offset, ap):
 
 
 def load_fits_input(
-    path, *, mode=None, model=None, reader="auto", device=False
+    path,
+    *,
+    mode=None,
+    model=None,
+    reader="auto",
+    device=False,
+    xdr_options=None,
 ):
     """Read the candidate bounding region and keep GPU stamps on device."""
     from .io import XFitDataset, _validate_dataset_contract
 
     plan = plan_fits_input(path, mode=mode, model=model)
+    xdr_options = normalize_xdr_options(xdr_options)
+
+    def plane_options(plane):
+        return merge_xdr_options(
+            merge_xdr_options(plan.xdr_options, plane.get("xdr_options")),
+            xdr_options,
+        )
+
     ap = np
     if device:
         import cupy as ap
@@ -333,6 +356,7 @@ def load_fits_input(
             reader=reader,
             device=device,
             section=None if full else section,
+            xdr_options=plane_options(plane),
         )
         arrays = _candidate_stamps(
             result,
@@ -372,6 +396,7 @@ def load_fits_input(
             [plan.stamp_basis["hdu"]],
             reader=reader,
             device=False,
+            xdr_options=plane_options(plan.stamp_basis),
         )
         basis = result.arrays[0]
         metadata.append(

@@ -648,6 +648,11 @@ def _preflight_items(
                             "shape": list(descriptor.shape),
                             "dtype": descriptor.dtype,
                             "reader": descriptor.reader,
+                            **(
+                                {"xdr_options": dict(descriptor.xdr_options)}
+                                if descriptor.xdr_options
+                                else {}
+                            ),
                             "roles": [role],
                         }
                     )

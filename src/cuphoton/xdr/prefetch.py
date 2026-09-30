@@ -29,6 +29,8 @@ from typing import Protocol
 
 import numpy as np
 
+from cuphoton.core.fits_options import normalize_xdr_options
+
 from .gds import available_cpu_cores, configure_kvikio_parallelism
 
 # Sentinel value pushed on the queue when the prefetcher has finished so the
@@ -595,7 +597,11 @@ class _FilePrefetcher(threading.Thread):
 
 
 def _consume_comp_batch(
-    entries: list[_CompBatchEntry], stream, keepalive=None
+    entries: list[_CompBatchEntry],
+    stream,
+    keepalive=None,
+    *,
+    postprocess="auto",
 ):
     """Decode many compressed HDUs with one batched nvCOMP call.
 
@@ -731,6 +737,7 @@ def _consume_comp_batch(
                 d_pixels[decoded_start:decoded_end],
                 local_tile_offsets,
                 entry.plan_item.plan,
+                postprocess=postprocess,
                 out=entry.out,
                 stream=stream,
                 keepalive=keepalive,
@@ -788,7 +795,12 @@ def _consume_image(
 
 
 def _consume_prefetched_group(
-    items: list[PrefetchedFile], outs: list, stream, keepalive=None
+    items: list[PrefetchedFile],
+    outs: list,
+    stream,
+    keepalive=None,
+    *,
+    postprocess="auto",
 ):
     """Consume prefetched files, batching compressed HDUs together."""
     comp_entries: list[_CompBatchEntry] = []
@@ -820,7 +832,9 @@ def _consume_prefetched_group(
             else:
                 raise AssertionError(f"unknown kind {plan_item.kind!r}")
 
-    _consume_comp_batch(comp_entries, stream, keepalive=keepalive)
+    _consume_comp_batch(
+        comp_entries, stream, keepalive=keepalive, postprocess=postprocess
+    )
 
 
 def _native_file_plans(
@@ -1051,6 +1065,7 @@ def _submit_prefetched_group(
     stream,
     owner,
     in_flight: deque[_GpuBatchHandle],
+    postprocess="auto",
 ) -> None:
     """Queue GPU work and register its lifetime handle."""
     import cupy as cp
@@ -1071,7 +1086,11 @@ def _submit_prefetched_group(
         try:
             with use_stream:
                 _consume_prefetched_group(
-                    items, outs, stream, keepalive=keepalive
+                    items,
+                    outs,
+                    stream,
+                    keepalive=keepalive,
+                    postprocess=postprocess,
                 )
                 candidate_event = cp.cuda.Event()
                 candidate_event.record(use_stream)
@@ -1397,6 +1416,7 @@ def _consume_native_batches(
     stream,
     NativeBatchBuilder,
     native_plan_files,
+    postprocess="auto",
 ):
     """Consume device batches built by the C++ KvikIO worker pool."""
     import cupy as cp
@@ -1472,6 +1492,7 @@ def _consume_native_batches(
                         stream=stream,
                         owner=native_batch,
                         in_flight=in_flight,
+                        postprocess=postprocess,
                     )
             planner.join()
             if planner.error is not None:
@@ -1511,6 +1532,7 @@ def _consume_python_batches(
     batch_queue_depth: int,
     section,
     stream,
+    postprocess="auto",
 ) -> None:
     """Consume pinned-host batches with bounded event-owned lifetimes."""
     n_files = len(paths)
@@ -1531,6 +1553,7 @@ def _consume_python_batches(
             stream=stream,
             owner=group,
             in_flight=in_flight,
+            postprocess=postprocess,
         )
 
     prefetcher.start()
@@ -1598,6 +1621,7 @@ def batch_to_device_stream(
     native_read_threads: int | None = None,
     native_plan_threads: int | None = None,
     native_batcher: str | bool = "auto",
+    postprocess: str = "auto",
     section=None,
     stream=None,
 ):
@@ -1641,6 +1665,9 @@ def batch_to_device_stream(
         "auto" uses the C++ KvikIO batch builder when available and falls back
         to the Python prefetcher otherwise. True requires the native builder.
         False always uses the Python prefetcher.
+    postprocess
+        "auto" (default) and "fused" restore FITS pixel order in one kernel.
+        "separate" uses individual unshuffle, byteswap and scatter kernels.
     section
         Optional 2D ROI applied uniformly to CompImageHDUs.
     stream
@@ -1661,6 +1688,7 @@ def batch_to_device_stream(
     length ``len(paths)``.
     """
 
+    normalize_xdr_options({"postprocess": postprocess})
     hdu_indices = tuple(int(i) for i in hdu_indices)
     resolved_paths = [Path(p) for p in paths]
     n_files = len(resolved_paths)
@@ -1710,6 +1738,7 @@ def batch_to_device_stream(
             stream=stream,
             NativeBatchBuilder=NativeBatchBuilder,
             native_plan_files=native_plan_files,
+            postprocess=postprocess,
         )
         return tuple(outs)
 
@@ -1722,6 +1751,7 @@ def batch_to_device_stream(
         batch_queue_depth=batch_queue_depth,
         section=section,
         stream=stream,
+        postprocess=postprocess,
     )
 
     return tuple(outs)

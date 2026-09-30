@@ -10,6 +10,7 @@ import json
 import os
 import time
 import warnings
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -124,6 +125,7 @@ def run_reproject_image(
     *,
     input_path: Path,
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -150,6 +152,7 @@ def run_reproject_image(
     result, grid, timings = _execute_single_reprojection(
         input_path=input_path,
         fits_reader=fits_reader,
+        xdr_options=xdr_options,
         hdu=hdu,
         grid_crval_ra=grid_crval_ra,
         grid_crval_dec=grid_crval_dec,
@@ -217,6 +220,7 @@ def benchmark_reproject_image(
     *,
     input_path: Path,
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -253,6 +257,7 @@ def benchmark_reproject_image(
         _execute_single_reprojection(
             input_path=input_path,
             fits_reader=fits_reader,
+            xdr_options=xdr_options,
             hdu=hdu,
             grid_crval_ra=grid_crval_ra,
             grid_crval_dec=grid_crval_dec,
@@ -268,6 +273,7 @@ def benchmark_reproject_image(
         result, grid, timings = _execute_single_reprojection(
             input_path=input_path,
             fits_reader=fits_reader,
+            xdr_options=xdr_options,
             hdu=hdu,
             grid_crval_ra=grid_crval_ra,
             grid_crval_dec=grid_crval_dec,
@@ -354,6 +360,7 @@ def compare_backends_reproject_image(
     *,
     input_path: Path,
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -400,6 +407,7 @@ def compare_backends_reproject_image(
             _execute_single_reprojection(
                 input_path=input_path,
                 fits_reader=fits_reader,
+                xdr_options=xdr_options,
                 hdu=hdu,
                 grid_crval_ra=grid_crval_ra,
                 grid_crval_dec=grid_crval_dec,
@@ -417,6 +425,7 @@ def compare_backends_reproject_image(
             result, grid, timings = _execute_single_reprojection(
                 input_path=input_path,
                 fits_reader=fits_reader,
+                xdr_options=xdr_options,
                 hdu=hdu,
                 grid_crval_ra=grid_crval_ra,
                 grid_crval_dec=grid_crval_dec,
@@ -538,6 +547,7 @@ def benchmark_backend_variants_reproject_image(
     *,
     input_path: Path,
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -585,7 +595,11 @@ def benchmark_backend_variants_reproject_image(
     )
     load_start = time.perf_counter()
     image, wcs, _, _ = load_fits_image_with_wcs(
-        input_path, hdu=hdu, fits_reader=reader, read_metadata=fits_reads
+        input_path,
+        hdu=hdu,
+        fits_reader=reader,
+        xdr_options=xdr_options,
+        read_metadata=fits_reads,
     )
     grid = _resolve_grid(
         grid_crval_ra=grid_crval_ra,
@@ -600,6 +614,7 @@ def benchmark_backend_variants_reproject_image(
             mask_path,
             hdu=mask_hdu,
             fits_reader=reader,
+            xdr_options=xdr_options,
             read_metadata=fits_reads,
         )
     load_seconds = float(time.perf_counter() - load_start)
@@ -822,6 +837,7 @@ def run_reproject_stack(
     *,
     input_paths: list[Path],
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -897,6 +913,7 @@ def run_reproject_stack(
     images, spec = build_stack_spec_from_fits(
         input_paths,
         fits_reader=reader,
+        xdr_options=xdr_options,
         device=backend == "cupy",
         read_metadata=fits_reads,
         grid=grid,
@@ -1021,6 +1038,7 @@ def _execute_single_reprojection(
     *,
     input_path: Path,
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     hdu: int | None,
     grid_crval_ra: float | None,
     grid_crval_dec: float | None,
@@ -1046,6 +1064,7 @@ def _execute_single_reprojection(
         input_path,
         hdu=hdu,
         fits_reader=reader,
+        xdr_options=xdr_options,
         device=backend == "cupy",
         read_metadata=fits_reads,
     )
@@ -1062,6 +1081,7 @@ def _execute_single_reprojection(
             mask_path,
             hdu=mask_hdu,
             fits_reader=reader,
+            xdr_options=xdr_options,
             device=backend == "cupy",
             read_metadata=fits_reads,
         )

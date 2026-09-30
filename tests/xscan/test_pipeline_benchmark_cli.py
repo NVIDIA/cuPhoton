@@ -33,6 +33,7 @@ def test_benchmark_defaults_and_path_conversion(monkeypatch):
         "config": None,
         "items": None,
         "fits_reader": None,
+        "xdr_options": {},
         "images": 4,
         "image_size": 256,
         "candidates": 9,

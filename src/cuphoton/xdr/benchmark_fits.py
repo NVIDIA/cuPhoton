@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from cuphoton import __version__, xdr
+from cuphoton.core.fits_options import normalize_xdr_options
 from cuphoton.xdr import (
     batch_to_device,
     batch_to_device_stream,
@@ -161,6 +162,7 @@ class _BatchOptions(TypedDict):
     native_read_threads: int
     native_plan_threads: int
     native_batcher: str | bool
+    postprocess: str
 
 
 def parse_hdu_indices(value: str) -> tuple[int, ...]:
@@ -417,6 +419,7 @@ def bench_batch_load(
     native_batcher: str | bool,
     use_stream: bool,
     data_mb: float,
+    postprocess: str = "auto",
 ) -> PhaseResult:
     fn = batch_to_device_stream if use_stream else batch_to_device
     phase = "batch_to_device_stream" if use_stream else "batch_to_device"
@@ -428,12 +431,13 @@ def bench_batch_load(
         native_read_threads=native_read_threads,
         native_plan_threads=native_plan_threads,
         native_batcher=native_batcher,
+        postprocess=postprocess,
     )
 
     times: list[float] = []
     note = (
         f"{len(paths)} files x {len(tuple(hdu_indices))} HDUs, "
-        f"native_batcher={native_batcher}"
+        f"native_batcher={native_batcher}, postprocess={postprocess}"
     )
     with nvtx_range(f"xdr.{phase}"):
         try:
@@ -554,6 +558,7 @@ def run_benchmark(
     native_read_threads: int = 4,
     native_plan_threads: int = max(1, os.cpu_count() or 1),
     native_batcher: str = "auto",
+    postprocess: str = "auto",
     mock_storage_kind: str | None = None,
     skip_gds_read: bool = False,
     output_json: Path | None = None,
@@ -566,6 +571,7 @@ def run_benchmark(
     helpers; the return value remains a list of phases.
     """
 
+    normalize_xdr_options({"postprocess": postprocess})
     paths = resolve_paths(
         fits_files,
         scan_dir=scan_dir,
@@ -641,6 +647,7 @@ def run_benchmark(
                 native_read_threads=native_read_threads,
                 native_plan_threads=native_plan_threads,
                 native_batcher=resolved_native_batcher,
+                postprocess=postprocess,
                 use_stream=False,
                 data_mb=total_data_mb,
             )
@@ -656,6 +663,7 @@ def run_benchmark(
                 native_read_threads=native_read_threads,
                 native_plan_threads=native_plan_threads,
                 native_batcher=resolved_native_batcher,
+                postprocess=postprocess,
                 use_stream=True,
                 data_mb=total_data_mb,
             )
@@ -698,6 +706,7 @@ def run_benchmark(
                     "native_read_threads": native_read_threads,
                     "native_plan_threads": native_plan_threads,
                     "native_batcher": native_batcher,
+                    "postprocess": postprocess,
                     "native_batcher_enabled": batcher_enabled,
                     "native_batcher_error": batcher_error,
                     "skip_gds_read": skip_gds_read,

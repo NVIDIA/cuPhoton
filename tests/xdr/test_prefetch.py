@@ -548,7 +548,8 @@ def test_consume_group_carries_precomputed_header_sizes(monkeypatch):
     )
     captured = []
 
-    def consume(entries, stream, keepalive=None):
+    def consume(entries, stream, keepalive=None, **options):
+        assert options["postprocess"] == "separate"
         captured.extend(entries)
 
     monkeypatch.setattr(prefetch, "_consume_comp_batch", consume)
@@ -557,6 +558,7 @@ def test_consume_group_carries_precomputed_header_sizes(monkeypatch):
         [item],
         [np.empty((1, 1), dtype=np.uint8)],
         stream=None,
+        postprocess="separate",
     )
 
     assert captured[0].header_sizes is header_sizes
@@ -843,7 +845,7 @@ def test_gpu_batch_owner_lives_until_ordered_event_completion(monkeypatch):
         ),
     )
 
-    def consume(items, outs, use_stream, keepalive):
+    def consume(items, outs, use_stream, keepalive, **options):
         assert use_stream is stream
         trace.append("consume")
         keepalive.append("device-owner")
@@ -1929,7 +1931,7 @@ def test_python_batches_bound_in_flight_pinned_owners(monkeypatch):
             state["active"] -= 1
             synchronized.append(self.index)
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         index = owner[0].file_index
         state["active"] += 1
         state["maximum"] = max(state["maximum"], state["active"])
@@ -1972,7 +1974,7 @@ def test_backpressure_failure_drains_and_quarantines(monkeypatch):
 
     handle = prefetch._GpuBatchHandle(Event(), [items[0]], Stream())
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         trace.append(f"submit-{owner[0].file_index}")
         in_flight.append(handle)
 
@@ -2051,7 +2053,7 @@ def test_backpressure_control_signal_retains_all_pending_batches(
         def join(self):
             trace.append("planner-join")
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         handle = prefetch._GpuBatchHandle(
             Event(len(handles)), [owner, outs], object()
         )
@@ -2134,7 +2136,7 @@ def test_batch_stream_waits_for_python_gpu_completion(monkeypatch):
         def synchronize(self):
             trace.append("event-synchronize")
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         trace.append("submit")
         in_flight.append(
             prefetch._GpuBatchHandle(Event(), [owner, outs], object())
@@ -2241,7 +2243,7 @@ def test_native_batches_bound_in_flight_device_owners(monkeypatch):
     )
     monkeypatch.setattr(prefetch, "_NativeBatchPlanner", Planner)
 
-    def submit(items, outs, *, stream, owner, in_flight):
+    def submit(items, outs, *, stream, owner, in_flight, **options):
         index = owner[0].index
         trace.append(f"submit-{index}")
         state["active"] += 1
@@ -2360,7 +2362,7 @@ def test_native_batches_error_drain_precedence(monkeypatch, control_error):
     monkeypatch.setattr(prefetch, "_NativeBatchPlanner", Planner)
     submitted_handles = []
 
-    def submit(items, outs, *, stream, owner, in_flight):
+    def submit(items, outs, *, stream, owner, in_flight, **options):
         index = owner[0].index
         trace.append(f"submit-{index}")
         if index == 1:
@@ -2417,7 +2419,7 @@ def test_python_batches_wait_before_cleanup_after_later_submit_error(
         def synchronize(self):
             trace.append("wait-0")
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         index = owner[0].file_index
         trace.append(f"submit-{index}")
         if index == 1:
@@ -2472,7 +2474,7 @@ def test_python_batches_error_drain_precedence(monkeypatch, control_error):
             trace.append("stream-sync")
             raise RuntimeError("sticky stream failure")
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         index = owner[0].file_index
         trace.append(f"submit-{index}")
         if index == 1:
@@ -2524,7 +2526,7 @@ def test_python_batches_cleanup_after_async_event_error(monkeypatch):
         def synchronize(self):
             trace.append("stream-sync")
 
-    def submit(group, outs, *, stream, owner, in_flight):
+    def submit(group, outs, *, stream, owner, in_flight, **options):
         trace.append("submit")
         handle = prefetch._GpuBatchHandle(Event(), [owner], Stream())
         in_flight.append(handle)
@@ -2647,7 +2649,7 @@ def test_batch_stream_does_not_consume_partial_group_after_prefetch_error(
     output = np.zeros((2, 1), dtype=np.float32)
     consumed = []
 
-    def consume(items, outs, stream):
+    def consume(items, outs, stream, **options):
         consumed.extend(items)
         outs[0][0] = 1.0
 

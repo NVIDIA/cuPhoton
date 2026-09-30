@@ -182,6 +182,13 @@ Selecting xDR does not assert native GPUDirect Storage use. Run artifacts
 record the manifest and source-file hashes, selected reader and any automatic
 fallback. Existing NPZ loading is unaffected by this option.
 
+`--xdr-postprocess auto|fused|separate` selects xDR postprocessing for FITS
+reads. Python `load_xfit_dataset` accepts the equivalent
+`xdr_options={"postprocess": "separate"}`. FITS manifests may specify
+`xdr_options` at the top level and on individual image or `stamp_basis`
+descriptors. Per-image choices override the manifest default; explicit
+Python/CLI choices override only supplied keys and survive worker dispatch.
+
 Input archives contain candidate identifiers and exact image pixels. Fit
 artifacts contain identifiers, hashes, parameters, uncertainties, covariance,
 and optional residuals. Confirm that the underlying data and metadata are cleared

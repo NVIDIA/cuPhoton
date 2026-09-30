@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import numpy as np
 
+from cuphoton.core.fits_options import normalize_xdr_options
+
 from .gds import GdsHeapLoader, pread_to_device
 from .kernels import (
     apply_bzero_bscale,
     byteswap_inplace,
     dequantize_int_to_float,
+    scatter_native_tiles_2d,
     scatter_tiles_2d,
+    unshuffle_gzip2_tiles,
 )
 from .nvcomp_batch import (
     _native_device_empty,
@@ -59,6 +63,11 @@ class _ReadCompletion:
             if self.handle is None or not self.handle.done:
                 return False
         return bool(self.stream.done)
+
+    def synchronize(self) -> None:
+        if not self.io_complete:
+            raise RuntimeError("Cannot synchronize before GDS I/O completes")
+        self.stream.synchronize()
 
 
 def _hdu_path(hdu) -> str:
@@ -460,8 +469,10 @@ class GpuCompImageReader:
         out=None,
         stream=None,
         keepalive=None,
+        postprocess: str = "auto",
     ):
-        """Scatter already-inflated tile bytes into the final image output."""
+        """Restore FITS pixels; auto uses the fused kernel."""
+        normalize_xdr_options({"postprocess": postprocess})
         import cupy as cp
 
         use_native_pool = keepalive is not None
@@ -480,6 +491,25 @@ class GpuCompImageReader:
             d_tile_byte_lengths = cp.asarray(plan["out_bytes"])
             if keepalive is not None:
                 keepalive.extend([d_tile_offsets, d_tile_byte_lengths])
+
+            shuffled = plan["compression_type"] == "GZIP_2"
+            if postprocess == "separate":
+                # Keep the caller's decoded bytes intact in both modes.
+                d_separate = cp.empty_like(d_pixels)
+                if keepalive is not None:
+                    keepalive.append(d_separate)
+                if shuffled and scatter_itemsize > 1:
+                    unshuffle_gzip2_tiles(
+                        d_pixels,
+                        d_separate,
+                        d_tile_offsets,
+                        d_tile_byte_lengths,
+                        scatter_itemsize,
+                    )
+                else:
+                    d_separate[...] = d_pixels
+                byteswap_inplace(d_separate, scatter_itemsize)
+                d_pixels = d_separate
 
             # Restore pixel order and native byte order while scattering.
             d_origins_r = cp.asarray(plan["origins_r"])
@@ -501,11 +531,10 @@ class GpuCompImageReader:
                         d_tile_full_w,
                     ]
                 )
-            scatter_tiles_2d(
+            scatter_args = (
                 d_pixels,
                 d_scatter_target,
                 d_tile_offsets,
-                d_tile_byte_lengths,
                 d_origins_r,
                 d_origins_c,
                 d_heights,
@@ -514,8 +543,16 @@ class GpuCompImageReader:
                 d_src_off_c,
                 d_tile_full_w,
                 scatter_itemsize,
-                shuffled=plan["compression_type"] == "GZIP_2",
             )
+            if postprocess == "separate":
+                scatter_native_tiles_2d(*scatter_args)
+            else:
+                scatter_tiles_2d(
+                    *scatter_args[:3],
+                    d_tile_byte_lengths,
+                    *scatter_args[3:],
+                    shuffled=shuffled,
+                )
 
             # Dequantize int -> float when ZSCALE/ZZERO are present.
             if plan["quantized"]:
@@ -545,6 +582,7 @@ class GpuCompImageReader:
         out=None,
         stream=None,
         keepalive=None,
+        postprocess: str = "auto",
     ):
         """Run the decode pipeline on a pre-loaded compressed heap buffer.
 
@@ -553,6 +591,7 @@ class GpuCompImageReader:
         start offset of tile i inside `d_concat`. This is what the prefetch
         consumer calls after staging its pinned host heap to device.
         """
+        normalize_xdr_options({"postprocess": postprocess})
         if keepalive is not None:
             keepalive.append(d_concat)
         d_pixels, tile_byte_offsets_np = (
@@ -574,9 +613,18 @@ class GpuCompImageReader:
             out=out,
             stream=stream,
             keepalive=keepalive,
+            postprocess=postprocess,
         )
 
-    def read(self, *, out=None, stream=None, section=None, loader=None):
+    def read(
+        self,
+        *,
+        out=None,
+        stream=None,
+        section=None,
+        loader=None,
+        postprocess: str = "auto",
+    ):
         """Read and decode this HDU into a `cupy.ndarray`.
 
         Parameters
@@ -595,6 +643,7 @@ class GpuCompImageReader:
         Failure before an I/O handle is returned leaves completion unknown and
         requires a process restart before further GPU submissions.
         """
+        normalize_xdr_options({"postprocess": postprocess})
         import cupy as cp
 
         plan = self.prepare_plan(section=section)
@@ -663,7 +712,12 @@ class GpuCompImageReader:
                         io_completion.io_complete = True
                         keepalive.append(d_concat)
                         return GpuCompImageReader.decode_from_device_heap(
-                            d_concat, rel_offsets, plan, out=out, stream=None
+                            d_concat,
+                            rel_offsets,
+                            plan,
+                            out=out,
+                            stream=None,
+                            postprocess=postprocess,
                         )
                     except BaseException as error:
                         abandon(error)
@@ -705,6 +759,7 @@ class GpuCompImageReader:
                                 out=out,
                                 stream=stream,
                                 keepalive=keepalive,
+                                postprocess=postprocess,
                             )
                     except (KeyboardInterrupt, SystemExit) as error:
                         abandon(error)

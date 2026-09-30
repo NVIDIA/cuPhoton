@@ -146,13 +146,37 @@ def test_worker_reads_fits_only_after_binding_and_requests_device(
 
     monkeypatch.setattr(executor, "load_xfit_dataset", load)
     items, options = executor.plan_xfit_chunks(
-        path, chunk_size=1, fit_options={"fits_reader": "xdr"}
+        path,
+        chunk_size=1,
+        fit_options={
+            "fits_reader": "xdr",
+            "xdr_options": {"postprocess": "separate"},
+        },
     )
     worker = executor.XFitWorker(options)
     assert calls[0]["device"] is True
     assert calls[0]["reader"] == "xdr"
+    assert calls[0]["xdr_options"] == {"postprocess": "separate"}
     assert len(items) == 2
     worker.close()
+
+
+@pytest.mark.parametrize(
+    "override,expected",
+    [(None, "separate"), ({"postprocess": "fused"}, "fused")],
+)
+def test_fits_manifest_options_preserved_and_explicitly_overridden(
+    tmp_path, override, expected
+):
+    path, _, _, _, _ = _input(tmp_path)
+    manifest = json.loads(path.read_text())
+    manifest["xdr_options"] = {"postprocess": "auto"}
+    manifest["images"][0]["xdr_options"] = {"postprocess": "separate"}
+    path.write_text(json.dumps(manifest))
+    dataset = load_xfit_dataset(path, reader="astropy", xdr_options=override)
+    assert dataset.reader_metadata[0]["xdr_options"] == {
+        "postprocess": expected
+    }
 
 
 def test_source_hash_change_is_rejected_even_with_unchanged_stat(tmp_path):

@@ -307,6 +307,7 @@ def load_xfit_dataset(
     model: ModelName | None = None,
     reader: str = "auto",
     device: bool = False,
+    xdr_options=None,
 ) -> XFitDataset:
     """Load a safe NPZ batch or an explicit FITS candidate manifest."""
 
@@ -314,7 +315,12 @@ def load_xfit_dataset(
         from .fits_input import load_fits_input
 
         return load_fits_input(
-            path, mode=mode, model=model, reader=reader, device=device
+            path,
+            mode=mode,
+            model=model,
+            reader=reader,
+            device=device,
+            xdr_options=xdr_options,
         )
 
     resolved = _require_npz_path(path)
