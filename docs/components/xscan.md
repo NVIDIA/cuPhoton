@@ -358,6 +358,10 @@ outputs, and merging and validation occur after the timed worker phase.
 
 ## Persistent xPois, xFit and xScan pipeline
 
+For a complete launch walkthrough with a generated workload, JSON template,
+Slurm allocation and MPI/Dragon host files, see
+[distributed execution](../distributed-execution.md).
+
 For a reproducible comparison with separately launched stages and intermediate
 files, see the [pipeline stage benchmark](pipeline-stage-benchmark.md). It
 checks the same scientific outputs while reporting startup and warm execution

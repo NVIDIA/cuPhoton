@@ -25,5 +25,6 @@ include uv.lock
 include .pre-commit-config.yaml
 recursive-include docs *.md
 recursive-include examples *.py *.yaml
+recursive-include examples/distributed-pipeline *.json *.txt *.license
 recursive-include tests *.py
 recursive-include src/cuphoton/xdr/src *.cpp *.h *.sh

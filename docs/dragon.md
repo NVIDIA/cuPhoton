@@ -4,6 +4,9 @@ Dragon places and manages cuPhoton workers; the selected numerical backend
 runs each image pair inside its worker. Transport selection belongs to the
 Dragon launcher. It does not change cuPhoton's numerical backend or fit options.
 
+Start with [distributed execution](distributed-execution.md) for environment
+setup, a pipeline manifest, Slurm allocations and representative host files.
+
 ## Execution models
 
 The [xPois batch executor](components/xpois.md#launch-with-dragon)
