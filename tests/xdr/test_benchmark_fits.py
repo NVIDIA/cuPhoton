@@ -167,6 +167,8 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
             "separate",
             "--xdr-gzip-decoder",
             "deflate",
+            "--xdr-decompression-backend",
+            "cuda",
             "--mock-storage",
             "host",
             "--skip-gds-read",
@@ -189,6 +191,7 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
     assert received["native_batcher"] == "off"
     assert received["postprocess"] == "separate"
     assert received["gzip_decoder"] == "deflate"
+    assert received["decompression_backend"] == "cuda"
     assert received["mock_storage_kind"] == "host"
     assert received["skip_gds_read"] is True
     assert received["output_json"] == Path("report.json")
@@ -404,6 +407,7 @@ def test_json_report_matches_returned_and_printed_phases(
         "native_batcher": "auto",
         "postprocess": "auto",
         "gzip_decoder": "auto",
+        "decompression_backend": "auto",
         "native_batcher_enabled": mode == "real",
         "native_batcher_error": None,
         "skip_gds_read": mode != "real",

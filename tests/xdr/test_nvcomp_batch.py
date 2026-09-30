@@ -933,3 +933,31 @@ def test_auto_decoder_propagates_native_gzip_error(monkeypatch):
             [1],
             header_sizes=[10],
         )
+
+
+@pytest.mark.parametrize("backend", ["invalid", "hardware", "", True])
+def test_gpu_batch_rejects_invalid_backend_before_import(backend):
+    with pytest.raises(ValueError, match="decompression_backend must be"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            None, [], [], [], decompression_backend=backend
+        )
+
+
+@pytest.mark.parametrize("extension", [None, SimpleNamespace()])
+def test_forced_cuda_rejects_missing_native_capability(
+    monkeypatch, extension
+):
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace())
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setattr(
+        nvcomp_batch, "_warn_python_fallback_once", lambda: None
+    )
+    with pytest.raises(RuntimeError, match="requires a rebuilt native"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            SimpleNamespace(size=20),
+            [0],
+            [20],
+            [1],
+            header_sizes=[10],
+            decompression_backend="cuda",
+        )

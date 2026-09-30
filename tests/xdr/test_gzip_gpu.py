@@ -32,10 +32,13 @@ def cp():
     return module
 
 
+@pytest.mark.parametrize("backend", ["auto", "cuda"])
 @pytest.mark.parametrize("decoder", ["auto", "gzip", "deflate"])
 @pytest.mark.parametrize("pooled", [False, True])
 @pytest.mark.parametrize("preparsed", [False, True])
-def test_native_gzip_decodes_optional_headers(cp, pooled, preparsed, decoder):
+def test_native_gzip_decodes_optional_headers(
+    cp, pooled, preparsed, decoder, backend
+):
     payloads, originals, header_sizes = [], [], []
     for flags in range(32):
         original = bytes(range(256)) * 9 + bytes([flags]) * 11
@@ -60,6 +63,7 @@ def test_native_gzip_decodes_optional_headers(cp, pooled, preparsed, decoder):
             sizes,
             use_cpp_helper=True,
             gzip_decoder=decoder,
+            decompression_backend=backend,
             use_native_pool=pooled,
             keepalive=owners,
             header_sizes=header_sizes if preparsed else None,
@@ -206,3 +210,20 @@ def test_auto_decoder_orders_legacy_deflate(
     np.testing.assert_array_equal(
         cp.asnumpy(result), np.frombuffer(original, dtype="u1")
     )
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "batch_gzip_decompress",
+        "batch_deflate_decompress",
+        "batch_deflate_decompress_pooled",
+    ],
+)
+def test_native_decoder_rejects_invalid_backend(cp, entrypoint):
+    extension = nvcomp_batch._try_get_cpp_ext()
+    empty = np.empty(0, dtype="i8")
+    with pytest.raises(ValueError, match="decompression_backend must be"):
+        getattr(extension, entrypoint)(
+            0, empty, empty, 0, empty, empty, decompression_backend="invalid"
+        )

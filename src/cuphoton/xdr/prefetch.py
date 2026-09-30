@@ -603,6 +603,7 @@ def _consume_comp_batch(
     *,
     postprocess="auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ):
     """Decode many compressed HDUs with one batched nvCOMP call.
 
@@ -719,6 +720,7 @@ def _consume_comp_batch(
                 out_bytes=out_bytes,
                 stream=stream,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
             )
@@ -804,6 +806,7 @@ def _consume_prefetched_group(
     *,
     postprocess="auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ):
     """Consume prefetched files, batching compressed HDUs together."""
     comp_entries: list[_CompBatchEntry] = []
@@ -841,6 +844,7 @@ def _consume_prefetched_group(
         keepalive=keepalive,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
+        decompression_backend=decompression_backend,
     )
 
 
@@ -1074,6 +1078,7 @@ def _submit_prefetched_group(
     in_flight: deque[_GpuBatchHandle],
     postprocess="auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ) -> None:
     """Queue GPU work and register its lifetime handle."""
     import cupy as cp
@@ -1100,6 +1105,7 @@ def _submit_prefetched_group(
                     keepalive=keepalive,
                     postprocess=postprocess,
                     gzip_decoder=gzip_decoder,
+                    decompression_backend=decompression_backend,
                 )
                 candidate_event = cp.cuda.Event()
                 candidate_event.record(use_stream)
@@ -1427,6 +1433,7 @@ def _consume_native_batches(
     native_plan_files,
     postprocess="auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ):
     """Consume device batches built by the C++ KvikIO worker pool."""
     import cupy as cp
@@ -1504,6 +1511,7 @@ def _consume_native_batches(
                         in_flight=in_flight,
                         postprocess=postprocess,
                         gzip_decoder=gzip_decoder,
+                        decompression_backend=decompression_backend,
                     )
             planner.join()
             if planner.error is not None:
@@ -1545,6 +1553,7 @@ def _consume_python_batches(
     stream,
     postprocess="auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ) -> None:
     """Consume pinned-host batches with bounded event-owned lifetimes."""
     n_files = len(paths)
@@ -1567,6 +1576,7 @@ def _consume_python_batches(
             in_flight=in_flight,
             postprocess=postprocess,
             gzip_decoder=gzip_decoder,
+            decompression_backend=decompression_backend,
         )
 
     prefetcher.start()
@@ -1636,6 +1646,7 @@ def batch_to_device_stream(
     native_batcher: str | bool = "auto",
     postprocess: str = "auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
     section=None,
     stream=None,
 ):
@@ -1685,6 +1696,10 @@ def batch_to_device_stream(
     gzip_decoder
         "auto" uses native Gzip when available, otherwise aligned DEFLATE.
         "gzip" requires native Gzip support; "deflate" selects raw DEFLATE.
+    decompression_backend
+        "auto" lets Gzip select compatible hardware with CUDA fallback. "cuda"
+        requires a rebuilt native helper and uses CUDA kernels. Native raw
+        DEFLATE uses CUDA in either mode.
     section
         Optional 2D ROI applied uniformly to CompImageHDUs.
     stream
@@ -1706,7 +1721,11 @@ def batch_to_device_stream(
     """
 
     normalize_xdr_options(
-        {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+        {
+            "postprocess": postprocess,
+            "gzip_decoder": gzip_decoder,
+            "decompression_backend": decompression_backend,
+        }
     )
     hdu_indices = tuple(int(i) for i in hdu_indices)
     resolved_paths = [Path(p) for p in paths]
@@ -1759,6 +1778,7 @@ def batch_to_device_stream(
             native_plan_files=native_plan_files,
             postprocess=postprocess,
             gzip_decoder=gzip_decoder,
+            decompression_backend=decompression_backend,
         )
         return tuple(outs)
 
@@ -1773,6 +1793,7 @@ def batch_to_device_stream(
         stream=stream,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
+        decompression_backend=decompression_backend,
     )
 
     return tuple(outs)

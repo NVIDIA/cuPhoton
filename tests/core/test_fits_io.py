@@ -15,10 +15,11 @@ from astropy.io import fits
 from cuphoton.core import fits_io
 
 
+@pytest.mark.parametrize("decompression_backend", ["auto", "cuda"])
 @pytest.mark.parametrize("postprocess", ["fused", "separate"])
 @pytest.mark.parametrize("gzip_decoder", ["auto", "gzip", "deflate"])
 def test_xdr_options_reach_batch_dispatch(
-    tmp_path, monkeypatch, postprocess, gzip_decoder
+    tmp_path, monkeypatch, postprocess, gzip_decoder, decompression_backend
 ):
     import cuphoton.xdr as xdr
 
@@ -40,13 +41,16 @@ def test_xdr_options_reach_batch_dispatch(
         xdr_options={
             "postprocess": postprocess,
             "gzip_decoder": gzip_decoder,
+            "decompression_backend": decompression_backend,
         },
     )
     assert observed["postprocess"] == postprocess
     assert observed["gzip_decoder"] == gzip_decoder
+    assert observed["decompression_backend"] == decompression_backend
     assert result.metadata()["xdr_options"] == {
         "postprocess": postprocess,
         "gzip_decoder": gzip_decoder,
+        "decompression_backend": decompression_backend,
     }
     np.testing.assert_array_equal(result.arrays[0], data)
 
