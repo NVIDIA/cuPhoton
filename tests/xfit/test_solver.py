@@ -248,6 +248,81 @@ def test_specialized_normal_equations_report_non_converged_diagnostics(
         assert np.allclose(getattr(specialized, field), getattr(plain, field))
 
 
+@pytest.mark.parametrize(
+    ("dtype", "large_scale"), [(np.float32, 1.0e25), (np.float64, 1.0e200)]
+)
+def test_specialized_normal_overflow_preserves_finite_jacobian_results(
+    dtype, large_scale
+) -> None:
+    scales = np.asarray([1.0, large_scale, np.nan], dtype=dtype)
+    jacobian_calls: list[tuple[int, ...]] = []
+
+    def residual(x, *, indices):
+        del indices
+        return np.zeros_like(x)
+
+    def jacobian(x, *, indices):
+        del x
+        jacobian_calls.append(tuple(int(value) for value in indices))
+        return scales[indices, None, None]
+
+    def normal_equations(x, residuals, *, indices):
+        del x
+        jac = scales[indices, None, None]
+        gradient = np.einsum("knm,km->kn", jac, residuals)
+        hessian = np.einsum("knm,kpm->knp", jac, jac)
+        # Callback arrays may be borrowed or readonly.
+        gradient.flags.writeable = False
+        hessian.flags.writeable = False
+        return gradient, hessian
+
+    initial = np.zeros((3, 1), dtype=dtype)
+    with np.errstate(over="ignore", invalid="ignore"):
+        plain = batched_levenberg_marquardt(
+            BatchedLeastSquaresProblem(residual, jacobian), initial
+        )
+        jacobian_calls.clear()
+        specialized = batched_levenberg_marquardt(
+            BatchedLeastSquaresProblem(
+                residual, jacobian, normal_equations=normal_equations
+            ),
+            initial,
+        )
+
+    assert jacobian_calls[0] == (1, 2)
+    assert plain.status.tolist() == [
+        LMStatus.CONVERGED_G_TOL,
+        LMStatus.CONVERGED_G_TOL,
+        LMStatus.INVALID_RESIDUAL,
+    ]
+    assert plain.evaluations.tolist() == [1, 1, 1]
+    assert plain.rank.tolist() == [1, 1, -1]
+    for name, expected in vars(plain).items():
+        np.testing.assert_array_equal(getattr(specialized, name), expected)
+
+
+def test_specialized_overflow_jacobian_shape_is_validated() -> None:
+    def residual(x, *, indices):
+        del indices
+        return x.copy()
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.ones((x.shape[0], 2, 1))
+
+    def normal_equations(x, residuals, *, indices):
+        del indices
+        return residuals.copy(), np.full((x.shape[0], 1, 1), np.inf)
+
+    with pytest.raises(ValueError, match="jacobian must return shape"):
+        batched_levenberg_marquardt(
+            BatchedLeastSquaresProblem(
+                residual, jacobian, normal_equations=normal_equations
+            ),
+            np.zeros((2, 1)),
+        )
+
+
 def test_specialized_normal_equations_require_an_analytic_jacobian() -> None:
     def residual(x, *, indices):
         del indices
