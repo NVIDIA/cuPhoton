@@ -36,8 +36,12 @@ def runtime_metadata(
 
     if backend == "torch":
         _add_torch_metadata(metadata, resolved_device)
-    elif backend in {"cupy", "cutile", "native"}:
+    elif backend in {"cupy", "cutile", "native", "numba-cuda-mlir"}:
         _add_cupy_metadata(metadata)
+        if backend == "numba-cuda-mlir":
+            metadata["numba_cuda_mlir_version"] = _package_version(
+                "numba-cuda-mlir"
+            )
     elif backend == "numba-cuda":
         _add_numba_metadata(metadata)
     return metadata
@@ -59,7 +63,13 @@ def _device_type(backend: str, device: str | None) -> str:
             return "cpu"
     if backend == "cpu":
         return "cpu"
-    if backend in {"cupy", "cutile", "native", "numba-cuda"}:
+    if backend in {
+        "cupy",
+        "cutile",
+        "native",
+        "numba-cuda",
+        "numba-cuda-mlir",
+    }:
         return "cuda"
     return device or "unknown"
 
