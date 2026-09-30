@@ -110,6 +110,30 @@ choices select available capabilities before decoding. I/O or decoder exceptions
 propagate; they do not trigger another reader, codec or postprocessing attempt.
 The supported FITS compression formats remain `GZIP_1` and `GZIP_2`.
 
+### Hardware eligibility and diagnostics
+
+nvCOMP selects an engine for each native Gzip call. Its
+[Decompression Engine FAQ](https://docs.nvidia.com/cuda/nvcomp/decompression_engine_faq.html)
+lists B200, B300, GB200 and GB300 support; other Blackwell GPUs need not have
+this engine. The compressed data, output and decoded-size buffers must all
+use compatible allocations. B200 has a 4 MiB hardware chunk limit; the limit
+on a device is available through `CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH`.
+Use `decompression_backend="cuda"` when comparing execution paths or reading
+tiles beyond the hardware limit.
+
+Batch readers retain native pooled scratch buffers. The low-level non-pooled
+path, including `GpuCompImageReader.read()` without an explicit stream, uses
+`cudaMallocAsync` scratch; these allocations can cause CUDA fallback even on
+a GPU with an engine. Custom CuPy allocators can also affect eligibility.
+An `auto` receipt and a compatible GPU therefore do not establish hardware use.
+See [nvCOMP logging](../troubleshooting.md#confirm-the-decompression-engine)
+to inspect the actual decoder calls.
+
+The native decoder expects valid compressed payloads and correct output sizes.
+Header validation and a successful launch do not verify payload integrity;
+nvCOMP's [C API](https://docs.nvidia.com/cuda/nvcomp/c_api.html)
+does not guarantee safe decoding of corrupt Gzip or DEFLATE streams.
+
 ## Read FITS images in a workflow
 
 The shared FITS reader selects explicit image HDUs and returns NumPy or CuPy

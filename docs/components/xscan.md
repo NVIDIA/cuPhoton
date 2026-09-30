@@ -493,7 +493,7 @@ accept the same mapping as an `xdr_options` keyword.
 
 `run-pipeline` and `benchmark-pipeline` accept all three `--xdr-*` flags.
 An explicit flag overrides its matching key on every FITS descriptor;
-omitted flags preserve per-descriptor choices. Effective choices travel with
+omitted flags preserve per-descriptor choices. Requested choices travel with
 work items to MPI/Dragon workers and benchmark subprocesses, and appear in
 workload identities and read receipts. HDUs grouped into one file read must
 use matching xDR choices.
