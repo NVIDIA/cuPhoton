@@ -41,7 +41,9 @@ def _fixture(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--backend", action="append", choices=("numpy", "cupy", "cutile")
+        "--backend",
+        action="append",
+        choices=("numpy", "cupy", "cutile", "numba-cuda-mlir"),
     )
     parser.add_argument("--batch", type=int, action="append")
     parser.add_argument(

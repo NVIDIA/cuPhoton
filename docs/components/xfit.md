@@ -89,6 +89,44 @@ uv run --locked --python 3.12 --extra gpu --extra cutile \
   python examples/xfit/benchmark_gaussian.py --dtype float64
 ```
 
+`backend="numba-cuda-mlir"` uses Python-authored CUDA kernels that fuse
+Gaussian model evaluation and weighting in separate kernels for residuals
+and the analytic Jacobian. CuPy contracts the weighted Jacobian to form the
+gradient and Gauss–Newton Hessian. Install the optional
+`cuphoton[numba-cuda-mlir]` extra on Linux with CUDA 13. It supports float32
+and float64 computation in difference and split modes, including masks and
+variance weights. The existing LM solver and final analytic-Jacobian
+diagnostics are retained. Sampled-stamp models and finite differences are
+rejected. Automatic backend selection continues to choose NumPy or CuPy.
+
+Select it in the CLI with:
+
+```bash
+cuphoton xfit fit-dipoles --input dipoles.npz --output-dir fit-run \
+  --model gaussian --backend numba-cuda-mlir --compute-dtype float64
+```
+
+`fit_dipoles_device(..., backend="numba-cuda-mlir")` returns CuPy-owned
+arrays and reports the selected execution backend. Inputs and consumers use
+the current CuPy stream; establish an event dependency before passing data
+produced on another stream. Each worker thread reuses compiled kernels for
+repeated fits of the same dtype and stamp dimensions. Allow for compilation
+when warming a new worker or stamp shape. Each fit call retains a buffer
+for the weighted Jacobian with eight values per observation and candidate,
+in the selected compute dtype. Split mode has three observations per spatial
+pixel. Account for this device-memory cost when choosing batch sizes.
+
+For a persistent device pipeline or pipeline benchmark, set
+`"backend": "numba-cuda-mlir"` in the configuration's `xfit` object.
+
+Compare warmed CuPy and Numba-CUDA-MLIR fits on synthetic inputs with:
+
+```bash
+uv run --locked --extra numba-cuda-mlir \
+  python examples/xfit/benchmark_gaussian.py \
+  --backend cupy --backend numba-cuda-mlir --dtype float64
+```
+
 Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
 statistical calibration of the reported covariance requires a caller-supplied

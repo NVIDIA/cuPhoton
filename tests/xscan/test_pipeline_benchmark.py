@@ -434,7 +434,7 @@ def test_compare_cpu_orchestration_and_audit(
         )
 
 
-def test_provenance_discovers_the_installed_cupy_distribution(
+def test_provenance_discovers_installed_cuda_distributions(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -445,4 +445,6 @@ def test_provenance_discovers_the_installed_cupy_distribution(
     monkeypatch.setattr(
         benchmark.importlib.metadata, "version", lambda name: "test-" + name
     )
-    assert benchmark.provenance()["packages"]["cupy"] == "test-cupy"
+    packages = benchmark.provenance()["packages"]
+    assert packages["cupy"] == "test-cupy"
+    assert packages["numba-cuda-mlir"] == "test-numba-cuda-mlir"

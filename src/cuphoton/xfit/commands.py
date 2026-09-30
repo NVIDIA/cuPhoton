@@ -246,7 +246,8 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     class BackendArg(BackendInvariant):
         _arg = "--backend"
         _help = (
-            "Array backend: auto, numpy, cupy, or cutile. [default: %default]"
+            "Backend: auto, numpy, cupy, cutile, or numba-cuda-mlir. "
+            "[default: %default]"
         )
         _mandatory = False
         _default = "auto"

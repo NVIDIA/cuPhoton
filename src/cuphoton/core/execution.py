@@ -43,7 +43,8 @@ SUMMARY_SCHEMA = "cuphoton.core.execution-summary/v1"
 class Worker(Protocol):
     """Worker-local state constructed after placement and CUDA binding.
 
-    ``gpu_identity`` must contain ``backend`` (``cupy`` for ``cutile``),
+    ``gpu_identity`` must contain ``backend`` (``cupy`` for ``cutile`` or
+    ``numba-cuda-mlir``),
     ``device_index=0``, ``identity_error=None``, and at least one non-empty
     physical ``uuid`` or ``pci_bus_id`` string.
     """
@@ -114,7 +115,13 @@ class WorkloadSpec:
             or any(c not in "0123456789abcdef" for c in self.manifest_sha256)
         ):
             raise ValueError("manifest_sha256 must be a lowercase SHA-256")
-        if self.backend not in {"cupy", "cutile", "numba-cuda", "torch"}:
+        if self.backend not in {
+            "cupy",
+            "cutile",
+            "numba-cuda",
+            "numba-cuda-mlir",
+            "torch",
+        }:
             raise ValueError("workload requires an explicit GPU backend")
         factory_reference(self.worker_factory)
         for field in (
@@ -383,7 +390,9 @@ def audit_worker_provenance(
         ):
             invalid.append("cuda_visible_devices")
         ids: frozenset[tuple[str, str]] = frozenset()
-        expected_backend = "cupy" if backend == "cutile" else backend
+        expected_backend = (
+            "cupy" if backend in {"cutile", "numba-cuda-mlir"} else backend
+        )
         if not isinstance(gpu, Mapping):
             invalid.append("gpu")
         else:
