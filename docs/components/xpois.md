@@ -48,6 +48,11 @@ to require xDR. With `--backend cpu`, automatic reading uses Astropy.
 The option also applies to batch, MPI and Dragon execution. NPY inputs keep
 their existing loading path.
 
+`--xdr-postprocess auto|fused|separate` selects xDR's postprocessing path
+when xDR is the active reader. Python workflows and `BatchFitOptions` accept
+`xdr_options={"postprocess": "separate"}`; batch workers retain these choices.
+Omitting the option uses xDR's default without changing FITS reader selection.
+
 Image, variance and mask HDU selection stays the same. `summary.json` records
 `fits_reader` and `fits_reads`, including the reader used and any fallback.
 The standalone fitting workflows retain host input arrays: xDR accelerates

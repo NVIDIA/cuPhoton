@@ -19,6 +19,7 @@ import numpy as np
 import yaml
 
 from cuphoton.core.bulk import WorkItem, validate_identifier
+from cuphoton.core.fits_options import normalize_xdr_options
 
 from .data import (
     ERROR_EXTENSION_NAMES,
@@ -441,6 +442,7 @@ class BatchFitOptions:
     flux_conserve: bool = False
     backend: str = "cupy"
     fits_reader: str = "auto"
+    xdr_options: Mapping[str, str] | None = None
     solver: str = "constant"
     spatial_degree: int | None = None
     als_iterations: int | None = None
@@ -500,6 +502,9 @@ class BatchFitOptions:
             raise ValueError(f"unsupported mask policy: {self.mask_policy}")
         if self.fits_reader not in {"auto", "astropy", "xdr"}:
             raise ValueError(f"unsupported FITS reader: {self.fits_reader}")
+        object.__setattr__(
+            self, "xdr_options", normalize_xdr_options(self.xdr_options)
+        )
         if self.backend not in _SUPPORTED_BACKENDS:
             raise ValueError(f"unsupported fit backend: {self.backend}")
         if self.solver not in _SUPPORTED_SOLVERS:
@@ -860,6 +865,7 @@ def run_image_pair_item(
             flux_conserve=options.flux_conserve,
             backend=options.backend,
             fits_reader=options.fits_reader,
+            xdr_options=options.xdr_options,
             solver=options.solver,
             spatial_degree=options.spatial_degree,
             als_iterations=options.als_iterations,

@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from astropy.io import fits
 
 from cuphoton.core.cli import get_component, run_component
@@ -107,6 +109,7 @@ def test_inspect_image_help_omits_fits_reader(capsys) -> None:
 
     assert rc == 0
     assert "--fits-reader" not in captured.out
+    assert "--xdr-postprocess" not in captured.out
 
 
 def test_inspect_image_command_emits_json(tmp_path: Path, capsys) -> None:
@@ -117,3 +120,41 @@ def test_inspect_image_command_emits_json(tmp_path: Path, capsys) -> None:
 
     assert rc == 0
     assert str(fits_path) in captured.out
+
+
+@pytest.mark.parametrize(
+    "command,workflow,input_flag",
+    [
+        ("reproject-image", "run_reproject_image", "--input"),
+        ("reproject-stack", "run_reproject_stack", "--inputs"),
+        ("benchmark-reproject-image", "benchmark_reproject_image", "--input"),
+        (
+            "benchmark-backend-variants",
+            "benchmark_backend_variants_reproject_image",
+            "--input",
+        ),
+        ("compare-backends", "compare_backends_reproject_image", "--input"),
+    ],
+)
+def test_fits_commands_forward_xdr_options(
+    tmp_path, monkeypatch, capsys, command, workflow, input_flag
+):
+    from cuphoton.xrep import commands
+
+    captured = {}
+
+    def run(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(summary={})
+
+    monkeypatch.setattr(commands, workflow, run)
+    path = _write_test_fits(tmp_path / "image.fits")
+    assert (
+        _run_cli(
+            [command, input_flag, str(path), "--xdr-postprocess", "separate"]
+        )
+        == 0
+    )
+    assert captured["xdr_options"] == {"postprocess": "separate"}
+    assert captured["fits_reader"] == "auto"
+    capsys.readouterr()

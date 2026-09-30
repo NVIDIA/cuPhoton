@@ -87,6 +87,7 @@ def test_reader_override_is_forwarded_to_benchmark_children(
     def child(command, log, **kwargs):
         commands.append(command)
         assert command[command.index("--fits-reader") + 1] == "astropy"
+        assert command[command.index("--xdr-postprocess") + 1] == "separate"
         stage = command[command.index("--stage") + 1]
         root = Path(command[command.index("--output") + 1])
         if stage != "pipeline":
@@ -103,6 +104,7 @@ def test_reader_override_is_forwarded_to_benchmark_children(
         config=tmp_path / "config.json",
         items=tmp_path / "items.json",
         fits_reader="astropy",
+        xdr_options={"postprocess": "separate"},
         warmup=1,
         repeat=1,
         timeout=10,

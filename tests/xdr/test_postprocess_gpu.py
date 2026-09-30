@@ -24,10 +24,13 @@ def cp():
     return module
 
 
+@pytest.mark.parametrize("postprocess", ["auto", "fused", "separate"])
 @pytest.mark.parametrize("dtype", ["u1", "i2", "i4", "i8", "f4", "f8"])
 @pytest.mark.parametrize("compression", ["GZIP_1", "GZIP_2"])
 @pytest.mark.parametrize("cropped", [False, True])
-def test_scatter_restores_fits_pixels(cp, dtype, compression, cropped):
+def test_scatter_restores_fits_pixels(
+    cp, dtype, compression, cropped, postprocess
+):
     rng = np.random.default_rng(42)
     # Arbitrary bit patterns exercise signed values, NaNs and integer masks.
     pixels = rng.bytes(17 * 19 * np.dtype(dtype).itemsize)
@@ -39,7 +42,12 @@ def test_scatter_restores_fits_pixels(cp, dtype, compression, cropped):
         device_raw = cp.asarray(raw)
         out = cp.empty(plan["out_shape"], dtype=dtype)
         result = GpuCompImageReader.postprocess_decoded_tiles(
-            device_raw, offsets, plan, out=out, stream=stream
+            device_raw,
+            offsets,
+            plan,
+            out=out,
+            stream=stream,
+            postprocess=postprocess,
         )
     stream.synchronize()
 
@@ -50,9 +58,12 @@ def test_scatter_restores_fits_pixels(cp, dtype, compression, cropped):
     np.testing.assert_array_equal(cp.asnumpy(device_raw), raw)
 
 
+@pytest.mark.parametrize("postprocess", ["auto", "separate"])
 @pytest.mark.parametrize("dtype", ["f4", "f8"])
 @pytest.mark.parametrize("compression", ["GZIP_1", "GZIP_2"])
-def test_scatter_preserves_nondithered_dequantization(cp, dtype, compression):
+def test_scatter_preserves_nondithered_dequantization(
+    cp, dtype, compression, postprocess
+):
     itemsize = np.dtype(dtype).itemsize
     image = np.arange(-150, 173, dtype=f"i{itemsize}").reshape(17, 19)
     section = np.s_[3:15, 5:18]
@@ -65,7 +76,7 @@ def test_scatter_preserves_nondithered_dequantization(cp, dtype, compression):
         sel_zzero=np.full(len(offsets), 2.0),
     )
     result = GpuCompImageReader.postprocess_decoded_tiles(
-        cp.asarray(raw), offsets, plan
+        cp.asarray(raw), offsets, plan, postprocess=postprocess
     )
     np.testing.assert_array_equal(
         cp.asnumpy(result), image[section].astype(dtype) * 0.5 + 2

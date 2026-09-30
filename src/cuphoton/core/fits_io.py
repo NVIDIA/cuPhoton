@@ -13,13 +13,15 @@ the storage route is native GPUDirect Storage.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from astropy.io import fits
+
+from .fits_options import normalize_xdr_options
 
 _BITPIX_DTYPES = {8: "u1", 16: "i2", 32: "i4", 64: "i8", -32: "f4", -64: "f8"}
 
@@ -45,6 +47,7 @@ class FitsReadResult:
     requested_reader: str
     fallback_reason: str | None
     device: bool
+    xdr_options: Mapping[str, str] | None = None
 
     def metadata(self) -> dict[str, Any]:
         """Return logical read provenance, without physical I/O claims."""
@@ -63,6 +66,11 @@ class FitsReadResult:
                 for info, array in zip(self.infos, self.arrays, strict=True)
             ],
             "decoded_bytes": sum(int(array.nbytes) for array in self.arrays),
+            **(
+                {"xdr_options": dict(self.xdr_options)}
+                if self.xdr_options
+                else {}
+            ),
         }
 
 
@@ -195,7 +203,9 @@ def _xdr_available() -> bool:
     return gpu_available() and native_plan_files_available()
 
 
-def _read_xdr(path: Path, hdus: tuple[int, ...], *, section, stream):
+def _read_xdr(
+    path: Path, hdus: tuple[int, ...], *, section, stream, xdr_options
+):
     from cuphoton.xdr import batch_to_device_stream
 
     return batch_to_device_stream(
@@ -208,6 +218,7 @@ def _read_xdr(path: Path, hdus: tuple[int, ...], *, section, stream):
         batch_queue_depth=1,
         native_read_threads=1,
         native_plan_threads=1,
+        **xdr_options,
     )
 
 
@@ -230,6 +241,7 @@ def read_fits_images(
     device: bool = False,
     section=None,
     stream=None,
+    xdr_options: Mapping[str, str] | None = None,
 ) -> FitsReadResult:
     """Read selected planes to host or device, preserving FITS semantics.
 
@@ -238,8 +250,13 @@ def read_fits_images(
     small stamp does not require a full-image GPU read. Explicit ``xdr``
     rejects unsupported semantics or unavailable dependencies before reading
     pixels. All returned device arrays are ready on return.
+
+    ``xdr_options`` carries explicit xDR runtime choices, such as
+    ``{"postprocess": "separate"}``. Omitted choices use xDR defaults.
+    These choices do not change the reader or its Astropy fallback policy.
     """
     validate_fits_reader(reader)
+    xdr_options = normalize_xdr_options(xdr_options)
     selectors = tuple(hdus)
     if not selectors:
         raise ValueError("At least one FITS HDU must be selected")
@@ -272,7 +289,13 @@ def read_fits_images(
     resolved = infos[0].path
     unique = tuple(dict.fromkeys(int(hdu) for hdu in selectors))
     if actual == "xdr":
-        stacked = _read_xdr(resolved, unique, section=section, stream=stream)
+        stacked = _read_xdr(
+            resolved,
+            unique,
+            section=section,
+            stream=stream,
+            xdr_options=xdr_options,
+        )
         if len(stacked) != len(unique):
             raise RuntimeError("xDR returned different HDU coverage")
         by_hdu = dict(
@@ -325,4 +348,6 @@ def read_fits_images(
             raise RuntimeError(
                 "FITS image shape or dtype changed during read"
             )
-    return FitsReadResult(arrays, infos, actual, reader, fallback, device)
+    return FitsReadResult(
+        arrays, infos, actual, reader, fallback, device, xdr_options
+    )

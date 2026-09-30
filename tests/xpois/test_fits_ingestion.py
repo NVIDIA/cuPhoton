@@ -91,5 +91,6 @@ def test_fits_reader_survives_distributed_options_round_trip():
         basis_sigmas=(1,),
         basis_degrees=(0,),
         fits_reader="xdr",
+        xdr_options={"postprocess": "separate"},
     )
     assert BatchFitOptions.from_payload(options.to_payload()) == options

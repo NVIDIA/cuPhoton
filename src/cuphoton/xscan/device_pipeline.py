@@ -31,6 +31,10 @@ import numpy as np
 
 from cuphoton.core.artifacts import file_sha256
 from cuphoton.core.bulk import json_mapping, validate_identifier
+from cuphoton.core.fits_options import (
+    merge_xdr_options,
+    normalize_xdr_options,
+)
 
 DEVICE_PIPELINE_CONFIG_SCHEMA: Final = (
     "cuphoton.xscan.device-pipeline.config/v2"
@@ -237,6 +241,7 @@ class FitsArrayDescriptor:
     dtype: str
     hdu: int
     reader: Literal["astropy", "auto", "xdr"] = "auto"
+    xdr_options: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.path, str):
@@ -255,6 +260,9 @@ class FitsArrayDescriptor:
             raise ValueError("FITS descriptor hdu must be non-negative")
         if self.reader not in {"astropy", "auto", "xdr"}:
             raise ValueError("FITS reader must be astropy, auto or xdr")
+        object.__setattr__(
+            self, "xdr_options", normalize_xdr_options(self.xdr_options)
+        )
         if not isinstance(self.dtype, str):
             raise TypeError("FITS descriptor dtype must be a string")
         try:
@@ -276,14 +284,26 @@ class FitsArrayDescriptor:
             "dtype": self.dtype,
             "hdu": self.hdu,
             "reader": self.reader,
+            **(
+                {"xdr_options": dict(self.xdr_options)}
+                if self.xdr_options
+                else {}
+            ),
         }
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> FitsArrayDescriptor:
         """Restore one strict FITS descriptor."""
 
+        if not isinstance(payload, Mapping):
+            raise TypeError("FITS descriptor must be a mapping")
+        xdr_options = normalize_xdr_options(payload.get("xdr_options"))
         values = _require_exact_fields(
-            payload,
+            {
+                name: value
+                for name, value in payload.items()
+                if name != "xdr_options"
+            },
             expected=frozenset(
                 {
                     "format",
@@ -299,7 +319,7 @@ class FitsArrayDescriptor:
         )
         if values.pop("format") != "fits":
             raise ValueError("unsupported image descriptor format")
-        return cls(**values)
+        return cls(**values, xdr_options=xdr_options)
 
 
 ImageArrayDescriptor = NpyArrayDescriptor | FitsArrayDescriptor
@@ -433,10 +453,15 @@ class DevicePipelineItem:
 
     @classmethod
     def from_payload(
-        cls, payload: Mapping[str, Any], *, fits_reader: str | None = None
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        fits_reader: str | None = None,
+        xdr_options: Mapping[str, str] | None = None,
     ) -> DevicePipelineItem:
         """Restore an item, optionally overriding its FITS reader policies."""
 
+        xdr_options = normalize_xdr_options(xdr_options)
         if fits_reader is not None:
             from cuphoton.core.fits_io import validate_fits_reader
 
@@ -464,12 +489,18 @@ class DevicePipelineItem:
             raise TypeError("device pipeline candidates must be a list")
 
         def descriptor(value: Any) -> ImageArrayDescriptor:
-            if (
-                fits_reader is not None
-                and isinstance(value, Mapping)
-                and value.get("format") == "fits"
-            ):
-                value = {**value, "reader": fits_reader}
+            if isinstance(value, Mapping) and value.get("format") == "fits":
+                value = {
+                    **value,
+                    **(
+                        {"reader": fits_reader}
+                        if fits_reader is not None
+                        else {}
+                    ),
+                    "xdr_options": merge_xdr_options(
+                        value.get("xdr_options"), xdr_options
+                    ),
+                }
             return _image_descriptor(value)
 
         def optional_descriptor(value: Any) -> ImageArrayDescriptor | None:
@@ -2906,6 +2937,7 @@ def _fits_input_groups(
                 if (
                     previous.sha256 != descriptor.sha256
                     or previous.reader != descriptor.reader
+                    or previous.xdr_options != descriptor.xdr_options
                     or (
                         previous.hdu == descriptor.hdu
                         and previous != descriptor
@@ -2939,6 +2971,11 @@ def _validate_fits_reads(item: DevicePipelineItem, reads: Any) -> None:
                     "hdus",
                     "decoded_bytes",
                 }
+                | (
+                    {"xdr_options"}
+                    if isinstance(record, Mapping) and "xdr_options" in record
+                    else set()
+                )
             ),
             field_name="FITS reader receipt",
         )
@@ -2949,6 +2986,8 @@ def _validate_fits_reads(item: DevicePipelineItem, reads: Any) -> None:
             != {role: value.hdu for role, value in roles.items()}
             or any(type(hdu) is not int for hdu in record["roles"].values())
             or record["requested_reader"] != descriptor.reader
+            or normalize_xdr_options(record.get("xdr_options"))
+            != descriptor.xdr_options
             or record["location"] != "device"
             or record["reader"] not in {"astropy", "xdr"}
             or (
@@ -3024,6 +3063,7 @@ def _read_fits_device_inputs(
             descriptor.path,
             hdus,
             reader=descriptor.reader,
+            xdr_options=descriptor.xdr_options,
             device=True,
             stream=stream,
         )

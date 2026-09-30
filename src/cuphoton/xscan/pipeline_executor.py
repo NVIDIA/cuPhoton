@@ -43,6 +43,7 @@ def load_pipeline_manifest(
     path: Path,
     *,
     fits_reader: str | None = None,
+    xdr_options: Mapping[str, str] | None = None,
 ) -> tuple[DevicePipelineConfig, tuple[DevicePipelineItem, ...]]:
     """Read config/items and resolve NPY or FITS paths beside the manifest.
 
@@ -94,7 +95,9 @@ def load_pipeline_manifest(
                     descriptor["path"] = resolve(descriptor["path"])
                 item[role] = descriptor
         items.append(
-            DevicePipelineItem.from_payload(item, fits_reader=fits_reader)
+            DevicePipelineItem.from_payload(
+                item, fits_reader=fits_reader, xdr_options=xdr_options
+            )
         )
     return config, tuple(items)
 
@@ -209,6 +212,7 @@ def run_pipeline_manifest(
     output_root: Path,
     run_id: str | None = None,
     fits_reader: str | None = None,
+    xdr_options: Mapping[str, str] | None = None,
     **options: Any,
 ) -> ExecutionResult | None:
     """Run an xPois/xFit/xScan manifest through the selected executor."""
@@ -217,7 +221,7 @@ def run_pipeline_manifest(
 
     def prepare(rank: int):
         config, items = load_pipeline_manifest(
-            manifest_path, fits_reader=fits_reader
+            manifest_path, fits_reader=fits_reader, xdr_options=xdr_options
         )
         return prepare_pipeline_workload(items, config, rank=rank)
 

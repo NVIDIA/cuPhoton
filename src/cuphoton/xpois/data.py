@@ -138,7 +138,11 @@ def inspect_hsc_data_tree(base: Path | None = None) -> dict[str, Any]:
 
 
 def load_image_array(
-    path: Path, hdu: int | None = None, *, fits_reader: str = "astropy"
+    path: Path,
+    hdu: int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    xdr_options=None,
 ) -> np.ndarray:
     """Load a two-dimensional FITS or NumPy image.
 
@@ -155,28 +159,38 @@ def load_image_array(
         Floating-point image data.
     """
 
-    array, _, _ = load_image_with_wcs(path, hdu=hdu, fits_reader=fits_reader)
+    array, _, _ = load_image_with_wcs(
+        path, hdu=hdu, fits_reader=fits_reader, xdr_options=xdr_options
+    )
     return array
 
 
 def load_variance_array(
-    path: Path, hdu: int | None = None, *, fits_reader: str = "astropy"
+    path: Path,
+    hdu: int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    xdr_options=None,
 ) -> np.ndarray:
     """Load a two-dimensional variance image from FITS or NumPy."""
 
     array, _, _ = load_variance_with_wcs(
-        path, hdu=hdu, fits_reader=fits_reader
+        path, hdu=hdu, fits_reader=fits_reader, xdr_options=xdr_options
     )
     return array
 
 
 def load_mask_array(
-    path: Path, hdu: int | None = None, *, fits_reader: str = "astropy"
+    path: Path,
+    hdu: int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    xdr_options=None,
 ) -> np.ndarray:
     """Load a two-dimensional integer mask from FITS or NumPy."""
 
     array, _, _ = load_mask_with_planes(
-        path, hdu=hdu, fits_reader=fits_reader
+        path, hdu=hdu, fits_reader=fits_reader, xdr_options=xdr_options
     )
     return array
 
@@ -218,10 +232,12 @@ def load_fit_positions(
     return positions.astype(np.int64, copy=False)
 
 
-def _load_plane(path, hdu, *, reader, dtype, read_metadata):
+def _load_plane(path, hdu, *, reader, dtype, read_metadata, xdr_options=None):
     from cuphoton.core.fits_io import read_fits_images
 
-    result = read_fits_images(path, [hdu], reader=reader)
+    result = read_fits_images(
+        path, [hdu], reader=reader, xdr_options=xdr_options
+    )
     if read_metadata is not None:
         read_metadata.append(result.metadata())
     return np.asarray(result.arrays[0], dtype=dtype)
@@ -233,6 +249,7 @@ def load_image_with_wcs(
     *,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
+    xdr_options=None,
 ) -> tuple[np.ndarray, WCS | None, int | None]:
     """Load a host image with optional GPU FITS decompression and its WCS."""
     resolved = path.expanduser().resolve()
@@ -262,6 +279,7 @@ def load_image_with_wcs(
         reader=fits_reader,
         dtype=np.float64,
         read_metadata=read_metadata,
+        xdr_options=xdr_options,
     )
     return array, WCS(info.header), info.hdu
 
@@ -272,6 +290,7 @@ def load_variance_with_wcs(
     *,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
+    xdr_options=None,
 ) -> tuple[np.ndarray, WCS | None, int | None]:
     """Load variance, preserving the unambiguous named-HDU policy."""
     resolved = path.expanduser().resolve()
@@ -281,6 +300,7 @@ def load_variance_with_wcs(
             hdu,
             fits_reader=fits_reader,
             read_metadata=read_metadata,
+            xdr_options=xdr_options,
         )
     if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported image format: {resolved}")
@@ -319,6 +339,7 @@ def load_variance_with_wcs(
         selected.hdu,
         fits_reader=fits_reader,
         read_metadata=read_metadata,
+        xdr_options=xdr_options,
     )
 
 
@@ -328,6 +349,7 @@ def load_mask_with_planes(
     *,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
+    xdr_options=None,
 ) -> tuple[np.ndarray, int | None, dict[str, int] | None]:
     """Load an integer mask and preserve its FITS mask-plane mapping."""
     resolved = path.expanduser().resolve()
@@ -378,6 +400,7 @@ def load_mask_with_planes(
         reader=fits_reader,
         dtype=np.int64,
         read_metadata=read_metadata,
+        xdr_options=xdr_options,
     )
     return array, info.hdu, plane_map or None
 

@@ -58,6 +58,7 @@ def test_run_reproject_image_persists_summary_and_arrays(
     )
 
     result = run_reproject_image(
+        xdr_options={"postprocess": "separate"},
         input_path=fits_path,
         output_root=tmp_path / "runs",
         name="reproject-image-test",
@@ -74,6 +75,11 @@ def test_run_reproject_image_persists_summary_and_arrays(
         write_fits=True,
     )
 
+    assert all(
+        receipt["xdr_options"] == {"postprocess": "separate"}
+        and receipt["reader"] == "astropy"
+        for receipt in result.summary["fits_reads"]
+    )
     assert result.run_dir.name == "reproject-image-test"
     assert result.summary["requested_backend"] == "cpu"
     assert result.summary["backend"] == "cpu"
@@ -132,6 +138,7 @@ def test_run_reproject_stack_persists_stack_outputs(tmp_path: Path) -> None:
     )
 
     result = run_reproject_stack(
+        xdr_options={"postprocess": "separate"},
         input_paths=[path_a, path_b],
         output_root=tmp_path / "runs",
         name="reproject-stack-test",
@@ -146,6 +153,11 @@ def test_run_reproject_stack_persists_stack_outputs(tmp_path: Path) -> None:
         write_fits=True,
     )
 
+    assert all(
+        receipt["xdr_options"] == {"postprocess": "separate"}
+        and receipt["reader"] == "astropy"
+        for receipt in result.summary["fits_reads"]
+    )
     assert result.summary["stack_shape"][0] == 2
     assert result.summary["runtime"]["backend"] == "cpu"
     assert result.summary["device"] == "cpu"
@@ -165,6 +177,7 @@ def test_benchmark_reproject_image_reports_split_timings(
     )
 
     result = benchmark_reproject_image(
+        xdr_options={"postprocess": "separate"},
         input_path=fits_path,
         output_root=tmp_path / "runs",
         name="benchmark-reproject-image-test",
@@ -183,6 +196,11 @@ def test_benchmark_reproject_image_reports_split_timings(
         warmup=0,
     )
 
+    assert all(
+        receipt["xdr_options"] == {"postprocess": "separate"}
+        and receipt["reader"] == "astropy"
+        for receipt in result.summary["fits_reads"]
+    )
     assert result.summary["workflow"] == "benchmark-reproject-image"
     timings = result.summary["timings"]
     assert set(timings) == {
@@ -208,6 +226,7 @@ def test_compare_backends_reports_parity_and_timings(
     )
 
     result = compare_backends_reproject_image(
+        xdr_options={"postprocess": "separate"},
         input_path=fits_path,
         output_root=tmp_path / "runs",
         name="compare-backends-test",
@@ -229,6 +248,11 @@ def test_compare_backends_reports_parity_and_timings(
         rtol=1e-12,
     )
 
+    assert all(
+        receipt["xdr_options"] == {"postprocess": "separate"}
+        and receipt["reader"] == "astropy"
+        for receipt in result.summary["fits_reads"]["cpu"]
+    )
     assert result.summary["workflow"] == "compare-backends"
     assert result.summary["backends"] == ["cpu"]
     assert result.summary["parity"]["ok"] is True
@@ -249,6 +273,7 @@ def test_benchmark_backend_variants_reports_masks_and_parity(
     )
 
     result = benchmark_backend_variants_reproject_image(
+        xdr_options={"postprocess": "separate"},
         input_path=fits_path,
         output_root=tmp_path / "runs",
         name="benchmark-backend-variants-test",
@@ -271,6 +296,11 @@ def test_benchmark_backend_variants_reports_masks_and_parity(
         rtol=1e-12,
     )
 
+    assert all(
+        receipt["xdr_options"] == {"postprocess": "separate"}
+        and receipt["reader"] == "astropy"
+        for receipt in result.summary["fits_reads"]
+    )
     assert result.summary["workflow"] == "benchmark-backend-variants"
     assert result.summary["mask_cases"] == ["none", "mask"]
     assert result.summary["parity"]["ok"] is True

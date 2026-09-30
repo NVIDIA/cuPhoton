@@ -262,14 +262,24 @@ def test_fits_worker_grouped_device_read_and_receipt(inputs, monkeypatch):
     from cuphoton.core import fits_io
 
     item, config = inputs
+    item = pipeline.DevicePipelineItem.from_payload(
+        item.to_payload(), xdr_options={"postprocess": "separate"}
+    )
     calls = []
     stream = object()
     cpu_read = fits_io.read_fits_images
 
     def device_read(path, hdus, **options):
-        assert options == {"reader": "auto", "device": True, "stream": stream}
+        assert options == {
+            "reader": "auto",
+            "device": True,
+            "stream": stream,
+            "xdr_options": {"postprocess": "separate"},
+        }
         calls.append(tuple(hdus))
-        result = cpu_read(path, hdus, reader="astropy")
+        result = cpu_read(
+            path, hdus, reader="astropy", xdr_options=options["xdr_options"]
+        )
         return replace(
             result,
             requested_reader="auto",
@@ -300,11 +310,50 @@ def test_fits_worker_grouped_device_read_and_receipt(inputs, monkeypatch):
         ("reader", "gds"),
         ("roles", {}),
         ("fallback_reason", None),
+        ("xdr_options", {"postprocess": "fused"}),
     ):
         changed = copy.deepcopy(receipt["fits_reads"])
         changed[0][field] = replacement
         with pytest.raises(ValueError):
             pipeline._validate_fits_reads(item, changed)
+
+
+@pytest.mark.parametrize(
+    "override,expected",
+    [(None, "fused"), ({"postprocess": "separate"}, "separate")],
+)
+def test_xdr_options_survive_manifest_workers_and_identity(
+    inputs, tmp_path, override, expected
+):
+    item, config = inputs
+    payload = item.to_payload()
+    for role in ("reference", "target", "variance", "fit_mask"):
+        payload[role]["xdr_options"] = {"postprocess": "fused"}
+    manifest = tmp_path / "runtime.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": pipeline_executor.PIPELINE_MANIFEST_SCHEMA,
+                "configuration": config.to_payload(),
+                "items": [payload],
+            }
+        )
+    )
+    _, (loaded,) = pipeline_executor.load_pipeline_manifest(
+        manifest, xdr_options=override
+    )
+    work, identities = dragon_pipeline._preflight_items((loaded,))
+    restored = pipeline.DevicePipelineItem.from_payload(work[0].payload)
+    assert restored.reference.xdr_options == {"postprocess": expected}
+    assert identities[0]["files"][0]["images"][0]["xdr_options"] == {
+        "postprocess": expected
+    }
+    conflicting = replace(
+        loaded,
+        target=replace(loaded.target, xdr_options={"postprocess": "auto"}),
+    )
+    with pytest.raises(ValueError, match="conflicting FITS"):
+        dragon_pipeline._preflight_items((conflicting,))
 
 
 def test_fits_mask_rejects_bitplanes_and_changed_content(inputs, monkeypatch):

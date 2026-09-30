@@ -18,6 +18,7 @@ from cuphoton.core.cli import (
     StringInvariant,
     VariablePositionalInvariant,
 )
+from cuphoton.core.cli.fits import XdrOptionsMixin, xdr_options_from_cli
 
 from .benchmark_fits import parse_hdu_indices, run_benchmark
 
@@ -41,7 +42,7 @@ class MockStorageInvariant(SetInvariant):
     _set = {"device", "host"}
 
 
-class BenchmarkFitsCommand(InvariantAwareCommand):
+class BenchmarkFitsCommand(XdrOptionsMixin, InvariantAwareCommand):
     """Benchmark xdr GPU FITS loading.
 
     It uses xDataReader's native CFITSIO planning path instead of Astropy
@@ -165,6 +166,7 @@ class BenchmarkFitsCommand(InvariantAwareCommand):
                 native_read_threads=self.native_read_threads,
                 native_plan_threads=self.native_plan_threads,
                 native_batcher=self.native_batcher,
+                **xdr_options_from_cli(self),
                 mock_storage_kind=self.mock_storage,
                 skip_gds_read=self.skip_gds_read,
                 output_json=(

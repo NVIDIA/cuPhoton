@@ -199,6 +199,164 @@ def _scatter_tiles_2d_kernel(itemsize: int, shuffled: bool):
     return cp.RawKernel(src, name)
 
 
+def scatter_native_tiles_2d(
+    d_tiles_concat,
+    d_out,
+    tile_byte_offsets,
+    tile_origins_row,
+    tile_origins_col,
+    tile_heights,
+    tile_widths,
+    tile_src_off_row,
+    tile_src_off_col,
+    tile_full_widths,
+    itemsize: int,
+) -> None:
+    """Copy decompressed tile bytes into a 2D output image on the device.
+
+    Supports partial-tile copies for section (ROI) reads: each tile copies the
+    sub-region ``(src_off_row..src_off_row+h, src_off_col..src_off_col+w)``
+    from its decompressed block (laid out as ``tile_full_width`` pixels per
+    row) into ``(orig_row..orig_row+h, orig_col..orig_col+w)`` in the output.
+
+    For a full-image read pass ``src_off_*`` zeros and ``tile_full_widths``
+    equal to the crop widths.
+    """
+
+    pix_stride_out = d_out.strides[0]  # row stride in bytes
+    assert d_out.strides[1] == itemsize, "d_out must be C-contiguous"
+    n_tiles = tile_byte_offsets.size
+
+    kern = _scatter_native_tiles_2d_kernel(itemsize)
+    threads_per_block = 256
+    kern(
+        (n_tiles,),
+        (threads_per_block,),
+        (
+            d_tiles_concat,
+            d_out,
+            tile_byte_offsets,
+            tile_origins_row,
+            tile_origins_col,
+            tile_heights,
+            tile_widths,
+            tile_src_off_row,
+            tile_src_off_col,
+            tile_full_widths,
+            np.int64(pix_stride_out),
+        ),
+    )
+
+
+@functools.cache
+def _scatter_native_tiles_2d_kernel(itemsize: int):
+    import cupy as cp
+
+    src = rf"""
+    extern "C" __global__
+    void scatter_tiles_{itemsize}(
+        const unsigned char* __restrict__ tiles,
+        unsigned char* __restrict__ out,
+        const long long* __restrict__ tile_byte_offsets,
+        const int* __restrict__ origins_row,
+        const int* __restrict__ origins_col,
+        const int* __restrict__ tile_h,
+        const int* __restrict__ tile_w,
+        const int* __restrict__ src_off_row,
+        const int* __restrict__ src_off_col,
+        const int* __restrict__ tile_full_w,
+        long long out_row_stride_bytes
+    ) {{
+        const int t = blockIdx.x;
+        const int ITEMSIZE = {itemsize};
+        const long long src_off = tile_byte_offsets[t];
+        const int r0 = origins_row[t];
+        const int c0 = origins_col[t];
+        const int h  = tile_h[t];
+        const int w  = tile_w[t];
+        const int sr = src_off_row[t];
+        const int sc = src_off_col[t];
+        const int fw = tile_full_w[t];
+        const int total = h * w;
+        for (int i = threadIdx.x; i < total; i += blockDim.x) {{
+            int r = i / w;
+            int c = i - r * w;
+            int src_linear = (sr + r) * fw + (sc + c);
+            const unsigned char* src_pix =
+                tiles + src_off + (long long)src_linear * ITEMSIZE;
+            unsigned char* dst_pix =
+                out + (long long)(r0 + r) * out_row_stride_bytes
+                + (long long)(c0 + c) * ITEMSIZE;
+            #pragma unroll
+            for (int b = 0; b < ITEMSIZE; ++b) {{
+                dst_pix[b] = src_pix[b];
+            }}
+        }}
+    }}
+    """
+    return cp.RawKernel(src, f"scatter_tiles_{itemsize}")
+
+
+@functools.cache
+def _unshuffle_gzip2_kernel(itemsize: int):
+    import cupy as cp
+
+    src = rf"""
+    extern "C" __global__
+    void unshuffle_gzip2_{itemsize}(
+        const unsigned char* __restrict__ shuffled,
+        unsigned char* __restrict__ interleaved,
+        const long long* __restrict__ tile_byte_offsets,
+        const long long* __restrict__ tile_byte_lengths
+    ) {{
+        const int t = blockIdx.x;
+        const int ITEMSIZE = {itemsize};
+        const long long off = tile_byte_offsets[t];
+        const long long total = tile_byte_lengths[t];
+        const long long n_pixels = total / ITEMSIZE;
+        // Shuffled layout:
+        // [plane_0 (n_pixels bytes), plane_1, ..., plane_(ITEMSIZE-1)]
+        // Interleaved layout: [pix_0 (ITEMSIZE bytes), pix_1, ...]
+        for (long long p = threadIdx.x; p < n_pixels; p += blockDim.x) {{
+            for (int b = 0; b < ITEMSIZE; ++b) {{
+                interleaved[off + p * ITEMSIZE + b] =
+                    shuffled[off + (long long)b * n_pixels + p];
+            }}
+        }}
+    }}
+    """
+    return cp.RawKernel(src, f"unshuffle_gzip2_{itemsize}")
+
+
+def unshuffle_gzip2_tiles(
+    d_shuffled,
+    d_interleaved,
+    tile_byte_offsets,
+    tile_byte_lengths,
+    itemsize: int,
+):
+    """Reorder GZIP_2 tile bytes from plane-major to pixel-major.
+
+    `d_shuffled` and `d_interleaved` must be the same size; both are uint8.
+    Each tile is processed independently (one CUDA block per tile).
+    """
+    if itemsize == 1:
+        # Nothing to unshuffle; in-place no-op via alias.
+        return
+    kern = _unshuffle_gzip2_kernel(itemsize)
+    n_tiles = tile_byte_offsets.size
+    kern(
+        (n_tiles,),
+        (256,),
+        (
+            d_shuffled,
+            d_interleaved,
+            tile_byte_offsets,
+            tile_byte_lengths,
+        ),
+    )
+
+
 @functools.cache
 def _dequantize_int_to_float_kernel(int_itemsize: int, float_dtype_char: str):
     """Per-tile `out[p] = (float)int_buf[p] * zscale[t] + zzero[t]`.
