@@ -27,6 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
+_REPACK_DEFLATE_KERNEL = None
 _DEFLATE_CODEC = None
 _CPP_EXT = None
 _CPP_EXT_PROBED = False
@@ -746,6 +747,65 @@ def _checked_output_offsets(
     return offsets, total
 
 
+def _align_deflate_inputs(d_concat, offsets, lengths):
+    """Pack raw DEFLATE payloads at nvCOMP's required four-byte alignment."""
+    if not np.any((int(d_concat.data.ptr) + offsets) % 4):
+        return d_concat, offsets, ()
+
+    import cupy as cp
+
+    global _REPACK_DEFLATE_KERNEL
+    if _REPACK_DEFLATE_KERNEL is None:
+        _REPACK_DEFLATE_KERNEL = cp.RawKernel(
+            r"""
+            extern "C" __global__ void align_deflate(
+                const unsigned char* src, const long long* offsets,
+                const long long* lengths, const long long* out_offsets,
+                unsigned char* dst) {
+                const int tile = blockIdx.x;
+                for (long long i = threadIdx.x; i < lengths[tile];
+                     i += blockDim.x) {
+                    dst[out_offsets[tile] + i] = src[offsets[tile] + i];
+                }
+            }
+            """,
+            "align_deflate",
+        )
+    if np.any(lengths > np.iinfo(np.int64).max - 3):
+        raise ValueError("aligned DEFLATE size exceeds the int64 range")
+    aligned_offsets, total = _checked_output_offsets((lengths + 3) & ~3)
+    packed = cp.empty(total, dtype=cp.uint8)
+    tables = []
+    try:
+        for table in (offsets, lengths, aligned_offsets):
+            tables.append(cp.asarray(table))
+        _REPACK_DEFLATE_KERNEL(
+            (len(offsets),), (256,), (d_concat, *tables, packed)
+        )
+    except Exception:
+        # Keep the input and metadata alive through any queued copies.
+        cp.cuda.get_current_stream().synchronize()
+        raise
+    return packed, aligned_offsets, (d_concat, packed, *tables)
+
+
+def _retain_decode_inputs(d_out, owners):
+    """Keep repacked input alive until the decoded output is released."""
+    import cupy as cp
+
+    memory = cp.cuda.UnownedMemory(
+        int(d_out.data.ptr),
+        int(d_out.nbytes),
+        (d_out, *owners),
+        device_id=int(d_out.device.id),
+    )
+    return cp.ndarray(
+        d_out.shape,
+        dtype=d_out.dtype,
+        memptr=cp.cuda.MemoryPointer(memory, 0),
+    )
+
+
 def gpu_gzip_decompress_batch(
     d_concat,
     rel_offsets: Sequence[int],
@@ -861,66 +921,81 @@ def gpu_gzip_decompress_batch(
     if n == 0:
         return cp.empty(0, dtype=cp.uint8), out_offsets
 
-    # Allocate one concatenated output buffer and slice it per tile.
-    d_out = (
-        _native_device_empty_uint8(total, ext=ext)
-        if use_native_pool and ext is not None
-        else cp.empty(total, dtype=cp.uint8)
+    d_concat, deflate_offsets, aligned_owners = _align_deflate_inputs(
+        d_concat, deflate_offsets, deflate_lengths
     )
     if keepalive is not None:
-        keepalive.append(d_out)
+        keepalive.extend(aligned_owners)
 
-    if ext is not None:
-        # C++ path: device pointers + length arrays, no per-tile Python loop.
-        stream_ptr = int(cp.cuda.get_current_stream().ptr)
-        d_concat_ptr = int(d_concat.data.ptr)
-        d_out_ptr = int(d_out.data.ptr)
-        pooled_fn = getattr(ext, "batch_deflate_decompress_pooled", None)
-        if (
-            use_native_pool
-            and pooled_fn is not None
-            and keepalive is not None
-        ):
-            scratch_owner = pooled_fn(
+    try:
+        # Allocate one concatenated output buffer and slice it per tile.
+        d_out = (
+            _native_device_empty_uint8(total, ext=ext)
+            if use_native_pool and ext is not None
+            else cp.empty(total, dtype=cp.uint8)
+        )
+        if aligned_owners and keepalive is None:
+            d_out = _retain_decode_inputs(d_out, aligned_owners)
+        if keepalive is not None:
+            keepalive.append(d_out)
+
+        if ext is not None:
+            # C++ path: device pointers and tables, without a per-tile loop.
+            stream_ptr = int(cp.cuda.get_current_stream().ptr)
+            d_concat_ptr = int(d_concat.data.ptr)
+            d_out_ptr = int(d_out.data.ptr)
+            pooled_fn = getattr(ext, "batch_deflate_decompress_pooled", None)
+            if (
+                use_native_pool
+                and pooled_fn is not None
+                and keepalive is not None
+            ):
+                scratch_owner = pooled_fn(
+                    d_concat_ptr,
+                    deflate_offsets,
+                    deflate_lengths,
+                    d_out_ptr,
+                    out_offsets,
+                    uncompressed_sizes,
+                    stream_ptr,
+                )
+                keepalive.append(scratch_owner)
+                return d_out, out_offsets
+
+            ext.batch_deflate_decompress(
                 d_concat_ptr,
                 deflate_offsets,
                 deflate_lengths,
                 d_out_ptr,
                 out_offsets,
-                uncompressed_sizes,
+                size_array,
                 stream_ptr,
             )
-            keepalive.append(scratch_owner)
             return d_out, out_offsets
 
-        ext.batch_deflate_decompress(
-            d_concat_ptr,
-            deflate_offsets,
-            deflate_lengths,
-            d_out_ptr,
-            out_offsets,
-            size_array,
-            stream_ptr,
-        )
+        # Python fallback: original path, retained for compile-less checkouts.
+        import nvidia.nvcomp as nvcomp
+
+        src_arrays = [
+            nvcomp.as_array(
+                d_concat[
+                    deflate_offsets[i] : deflate_offsets[i]
+                    + deflate_lengths[i]
+                ]
+            )
+            for i in range(n)
+        ]
+        out_arrays = [
+            nvcomp.as_array(
+                d_out[out_offsets[i] : out_offsets[i] + size_array[i]]
+            )
+            for i in range(n)
+        ]
+        codec = _get_codec()
+        codec.decode(src_arrays, out=out_arrays)
         return d_out, out_offsets
-
-    # Python fallback: original path, retained for compile-less checkouts.
-    import nvidia.nvcomp as nvcomp
-
-    src_arrays = [
-        nvcomp.as_array(
-            d_concat[
-                deflate_offsets[i] : deflate_offsets[i] + deflate_lengths[i]
-            ]
-        )
-        for i in range(n)
-    ]
-    out_arrays = [
-        nvcomp.as_array(
-            d_out[out_offsets[i] : out_offsets[i] + size_array[i]]
-        )
-        for i in range(n)
-    ]
-    codec = _get_codec()
-    codec.decode(src_arrays, out=out_arrays)
-    return d_out, out_offsets
+    except Exception:
+        # A failed decode cannot return an output to retain its input owners.
+        if keepalive is None and (aligned_owners or use_native_pool):
+            cp.cuda.get_current_stream().synchronize()
+        raise
