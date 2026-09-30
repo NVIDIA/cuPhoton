@@ -30,7 +30,7 @@ def _cupy_backend(
     try:
         import cupy as cp
     except ImportError as exc:
-        extra = "cutile" if name == "cutile" else "gpu"
+        extra = name if name in {"cutile", "numba-cuda-mlir"} else "gpu"
         raise RuntimeError(
             f"CuPy is not installed; install cuphoton with the {extra} extra"
         ) from exc
@@ -66,10 +66,19 @@ def resolve_backend(name: BackendRequest = "auto") -> Backend:
         return _cupy_backend(require_device=True)
     if name == "cutile":
         return _cutile_backend()
+    if name == "numba-cuda-mlir":
+        try:
+            from numba_cuda_mlir import cuda  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "Numba-CUDA-MLIR is not installed; install cuphoton with "
+                "the numba-cuda-mlir extra"
+            ) from exc
+        return _cupy_backend(require_device=True, name=name)
     if name != "auto":
         raise ValueError(
             f"unsupported xFit backend {name!r}; expected auto, "
-            "numpy, cupy, or cutile"
+            "numpy, cupy, cutile, or numba-cuda-mlir"
         )
     try:
         return _cupy_backend(require_device=True)

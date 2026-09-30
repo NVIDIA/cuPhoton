@@ -131,13 +131,15 @@ class DeviceDipoleFitResult:
         init=False,
         default="levenberg-marquardt",
     )
-    backend: Literal["cupy"] = field(init=False, default="cupy")
+    backend: Literal["cupy", "numba-cuda-mlir"] = "cupy"
     result_location: Literal["device"] = field(
         init=False,
         default="device",
     )
 
     def __post_init__(self) -> None:
+        if self.backend not in {"cupy", "numba-cuda-mlir"}:
+            raise ValueError("unsupported device xFit backend")
         if isinstance(self.device_id, bool) or not isinstance(
             self.device_id, (int, np.integer)
         ):
@@ -789,16 +791,28 @@ def _fit_dipoles_backend(
                 mode=mode,
             )
 
-    problem = BatchedLeastSquaresProblem(
-        residual,
-        jacobian_function,
-        normal_equations=normal_equations,
-    )
-    low_level = batched_levenberg_marquardt(
-        problem,
-        solver_initial,
-        config=config,
-    )
+    execution: Any = nullcontext()
+    if resolved.name == "numba-cuda-mlir":
+        from ._numba_mlir import GaussianWorkspace
+
+        execution = GaussianWorkspace(
+            images_array, weights, image_shape=(height, width), mode=mode
+        )
+    with execution as workspace:
+        problem = BatchedLeastSquaresProblem(
+            residual if workspace is None else workspace.residual,
+            jacobian_function,
+            normal_equations=(
+                normal_equations
+                if workspace is None
+                else workspace.normal_equations
+            ),
+        )
+        low_level = batched_levenberg_marquardt(
+            problem,
+            solver_initial,
+            config=config,
+        )
     parameters_backend = model_parameters(low_level.parameters)
     if gaussian_model:
         # An ellipse orientation is periodic modulo pi. Keep portable fit
@@ -977,6 +991,23 @@ def _materialize_dipole_fit_result(
     )
 
 
+def _validate_specialized_backend(
+    backend: BackendRequest,
+    model: Literal["gaussian"] | GaussianDipoleModel | StampDipoleModel,
+    config: LMConfig | None,
+) -> None:
+    if backend not in {"cutile", "numba-cuda-mlir"}:
+        return
+    if not isinstance(model, GaussianDipoleModel) and model != "gaussian":
+        raise ValueError(
+            f"backend={backend!r} currently supports only the Gaussian model"
+        )
+    if config is not None and config.use_finite_difference:
+        raise ValueError(
+            f"backend={backend!r} does not support finite-difference fitting"
+        )
+
+
 def fit_dipoles(
     images: ArrayLike,
     *,
@@ -1010,20 +1041,7 @@ def fit_dipoles(
     statistically calibrated for that dependence.
     """
 
-    if backend == "cutile" and isinstance(model, StampDipoleModel):
-        # Report the model restriction before the finite-difference one:
-        # sampled-stamp fits always difference the residual.
-        raise ValueError(
-            "backend='cutile' currently supports only the Gaussian model"
-        )
-    if (
-        backend == "cutile"
-        and config is not None
-        and config.use_finite_difference
-    ):
-        raise ValueError(
-            "backend='cutile' does not support finite-difference fitting"
-        )
+    _validate_specialized_backend(backend, model, config)
     resolved = resolve_backend(backend)
     backend_result = _fit_dipoles_backend(
         images,
@@ -1046,12 +1064,15 @@ def fit_dipoles_device(
     mask: ArrayLike | None = None,
     variance: ArrayLike | None = None,
     mode: FitMode = "difference",
+    backend: Literal["cupy", "numba-cuda-mlir"] = "cupy",
     config: LMConfig | None = None,
 ) -> DeviceDipoleFitResult:
     """Fit dipoles while keeping every result array on the active GPU.
 
-    This experimental seam is explicitly CuPy-only and has no backend
-    selector. NumPy inputs are copied to the active device. Existing CuPy
+    Results are CuPy arrays. The optional ``numba-cuda-mlir`` backend fuses
+    Gaussian model evaluation and weighting in separate kernels for residuals
+    and the analytic Jacobian, then uses CuPy contractions for the normal
+    equations. NumPy inputs are copied to the active device. Existing CuPy
     inputs must already reside on that device and are checked before any input
     conversion. Input arrays are borrowed and are not mutated.
 
@@ -1067,7 +1088,12 @@ def fit_dipoles_device(
     from another stream. Retain the result until its consumers have finished.
     """
 
-    cp = _load_cupy()
+    if backend not in {"cupy", "numba-cuda-mlir"}:
+        raise ValueError("unsupported device xFit backend")
+    _validate_specialized_backend(backend, model, config)
+    cp = (
+        _load_cupy() if backend == "cupy" else resolve_backend(backend).module
+    )
     active_device_id = _active_cupy_device_id(cp)
     for name, value in (
         ("images", images),
@@ -1095,7 +1121,7 @@ def fit_dipoles_device(
         mask=mask,
         variance=variance,
         mode=mode,
-        resolved=resolve_backend("cupy"),
+        resolved=resolve_backend(backend),
         config=config,
     )
     return DeviceDipoleFitResult(
@@ -1122,6 +1148,7 @@ def fit_dipoles_device(
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,
+        backend=backend,
     )
 
 

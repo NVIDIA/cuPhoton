@@ -246,7 +246,9 @@ def _valid_shard_provenance(
         return False
     gpu_backend = gpu.get("backend")
     expected_identity_backend = (
-        "cupy" if backend in {"cupy", "cutile"} else backend
+        "cupy"
+        if backend in {"cupy", "cutile", "numba-cuda-mlir"}
+        else backend
     )
     return (
         isinstance(gpu_backend, str)

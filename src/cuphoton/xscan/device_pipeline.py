@@ -606,7 +606,7 @@ class DeviceXPOISPipelineConfig:
 
 @dataclass(frozen=True, slots=True)
 class DeviceXFitPipelineConfig:
-    """Levenberg-Marquardt controls for Gaussian difference fitting."""
+    """Backend and LM controls for Gaussian difference fitting."""
 
     model: Literal["gaussian"] = "gaussian"
     mode: Literal["difference"] = "difference"
@@ -619,12 +619,17 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
+    backend: Literal["cupy", "numba-cuda-mlir"] = "cupy"
 
     def __post_init__(self) -> None:
         if self.model != "gaussian":
             raise ValueError("xfit model must be 'gaussian'")
         if self.mode != "difference":
             raise ValueError("xfit mode must be 'difference'")
+        if self.backend not in {"cupy", "numba-cuda-mlir"}:
+            raise ValueError(
+                "xfit backend must be 'cupy' or 'numba-cuda-mlir'"
+            )
         for name in ("f_tol", "x_tol", "g_tol", "finite_difference_step"):
             value = getattr(self, name)
             if value is not None:
@@ -670,11 +675,19 @@ class DeviceXFitPipelineConfig:
             )
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
+        if self.backend == "numba-cuda-mlir" and self.use_finite_difference:
+            raise ValueError(
+                "xfit numba-cuda-mlir does not support "
+                "finite-difference fitting"
+            )
 
     def to_payload(self) -> dict[str, Any]:
-        """Return JSON-compatible LM settings."""
+        """Return JSON-compatible backend and LM settings."""
 
-        return asdict(self)
+        payload = asdict(self)
+        if self.backend == "cupy":
+            del payload["backend"]
+        return payload
 
     def solver_payload(self) -> dict[str, Any]:
         """Return only fields accepted by :class:`LMConfig`."""
@@ -682,15 +695,20 @@ class DeviceXFitPipelineConfig:
         payload = self.to_payload()
         del payload["model"]
         del payload["mode"]
+        payload.pop("backend", None)
         return payload
 
     @classmethod
     def from_payload(
         cls, payload: Mapping[str, Any]
     ) -> DeviceXFitPipelineConfig:
-        """Restore exact LM settings from JSON-compatible values."""
+        """Restore settings, preserving CuPy for older configuration files."""
 
         expected = frozenset(value.name for value in fields(cls))
+        payload = {
+            "backend": "cupy",
+            **json_mapping(payload, field="device pipeline xfit config"),
+        }
         values = _require_exact_fields(
             payload,
             expected=expected,
@@ -1022,12 +1040,13 @@ def _device_pipeline_evidence_layout_contract(
     )
     expected_xfit = {
         "schema": "cuphoton.xfit.device-fit-result/v1",
-        "backend": "cupy",
         "solver": "levenberg-marquardt",
         "model": "gaussian",
         "mode": "difference",
         "dtype": "float64",
     }
+    if xfit["backend"] not in {"cupy", "numba-cuda-mlir"}:
+        raise ValueError("scientific evidence xfit.backend is unsupported")
     for name, expected in expected_xfit.items():
         if xfit[name] != expected:
             raise ValueError(
@@ -1730,6 +1749,10 @@ def _validate_device_pipeline_evidence_config(
 
     if not isinstance(config, DevicePipelineConfig):
         raise TypeError("config must be a DevicePipelineConfig")
+    if values["xfit"]["backend"] != config.xfit.backend:
+        raise ValueError(
+            "scientific evidence xfit.backend does not match config"
+        )
     xpois = json_mapping(values["xpois"], field="scientific evidence xpois")
     if tuple(xpois["kernel_shape"]) != config.xpois.kernel_shape:
         raise ValueError(
@@ -2098,6 +2121,7 @@ def _pack_scientific_evidence(
     candidate_count: int,
     kernel_shape: tuple[int, int],
     flux_conserve: bool,
+    xfit_backend: Literal["cupy", "numba-cuda-mlir"] = "cupy",
 ) -> _PackedScientificEvidence:
     """Pack all parity evidence on the producer stream as float64."""
 
@@ -2124,7 +2148,7 @@ def _pack_scientific_evidence(
         str(xfit_result.dtype),
     )
     if xfit_contract != (
-        "cupy",
+        xfit_backend,
         "levenberg-marquardt",
         "gaussian",
         "difference",
@@ -3261,6 +3285,11 @@ def run_device_pipeline_item(
                         model=context.config.xfit.model,
                         mode=context.config.xfit.mode,
                         config=context.solver_config,
+                        **(
+                            {"backend": context.config.xfit.backend}
+                            if context.config.xfit.backend != "cupy"
+                            else {}
+                        ),
                     ),
                 )
                 features = _timed(
@@ -3283,6 +3312,7 @@ def run_device_pipeline_item(
                         candidate_count=len(item.candidates),
                         kernel_shape=context.config.xpois.kernel_shape,
                         flux_conserve=context.config.xpois.flux_conserve,
+                        xfit_backend=context.config.xfit.backend,
                     ),
                 )
                 evidence_layout = _append_prediction_evidence_layout(

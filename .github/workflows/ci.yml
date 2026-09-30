@@ -109,7 +109,9 @@ jobs:
           version: "0.12.1"
           enable-cache: false
       - run: uv python install 3.12
-      - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+      - run: >-
+          uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+          --extra numba-cuda-mlir
       - name: Require working CUDA 13 and GPU kernels
         run: |
           uv run --no-sync python - <<'PY'
@@ -150,6 +152,25 @@ jobs:
           assert not report.findall(".//error")
           print("All 6 selected tests passed without skips")
           PY
+      - name: Run Numba-CUDA-MLIR scientific and CLI tests
+        run: >-
+          uv run --no-sync pytest -q -rs
+          --junitxml="${RUNNER_TEMP}/xfit-numba-mlir.xml"
+          tests/xfit/test_numba_mlir.py tests/xfit/test_numba_mlir_commands.py
+          tests/xscan/test_numba_mlir_pipeline.py::test_numba_pipeline_cli_runs_real_stages_and_matches_cupy
+      - name: Require Numba-CUDA-MLIR tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-numba-mlir.xml")
+          assert report.findall(".//testcase"), "No Numba-CUDA-MLIR tests ran"
+          assert not report.findall(".//skipped"), "GPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          PY
       - name: Run synthetic GPU quickstarts
         run: >-
           uv run --no-sync python examples/run_quickstarts.py
@@ -161,6 +182,7 @@ jobs:
           name: gpu-l40g-${{ github.sha }}
           path: |
             ${{ runner.temp }}/xfit-gpu.xml
+            ${{ runner.temp }}/xfit-numba-mlir.xml
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
           if-no-files-found: error
           retention-days: 14
