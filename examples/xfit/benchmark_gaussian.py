@@ -59,7 +59,9 @@ def _fixture(
     return images, initial
 
 
-def _initialize(images, initial, mode, workers, counter, barrier, gpu):
+def _initialize(
+    images, initial, mode, workers, counter, barrier, gpu, fusion
+):
     with counter.get_lock():
         index = counter.value
         counter.value += 1
@@ -72,6 +74,7 @@ def _initialize(images, initial, mode, workers, counter, barrier, gpu):
     _worker.initial = initial[start:stop].copy()
     _worker.variance = np.ones_like(_worker.images)
     _worker.mode = mode
+    _worker.fusion = fusion
     _worker.barrier = barrier
     _worker.stream = None
     _worker.pool = None
@@ -113,6 +116,7 @@ def _run(treatment):
             variance=_worker.variance,
             mode=_worker.mode,
             backend=backend,
+            fusion=_worker.fusion,
         )
         seconds = time.perf_counter() - start
     if result.backend != backend:
@@ -214,6 +218,9 @@ def main() -> None:
         default=180,
         help="Per-round wait, including cold compilation (default: 180).",
     )
+    parser.add_argument(
+        "--fusion", action="store_true", help="Use fused cutile evaluation."
+    )
     args = parser.parse_args()
     if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive and finite")
@@ -228,6 +235,8 @@ def main() -> None:
     if args.compare_native and args.backend:
         parser.error("--compare-native cannot be combined with --backend")
     backends = args.backend or ["cupy", "cutile"]
+    if args.fusion and backends != ["cutile"]:
+        parser.error("--fusion requires --backend cutile")
     batches = args.batch or [1, 16, 256, 4096]
     if any(batch < args.workers for batch in batches):
         parser.error("every batch must contain at least --workers candidates")
@@ -274,6 +283,7 @@ def main() -> None:
                 context.Value("i", 0),
                 context.Barrier(args.workers),
                 any(backend != "numpy" for backend in treatments),
+                args.fusion,
             ),
             **executor_options,
         ) as pool:
@@ -345,6 +355,7 @@ def main() -> None:
                 json.dumps(
                     {
                         "backend": treatment,
+                        "fusion": args.fusion,
                         "execution": args.execution,
                         "workers": args.workers,
                         "batch": batch,

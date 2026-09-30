@@ -236,6 +236,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     g_tol = None
     max_evaluations = None
     use_finite_difference = None
+    fusion = None
     chunk_size = None
 
     class ChunkSizeArg(PositiveIntegerInvariant):
@@ -265,6 +266,12 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         )
         _mandatory = False
         _default = "input"
+
+    class FusionArg(BoolInvariant):
+        _arg = "--fusion"
+        _help = "Fuse Gaussian evaluation with the cutile backend."
+        _mandatory = False
+        _default = False
 
     class StampEvaluationArg(StampEvaluationInvariant):
         _arg = "--stamp-evaluation"
@@ -338,6 +345,17 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         )
 
     def run(self) -> None:
+        from .api import _validate_fusion
+
+        assert self.backend is not None
+        assert self.fusion is not None
+        self._call(
+            _validate_fusion,
+            self.fusion,
+            backend=self.backend,
+            gaussian_model=self.model == "gaussian",
+            use_finite_difference=bool(self.use_finite_difference),
+        )
         executor_options = self.executor_options()
         if self.executor != "local":
             from cuphoton.core.executors import run_workload
@@ -370,6 +388,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                     "g_tol",
                     "max_evaluations",
                     "use_finite_difference",
+                    "fusion",
                     "fits_reader",
                 )
             }
@@ -447,6 +466,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             mode=self.mode,
             backend=self.backend,
             config=config,
+            fusion=self.fusion,
         )
         dtype = np.dtype(result.dtype)
         default_tolerance = float(np.sqrt(np.finfo(dtype).eps))
@@ -459,6 +479,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             "model": self.model,
             "mode": self.mode,
             "backend": self.backend,
+            "fusion": self.fusion,
             **(
                 {"fits_reader": self.fits_reader}
                 if dataset.input_sources
