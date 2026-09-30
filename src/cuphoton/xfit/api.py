@@ -1088,8 +1088,9 @@ def fit_dipoles(
     minus negative, the reported degrees of freedom and uncertainties are not
     statistically calibrated for that dependence.
 
-    ``fusion=True`` selects fused Gaussian residual and normal-equation
-    kernels with ``backend="cupy"``. It requires analytic derivatives.
+    ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
+    kernels with ``backend="cupy"``. Normal equations retain the default CuPy
+    contractions. It requires analytic derivatives.
     """
 
     _validate_execution_options(model, backend, config)
@@ -1128,8 +1129,9 @@ def fit_dipoles_device(
     to the active device. Existing CuPy inputs must already reside on that
     device and are checked before any input conversion. Input arrays are
     borrowed and are not mutated.
-    ``fusion=True`` selects fused CuPy Gaussian residual and normal-equation
-    kernels; native fits, sampled stamps and finite differences require
+    ``fusion=True`` selects fused CuPy Gaussian residual and analytic-Jacobian
+    kernels while retaining the default CuPy normal-equation contractions.
+    Native fits, sampled stamps and finite differences require
     ``fusion=False``.
 
     The solver may copy per-fit status, evaluation counts and boolean

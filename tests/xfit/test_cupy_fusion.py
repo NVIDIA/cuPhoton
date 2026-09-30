@@ -228,6 +228,50 @@ def test_cupy_fusion_callbacks_preserve_weighting_indices_and_layout(
     )
 
 
+def test_cupy_fusion_preserves_cancelling_hessian_terms():
+    cp = _require_cupy()
+    from cuphoton.xfit._cupy_fused import GaussianFusedProblem
+
+    shape = (51, 51)
+    parameters = cp.asarray(
+        [[2**20, 8.0, 4.0, 0.0, -0.25, 0.0, 0.25, 0.0]],
+        dtype=cp.float64,
+    )
+    parameters[:, 1:3] = cp.log(parameters[:, 1:3])
+    images = cp.zeros((1, *shape), dtype=cp.float64)
+    coordinate = cp.arange(51, dtype=cp.float64) - 25
+    radius_squared = coordinate[:, None] ** 2 + coordinate[None, :] ** 2
+    weights = (1 + radius_squared[None, ...] / 4096).copy()
+    indices = cp.asarray([0], dtype=cp.int64)
+    _, jacobian = _reference_callbacks(
+        cp, parameters, images, weights, indices, "difference"
+    )
+    residual = cp.ones((1, 51 * 51), dtype=cp.float64)
+    expected_gradient = cp.einsum("knm,km->kn", jacobian, residual)
+    expected_hessian = cp.einsum("knm,kpm->knp", jacobian, jacobian)
+
+    # Symmetry makes these bright-lobe derivative products cancel. A small
+    # relative error in each partial sum can change the near-zero Hessian.
+    absolute_sum = float(
+        cp.sum(cp.abs(jacobian[0, 4] * jacobian[0, 5])).item()
+    )
+    assert absolute_sum > 1e8
+    assert abs(float(expected_hessian[0, 4, 5].item())) < 1e-12 * absolute_sum
+
+    problem = GaussianFusedProblem(
+        cp, images, weights, image_shape=shape, mode="difference"
+    )
+    gradient, hessian = problem.normal_equations(
+        parameters, residual, indices=indices
+    )
+    _assert_numeric(
+        cp.asnumpy(gradient), cp.asnumpy(expected_gradient), np.float64
+    )
+    _assert_numeric(
+        cp.asnumpy(hessian), cp.asnumpy(expected_hessian), np.float64
+    )
+
+
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_cupy_fusion_extreme_widths_preserve_nonfinite_results(dtype):
     cp = _require_cupy()

@@ -67,10 +67,11 @@ batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
 With `backend="cupy"`, `fusion=True` evaluates Gaussian residuals and weighted
-normal equations in CuPy CUDA kernels. It supports float32 and float64,
-difference and split modes, masks, and variances. The solver uses analytic
-derivatives; final uncertainty diagnostics use the full analytic Jacobian.
-Each fit owns its scratch buffers and runs on the current CuPy stream.
+analytic Jacobians in fused CuPy CUDA kernels. The Jacobian is materialized
+for the same CuPy normal-equation contractions used by the default solver.
+It supports float32 and float64, difference and split modes, masks, and
+variances. Final uncertainty diagnostics use the full analytic Jacobian.
+Each fit owns its buffers and runs on the current CuPy stream.
 Select it in the CLI with `--backend cupy --fusion`; the default is
 `fusion=False`. Device pipeline manifests select it with `xfit.fusion: true`.
 Sampled-stamp and finite-difference fits use the default path.
