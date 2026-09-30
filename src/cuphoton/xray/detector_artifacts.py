@@ -323,12 +323,14 @@ def build_detector_artifacts_cupy(
 ) -> DetectorArtifactResult:
     """Write detector-wide LPF arrays using HDF5 input and CuPy fitting.
 
-    The emitted arrays match the dumped reference-analysis contract:
+    The default dense arrays match the dumped reference-analysis contract:
     ``freq_all.npy``, ``amp_all.npy``, ``fft_all.npy``, ``fft_freq_all.npy``,
     and ``amp_all_sum_filtered.npy``. Each fitted detector row is broadcast
     across the x-columns of its tile, preserving the current vertical-strip
     science path. Set ``artifact_layout="tile-rows"`` to store each row
-    spectrum once per tile; use ``load_detector_array`` for pixel slices.
+    spectrum once per tile in ``*.tile-rows.npy`` files. Use
+    ``load_detector_array`` for pixel slices from either layout. Dense
+    output retains compatibility with direct ``numpy.load`` consumers.
 
     Set ``batch_rows=False`` to force the serial row loop for A/B checks
     and diagnostics. The default batches eligible rows and retains the

@@ -5,7 +5,16 @@ x-axis shards and either plans or launches the same `detector-artifacts`
 worker command for each shard. It supports local GPU assignment and Slurm
 array scripts. Add `--artifact-layout tile-rows` to store one spectrum per
 x tile row in each worker and the merged output. The default `dense` layout
-writes pixel-shaped NPY arrays. Resume identities distinguish the layouts.
+writes pixel-shaped NPY arrays for existing NumPy consumers. Use
+`--artifact-layout dense` to select it explicitly. Resume identities
+distinguish the layouts, so changing the option rebuilds existing shards.
+Merging requires all shards to use the same layout and preserves that layout.
+
+From Python, call
+`cuphoton.xray.detector_distributed.build_detector_artifact_distributed_plan`
+with `detector_options={"artifact_layout": "tile-rows"}` or
+`detector_options={"artifact_layout": "dense"}`. The plan carries this choice
+to every local or Slurm worker before resume decisions are made.
 
 ## Inspect an in-memory dry run
 

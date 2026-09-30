@@ -103,7 +103,13 @@ The four spectral files then use the suffix `.tile-rows.npy`, with logical
 shape and x boundaries in `spectral-layout.json`. This is lossless: fitted
 values, masks, and pixel coordinates remain identical. A full tile with
 width 16 stores one sixteenth of the spectral values. The default `dense`
-layout writes the usual `.npy` arrays for direct NumPy consumers.
+layout writes the usual `.npy` arrays for direct NumPy consumers. Dense
+remains the compatibility default because compact storage changes filenames
+and requires the shared loader. Select the output format explicitly for each
+run; pass `--artifact-layout dense` to request the original layout.
+
+From Python, pass `artifact_layout="tile-rows"` or `artifact_layout="dense"`
+to `cuphoton.xray.detector_artifacts.build_detector_artifacts_cupy`.
 
 Comparison, visualization, resume, and distributed merging support both
 layouts. Compact shards remain compact when merged. Use the shared loader

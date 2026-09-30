@@ -39,7 +39,10 @@ def main(argv=None, *, program_name=None):
     return run_component("xray", argv, program_name=program_name)
 
 
-def test_detector_artifact_distributed_dry_run_cli_json(tmp_path, capsys):
+@pytest.mark.parametrize("artifact_layout", [None, "dense", "tile-rows"])
+def test_detector_artifact_distributed_dry_run_cli_json(
+    tmp_path, capsys, artifact_layout
+):
     _write_synthetic_hdf5_pair(tmp_path, samples=8, rows=4, cols=10)
 
     assert (
@@ -70,6 +73,11 @@ def test_detector_artifact_distributed_dry_run_cli_json(tmp_path, capsys):
                 "full",
                 "--p2-ridge-alpha",
                 "0.01",
+                *(
+                    ["--artifact-layout", artifact_layout]
+                    if artifact_layout is not None
+                    else []
+                ),
                 "--json",
             ]
         )
@@ -77,6 +85,14 @@ def test_detector_artifact_distributed_dry_run_cli_json(tmp_path, capsys):
     )
 
     payload = json.loads(capsys.readouterr().out)
+    assert payload["detector_options"]["artifact_layout"] == (
+        artifact_layout or "dense"
+    )
+    for script in (payload["local_script"], payload["slurm_script"]):
+        if artifact_layout == "tile-rows":
+            assert "--artifact-layout tile-rows" in script
+        else:
+            assert "--artifact-layout" not in script
     assert payload["executor"] == "dry-run"
     assert payload["global_roi_dim"] == [10, 4]
     assert payload["shard_count"] == 3
@@ -304,7 +320,16 @@ def test_local_executor_rejects_empty_inherited_visibility(
         )
 
 
-def test_resume_requires_current_input_and_option_identity(tmp_path):
+@pytest.mark.parametrize(
+    "old_options,new_options",
+    [
+        ({"components": 2}, {"components": 3}),
+        ({"artifact_layout": "dense"}, {"artifact_layout": "tile-rows"}),
+    ],
+)
+def test_resume_requires_current_input_and_option_identity(
+    tmp_path, old_options, new_options
+):
     _write_synthetic_hdf5_pair(tmp_path, samples=8, rows=2, cols=2)
     common = {
         "h5dir": tmp_path,
@@ -318,11 +343,11 @@ def test_resume_requires_current_input_and_option_identity(tmp_path):
     }
     old_plan = build_detector_artifact_distributed_plan(
         **common,
-        detector_options={"components": 2},
+        detector_options=old_options,
     )
     new_plan = build_detector_artifact_distributed_plan(
         **common,
-        detector_options={"components": 3},
+        detector_options=new_options,
     )
     old_identity = old_plan["shards"][0]["resume_identity"]
     new_identity = new_plan["shards"][0]["resume_identity"]

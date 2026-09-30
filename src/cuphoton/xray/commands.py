@@ -2658,7 +2658,7 @@ class DetectorArtifactsCommand(_XRayCommand):
 
     class ArtifactLayoutArg(SetInvariant):
         _arg = "--artifact-layout"
-        _help = "Store dense pixel arrays or one spectrum per tile row."
+        _help = "Output storage: dense NPY (default) or compact tile rows."
         _required = False
         _set = {"dense", "tile-rows"}
         _default = "dense"
@@ -3055,7 +3055,7 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
 
     class ArtifactLayoutArg(SetInvariant):
         _arg = "--artifact-layout"
-        _help = "Store dense pixel arrays or one spectrum per tile row."
+        _help = "Output storage: dense NPY (default) or compact tile rows."
         _required = False
         _set = {"dense", "tile-rows"}
         _default = "dense"

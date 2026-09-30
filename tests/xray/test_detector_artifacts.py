@@ -1624,8 +1624,9 @@ def test_iterative_detector_dispatch_and_convergence_diagnostics(
         assert "selected_model_order" not in data.files
 
 
-def test_detector_artifacts_cli_forwards_iterative_controls(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize("artifact_layout", [None, "dense", "tile-rows"])
+def test_detector_artifacts_cli_forwards_fit_and_storage_controls(
+    tmp_path, monkeypatch, capsys, artifact_layout
 ):
     import cuphoton.xray.detector_artifacts as artifacts
 
@@ -1654,12 +1655,18 @@ def test_detector_artifacts_cli_forwards_iterative_controls(
                 "40",
                 "--iterative-amplitude-l2",
                 "0.02",
+                *(
+                    ["--artifact-layout", artifact_layout]
+                    if artifact_layout is not None
+                    else []
+                ),
                 "--json",
             ]
         )
         == 0
     )
     assert json.loads(capsys.readouterr().out) == {"complete": True}
+    assert captured["artifact_layout"] == (artifact_layout or "dense")
     assert captured["fit_method"] == "iterative"
     assert captured["iterative_options"].max_iterations == 40
     assert captured["iterative_options"].amplitude_l2 == 0.02

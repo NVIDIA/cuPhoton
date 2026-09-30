@@ -127,7 +127,12 @@ def build_detector_artifact_distributed_plan(
     python_executable: str | None = None,
     work_dir: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Build a serializable plan for an x-sharded detector artifact run."""
+    """Build a serializable plan for an x-sharded detector artifact run.
+
+    Pass ``detector_options={"artifact_layout": "tile-rows"}`` to store
+    compact spectra in every shard and merged output. The default ``dense``
+    layout preserves pixel-shaped NPY files for direct NumPy consumers.
+    """
 
     _require_positive("tile width", tile_shape[0])
     _require_positive("tile height", tile_shape[1])
