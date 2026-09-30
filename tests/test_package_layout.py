@@ -70,6 +70,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "gpu",
         "io",
         "mpi",
+        "numba-cuda-mlir",
         "photometry",
         "torch",
         "viz",
