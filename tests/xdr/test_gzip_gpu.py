@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import struct
 import zlib
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -30,9 +31,10 @@ def cp():
     return module
 
 
+@pytest.mark.parametrize("decoder", ["auto", "gzip", "deflate"])
 @pytest.mark.parametrize("pooled", [False, True])
 @pytest.mark.parametrize("preparsed", [False, True])
-def test_native_gzip_decodes_optional_headers(cp, pooled, preparsed):
+def test_native_gzip_decodes_optional_headers(cp, pooled, preparsed, decoder):
     payloads, originals, header_sizes = [], [], []
     for flags in range(32):
         original = bytes(range(256)) * 9 + bytes([flags]) * 11
@@ -56,6 +58,7 @@ def test_native_gzip_decodes_optional_headers(cp, pooled, preparsed):
             lengths,
             sizes,
             use_cpp_helper=True,
+            gzip_decoder=decoder,
             use_native_pool=pooled,
             keepalive=owners,
             header_sizes=header_sizes if preparsed else None,
@@ -100,4 +103,72 @@ def _gzip_with_flags(data, flags):
         header
         + zlib.compress(data, wbits=-15)
         + struct.pack("<II", zlib.crc32(data), len(data))
+    )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_deflate_alignment_without_keepalive(cp, wrapped):
+    originals = [bytes(range(250)) * 4, b"second payload" * 79]
+    payloads = [
+        gzip.compress(value) if wrapped else zlib.compress(value, wbits=-15)
+        for value in originals
+    ]
+    lengths = np.array([len(payload) for payload in payloads], dtype="i8")
+    offsets = np.cumsum(lengths) - lengths
+    stream = cp.cuda.Stream(non_blocking=True)
+    with stream:
+        # The view also has an unaligned base pointer, independently of tiles.
+        allocation = cp.asarray(
+            np.frombuffer(b"x" + b"".join(payloads), dtype="u1")
+        )
+        data = allocation[1:]
+        result, _ = nvcomp_batch.gpu_gzip_decompress_batch(
+            data,
+            offsets,
+            lengths,
+            [len(value) for value in originals],
+            gzip_wrapped=wrapped,
+            gzip_decoder="deflate",
+            use_cpp_helper=True,
+        )
+    stream.synchronize()
+    np.testing.assert_array_equal(
+        cp.asnumpy(result), np.frombuffer(b"".join(originals), dtype="u1")
+    )
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_auto_decoder_supports_legacy_deflate(cp, monkeypatch, native):
+    extension = nvcomp_batch._try_get_cpp_ext()
+    monkeypatch.setattr(
+        nvcomp_batch,
+        "_try_get_cpp_ext",
+        lambda: (
+            SimpleNamespace(
+                batch_deflate_decompress=extension.batch_deflate_decompress
+            )
+            if native
+            else None
+        ),
+    )
+    original = b"legacy decoder tile" * 123
+    payload = gzip.compress(original)
+    if not native:
+        # Warm the codec so stream ordering cannot rely on setup latency.
+        nvcomp_batch._get_codec()
+    stream = cp.cuda.Stream(non_blocking=True)
+    with stream:
+        data = cp.asarray(np.frombuffer(payload, dtype="u1"))
+        result, _ = nvcomp_batch.gpu_gzip_decompress_batch(
+            data,
+            [0],
+            [len(payload)],
+            [len(original)],
+            use_cpp_helper=native,
+            gzip_decoder="auto",
+            header_sizes=[10],
+        )
+    stream.synchronize()
+    np.testing.assert_array_equal(
+        cp.asnumpy(result), np.frombuffer(original, dtype="u1")
     )

@@ -24,11 +24,12 @@ import struct
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
-_REPACK_DEFLATE_KERNEL = None
 _DEFLATE_CODEC = None
+_REPACK_DEFLATE_KERNEL = None
 _CPP_EXT = None
 _CPP_EXT_PROBED = False
 _CPP_EXT_IMPORT_ERROR: str | None = None
@@ -820,6 +821,7 @@ def gpu_gzip_decompress_batch(
     uncompressed_sizes: Sequence[int],
     *,
     gzip_wrapped: bool = True,
+    gzip_decoder: Literal["auto", "gzip", "deflate"] = "auto",
     use_cpp_helper: str | bool = "auto",
     use_native_pool: bool = False,
     keepalive: list | None = None,
@@ -837,6 +839,10 @@ def gpu_gzip_decompress_batch(
         If True (default), each tile is an RFC 1952 gzip stream; the
         native gzip decoder consumes its header and trailer directly. Older
         extensions and the Python fallback strip the framing for DEFLATE.
+    gzip_decoder : "auto" | "gzip" | "deflate"
+        "auto" uses native Gzip when available, otherwise raw DEFLATE.
+        "gzip" requires the native Gzip helper and gzip-wrapped inputs.
+        "deflate" strips gzip framing and aligns payloads before decoding.
     use_cpp_helper : "auto" | True | False
         "auto" (default) → use the C++ pybind11 helper when importable, else
         fall back to the Python loop. True forces the C++ path (raises if
@@ -859,6 +865,11 @@ def gpu_gzip_decompress_batch(
     out_offsets : numpy.ndarray (int64)
         Start offset of each decompressed tile inside ``d_out``.
     """
+    if gzip_decoder not in ("auto", "gzip", "deflate"):
+        raise ValueError("gzip_decoder must be 'auto', 'gzip', or 'deflate'")
+    if gzip_decoder == "gzip" and not gzip_wrapped:
+        raise ValueError("gzip_decoder='gzip' requires gzip_wrapped=True")
+
     import cupy as cp
 
     concat_size = int(d_concat.size)
@@ -916,7 +927,7 @@ def gpu_gzip_decompress_batch(
                 "`bash src/cuphoton/xdr/src/build.sh` from source. "
                 f"Import error: {_CPP_EXT_IMPORT_ERROR}"
             )
-    elif n == 0:
+    elif n == 0 and gzip_decoder != "gzip":
         # No backend work is needed, so an automatic fallback is not useful.
         ext = None
     elif use_cpp_helper is False:
@@ -926,11 +937,19 @@ def gpu_gzip_decompress_batch(
         if ext is None:
             _warn_python_fallback_once()
 
+    gzip_fn = getattr(ext, "batch_gzip_decompress", None)
+    if gzip_decoder == "gzip" and gzip_fn is None:
+        raise RuntimeError(
+            "gzip_decoder='gzip' requires a native extension with Gzip "
+            "support and use_cpp_helper enabled"
+        )
+    use_gzip = (
+        gzip_wrapped and gzip_decoder != "deflate" and gzip_fn is not None
+    )
+
     if n == 0:
         return cp.empty(0, dtype=cp.uint8), out_offsets
 
-    gzip_fn = getattr(ext, "batch_gzip_decompress", None)
-    use_gzip = gzip_wrapped and gzip_fn is not None
     aligned_owners = ()
     if not use_gzip:
         d_concat, deflate_offsets, aligned_owners = _align_deflate_inputs(
