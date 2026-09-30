@@ -297,7 +297,8 @@ py::object batch_decompress_impl(
         // can progress while the async kernel launches + returns.
         {
             py::gil_scoped_release release;
-            // nvCOMP 5.2 requires a non-null status buffer for both codecs.
+            // Pass actual-size and status buffers together: nvCOMP 5.2
+            // rejects a mixed null/non-null pair on the CUDA backend.
             check_nvcomp(
                 gzip_wrapped ? nvcompBatchedGzipDecompressAsync(
                                    static_cast<const void* const*>(d_comp_ptrs),
@@ -323,7 +324,7 @@ py::object batch_decompress_impl(
                                    opts,
                                    static_cast<nvcompStatus_t*>(d_statuses),
                                    stream),
-                "batched gzip/deflate decompression");
+                gzip_wrapped ? "batched gzip decompression" : "batched deflate decompression");
         }
 
         if (use_native_pool) {

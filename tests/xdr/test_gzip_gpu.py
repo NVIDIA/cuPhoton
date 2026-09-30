@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import struct
+import weakref
 import zlib
 from types import SimpleNamespace
 
@@ -131,14 +132,23 @@ def test_deflate_alignment_without_keepalive(cp, wrapped):
             gzip_decoder="deflate",
             use_cpp_helper=True,
         )
+    input_owner = weakref.ref(allocation)
+    del data, allocation
+    assert input_owner() is not None
+    cp.get_default_memory_pool().free_all_blocks()
     stream.synchronize()
     np.testing.assert_array_equal(
         cp.asnumpy(result), np.frombuffer(b"".join(originals), dtype="u1")
     )
+    del result
+    assert input_owner() is None
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_auto_decoder_supports_legacy_deflate(cp, monkeypatch, native):
+@pytest.mark.parametrize("non_blocking", [False, True])
+def test_auto_decoder_orders_legacy_deflate(
+    cp, monkeypatch, native, non_blocking
+):
     extension = nvcomp_batch._try_get_cpp_ext()
     monkeypatch.setattr(
         nvcomp_batch,
@@ -152,13 +162,37 @@ def test_auto_decoder_supports_legacy_deflate(cp, monkeypatch, native):
         ),
     )
     original = b"legacy decoder tile" * 123
-    payload = gzip.compress(original)
-    if not native:
-        # Warm the codec so stream ordering cannot rely on setup latency.
-        nvcomp_batch._get_codec()
-    stream = cp.cuda.Stream(non_blocking=True)
+    payload = gzip.compress(original, compresslevel=0)
+    stale = gzip.compress(bytes(len(original)), compresslevel=0)
+    assert len(payload) == len(stale)
+    delayed_copy = cp.RawKernel(
+        r"""
+        extern "C" __global__ void delayed_copy(
+            const unsigned char* src, unsigned char* dst, long long size) {
+            unsigned long long start, now;
+            asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(start));
+            do {
+                asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(now));
+            } while (now - start < 150000000ULL);
+            for (long long i = threadIdx.x; i < size; i += blockDim.x) {
+                dst[i] = src[i];
+            }
+        }
+        """,
+        "delayed_copy",
+    )
+    delayed_copy.compile()
+    staged = cp.asarray(np.frombuffer(payload, dtype="u1"))
+    # Keep the stripped payload aligned and valid even before the producer
+    # runs, so a stream-ordering regression returns stale pixels safely.
+    allocation = cp.asarray(np.frombuffer(b"xx" + stale, dtype="u1"))
+    data = allocation[2:]
+    cp.cuda.get_current_stream().synchronize()
+    stream = cp.cuda.Stream(non_blocking=non_blocking)
     with stream:
-        data = cp.asarray(np.frombuffer(payload, dtype="u1"))
+        if not native:
+            nvcomp_batch._get_codec()
+        delayed_copy((1,), (256,), (staged, data, np.int64(len(payload))))
         result, _ = nvcomp_batch.gpu_gzip_decompress_batch(
             data,
             [0],
