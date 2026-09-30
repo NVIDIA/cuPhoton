@@ -305,7 +305,11 @@ def test_compare_cpu_orchestration_and_audit(
     ]
     metadata = {
         "xpois": {"xpois_chi2": 1.0, "basis_terms": []},
-        "xfit": {"parameter_names": ["amplitude"], "feature_names": ["flux"]},
+        "xfit": {
+            "parameter_names": ["amplitude"],
+            "feature_names": ["flux"],
+            "backend": config.xfit.backend,
+        },
         "xscan": {"predictions": predictions},
     }
     # Exercise the real file contracts, stage summaries, round bookkeeping and
@@ -350,6 +354,7 @@ def test_compare_cpu_orchestration_and_audit(
                         "xpois": {"chi2": 1.0},
                         "scientific_evidence": {
                             "xpois": {"basis_terms": []},
+                            "xfit": {"backend": config.xfit.backend},
                             "parameter_names": ["amplitude"],
                             "feature_names": ["flux"],
                         },
@@ -411,6 +416,15 @@ def test_compare_cpu_orchestration_and_audit(
         assert row["batch_seconds_without_extra_hashing"] == pytest.approx(
             row["batch_seconds"] - row["extra_hashing_seconds"]
         )
+    stage_path = args.output / "staged/round-001/xfit/summary.json"
+    original_stage = stage_path.read_text()
+    changed_stage = json.loads(original_stage)
+    changed_stage["items"][0]["metadata"]["backend"] = "cutile"
+    benchmark.write_json(stage_path, changed_stage)
+    with pytest.raises(ValueError, match="xFit backend differs"):
+        benchmark.audit(args)
+    stage_path.write_text(original_stage)
+
     # Candidate identity and exact scientific values both gate acceptance.
     path = args.output / "pipeline/round-001/item-0000.json"
     result = json.loads(path.read_text())

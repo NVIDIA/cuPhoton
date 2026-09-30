@@ -54,6 +54,9 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=21)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repeat", type=int, default=5)
+    parser.add_argument(
+        "--fusion", action="store_true", help="Use fused cutile evaluation."
+    )
     args = parser.parse_args()
     if args.repeat <= 0:
         parser.error("--repeat must be positive")
@@ -62,8 +65,11 @@ def main() -> None:
     if args.warmup < 0:
         parser.error("--warmup must be nonnegative")
     backends = args.backend or ["cupy", "cutile"]
+    if args.fusion and backends != ["cutile"]:
+        parser.error("--fusion requires --backend cutile")
     batches = args.batch or [1, 16, 256, 4096]
     dtype = np.dtype(args.dtype)
+    fit_options = {"fusion": True} if args.fusion else {}
 
     for batch in batches:
         images, initial = _fixture(
@@ -77,6 +83,7 @@ def main() -> None:
                     initial=initial,
                     mode=args.mode,
                     backend=backend,
+                    **fit_options,
                 )
             samples = []
             for _ in range(args.repeat):
@@ -87,12 +94,14 @@ def main() -> None:
                     initial=initial,
                     mode=args.mode,
                     backend=backend,
+                    **fit_options,
                 )
                 samples.append(1.0e3 * (time.perf_counter() - start))
             print(
                 json.dumps(
                     {
                         "backend": backend,
+                        "fusion": args.fusion,
                         "batch": batch,
                         "dtype": dtype.name,
                         "mode": args.mode,
@@ -100,6 +109,7 @@ def main() -> None:
                         "milliseconds_min": min(samples),
                         "milliseconds_median": float(np.median(samples)),
                         "milliseconds_max": max(samples),
+                        "milliseconds": samples,
                         "status": dict(Counter(result.status.tolist())),
                         "evaluations_median": float(
                             np.median(result.evaluations)

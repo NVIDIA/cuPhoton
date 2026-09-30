@@ -371,6 +371,8 @@ def audit(args: SimpleNamespace) -> dict[str, Any]:
                 if metadata["xpois"][f"xpois_{name}"] != value:
                     raise ValueError(f"xPois {name} differs")
             evidence = result["scientific_evidence"]
+            if metadata["xfit"].get("backend") != evidence["xfit"]["backend"]:
+                raise ValueError("xFit backend differs")
             if (
                 metadata["xpois"]["basis_terms"]
                 != evidence["xpois"]["basis_terms"]
@@ -414,6 +416,8 @@ def provenance() -> dict[str, Any]:
         "xpois/ois.py",
         "xfit/api.py",
         "xfit/backend.py",
+        "xfit/_cutile.py",
+        "xfit/_cutile_fused.py",
         "xfit/models.py",
         "xfit/solver.py",
         "xscan/xfit_features.py",
@@ -424,7 +428,7 @@ def provenance() -> dict[str, Any]:
     cupy_packages = importlib.metadata.packages_distributions().get(
         "cupy", []
     )
-    for name in ("cuphoton", "numpy", "torch", *cupy_packages):
+    for name in ("cuphoton", "numpy", "torch", "cuda-tile", *cupy_packages):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:

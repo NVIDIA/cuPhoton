@@ -4,6 +4,7 @@
 
 """CPU-only checks for the benchmark's shared CLI adapter."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,83 @@ def test_benchmark_child_options(monkeypatch):
         2,
         4,
     )
+
+
+def test_benchmark_config_selects_cutile_fusion(tmp_path, monkeypatch):
+    from cuphoton.xscan.device_pipeline import (
+        DevicePipelineCandidate,
+        DevicePipelineConfig,
+        DevicePipelineItem,
+        DeviceXFitPipelineConfig,
+        DeviceXPOISPipelineConfig,
+        NpyArrayDescriptor,
+    )
+    from cuphoton.xscan.pipeline_benchmark import stages
+
+    config = DevicePipelineConfig(
+        device="cuda:0",
+        checkpoint_dir=str(tmp_path),
+        checkpoint_sha256="a" * 64,
+        feature_schema_path=str(tmp_path / "schema.json"),
+        feature_schema_sha256="b" * 64,
+        stamp_shape=(17, 17),
+        decision_threshold=0.5,
+        xpois=DeviceXPOISPipelineConfig(
+            kernel_shape=(3, 3), basis_sigmas=(0.8,), basis_degrees=(0,)
+        ),
+        xfit=DeviceXFitPipelineConfig(
+            backend="cutile", fusion=True, max_evaluations=13
+        ),
+    )
+    image = NpyArrayDescriptor(
+        path=str(tmp_path / "image.npy"),
+        sha256="c" * 64,
+        shape=(64, 64),
+        dtype="float64",
+    )
+    item = DevicePipelineItem(
+        item_id="pair-0",
+        reference=image,
+        target=image,
+        candidates=(DevicePipelineCandidate("candidate-0", 32, 32, 0),),
+    )
+    config_path, items_path = (
+        tmp_path / "config.json",
+        tmp_path / "items.json",
+    )
+    config_path.write_text(json.dumps(config.to_payload()))
+    items_path.write_text(json.dumps([item.to_payload()]))
+    received = []
+    monkeypatch.setattr(
+        stages, "run_stage", lambda *args: received.append(args)
+    )
+    output = tmp_path / "result"
+
+    assert (
+        run_component(
+            "xscan",
+            [
+                "benchmark-pipeline",
+                "--config",
+                str(config_path),
+                "--items",
+                str(items_path),
+                "--stage",
+                "xfit",
+                "--output",
+                str(output),
+            ],
+        )
+        == 0
+    )
+    ((stage, actual_config, actual_items, actual_output),) = received
+    assert stage == "xfit"
+    assert actual_config == config
+    assert actual_config.xfit.backend == "cutile"
+    assert actual_config.xfit.fusion is True
+    assert actual_config.xfit.max_evaluations == 13
+    assert actual_items == [item]
+    assert actual_output == output
 
 
 @pytest.mark.parametrize("timeout", ["0", "-1", "nan", "inf"])

@@ -131,13 +131,17 @@ class DeviceDipoleFitResult:
         init=False,
         default="levenberg-marquardt",
     )
-    backend: Literal["cupy"] = field(init=False, default="cupy")
+    backend: Literal["cupy", "cutile"] = "cupy"
     result_location: Literal["device"] = field(
         init=False,
         default="device",
     )
 
     def __post_init__(self) -> None:
+        if self.backend not in {"cupy", "cutile"}:
+            raise ValueError("backend must be 'cupy' or 'cutile'")
+        if self.backend == "cutile" and self.model != "gaussian":
+            raise ValueError("backend='cutile' supports only Gaussian fits")
         if isinstance(self.device_id, bool) or not isinstance(
             self.device_id, (int, np.integer)
         ):
@@ -613,6 +617,7 @@ def _fit_dipoles_backend(
     mode: FitMode = "difference",
     resolved: Backend,
     config: LMConfig | None = None,
+    fusion: bool = False,
 ) -> _BackendDipoleFitResult:
     """Fit dipoles while retaining all result arrays in ``resolved``."""
 
@@ -745,9 +750,22 @@ def _fit_dipoles_backend(
             )
         return selected_model.evaluate(parameters, mode=mode)
 
+    workspace = None
+    if fusion:
+        from ._cutile_fused import GaussianWorkspace
+
+        workspace = GaussianWorkspace(
+            images_array.reshape(batch, -1),
+            weights.reshape(batch, -1),
+            image_shape=(height, width),
+            mode=mode,
+        )
+
     def residual(
         parameters: BackendArray, *, indices: BackendArray
     ) -> BackendArray:
+        if workspace is not None:
+            return workspace.residual(parameters, indices=indices)
         prediction = evaluate_model(model_parameters(parameters))
         value = (prediction - images_array[indices]) * weights[indices]
         return value.reshape(parameters.shape[0], -1)
@@ -758,6 +776,8 @@ def _fit_dipoles_backend(
         def jacobian(
             parameters: BackendArray, *, indices: BackendArray
         ) -> BackendArray:
+            if workspace is not None:
+                return workspace.jacobian(parameters, indices=indices)
             assert isinstance(selected_model, GaussianDipoleModel)
             physical = model_parameters(parameters)
             value = selected_model._jacobian_positive_unchecked(
@@ -771,7 +791,7 @@ def _fit_dipoles_backend(
         jacobian_function = jacobian
 
     normal_equations = None
-    if gaussian_model and resolved.name == "cutile":
+    if gaussian_model and resolved.name == "cutile" and workspace is None:
         from ._cutile import gaussian_normal_equations
 
         def normal_equations(
@@ -977,6 +997,25 @@ def _materialize_dipole_fit_result(
     )
 
 
+def _validate_fusion(
+    fusion: bool,
+    *,
+    backend: BackendRequest,
+    gaussian_model: bool,
+    use_finite_difference: bool,
+) -> None:
+    if not isinstance(fusion, bool):
+        raise TypeError("fusion must be a boolean")
+    if not fusion:
+        return
+    if backend != "cutile":
+        raise ValueError("fusion requires backend='cutile'")
+    if not gaussian_model:
+        raise ValueError("fusion supports only the Gaussian model")
+    if use_finite_difference:
+        raise ValueError("fusion does not support finite-difference fitting")
+
+
 def fit_dipoles(
     images: ArrayLike,
     *,
@@ -987,6 +1026,7 @@ def fit_dipoles(
     mode: FitMode = "difference",
     backend: BackendRequest = "auto",
     config: LMConfig | None = None,
+    fusion: bool = False,
 ) -> DipoleFitResult:
     """Fit batched Gaussian or sampled-stamp dipoles.
 
@@ -1008,8 +1048,24 @@ def fit_dipoles(
     treats all three planes as independent; when difference equals positive
     minus negative, the reported degrees of freedom and uncertainties are not
     statistically calibrated for that dependence.
+
+    ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
+    evaluation with ``backend="cutile"``. Normal equations retain CuPy's
+    contractions and the solver's convergence and diagnostics controls.
     """
 
+    _validate_fusion(
+        fusion,
+        backend=backend,
+        gaussian_model=(
+            model == "gaussian"
+            if isinstance(model, str)
+            else isinstance(model, GaussianDipoleModel)
+        ),
+        use_finite_difference=(
+            config is not None and config.use_finite_difference
+        ),
+    )
     if backend == "cutile" and isinstance(model, StampDipoleModel):
         # Report the model restriction before the finite-difference one:
         # sampled-stamp fits always difference the residual.
@@ -1034,6 +1090,7 @@ def fit_dipoles(
         mode=mode,
         resolved=resolved,
         config=config,
+        fusion=fusion,
     )
     return _materialize_dipole_fit_result(backend_result)
 
@@ -1046,12 +1103,16 @@ def fit_dipoles_device(
     mask: ArrayLike | None = None,
     variance: ArrayLike | None = None,
     mode: FitMode = "difference",
+    backend: Literal["cupy", "cutile"] = "cupy",
     config: LMConfig | None = None,
+    fusion: bool = False,
 ) -> DeviceDipoleFitResult:
     """Fit dipoles while keeping every result array on the active GPU.
 
-    This experimental seam is explicitly CuPy-only and has no backend
-    selector. NumPy inputs are copied to the active device. Existing CuPy
+    Results use CuPy storage with the selected CuPy or cuTile backend.
+    ``backend="cutile"`` supports Gaussian analytic fits; ``fusion=True``
+    selects fused residual and analytic-Jacobian evaluation.
+    NumPy inputs are copied to the active device. Existing CuPy
     inputs must already reside on that device and are checked before any input
     conversion. Input arrays are borrowed and are not mutated.
 
@@ -1067,6 +1128,30 @@ def fit_dipoles_device(
     from another stream. Retain the result until its consumers have finished.
     """
 
+    if backend not in {"cupy", "cutile"}:
+        raise ValueError("device backend must be 'cupy' or 'cutile'")
+    gaussian_model = (
+        model == "gaussian"
+        if isinstance(model, str)
+        else isinstance(model, GaussianDipoleModel)
+    )
+    _validate_fusion(
+        fusion,
+        backend=backend,
+        gaussian_model=gaussian_model,
+        use_finite_difference=(
+            config is not None and config.use_finite_difference
+        ),
+    )
+    if backend == "cutile":
+        if not gaussian_model:
+            raise ValueError(
+                "backend='cutile' currently supports only the Gaussian model"
+            )
+        if config is not None and config.use_finite_difference:
+            raise ValueError(
+                "backend='cutile' does not support finite-difference fitting"
+            )
     cp = _load_cupy()
     active_device_id = _active_cupy_device_id(cp)
     for name, value in (
@@ -1095,8 +1180,9 @@ def fit_dipoles_device(
         mask=mask,
         variance=variance,
         mode=mode,
-        resolved=resolve_backend("cupy"),
+        resolved=resolve_backend(backend),
         config=config,
+        fusion=fusion,
     )
     return DeviceDipoleFitResult(
         parameters=result.parameters,
@@ -1122,6 +1208,7 @@ def fit_dipoles_device(
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,
+        backend=cast(Literal["cupy", "cutile"], result.backend),
     )
 
 
