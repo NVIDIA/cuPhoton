@@ -131,6 +131,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mask",
         "variance",
         "mode",
+        "backend",
         "config",
     ]
     assert [field.name for field in fields(xfit.DipoleFitResult)] == [
