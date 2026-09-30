@@ -578,6 +578,13 @@ def run_benchmark(
     ``output_json`` requires an existing parent directory. Report metadata
     is collected after the timed phases so it cannot warm their native
     helpers; the return value remains a list of phases.
+
+    ``postprocess``, ``gzip_decoder`` and ``decompression_backend`` use the
+    choices documented by :func:`cuphoton.xdr.batch_to_device_stream`. They
+    affect the two batch-load phases, independently of planner/raw-read
+    phases. JSON ``options`` records the requested values; ``auto`` does not
+    identify the actual nvCOMP engine. Keep inputs and scheduling fixed and
+    vary one control at a time when comparing implementations.
     """
 
     normalize_xdr_options(

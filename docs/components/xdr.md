@@ -12,51 +12,103 @@ Current scope:
 - pipelined loading with `batch_to_device_stream`
 - explicit `NotImplementedError` for unsupported compression formats
 
-
 ## Runtime choices
 
-The default `postprocess="auto"` uses fused unshuffle, byte-order conversion,
-and scatter for supported GZIP FITS tiles. `"fused"` selects that path explicitly;
-`"separate"` runs those steps with individual kernels for comparison.
-Both preserve FITS values, including integer masks and floating-point bits.
-Both leave the decoded input buffer unchanged. The separate path allocates
-another buffer the size of the decoded tiles and copies GZIP_1 input before
-byte-order conversion. Its timings therefore include that copy and are not
-an exact baseline for the former in-place GZIP_1 implementation.
+Three independent controls select how xDR restores supported compressed FITS
+pixels. Each defaults to `auto`. They preserve image values, mask bits and
+floating-point bit patterns; choose explicit modes for comparisons or debugging.
+
+| Direct Python keyword / `xdr_options` key | CLI flag | Values | Meaning of `auto` |
+| --- | --- | --- | --- |
+| `postprocess` | `--xdr-postprocess` | `auto`, `fused`, `separate` | Fuse unshuffle, byte-order conversion and scatter. |
+| `gzip_decoder` | `--xdr-gzip-decoder` | `auto`, `gzip`, `deflate` | Use native Gzip when available; otherwise decode aligned raw DEFLATE. |
+| `decompression_backend` | `--xdr-decompression-backend` | `auto`, `cuda` | Let nvCOMP choose a compatible decompression engine for native Gzip, with CUDA fallback. |
+
+`postprocess="fused"` selects the same kernel as `auto`; `"separate"` runs
+individual restoration kernels. `gzip_decoder="gzip"` requires native Gzip
+support. `"deflate"` strips the Gzip framing and aligns payloads for raw
+DEFLATE. `decompression_backend="cuda"` requires a native extension with
+backend selection support and selects CUDA kernels explicitly. The native
+raw DEFLATE decoder uses CUDA in either backend mode.
+
+Both postprocessing modes leave the decoded input buffer unchanged. The
+separate path allocates another buffer the size of the decoded tiles and
+copies GZIP_1 input before byte-order conversion. Its timings therefore
+include that copy and are not an exact baseline for the former in-place
+GZIP_1 implementation.
+
+### Direct Python APIs
+
+Both batch APIs and `GpuCompImageReader.read` accept these named keywords:
 
 ```python
 from cuphoton.xdr import batch_to_device
 
-(images,) = batch_to_device(paths, postprocess="auto")
+(images,) = batch_to_device(
+    ["exposure-1.fits", "exposure-2.fits"],
+    hdu_indices=[1],
+    postprocess="auto",
+    gzip_decoder="auto",
+    decompression_backend="auto",
+)
 ```
 
-Workflow FITS APIs accept `xdr_options={"postprocess": "separate"}` alongside
-`fits_reader="xdr"` (or `reader="xdr"` for `read_fits_images`). FITS input
-descriptors can persist the same `xdr_options` mapping. The corresponding
-CLI flag is `--xdr-postprocess {auto,fused,separate}`, including on
-`cuphoton xdr benchmark-fits`. Explicit CLI values override matching descriptor
-fields; omitted flags preserve the descriptor's choices.
+The same controls apply with `batch_to_device_stream` or `parallel=False`.
+Python prefetching (`native_batcher=False`, or CLI `--native-batcher off`)
+still uses the selected GPU decoder. It does not select CPU decompression.
 
-Gzip decoding defaults to `gzip_decoder="auto"`: use the native Gzip helper
-when available, or aligned raw DEFLATE with an older extension or the Python
-fallback. Select `gzip_decoder="gzip"` to require native Gzip support, or
-`gzip_decoder="deflate"` to strip the wrapper and decode aligned raw payloads.
-The same choice is available as `xdr_options={"gzip_decoder": "deflate"}` in
-workflow APIs and descriptors, or `--xdr-gzip-decoder {auto,gzip,deflate}` on
-the CLI. Both decoders preserve the FITS pixel values.
+### Workflow APIs and manifests
 
-These controls apply when the existing reader policy selects xDR. Reader
-selection and CPU fallback remain controlled by `--fits-reader`. Invalid options
-fail during validation; decode, I/O, and CUDA failures propagate to the caller.
+Workflow APIs accept the three keys in an `xdr_options` mapping. For example,
+to require xDR and compare CUDA decompression with separate pixel restoration:
 
-For native Gzip decoding, `decompression_backend="auto"` lets nvCOMP select
-a compatible hardware decompression engine, with CUDA fallback when the
-device or buffers do not support that path. Set `decompression_backend="cuda"`
-to use CUDA kernels explicitly; this requires a native extension with backend
-selection support. Workflow APIs and descriptors accept
-`xdr_options={"decompression_backend": "cuda"}`, and the CLI exposes
-`--xdr-decompression-backend {auto,cuda}`. Backend selection preserves the
-decoded pixel values. Native raw DEFLATE uses CUDA in either mode.
+```python
+from cuphoton.core.fits_io import read_fits_images
+
+result = read_fits_images(
+    "exposure.fits", [1], reader="xdr", device=True,
+    xdr_options={
+        "postprocess": "separate",
+        "gzip_decoder": "gzip",
+        "decompression_backend": "cuda",
+    },
+)
+image = result.arrays[0]
+```
+
+The mapping is also accepted by the FITS-consuming APIs in
+[xFit](xfit.md), [xPois](xpois.md), [xRep](xrep.md), and [xScan](xscan.md).
+Manifest-based workflows preserve their input choices through worker
+serialization and execution. See the component guide for the mapping's
+placement in its manifest or FITS descriptor.
+
+An explicit API override or CLI flag replaces only the corresponding manifest
+key. Omitted flags preserve manifest values; keys absent from both use `auto`.
+Passing `--xdr-gzip-decoder auto` explicitly therefore replaces a manifest's
+`gzip_decoder` value. Reader receipts include explicit `xdr_options`; they
+record requested settings rather than which nvCOMP engine actually ran.
+
+### Reader selection and fallback
+
+`--fits-reader` (Python `reader` or `fits_reader`) selects Astropy versus xDR.
+The three controls above apply after that selection and do not request a GPU
+reader by themselves. See [reader policies below](#read-fits-images-in-a-workflow)
+for automatic CPU fallback and FITS semantic restrictions.
+
+Within xDR, native Gzip with `decompression_backend="auto"` may use CUDA when
+a hardware engine or suitable buffers are unavailable. An older extension
+without native Gzip support can use aligned raw DEFLATE. The low-level decoder's
+Python fallback also runs on the GPU and retains nvCOMP's existing backend
+defaults. Full batch FITS loading
+still requires the native FITS planner; codec fallback does not remove that
+requirement.
+
+When xDR decodes compressed HDUs, explicit `gzip` or `cuda` requests fail clearly
+if the installed extension cannot honor them. Rebuild an older source extension
+using the [native build instructions](#native-extension-availability). The `auto`
+choices select available capabilities before decoding. I/O or decoder exceptions
+propagate; they do not trigger another reader, codec or postprocessing attempt.
+The supported FITS compression formats remain `GZIP_1` and `GZIP_2`.
 
 ## Read FITS images in a workflow
 
@@ -222,6 +274,24 @@ cuphoton xdr benchmark-fits \
   /path/to/file1.fits /path/to/file2.fits
 ```
 
+All three [runtime controls](#runtime-choices) are available on this command.
+For a comparison against separate restoration and the native CUDA DEFLATE path,
+repeat the same workload with a distinct report:
+
+```bash
+cuphoton xdr benchmark-fits \
+  --hdu-indices 1,2,3 --output-json separate-deflate-cuda.json \
+  --xdr-postprocess separate --xdr-gzip-decoder deflate \
+  --xdr-decompression-backend cuda \
+  /path/to/file1.fits /path/to/file2.fits
+```
+
+Use the same files, HDUs, batching settings and storage mode for both runs.
+These controls affect the `batch_to_device` and `batch_to_device_stream`
+phases; planner and raw-read timings do not measure decompression. To isolate
+one change, vary only that control. The Python `run_benchmark` API accepts
+`postprocess`, `gzip_decoder` and `decompression_backend` directly.
+
 Use `--dir` and `--max-files` to scan directories of FITS files. The benchmark
 defaults to `--native-read-threads=4`; the loading APIs default to the available
 CPU core count when `native_read_threads` is omitted.
@@ -244,8 +314,11 @@ The version 1 JSON report contains:
   measured read used GDS, including when storage is mocked.
 - `storage`: the effective `real`, `host`, or `device` mode, including an
   ambient mock-storage context or environment setting.
-- `options`: HDUs, iteration count, thread/queue settings, and native-batcher
-  selection. `native_batcher_enabled=null` records an invalid forced selection
+- `options`: HDUs, iteration count, thread/queue settings, native-batcher
+  selection, and requested `postprocess`, `gzip_decoder` and
+  `decompression_backend`. An `auto` value does not identify which nvCOMP
+  engine ran or prove hardware decompression. `native_batcher_enabled=null`
+  records an invalid forced selection
   with the reason in `native_batcher_error`.
 - `workload`: ordered input files, counts, planned raw bytes, and decoded MiB.
   Failed planning can leave these planned sizes at zero.

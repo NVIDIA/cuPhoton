@@ -55,10 +55,17 @@ cutouts remain bounded reads, and the prepared dataset format is unchanged.
 Automatic uncompressed cutouts use Astropy sections. Explicit `xdr` requires
 supported tile-compressed cutouts and rejects uncompressed section reads.
 
-Builders also accept `--xdr-postprocess auto|fused|separate`, or the Python
-keyword `xdr_options={"postprocess": "separate"}`. A manifest's
-`xdr_options` mapping supplies defaults; explicit options override only
-their matching keys. These choices apply when the selected reader uses xDR.
+Raw builders also accept `--xdr-postprocess`, `--xdr-gzip-decoder`, and
+`--xdr-decompression-backend`, or the Python keyword `xdr_options` with keys
+`postprocess`, `gzip_decoder`, and `decompression_backend`. See
+[xDR runtime choices](xdr.md#runtime-choices) for values and automatic
+capability selection. These choices apply when the selected reader uses xDR.
+
+For raw builders, put defaults in the manifest's top-level `xdr_options`
+mapping, for example `"xdr_options": {"gzip_decoder": "gzip"}`. Explicit
+Python options or CLI flags override only their matching keys; omitted flags
+preserve manifest choices. For example, `--xdr-decompression-backend cuda`
+keeps that manifest's Gzip choice while requesting CUDA decompression.
 
 The raw builders (`data-build-autoscan-raw`, `data-build-nodiff-raw`, and
 `data-build-lsstcomcam-smoke`) also accept `--fits-reader auto|astropy|xdr`.
@@ -454,12 +461,13 @@ from cuphoton.core.fits_io import inspect_fits_image
 from cuphoton.xscan.device_pipeline import FitsArrayDescriptor
 
 
-def describe_fits(path, hdu, *, reader="auto"):
+def describe_fits(path, hdu, *, reader="auto", xdr_options=None):
     path = Path(path).resolve()
     info = inspect_fits_image(path, hdu)
     return FitsArrayDescriptor(
         path=str(path), sha256=file_sha256(path), hdu=info.hdu,
         shape=info.shape, dtype=info.dtype.str, reader=reader,
+        xdr_options=xdr_options,
     )
 ```
 
@@ -476,12 +484,19 @@ masks, before work is sent to MPI or Dragon workers or benchmark children.
 The effective policies are retained in workload identities and read receipts.
 Omitting the option preserves per-descriptor choices; NPY inputs are unchanged.
 
-FITS descriptors can additionally carry `"xdr_options": {"postprocess":
-"separate"}`. The same mapping is accepted by `predict_fits`, manifest
-execution and benchmark input loading. `--xdr-postprocess` overrides that
-key for all FITS descriptors. Effective choices travel with work items to
-MPI/Dragon workers and benchmark subprocesses, and appear in read receipts.
-HDUs grouped into one file read must use matching xDR choices.
+In a pipeline manifest, put `xdr_options` on each FITS descriptor, including
+variance and mask descriptors. It accepts all three
+[xDR runtime choices](xdr.md#runtime-choices), for example
+`"xdr_options": {"gzip_decoder": "gzip", "decompression_backend": "cuda"}`.
+The Python `predict_fits` API, manifest execution, and benchmark input loading
+accept the same mapping as an `xdr_options` keyword.
+
+`run-pipeline` and `benchmark-pipeline` accept all three `--xdr-*` flags.
+An explicit flag overrides its matching key on every FITS descriptor;
+omitted flags preserve per-descriptor choices. Effective choices travel with
+work items to MPI/Dragon workers and benchmark subprocesses, and appear in
+workload identities and read receipts. HDUs grouped into one file read must
+use matching xDR choices.
 
 ```bash
 : "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
