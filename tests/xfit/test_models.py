@@ -919,14 +919,14 @@ def test_fit_dipoles_device_matches_portable_result_without_bulk_d2h(
 
     with pytest.raises(FrozenInstanceError):
         device.device_id = device.device_id + 1  # type: ignore[misc]
-    for name, value in (
-        ("schema", "other"),
-        ("solver", "other"),
-        ("backend", "numpy"),
-        ("result_location", "host"),
-    ):
-        with pytest.raises(ValueError):
-            replace(device, **{name: value})
+    for name in ("schema", "solver", "result_location"):
+        # Python 3.14 changed replace()'s init=False error to TypeError.
+        with pytest.raises(
+            (ValueError, TypeError), match=rf"field {name}.*init=False"
+        ):
+            replace(device, **{name: "other"})
+    with pytest.raises(ValueError, match="backend"):
+        replace(device, backend="numpy")
     with pytest.raises(ValueError, match="CUDA device"):
         replace(device, device_id=device.device_id + 1)
     with pytest.raises(TypeError, match=device.dtype):
@@ -1096,6 +1096,40 @@ def test_fit_dipoles_device_rejects_stamp_model_dtype_conversion(
         fit_dipoles_device(images, model=model)
 
 
+@pytest.mark.parametrize(
+    ("backend", "model_name", "finite_difference", "fusion", "message"),
+    [
+        ("auto", "gaussian", False, False, "device backend"),
+        ("numpy", "gaussian", False, False, "device backend"),
+        ("cupy", "gaussian", False, True, "requires backend='cutile'"),
+        ("cutile", "stamp", False, False, "only the Gaussian model"),
+        ("cutile", "gaussian", True, False, "finite-difference fitting"),
+        ("cutile", "gaussian", False, 1, "must be a boolean"),
+    ],
+)
+def test_device_options_reject_invalid_settings_before_cuda(
+    monkeypatch, backend, model_name, finite_difference, fusion, message
+) -> None:
+    model = (
+        StampDipoleModel(np.ones((5, 7)), image_shape=(5, 7))
+        if model_name == "stamp"
+        else "gaussian"
+    )
+    monkeypatch.setattr(
+        xfit_api,
+        "_load_cupy",
+        lambda: pytest.fail("invalid device options loaded CUDA"),
+    )
+    with pytest.raises((TypeError, ValueError), match=message):
+        fit_dipoles_device(
+            np.zeros((1, 5, 7)),
+            model=model,
+            backend=backend,
+            fusion=fusion,
+            config=LMConfig(use_finite_difference=finite_difference),
+        )
+
+
 def test_fit_dipoles_device_reports_no_visible_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1219,6 +1253,40 @@ def test_cupy_stamp_fit_matches_numpy_when_cuda_is_available() -> None:
     assert gpu.device.startswith("cuda:")
     assert gpu.converged.all()
     assert np.allclose(gpu.parameters, cpu.parameters, rtol=2e-8, atol=2e-8)
+
+
+@pytest.mark.parametrize(
+    ("backend", "model_name", "finite_difference", "fusion", "message"),
+    [
+        ("numpy", "gaussian", False, True, "requires backend='cutile'"),
+        ("cupy", "gaussian", False, True, "requires backend='cutile'"),
+        ("auto", "gaussian", False, True, "requires backend='cutile'"),
+        ("cutile", "stamp", False, True, "only the Gaussian model"),
+        ("cutile", "gaussian", True, True, "finite-difference fitting"),
+        ("cutile", "gaussian", False, "yes", "must be a boolean"),
+    ],
+)
+def test_fusion_rejects_unsupported_settings_before_backend_resolution(
+    monkeypatch, backend, model_name, finite_difference, fusion, message
+) -> None:
+    model = (
+        StampDipoleModel(np.ones((5, 7)), image_shape=(5, 7))
+        if model_name == "stamp"
+        else "gaussian"
+    )
+    monkeypatch.setattr(
+        xfit_api,
+        "resolve_backend",
+        lambda _: pytest.fail("invalid fusion settings resolved a backend"),
+    )
+    with pytest.raises((TypeError, ValueError), match=message):
+        fit_dipoles(
+            np.zeros((1, 5, 7)),
+            model=model,
+            backend=backend,
+            fusion=fusion,
+            config=LMConfig(use_finite_difference=finite_difference),
+        )
 
 
 def test_cutile_rejects_finite_difference_provenance() -> None:
@@ -1471,3 +1539,120 @@ def test_cutile_preserves_rank_and_budget_failure_semantics() -> None:
     assert np.array_equal(cutile_budget.status, cupy_budget.status)
     assert np.array_equal(cutile_budget.evaluations, cupy_budget.evaluations)
     assert cutile_budget.uncertainty_reason == cupy_budget.uncertainty_reason
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("fusion", [False, True])
+def test_cutile_device_results_survive_worker_reuse(dtype, fusion) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import fields
+    from threading import Barrier
+
+    cp = _require_cutile()
+    pytest.importorskip("torch")
+
+    from cuphoton.xscan.xfit_features import (
+        transform_xfit_result_features_device,
+    )
+
+    device_id = int(cp.cuda.Device().id)
+    model = GaussianDipoleModel((11, 15), dtype=dtype)
+    cases = []
+    for scale in (1.0, 1.5):
+        truth = _gaussian_truth(dtype)
+        truth[:, 0] *= scale
+        images = model.evaluate(truth, mode="difference")
+        initial = truth + np.asarray(
+            [0.2, 0.1, -0.1, 0.03, 0.1, -0.1, -0.1, 0.1], dtype=dtype
+        )
+        initial[0] = truth[0]
+        cases.append(
+            dict(
+                images=images,
+                model=model,
+                initial=initial,
+                variance=np.full_like(images, 0.5),
+                mode="difference",
+            )
+        )
+
+    def snapshot(result):
+        return {
+            field.name: cp.asnumpy(value)
+            for field in fields(result)
+            if isinstance(value := getattr(result, field.name), cp.ndarray)
+        }
+
+    def features(result):
+        transformed = transform_xfit_result_features_device(
+            result, image_shape=(11, 15), variance_present=True
+        )
+        assert transformed.backend == "cupy"
+        return transformed
+
+    expected = []
+    with cp.cuda.Stream.null:
+        for case in cases:
+            reference = fit_dipoles_device(**case)
+            expected.append(
+                (snapshot(reference), cp.asnumpy(features(reference).values))
+            )
+            fit_dipoles_device(**case, backend="cutile", fusion=fusion)
+        cp.cuda.Stream.null.synchronize()
+    barrier = Barrier(2)
+    tolerance = 3e-5 if dtype is np.float32 else 5e-12
+
+    def worker(index):
+        with cp.cuda.Device(device_id):
+            pool = cp.cuda.MemoryPool()
+            stream = cp.cuda.Stream(non_blocking=True)
+            retained = []
+            with stream, cp.cuda.using_allocator(pool.malloc):
+                barrier.wait(timeout=30)
+                for iteration in range(2):
+                    case_index = (index + iteration) % len(cases)
+                    result = fit_dipoles_device(
+                        **cases[case_index], backend="cutile", fusion=fusion
+                    )
+                    assert result.backend == "cutile"
+                    assert result.device_id == device_id
+                    transformed = features(result)
+                    arrays = snapshot(result)
+                    reference, reference_features = expected[case_index]
+                    assert arrays.keys() == reference.keys()
+                    for name, actual in arrays.items():
+                        target = reference[name]
+                        if actual.dtype.kind in "fc":
+                            np.testing.assert_array_equal(
+                                np.isnan(actual), np.isnan(target)
+                            )
+                            np.testing.assert_allclose(
+                                actual, target, rtol=tolerance, atol=tolerance
+                            )
+                        else:
+                            np.testing.assert_array_equal(actual, target)
+                    feature_values = cp.asnumpy(transformed.values)
+                    # Canonical xScan features have float32 storage even
+                    # when the fit was computed in float64.
+                    np.testing.assert_allclose(
+                        feature_values,
+                        reference_features,
+                        rtol=3e-5,
+                        atol=3e-5,
+                    )
+                    retained.append(
+                        (result, arrays, transformed, feature_values)
+                    )
+                stream.synchronize()
+                pool.free_all_blocks()
+                for result, arrays, transformed, feature_values in retained:
+                    for name, actual in snapshot(result).items():
+                        np.testing.assert_array_equal(actual, arrays[name])
+                    np.testing.assert_array_equal(
+                        cp.asnumpy(transformed.values), feature_values
+                    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(worker, index) for index in range(2)]
+        for future in futures:
+            future.result(timeout=180)

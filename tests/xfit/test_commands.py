@@ -477,10 +477,12 @@ def test_artifacts_retain_archive_hash_captured_at_load_time(
     assert loaded_sha256 != file_sha256(input_path)
 
 
+@pytest.mark.parametrize("fusion", [False, True])
 def test_fit_dipoles_command_writes_complete_artifact_set(
     monkeypatch,
     tmp_path,
     capsys,
+    fusion,
 ) -> None:
     import cuphoton.xfit as xfit
 
@@ -510,6 +512,7 @@ def test_fit_dipoles_command_writes_complete_artifact_set(
         assert received_images.dtype == np.float64
         assert kwargs["model"] == "gaussian"
         assert isinstance(kwargs["config"], FakeConfig)
+        assert kwargs["fusion"] is fusion
         return _fake_result(received_images)
 
     monkeypatch.setattr(xfit, "LMConfig", FakeConfig, raising=False)
@@ -531,7 +534,8 @@ def test_fit_dipoles_command_writes_complete_artifact_set(
             "--model",
             "gaussian",
             "--backend",
-            "numpy",
+            "cutile" if fusion else "numpy",
+            *(["--fusion"] if fusion else []),
             "--compute-dtype",
             "float64",
         ],
@@ -557,6 +561,56 @@ def test_fit_dipoles_command_writes_complete_artifact_set(
         "requested": "float64",
         "resolved": "float64",
     }
+    assert effective["fusion"] is fusion
+    assert effective["backend"] == ("cutile" if fusion else "numpy")
+
+
+@pytest.mark.parametrize(
+    ("backend", "model", "extra_args", "message"),
+    [
+        ("cupy", "gaussian", [], "requires backend='cutile'"),
+        ("cutile", "stamp", [], "only the Gaussian model"),
+        (
+            "cutile",
+            "gaussian",
+            ["--use-finite-difference"],
+            "finite-difference fitting",
+        ),
+    ],
+)
+def test_fusion_command_rejects_invalid_settings_before_loading_input(
+    tmp_path, monkeypatch, capsys, backend, model, extra_args, message
+) -> None:
+    from cuphoton.xfit.commands import FitDipolesCommand
+
+    input_path = tmp_path / "input.npz"
+    _write_gaussian_input(input_path)
+    monkeypatch.setattr(
+        FitDipolesCommand,
+        "_load_dataset",
+        lambda *args, **kwargs: pytest.fail(
+            "invalid fusion settings read the input"
+        ),
+    )
+    rc = run_component(
+        "xfit",
+        [
+            "fit-dipoles",
+            "--input",
+            str(input_path),
+            "--output-dir",
+            str(tmp_path / "fit"),
+            "--backend",
+            backend,
+            "--model",
+            model,
+            "--fusion",
+            *extra_args,
+        ],
+    )
+    assert rc == 1
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "fit").exists()
 
 
 def test_fit_dipoles_command_runs_real_synthetic_gaussian_fit(
@@ -754,6 +808,7 @@ def test_command_help_exposes_stable_safe_input_options(capsys) -> None:
     assert "vignetted" in captured.out
     assert "finite-volume" in captured.out
     assert "--use-finite-difference" in captured.out
+    assert "--fusion" in captured.out
 
 
 @pytest.mark.parametrize("runtime", ["dragon", "mpi"])

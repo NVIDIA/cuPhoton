@@ -13,6 +13,7 @@ from dataclasses import fields, replace
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
+import yaml
 
 from cuphoton.core.artifacts import file_sha256
 from cuphoton.xfit import (
@@ -101,8 +102,9 @@ def test_chunk_size_is_part_of_configuration_identity(tmp_path):
     assert first["configuration_sha256"] != second["configuration_sha256"]
 
 
+@pytest.mark.parametrize("fusion", [False, True])
 def test_finalizer_retains_planning_input_and_still_checks_content(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, fusion
 ):
     path = _input(tmp_path)
     loads = []
@@ -113,8 +115,11 @@ def test_finalizer_retains_planning_input_and_still_checks_content(
         return original_load(*args, **kwargs)
 
     def cpu_fit(*args, **kwargs):
-        result = fit_dipoles(*args, **{**kwargs, "backend": "numpy"})
-        return replace(result, backend="cupy", device="cuda:0")
+        assert kwargs["fusion"] is fusion
+        result = fit_dipoles(
+            *args, **{**kwargs, "backend": "numpy", "fusion": False}
+        )
+        return replace(result, backend=kwargs["backend"], device="cuda:0")
 
     monkeypatch.setattr(executor, "load_xfit_dataset", load)
     monkeypatch.setattr(executor, "fit_dipoles", cpu_fit)
@@ -122,7 +127,11 @@ def test_finalizer_retains_planning_input_and_still_checks_content(
     spec = executor.prepare_xfit_workload(
         input_path=path,
         chunk_size=2,
-        fit_options={"backend": "cupy", "max_evaluations": 2},
+        fit_options={
+            "backend": "cutile" if fusion else "cupy",
+            "fusion": fusion,
+            "max_evaluations": 2,
+        },
     )
     worker = spec.worker_factory(spec.options_payload)
     for index in range(2):
@@ -132,6 +141,10 @@ def test_finalizer_retains_planning_input_and_still_checks_content(
             worker.run_item(item, round_dir / "items" / item.item_id)
             records.append({"item_id": item.item_id, "status": "success"})
         assert spec.finalize_round(round_dir, records)["candidate_count"] == 3
+        effective = yaml.safe_load(
+            (round_dir / "scientific" / "effective-config.yaml").read_text()
+        )
+        assert effective["fusion"] is fusion
     assert len(loads) == 2  # One planning load and one worker load.
     before = path.stat()
     changed = bytearray(path.read_bytes())
@@ -144,18 +157,46 @@ def test_finalizer_retains_planning_input_and_still_checks_content(
     worker.close()
 
 
-def test_preflight_accepts_analytic_gaussian_cutile(tmp_path):
+@pytest.mark.parametrize("fusion", [False, True])
+def test_preflight_accepts_analytic_gaussian_cutile(tmp_path, fusion):
     spec = executor.prepare_xfit_workload(
-        input_path=_input(tmp_path), fit_options={"backend": "cutile"}
+        input_path=_input(tmp_path),
+        fit_options={"backend": "cutile", "fusion": fusion},
     )
     assert spec.backend == "cutile"
+    assert spec.options_payload["fit_options"]["fusion"] is fusion
+
+
+@pytest.mark.parametrize(
+    ("backend", "fusion", "message"),
+    [
+        ("cupy", True, "requires backend='cutile'"),
+        ("cutile", "yes", "must be a boolean"),
+    ],
+)
+def test_preflight_rejects_invalid_fusion_before_input_reads(
+    tmp_path, monkeypatch, backend, fusion, message
+):
+    monkeypatch.setattr(
+        executor,
+        "load_xfit_dataset",
+        lambda *args, **kwargs: pytest.fail(
+            "invalid fusion settings read the input"
+        ),
+    )
+    with pytest.raises((ValueError, TypeError), match=message):
+        executor.prepare_xfit_workload(
+            input_path=tmp_path / "missing.npz",
+            fit_options={"backend": backend, "fusion": fusion},
+        )
 
 
 @pytest.mark.parametrize(
     "runtime,rank", [("dragon", 0), ("mpi", 0), ("mpi", 1)]
 )
+@pytest.mark.parametrize("fusion", [False, True])
 def test_cli_dispatches_collective_preflight_and_preserves_options(
-    tmp_path, monkeypatch, capsys, runtime, rank
+    tmp_path, monkeypatch, capsys, runtime, rank, fusion
 ):
     from types import SimpleNamespace
 
@@ -195,7 +236,8 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
                 "--model",
                 "gaussian",
                 "--backend",
-                "cupy",
+                "cutile" if fusion else "cupy",
+                *(["--fusion"] if fusion else []),
                 "--executor",
                 runtime,
                 "--chunk-size",
@@ -220,6 +262,7 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
     assert kwargs["benchmark"].measure_rounds == 2
     assert len(spec.items) == 2
     assert spec.options_payload["fit_options"]["max_evaluations"] == 10
+    assert spec.options_payload["fit_options"]["fusion"] is fusion
     assert json.loads(capsys.readouterr().out)["status"] == "success"
 
 

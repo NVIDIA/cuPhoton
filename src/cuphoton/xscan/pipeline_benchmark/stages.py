@@ -341,7 +341,9 @@ def _run_item(
                 difference,
                 model=config.xfit.model,
                 mode=config.xfit.mode,
+                backend=config.xfit.backend,
                 config=LMConfig(**config.xfit.solver_payload()),
+                fusion=config.xfit.fusion,
             )
             features = transform_xfit_result_features_device(
                 result,

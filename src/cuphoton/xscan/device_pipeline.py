@@ -619,6 +619,8 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
+    backend: Literal["cupy", "cutile"] = "cupy"
+    fusion: bool = False
 
     def __post_init__(self) -> None:
         if self.model != "gaussian":
@@ -670,11 +672,26 @@ class DeviceXFitPipelineConfig:
             )
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
+        if self.backend not in {"cupy", "cutile"}:
+            raise ValueError("xfit backend must be 'cupy' or 'cutile'")
+        if not isinstance(self.fusion, bool):
+            raise TypeError("xfit fusion must be boolean")
+        if self.fusion and self.backend != "cutile":
+            raise ValueError("xfit fusion requires backend='cutile'")
+        if self.backend == "cutile" and self.use_finite_difference:
+            raise ValueError(
+                "xfit backend='cutile' does not support finite differences"
+            )
 
     def to_payload(self) -> dict[str, Any]:
         """Return JSON-compatible LM settings."""
 
-        return asdict(self)
+        payload = asdict(self)
+        if self.backend == "cupy":
+            del payload["backend"]
+        if not self.fusion:
+            del payload["fusion"]
+        return payload
 
     def solver_payload(self) -> dict[str, Any]:
         """Return only fields accepted by :class:`LMConfig`."""
@@ -682,6 +699,8 @@ class DeviceXFitPipelineConfig:
         payload = self.to_payload()
         del payload["model"]
         del payload["mode"]
+        payload.pop("backend", None)
+        payload.pop("fusion", None)
         return payload
 
     @classmethod
@@ -691,8 +710,11 @@ class DeviceXFitPipelineConfig:
         """Restore exact LM settings from JSON-compatible values."""
 
         expected = frozenset(value.name for value in fields(cls))
+        values = json_mapping(payload, field="device pipeline xfit config")
+        values.setdefault("backend", "cupy")
+        values.setdefault("fusion", False)
         values = _require_exact_fields(
-            payload,
+            values,
             expected=expected,
             field_name="device pipeline xfit config",
         )
@@ -1022,7 +1044,6 @@ def _device_pipeline_evidence_layout_contract(
     )
     expected_xfit = {
         "schema": "cuphoton.xfit.device-fit-result/v1",
-        "backend": "cupy",
         "solver": "levenberg-marquardt",
         "model": "gaussian",
         "mode": "difference",
@@ -1033,6 +1054,10 @@ def _device_pipeline_evidence_layout_contract(
             raise ValueError(
                 f"scientific evidence xfit.{name} must be {expected!r}"
             )
+    if xfit["backend"] not in {"cupy", "cutile"}:
+        raise ValueError(
+            "scientific evidence xfit.backend must be 'cupy' or 'cutile'"
+        )
     expected_status_names = {
         str(int(status)): status.name for status in LMStatus
     }
@@ -1730,6 +1755,10 @@ def _validate_device_pipeline_evidence_config(
 
     if not isinstance(config, DevicePipelineConfig):
         raise TypeError("config must be a DevicePipelineConfig")
+    if values["xfit"]["backend"] != config.xfit.backend:
+        raise ValueError(
+            "scientific evidence xfit.backend does not match config"
+        )
     xpois = json_mapping(values["xpois"], field="scientific evidence xpois")
     if tuple(xpois["kernel_shape"]) != config.xpois.kernel_shape:
         raise ValueError(
@@ -2098,6 +2127,7 @@ def _pack_scientific_evidence(
     candidate_count: int,
     kernel_shape: tuple[int, int],
     flux_conserve: bool,
+    xfit_backend: Literal["cupy", "cutile"] = "cupy",
 ) -> _PackedScientificEvidence:
     """Pack all parity evidence on the producer stream as float64."""
 
@@ -2124,7 +2154,7 @@ def _pack_scientific_evidence(
         str(xfit_result.dtype),
     )
     if xfit_contract != (
-        "cupy",
+        xfit_backend,
         "levenberg-marquardt",
         "gaussian",
         "difference",
@@ -3260,7 +3290,9 @@ def run_device_pipeline_item(
                         difference,
                         model=context.config.xfit.model,
                         mode=context.config.xfit.mode,
+                        backend=context.config.xfit.backend,
                         config=context.solver_config,
+                        fusion=context.config.xfit.fusion,
                     ),
                 )
                 features = _timed(
@@ -3283,6 +3315,7 @@ def run_device_pipeline_item(
                         candidate_count=len(item.candidates),
                         kernel_shape=context.config.xpois.kernel_shape,
                         flux_conserve=context.config.xpois.flux_conserve,
+                        xfit_backend=context.config.xfit.backend,
                     ),
                 )
                 evidence_layout = _append_prediction_evidence_layout(
