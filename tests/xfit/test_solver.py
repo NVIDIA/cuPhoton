@@ -130,6 +130,46 @@ def test_finite_difference_jacobian_converges_and_counts_evaluations() -> (
     assert residual_rows_evaluated == int(result.evaluations.sum())
 
 
+@pytest.mark.parametrize(
+    "with_analytic_jacobian",
+    [False, True],
+    ids=["residual-only", "forced-finite-difference"],
+)
+def test_finite_difference_budget_can_end_before_the_trial(
+    with_analytic_jacobian: bool,
+) -> None:
+    residual_calls = 0
+
+    def residual(x, *, indices):
+        nonlocal residual_calls
+        del indices
+        residual_calls += 1
+        return x.copy()
+
+    def jacobian(x, *, indices):
+        del x, indices
+        raise AssertionError("analytic Jacobian must not be called")
+
+    initial = np.ones((2, 2))
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(
+            residual, jacobian if with_analytic_jacobian else None
+        ),
+        initial,
+        config=LMConfig(
+            max_evaluations=3,
+            use_finite_difference=with_analytic_jacobian,
+        ),
+    )
+
+    # The initial residual and two perturbations leave no trial evaluation.
+    assert residual_calls == 3
+    assert result.evaluations.tolist() == [3, 3]
+    assert result.status.tolist() == [LMStatus.MAX_EVALUATIONS] * 2
+    np.testing.assert_array_equal(result.parameters, initial)
+    assert result.rank.tolist() == [2, 2]
+
+
 def test_callbacks_do_not_need_to_accept_an_out_argument() -> None:
     target = np.asarray([[1.0], [-2.0]])
 
