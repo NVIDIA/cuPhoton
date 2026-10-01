@@ -13,8 +13,10 @@ import numpy.typing as npt
 
 # Keep aliases eagerly expanded for public get_type_hints/get_args users.
 FitMode: TypeAlias = Literal["difference", "split"]
-BackendRequest: TypeAlias = Literal["auto", "numpy", "cupy", "cutile"]
-ResolvedBackend: TypeAlias = Literal["numpy", "cupy", "cutile"]
+BackendRequest: TypeAlias = Literal[
+    "auto", "numpy", "cupy", "cutile", "native"
+]
+ResolvedBackend: TypeAlias = Literal["numpy", "cupy", "cutile", "native"]
 ModelName: TypeAlias = Literal["gaussian", "stamp"]
 StampEvaluation: TypeAlias = Literal[
     "bilinear", "bilinear-vignetted", "finite-volume"
@@ -24,7 +26,7 @@ FloatDType: TypeAlias = Literal["float32", "float64"]
 
 FIT_MODES: frozenset[FitMode] = frozenset(("difference", "split"))
 BACKEND_REQUESTS: frozenset[BackendRequest] = frozenset(
-    ("auto", "numpy", "cupy", "cutile")
+    ("auto", "numpy", "cupy", "cutile", "native")
 )
 MODEL_NAMES: frozenset[ModelName] = frozenset(("gaussian", "stamp"))
 STAMP_EVALUATIONS: frozenset[StampEvaluation] = frozenset(

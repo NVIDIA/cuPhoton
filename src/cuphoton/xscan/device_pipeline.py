@@ -619,12 +619,21 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
+    backend: Literal["cupy", "native"] = "cupy"
 
     def __post_init__(self) -> None:
         if self.model != "gaussian":
             raise ValueError("xfit model must be 'gaussian'")
         if self.mode != "difference":
             raise ValueError("xfit mode must be 'difference'")
+        if self.backend not in ("cupy", "native"):
+            raise ValueError("xfit backend must be 'cupy' or 'native'")
+        if not isinstance(self.use_finite_difference, bool):
+            raise TypeError("xfit use_finite_difference must be boolean")
+        if self.backend == "native" and self.use_finite_difference:
+            raise ValueError(
+                "native xfit does not support finite differences"
+            )
         for name in ("f_tol", "x_tol", "g_tol", "finite_difference_step"):
             value = getattr(self, name)
             if value is not None:
@@ -668,13 +677,22 @@ class DeviceXFitPipelineConfig:
             raise ValueError(
                 "xfit finite_difference_step must be greater than zero"
             )
-        if not isinstance(self.use_finite_difference, bool):
-            raise TypeError("xfit use_finite_difference must be boolean")
 
     def to_payload(self) -> dict[str, Any]:
-        """Return JSON-compatible LM settings."""
+        """Return settings without changing legacy default manifest hashes."""
 
-        return asdict(self)
+        payload = asdict(self)
+        if self.backend == "cupy":
+            del payload["backend"]
+        return payload
+
+    def execution_payload(self) -> dict[str, Any]:
+        """Return optional execution controls for the device fit call."""
+
+        payload: dict[str, Any] = {}
+        if self.backend != "cupy":
+            payload["backend"] = self.backend
+        return payload
 
     def solver_payload(self) -> dict[str, Any]:
         """Return only fields accepted by :class:`LMConfig`."""
@@ -682,6 +700,7 @@ class DeviceXFitPipelineConfig:
         payload = self.to_payload()
         del payload["model"]
         del payload["mode"]
+        payload.pop("backend", None)
         return payload
 
     @classmethod
@@ -690,9 +709,11 @@ class DeviceXFitPipelineConfig:
     ) -> DeviceXFitPipelineConfig:
         """Restore exact LM settings from JSON-compatible values."""
 
+        values = json_mapping(payload, field="device pipeline xfit config")
+        values.setdefault("backend", "cupy")
         expected = frozenset(value.name for value in fields(cls))
         values = _require_exact_fields(
-            payload,
+            values,
             expected=expected,
             field_name="device pipeline xfit config",
         )
@@ -1022,12 +1043,15 @@ def _device_pipeline_evidence_layout_contract(
     )
     expected_xfit = {
         "schema": "cuphoton.xfit.device-fit-result/v1",
-        "backend": "cupy",
         "solver": "levenberg-marquardt",
         "model": "gaussian",
         "mode": "difference",
         "dtype": "float64",
     }
+    if xfit["backend"] not in ("cupy", "native"):
+        raise ValueError(
+            "scientific evidence xfit.backend must be 'cupy' or 'native'"
+        )
     for name, expected in expected_xfit.items():
         if xfit[name] != expected:
             raise ValueError(
@@ -1730,6 +1754,11 @@ def _validate_device_pipeline_evidence_config(
 
     if not isinstance(config, DevicePipelineConfig):
         raise TypeError("config must be a DevicePipelineConfig")
+    xfit = json_mapping(values["xfit"], field="scientific evidence xfit")
+    if xfit["backend"] != config.xfit.backend:
+        raise ValueError(
+            "scientific evidence xFit backend does not match config"
+        )
     xpois = json_mapping(values["xpois"], field="scientific evidence xpois")
     if tuple(xpois["kernel_shape"]) != config.xpois.kernel_shape:
         raise ValueError(
@@ -2123,8 +2152,7 @@ def _pack_scientific_evidence(
         str(xfit_result.mode),
         str(xfit_result.dtype),
     )
-    if xfit_contract != (
-        "cupy",
+    if xfit_contract[0] not in ("cupy", "native") or xfit_contract[1:] != (
         "levenberg-marquardt",
         "gaussian",
         "difference",
@@ -3261,6 +3289,7 @@ def run_device_pipeline_item(
                         model=context.config.xfit.model,
                         mode=context.config.xfit.mode,
                         config=context.solver_config,
+                        **context.config.xfit.execution_payload(),
                     ),
                 )
                 features = _timed(

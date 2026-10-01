@@ -131,13 +131,15 @@ class DeviceDipoleFitResult:
         init=False,
         default="levenberg-marquardt",
     )
-    backend: Literal["cupy"] = field(init=False, default="cupy")
+    backend: Literal["cupy", "native"] = "cupy"
     result_location: Literal["device"] = field(
         init=False,
         default="device",
     )
 
     def __post_init__(self) -> None:
+        if self.backend not in {"cupy", "native"}:
+            raise ValueError("device fit backend must be cupy or native")
         if isinstance(self.device_id, bool) or not isinstance(
             self.device_id, (int, np.integer)
         ):
@@ -794,11 +796,24 @@ def _fit_dipoles_backend(
         jacobian_function,
         normal_equations=normal_equations,
     )
-    low_level = batched_levenberg_marquardt(
-        problem,
-        solver_initial,
-        config=config,
-    )
+    if resolved.name == "native":
+        from ._native import fit_gaussian
+
+        low_level = fit_gaussian(
+            problem,
+            solver_initial,
+            images_array,
+            weights,
+            image_shape=(height, width),
+            mode=mode,
+            config=config,
+        )
+    else:
+        low_level = batched_levenberg_marquardt(
+            problem,
+            solver_initial,
+            config=config,
+        )
     parameters_backend = model_parameters(low_level.parameters)
     if gaussian_model:
         # An ellipse orientation is periodic modulo pi. Keep portable fit
@@ -977,6 +992,32 @@ def _materialize_dipole_fit_result(
     )
 
 
+def _validate_execution_options(
+    model: object,
+    backend: str,
+    config: LMConfig | None,
+) -> None:
+    if (
+        backend == "native"
+        and isinstance(model, GaussianDipoleModel)
+        and type(model) is not GaussianDipoleModel
+    ):
+        raise ValueError(
+            "native xFit does not support custom Gaussian models"
+        )
+    if backend in {"cutile", "native"}:
+        if isinstance(model, StampDipoleModel) or model == "stamp":
+            raise ValueError(
+                f"backend={backend!r} currently supports only "
+                "the Gaussian model"
+            )
+        if config is not None and config.use_finite_difference:
+            raise ValueError(
+                f"backend={backend!r} does not support "
+                "finite-difference fitting"
+            )
+
+
 def fit_dipoles(
     images: ArrayLike,
     *,
@@ -1010,20 +1051,7 @@ def fit_dipoles(
     statistically calibrated for that dependence.
     """
 
-    if backend == "cutile" and isinstance(model, StampDipoleModel):
-        # Report the model restriction before the finite-difference one:
-        # sampled-stamp fits always difference the residual.
-        raise ValueError(
-            "backend='cutile' currently supports only the Gaussian model"
-        )
-    if (
-        backend == "cutile"
-        and config is not None
-        and config.use_finite_difference
-    ):
-        raise ValueError(
-            "backend='cutile' does not support finite-difference fitting"
-        )
+    _validate_execution_options(model, backend, config)
     resolved = resolve_backend(backend)
     backend_result = _fit_dipoles_backend(
         images,
@@ -1047,13 +1075,15 @@ def fit_dipoles_device(
     variance: ArrayLike | None = None,
     mode: FitMode = "difference",
     config: LMConfig | None = None,
+    backend: Literal["cupy", "native"] = "cupy",
 ) -> DeviceDipoleFitResult:
     """Fit dipoles while keeping every result array on the active GPU.
 
-    This experimental seam is explicitly CuPy-only and has no backend
-    selector. NumPy inputs are copied to the active device. Existing CuPy
-    inputs must already reside on that device and are checked before any input
-    conversion. Input arrays are borrowed and are not mutated.
+    This experimental seam uses CuPy-owned buffers. The optional native
+    backend runs Gaussian LM iterations in CUDA C++. NumPy inputs are copied
+    to the active device. Existing CuPy inputs must already reside on that
+    device and are checked before any input conversion. Input arrays are
+    borrowed and are not mutated.
 
     The solver may copy per-fit status, evaluation counts and boolean
     diagnostic masks to the host for control flow. Parameters, residuals,
@@ -1067,6 +1097,13 @@ def fit_dipoles_device(
     from another stream. Retain the result until its consumers have finished.
     """
 
+    _validate_execution_options(model, backend, config)
+    if backend not in {"cupy", "native"}:
+        raise ValueError("device fit backend must be cupy or native")
+    if backend == "native":
+        from ._native import load_extension
+
+        load_extension()
     cp = _load_cupy()
     active_device_id = _active_cupy_device_id(cp)
     for name, value in (
@@ -1095,7 +1132,7 @@ def fit_dipoles_device(
         mask=mask,
         variance=variance,
         mode=mode,
-        resolved=resolve_backend("cupy"),
+        resolved=resolve_backend(backend),
         config=config,
     )
     return DeviceDipoleFitResult(
@@ -1119,6 +1156,7 @@ def fit_dipoles_device(
         uncertainty_reason_codes=result.uncertainty_reason_codes,
         residuals=result.residuals,
         device_id=active_device_id,
+        backend=backend,
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,

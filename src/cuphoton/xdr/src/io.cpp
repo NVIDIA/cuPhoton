@@ -84,7 +84,8 @@ struct ReadTask {
 
 std::uint64_t as_u64(const py::handle& obj, const char* name) {
     auto value = py::cast<std::uint64_t>(obj);
-    if (value > static_cast<std::uint64_t>(std::numeric_limits<py::ssize_t>::max())) {
+    if (value
+        > static_cast<std::uint64_t>(std::numeric_limits<py::ssize_t>::max())) {
         throw std::overflow_error(std::string(name) + " exceeds Py_ssize_t");
     }
     return value;
@@ -120,17 +121,22 @@ std::vector<FilePlan> parse_file_plans(py::sequence file_plans) {
             rs.nbytes = as_u64(span[1], "nbytes");
             rs.host_offset = as_u64(span[2], "host_offset");
             if (rs.host_offset + rs.nbytes < rs.host_offset
-                || rs.host_offset + rs.nbytes > static_cast<std::uint64_t>(plan.total_bytes)) {
-                throw std::invalid_argument("read span exceeds planned host buffer size");
+                || rs.host_offset + rs.nbytes
+                    > static_cast<std::uint64_t>(plan.total_bytes)) {
+                throw std::invalid_argument(
+                    "read span exceeds planned host buffer size");
             }
             plan.spans.push_back(rs);
         }
 
         if (py::len(item) == 5) {
-            py::sequence direct_spans = py::reinterpret_borrow<py::sequence>(item[4]);
-            plan.direct_spans.reserve(static_cast<std::size_t>(py::len(direct_spans)));
+            py::sequence direct_spans =
+                py::reinterpret_borrow<py::sequence>(item[4]);
+            plan.direct_spans.reserve(
+                static_cast<std::size_t>(py::len(direct_spans)));
             for (py::handle span_obj : direct_spans) {
-                py::sequence span = py::reinterpret_borrow<py::sequence>(span_obj);
+                py::sequence span =
+                    py::reinterpret_borrow<py::sequence>(span_obj);
                 if (py::len(span) != 3) {
                     throw std::invalid_argument(
                         "native direct read spans must be (file_offset, nbytes, device_ptr)");
@@ -140,7 +146,8 @@ std::vector<FilePlan> parse_file_plans(py::sequence file_plans) {
                 rs.nbytes = as_u64(span[1], "direct_nbytes");
                 rs.device_ptr = py::cast<std::uintptr_t>(span[2]);
                 if (rs.nbytes > 0 && rs.device_ptr == 0) {
-                    throw std::invalid_argument("direct read device pointer is null");
+                    throw std::invalid_argument(
+                        "direct read device pointer is null");
                 }
                 plan.direct_spans.push_back(rs);
             }
@@ -218,10 +225,11 @@ std::string fits_status_text(int status) {
     return std::string(text);
 }
 
-[[noreturn]] void throw_fits_error(const std::string& path, const char* context, int status) {
+[[noreturn]] void throw_fits_error(
+    const std::string& path, const char* context, int status) {
     throw std::runtime_error(
-        path + ": CFITSIO error in " + context + " (status=" + std::to_string(status) + ", "
-        + fits_status_text(status) + ")");
+        path + ": CFITSIO error in " + context + " (status="
+        + std::to_string(status) + ", " + fits_status_text(status) + ")");
 }
 
 void check_fits(int status, const std::string& path, const char* context) {
@@ -231,9 +239,10 @@ void check_fits(int status, const std::string& path, const char* context) {
 }
 
 std::string uppercase_ascii(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::toupper(ch));
-    });
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::toupper(ch));
+        });
     return value;
 }
 
@@ -252,7 +261,8 @@ std::pair<std::string, int> dtype_for_bitpix(int bitpix) {
     case -64:
         return {"f8", 8};
     default:
-        throw std::invalid_argument("unsupported BITPIX/ZBITPIX " + std::to_string(bitpix));
+        throw std::invalid_argument(
+            "unsupported BITPIX/ZBITPIX " + std::to_string(bitpix));
     }
 }
 
@@ -264,7 +274,8 @@ FitsFilePtr open_fits_readonly(const std::string& path) {
     return FitsFilePtr(raw);
 }
 
-LONGLONG read_key_lnglng_required(fitsfile* fptr, const std::string& path, const char* key) {
+LONGLONG read_key_lnglng_required(
+    fitsfile* fptr, const std::string& path, const char* key) {
     LONGLONG value = 0;
     int status = 0;
     fits_read_key_lnglng(fptr, key, &value, nullptr, &status);
@@ -285,7 +296,10 @@ std::optional<LONGLONG> read_key_lnglng_optional(
 }
 
 double read_key_dbl_optional(
-    fitsfile* fptr, const std::string& path, const char* key, double default_value) {
+    fitsfile* fptr,
+    const std::string& path,
+    const char* key,
+    double default_value) {
     double value = default_value;
     int status = 0;
     fits_read_key_dbl(fptr, key, &value, nullptr, &status);
@@ -308,16 +322,21 @@ std::optional<std::string> read_key_str_optional(
     return std::string(value);
 }
 
-std::string read_key_str_required(fitsfile* fptr, const std::string& path, const char* key) {
+std::string read_key_str_required(
+    fitsfile* fptr, const std::string& path, const char* key) {
     auto value = read_key_str_optional(fptr, path, key);
     if (!value) {
-        throw std::runtime_error(path + ": required FITS keyword missing: " + key);
+        throw std::runtime_error(
+            path + ": required FITS keyword missing: " + key);
     }
     return *value;
 }
 
 bool read_key_logical_optional(
-    fitsfile* fptr, const std::string& path, const char* key, bool default_value) {
+    fitsfile* fptr,
+    const std::string& path,
+    const char* key,
+    bool default_value) {
     int value = default_value ? 1 : 0;
     int status = 0;
     fits_read_key_log(fptr, key, &value, nullptr, &status);
@@ -328,7 +347,8 @@ bool read_key_logical_optional(
     return value != 0;
 }
 
-int get_colnum_required(fitsfile* fptr, const std::string& path, const char* name) {
+int get_colnum_required(
+    fitsfile* fptr, const std::string& path, const char* name) {
     int colnum = 0;
     int status = 0;
     char colname[FLEN_VALUE] = {0};
@@ -338,7 +358,8 @@ int get_colnum_required(fitsfile* fptr, const std::string& path, const char* nam
     return colnum;
 }
 
-std::optional<int> get_colnum_optional(fitsfile* fptr, const std::string& path, const char* name) {
+std::optional<int> get_colnum_optional(
+    fitsfile* fptr, const std::string& path, const char* name) {
     int colnum = 0;
     int status = 0;
     char colname[FLEN_VALUE] = {0};
@@ -360,7 +381,8 @@ void append_compact_read_spans(
     std::uint64_t& heap_span_start,
     std::uint64_t& heap_span_len) {
     if (abs_offsets.size() != lengths.size()) {
-        throw std::invalid_argument("abs_offsets and lengths must have the same size");
+        throw std::invalid_argument(
+            "abs_offsets and lengths must have the same size");
     }
     rel_offsets.assign(abs_offsets.size(), 0);
     heap_span_start = 0;
@@ -373,13 +395,16 @@ void append_compact_read_spans(
     for (std::size_t i = 0; i < order.size(); ++i) {
         order[i] = i;
     }
-    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-        return abs_offsets[a] < abs_offsets[b];
-    });
+    std::stable_sort(
+        order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return abs_offsets[a] < abs_offsets[b];
+        });
 
     std::uint64_t cursor = 0;
-    std::uint64_t span_start = static_cast<std::uint64_t>(abs_offsets[order[0]]);
-    std::uint64_t span_end = span_start + static_cast<std::uint64_t>(lengths[order[0]]);
+    std::uint64_t span_start =
+        static_cast<std::uint64_t>(abs_offsets[order[0]]);
+    std::uint64_t span_end =
+        span_start + static_cast<std::uint64_t>(lengths[order[0]]);
     std::uint64_t span_host_offset = cursor;
     heap_span_start = span_start;
     rel_offsets[order[0]] = static_cast<std::int64_t>(span_host_offset);
@@ -391,20 +416,24 @@ void append_compact_read_spans(
         const auto end = off + length;
         if (off > span_end) {
             const auto span_len = span_end - span_start;
-            file_spans.push_back(ReadSpan{span_start, span_len, file_host_base + span_host_offset});
+            file_spans.push_back(
+                ReadSpan{
+                    span_start, span_len, file_host_base + span_host_offset});
             cursor += span_len;
             span_start = off;
             span_end = end;
             span_host_offset = cursor;
         }
-        rel_offsets[tile_pos] = static_cast<std::int64_t>(span_host_offset + (off - span_start));
+        rel_offsets[tile_pos] =
+            static_cast<std::int64_t>(span_host_offset + (off - span_start));
         if (end > span_end) {
             span_end = end;
         }
     }
 
     const auto span_len = span_end - span_start;
-    file_spans.push_back(ReadSpan{span_start, span_len, file_host_base + span_host_offset});
+    file_spans.push_back(
+        ReadSpan{span_start, span_len, file_host_base + span_host_offset});
     cursor += span_len;
     heap_span_len = cursor;
 }
@@ -415,7 +444,8 @@ SectionSpec parse_section(py::object section_obj) {
         return section;
     }
     if (!py::isinstance<py::tuple>(section_obj) || py::len(section_obj) != 2) {
-        throw std::invalid_argument("section must be None or a tuple of two slices");
+        throw std::invalid_argument(
+            "section must be None or a tuple of two slices");
     }
 
     auto parse_one = [](py::handle obj,
@@ -424,7 +454,8 @@ SectionSpec parse_section(py::object section_obj) {
                          bool& stop_set,
                          const char* axis) {
         if (!py::isinstance<py::slice>(obj)) {
-            throw std::invalid_argument(std::string("section ") + axis + " entry must be a slice");
+            throw std::invalid_argument(
+                std::string("section ") + axis + " entry must be a slice");
         }
         py::object slice = py::reinterpret_borrow<py::object>(obj);
         py::object start_obj = slice.attr("start");
@@ -439,14 +470,25 @@ SectionSpec parse_section(py::object section_obj) {
             stop = py::cast<std::int64_t>(stop_obj);
         }
         if (!step_obj.is_none() && py::cast<std::int64_t>(step_obj) != 1) {
-            throw std::invalid_argument("strided section slices are not supported");
+            throw std::invalid_argument(
+                "strided section slices are not supported");
         }
     };
 
     py::tuple tuple = py::reinterpret_borrow<py::tuple>(section_obj);
     section.enabled = true;
-    parse_one(tuple[0], section.row_start, section.row_stop, section.row_stop_set, "row");
-    parse_one(tuple[1], section.col_start, section.col_stop, section.col_stop_set, "column");
+    parse_one(
+        tuple[0],
+        section.row_start,
+        section.row_stop,
+        section.row_stop_set,
+        "row");
+    parse_one(
+        tuple[1],
+        section.col_start,
+        section.col_stop,
+        section.col_stop_set,
+        "column");
     return section;
 }
 
@@ -497,7 +539,9 @@ NativeHduPlan plan_image_hdu(
     hdu.image_bzero = read_key_dbl_optional(fptr, path, "BZERO", 0.0);
     hdu.image_bscale = read_key_dbl_optional(fptr, path, "BSCALE", 1.0);
 
-    file_spans.push_back(ReadSpan{static_cast<std::uint64_t>(datastart), nbytes, file_host_offset});
+    file_spans.push_back(
+        ReadSpan{
+            static_cast<std::uint64_t>(datastart), nbytes, file_host_offset});
     return hdu;
 }
 
@@ -517,9 +561,10 @@ void build_tile_grid_2d(
         roi_r1 = section.row_stop_set ? section.row_stop : H;
         roi_c0 = section.col_start;
         roi_c1 = section.col_stop_set ? section.col_stop : W;
-        if (!(0 <= roi_r0 && roi_r0 < roi_r1 && roi_r1 <= H && 0 <= roi_c0 && roi_c0 < roi_c1
-                && roi_c1 <= W)) {
-            throw std::runtime_error("section out of bounds for compressed image");
+        if (!(0 <= roi_r0 && roi_r0 < roi_r1 && roi_r1 <= H && 0 <= roi_c0
+                && roi_c0 < roi_c1 && roi_c1 <= W)) {
+            throw std::runtime_error(
+                "section out of bounds for compressed image");
         }
     }
 
@@ -540,10 +585,14 @@ void build_tile_grid_2d(
             }
             const auto row_i = (tr0 / th) * n_cols_in_grid + (tc0 / tw);
             hdu.tile_idx.push_back(row_i);
-            hdu.origins_r.push_back(static_cast<std::int32_t>(inter_r0 - roi_r0));
-            hdu.origins_c.push_back(static_cast<std::int32_t>(inter_c0 - roi_c0));
-            hdu.heights.push_back(static_cast<std::int32_t>(inter_r1 - inter_r0));
-            hdu.widths.push_back(static_cast<std::int32_t>(inter_c1 - inter_c0));
+            hdu.origins_r.push_back(
+                static_cast<std::int32_t>(inter_r0 - roi_r0));
+            hdu.origins_c.push_back(
+                static_cast<std::int32_t>(inter_c0 - roi_c0));
+            hdu.heights.push_back(
+                static_cast<std::int32_t>(inter_r1 - inter_r0));
+            hdu.widths.push_back(
+                static_cast<std::int32_t>(inter_c1 - inter_c0));
             hdu.out_bytes.push_back(t_h_full * t_w_full * hdu.itemsize);
             hdu.src_off_r.push_back(static_cast<std::int32_t>(inter_r0 - tr0));
             hdu.src_off_c.push_back(static_cast<std::int32_t>(inter_c0 - tc0));
@@ -559,15 +608,18 @@ NativeHduPlan plan_compressed_hdu(
     const SectionSpec& section,
     std::uint64_t file_host_offset,
     std::vector<ReadSpan>& file_spans) {
-    auto compression = uppercase_ascii(read_key_str_required(fptr, path, "ZCMPTYPE"));
+    auto compression =
+        uppercase_ascii(read_key_str_required(fptr, path, "ZCMPTYPE"));
     if (compression != "GZIP_1" && compression != "GZIP_2") {
         throw std::runtime_error(
-            path + ": " + compression + " is not supported by the native streaming path");
+            path + ": " + compression
+            + " is not supported by the native streaming path");
     }
 
     const auto znaxis = read_key_lnglng_required(fptr, path, "ZNAXIS");
     if (znaxis != 2) {
-        throw std::runtime_error(path + ": native compressed path supports only 2D images");
+        throw std::runtime_error(
+            path + ": native compressed path supports only 2D images");
     }
     const auto W = read_key_lnglng_required(fptr, path, "ZNAXIS1");
     const auto H = read_key_lnglng_required(fptr, path, "ZNAXIS2");
@@ -579,7 +631,8 @@ NativeHduPlan plan_compressed_hdu(
     if (tw <= 0 || th <= 0) {
         throw std::runtime_error(path + ": ZTILE1/ZTILE2 must be positive");
     }
-    const auto zbitpix = static_cast<int>(read_key_lnglng_required(fptr, path, "ZBITPIX"));
+    const auto zbitpix =
+        static_cast<int>(read_key_lnglng_required(fptr, path, "ZBITPIX"));
     auto dtype = dtype_for_bitpix(zbitpix);
 
     NativeHduPlan hdu;
@@ -602,7 +655,8 @@ NativeHduPlan plan_compressed_hdu(
 
     const auto naxis1 = read_key_lnglng_required(fptr, path, "NAXIS1");
     const auto naxis2 = read_key_lnglng_required(fptr, path, "NAXIS2");
-    const auto theap = read_key_lnglng_optional(fptr, path, "THEAP").value_or(naxis1 * naxis2);
+    const auto theap =
+        read_key_lnglng_optional(fptr, path, "THEAP").value_or(naxis1 * naxis2);
     const auto heap_base = datastart + theap;
 
     const int comp_col = get_colnum_required(fptr, path, "COMPRESSED_DATA");
@@ -610,13 +664,16 @@ NativeHduPlan plan_compressed_hdu(
     const auto zzero_col = get_colnum_optional(fptr, path, "ZZERO");
     hdu.quantized = zscale_col.has_value();
     if (hdu.quantized && !zzero_col.has_value()) {
-        throw std::runtime_error(path + ": ZSCALE column exists but ZZERO is missing");
+        throw std::runtime_error(
+            path + ": ZSCALE column exists but ZZERO is missing");
     }
     if (hdu.quantized) {
         const auto zquantiz =
-            uppercase_ascii(read_key_str_optional(fptr, path, "ZQUANTIZ").value_or("NO_DITHER"));
+            uppercase_ascii(read_key_str_optional(fptr, path, "ZQUANTIZ")
+                    .value_or("NO_DITHER"));
         if (zquantiz != "NO_DITHER" && zquantiz != "NONE") {
-            throw std::runtime_error(path + ": dithered ZQUANTIZ is not supported");
+            throw std::runtime_error(
+                path + ": dithered ZQUANTIZ is not supported");
         }
     }
 
@@ -632,7 +689,8 @@ NativeHduPlan plan_compressed_hdu(
     for (const auto tile : hdu.tile_idx) {
         const auto row = tile + 1;
         if (row < 1 || row > nrows) {
-            throw std::runtime_error(path + ": compressed tile index exceeds table rows");
+            throw std::runtime_error(
+                path + ": compressed tile index exceeds table rows");
         }
         LONGLONG length = 0;
         LONGLONG heapaddr = 0;
@@ -640,17 +698,20 @@ NativeHduPlan plan_compressed_hdu(
         fits_read_descriptll(fptr, comp_col, row, &length, &heapaddr, &status);
         check_fits(status, path, "fits_read_descriptll COMPRESSED_DATA");
         hdu.sel_lengths.push_back(static_cast<std::int64_t>(length));
-        hdu.sel_abs_offsets.push_back(static_cast<std::int64_t>(heap_base + heapaddr));
+        hdu.sel_abs_offsets.push_back(
+            static_cast<std::int64_t>(heap_base + heapaddr));
 
         if (hdu.quantized) {
             int anynul = 0;
             double zscale = 0.0;
             double zzero = 0.0;
             status = 0;
-            fits_read_col_dbl(fptr, *zscale_col, row, 1, 1, 0.0, &zscale, &anynul, &status);
+            fits_read_col_dbl(
+                fptr, *zscale_col, row, 1, 1, 0.0, &zscale, &anynul, &status);
             check_fits(status, path, "fits_read_col_dbl ZSCALE");
             status = 0;
-            fits_read_col_dbl(fptr, *zzero_col, row, 1, 1, 0.0, &zzero, &anynul, &status);
+            fits_read_col_dbl(
+                fptr, *zzero_col, row, 1, 1, 0.0, &zzero, &anynul, &status);
             check_fits(status, path, "fits_read_col_dbl ZZERO");
             hdu.sel_zscale.push_back(zscale);
             hdu.sel_zzero.push_back(zzero);
@@ -686,11 +747,14 @@ NativePlannedFile plan_native_file_cfitsio(
         check_fits(status, path, "fits_movabs_hdu");
 
         NativeHduPlan hdu;
-        const bool zimage = read_key_logical_optional(fptr.get(), path, "ZIMAGE", false);
+        const bool zimage =
+            read_key_logical_optional(fptr.get(), path, "ZIMAGE", false);
         if (zimage) {
-            hdu = plan_compressed_hdu(fptr.get(), path, hdu_index, section, cursor, planned.spans);
+            hdu = plan_compressed_hdu(
+                fptr.get(), path, hdu_index, section, cursor, planned.spans);
         } else if (hdu_type == IMAGE_HDU) {
-            hdu = plan_image_hdu(fptr.get(), path, hdu_index, cursor, planned.spans);
+            hdu = plan_image_hdu(
+                fptr.get(), path, hdu_index, cursor, planned.spans);
         } else {
             throw std::runtime_error(
                 path + ": HDU[" + std::to_string(hdu_index)
@@ -709,7 +773,8 @@ template <typename T>
 py::array_t<T> array_from_vector(const std::vector<T>& values) {
     py::array_t<T> out(static_cast<py::ssize_t>(values.size()));
     if (!values.empty()) {
-        std::memcpy(out.mutable_data(), values.data(), values.size() * sizeof(T));
+        std::memcpy(
+            out.mutable_data(), values.data(), values.size() * sizeof(T));
     }
     return out;
 }
@@ -781,10 +846,12 @@ py::tuple py_planned_file(const NativePlannedFile& planned) {
 
     py::list spans;
     for (const auto& span : planned.spans) {
-        spans.append(py::make_tuple(span.file_offset, span.nbytes, span.host_offset));
+        spans.append(
+            py::make_tuple(span.file_offset, span.nbytes, span.host_offset));
     }
 
-    return py::make_tuple(planned.path, planned.file_index, hdus, spans, planned.total_bytes);
+    return py::make_tuple(
+        planned.path, planned.file_index, hdus, spans, planned.total_bytes);
 }
 
 py::list plan_native_files(
@@ -797,7 +864,8 @@ py::list plan_native_files(
         throw std::invalid_argument("native_plan_threads must be >= 1");
     }
     if (!fits_is_reentrant()) {
-        throw std::runtime_error("CFITSIO is not compiled in reentrant/thread-safe mode");
+        throw std::runtime_error(
+            "CFITSIO is not compiled in reentrant/thread-safe mode");
     }
 
     std::vector<std::string> paths;
@@ -808,7 +876,8 @@ py::list plan_native_files(
     hdu_indices.reserve(static_cast<std::size_t>(py::len(hdu_indices_obj)));
 
     if (py::len(paths_obj) != py::len(file_indices_obj)) {
-        throw std::invalid_argument("paths and file_indices must have the same length");
+        throw std::invalid_argument(
+            "paths and file_indices must have the same length");
     }
     for (py::handle obj : paths_obj) {
         paths.push_back(py::cast<std::string>(obj));
@@ -833,7 +902,8 @@ py::list plan_native_files(
     std::exception_ptr error;
     std::mutex error_mutex;
 
-    const auto worker_count = std::min<std::size_t>(native_plan_threads, paths.size());
+    const auto worker_count =
+        std::min<std::size_t>(native_plan_threads, paths.size());
     std::vector<std::thread> workers;
     workers.reserve(worker_count);
     {
@@ -938,7 +1008,8 @@ public:
         }
         if (device_bytes > 0) {
             py::gil_scoped_release release;
-            batch->device_buffer = acquire_native_device_allocation(device_id_, device_bytes);
+            batch->device_buffer =
+                acquire_native_device_allocation(device_id_, device_bytes);
             device_batches_.fetch_add(1);
         }
 
@@ -946,13 +1017,15 @@ public:
             py::gil_scoped_release release;
             std::unique_lock<std::mutex> lock(mutex_);
             cv_submit_.wait(lock, [&] {
-                return stop_ || error_ || outstanding_batches_ < max_outstanding_batches_;
+                return stop_ || error_
+                    || outstanding_batches_ < max_outstanding_batches_;
             });
             if (stop_ || error_) {
                 return;
             }
             if (input_closed_) {
-                throw std::runtime_error("submit_batch called after close_input");
+                throw std::runtime_error(
+                    "submit_batch called after close_input");
             }
             if (batch_id != next_submit_batch_id_) {
                 throw std::invalid_argument(
@@ -1002,7 +1075,8 @@ public:
             py::gil_scoped_release release;
             std::unique_lock<std::mutex> lock(mutex_);
             cv_ready_.wait(lock, [&] {
-                return stop_ || error_ || completed_.count(next_emit_batch_id_) > 0
+                return stop_ || error_
+                    || completed_.count(next_emit_batch_id_) > 0
                     || (input_closed_ && outstanding_batches_ == 0);
             });
 
@@ -1032,8 +1106,9 @@ public:
             files.append(py::make_tuple(file.file_index, file.batch_offset));
         }
         auto holder = new std::shared_ptr<ReadyBatch>(batch);
-        py::capsule owner(
-            holder, [](void* p) { delete reinterpret_cast<std::shared_ptr<ReadyBatch>*>(p); });
+        py::capsule owner(holder, [](void* p) {
+            delete reinterpret_cast<std::shared_ptr<ReadyBatch>*>(p);
+        });
         std::uintptr_t ptr = 0;
         std::size_t nbytes = 0;
         if (batch->device_buffer.owner) {
@@ -1081,7 +1156,8 @@ private:
             }
             auto batch = task.batch;
             if (!batch || !batch->device_buffer.owner) {
-                throw std::runtime_error("native batch device buffer is not allocated");
+                throw std::runtime_error(
+                    "native batch device buffer is not allocated");
             }
             auto dst = static_cast<void*>(
                 batch->device_buffer.data + task.batch_offset
@@ -1094,7 +1170,8 @@ private:
                 kvikio::defaults::gds_threshold(),
                 false);
             pending_reads.push_back(
-                PendingRead{std::move(future), static_cast<std::size_t>(span.nbytes)});
+                PendingRead{
+                    std::move(future), static_cast<std::size_t>(span.nbytes)});
         }
 
         for (const auto& span : plan.direct_spans) {
@@ -1110,7 +1187,8 @@ private:
                 kvikio::defaults::gds_threshold(),
                 false);
             pending_reads.push_back(
-                PendingRead{std::move(future), static_cast<std::size_t>(span.nbytes)});
+                PendingRead{
+                    std::move(future), static_cast<std::size_t>(span.nbytes)});
         }
 
         for (auto& read : pending_reads) {
@@ -1165,15 +1243,18 @@ private:
     void worker_loop() {
         try {
             if (device_id_ >= 0) {
-                check_cuda(cudaSetDevice(device_id_), "cudaSetDevice native batch reader");
+                check_cuda(
+                    cudaSetDevice(device_id_),
+                    "cudaSetDevice native batch reader");
             }
 
             while (true) {
                 ReadTask task;
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    cv_not_empty_.wait(
-                        lock, [&] { return stop_ || !pending_.empty() || input_closed_; });
+                    cv_not_empty_.wait(lock, [&] {
+                        return stop_ || !pending_.empty() || input_closed_;
+                    });
                     if (stop_ || (pending_.empty() && input_closed_)) {
                         break;
                     }

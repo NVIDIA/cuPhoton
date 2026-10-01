@@ -22,7 +22,8 @@ namespace xdr_gpu {
 inline void check_cuda(cudaError_t err, const char* ctx) {
     if (err != cudaSuccess) {
         throw std::runtime_error(
-            std::string("CUDA error in ") + ctx + ": " + cudaGetErrorString(err));
+            std::string("CUDA error in ") + ctx + ": "
+            + cudaGetErrorString(err));
     }
 }
 
@@ -32,7 +33,8 @@ struct NativeDeviceAllocation {
     std::size_t size = 0;
 };
 
-NativeDeviceAllocation acquire_native_device_allocation(int device_id, std::size_t nbytes);
+NativeDeviceAllocation acquire_native_device_allocation(
+    int device_id, std::size_t nbytes);
 py::dict native_pinned_pool_stats_dict(int device_id);
 void clear_native_pinned_pool_impl(int device_id);
 py::dict native_device_pool_stats_dict(int device_id);
