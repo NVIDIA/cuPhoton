@@ -1475,13 +1475,20 @@ def _assert_detector_outputs_match(
     expected: dict[str, np.ndarray],
 ) -> None:
     for name, values in expected.items():
-        if name == "fft_all":
-            # The batched cuFFT plan rounds differently from per-row FFTs.
+        assert actual[name].shape == values.shape
+        assert actual[name].dtype == values.dtype
+        if name in {"freq_all", "amp_all", "amp_all_sum_filtered", "fft_all"}:
+            np.testing.assert_array_equal(
+                np.isfinite(actual[name]), np.isfinite(values)
+            )
+            np.testing.assert_array_equal(actual[name] == 0, values == 0)
+            # Row and batched GPU arithmetic can round differently. Keep a
+            # fixed absolute error budget for these normalized fixtures.
             np.testing.assert_allclose(
                 actual[name],
                 values,
                 rtol=0.0,
-                atol=1e-15,
+                atol=1e-15 if name == "fft_all" else 5e-15,
             )
         else:
             np.testing.assert_array_equal(actual[name], values)

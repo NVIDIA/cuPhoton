@@ -161,9 +161,13 @@ For Python A/B checks, pass `batch_rows=False` to
 `cuphoton.xray.detector_artifacts.build_detector_artifacts_cupy` to force
 the serial row loop. The default, `True`, batches eligible rows. The manifest
 records this choice, and serial runs have distinct configuration and resume
-identities. Frequency, amplitude, and FFT-frequency arrays match exactly in
-the batch-versus-row regression cases; `fft_all` can differ by rounding from
-the batched cuFFT plan (the normalized-trace tests use `atol=1e-15`).
+identities. Batch-versus-row regression checks preserve array shapes, dtypes,
+finite masks, zero padding, mode positions, fit status and FFT frequencies
+exactly. Fitted frequencies, amplitudes and filtered amplitude sums can differ
+by floating-point rounding, as can the batched cuFFT output. The normalized
+trace fixtures use `rtol=0`, with `atol=5e-15` for fitted outputs and
+`atol=1e-15` for `fft_all`; these bounds describe those fixtures rather than
+arbitrary input scales.
 
 `--fit-diagnostics summary` writes one status-aware record per detector row
 within each processed tile, covering the tile's `tile_x_start` to
