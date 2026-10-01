@@ -16,7 +16,10 @@ from cuphoton.core import fits_io
 
 
 @pytest.mark.parametrize("postprocess", ["fused", "separate"])
-def test_xdr_options_reach_batch_dispatch(tmp_path, monkeypatch, postprocess):
+@pytest.mark.parametrize("gzip_decoder", ["auto", "gzip", "deflate"])
+def test_xdr_options_reach_batch_dispatch(
+    tmp_path, monkeypatch, postprocess, gzip_decoder
+):
     import cuphoton.xdr as xdr
 
     data = np.arange(12, dtype=np.float32).reshape(3, 4)
@@ -34,10 +37,17 @@ def test_xdr_options_reach_batch_dispatch(tmp_path, monkeypatch, postprocess):
         [1],
         reader="xdr",
         device=True,
-        xdr_options={"postprocess": postprocess},
+        xdr_options={
+            "postprocess": postprocess,
+            "gzip_decoder": gzip_decoder,
+        },
     )
     assert observed["postprocess"] == postprocess
-    assert result.metadata()["xdr_options"] == {"postprocess": postprocess}
+    assert observed["gzip_decoder"] == gzip_decoder
+    assert result.metadata()["xdr_options"] == {
+        "postprocess": postprocess,
+        "gzip_decoder": gzip_decoder,
+    }
     np.testing.assert_array_equal(result.arrays[0], data)
 
 
