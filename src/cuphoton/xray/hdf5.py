@@ -39,6 +39,15 @@ class DatasetProbe:
     dtype: str
     chunks: tuple[int, ...] | None
 
+    def __str__(self) -> str:
+        shape = "x".join(str(dim) for dim in self.shape)
+        chunks = (
+            "-"
+            if self.chunks is None
+            else "x".join(str(dim) for dim in self.chunks)
+        )
+        return f"{self.name} shape={shape} dtype={self.dtype} chunks={chunks}"
+
 
 @dataclass(frozen=True)
 class FileProbe:
@@ -50,11 +59,37 @@ class FileProbe:
     ipm_pairs: tuple[str, ...]
     load_plan: Hdf5LoadPlan | None
 
+    def __str__(self) -> str:
+        return self.format_text()
+
+    def format_text(self, *, label: str | None = None) -> str:
+        """Summarize the file, optionally prefixing fields with a label."""
+        prefix = "" if label is None else f"{label}_"
+        lines = [
+            f"{prefix}path={self.path}",
+            f"{prefix}size_bytes={self.size_bytes}",
+            f"{prefix}schema={self.schema}",
+            f"{prefix}ipm_pairs={','.join(self.ipm_pairs) or '-'}",
+            f"{prefix}keys={','.join(self.keys)}",
+        ]
+        lines.extend(
+            f"{prefix}dataset={dataset}" for dataset in self.datasets
+        )
+        return "\n".join(lines)
+
 
 @dataclass(frozen=True)
 class Hdf5PairProbe:
     on: FileProbe
     off: FileProbe
+
+    def __str__(self) -> str:
+        return "\n".join(
+            (
+                self.on.format_text(label="on"),
+                self.off.format_text(label="off"),
+            )
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

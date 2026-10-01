@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from math import pi
 from time import perf_counter
 from typing import Any
@@ -431,6 +432,17 @@ class ModelOrderSweepEntry:
     singular_value_ratio: float | None
     elapsed_s: float
 
+    def __str__(self) -> str:
+        return (
+            f"components={self.components} "
+            f"selected_model_order={self.selected_model_order} "
+            f"rms_residual={self.rms_residual:.6g} "
+            f"reconstruction_rms_error={self.reconstruction_rms_error:.6g} "
+            f"chi2={self.chi2:.6g} "
+            f"selected_roots={self.selected_root_count} "
+            f"decaying_roots={self.decaying_root_count}"
+        )
+
 
 @dataclass(frozen=True)
 class ModelOrderSweep:
@@ -442,6 +454,115 @@ class ModelOrderSweep:
     best_rms_residual: float
     best_reconstruction_rms_error: float
     entries: tuple[ModelOrderSweepEntry, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def __str__(self) -> str:
+        return "\n".join(
+            (
+                f"samples={self.samples}",
+                f"roots_backend={self.roots_backend}",
+                f"best_components={self.best_components}",
+                f"best_selected_model_order={self.best_selected_model_order}",
+                f"best_rms_residual={self.best_rms_residual:.6g}",
+                "best_reconstruction_rms_error="
+                f"{self.best_reconstruction_rms_error:.6g}",
+                *(str(entry) for entry in self.entries),
+            )
+        )
+
+
+@dataclass(frozen=True)
+class ModelOrderSweepBatch:
+    """Per-trace model-order sweeps and their input provenance."""
+
+    samples: int
+    roots_backend: str
+    relative_tolerance: float
+    component_counts: tuple[int, ...]
+    sources: tuple[dict[str, Any], ...]
+    traces: tuple[ModelOrderSweep, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        best_components = tuple(
+            trace.best_components for trace in self.traces
+        )
+        best_orders = tuple(
+            trace.best_selected_model_order for trace in self.traces
+        )
+        best_residuals = tuple(
+            trace.best_rms_residual for trace in self.traces
+        )
+        best_errors = tuple(
+            trace.best_reconstruction_rms_error for trace in self.traces
+        )
+        trace_payloads = []
+        for index, (trace, source) in enumerate(
+            zip(self.traces, self.sources, strict=True)
+        ):
+            payload = trace.to_dict()
+            payload["source"] = source
+            payload["trace_index"] = index
+            trace_payloads.append(payload)
+        return {
+            "source": {
+                "kind": "trace-npz-batch",
+                "trace_count": len(self.traces),
+                "traces": self.sources,
+            },
+            "trace_count": len(self.traces),
+            "samples": self.samples,
+            "roots_backend": self.roots_backend,
+            "relative_tolerance": self.relative_tolerance,
+            "component_counts": self.component_counts,
+            "best_components_by_trace": best_components,
+            "best_components_unique": tuple(sorted(set(best_components))),
+            "best_selected_model_orders_by_trace": best_orders,
+            "best_selected_model_orders_unique": tuple(
+                sorted(set(best_orders))
+            ),
+            "best_rms_residual_min": min(best_residuals),
+            "best_rms_residual_max": max(best_residuals),
+            "best_reconstruction_rms_error_min": min(best_errors),
+            "best_reconstruction_rms_error_max": max(best_errors),
+            "traces": tuple(trace_payloads),
+        }
+
+    def __str__(self) -> str:
+        lines = [
+            "source=trace-npz-batch",
+            f"trace_count={len(self.traces)}",
+            f"samples={self.samples}",
+            f"roots_backend={self.roots_backend}",
+            "component_counts=" + ",".join(map(str, self.component_counts)),
+            "best_components_unique="
+            + ",".join(
+                str(item)
+                for item in sorted(
+                    {trace.best_components for trace in self.traces}
+                )
+            ),
+            "best_selected_model_orders_unique="
+            + ",".join(
+                str(item)
+                for item in sorted(
+                    {trace.best_selected_model_order for trace in self.traces}
+                )
+            ),
+        ]
+        for index, trace in enumerate(self.traces):
+            lines.extend(
+                (
+                    f"trace_index={index}",
+                    f"  best_components={trace.best_components}",
+                    "  best_selected_model_order="
+                    f"{trace.best_selected_model_order}",
+                    "  best_reconstruction_rms_error="
+                    f"{trace.best_reconstruction_rms_error:.6g}",
+                )
+            )
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -1265,6 +1386,39 @@ def model_order_sweep(
             best_entry.reconstruction_rms_error
         ),
         entries=tuple(entries),
+    )
+
+
+def model_order_sweep_batch(
+    time,
+    trace_rows,
+    sources: Sequence[dict[str, Any]],
+    *,
+    components: tuple[int, ...],
+    roots_backend: str = "eigvals",
+    relative_tolerance: float = 0.01,
+) -> ModelOrderSweepBatch:
+    """Sweep component counts for rows sharing one time axis."""
+
+    results = tuple(
+        model_order_sweep(
+            time,
+            trace,
+            components,
+            roots_backend=roots_backend,
+            relative_tolerance=relative_tolerance,
+        )
+        for trace, _source in zip(trace_rows, sources, strict=True)
+    )
+    if not results:
+        raise ValueError("trace_rows must contain at least one trace")
+    return ModelOrderSweepBatch(
+        samples=results[0].samples,
+        roots_backend=roots_backend,
+        relative_tolerance=float(relative_tolerance),
+        component_counts=tuple(int(item) for item in components),
+        sources=tuple(sources),
+        traces=results,
     )
 
 
