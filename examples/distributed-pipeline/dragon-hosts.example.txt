@@ -1,0 +1,2 @@
+gpu-node-01
+gpu-node-02

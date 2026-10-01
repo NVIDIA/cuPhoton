@@ -1,8 +1,9 @@
-# xRep (xReproject)
+# xRep
 
-`cuphoton.xrep` reprojects two-dimensional images onto north-up celestial
-WCS grids. It supports bilinear and Lanczos-3 interpolation, optional mask
-propagation, relative-area scaling, and shared-grid stacks. Its CLI group is
+`cuphoton.xrep` reprojects two-dimensional images onto celestial WCS grids.
+It can derive a north-up grid or use an existing image as the destination.
+It supports bilinear and Lanczos-3 interpolation, optional mask propagation,
+relative-area scaling, and shared-grid stacks. Its CLI group is
 `cuphoton xrep`.
 
 ## Install and smoke test
@@ -19,7 +20,21 @@ uv run python examples/run_quickstarts.py \
 ```
 
 Automatic selection prefers CuPy, then CUDA PyTorch, then CPU. The resolved
-backend and timings are written to `summary.json`.
+backend and timings are written to `summary.json`. Explicit `--backend torch`
+can also run on a CPU-only host; `--backend cpu` selects the NumPy reference.
+
+## FITS reading
+
+`--fits-reader auto` uses xDR for supported FITS images on GPU
+workflows and Astropy on CPU workflows. `--fits-reader astropy` selects CPU
+decoding; `--fits-reader xdr` requires xDR. CuPy reprojection consumes
+decoded device arrays directly. Output images retain the usual host-array and
+FITS contracts. Summaries record the selected reader and any fallback under
+`fits_reads`.
+
+WCS mapping and target-grid setup read headers and dimensions without
+decompressing image pixels. Reading with xDR does not by itself imply native
+GPUDirect Storage; it can also decode images using KvikIO compatibility I/O.
 
 ## Inspect and reproject one image
 
@@ -37,8 +52,8 @@ uv run cuphoton xrep reproject-image \
   --output-dir /path/to/runs
 ```
 
-If a target grid is not supplied, the workflow derives one from the source
-WCS. Provide a reference sky position and pixel scale for controlled
+By default, the workflow derives the target grid from the source WCS.
+Provide a reference sky position and pixel scale for controlled
 cross-image comparisons. Validate the output bounding box, WCS alignment,
 flux behavior, and mask footprint.
 
@@ -54,6 +69,39 @@ uv run cuphoton xrep reproject-stack \
 Stack members are mapped to one grid and bounding box. The run writes a stacked
 NumPy array, optional mask stack, and a summary of the shared grid and each
 member.
+
+### Use an existing image as the destination
+
+`reproject-stack --target-wcs` uses a selected FITS image HDU's full celestial
+WCS and exact `(height, width)`. `--target-hdu` selects its zero-based HDU index;
+omitting it selects the first 2D image. The output origin is `(0, 0)` on that
+image, and the destination dimensions stay fixed for every input footprint.
+
+```bash
+uv run cuphoton xrep reproject-stack \
+  --inputs a.fits,b.fits \
+  --target-wcs destination.fits --target-hdu 1 \
+  --backend cpu --mapping-grid-step 1 --write-fits \
+  --output-dir runs
+```
+
+The target retains rotation, reference-pixel shifts, and SIP distortion.
+Lookup-table distortions are unsupported. `--grid-crval-ra`,
+`--grid-crval-dec`, and `--pixel-scale-arcsec` conflict with `--target-wcs`.
+Interpolation and relative-area scaling use their existing settings; pixels
+outside each source footprint retain the normal NaN fill and invalid mask.
+`--mapping-grid-step 1` evaluates the WCS mapping at every pixel; larger values
+retain the existing coarse-grid approximation, which interpolates the target's
+SIP distortion, so the workflow emits a `RuntimeWarning` when a SIP target is
+combined with a step above 1.
+
+The summary records the selected target HDU, dimensions, and serialized WCS
+header. FITS output retains that WCS, including SIP coefficients. Read the
+celestial WCS from a stack cube with `WCS(header, naxis=2)`. Each input remains
+a separate stack member.
+
+Python callers can pass `Grid.from_wcs(target_wcs)` and
+`output_bbox=BBox(0, 0, width, height)` to `build_stack_spec_from_fits`.
 
 ## Compare implementations
 
@@ -107,8 +155,8 @@ result = reproject_masked_array(
 Masked reprojections use squared normalized interpolation weights for variance,
 square the relative-area Jacobian, and preserve mask neighborhoods by exact
 bitwise OR over every nonzero contributor in the selected interpolation
-kernel. The returned variance is explicitly a diagonal approximation:
-interpolation-induced covariance is not represented. Pass
+kernel. The returned variance is a diagonal approximation; callers tracking
+interpolation-induced covariance need to carry it separately. Pass
 `variance_fill_value` to `reproject_masked_array` to set an out-of-footprint
 variance sentinel independently of the image `fill_value`; it defaults to
 NaN. Finite variance values must be nonnegative; NaN and positive infinity

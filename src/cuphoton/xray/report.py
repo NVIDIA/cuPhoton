@@ -107,9 +107,12 @@ def _discover_tile_plots(figures_dir: Path, run: int):
         if match is None:
             continue
         tile = match.group("tile")
-        reconstruction = f"reconst_[{tile}]_run_{run}.png"
-        if not (figures_dir / reconstruction).exists():
-            reconstruction = None
+        reconstruction_name = f"reconst_[{tile}]_run_{run}.png"
+        reconstruction = (
+            reconstruction_name
+            if (figures_dir / reconstruction_name).exists()
+            else None
+        )
         tile_plots.append(
             TilePlot(
                 tile=tile,

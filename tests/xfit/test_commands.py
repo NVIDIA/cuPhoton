@@ -657,6 +657,48 @@ def test_stamp_command_records_resolved_finite_difference_mode(
     assert effective["solver"]["use_finite_difference"] is True
 
 
+def test_stamp_command_reports_cutile_model_restriction(
+    tmp_path,
+    capsys,
+) -> None:
+    from cuphoton.xfit import StampDipoleModel
+
+    y, x = np.mgrid[-3:4, -2:3]
+    basis = np.exp(-0.5 * ((x / 1.0) ** 2 + (y / 1.2) ** 2))
+    model = StampDipoleModel(basis, image_shape=(9, 13), dtype=np.float64)
+    truth = np.asarray([[-2.1, 0.6, 2.2, -0.4, 5.0]])
+    input_path = tmp_path / "stamp.npz"
+    np.savez_compressed(
+        input_path,
+        candidate_id=np.asarray(["stamp-0"]),
+        images=model.evaluate(truth),
+        initial=truth,
+        stamp_basis=basis,
+    )
+
+    # The error precedes backend resolution, so no CUDA device is needed.
+    rc = run_component(
+        "xfit",
+        [
+            "fit-dipoles",
+            "--input",
+            str(input_path),
+            "--output-dir",
+            str(tmp_path / "stamp-fit"),
+            "--model",
+            "stamp",
+            "--backend",
+            "cutile",
+        ],
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert "supports only the Gaussian model" in captured.err
+    assert "finite-difference" not in captured.err
+    assert not (tmp_path / "stamp-fit").exists()
+
+
 def test_fit_command_refuses_to_overwrite_output_directory(
     monkeypatch,
     tmp_path,
@@ -712,3 +754,55 @@ def test_command_help_exposes_stable_safe_input_options(capsys) -> None:
     assert "vignetted" in captured.out
     assert "finite-volume" in captured.out
     assert "--use-finite-difference" in captured.out
+
+
+@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+def test_distributed_output_name_is_validated_before_launch(
+    tmp_path, monkeypatch, capsys, runtime
+):
+    from cuphoton.core import executors
+
+    input_path = tmp_path / "input.npz"
+    _write_gaussian_input(input_path)
+    monkeypatch.setattr(
+        executors, "run_workload", lambda **kwargs: pytest.fail("launched")
+    )
+    rc = run_component(
+        "xfit",
+        [
+            "fit-dipoles",
+            "--input",
+            str(input_path),
+            "--model",
+            "gaussian",
+            "--backend",
+            "cupy",
+            "--executor",
+            runtime,
+            "--output-dir",
+            str(tmp_path / "invalid name"),
+        ],
+    )
+    assert rc != 0
+    assert "--output-dir basename" in capsys.readouterr().err
+
+
+def test_local_fitting_rejects_distributed_chunk_option(tmp_path, capsys):
+    input_path = tmp_path / "input.npz"
+    _write_gaussian_input(input_path)
+    rc = run_component(
+        "xfit",
+        [
+            "fit-dipoles",
+            "--input",
+            str(input_path),
+            "--model",
+            "gaussian",
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--chunk-size",
+            "1",
+        ],
+    )
+    assert rc != 0
+    assert "--chunk-size requires --executor" in capsys.readouterr().err

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dataset packaging, validation, and loading for XScan."""
+"""Dataset packaging, validation, and loading for xScan."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ NODIFF_REQUIRED_FIELDS = COMMON_METADATA_FIELDS | {
 
 @dataclass(slots=True)
 class DatasetBuildResult:
-    """Location and summary of a newly packaged XScan dataset.
+    """Location and summary of a newly packaged xScan dataset.
 
     Attributes
     ----------
@@ -137,7 +137,7 @@ def summarize_float_values(values: list[float]) -> dict[str, Any]:
 
 
 class StampDataset(Dataset[DatasetSample]):
-    """Memory-mapped canonical XScan dataset for PyTorch.
+    """Memory-mapped canonical xScan dataset for PyTorch.
 
     The dataset directory owns ``search.npy`` and ``template.npy`` arrays
     shaped ``(samples, height, width)``, plus one-dimensional ``labels.npy``
@@ -219,11 +219,11 @@ class StampDataset(Dataset[DatasetSample]):
             if xfit_feature_matrix.dataset_dir != self.dataset_dir:
                 raise ValueError(
                     "xFit feature matrix was validated for a different "
-                    "XScan dataset directory"
+                    "xScan dataset directory"
                 )
             if len(xfit_feature_matrix) != int(self.labels.shape[0]):
                 raise ValueError(
-                    "xFit feature row count does not match the XScan dataset"
+                    "xFit feature row count does not match the xScan dataset"
                 )
             if (
                 xfit_feature_names is not None
@@ -286,7 +286,7 @@ def inspect_dataset_dir(
     Parameters
     ----------
     dataset_dir
-        Directory containing canonical XScan arrays.
+        Directory containing canonical xScan arrays.
     dataset_kind
         Optional dataset contract name included in the summary.
 
@@ -339,7 +339,7 @@ def validate_dataset_dir(
     *,
     dataset_kind: str | None = None,
 ) -> dict[str, Any]:
-    """Validate a canonical XScan dataset directory.
+    """Validate a canonical xScan dataset directory.
 
     Canonical image arrays are rank three with shape
     ``(samples, height, width)``. Labels and split assignments are rank-one,
@@ -524,24 +524,25 @@ def build_dataset_from_manifest(
     write_metadata_jsonl(root / "metadata.jsonl", metadata_rows)
     maybe_write_metadata_parquet(root / "metadata.parquet", metadata_rows)
 
+    saved = {
+        "search": "search.npy",
+        "template": "template.npy",
+        "labels": "labels.npy",
+        "split": "split.npy",
+        "metadata_jsonl": "metadata.jsonl",
+    }
     summary = {
         "dataset_dir": str(root),
         "dataset_kind": dataset_kind,
         "manifest_path": str(manifest_path.expanduser().resolve()),
         "sample_count": int(search.shape[0]),
         "input_mode": "triplet" if difference is not None else "pair",
-        "saved": {
-            "search": "search.npy",
-            "template": "template.npy",
-            "labels": "labels.npy",
-            "split": "split.npy",
-            "metadata_jsonl": "metadata.jsonl",
-        },
+        "saved": saved,
     }
     if difference is not None:
-        summary["saved"]["difference"] = "difference.npy"
+        saved["difference"] = "difference.npy"
     if (root / "metadata.parquet").exists():
-        summary["saved"]["metadata_parquet"] = "metadata.parquet"
+        saved["metadata_parquet"] = "metadata.parquet"
     (root / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
         encoding="utf-8",
@@ -592,7 +593,7 @@ def merge_dataset_dirs(
                 "all input datasets must either include difference.npy or "
                 "omit it"
             )
-        current_stamp_shape = tuple(int(value) for value in search.shape[1:])
+        current_stamp_shape = (int(search.shape[1]), int(search.shape[2]))
         if stamp_shape is None:
             stamp_shape = current_stamp_shape
         elif stamp_shape != current_stamp_shape:
@@ -683,6 +684,12 @@ def merge_dataset_dirs(
         )
 
     validation = validate_dataset_dir(output_root, dataset_kind=dataset_kind)
+    saved = {
+        "search": "search.npy",
+        "template": "template.npy",
+        "labels": "labels.npy",
+        "split": "split.npy",
+    }
     summary = {
         "workflow": "data-merge",
         "dataset_dir": str(output_root),
@@ -691,19 +698,14 @@ def merge_dataset_dirs(
         "input_summaries": input_summaries,
         "sample_count": int(validation["sample_count"]),
         "input_mode": validation["input_mode"],
-        "saved": {
-            "search": "search.npy",
-            "template": "template.npy",
-            "labels": "labels.npy",
-            "split": "split.npy",
-        },
+        "saved": saved,
     }
     if difference_present:
-        summary["saved"]["difference"] = "difference.npy"
+        saved["difference"] = "difference.npy"
     if metadata_policy:
-        summary["saved"]["metadata_jsonl"] = "metadata.jsonl"
+        saved["metadata_jsonl"] = "metadata.jsonl"
         if (output_root / "metadata.parquet").exists():
-            summary["saved"]["metadata_parquet"] = "metadata.parquet"
+            saved["metadata_parquet"] = "metadata.parquet"
     (output_root / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
         encoding="utf-8",
@@ -877,6 +879,13 @@ def build_hsc_synthetic_dataset(
     write_metadata_jsonl(output_dir / "metadata.jsonl", rows)
     maybe_write_metadata_parquet(output_dir / "metadata.parquet", rows)
 
+    saved = {
+        "search": "search.npy",
+        "template": "template.npy",
+        "labels": "labels.npy",
+        "split": "split.npy",
+        "metadata_jsonl": "metadata.jsonl",
+    }
     summary = {
         "dataset_dir": str(output_dir),
         "dataset_kind": "experimental-hsc-synthetic",
@@ -889,18 +898,12 @@ def build_hsc_synthetic_dataset(
         "seed": seed,
         "tile_size": tile_size,
         "splits": summarize_splits(rows),
-        "saved": {
-            "search": "search.npy",
-            "template": "template.npy",
-            "labels": "labels.npy",
-            "split": "split.npy",
-            "metadata_jsonl": "metadata.jsonl",
-        },
+        "saved": saved,
     }
     if include_difference:
-        summary["saved"]["difference"] = "difference.npy"
+        saved["difference"] = "difference.npy"
     if (output_dir / "metadata.parquet").exists():
-        summary["saved"]["metadata_parquet"] = "metadata.parquet"
+        saved["metadata_parquet"] = "metadata.parquet"
     (output_dir / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
         encoding="utf-8",
@@ -1203,10 +1206,11 @@ def build_hsc_dataset_from_manifest(
     labels = np.zeros((samples,), dtype=np.int64)
     split = np.zeros((samples,), dtype=np.int64)
     rows: list[dict[str, Any]] = []
+    kernel_y, kernel_x = (
+        int(value) for value in payload.get("xpois_kernel_shape", [9, 9])
+    )
     xpois_config = HscXPOISConfig(
-        kernel_shape=tuple(
-            int(value) for value in payload.get("xpois_kernel_shape", [9, 9])
-        ),
+        kernel_shape=(kernel_y, kernel_x),
         basis_sigmas=tuple(
             float(value)
             for value in payload.get("xpois_basis_sigmas", [1.5, 3.0])
@@ -1744,6 +1748,7 @@ def build_hsc_dataset_from_manifest(
                     injected_flux,
                 )
                 if include_difference and base_search_context is not None:
+                    assert psf_patch_context is not None
                     search_context, _ = inject_transient(
                         base_search_context,
                         psf_patch_context,

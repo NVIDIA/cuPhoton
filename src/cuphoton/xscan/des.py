@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raw DES-oriented dataset builders for XScan."""
+"""Raw DES-oriented dataset builders for xScan."""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ import numpy as np
 import yaml
 
 from cuphoton._photometry import detect_sources, estimate_background
+from cuphoton.core.fits_io import (
+    inspect_fits_image,
+    read_fits_images,
+    validate_fits_reader,
+)
 
 from .dataset import (
     INDEX_TO_SPLIT,
@@ -83,8 +88,15 @@ def build_autoscan_dataset_from_raw(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     manifest = load_manifest(manifest_path)
+    fits_reader = validate_fits_reader(
+        manifest.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
+    fits_reads: list[dict[str, Any]] = []
     rows = load_table_rows(resolve_required_path(manifest, "records_path"))
     if not rows:
         raise ValueError("records_path did not contain any rows")
@@ -123,6 +135,8 @@ def build_autoscan_dataset_from_raw(
             center_x=center_x,
             center_y=center_y,
             hdu=search_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         template = load_stamp_or_image_cutout(
             template_path,
@@ -130,6 +144,8 @@ def build_autoscan_dataset_from_raw(
             center_x=center_x,
             center_y=center_y,
             hdu=template_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         if not difference_path:
             raise ValueError("autoScan raw rows must include difference_path")
@@ -139,6 +155,8 @@ def build_autoscan_dataset_from_raw(
             center_x=center_x,
             center_y=center_y,
             hdu=difference_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         if search.shape != template.shape or search.shape != difference.shape:
             raise ValueError(
@@ -218,6 +236,8 @@ def build_autoscan_dataset_from_raw(
         manifest_path=manifest_path,
         samples=samples,
         builder_summary={
+            "fits_reader": fits_reader,
+            "fits_reads": fits_reads,
             "input_record_count": len(rows),
             "samples_before_balance": samples_before_balance,
             "samples_after_balance": samples_after_balance,
@@ -230,8 +250,15 @@ def build_nodiff_dataset_from_raw(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     manifest = load_manifest(manifest_path)
+    fits_reader = validate_fits_reader(
+        manifest.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
+    fits_reads: list[dict[str, Any]] = []
     exposures = load_table_rows(
         resolve_required_path(manifest, "exposures_path")
     )
@@ -275,6 +302,8 @@ def build_nodiff_dataset_from_raw(
                 "search_path",
             ),
             hdu=search_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         template = load_image_array(
             get_required_alias(
@@ -283,6 +312,8 @@ def build_nodiff_dataset_from_raw(
                 "template_path",
             ),
             hdu=template_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
         )
         if search.shape != template.shape:
             raise ValueError("search and template images must share a shape")
@@ -293,7 +324,12 @@ def build_nodiff_dataset_from_raw(
             "difference_path",
         )
         if difference_path:
-            difference = load_image_array(difference_path, hdu=difference_hdu)
+            difference = load_image_array(
+                difference_path,
+                hdu=difference_hdu,
+                fits_reader=fits_reader,
+                read_metadata=fits_reads,
+            )
             if difference.shape != search.shape:
                 raise ValueError(
                     "difference image must match search/template shape"
@@ -544,6 +580,8 @@ def build_nodiff_dataset_from_raw(
         manifest_path=manifest_path,
         samples=all_samples,
         builder_summary={
+            "fits_reader": fits_reader,
+            "fits_reads": fits_reads,
             "exposure_count": len(exposures),
             "detections_total": detections_total,
             "positives_pre_cap": positives_pre_cap,
@@ -742,6 +780,13 @@ def write_canonical_dataset(
     write_metadata_jsonl(root / "metadata.jsonl", metadata_rows)
     maybe_write_metadata_parquet(root / "metadata.parquet", metadata_rows)
 
+    saved = {
+        "search": "search.npy",
+        "template": "template.npy",
+        "labels": "labels.npy",
+        "split": "split.npy",
+        "metadata_jsonl": "metadata.jsonl",
+    }
     summary = {
         "dataset_dir": str(root),
         "dataset_kind": dataset_kind,
@@ -749,18 +794,12 @@ def write_canonical_dataset(
         "sample_count": int(search.shape[0]),
         "input_mode": "triplet" if has_difference else "pair",
         "builder_summary": builder_summary or {},
-        "saved": {
-            "search": "search.npy",
-            "template": "template.npy",
-            "labels": "labels.npy",
-            "split": "split.npy",
-            "metadata_jsonl": "metadata.jsonl",
-        },
+        "saved": saved,
     }
     if has_difference:
-        summary["saved"]["difference"] = "difference.npy"
+        saved["difference"] = "difference.npy"
     if (root / "metadata.parquet").exists():
-        summary["saved"]["metadata_parquet"] = "metadata.parquet"
+        saved["metadata_parquet"] = "metadata.parquet"
 
     (root / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
@@ -985,7 +1024,7 @@ def match_fake_to_cutout(
         ):
             continue
         distance = (fake_x - center_x) ** 2 + (fake_y - center_y) ** 2
-        if best is None or distance < best_distance:
+        if best_distance is None or distance < best_distance:
             best = row
             best_distance = distance
     return best
@@ -1027,7 +1066,7 @@ def detect_search_sources(
         0.0,
     )
     amplitude = float(np.max(np.abs(background_subtracted)))
-    numeric_rms_floor = np.finfo(np.float32).eps * amplitude
+    numeric_rms_floor = float(np.finfo(np.float32).eps) * amplitude
     effective_rms = max(float(np.median(finite_rms)), numeric_rms_floor)
     threshold = float(threshold_sigma) * effective_rms
     objects = detect_sources(
@@ -1052,15 +1091,59 @@ def load_stamp_array(path: str | Path) -> np.ndarray:
     return np.asarray(array, dtype=np.float32)
 
 
+def _resolve_fits_hdu(path: Path, hdu: str | int | None) -> int | None:
+    if isinstance(hdu, str):
+        from astropy.io import fits
+
+        with fits.open(path, memmap=False, lazy_load_hdus=True) as hdus:
+            return hdus.index_of(hdu)
+    return hdu
+
+
 def load_stamp_or_image_cutout(
     path: str | Path,
     *,
     stamp_size: int,
     center_x: Any | None,
     center_y: Any | None,
-    hdu: int | None = None,
+    hdu: str | int | None = None,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> np.ndarray:
-    array = load_image_array(path, hdu=hdu)
+    resolved = Path(path).expanduser().resolve()
+    if resolved.suffix.lower() in {".fits", ".fit", ".fts"}:
+        info = inspect_fits_image(
+            resolved, hdu=_resolve_fits_hdu(resolved, hdu)
+        )
+        section = None
+        if (
+            center_x is not None
+            and center_y is not None
+            and any(size > stamp_size for size in info.shape)
+        ):
+            cy, cx = int(round(float(center_y))), int(round(float(center_x)))
+            half = stamp_size // 2
+            y0, y1, x0, x1 = (
+                cy - half,
+                cy + half + 1,
+                cx - half,
+                cx + half + 1,
+            )
+            if y0 < 0 or x0 < 0 or y1 > info.shape[0] or x1 > info.shape[1]:
+                raise ValueError("stamp exceeds image bounds")
+            section = (slice(y0, y1), slice(x0, x1))
+        result = read_fits_images(
+            resolved, [info.hdu], reader=fits_reader, section=section
+        )
+        if read_metadata is not None:
+            read_metadata.append(result.metadata())
+        return np.asarray(result.arrays[0], dtype=np.float32)
+    array = load_image_array(
+        resolved,
+        hdu=hdu,
+        fits_reader=fits_reader,
+        read_metadata=read_metadata,
+    )
     if array.ndim != 2:
         raise ValueError(f"array at {path} must be 2D")
     if (
@@ -1077,26 +1160,26 @@ def load_stamp_or_image_cutout(
     return np.asarray(array, dtype=np.float32)
 
 
-def load_image_array(path: str | Path, hdu: int | None = None) -> np.ndarray:
+def load_image_array(
+    path: str | Path,
+    hdu: str | int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
+) -> np.ndarray:
+    """Load a host image, optionally decompressing FITS pixels with xDR."""
     resolved = Path(path).expanduser().resolve()
     suffix = resolved.suffix.lower()
     if suffix == ".npy":
         return np.asarray(np.load(resolved, allow_pickle=False))
     if suffix in {".fits", ".fit", ".fts"}:
-        try:
-            from astropy.io import fits
-        except ModuleNotFoundError as exc:
-            raise ValueError(
-                "astropy is required for FITS ingestion"
-            ) from exc
-        with fits.open(resolved, memmap=True) as hdul:
-            if hdu is not None:
-                data = hdul[hdu].data
-                return np.asarray(data)
-            for item in hdul:
-                if item.data is not None and item.data.ndim == 2:
-                    return np.asarray(item.data)
-        raise ValueError(f"could not find a 2D image HDU in {resolved}")
+        info = inspect_fits_image(
+            resolved, hdu=_resolve_fits_hdu(resolved, hdu)
+        )
+        result = read_fits_images(resolved, [info.hdu], reader=fits_reader)
+        if read_metadata is not None:
+            read_metadata.append(result.metadata())
+        return np.asarray(result.arrays[0])
     raise ValueError(f"unsupported image format: {resolved}")
 
 

@@ -50,9 +50,16 @@ Use uv for development environments and dependency locking. The supported GPU
 profile is CUDA 13.
 
 ```bash
-uv sync --locked --extra dev --extra torch --extra viz
-uv run --locked --extra dev pre-commit install
+uv sync --locked --extra dev --extra torch --extra viz --extra photometry
+make hooks
 ```
+
+`make hooks` installs Git's pre-commit hook using this clone's development
+environment and checks the tracked files. Each contributor runs it in their
+own clone; generated files under `.git/hooks` are never committed. For linked
+worktrees, install hooks from the primary checkout and keep its `.venv`
+available, since Git shares hooks between worktrees. Rerun `make hooks` after
+moving the clone or recreating that environment.
 
 For CUDA 13 development:
 
@@ -60,8 +67,9 @@ For CUDA 13 development:
 uv sync --locked --extra dev --extra gpu --extra viz
 ```
 
-Use the smallest profile that exercises the change. The `cutile` extra is
-experimental and supports Python 3.12 and 3.13 only.
+Use the smallest profile that exercises the change. The experimental `cutile`
+extra supports Python 3.12–3.14; use a CUDA 13.2 or newer TileIR compiler
+for the supported setup. The `dragon` extra currently supports Python 3.12 and 3.13.
 
 ## Checks
 
@@ -73,11 +81,50 @@ uv lock --check
 uv run --locked --extra dev pre-commit run --all-files
 make lint
 make test-cpu
-uv build
+make build
 ```
+
+Ruff formats Python and checks imports, common bugs (`B`), and syntax upgrades
+for Python 3.12 (`UP`). Mypy checks annotated Python code throughout
+`src/cuphoton`; `make typecheck` runs it separately. Scientific and GPU imports
+without consistent typing support are skipped, so type checks do not require
+CUDA. Unannotated function bodies are not yet checked.
+
+The full pre-commit suite also runs clang-format on C/C++/CUDA sources and
+ShellCheck on shell scripts, including extensionless scripts with a shell
+shebang. `.clang-format` preserves the existing four-space indentation,
+attached braces, and pointer/reference spacing. Hook tools are installed
+automatically by pre-commit; no system clang-format or ShellCheck is required.
+Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 
 Validation logs should be clean. If warnings are expected, describe them in the
 pull request.
+
+### GPU CI
+
+Pull requests first run CPU and package checks on GitHub-hosted runners.
+GPU CI starts when `copy-pr-bot` copies a vetted revision to
+`pull-request/<number>` in this repository. Ready PRs from verified NVIDIA
+contributors with signed commits sync automatically. Draft PRs need an
+explicit maintainer trigger; each new external contribution revision needs
+maintainer approval before it can run on a GPU.
+
+After reviewing the current diff, a maintainer can request a bot copy with
+`/ok to test <full-head-SHA>`. A maintainer can also push that same reviewed
+commit to `pull-request/<number>` directly. Confirm that the copied SHA
+matches the current PR head; a passing result for an older revision does
+not qualify new changes.
+
+The required `ci-required` check combines CPU, package, and GPU results for
+that revision. The initial `ci-pr-checks` result does not satisfy the merge
+gate. Pushes to `main` and `0.1.x` also run the GPU checks.
+
+The GPU job uses one L40G with Python 3.12 and the locked CUDA 13 dependencies.
+It checks CuPy/PyTorch execution, runs six xFit GPU parity cases, and runs
+all five synthetic quickstarts with `--require-gpu`. Missing CUDA support or
+skipped parity cases fail the job. JUnit results and quickstart summaries are
+uploaded with the tested commit SHA. GPU jobs run one at a time; a new
+revision cancels the previous workflow for the same branch.
 
 ## Pull Requests
 
@@ -101,9 +148,11 @@ performance review before accepting a change.
 - Include a Developer Certificate of Origin sign-off on commits:
 
 ```bash
-git commit -s -m "Short imperative summary"
+git commit -sS -m "Short imperative summary"
 ```
 
+- Configure a Git signing key before committing; `-S` adds the cryptographic
+  signature and `-s` adds the DCO trailer.
 - Write commit titles in imperative mood.
 - Target the `main` branch.
 
@@ -119,8 +168,9 @@ Version 1.1
 
 Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
 
-Everyone is permitted to copy and distribute verbatim copies of this license
-document, but changing it is not allowed.
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
 
 Developer's Certificate of Origin 1.1
 

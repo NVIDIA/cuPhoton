@@ -1,6 +1,6 @@
-# XRay GPU-first behavior
+# xRay GPU-first behavior
 
-XRay uses CuPy for high-throughput trace batches and detector-wide analysis.
+xRay uses CuPy for high-throughput trace batches and detector-wide analysis.
 NumPy paths provide deterministic smoke tests, algorithm inspection, and
 correctness references for supported operations.
 
@@ -18,16 +18,20 @@ memory. Run a representative ROI before committing to a full detector.
 
 The synthetic quickstart reports `gpu` or `cpu`; component manifests identify
 the concrete CuPy or NumPy implementation where applicable. Read the JSON or
-run summary instead of inferring the backend from the machine. Some
-detector-wide commands are explicitly GPU-only; their help and error messages
-identify the `gpu` extra rather than silently switching algorithms.
+run summary to confirm the backend used. Detector-wide commands that require
+a GPU identify the `gpu` extra in their help and error messages.
 
 Use the checkout runner to distinguish a portable smoke from a CUDA gate:
 
 ```bash
-uv run python examples/run_quickstarts.py --component xray --profile cpu
-uv run python examples/run_quickstarts.py --component xray --require-gpu
+uv run python examples/run_quickstarts.py --component xray --profile cpu \
+  --output-dir /tmp/xray-cpu-quickstart
+uv run python examples/run_quickstarts.py --component xray --require-gpu \
+  --output-dir /tmp/xray-gpu-quickstart
 ```
+
+Use the [CUDA environment](ENVIRONMENT.md#cuda-13-development) for the GPU
+run and choose new output directories if these already exist.
 
 ## Performance records
 

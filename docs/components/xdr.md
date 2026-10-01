@@ -1,10 +1,8 @@
-# xDataReader
+# xDR
 
-`cuphoton.xdr` provides GPU-oriented FITS and HDF5 loading. Its FITS
-path uses native CFITSIO planning plus KvikIO, nvCOMP, and CuPy to load
-supported image HDUs directly to device arrays. Its optional HDF5 path
-delegates to Legate's integrated HDF5 API and returns a Legate
-`LogicalArray`.
+`cuphoton.xdr` provides GPU-oriented FITS loading. It uses native CFITSIO
+planning plus KvikIO, nvCOMP, and CuPy to load supported image HDUs directly
+to device arrays.
 
 Current scope:
 
@@ -12,103 +10,220 @@ Current scope:
 - `GZIP_1` and `GZIP_2` compressed image HDUs
 - batched multi-file loading with `batch_to_device`
 - pipelined loading with `batch_to_device_stream`
-- one-dataset HDF5 loading with `load_hdf5`
-- explicit `NotImplementedError` for compression formats that do not have a GPU
-  path
+- explicit `NotImplementedError` for unsupported compression formats
+
+## Read FITS images in a workflow
+
+The shared FITS reader selects explicit image HDUs and returns NumPy or CuPy
+arrays. Inspecting the headers does not decompress image pixels:
+
+```python
+from cuphoton.core.fits_io import inspect_fits_images, read_fits_images
+
+planes = inspect_fits_images("exposure.fits")
+result = read_fits_images(
+    "exposure.fits", [planes[0].hdu], reader="auto", device=True
+)
+image = result.arrays[0]  # CuPy array, ready for use
+print(result.metadata())  # Actual reader and any fallback reason
+```
+
+The Python reader defaults to `reader="astropy"` and `device=False`.
+`reader="astropy"` decodes on the CPU; `reader="xdr"` requires the GPU reader.
+`reader="auto"` uses xDR for supported lossless images when its dependencies,
+native planner, and CUDA device are available. Scaling, integer nulls,
+quantization, unsupported compression, and externally compressed files use
+Astropy. Read errors propagate after the selected reader starts. With
+`device=False`, the returned arrays reside on the host, including an explicit
+download when xDR decoded them. Integer masks retain their width and bits.
+
+Use `section=(slice(y0, y1), slice(x0, x1))` for bounded cutouts with unit-step
+slices. Automatic reads of uncompressed cutouts use Astropy's section access;
+the shared reader rejects explicit xDR requests for those sections.
+Supported tile-compressed cutouts can use xDR. Device output requires CuPy
+and a usable CUDA device even when Astropy performs decoding. Device reads
+finish before returning, including reads on an explicitly supplied CuPy stream.
+
+The pipeline and applicable standalone FITS workflows expose this reader
+policy. Prepared NPY, NPZ, and HDF5 inputs retain their existing readers.
+Reader receipts describe decoded arrays and reader selection; they do not
+measure physical storage traffic. Establish native GDS with process-local
+cuFile counters for the measured reads, distinguishing P2PDMA/NVFS from POSIX
+fallback. The legacy `is_gds_active` probe requires `nvidia-fs` and can report
+false on working P2PDMA configurations that do not use that module.
+
+## Load a batch onto the GPU
+
+The lower-level xDR APIs load the same HDU indices from every input file.
+Files must have matching shapes and dtypes at each selected HDU:
+
+```python
+from cuphoton.xdr import batch_to_device
+
+(images,) = batch_to_device(
+    ["exposure-1.fits", "exposure-2.fits"], hdu_indices=[1]
+)
+first_image = images[0]
+```
+
+The result is a tuple of CuPy arrays, one per selected HDU, each with shape
+`(file, y, x)`. `batch_to_device_stream` exposes the same stacked result with
+prefetch, decode-batch and queue controls. Both accept preallocated `out`
+arrays and a CuPy `stream`. Their `section` option applies to compressed
+image HDUs. Use the shared reader above when you need automatic Astropy
+fallback and FITS semantic checks. The exported `open_gpu` function is not
+implemented; use one of these readers instead.
+
+## HDF5 migration
+
+`cuphoton.xdr.load_hdf5` and the `hdf5` installation extra have been removed.
+For general HDF5 access, use `h5py` directly; it is a base dependency. Remove
+`hdf5` from installation extras, for example by replacing `cuphoton[hdf5]`
+with `cuphoton`.
+
+For supported xRay detector inputs, see the [single-node HDF5
+workflow](../xray/README.md#single-node-hdf5-workflow), which uses the `h5py`
+reader by default.
 
 ## Install
 
-Install the CUDA 13 development profile:
+After the first PyPI release is published, install the I/O profile for GPU
+FITS loading. Until then, use the source checkout instructions below:
 
 ```bash
-uv sync --locked --extra dev --extra gpu
+python -m pip install 'cuphoton[io]'
 ```
 
-The base package remains importable without GPU dependencies. xDataReader's
-loading paths require the `gpu` extra. To require a local build of its native
-extension after syncing the GPU environment, run:
+Linux x86-64 and ARM64 wheels for CPython 3.12–3.14 include the native
+extension and a private, reentrant CFITSIO 4.7.0 library. The extra installs
+CuPy, KvikIO, cuFile, and nvCOMP; `gpu` also includes these dependencies.
+The base package remains importable without GPU dependencies. No compiler,
+local CUDA toolkit, or system CFITSIO is needed for a wheel installation.
+Only CUDA 13 dependency variants are supported. A compatible NVIDIA driver
+is required for GPU execution.
+
+GPUDirect Storage also needs a supported host driver, filesystem, and storage
+configuration. KvikIO compatibility mode supports ordinary local file I/O;
+installing a wheel does not configure GDS. Use `KVIKIO_COMPAT_MODE=ON` to
+select compatibility mode explicitly.
+
+For development from a source checkout:
 
 ```bash
+uv sync --locked --extra dev --extra io
 bash src/cuphoton/xdr/src/build.sh
 ```
 
-The native extension also needs CUDA toolkit headers, cuFile headers, and a
-thread-safe CFITSIO development install visible through `pkg-config cfitsio` or
-`CUPHOTON_XDR_CFITSIO_ROOT`.
-
-Normal installation attempts to build the native extension and falls back to
-the pure Python package when native prerequisites are unavailable. Set
-`CUPHOTON_XDR_BUILD_EXT=1` to require the extension or
-`CUPHOTON_XDR_BUILD_EXT=0` to skip it explicitly. Only CUDA 13
-dependency variants are supported.
+Source and editable builds default to a Python-only installation without
+probing native prerequisites. Building the extension requires
+`CUPHOTON_XDR_BUILD_EXT=1`, as performed by `build.sh` above. The source build
+requires a C++17 compiler, CUDA and cuFile headers, and a reentrant CFITSIO
+development installation. See [the wheel build procedure](../packaging.md)
+for the pinned release recipe.
 
 ### Native extension availability
 
-Wheels built from this repository are pure Python (`py3-none-any`) and never
-contain `cuphoton.xdr._nvcomp_batch_ext`; the extension is built only from a
-source checkout. The build intentionally runs without PEP 517 build isolation
-(as `build.sh` does with `--no-build-isolation`) because pybind11 and the
-KvikIO, nvCOMP, and CFITSIO headers and libraries are resolved from the
-installed `gpu` environment — this is also why `pybind11` is not listed in
-`[build-system].requires`. Verify the extension after building:
+`build.sh` requires `uv` on `PATH` and prints the interpreter it selects.
+Selection order is `PYTHON`, the active `VIRTUAL_ENV`, the checkout's
+`.venv/bin/python`, then `python3` or `python` on `PATH`. An invalid explicit
+interpreter or active environment fails before installation. To select the
+interpreter running a command, use:
+
+```bash
+PYTHON="$(uv run python -c 'import sys; print(sys.executable)')" \
+  bash src/cuphoton/xdr/src/build.sh
+```
+
+For a bare CUDA 13 development container, install a C/C++ compiler, `make`,
+`pkg-config`, zlib development headers, and the CUDA/cuFile development headers.
+If the system CFITSIO package lacks thread support, build a reentrant copy
+from the [CFITSIO source distribution](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/):
+
+```bash
+# Run in a writable build directory outside the checkout.
+export CUPHOTON_XDR_CFITSIO_ROOT="$PWD/cfitsio-install"
+curl -fLO https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-4.7.0.tar.gz
+tar -xzf cfitsio-4.7.0.tar.gz
+(
+  cd cfitsio-4.7.0
+  ./configure --prefix="$CUPHOTON_XDR_CFITSIO_ROOT" \
+    --enable-reentrant --disable-curl
+  make -j4
+  make check
+  make install
+)
+```
+
+Return to the checkout and run `build.sh` in the same shell so the prefix
+remains exported. The prefix must contain `include/fitsio.h` and the CFITSIO
+library in `lib` or `lib64`. `--disable-curl` removes CFITSIO's optional URL
+support; local FITS loading does not require it. Keep `--enable-reentrant`
+for concurrent native planning and reads.
+
+An explicit native source build runs without
+PEP 517 build isolation (as `build.sh` does with `--no-build-isolation`)
+because pybind11, KvikIO and nvCOMP are resolved from the installed `io`
+environment. CFITSIO headers and libraries come from
+`CUPHOTON_XDR_CFITSIO_ROOT` or `pkg-config cfitsio`, as described above.
+The helper installs pybind11 as a build dependency; it is not an I/O runtime
+requirement.
+Verify the extension after building:
 
 ```bash
 uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
 ```
 
-Without the extension, `batch_to_device` and `batch_to_device_stream` raise a
-`RuntimeError` that names the missing module and the build command.
-
-Install the optional Legate HDF5 backend alongside the development profile:
-
-```bash
-uv sync --locked --extra dev --extra hdf5
-```
-
-## HDF5 loading with Legate
-
-`load_hdf5` is a thin integration with
-[`legate.io.hdf5.from_file`](https://docs.nvidia.com/legate/latest/api/python/generated/legate.io.hdf5.from_file.html):
-
-```python
-from cuphoton.xdr import load_hdf5
-
-images = load_hdf5("observation.h5", "/images/science")
-```
-
-The returned object is a Legate `LogicalArray`. Execution is asynchronous;
-use Legate's runtime fence when the caller needs an explicit completion
-boundary. Resource placement, distributed partitioning, GDS, and virtual
-dataset behavior belong to the installed Legate runtime. For example, a
-GDS-enabled Legate build can be configured before launching Python:
-
-```bash
-export LEGATE_CONFIG="--gpus 1 --io-use-vfd-gds"
-```
-
-xDataReader imports Legate only when this API is called, so the base package
-and the FITS loader remain usable without the `hdf5` extra. Custom Legate
-builds with experimental parallel or virtual-dataset readers can be installed
-into the same environment without changing the xDataReader API.
+If the extension is missing, `batch_to_device` and `batch_to_device_stream`
+raise a `RuntimeError` that names the missing module and the build command.
 
 ## Benchmark
 
 ```bash
 cuphoton xdr benchmark-fits \
-  --hdu-indices 1,2,3 /path/to/file1.fits /path/to/file2.fits
+  --hdu-indices 1,2,3 --output-json benchmark.json \
+  /path/to/file1.fits /path/to/file2.fits
 ```
 
-Use `--dir` and `--max-files` to scan directories of FITS files.
+Use `--dir` and `--max-files` to scan directories of FITS files. The benchmark
+defaults to `--native-read-threads=4`; the loading APIs default to the available
+CPU core count when `native_read_threads` is omitted.
 
-### Benchmarking without storage I/O
+`--output-json` writes an optional report while retaining the terminal table.
+Its parent directory must exist. The report replaces its destination only after
+all phases finish; preflight or uncaught errors leave a previous report intact.
+A caught phase failure still produces a report with `ok=false` and the phase's
+error text. The Python API accepts `output_json=Path(...)` and continues
+returning `list[PhaseResult]`.
 
-`benchmark-fits --mock-storage {device,host}` serves repeat reads of each
-file from an in-memory cache instead of storage, so runs measure decode and
-kernel cost independent of disk throughput. `device` replays from GPU memory
-at HBM bandwidth, isolating decompression cost and modeling an ideally fast
-GDS path; `host` replays from pinned host memory over PCIe, modeling what a
-properly working GDS path would deliver on the same hardware. The same
-behavior is available programmatically through the
+The version 1 JSON report contains:
+
+- `phases`: the same full-precision measurements returned by the benchmark,
+  including per-phase `ok` and `error` fields. `elapsed_ms` is the mean over
+  that phase's iterations.
+- `versions`: cuPhoton, Python, CuPy, KvikIO, and nvCOMP package versions.
+- `capabilities`: native-helper import availability and the existing
+  `is_gds_active` capability probe. `gds_active=true` does not prove that every
+  measured read used GDS, including when storage is mocked.
+- `storage`: the effective `real`, `host`, or `device` mode, including an
+  ambient mock-storage context or environment setting.
+- `options`: HDUs, iteration count, thread/queue settings, and native-batcher
+  selection. `native_batcher_enabled=null` records an invalid forced selection
+  with the reason in `native_batcher_error`.
+- `workload`: ordered input files, counts, planned raw bytes, and decoded MiB.
+  Failed planning can leave these planned sizes at zero.
+
+Metadata and JSON writes sit outside phase timings. `--skip-gds-read` omits the
+raw-read phase; failed planning also prevents that phase from running.
+
+### Benchmarking with cached input
+
+`benchmark-fits --mock-storage {device,host}` preloads an in-memory cache
+before its timed phases. `device` replays from GPU memory to measure decode
+and kernel costs
+without disk reads; `host` replays from pinned host memory and includes
+host-to-device transfer. Neither mode measures native GDS or storage
+throughput. The same behavior is available programmatically through the
 `cuphoton.xdr.mock_storage` context manager, or transparently by setting
-`CUPHOTON_XDR_MOCK_STORAGE=device` or `host` for benchmarks that do not
-select it explicitly.
+`CUPHOTON_XDR_MOCK_STORAGE=device` or `host` to set the benchmark's default.
+In a custom benchmark, populate the cache before measuring repeat reads;
+the first access otherwise includes a real file read.

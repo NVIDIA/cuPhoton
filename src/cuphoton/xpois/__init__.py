@@ -7,10 +7,15 @@
 from cuphoton import __version__
 
 from .data import inspect_hsc_data_tree, load_image_array
+from .noise import (
+    ConstantKernelNoiseResult,
+    standardize_constant_kernel_residual,
+)
 from .ois import (
     AutoStampMaskResult,
     BasisTerm,
     ConstantKernelFitResult,
+    DeviceConstantKernelFitResult,
     GaussianBasisComponent,
     SeparableKernelFitResult,
     background_design,
@@ -20,18 +25,35 @@ from .ois import (
     make_stamp_mask,
     resolve_backend,
     solve_constant_kernel,
+    solve_constant_kernel_device,
     solve_separable_kernel,
     triangular_degree_pairs,
 )
+from .spatial_als import (
+    SpatialALSConfig,
+    SpatialALSFitResult,
+    solve_spatial_als,
+)
 from .stamps import extract_centered_stamp, simple_difference_stamp
+from .statistics import (
+    StandardizedResidualStatistics,
+    StandardizedResidualSummary,
+    summarize_standardized_residuals,
+)
 
 __all__ = [
     "__version__",
     "AutoStampMaskResult",
     "BasisTerm",
     "ConstantKernelFitResult",
+    "ConstantKernelNoiseResult",
+    "DeviceConstantKernelFitResult",
     "GaussianBasisComponent",
     "SeparableKernelFitResult",
+    "SpatialALSConfig",
+    "SpatialALSFitResult",
+    "StandardizedResidualStatistics",
+    "StandardizedResidualSummary",
     "background_design",
     "build_compact_source_stamp_mask",
     "build_gaussian_polynomial_basis",
@@ -43,6 +65,10 @@ __all__ = [
     "resolve_backend",
     "simple_difference_stamp",
     "solve_constant_kernel",
+    "solve_constant_kernel_device",
     "solve_separable_kernel",
+    "solve_spatial_als",
+    "standardize_constant_kernel_residual",
+    "summarize_standardized_residuals",
     "triangular_degree_pairs",
 ]

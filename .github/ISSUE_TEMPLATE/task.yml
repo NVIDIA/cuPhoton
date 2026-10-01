@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Task
+description: Track repository maintenance, documentation, or release work.
+title: "[Task]: "
+labels: ["task"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What should be completed?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Files, components, or workflows affected.
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Concrete acceptance criteria.
+    validations:
+      required: true

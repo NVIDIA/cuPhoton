@@ -16,6 +16,7 @@ from .detector_artifacts import (
     detector_artifact_x_index,
     detector_artifact_y_slice,
 )
+from .detector_storage import DetectorArray, load_detector_array
 from .validation_viz import (
     _fit_traces,
     _load_trace_records,
@@ -113,7 +114,7 @@ def build_phonon_viz(
     x_value: int | None = None,
     y_start: int | None = None,
     y_end: int | None = None,
-    title: str = "XRay Phonon Dispersion",
+    title: str = "xRay Phonon Dispersion",
     components: int = 30,
     roots_backend: str = "eigvals",
     max_traces: int = 256,
@@ -332,8 +333,8 @@ def _detector_source(
     }
 
 
-def _load_detector_array(path: Path) -> np.ndarray:
-    return np.load(path, mmap_mode="r")
+def _load_detector_array(path: Path) -> DetectorArray:
+    return load_detector_array(path)
 
 
 def _trace_phonon_figure(fits):
@@ -499,10 +500,10 @@ def _workflow_phonon_figure(workflow, *, max_points: int):
 
 def _detector_phonon_figure(
     *,
-    freq_all: np.ndarray,
-    amp_all: np.ndarray,
-    fft_all: np.ndarray,
-    fft_freq_all: np.ndarray,
+    freq_all: DetectorArray,
+    amp_all: DetectorArray,
+    fft_all: DetectorArray,
+    fft_freq_all: DetectorArray,
     local_x: int,
     local_y_start: int,
     local_y_end: int,

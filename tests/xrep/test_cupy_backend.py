@@ -9,10 +9,13 @@ import pytest
 
 from cuphoton.xrep import (
     BBox,
+    Grid,
     ReprojectionSpec,
+    StackReprojectionSpec,
     prepare_reprojection,
     reproject_array,
     reproject_masked_array,
+    reproject_stack,
 )
 from cuphoton.xrep.backends import get_backend
 
@@ -54,6 +57,37 @@ def test_cupy_backend_matches_cpu_for_identity(interpolation: str) -> None:
     assert np.allclose(cupy_result.image, cpu.image, equal_nan=True)
     assert np.array_equal(cupy_result.mask, cpu.mask)
     assert cupy_result.backend == "cupy"
+
+
+@pytest.mark.parametrize("backend", ["cupy", "auto"])
+def test_cupy_stack_accepts_device_images_and_masks(backend: str) -> None:
+    source = np.arange(64, dtype=np.float64).reshape(8, 8)
+    mask = np.zeros(source.shape, dtype=np.uint32)
+    mask[3, 3] = 4
+    member = ReprojectionSpec(
+        mapping=lambda coords: np.asarray(coords, dtype=np.float64),
+        output_bbox=BBox(0, 0, 8, 8),
+        interpolation="bilinear",
+        mapping_grid_step=1,
+    )
+    spec = StackReprojectionSpec(
+        grid=Grid((150.0, 2.0), 0.2),
+        output_bbox=member.output_bbox,
+        members=(member, member),
+    )
+    sources = [source, source + 10]
+    expected = reproject_stack(
+        sources, spec, source_masks=[mask, None], backend="cpu"
+    )
+    actual = reproject_stack(
+        [cp.asarray(image) for image in sources],
+        spec,
+        source_masks=[cp.asarray(mask), None],
+        backend=backend,
+    )
+    assert actual.backend == "cupy"
+    np.testing.assert_allclose(actual.images, expected.images)
+    np.testing.assert_array_equal(actual.masks, expected.masks)
 
 
 def test_cupy_lanczos_matches_cpu_for_subpixel_mapping() -> None:

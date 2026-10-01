@@ -141,7 +141,7 @@ def run_server(
     server.start()
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     print(
-        "XScan Alard-Lupton display lab: "
+        "xScan Alard-Lupton display lab: "
         f"http://{display_host}:{port}/?s=3510",
         flush=True,
     )
@@ -186,7 +186,7 @@ def build_document(doc, *, review_dir: Path) -> None:
     )
     state = {"sample_index": initial_sample}
 
-    doc.title = f"XScan Alard-Lupton Display Lab {initial_sample}"
+    doc.title = f"xScan Alard-Lupton Display Lab {initial_sample}"
 
     title = Div(width=380, css_classes=["review-brand"])
     progress_div = Div(width=120)
@@ -320,7 +320,7 @@ window.history.replaceState({}, "", url.toString());
             )
             return
         state["sample_index"] = sample_index
-        doc.title = f"XScan Alard-Lupton Display Lab {sample_index}"
+        doc.title = f"xScan Alard-Lupton Display Lab {sample_index}"
         sample_input.value = str(sample_index)
         url_state.text = str(sample_index)
 
@@ -362,7 +362,7 @@ window.history.replaceState({}, "", url.toString());
         item = current_item(sample_index)
         qpos = queue_position(sample_index)
         title.text = raw_compare._review_header_html(
-            title="XScan AL Display Lab",
+            title="xScan AL Display Lab",
             subtitle="Raw flux beside empirical normalized display",
             id_label="Candidate ID",
             item=item,

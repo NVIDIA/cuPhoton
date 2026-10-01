@@ -2,7 +2,7 @@
 
 | Role | Owner | Responsibility |
 | --- | --- | --- |
-| Repository maintenance | @tpn | Branch hygiene, reviews, and releases |
+| Repository maintenance | @tpn, @melo-gonzo | Branch hygiene, reviews, and releases |
 | Security escalation | NVIDIA PSIRT | Vulnerability intake through `SECURITY.md` |
 
 Maintainers should update `.github/CODEOWNERS` when ownership moves to a GitHub

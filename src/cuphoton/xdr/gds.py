@@ -16,9 +16,13 @@ Entry points for the FITS reader:
 from __future__ import annotations
 
 import os
+import threading
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Sequence
+
+_KVIKIO_DEFAULTS_LOCK = threading.Lock()
+_KVIKIO_NUM_THREADS: int | None = None
 
 
 def available_cpu_cores() -> int:
@@ -33,12 +37,24 @@ def available_cpu_cores() -> int:
 
 
 def configure_kvikio_parallelism() -> int:
-    """Configure KvikIO's default thread pool for parallel FITS reads."""
-    import kvikio.defaults as defaults
+    """Initialize the shared KvikIO pool before the first cuPhoton reader.
 
-    num_threads = available_cpu_cores()
-    defaults.set("num_threads", num_threads)
-    return num_threads
+    Keep an explicit KVIKIO_NTHREADS setting; otherwise use available CPUs.
+    Resetting this global pool while another reader uses it is unsafe.
+    """
+    global _KVIKIO_NUM_THREADS
+    with _KVIKIO_DEFAULTS_LOCK:
+        if _KVIKIO_NUM_THREADS is None:
+            import kvikio.defaults as defaults
+
+            num_threads = int(defaults.get("num_threads"))
+            if "KVIKIO_NTHREADS" not in os.environ:
+                desired_threads = available_cpu_cores()
+                if num_threads != desired_threads:
+                    defaults.set("num_threads", desired_threads)
+                    num_threads = int(defaults.get("num_threads"))
+            _KVIKIO_NUM_THREADS = num_threads
+        return _KVIKIO_NUM_THREADS
 
 
 @contextmanager
@@ -106,6 +122,11 @@ class HeapReadHandle:
             self._futures = None  # drop refs so kvikio can release resources
         return self.d_buf, self.rel_offsets
 
+    @property
+    def done(self) -> bool:
+        """Report I/O completion without waiting on any read."""
+        return self._waited or all(fut.done() for fut in self._futures)
+
 
 class GdsHeapLoader:
     """Load compressed tile byte ranges into one device buffer.
@@ -170,9 +191,9 @@ class GdsHeapLoader:
         import cupy as cp
         import numpy as np
 
-        abs_offsets = np.asarray(abs_offsets, dtype=np.int64)
-        lengths = np.asarray(lengths, dtype=np.int64)
-        n = abs_offsets.size
+        offset_array = np.asarray(abs_offsets, dtype=np.int64)
+        length_array = np.asarray(lengths, dtype=np.int64)
+        n = offset_array.size
         if n == 0:
             return HeapReadHandle(
                 cp.empty(0, dtype=cp.uint8),
@@ -180,27 +201,29 @@ class GdsHeapLoader:
                 [],
             )
 
-        ends = abs_offsets + lengths
-        is_contiguous = bool(np.all(abs_offsets[1:] == ends[:-1]) or (n == 1))
+        ends = offset_array + length_array
+        is_contiguous = bool(
+            np.all(offset_array[1:] == ends[:-1]) or (n == 1)
+        )
 
         f = self._file()
 
         if is_contiguous:
-            span_start = int(abs_offsets[0])
+            span_start = int(offset_array[0])
             span_len = int(ends[-1]) - span_start
             d_buf = cp.empty(span_len, dtype=cp.uint8)
             fut = f.pread(d_buf, size=span_len, file_offset=span_start)
-            rel = (abs_offsets - span_start).astype(np.int64)
+            rel = (offset_array - span_start).astype(np.int64)
             return HeapReadHandle(d_buf, rel, [fut])
 
-        total = int(lengths.sum())
+        total = int(length_array.sum())
         d_buf = cp.empty(total, dtype=cp.uint8)
         rel = np.zeros(n, dtype=np.int64)
         cursor = 0
         futs = []
         for i in range(n):
-            off = int(abs_offsets[i])
-            ln = int(lengths[i])
+            off = int(offset_array[i])
+            ln = int(length_array[i])
             rel[i] = cursor
             view = d_buf[cursor : cursor + ln]
             futs.append(f.pread(view, size=ln, file_offset=off))

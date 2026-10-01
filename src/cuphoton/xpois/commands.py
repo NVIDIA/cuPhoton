@@ -2,16 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Class-based CLI commands for XPOIS."""
+"""Class-based CLI commands for xPois."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from numpy.linalg import LinAlgError
 
+from cuphoton.core.benchmark import BenchmarkOptions
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -23,12 +25,14 @@ from cuphoton.core.cli import (
     StringInvariant,
 )
 
+from .batch import BatchFitOptions
 from .data import inspect_hsc_data_tree
 from .ois import (
     EXPLICIT_BACKENDS,
     SUPPORTED_BACKENDS,
     GaussianBasisComponent,
 )
+from .spatial_als import SpatialALSConfig
 from .workflows import (
     benchmark_constant_kernel_backends,
     evaluate_subtraction_run,
@@ -53,6 +57,18 @@ _KNOWN_COMMAND_EXCEPTIONS = (
 
 def _emit_json_payload(payload: Any, *, out: Callable[[str], None]) -> None:
     out(json.dumps(payload, indent=2, default=str))
+
+
+def _run_dragon_image_pair_batch(**kwargs: Any) -> Any:
+    from .dragon import run_dragon_image_pair_batch
+
+    return run_dragon_image_pair_batch(**kwargs)
+
+
+def _run_mpi_image_pair_batch(**kwargs: Any) -> Any:
+    from .mpi import run_mpi_image_pair_batch
+
+    return run_mpi_image_pair_batch(**kwargs)
 
 
 class PathSpecInvariant(StringInvariant):
@@ -106,7 +122,7 @@ class XPOISCommand(InvariantAwareCommand):
 
 
 class DataInspectCommand(XPOISCommand):
-    """Inspect the shared HSC data tree used by XPOIS."""
+    """Inspect the shared HSC data tree used by xPois."""
 
     base = None
 
@@ -121,19 +137,8 @@ class DataInspectCommand(XPOISCommand):
         self._emit_json(summary)
 
 
-class _KernelSolveCommand(XPOISCommand):
-    reference = None
-    target = None
-    reference_hdu = None
-    target_hdu = None
-    variance = None
-    variance_hdu = None
-    reference_mask = None
-    target_mask = None
-    reference_mask_hdu = None
-    target_mask_hdu = None
+class _KernelSolveOptionsCommand(XPOISCommand):
     mask_policy = None
-    fit_mask = None
     auto_stamp_mask = None
     auto_stamp_size = None
     auto_stamp_count = None
@@ -146,75 +151,10 @@ class _KernelSolveCommand(XPOISCommand):
     run_name = None
     kernel_height = None
     kernel_width = None
-    basis_sigmas = None
-    basis_degrees = None
+    basis_sigmas: str | None = None
+    basis_degrees: str | None = None
     background_degree = None
     flux_conserve = None
-
-    class ReferenceArg(ImagePathInvariant):
-        _arg = "--reference"
-        _help = "Reference image path (.fits or .npy)."
-        _mandatory = True
-
-    class TargetArg(ImagePathInvariant):
-        _arg = "--target"
-        _help = "Target image path (.fits or .npy)."
-        _mandatory = True
-
-    class ReferenceHduArg(NonNegativeIntegerInvariant):
-        _arg = "--reference-hdu"
-        _help = "Optional explicit HDU index for the reference FITS file."
-        _mandatory = False
-        _default = None
-
-    class TargetHduArg(NonNegativeIntegerInvariant):
-        _arg = "--target-hdu"
-        _help = "Optional explicit HDU index for the target FITS file."
-        _mandatory = False
-        _default = None
-
-    class VarianceArg(PathSpecInvariant):
-        _arg = "--variance"
-        _help = "Optional variance image path (.fits or .npy)."
-        _mandatory = False
-        _default = None
-
-    class VarianceHduArg(NonNegativeIntegerInvariant):
-        _arg = "--variance-hdu"
-        _help = "Optional explicit HDU index for the variance FITS file."
-        _mandatory = False
-        _default = None
-
-    class ReferenceMaskArg(PathSpecInvariant):
-        _arg = "--reference-mask"
-        _help = (
-            "Optional reference mask path (.fits or .npy). "
-            "Defaults to --reference when mask-policy is enabled on FITS "
-            "input."
-        )
-        _mandatory = False
-        _default = None
-
-    class TargetMaskArg(PathSpecInvariant):
-        _arg = "--target-mask"
-        _help = (
-            "Optional target mask path (.fits or .npy). "
-            "Defaults to --target when mask-policy is enabled on FITS input."
-        )
-        _mandatory = False
-        _default = None
-
-    class ReferenceMaskHduArg(NonNegativeIntegerInvariant):
-        _arg = "--reference-mask-hdu"
-        _help = "Optional explicit HDU index for the reference FITS mask."
-        _mandatory = False
-        _default = None
-
-    class TargetMaskHduArg(NonNegativeIntegerInvariant):
-        _arg = "--target-mask-hdu"
-        _help = "Optional explicit HDU index for the target FITS mask."
-        _mandatory = False
-        _default = None
 
     class MaskPolicyArg(SetInvariant):
         _arg = "--mask-policy"
@@ -225,12 +165,6 @@ class _KernelSolveCommand(XPOISCommand):
         _mandatory = False
         _default = "none"
         _set = {"none", "strict", "hsc-masklite", "masklite"}
-
-    class FitMaskArg(PathSpecInvariant):
-        _arg = "--fit-mask"
-        _help = "Optional boolean .npy mask selecting fit pixels."
-        _mandatory = False
-        _default = None
 
     class AutoStampMaskArg(BoolInvariant):
         _arg = "--auto-stamp-mask"
@@ -340,6 +274,8 @@ class _KernelSolveCommand(XPOISCommand):
         _default = False
 
     def _components(self) -> list[GaussianBasisComponent]:
+        assert self.basis_degrees is not None
+        assert self.basis_sigmas is not None
         try:
             sigmas = [
                 float(item)
@@ -371,22 +307,199 @@ class _KernelSolveCommand(XPOISCommand):
             )
         return [
             GaussianBasisComponent(sigma=sigma, degree=degree)
-            for sigma, degree in zip(sigmas, degrees)
+            for sigma, degree in zip(sigmas, degrees, strict=True)
         ]
 
     def _output_root(self) -> Path:
         if self.output_dir is not None:
             return Path(self.output_dir).expanduser()
+        assert self.context is not None
         return self.context.runs_dir
+
+
+class _SpatialSolverOptionsCommand(_KernelSolveOptionsCommand):
+    fits_reader = None
+
+    class FitsReaderArg(SetInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS decompression reader. CPU auto uses Astropy. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
+        _set = {"auto", "astropy", "xdr"}
+
+    solver = None
+    spatial_degree = None
+    als_iterations = None
+    als_tolerance = None
+    als_regularization = None
+
+    class SolverArg(SetInvariant):
+        _arg = "--solver"
+        _help = (
+            "Kernel model to fit: constant or spatial-als. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "constant"
+        _set = {"constant", "spatial-als"}
+
+    def _warn_if_not_converged(self, summary: dict[str, Any]) -> None:
+        if summary.get("converged") is False:
+            spatial = summary.get("spatial_als", {})
+            self._warn(
+                "spatial ALS did not converge in "
+                f"{summary.get('iterations')} of "
+                f"{spatial.get('max_iterations')} sweeps; "
+                "inspect 'converged' in summary.json before accepting "
+                "the subtraction"
+            )
+
+    # The spatial ALS options default to None so the workflow can reject any
+    # explicit value for the constant solver and resolve unset values from
+    # SpatialALSConfig, the single source of those defaults.
+    class SpatialDegreeArg(NonNegativeIntegerInvariant):
+        _arg = "--spatial-degree"
+        _help = (
+            "Total Chebyshev degree for spatial ALS coefficient fields. "
+            f"[default: {SpatialALSConfig.spatial_degree}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class AlsIterationsArg(PositiveIntegerInvariant):
+        _arg = "--als-iterations"
+        _help = (
+            "Maximum spatial ALS sweeps. "
+            f"[default: {SpatialALSConfig.max_iterations}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class AlsToleranceArg(FloatInvariant):
+        _arg = "--als-tolerance"
+        _help = (
+            "Spatial ALS relative objective tolerance; 0 disables the "
+            "relative-change stop. "
+            f"[default: {SpatialALSConfig.tolerance}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.0
+
+    class AlsRegularizationArg(FloatInvariant):
+        _arg = "--als-regularization"
+        _help = (
+            "Spatial ALS ridge penalty. "
+            f"[default: {SpatialALSConfig.regularization}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.0
+
+
+class _KernelSolveCommand(_SpatialSolverOptionsCommand):
+    reference: str | None = None
+    target: str | None = None
+    reference_hdu = None
+    target_hdu = None
+    variance = None
+    variance_hdu = None
+    reference_mask = None
+    target_mask = None
+    reference_mask_hdu = None
+    target_mask_hdu = None
+    fit_mask = None
+
+    class ReferenceArg(ImagePathInvariant):
+        _arg = "--reference"
+        _help = "Reference image path (.fits or .npy)."
+        _mandatory = True
+
+    class TargetArg(ImagePathInvariant):
+        _arg = "--target"
+        _help = "Target image path (.fits or .npy)."
+        _mandatory = True
+
+    class ReferenceHduArg(NonNegativeIntegerInvariant):
+        _arg = "--reference-hdu"
+        _help = "Optional explicit HDU index for the reference FITS file."
+        _mandatory = False
+        _default = None
+
+    class TargetHduArg(NonNegativeIntegerInvariant):
+        _arg = "--target-hdu"
+        _help = "Optional explicit HDU index for the target FITS file."
+        _mandatory = False
+        _default = None
+
+    class VarianceArg(PathSpecInvariant):
+        _arg = "--variance"
+        _help = "Optional target variance image path (.fits or .npy)."
+        _mandatory = False
+        _default = None
+
+    class VarianceHduArg(NonNegativeIntegerInvariant):
+        _arg = "--variance-hdu"
+        _help = "Optional explicit HDU index for the variance FITS file."
+        _mandatory = False
+        _default = None
+
+    class ReferenceMaskArg(PathSpecInvariant):
+        _arg = "--reference-mask"
+        _help = (
+            "Optional reference mask path (.fits or .npy). "
+            "Defaults to --reference when mask-policy is enabled on FITS "
+            "input."
+        )
+        _mandatory = False
+        _default = None
+
+    class TargetMaskArg(PathSpecInvariant):
+        _arg = "--target-mask"
+        _help = (
+            "Optional target mask path (.fits or .npy). "
+            "Defaults to --target when mask-policy is enabled on FITS input."
+        )
+        _mandatory = False
+        _default = None
+
+    class ReferenceMaskHduArg(NonNegativeIntegerInvariant):
+        _arg = "--reference-mask-hdu"
+        _help = "Optional explicit HDU index for the reference FITS mask."
+        _mandatory = False
+        _default = None
+
+    class TargetMaskHduArg(NonNegativeIntegerInvariant):
+        _arg = "--target-mask-hdu"
+        _help = "Optional explicit HDU index for the target FITS mask."
+        _mandatory = False
+        _default = None
+
+    class FitMaskArg(PathSpecInvariant):
+        _arg = "--fit-mask"
+        _help = "Optional boolean .npy mask selecting fit pixels."
+        _mandatory = False
+        _default = None
 
 
 class _FitCommand(_KernelSolveCommand):
     backend = None
+    no_review = None
+
+    class NoReviewArg(BoolInvariant):
+        _arg = "--no-review"
+        _help = "Skip review metadata and HTML; retain fitted artifacts."
+        _mandatory = False
+        _default = False
 
     class BackendArg(SetInvariant):
         _arg = "--backend"
         _help = (
-            "Fit backend. Auto tries cupy, then numba-cuda, then cpu. "
+            "Fit backend. Constant-solver auto tries cupy, then numba-cuda, "
+            "then cpu; spatial-als auto tries cupy, then cpu. "
             "[default: %default]"
         )
         _mandatory = False
@@ -395,12 +508,12 @@ class _FitCommand(_KernelSolveCommand):
 
 
 class FitKernelCommand(_FitCommand):
-    """Fit a constant kernel and persist reviewable subtraction artifacts.
+    """Fit a kernel model and persist reviewable subtraction artifacts.
 
     This is the main source-backed OIS workflow entrypoint. It supports:
 
     - raw FITS or `.npy` image inputs
-    - optional variance images / variance HDUs
+    - optional target variance images / variance HDUs
     - optional input-mask policies and explicit mask HDUs
     - optional rectangular workflow crops
     - explicit fit masks or auto-selected compact-source stamp masks
@@ -410,6 +523,8 @@ class FitKernelCommand(_FitCommand):
     """
 
     def run(self) -> None:
+        assert self.reference is not None
+        assert self.target is not None
         result = self._call(
             run_constant_kernel_fit,
             reference_path=Path(self.reference).expanduser(),
@@ -439,14 +554,22 @@ class FitKernelCommand(_FitCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            fits_reader=self.fits_reader,
+            review=not self.no_review,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
             workflow_name="fit_kernel",
             run_prefix="fit-kernel",
         )
+        self._warn_if_not_converged(result.summary)
         self._emit_json(result.summary)
 
 
 class SubtractCommand(_FitCommand):
-    """Run the same constant-kernel workflow under subtraction naming.
+    """Run the same kernel-fit workflow under subtraction naming.
 
     This currently shares the same underlying solve path as `fit-kernel`, but
     emits `workflow="subtract"` and uses the `subtract-*` run-prefix naming
@@ -455,6 +578,8 @@ class SubtractCommand(_FitCommand):
     """
 
     def run(self) -> None:
+        assert self.reference is not None
+        assert self.target is not None
         result = self._call(
             run_constant_kernel_fit,
             reference_path=Path(self.reference).expanduser(),
@@ -484,22 +609,300 @@ class SubtractCommand(_FitCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backend=self.backend,
+            fits_reader=self.fits_reader,
+            review=not self.no_review,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
             workflow_name="subtract",
             run_prefix="subtract",
         )
+        self._warn_if_not_converged(result.summary)
         self._emit_json(result.summary)
 
 
-class BenchmarkBackendsCommand(_KernelSolveCommand):
-    """Benchmark constant-kernel CPU/CuPy backends and parity.
+class FitBatchCommand(_SpatialSolverOptionsCommand):
+    """Fit an image-pair manifest with a selected distributed executor."""
 
-    This command isolates the constant-kernel solve/application path. It loads
-    the input arrays once, repeats `solve_constant_kernel` for each backend,
-    and persists timing plus numerical comparison artifacts under the run
-    directory.
+    executor = None
+    manifest: str | None = None
+    max_workers = None
+    result_timeout_sec = None
+    worker_timeout_sec = None
+    aggregation_mode = None
+    rank_setup_timeout_sec = None
+    rank_timeout_sec = None
+    attempt_id = None
+    backend = None
+    warmup_rounds = None
+    measure_rounds = None
+
+    class WarmupRoundsArg(NonNegativeIntegerInvariant):
+        _arg = "--warmup-rounds"
+        _help = (
+            "Opt into persistent-worker benchmarking with this many warmup "
+            "passes over the manifest. Outputs are retained. "
+            "[default when benchmarking: 0]"
+        )
+        _mandatory = False
+        _default = None
+
+    class MeasureRoundsArg(PositiveIntegerInvariant):
+        _arg = "--measure-rounds"
+        _help = (
+            "Opt into persistent-worker benchmarking with this many measured "
+            "passes over the manifest. MPI requires aggregation mpi. "
+            "[default when benchmarking: 1]"
+        )
+        _mandatory = False
+        _default = None
+
+    class ExecutorArg(SetInvariant):
+        _arg = "--executor"
+        _help = (
+            "Distributed executor. MPI requires an external mpirun/srun "
+            "launcher with GPU binding; see docs/components/xpois.md."
+        )
+        _mandatory = True
+        _set = {"dragon", "mpi"}
+        _metavar = "{dragon,mpi}"
+
+    class ManifestArg(PathSpecInvariant):
+        _arg = "--manifest"
+        _help = "Strict JSON or YAML image-pair manifest."
+        _mandatory = True
+
+    class MaxWorkersArg(PositiveIntegerInvariant):
+        _arg = "--max-workers"
+        _help = "Dragon-only maximum explicitly placed GPU workers."
+        _mandatory = False
+        _default = None
+
+    class ResultTimeoutSecArg(FloatInvariant):
+        _arg = "--result-timeout-sec"
+        _help = (
+            "Dragon-only seconds of grace for ProcessGroup join and compact "
+            "worker results, plus shared artifact visibility. "
+            "[Dragon default: 60.0]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.001
+
+    class WorkerTimeoutSecArg(FloatInvariant):
+        _arg = "--worker-timeout-sec"
+        _help = (
+            "Dragon-only ProcessGroup worker wall time in seconds. "
+            "[Dragon default: 3600.0]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.001
+
+    class AggregationModeArg(SetInvariant):
+        _arg = "--aggregation-mode"
+        _help = "MPI-only rank-metadata aggregation mode. [MPI default: mpi]"
+        _mandatory = False
+        _default = None
+        _set = {"mpi", "files"}
+        _metavar = "{files,mpi}"
+
+    class RankTimeoutSecArg(FloatInvariant):
+        _arg = "--rank-timeout-sec"
+        _help = "MPI file-mode rank-completion wait. [files default: 3600.0]"
+        _mandatory = False
+        _default = None
+        _min = 0.001
+
+    class RankSetupTimeoutSecArg(FloatInvariant):
+        _arg = "--rank-setup-timeout-sec"
+        _help = (
+            "MPI setup wait for file metadata and collective rank/record "
+            "visibility. [MPI default: 600.0]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 0.001
+
+    class AttemptIdArg(StringInvariant):
+        _arg = "--attempt-id"
+        _help = "MPI-only shared identity for one file-aggregation launch."
+        _mandatory = False
+        _default = None
+        _minlen = 1
+        _maxlen = 256
+
+    class BackendArg(SetInvariant):
+        _arg = "--backend"
+        _help = "Explicit GPU fit backend."
+        _mandatory = True
+        _set = {"cupy", "numba-cuda", "cutile"}
+        _metavar = "{cupy,cutile,numba-cuda}"
+
+    def run(self) -> None:
+        assert self.manifest is not None
+        self._validate_executor_options()
+        components = self._components()
+        options = self._call(
+            BatchFitOptions,
+            kernel_shape=(self.kernel_height, self.kernel_width),
+            basis_sigmas=tuple(item.sigma for item in components),
+            basis_degrees=tuple(item.degree for item in components),
+            mask_policy=self.mask_policy,
+            crop_y0=self.crop_y0,
+            crop_x0=self.crop_x0,
+            crop_height=self.crop_height,
+            crop_width=self.crop_width,
+            auto_stamp_mask=bool(self.auto_stamp_mask),
+            auto_stamp_size=self.auto_stamp_size,
+            auto_stamp_count=self.auto_stamp_count,
+            auto_peak_percentile=self.auto_peak_percentile,
+            background_degree=self.background_degree,
+            flux_conserve=bool(self.flux_conserve),
+            backend=self.backend,
+            fits_reader=self.fits_reader,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
+        )
+        common = {
+            "manifest_path": Path(self.manifest).expanduser(),
+            "output_root": self._output_root(),
+            "run_id": self.run_name or None,
+            "options": options,
+        }
+        if self.warmup_rounds is not None or self.measure_rounds is not None:
+            common["benchmark"] = BenchmarkOptions(
+                warmup_rounds=self.warmup_rounds or 0,
+                measure_rounds=self.measure_rounds or 1,
+            )
+        if self.executor == "dragon":
+            result = self._call(
+                _run_dragon_image_pair_batch,
+                **common,
+                max_workers=self.max_workers,
+                result_timeout_sec=(
+                    60.0
+                    if self.result_timeout_sec is None
+                    else self.result_timeout_sec
+                ),
+                worker_timeout_sec=(
+                    3600.0
+                    if self.worker_timeout_sec is None
+                    else self.worker_timeout_sec
+                ),
+            )
+        else:
+            aggregation_mode = self.aggregation_mode or "mpi"
+            result = self._call(
+                _run_mpi_image_pair_batch,
+                **common,
+                aggregation_mode=aggregation_mode,
+                rank_setup_timeout_sec=(
+                    600.0
+                    if self.rank_setup_timeout_sec is None
+                    else self.rank_setup_timeout_sec
+                ),
+                rank_timeout_sec=(
+                    3600.0
+                    if aggregation_mode == "files"
+                    and self.rank_timeout_sec is None
+                    else self.rank_timeout_sec
+                ),
+                attempt_id=self.attempt_id,
+            )
+        if result is None:
+            return
+        payload = dict(result.to_dict())
+        if payload.get("executor") != self.executor:
+            raise CommandError(
+                f"{self.executor} executor returned invalid provenance"
+            )
+        self._emit_json(payload)
+        if result.status != "success":
+            executor_name = "Dragon" if self.executor == "dragon" else "MPI"
+            raise CommandError(
+                f"{executor_name} batch failed; inspect {result.summary_path}"
+            )
+
+    def _validate_executor_options(self) -> None:
+        if (
+            self.executor == "mpi"
+            and self.aggregation_mode == "files"
+            and (
+                self.warmup_rounds is not None
+                or self.measure_rounds is not None
+            )
+        ):
+            raise CommandError(
+                "--warmup-rounds and --measure-rounds require MPI "
+                "--aggregation-mode mpi"
+            )
+        invalid: tuple[tuple[str, object], ...]
+        if self.executor == "dragon":
+            invalid = (
+                ("--aggregation-mode", self.aggregation_mode),
+                ("--rank-setup-timeout-sec", self.rank_setup_timeout_sec),
+                ("--rank-timeout-sec", self.rank_timeout_sec),
+                ("--attempt-id", self.attempt_id),
+            )
+        else:
+            invalid = (
+                ("--max-workers", self.max_workers),
+                ("--result-timeout-sec", self.result_timeout_sec),
+                ("--worker-timeout-sec", self.worker_timeout_sec),
+            )
+        supplied = [flag for flag, value in invalid if value is not None]
+        if supplied:
+            raise CommandError(
+                f"{', '.join(supplied)} cannot be used with "
+                f"--executor {self.executor}"
+            )
+        if (
+            self.executor == "mpi"
+            and (self.aggregation_mode or "mpi") != "files"
+        ):
+            file_only = (
+                ("--rank-timeout-sec", self.rank_timeout_sec),
+                ("--attempt-id", self.attempt_id),
+            )
+            supplied = [
+                flag for flag, value in file_only if value is not None
+            ]
+            if supplied:
+                raise CommandError(
+                    f"{', '.join(supplied)} can be used only with "
+                    "--aggregation-mode files"
+                )
+        if (
+            self.executor == "mpi"
+            and (self.aggregation_mode or "mpi") == "files"
+        ):
+            required = (
+                ("--name", self.run_name),
+                ("--attempt-id", self.attempt_id),
+            )
+            missing = [flag for flag, value in required if not value]
+            if missing:
+                raise CommandError(
+                    f"{', '.join(missing)} must be provided with "
+                    "--aggregation-mode files"
+                )
+
+
+class BenchmarkBackendsCommand(_KernelSolveCommand):
+    """Benchmark CPU/GPU kernel solvers and numerical parity.
+
+    This command loads the input arrays once, repeats the selected solver for
+    each backend, and persists timing plus numerical comparison artifacts
+    under the run directory.
     """
 
-    backends = None
+    backends: str | None = None
     reference_backend = None
     repeats = None
     warmup = None
@@ -546,6 +949,9 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
         _min = 0.0
 
     def run(self) -> None:
+        assert self.backends is not None
+        assert self.reference is not None
+        assert self.target is not None
         result = self._call(
             benchmark_constant_kernel_backends,
             reference_path=Path(self.reference).expanduser(),
@@ -558,6 +964,15 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
             components=self._components(),
             variance_path=self._path(self.variance),
             variance_hdu=self.variance_hdu,
+            reference_mask_path=self._path(self.reference_mask),
+            target_mask_path=self._path(self.target_mask),
+            reference_mask_hdu=self.reference_mask_hdu,
+            target_mask_hdu=self.target_mask_hdu,
+            mask_policy=self.mask_policy,
+            auto_stamp_mask=bool(self.auto_stamp_mask),
+            auto_stamp_size=self.auto_stamp_size,
+            auto_stamp_count=self.auto_stamp_count,
+            auto_peak_percentile=self.auto_peak_percentile,
             fit_mask_path=self._path(self.fit_mask),
             crop_y0=self.crop_y0,
             crop_x0=self.crop_x0,
@@ -566,11 +981,17 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
             background_degree=self.background_degree,
             flux_conserve=bool(self.flux_conserve),
             backends=self._csv_backends(self.backends),
+            fits_reader=self.fits_reader,
             reference_backend=self.reference_backend,
             repeats=self.repeats,
             warmup=self.warmup,
             atol=self.atol,
             rtol=self.rtol,
+            solver=self.solver,
+            spatial_degree=self.spatial_degree,
+            als_iterations=self.als_iterations,
+            als_tolerance=self.als_tolerance,
+            als_regularization=self.als_regularization,
         )
         self._emit_json(result.summary)
 
@@ -583,7 +1004,7 @@ class EvaluateSubtractionCommand(XPOISCommand):
     reproducible even after the run is moved.
     """
 
-    run_dir = None
+    run_dir: str | None = None
 
     class RunDirArg(PathSpecInvariant):
         _arg = "--run-dir"
@@ -591,6 +1012,7 @@ class EvaluateSubtractionCommand(XPOISCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.run_dir is not None
         result = self._call(
             evaluate_subtraction_run,
             Path(self.run_dir).expanduser(),
@@ -606,7 +1028,7 @@ class ReviewBokehCommand(XPOISCommand):
     `review_bokeh.html` path as JSON.
     """
 
-    run_dir = None
+    run_dir: str | None = None
 
     class RunDirArg(PathSpecInvariant):
         _arg = "--run-dir"
@@ -614,6 +1036,7 @@ class ReviewBokehCommand(XPOISCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.run_dir is not None
         result = self._call(
             rebuild_interactive_review,
             Path(self.run_dir).expanduser(),

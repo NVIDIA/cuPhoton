@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import numpy as np
 
@@ -561,6 +562,8 @@ def _propagate_mask_or_torch(
     fx = safe_x - x0.to(torch.float64)
     fy = safe_y - y0.to(torch.float64)
 
+    x_contributors: tuple[tuple[int, Any], ...]
+    y_contributors: tuple[tuple[int, Any], ...]
     if interpolation == "bilinear":
         x_contributors = ((0, (1.0 - fx) != 0.0), (1, fx != 0.0))
         y_contributors = ((0, (1.0 - fy) != 0.0), (1, fy != 0.0))

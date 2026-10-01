@@ -15,7 +15,7 @@ from astropy.wcs import WCS
 from astropy.wcs.wcs import NoConvergence
 
 from .geometry import BBox, Grid, ReprojectionSpec
-from .io import load_fits_image_with_wcs
+from .io import inspect_fits_image_with_wcs
 
 
 @dataclass(slots=True)
@@ -216,10 +216,10 @@ def make_wcs_mapping(
         Destination footprint used by the mapping.
     """
 
-    image, source_wcs, _, _ = load_fits_image_with_wcs(fits_path, hdu=hdu)
+    shape, source_wcs, _, _ = inspect_fits_image_with_wcs(fits_path, hdu=hdu)
     bbox = output_bbox or estimate_source_bbox_on_grid(
         source_wcs,
-        shape=image.shape,
+        shape=shape,
         grid=grid,
     )
     return make_grid_mapping(source_wcs, grid=grid, output_bbox=bbox), bbox

@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: sync sync-gpu sync-cutile lock lock-check lint format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu clean-dist build package-check release-check ci-lint ci-test-cpu hooks
+.PHONY: sync sync-gpu sync-cutile lock lock-check lint typecheck format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels conda release-check ci-lint ci-test-cpu hooks
 
-CPU_EXTRAS = --extra dev --extra torch --extra viz
+CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
-CORE_EXTRAS = --extra dev
-VIZ_EXTRAS = --extra dev --extra viz
+CORE_EXTRAS = --extra dev --extra photometry
+VIZ_EXTRAS = --extra dev --extra viz --extra photometry
 UV_RUN = uv run --locked
 
 sync:
@@ -17,7 +17,7 @@ sync-gpu:
 	uv sync --locked $(GPU_EXTRAS)
 
 sync-cutile:
-	uv sync --locked --python 3.12 $(GPU_EXTRAS) --extra cutile
+	uv sync --locked $(GPU_EXTRAS) --extra cutile
 
 lock:
 	uv lock
@@ -25,9 +25,12 @@ lock:
 lock-check:
 	uv lock --check
 
-lint:
+lint: typecheck
 	$(UV_RUN) --extra dev ruff check .
 	$(UV_RUN) --extra dev ruff format --check .
+
+typecheck:
+	$(UV_RUN) --extra dev mypy
 
 format:
 	$(UV_RUN) --extra dev ruff check --fix .
@@ -37,7 +40,7 @@ test:
 	$(UV_RUN) $(CPU_EXTRAS) pytest
 
 test-cpu:
-	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) pytest
+	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) pytest -rs
 
 test-core:
 	$(UV_RUN) $(CORE_EXTRAS) pytest tests/core
@@ -66,20 +69,34 @@ test-xray:
 test-gpu:
 	$(UV_RUN) $(GPU_EXTRAS) pytest
 
+test-cutile:
+	$(UV_RUN) $(GPU_EXTRAS) --extra cutile pytest tests/xfit tests/xpois
+
 clean-dist:
 	rm -rf dist
 
-build: clean-dist
-	uv build
+build:
+	rm -f dist/cuphoton-*.tar.gz
+	CUPHOTON_XDR_BUILD_EXT=0 uv build --sdist
+
+wheels: build
+	rm -f dist/cuphoton-*.whl
+	uv tool run --from cibuildwheel==4.2.1 cibuildwheel --platform linux --output-dir dist dist/*.tar.gz
+
+conda: build
+	rm -rf dist/conda
+	pixi exec --spec rattler-build=0.76.1 --spec python=3.12 -- python scripts/conda/build.py dist/*.tar.gz
 
 package-check: build
-	uvx --isolated --from twine==6.2.0 twine check dist/*
+	uvx --isolated --from twine==6.2.0 twine check --strict dist/*.tar.gz
 
 release-check:
 	$(MAKE) lock-check
 	$(MAKE) ci-lint
 	$(MAKE) ci-test-cpu
-	$(MAKE) package-check
+	$(MAKE) wheels
+	python scripts/wheels/check_distributions.py dist --arch "$$(uname -m)"
+	uvx --isolated --from twine==6.2.0 twine check --strict dist/*.tar.gz dist/*.whl
 
 ci-lint:
 	$(MAKE) lint

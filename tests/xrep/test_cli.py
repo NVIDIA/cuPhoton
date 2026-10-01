@@ -44,6 +44,7 @@ def test_group_program_name_is_used_in_help_output(capsys) -> None:
 
     assert rc == 0
     assert "Usage: cuphoton xrep reproject-image" in captured.out
+    assert "--fits-reader" in captured.out
     assert "--input" in captured.out
     assert "-c FILE, --conf=FILE" not in captured.out
 
@@ -54,6 +55,7 @@ def test_help_for_reproject_stack_command(capsys) -> None:
 
     assert rc == 0
     assert "Usage: cuphoton xrep reproject-stack" in captured.out
+    assert "--fits-reader" in captured.out
     assert "--inputs" in captured.out
     assert "--mapping-mode" not in captured.out
 
@@ -64,6 +66,7 @@ def test_help_for_benchmark_reproject_image_command(capsys) -> None:
 
     assert rc == 0
     assert "Usage: cuphoton xrep benchmark-reproject-image" in captured.out
+    assert "--fits-reader" in captured.out
     assert "--repeats" in captured.out
     assert "--warmup" in captured.out
 
@@ -74,6 +77,7 @@ def test_help_for_benchmark_backend_variants_command(capsys) -> None:
 
     assert rc == 0
     assert "Usage: cuphoton xrep benchmark-backend-variants" in captured.out
+    assert "--fits-reader" in captured.out
     assert "--variants" in captured.out
     assert "--mask-cases" in captured.out
 
@@ -84,6 +88,7 @@ def test_help_for_compare_backends_command(capsys) -> None:
 
     assert rc == 0
     assert "Usage: cuphoton xrep compare-backends" in captured.out
+    assert "--fits-reader" in captured.out
     assert "--backends" in captured.out
     assert "--reference-backend" in captured.out
 
@@ -94,6 +99,14 @@ def test_reproject_image_help_documents_explicit_auto_backend(capsys) -> None:
 
     assert rc == 0
     assert "auto" in captured.out
+
+
+def test_inspect_image_help_omits_fits_reader(capsys) -> None:
+    rc = _run_cli(["help", "inspect-image"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "--fits-reader" not in captured.out
 
 
 def test_inspect_image_command_emits_json(tmp_path: Path, capsys) -> None:

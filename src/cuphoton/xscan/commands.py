@@ -2,24 +2,31 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Class-based CLI commands for XScan."""
+"""Class-based CLI commands for xScan."""
 
 from __future__ import annotations
 
 import json
+import math
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from types import SimpleNamespace
+from typing import Any, TypeVar
 
+from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
+    FloatInvariant,
     InvariantAwareCommand,
     NonNegativeIntegerInvariant,
     PositiveIntegerInvariant,
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.executor import ExecutorOptions
+from cuphoton.core.cli.fits import FitsReaderOptions
 
 T = TypeVar("T")
 _DEFAULT_REVIEW_DIR = os.environ.get("CUPHOTON_XSCAN_REVIEW_DIR")
@@ -47,7 +54,7 @@ def _load_workflow(name: str) -> Callable[..., Any]:
             if exc.name != "torch":
                 raise
             raise ModuleNotFoundError(
-                "XScan workflows require PyTorch; run "
+                "xScan workflows require PyTorch; run "
                 "'uv sync --extra torch' for development or install "
                 "'cuphoton[torch]'"
             ) from exc
@@ -244,9 +251,9 @@ class XScanCommand(InvariantAwareCommand):
 
 
 class DataInspectCommand(XScanCommand):
-    """Inspect a packaged XScan dataset directory."""
+    """Inspect a packaged xScan dataset directory."""
 
-    dataset_dir = None
+    dataset_dir: str | None = None
     dataset_kind = None
 
     class DatasetDirArg(PathSpecInvariant):
@@ -261,6 +268,7 @@ class DataInspectCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
         payload = self._call(
             inspect_dataset_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -270,9 +278,9 @@ class DataInspectCommand(XScanCommand):
 
 
 class DataValidateCommand(XScanCommand):
-    """Validate a packaged XScan dataset directory."""
+    """Validate a packaged xScan dataset directory."""
 
-    dataset_dir = None
+    dataset_dir: str | None = None
     dataset_kind = None
 
     class DatasetDirArg(PathSpecInvariant):
@@ -287,6 +295,7 @@ class DataValidateCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
         payload = self._call(
             validate_dataset_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -296,19 +305,19 @@ class DataValidateCommand(XScanCommand):
 
 
 class DataBuildXFitFeaturesCommand(XScanCommand):
-    """Build a candidate-keyed xFit feature bundle for XScan fusion."""
+    """Build a candidate-keyed xFit feature bundle for xScan fusion."""
 
     _name_ = "data-build-xfit-features"
 
-    dataset_dir = None
-    x_fit_run_dir = None
-    output_dir = None
+    dataset_dir: str | None = None
+    x_fit_run_dir: str | None = None
+    output_dir: str | None = None
     missing_policy = None
 
     class DatasetDirArg(PathSpecInvariant):
         _arg = "--dataset-dir"
         _help = (
-            "Packaged XScan dataset whose candidate order is authoritative."
+            "Packaged xScan dataset whose candidate order is authoritative."
         )
         _mandatory = True
 
@@ -319,7 +328,7 @@ class DataBuildXFitFeaturesCommand(XScanCommand):
 
     class OutputDirArg(PathSpecInvariant):
         _arg = "--output-dir"
-        _help = "New directory for the XScan xFit feature bundle."
+        _help = "New directory for the xScan xFit feature bundle."
         _mandatory = True
 
     class MissingPolicyArg(XFitMissingPolicyInvariant):
@@ -332,6 +341,9 @@ class DataBuildXFitFeaturesCommand(XScanCommand):
         _default = "error"
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.output_dir is not None
+        assert self.x_fit_run_dir is not None
         result = self._call(
             build_xfit_feature_bundle_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -347,12 +359,16 @@ class DataExportXFitInputCommand(XScanCommand):
 
     _name_ = "data-export-xfit-input"
 
-    dataset_dir = None
-    output_path = None
+    dataset_dir: str | None = None
+    output_path: str | None = None
+    variance = None
+    mask = None
+    image_unit = None
+    skip_source_rehash = None
 
     class DatasetDirArg(PathSpecInvariant):
         _arg = "--dataset-dir"
-        _help = "Packaged XScan dataset containing difference.npy."
+        _help = "Packaged xScan dataset containing difference.npy."
         _mandatory = True
 
     class OutputPathArg(PathSpecInvariant):
@@ -360,20 +376,57 @@ class DataExportXFitInputCommand(XScanCommand):
         _help = "New .npz path for exact, unique xFit input stamps."
         _mandatory = True
 
+    class VarianceArg(PathSpecInvariant):
+        _arg = "--variance"
+        _help = "Optional variance .npy aligned to the original dataset rows."
+        _mandatory = False
+        _default = None
+
+    class MaskArg(PathSpecInvariant):
+        _arg = "--mask"
+        _help = "Optional row-aligned inclusion mask .npy; nonzero includes."
+        _mandatory = False
+        _default = None
+
+    class ImageUnitArg(StringInvariant):
+        _arg = "--image-unit"
+        _help = (
+            "Image unit label for provenance; variance uses squared units."
+        )
+        _mandatory = False
+        _default = None
+
+    class SkipSourceRehashArg(BoolInvariant):
+        _arg = "--skip-source-rehash"
+        _help = (
+            "Skip post-copy source hashing for immutable inputs; "
+            "initial source hashes and the archive hash are retained."
+        )
+        _mandatory = False
+        _default = False
+
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.output_path is not None
         payload = self._call(
             export_xfit_input_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
             output_path=Path(self.output_path).expanduser(),
+            variance_path=Path(self.variance).expanduser()
+            if self.variance
+            else None,
+            mask_path=Path(self.mask).expanduser() if self.mask else None,
+            image_unit=self.image_unit,
+            verify_sources_after_copy=not bool(self.skip_source_rehash),
         )
         self._emit_json(payload)
 
 
 class DataMergeCommand(XScanCommand):
-    """Merge compatible packaged XScan datasets."""
+    """Merge compatible packaged xScan datasets."""
 
-    dataset_dirs = None
-    output_dir = None
+    dataset_dirs: str | None = None
+    output_dir: str | None = None
     dataset_kind = None
 
     class DatasetDirsArg(StringInvariant):
@@ -393,6 +446,8 @@ class DataMergeCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.dataset_dirs is not None
+        assert self.output_dir is not None
         result = self._call(
             merge_dataset_workflow,
             dataset_dirs=self._csv_paths(self.dataset_dirs),
@@ -403,8 +458,8 @@ class DataMergeCommand(XScanCommand):
 
 
 class _PreparedDatasetBuildCommand(XScanCommand):
-    manifest = None
-    output_dir = None
+    manifest: str | None = None
+    output_dir: str | None = None
     dataset_kind = None
 
     class ManifestArg(PathSpecInvariant):
@@ -422,6 +477,8 @@ class DataBuildAutoscanCommand(_PreparedDatasetBuildCommand):
     """Package a prepared autoScan-style DES dataset into canonical layout."""
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_prepared_dataset_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -431,14 +488,19 @@ class DataBuildAutoscanCommand(_PreparedDatasetBuildCommand):
         self._emit_json(result.summary)
 
 
-class DataBuildAutoscanRawCommand(_PreparedDatasetBuildCommand):
+class DataBuildAutoscanRawCommand(
+    FitsReaderOptions, _PreparedDatasetBuildCommand
+):
     """Build a canonical autoScan dataset from raw detection records."""
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_raw_autoscan_workflow,
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
+            fits_reader=self.fits_reader,
         )
         self._emit_json(result.summary)
 
@@ -447,6 +509,8 @@ class DataBuildNodiffCommand(_PreparedDatasetBuildCommand):
     """Package a prepared no-Diff DES dataset into canonical layout."""
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_prepared_dataset_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -456,14 +520,19 @@ class DataBuildNodiffCommand(_PreparedDatasetBuildCommand):
         self._emit_json(result.summary)
 
 
-class DataBuildNodiffRawCommand(_PreparedDatasetBuildCommand):
+class DataBuildNodiffRawCommand(
+    FitsReaderOptions, _PreparedDatasetBuildCommand
+):
     """Build a canonical no-Diff dataset from raw search/template images."""
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_raw_nodiff_workflow,
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
+            fits_reader=self.fits_reader,
         )
         self._emit_json(result.summary)
 
@@ -474,6 +543,8 @@ class DataBuildNodiffReleaseCommand(_PreparedDatasetBuildCommand):
     _shortname_ = "dbnrel"
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_nodiff_release_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -486,6 +557,8 @@ class DataBuildHscCommand(_PreparedDatasetBuildCommand):
     """Build an HSC-domain synthetic dataset from real HSC image products."""
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_hsc_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -494,14 +567,19 @@ class DataBuildHscCommand(_PreparedDatasetBuildCommand):
         self._emit_json(result.summary)
 
 
-class DataBuildLsstcomcamSmokeCommand(_PreparedDatasetBuildCommand):
+class DataBuildLsstcomcamSmokeCommand(
+    FitsReaderOptions, _PreparedDatasetBuildCommand
+):
     """Build a tiny registry-backed LSSTComCam smoke dataset."""
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
         result = self._call(
             build_lsstcomcam_smoke_workflow,
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
+            fits_reader=self.fits_reader,
         )
         self._emit_json(result.summary)
 
@@ -509,7 +587,7 @@ class DataBuildLsstcomcamSmokeCommand(_PreparedDatasetBuildCommand):
 class DataCheckLsstcomcamCandidatesCommand(XScanCommand):
     """Preflight LSSTComCam candidate catalogs before stamp building."""
 
-    manifest = None
+    manifest: str | None = None
     strict = None
     require_ok = None
 
@@ -534,6 +612,7 @@ class DataCheckLsstcomcamCandidatesCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.manifest is not None
         result = self._call(
             check_lsstcomcam_candidates_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -550,7 +629,7 @@ class DataCheckLsstcomcamCandidatesCommand(XScanCommand):
 class DataPlanLsstcomcamStagingCommand(XScanCommand):
     """List FITS files needed by an LSSTComCam smoke manifest."""
 
-    manifest = None
+    manifest: str | None = None
     sample_count = None
 
     class ManifestArg(PathSpecInvariant):
@@ -567,6 +646,7 @@ class DataPlanLsstcomcamStagingCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.manifest is not None
         result = self._call(
             plan_lsstcomcam_staging_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -582,10 +662,10 @@ class DataPlanLsstcomcamStagingCommand(XScanCommand):
 class DataStageLsstcomcamFitsCommand(XScanCommand):
     """Stage exact FITS inputs needed by an LSSTComCam smoke manifest."""
 
-    manifest = None
+    manifest: str | None = None
     source_prefix = None
-    target_prefix = None
-    search_roots = None
+    target_prefix: str | None = None
+    search_roots: str | None = None
     sample_count = None
     link_mode = None
     duplicate_policy = None
@@ -645,6 +725,9 @@ class DataStageLsstcomcamFitsCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.search_roots is not None
+        assert self.target_prefix is not None
         result = self._call(
             stage_lsstcomcam_fits_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -667,7 +750,7 @@ class DataStageLsstcomcamFitsCommand(XScanCommand):
 class DataCheckTrainingLabelsCommand(XScanCommand):
     """Preflight label provenance before training a real-bogus model."""
 
-    dataset_dir = None
+    dataset_dir: str | None = None
     require_ok = None
 
     class DatasetDirArg(PathSpecInvariant):
@@ -682,6 +765,7 @@ class DataCheckTrainingLabelsCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
         result = self._call(
             check_training_labels_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -697,8 +781,8 @@ class DataCheckTrainingLabelsCommand(XScanCommand):
 class DataBuildHscRegistryCommand(XScanCommand):
     """Build a Butler-style registry from local HSC FITS products."""
 
-    fits_root = None
-    output_path = None
+    fits_root: str | None = None
+    output_path: str | None = None
     hsc_npy_dir = None
     butler_run = None
 
@@ -725,6 +809,8 @@ class DataBuildHscRegistryCommand(XScanCommand):
         _default = "local-hsc-fits"
 
     def run(self) -> None:
+        assert self.fits_root is not None
+        assert self.output_path is not None
         result = self._call(
             build_hsc_registry_workflow,
             fits_root=Path(self.fits_root).expanduser(),
@@ -739,7 +825,7 @@ class ExperimentalBuildHscSyntheticCommand(XScanCommand):
     """Build a lightweight experimental HSC synthetic dataset."""
 
     base = None
-    output_dir = None
+    output_dir: str | None = None
     positive_count = None
     negative_count = None
     stamp_size = None
@@ -801,6 +887,7 @@ class ExperimentalBuildHscSyntheticCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.output_dir is not None
         result = self._call(
             build_experimental_hsc_workflow,
             base=self.base,
@@ -817,7 +904,7 @@ class ExperimentalBuildHscSyntheticCommand(XScanCommand):
 
 
 class _TrainCommand(XScanCommand):
-    config = None
+    config: str | None = None
 
     class ConfigArg(PathSpecInvariant):
         _arg = "--config"
@@ -829,6 +916,7 @@ class TrainInadaPairCommand(_TrainCommand):
     """Train the faithful Inada pair model."""
 
     def run(self) -> None:
+        assert self.config is not None
         result = self._call(
             train_workflow,
             Path(self.config).expanduser(),
@@ -841,6 +929,7 @@ class TrainInadaTripletCommand(_TrainCommand):
     """Train the faithful Inada triplet model."""
 
     def run(self) -> None:
+        assert self.config is not None
         result = self._call(
             train_workflow,
             Path(self.config).expanduser(),
@@ -849,15 +938,85 @@ class TrainInadaTripletCommand(_TrainCommand):
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
 
 
-class InferRealBogusCommand(XScanCommand):
+class RunPipelineCommand(FitsReaderOptions, ExecutorOptions, XScanCommand):
+    """Run complete xPois, xFit and xScan jobs in persistent GPU workers."""
+
+    manifest: str | None = None
+    output_dir: str | None = None
+    run_name = None
+
+    class ExecutorArg(ExecutorOptions.ExecutorArg):
+        _set = {"dragon", "mpi"}
+        _default = None
+        _mandatory = True
+        _help = (
+            "Distributed runtime: dragon or mpi, with its matching launcher."
+        )
+
+    class ManifestArg(PathSpecInvariant):
+        _arg = "--manifest"
+        _mandatory = True
+        _help = "JSON pipeline manifest with configuration and image pairs."
+
+    class OutputDirArg(PathSpecInvariant):
+        _arg = "--output-dir"
+        _mandatory = True
+        _help = "Parent directory for immutable pipeline runs."
+
+    class RunNameArg(StringInvariant):
+        _arg = "--name"
+        _default = None
+        _help = "Optional unique run identifier."
+
+    def run(self) -> None:
+        assert self.manifest is not None
+        assert self.output_dir is not None
+        options = self.executor_options()
+        from .pipeline_executor import run_pipeline_manifest
+
+        result = self._call(
+            run_pipeline_manifest,
+            executor=self.executor,
+            manifest_path=Path(self.manifest),
+            output_root=Path(self.output_dir),
+            run_id=self.run_name,
+            fits_reader=self.fits_reader,
+            **options,
+        )
+        if result is not None:
+            self._emit_json(result.to_dict())
+            if result.status != "success":
+                raise CommandError(
+                    f"Pipeline failed; inspect {result.summary_path}"
+                )
+
+
+class InferRealBogusCommand(ExecutorOptions, XScanCommand):
     """Run inference for a trained real-bogus model on one split."""
 
-    run_dir = None
-    dataset_dir = None
+    run_dir: str | None = None
+    dataset_dir: str | None = None
     split = None
     batch_size = None
+    num_workers = None
     use_x_fit_features = None
     x_fit_feature_dir = None
+    output_dir = None
+    task_batches = None
+
+    class OutputDirArg(PathSpecInvariant):
+        _arg = "--output-dir"
+        _help = "New execution directory; required with Dragon or MPI."
+        _mandatory = False
+        _default = None
+
+    class TaskBatchesArg(PositiveIntegerInvariant):
+        _arg = "--task-batches"
+        _help = (
+            "Whole inference minibatches per distributed task. [default: 16]"
+        )
+        _mandatory = False
+        _default = None
 
     class RunDirArg(PathSpecInvariant):
         _arg = "--run-dir"
@@ -881,6 +1040,15 @@ class InferRealBogusCommand(XScanCommand):
         _mandatory = False
         _default = 32
 
+    class NumWorkersArg(NonNegativeIntegerInvariant):
+        _arg = "--num-workers"
+        _help = (
+            "Loader workers; 0 disables workers. Distributed inference "
+            "defaults to 0; local inference uses the checkpoint setting."
+        )
+        _mandatory = False
+        _default = None
+
     class UseXFitFeaturesArg(BoolInvariant):
         _arg = "--use-xfit-features"
         _help = (
@@ -897,12 +1065,60 @@ class InferRealBogusCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.run_dir is not None
+        executor_options = self.executor_options()
+        if self.executor != "local":
+            from cuphoton.core.executors import run_workload
+
+            from .executor import prepare_inference_workload
+
+            if self.output_dir is None:
+                raise CommandError(
+                    "--output-dir is required for distributed inference"
+                )
+            if self.executor == "mpi":
+                executor_options["prepare_on_root"] = True
+            output_dir = Path(self.output_dir).expanduser().resolve()
+            self._call(
+                validate_identifier,
+                output_dir.name,
+                field="--output-dir basename",
+            )
+            result = self._call(
+                run_workload,
+                executor=self.executor,
+                prepare_workload=lambda rank: prepare_inference_workload(
+                    run_dir=Path(self.run_dir).expanduser(),
+                    dataset_dir=Path(self.dataset_dir).expanduser(),
+                    split=self.split,
+                    batch_size=self.batch_size,
+                    task_batches=self.task_batches or 16,
+                    num_workers=self.num_workers,
+                    use_xfit_features=bool(self.use_x_fit_features),
+                    xfit_feature_dir=self._path(self.x_fit_feature_dir),
+                ),
+                output_root=output_dir.parent,
+                run_id=output_dir.name,
+                **executor_options,
+            )
+            if result is not None:
+                self._emit_json(result.to_dict())
+                if result.status != "success":
+                    raise CommandError("distributed xScan inference failed")
+            return
+        if self.output_dir is not None or self.task_batches is not None:
+            raise CommandError(
+                "--output-dir and --task-batches require "
+                "--executor dragon or mpi"
+            )
         result = self._call(
             infer_workflow,
             run_dir=Path(self.run_dir).expanduser(),
             dataset_dir=Path(self.dataset_dir).expanduser(),
             split=self.split,
             batch_size=self.batch_size,
+            num_workers=self.num_workers,
             use_xfit_features=bool(self.use_x_fit_features),
             xfit_feature_dir=self._path(self.x_fit_feature_dir),
         )
@@ -912,8 +1128,8 @@ class InferRealBogusCommand(XScanCommand):
 class EvaluateRealBogusCommand(XScanCommand):
     """Evaluate a trained real-bogus model on one split."""
 
-    run_dir = None
-    dataset_dir = None
+    run_dir: str | None = None
+    dataset_dir: str | None = None
     split = None
     batch_size = None
     use_x_fit_features = None
@@ -967,6 +1183,8 @@ class EvaluateRealBogusCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.run_dir is not None
         result = self._call(
             evaluate_workflow,
             run_dir=Path(self.run_dir).expanduser(),
@@ -985,10 +1203,10 @@ class EvaluateRealBogusCommand(XScanCommand):
 class ReviewQueueCommand(XScanCommand):
     """Build a prioritized human-review queue from model predictions."""
 
-    run_dir = None
-    dataset_dir = None
+    run_dir: str | None = None
+    dataset_dir: str | None = None
     split = None
-    output_dir = None
+    output_dir: str | None = None
     compare_run_dirs = None
     max_items = None
     strategy = None
@@ -1036,6 +1254,8 @@ class ReviewQueueCommand(XScanCommand):
         _default = "hybrid"
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.run_dir is not None
         compare_run_dirs = (
             self._csv_paths(self.compare_run_dirs)
             if self.compare_run_dirs
@@ -1057,9 +1277,9 @@ class ReviewQueueCommand(XScanCommand):
 class ReviewQueueDatasetCommand(XScanCommand):
     """Build a human-review queue directly from dataset samples."""
 
-    dataset_dir = None
+    dataset_dir: str | None = None
     split = None
-    output_dir = None
+    output_dir: str | None = None
     max_items = None
 
     class DatasetDirArg(PathSpecInvariant):
@@ -1091,6 +1311,7 @@ class ReviewQueueDatasetCommand(XScanCommand):
         _default = 200
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
         result = self._call(
             dataset_review_queue_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -1104,10 +1325,10 @@ class ReviewQueueDatasetCommand(XScanCommand):
 class ReviewQueueSplitsCommand(XScanCommand):
     """Build review queues for multiple dataset splits."""
 
-    run_dir = None
-    dataset_dir = None
-    output_root = None
-    splits = None
+    run_dir: str | None = None
+    dataset_dir: str | None = None
+    output_root: str | None = None
+    splits: str | None = None
     compare_run_dirs = None
     max_items = None
     strategy = None
@@ -1154,6 +1375,10 @@ class ReviewQueueSplitsCommand(XScanCommand):
         _default = "hybrid"
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.output_root is not None
+        assert self.run_dir is not None
+        assert self.splits is not None
         compare_run_dirs = (
             self._csv_paths(self.compare_run_dirs)
             if self.compare_run_dirs
@@ -1179,7 +1404,7 @@ class ReviewQueueSplitsCommand(XScanCommand):
 class ReviewBokehCommand(XScanCommand):
     """Run the local Bokeh server for a saved review queue."""
 
-    review_dir = None
+    review_dir: str | None = None
     host = None
     port = None
     show_url_only = None
@@ -1208,6 +1433,7 @@ class ReviewBokehCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.review_dir is not None
         result = self._call(
             review_bokeh_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1223,7 +1449,7 @@ class ReviewRawCompareCommand(XScanCommand):
     """Run the raw-array comparison Bokeh server for a review queue."""
 
     _shortname_ = "rrc"
-    review_dir = None
+    review_dir: str | None = None
     host = None
     port = None
 
@@ -1262,7 +1488,7 @@ class ReviewAlardLuptonCommand(XScanCommand):
     """Run the Alard-Lupton display-lab Bokeh server."""
 
     _shortname_ = "ral"
-    review_dir = None
+    review_dir: str | None = None
     host = None
     port = None
 
@@ -1300,7 +1526,7 @@ class ReviewAlardLuptonCommand(XScanCommand):
 class ReviewStatusCommand(XScanCommand):
     """Summarize whether a saved review queue is ready for review-apply."""
 
-    review_dir = None
+    review_dir: str | None = None
     min_reviewers = None
     min_actionable_reviewers = None
     consensus_rule = None
@@ -1349,6 +1575,7 @@ class ReviewStatusCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.review_dir is not None
         result = self._call(
             review_status_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1370,8 +1597,8 @@ class ReviewStatusCommand(XScanCommand):
 class ReviewContactSheetCommand(XScanCommand):
     """Export static PNG contact sheets for a saved review queue."""
 
-    review_dir = None
-    output_dir = None
+    review_dir: str | None = None
+    output_dir: str | None = None
     max_items = None
     items_per_page = None
     columns = None
@@ -1419,6 +1646,8 @@ class ReviewContactSheetCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.output_dir is not None
+        assert self.review_dir is not None
         result = self._call(
             review_contact_sheet_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1435,8 +1664,8 @@ class ReviewContactSheetCommand(XScanCommand):
 class ReviewAnnotationTemplateCommand(XScanCommand):
     """Write a CSV template for offline review annotations."""
 
-    review_dir = None
-    output_csv = None
+    review_dir: str | None = None
+    output_csv: str | None = None
     reviewer = None
     overwrite = None
 
@@ -1463,6 +1692,8 @@ class ReviewAnnotationTemplateCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.output_csv is not None
+        assert self.review_dir is not None
         result = self._call(
             review_annotation_template_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1476,8 +1707,8 @@ class ReviewAnnotationTemplateCommand(XScanCommand):
 class ReviewImportAnnotationsCommand(XScanCommand):
     """Validate and append offline review annotations from CSV."""
 
-    review_dir = None
-    input_csv = None
+    review_dir: str | None = None
+    input_csv: str | None = None
     reviewer = None
     dry_run = None
     require_all = None
@@ -1511,6 +1742,8 @@ class ReviewImportAnnotationsCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.input_csv is not None
+        assert self.review_dir is not None
         result = self._call(
             review_import_annotations_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1526,7 +1759,7 @@ class ReviewAggregateCommand(XScanCommand):
     """Aggregate latest per-reviewer annotations into explicit decisions."""
 
     _shortname_ = "rag"
-    review_dir = None
+    review_dir: str | None = None
     output_report = None
     min_reviewers = None
     min_actionable_reviewers = None
@@ -1568,6 +1801,7 @@ class ReviewAggregateCommand(XScanCommand):
         _default = "unanimous"
 
     def run(self) -> None:
+        assert self.review_dir is not None
         result = self._call(
             review_aggregate_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1582,9 +1816,9 @@ class ReviewAggregateCommand(XScanCommand):
 class ReviewApplyCommand(XScanCommand):
     """Apply reviewed binary labels to a new packaged dataset."""
 
-    dataset_dir = None
-    review_dir = None
-    output_dir = None
+    dataset_dir: str | None = None
+    review_dir: str | None = None
+    output_dir: str | None = None
     aggregation_report = None
 
     class DatasetDirArg(PathSpecInvariant):
@@ -1609,6 +1843,9 @@ class ReviewApplyCommand(XScanCommand):
         _default = None
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.output_dir is not None
+        assert self.review_dir is not None
         result = self._call(
             review_apply_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -1622,8 +1859,8 @@ class ReviewApplyCommand(XScanCommand):
 class EntityReviewQueueCommand(XScanCommand):
     """Build an entity-class review queue from binary real annotations."""
 
-    source_review_dirs = None
-    output_dir = None
+    source_review_dirs: str | None = None
+    output_dir: str | None = None
 
     class SourceReviewDirsArg(StringInvariant):
         _arg = "--source-review-dirs"
@@ -1636,6 +1873,8 @@ class EntityReviewQueueCommand(XScanCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.output_dir is not None
+        assert self.source_review_dirs is not None
         result = self._call(
             entity_review_queue_workflow,
             source_review_dirs=self._csv_paths(self.source_review_dirs),
@@ -1648,7 +1887,7 @@ class EntityReviewBokehCommand(XScanCommand):
     """Run the local Bokeh server for an entity-class review queue."""
 
     _shortname_ = "erbk"
-    review_dir = None
+    review_dir: str | None = None
     host = None
     port = None
     show_url_only = None
@@ -1677,6 +1916,7 @@ class EntityReviewBokehCommand(XScanCommand):
         _default = False
 
     def run(self) -> None:
+        assert self.review_dir is not None
         result = self._call(
             entity_review_bokeh_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1691,7 +1931,7 @@ class EntityReviewBokehCommand(XScanCommand):
 class EntityReviewAggregateCommand(XScanCommand):
     """Aggregate entity-class annotations into consensus reports."""
 
-    review_dir = None
+    review_dir: str | None = None
     output_report = None
     min_reviewers = None
     consensus_rule = None
@@ -1723,6 +1963,7 @@ class EntityReviewAggregateCommand(XScanCommand):
         _default = "unanimous"
 
     def run(self) -> None:
+        assert self.review_dir is not None
         result = self._call(
             entity_review_aggregate_workflow,
             review_dir=Path(self.review_dir).expanduser(),
@@ -1736,7 +1977,7 @@ class EntityReviewAggregateCommand(XScanCommand):
 class CompareInputsCommand(XScanCommand):
     """Compare evaluation summaries from multiple run directories."""
 
-    run_dirs = None
+    run_dirs: str | None = None
 
     class RunDirsArg(StringInvariant):
         _arg = "--run-dirs"
@@ -1744,6 +1985,7 @@ class CompareInputsCommand(XScanCommand):
         _mandatory = True
 
     def run(self) -> None:
+        assert self.run_dirs is not None
         result = self._call(
             compare_inputs_workflow,
             self._csv_paths(self.run_dirs),
@@ -1754,10 +1996,10 @@ class CompareInputsCommand(XScanCommand):
 class ReproduceInadaCommand(XScanCommand):
     """Run the multi-seed faithful Inada reproduction orchestration."""
 
-    pair_config = None
-    triplet_config = None
+    pair_config: str | None = None
+    triplet_config: str | None = None
     nodiff_pair_config = None
-    seeds = None
+    seeds: str | None = None
 
     class PairConfigArg(PathSpecInvariant):
         _arg = "--pair-config"
@@ -1784,6 +2026,7 @@ class ReproduceInadaCommand(XScanCommand):
         _default = "0,1,2,3,4"
 
     def run(self) -> None:
+        assert self.seeds is not None
         result = self._call(
             reproduce_inada_workflow,
             pair_config=self._path(self.pair_config),
@@ -1797,11 +2040,11 @@ class ReproduceInadaCommand(XScanCommand):
 class ReproducePairTripletCommand(XScanCommand):
     """Train matched pair and triplet models on one reviewed dataset."""
 
-    dataset_dir = None
-    pair_config = None
-    triplet_config = None
-    seeds = None
-    output_dir = None
+    dataset_dir: str | None = None
+    pair_config: str | None = None
+    triplet_config: str | None = None
+    seeds: str | None = None
+    output_dir: str | None = None
     run_name = None
 
     class DatasetDirArg(PathSpecInvariant):
@@ -1839,6 +2082,10 @@ class ReproducePairTripletCommand(XScanCommand):
         _minlen = 0
 
     def run(self) -> None:
+        assert self.dataset_dir is not None
+        assert self.pair_config is not None
+        assert self.seeds is not None
+        assert self.triplet_config is not None
         result = self._call(
             reproduce_pair_triplet_workflow,
             dataset_dir=Path(self.dataset_dir).expanduser(),
@@ -1854,13 +2101,13 @@ class ReproducePairTripletCommand(XScanCommand):
 class ReproduceHscComparisonCommand(XScanCommand):
     """Build and compare pair/simple-triplet/xpois-triplet HSC runs."""
 
-    manifest = None
-    pair_config = None
-    triplet_config = None
+    manifest: str | None = None
+    pair_config: str | None = None
+    triplet_config: str | None = None
     pair_pretrain_checkpoint = None
     triplet_pretrain_checkpoint = None
-    seeds = None
-    output_dir = None
+    seeds: str | None = None
+    output_dir: str | None = None
     run_name = None
 
     class ManifestArg(PathSpecInvariant):
@@ -1910,6 +2157,10 @@ class ReproduceHscComparisonCommand(XScanCommand):
         _minlen = 0
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.pair_config is not None
+        assert self.seeds is not None
+        assert self.triplet_config is not None
         result = self._call(
             reproduce_hsc_comparison_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -1934,12 +2185,12 @@ class ReproduceHscXPOISSweepCommand(XScanCommand):
     _name_ = "reproduce-hsc-xpois-sweep"
     _shortname_ = "rhxs"
 
-    manifest = None
-    pair_config = None
-    triplet_config = None
-    sweep_config = None
-    seeds = None
-    output_dir = None
+    manifest: str | None = None
+    pair_config: str | None = None
+    triplet_config: str | None = None
+    sweep_config: str | None = None
+    seeds: str | None = None
+    output_dir: str | None = None
     run_name = None
 
     class ManifestArg(PathSpecInvariant):
@@ -1982,6 +2233,11 @@ class ReproduceHscXPOISSweepCommand(XScanCommand):
         _minlen = 0
 
     def run(self) -> None:
+        assert self.manifest is not None
+        assert self.pair_config is not None
+        assert self.seeds is not None
+        assert self.sweep_config is not None
+        assert self.triplet_config is not None
         result = self._call(
             reproduce_hsc_xpois_sweep_workflow,
             manifest_path=Path(self.manifest).expanduser(),
@@ -1993,3 +2249,135 @@ class ReproduceHscXPOISSweepCommand(XScanCommand):
             run_name=self.run_name or None,
         )
         self._emit_json({"run_dir": str(result.run_dir), **result.summary})
+
+
+class BenchmarkPipelineCommand(FitsReaderOptions, XScanCommand):
+    """Compare the device pipeline with separate file-mediated stages."""
+
+    _name_ = "benchmark-pipeline"
+
+    # This declarative option intentionally reuses the framework stream name.
+    output: str | None = None  # type: ignore[assignment]
+    config = None
+    items = None
+    images = None
+    image_size = None
+    candidates = None
+    stamp_size = None
+    seed = None
+    device = None
+    warmup = None
+    repeat = None
+    timeout = None
+    order = None
+    stage = None
+
+    class OutputArg(PathSpecInvariant):
+        _arg = "--output"
+        _help = "New output directory for benchmark receipts and artifacts."
+        _mandatory = True
+
+    class ConfigArg(PathSpecInvariant):
+        _arg = "--config"
+        _help = "Existing pipeline config JSON; requires --items."
+        _default = None
+
+    class ItemsArg(PathSpecInvariant):
+        _arg = "--items"
+        _help = "Existing pipeline items JSON; requires --config."
+        _default = None
+
+    class ImagesArg(PositiveIntegerInvariant):
+        _arg = "--images"
+        _help = "Synthetic image-pair count. [default: %default]"
+        _default = 4
+
+    class ImageSizeArg(PositiveIntegerInvariant):
+        _arg = "--image-size"
+        _help = "Synthetic square image width in pixels. [default: %default]"
+        _default = 256
+
+    class CandidatesArg(PositiveIntegerInvariant):
+        _arg = "--candidates"
+        _help = "Candidates per synthetic image. [default: %default]"
+        _default = 9
+
+    class StampSizeArg(PositiveIntegerInvariant):
+        _arg = "--stamp-size"
+        _help = "Square candidate stamp width in pixels. [default: %default]"
+        _default = 17
+
+    class SeedArg(NonNegativeIntegerInvariant):
+        _arg = "--seed"
+        _help = "Synthetic fixture random seed. [default: %default]"
+        _default = 2026
+
+    class DeviceArg(StringInvariant):
+        _arg = "--device"
+        _help = "CUDA device for the synthetic fixture. [default: %default]"
+        _default = "cuda:0"
+
+    class WarmupArg(PositiveIntegerInvariant):
+        _arg = "--warmup"
+        _help = "Recorded warmup rounds per treatment. [default: %default]"
+        _default = 1
+
+    class RepeatArg(PositiveIntegerInvariant):
+        _arg = "--repeat"
+        _help = "Measured rounds per treatment. [default: %default]"
+        _default = 3
+
+    class TimeoutArg(FloatInvariant):
+        _arg = "--timeout"
+        _help = (
+            "Positive child-process timeout in seconds. [default: %default]"
+        )
+        _default = 600.0
+
+        @classmethod
+        def validate(cls, value: Any) -> float | None:
+            converted = super().validate(value)
+            if converted is not None and (
+                not math.isfinite(converted) or converted <= 0
+            ):
+                raise ValueError("must be finite and greater than zero")
+            return converted
+
+    class OrderArg(SetInvariant):
+        _arg = "--order"
+        _help = "Treatment launch order. [default: %default]"
+        _set = {"pipeline-first", "staged-first"}
+        _default = "pipeline-first"
+
+    class StageArg(SetInvariant):
+        _arg = "--stage"
+        _help = (
+            "Comparison or individual subprocess stage. [default: %default]"
+        )
+        _set = {"compare", "pipeline", "xpois", "xfit", "xscan"}
+        _default = "compare"
+
+    def run(self) -> None:
+        assert self.output is not None
+        from .pipeline_benchmark.runner import run_benchmark
+
+        self._call(
+            run_benchmark,
+            SimpleNamespace(
+                output=Path(self.output).expanduser(),
+                config=self._path(self.config),
+                items=self._path(self.items),
+                fits_reader=self.fits_reader,
+                images=self.images,
+                image_size=self.image_size,
+                candidates=self.candidates,
+                stamp_size=self.stamp_size,
+                seed=self.seed,
+                device=self.device,
+                warmup=self.warmup,
+                repeat=self.repeat,
+                timeout=self.timeout,
+                order=self.order,
+                stage=self.stage,
+            ),
+        )

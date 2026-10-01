@@ -9,11 +9,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from collections.abc import Mapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Mapping, Sequence, TextIO
+from typing import Any, Never, Protocol, TextIO
 
 from cuphoton import __version__
 
@@ -59,6 +60,10 @@ class _ParserFailure(Exception):
         self.message = message
 
 
+class _TextWriter(Protocol):
+    def write(self, text: str, /) -> object: ...
+
+
 class _ArgumentParser(argparse.ArgumentParser):
     def __init__(
         self,
@@ -73,10 +78,10 @@ class _ArgumentParser(argparse.ArgumentParser):
         self.capitalized_usage = capitalized_usage
         super().__init__(*args, **kwargs)
 
-    def exit(self, status: int = 0, message: str | None = None) -> None:
+    def exit(self, status: int = 0, message: str | None = None) -> Never:
         raise _ParserFailure(status, message)
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> Never:
         self.print_usage(self.error_stream)
         self._print_message(
             f"{self.prog}: error: {message}\n",
@@ -84,7 +89,7 @@ class _ArgumentParser(argparse.ArgumentParser):
         )
         raise _ParserFailure(2)
 
-    def print_help(self, file: TextIO | None = None) -> None:
+    def print_help(self, file: _TextWriter | None = None) -> None:
         super().print_help(file or self.output_stream)
 
     def format_usage(self) -> str:

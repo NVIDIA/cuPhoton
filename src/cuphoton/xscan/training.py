@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training and inference helpers for XScan."""
+"""Training and inference helpers for xScan."""
 
 from __future__ import annotations
 
@@ -11,10 +11,12 @@ import multiprocessing as mp
 import os
 import random
 import time
-from contextlib import nullcontext
-from dataclasses import asdict
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, nullcontext
+from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, SupportsIndex, cast
 
 import numpy as np
 import torch
@@ -65,7 +67,9 @@ def val_bce_with_logits(logits: np.ndarray, labels: np.ndarray) -> float:
     )
 
 
-def selection_value(metric_name: str, raw_value: object) -> float | None:
+def selection_value(
+    metric_name: str, raw_value: float | str | None
+) -> float | None:
     """Direction-normalized selection score (higher is always better).
 
     Loss metrics are negated so the shared ``> best`` comparison maximizes
@@ -194,12 +198,185 @@ def autocast_context(
     return torch.autocast(device_type=device.type, dtype=amp_dtype)
 
 
+@contextmanager
+def _temporary_eval_mode(model: torch.nn.Module) -> Iterator[None]:
+    """Run a block in eval mode and restore every submodule's mode."""
+
+    module_modes = [(module, module.training) for module in model.modules()]
+    try:
+        model.eval()
+        yield
+    finally:
+        # A caller may intentionally hold selected submodules in eval while
+        # the root model is in train mode. Restore each flag without making a
+        # recursive ``train()`` call that would clobber that mixed state.
+        for module, was_training in module_modes:
+            module.training = was_training
+
+
+@dataclass(frozen=True, slots=True)
+class CupyTorchView:
+    """A zero-copy Torch view with a strong reference to its CuPy owner.
+
+    The caller must retain this object until work consuming ``tensor`` has
+    completed on its Torch stream, or until a later operation with a retained
+    owner has been ordered behind that work. The bridge itself deliberately
+    does not synchronize a stream or device.
+    """
+
+    tensor: torch.Tensor
+    _owner: Any = dataclass_field(repr=False, compare=False)
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
+        raise TypeError(
+            "CuPy-to-Torch views cannot be pickled; keep the owner and "
+            "tensor inside the producing process"
+        )
+
+
+def _require_explicit_cuda_device(device: torch.device) -> torch.device:
+    if not isinstance(device, torch.device):
+        raise TypeError("device must be a torch.device")
+    if device.type != "cuda" or device.index is None:
+        raise ValueError("device must be an explicit CUDA device like cuda:0")
+    if not torch.cuda.is_available():
+        raise RuntimeError("xScan tensor inference requires Torch CUDA")
+    if device.index < 0 or device.index >= torch.cuda.device_count():
+        raise ValueError(
+            f"CUDA device ordinal {device.index} is not visible to Torch"
+        )
+    return device
+
+
+def _validate_cuda_tensor(
+    values: Any,
+    *,
+    name: str,
+    device: torch.device,
+    ndim: int,
+) -> torch.Tensor:
+    if not isinstance(values, torch.Tensor):
+        raise TypeError(f"{name} must be a Torch tensor")
+    if values.device != device:
+        raise ValueError(
+            f"{name} is on {values.device}, expected exact device {device}"
+        )
+    if values.dtype != torch.float32:
+        raise TypeError(f"{name} must have float32 dtype")
+    if values.ndim != ndim:
+        raise ValueError(f"{name} must have rank {ndim}")
+    if any(int(size) <= 0 for size in values.shape):
+        raise ValueError(f"{name} dimensions must all be positive")
+    if not values.is_contiguous():
+        raise ValueError(f"{name} must be C-contiguous")
+    return values
+
+
+def _validate_model_device(
+    model: torch.nn.Module,
+    *,
+    device: torch.device,
+) -> None:
+    if not isinstance(model, torch.nn.Module):
+        raise TypeError("model must be a Torch module")
+    for collection_name, tensors in (
+        ("parameter", model.named_parameters()),
+        ("buffer", model.named_buffers()),
+    ):
+        for name, value in tensors:
+            if value.device != device:
+                raise ValueError(
+                    f"model {collection_name} {name!r} is on "
+                    f"{value.device}, expected exact device {device}"
+                )
+            if value.is_floating_point() and value.dtype != torch.float32:
+                raise TypeError(
+                    f"model {collection_name} {name!r} must have "
+                    "float32 dtype"
+                )
+
+
+def _load_cupy_for_dlpack() -> Any:
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        raise ImportError(
+            "CuPy-to-Torch xScan handoff requires CuPy; run "
+            "'uv sync --extra gpu' for development or install "
+            "'cuphoton[gpu]'"
+        ) from exc
+    return cp
+
+
+def cupy_to_torch(
+    values: Any,
+    *,
+    device: torch.device,
+) -> CupyTorchView:
+    """Borrow one contiguous float32 CuPy allocation through DLPack.
+
+    Conversion must occur while the stream that most recently wrote
+    ``values`` is CuPy's current stream and while the intended consumer is
+    Torch's current stream. Passing the producer object to ``from_dlpack``
+    then orders those streams through the DLPack protocol. The returned
+    view keeps the CuPy allocation alive; its caller owns
+    consumer-completion lifetime.
+    """
+
+    device = _require_explicit_cuda_device(device)
+    cp = _load_cupy_for_dlpack()
+    if not isinstance(values, cp.ndarray):
+        raise TypeError("values must be a CuPy array")
+    try:
+        active_device = int(cp.cuda.runtime.getDevice())
+    except Exception as exc:
+        raise RuntimeError(
+            "CuPy-to-Torch xScan handoff requires CuPy CUDA"
+        ) from exc
+    if active_device != device.index:
+        raise ValueError(
+            f"active CuPy device is cuda:{active_device}, expected {device}"
+        )
+    if int(values.device.id) != device.index:
+        raise ValueError(
+            f"values are on cuda:{int(values.device.id)}, expected {device}"
+        )
+    if values.ndim < 1 or any(int(size) <= 0 for size in values.shape):
+        raise ValueError("values must have a non-empty array shape")
+    if np.dtype(values.dtype) != np.dtype(np.float32):
+        raise TypeError("values must have float32 dtype")
+    if not values.flags.c_contiguous:
+        raise ValueError("values must be C-contiguous")
+
+    # Use the producer object, not an eagerly created capsule: PyTorch then
+    # passes its current consumer stream into CuPy's ``__dlpack__`` method.
+    tensor = torch.utils.dlpack.from_dlpack(values, copy=False)
+    expected_shape = tuple(int(size) for size in values.shape)
+    if tensor.device != device:
+        raise RuntimeError("DLPack handoff changed the CUDA device")
+    if tensor.dtype != torch.float32:
+        raise RuntimeError("DLPack handoff changed the array dtype")
+    if tuple(tensor.shape) != expected_shape:
+        raise RuntimeError("DLPack handoff changed the array shape")
+    if not tensor.is_contiguous():
+        raise RuntimeError("DLPack handoff changed array contiguity")
+    if tensor.data_ptr() != int(values.data.ptr):
+        raise RuntimeError("DLPack handoff copied the array storage")
+    return CupyTorchView(tensor=tensor, _owner=values)
+
+
+# Retain the original names used by existing device-pipeline callers.
+_CupyTorchView = CupyTorchView
+_cupy_to_torch = cupy_to_torch
+
+
 def make_dataloader(
     dataset: StampDataset,
     *,
     batch_size: int,
     shuffle: bool,
     performance: PerformanceConfig,
+    sampler: Sequence[int] | None = None,
 ) -> DataLoader[CollatedDatasetBatch]:
     kwargs: dict[str, Any] = {
         "batch_size": batch_size,
@@ -208,6 +385,8 @@ def make_dataloader(
         "pin_memory": performance.pin_memory,
         "persistent_workers": performance.persistent_workers,
     }
+    if sampler is not None:
+        kwargs["sampler"] = sampler
     if (
         performance.num_workers > 0
         and performance.worker_start_method is not None
@@ -537,9 +716,9 @@ def check_training_label_provenance(dataset_dir: Path) -> dict[str, Any]:
         errors.append("split_group_crosses_splits")
     if cross_split_entities:
         errors.append("stable_entity_crosses_splits")
-    if labels is not None and int(label_counts[0]) == 0:
+    if label_counts is not None and int(label_counts[0]) == 0:
         errors.append("negative_labels_missing")
-    if labels is not None and int(label_counts[1]) == 0:
+    if label_counts is not None and int(label_counts[1]) == 0:
         errors.append("positive_labels_missing")
 
     return {
@@ -550,8 +729,12 @@ def check_training_label_provenance(dataset_dir: Path) -> dict[str, Any]:
         "sample_count": sample_count,
         "labels_binary": labels_binary,
         "label_counts": {
-            "negative": int(label_counts[0]) if labels is not None else None,
-            "positive": int(label_counts[1]) if labels is not None else None,
+            "negative": int(label_counts[0])
+            if label_counts is not None
+            else None,
+            "positive": int(label_counts[1])
+            if label_counts is not None
+            else None,
         },
         "label_sources": dict(sorted(label_sources.items())),
         "placeholder_label_source": LSSTCOMCAM_PLACEHOLDER_LABEL_SOURCE,
@@ -1139,7 +1322,9 @@ def train_classifier(
         )
         if improved:
             best_selection = current_selection
-            best_metric_value = float(epoch_metrics[selection_metric])
+            metric_value = epoch_metrics[selection_metric]
+            assert metric_value is not None
+            best_metric_value = float(metric_value)
             best_val_auc = epoch_metrics["val_roc_auc"]
             best_epoch = epoch + 1
             epochs_without_improvement = 0
@@ -1163,9 +1348,12 @@ def train_classifier(
         }
         best_epoch = len(history)
         last = history[-1] if history else None
-        best_metric_value = (
-            float(last[selection_metric]) if last is not None else None
-        )
+        if last is not None:
+            metric_value = last[selection_metric]
+            assert metric_value is not None
+            best_metric_value = float(metric_value)
+        else:
+            best_metric_value = None
         best_val_auc = last["val_roc_auc"] if last is not None else None
     early_stopping["best_epoch"] = best_epoch
     checkpoint = {
@@ -1256,7 +1444,28 @@ def load_model_from_checkpoint(
     run_dir: Path,
     *,
     device: torch.device | None = None,
+    performance_override: PerformanceConfig | None = None,
 ) -> tuple[torch.nn.Module, dict[str, Any], PerformanceConfig]:
+    """Load a checkpoint with an optional inference performance policy.
+
+    By default, retain the saved training policy. An explicit override is
+    validated before loading and replaces that policy without changing the
+    checkpoint. The selected policy's runtime settings apply before optional
+    model compilation.
+    On CUDA this updates process-wide TF32 and cuDNN settings; it does not
+    enable PyTorch's deterministic-algorithm mode.
+    """
+
+    target_device = device or torch.device("cpu")
+    performance = None
+    if performance_override is not None:
+        if not isinstance(performance_override, PerformanceConfig):
+            raise TypeError(
+                "performance_override must be a PerformanceConfig"
+            )
+        performance = normalize_performance_config(
+            performance_override, device=target_device
+        )
     checkpoint = torch.load(
         run_dir / "checkpoint.pt",
         map_location=device or "cpu",
@@ -1264,22 +1473,149 @@ def load_model_from_checkpoint(
     )
     model = build_model(**checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state"])
-    target_device = device or torch.device("cpu")
     model.to(target_device)
     performance_payload = checkpoint.get("train_config", {}).get(
         "performance", {}
     )
-    performance = PerformanceConfig(**(performance_payload or {}))
-    performance = normalize_performance_config(
-        performance,
-        device=target_device,
-    )
+    if performance is None:
+        performance = normalize_performance_config(
+            PerformanceConfig(**(performance_payload or {})),
+            device=target_device,
+        )
+    configure_runtime(performance=performance, device=target_device)
+    configure_compile_environment(performance)
     model, _compile_info = maybe_compile_model(
         model,
         performance=performance,
     )
     model.eval()
     return model, checkpoint, performance
+
+
+@torch.no_grad()
+def predict_tensors(
+    *,
+    model: torch.nn.Module,
+    images: torch.Tensor,
+    device: torch.device,
+    xfit_features: torch.Tensor | None = None,
+    performance: PerformanceConfig | None = None,
+) -> dict[str, torch.Tensor]:
+    """Predict from tensors already resident on one explicit CUDA device.
+
+    This path never transfers, converts, or makes inputs contiguous. Images
+    must be contiguous float32 ``[B, C, H, W]`` tensors. Optional xFit
+    features must be contiguous float32 ``[B, F]`` tensors. Floating model
+    state must be float32, and every parameter and buffer must already reside
+    on the same exact ``cuda:N`` device.
+
+    Logits and probabilities remain float32 tensors on that device. Sigmoid
+    deliberately runs in float32; probabilities need not exactly match the
+    float64 host computation in ``predict_dataset``. Inference disables
+    gradient recording but does not impose an inference-mode tag, so outputs
+    can feed a later trainable stage as constants. An enclosing caller-owned
+    ``torch.inference_mode()`` context still imposes its own restrictions.
+    The finite-value check belongs at the later compact terminal
+    materialization boundary so inference does not introduce a device-to-host
+    synchronization.
+
+    Calls run on the device's current Torch stream. Callers must make input
+    writes ready on that stream (for example, with ``wait_stream`` for a
+    different producer stream), retain input storage until consumption
+    completes, and order any later consumer stream after these outputs.
+    DLPack callers must retain each :class:`CupyTorchView` returned by
+    :func:`cupy_to_torch` through a recorded consumer-stream completion event
+    or the terminal blocking device-to-host copy.
+    """
+
+    device = _require_explicit_cuda_device(device)
+    images = _validate_cuda_tensor(
+        images,
+        name="images",
+        device=device,
+        ndim=4,
+    )
+    if xfit_features is not None:
+        xfit_features = _validate_cuda_tensor(
+            xfit_features,
+            name="xfit_features",
+            device=device,
+            ndim=2,
+        )
+        if int(xfit_features.shape[0]) != int(images.shape[0]):
+            raise ValueError(
+                "xfit_features batch size must match images: "
+                f"expected {int(images.shape[0])}, got "
+                f"{int(xfit_features.shape[0])}"
+            )
+    configured_feature_names = getattr(model, "xfit_feature_names", None)
+    if configured_feature_names is not None:
+        configured_feature_count = len(configured_feature_names)
+        if xfit_features is None and configured_feature_count:
+            raise ValueError("model requires xFit features")
+        if xfit_features is not None and int(xfit_features.shape[1]) != (
+            configured_feature_count
+        ):
+            raise ValueError(
+                "xfit_features column count does not match the model: "
+                f"expected {configured_feature_count}, got "
+                f"{int(xfit_features.shape[1])}"
+            )
+    input_mode = getattr(model, "input_mode", None)
+    if input_mode in {"pair", "triplet"}:
+        expected_channels = 2 if input_mode == "pair" else 3
+        if int(images.shape[1]) != expected_channels:
+            raise ValueError(
+                f"{input_mode} model requires {expected_channels} image "
+                f"channels, got {int(images.shape[1])}"
+            )
+    # Recheck each call: callers may move or replace parameters and buffers
+    # between batches, so a cached placement check could silently go stale.
+    _validate_model_device(model, device=device)
+
+    resolved_performance = normalize_performance_config(
+        performance or PerformanceConfig(),
+        device=device,
+    )
+    amp_dtype = resolve_amp_dtype(resolved_performance, device=device)
+    features: ModelFeatures = (
+        images if xfit_features is None else (images, xfit_features)
+    )
+    with _temporary_eval_mode(model):
+        with autocast_context(device=device, amp_dtype=amp_dtype):
+            logits = forward_feature_batch(model, features)
+    if not isinstance(logits, torch.Tensor):
+        raise TypeError("model output must be a Torch tensor")
+    if logits.device != device:
+        raise RuntimeError(
+            f"model logits are on {logits.device}, expected {device}"
+        )
+    allowed_output_dtypes = {torch.float32}
+    if amp_dtype is not None:
+        allowed_output_dtypes.add(amp_dtype)
+    if logits.dtype not in allowed_output_dtypes:
+        allowed_names = ", ".join(
+            sorted(
+                str(dtype).removeprefix("torch.")
+                for dtype in allowed_output_dtypes
+            )
+        )
+        raise TypeError(
+            "model logits have unsupported dtype "
+            f"{str(logits.dtype).removeprefix('torch.')}; expected "
+            f"{allowed_names}"
+        )
+    expected_logits_shape = (int(images.shape[0]),)
+    if tuple(logits.shape) != expected_logits_shape:
+        raise ValueError(
+            "model logits must have shape "
+            f"{expected_logits_shape}, got {tuple(logits.shape)}"
+        )
+    # This output-only device cast preserves the legacy AMP inference
+    # semantics. Input tensors above are never transferred or converted.
+    logits = logits.detach().float()
+    probabilities = torch.sigmoid(logits)
+    return {"logits": logits, "probabilities": probabilities}
 
 
 @torch.no_grad()
@@ -1291,32 +1627,28 @@ def predict_dataset(
     device: torch.device,
     performance: PerformanceConfig | None = None,
     _loader: DataLoader[CollatedDatasetBatch] | None = None,
+    _metadata_rows: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_performance = normalize_performance_config(
         performance or PerformanceConfig(),
         device=device,
     )
     amp_dtype = resolve_amp_dtype(resolved_performance, device=device)
-    loader = _loader or make_dataloader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        performance=resolved_performance,
+    loader = (
+        _loader
+        if _loader is not None
+        else make_dataloader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            performance=resolved_performance,
+        )
     )
-    # Run inference in eval mode: @torch.no_grad() only disables autograd;
-    # it does NOT deactivate Dropout or switch BatchNorm to running stats.
-    # Without this, per-epoch validation ran with dropout active and
-    # BatchNorm updating its running buffers from the validation set
-    # (leaking val data into the saved checkpoint). Restore the caller's
-    # mode afterwards.
-    # Snapshot every submodule's mode and restore each individually: a caller
-    # may intentionally hold some submodules (e.g. specific BatchNorm layers)
-    # in eval, which a recursive model.train(was_training) would clobber.
-    module_modes = [(module, module.training) for module in model.modules()]
-    model.eval()
     logits_chunks = []
     label_chunks = []
-    try:
+    # Evaluation disables Dropout and BatchNorm updates. Preserve every
+    # submodule's prior flag, including intentional mixed train/eval states.
+    with _temporary_eval_mode(model):
         for features, labels in loader:
             features = move_feature_batch(
                 features,
@@ -1328,9 +1660,6 @@ def predict_dataset(
             logits = logits.detach().float().cpu().numpy()
             logits_chunks.append(logits)
             label_chunks.append(labels.detach().cpu().numpy())
-    finally:
-        for module, was_training in module_modes:
-            module.training = was_training
     logits = (
         np.concatenate(logits_chunks, axis=0)
         if logits_chunks
@@ -1342,7 +1671,11 @@ def predict_dataset(
         if label_chunks
         else np.zeros((0,))
     )
-    rows = load_metadata_rows(dataset.dataset_dir)
+    rows = (
+        load_metadata_rows(dataset.dataset_dir)
+        if _metadata_rows is None
+        else _metadata_rows
+    )
     selected_rows = []
     for idx in dataset.indices.tolist():
         row = dict(rows[int(idx)])

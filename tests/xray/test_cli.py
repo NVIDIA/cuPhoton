@@ -135,6 +135,76 @@ def test_nonnegative_option_preserves_parser_error(capsys):
     )
 
 
+def test_detector_artifacts_help_declares_opt_in_fit_quality_options(capsys):
+    assert main(["help", "detector-artifacts"]) == 0
+    captured = capsys.readouterr()
+    assert "--fit-diagnostics {none,summary,full}" in captured.out
+    assert "--p2-ridge-alpha" in captured.out
+
+
+def test_distributed_detector_help_describes_fit_quality_options(capsys):
+    assert main(["help", "detector-artifact-distributed"]) == 0
+    captured = capsys.readouterr()
+    help_text = " ".join(captured.out.split())
+    assert (
+        "P2 ridge penalty; zero preserves unregularized fitting." in help_text
+    )
+    assert "Retain no, summary, or full per-fit diagnostics." in help_text
+
+
+def test_detector_artifacts_cli_rejects_negative_ridge_before_gpu(
+    tmp_path,
+    capsys,
+):
+    assert (
+        main(
+            [
+                "detector-artifacts",
+                "--h5dir",
+                str(tmp_path),
+                "--fon",
+                "on.h5",
+                "--foff",
+                "off.h5",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--p2-ridge-alpha",
+                "-1",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "p2_ridge_alpha must be finite and non-negative" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_detector_artifacts_cli_rejects_unknown_diagnostic_level(
+    tmp_path,
+    capsys,
+):
+    assert (
+        main(
+            [
+                "detector-artifacts",
+                "--h5dir",
+                str(tmp_path),
+                "--fon",
+                "on.h5",
+                "--foff",
+                "off.h5",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--fit-diagnostics",
+                "verbose",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert "invalid choice: 'verbose'" in captured.err
+
+
 def test_gpu_policy(capsys):
     assert main(["gpu-policy"]) == 0
     captured = capsys.readouterr()
