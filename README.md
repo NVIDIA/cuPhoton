@@ -23,9 +23,9 @@ separate kind of experimental data. See [how the components fit
 together](docs/architecture.md#how-the-science-components-fit-together) for
 the data flow and the adapters needed between stages.
 
-## Upcoming 0.1.3 release
+## 0.1.3
 
-The current checkout includes the changes planned for 0.1.3:
+Changes in 0.1.3 include:
 
 - Shared FITS reading across the imaging workflows, including candidate
   manifests for xFit and direct FITS inference through xScan's Python API.

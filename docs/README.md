@@ -11,8 +11,8 @@ and [what an exposure contains](architecture.md#what-an-exposure-contains).
 Then run a synthetic quickstart and read the contract for the component you
 intend to adapt.
 
-The [0.1.3 changelog](../CHANGELOG.md) summarizes the upcoming release and
-its migration requirements.
+The [0.1.3 changelog](../CHANGELOG.md) summarizes the changes and migration
+requirements.
 
 ## First run
 

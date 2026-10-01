@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.1.3 (unreleased)
+## 0.1.3
 
-These changes describe the current source tree relative to 0.1.2. Install from
-the checkout until 0.1.3 packages are published.
+These changes are relative to 0.1.2. Install from the checkout until 0.1.3
+packages are published.
 
 ### Breaking changes
 
