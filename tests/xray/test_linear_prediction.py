@@ -35,6 +35,7 @@ from cuphoton.xray.linear_prediction import (
     linear_prediction_p2_artifacts_numpy,
     linear_prediction_variable_artifacts_cupy_batched,
     model_order_sweep,
+    model_order_sweep_batch,
     synthetic_prediction_coefficients,
     synthetic_trace,
     synthetic_trace_batch,
@@ -1908,6 +1909,55 @@ def test_model_order_sweep_chooses_smallest_qualified_order():
     assert [entry.components for entry in result.entries] == [6, 4, 2]
     assert result.best_components == 2
     assert result.best_selected_model_order == 2
+
+
+def test_model_order_sweep_batch_retains_results_and_provenance():
+    time, rows = synthetic_trace_batch(samples=48, traces=2)
+    sources = [
+        {"kind": "trace-npz", "path": "first.npz"},
+        {"kind": "trace-npz", "path": "second.npz"},
+    ]
+    batch = model_order_sweep_batch(
+        time.tolist(),
+        rows,
+        sources,
+        components=(6, 2, 4),
+        relative_tolerance=0.05,
+    )
+    expected = [
+        model_order_sweep(time, row, (6, 2, 4), relative_tolerance=0.05)
+        for row in rows
+    ]
+
+    payload = batch.to_dict()
+    assert batch.sources == tuple(sources)
+    assert payload["source"]["traces"] == tuple(sources)
+    assert payload["trace_count"] == payload["source"]["trace_count"] == 2
+    assert payload["component_counts"] == (6, 2, 4)
+    assert payload["best_components_by_trace"] == tuple(
+        result.best_components for result in expected
+    )
+    assert payload["best_selected_model_orders_unique"] == tuple(
+        sorted({result.best_selected_model_order for result in expected})
+    )
+    residuals = [result.best_rms_residual for result in expected]
+    assert payload["best_rms_residual_min"] == pytest.approx(min(residuals))
+    assert payload["best_rms_residual_max"] == pytest.approx(max(residuals))
+    for index, trace in enumerate(payload["traces"]):
+        assert trace["trace_index"] == index
+        assert trace["source"] == sources[index]
+        assert trace["best_components"] == expected[index].best_components
+        assert trace["best_rms_residual"] == pytest.approx(residuals[index])
+        assert trace["entries"] == batch.traces[index].to_dict()["entries"]
+
+
+@pytest.mark.parametrize("source_count", [1, 3])
+def test_model_order_sweep_batch_rejects_unmatched_provenance(source_count):
+    time, rows = synthetic_trace_batch(samples=32, traces=2)
+    sources = [{"kind": "trace-npz"}] * source_count
+
+    with pytest.raises(ValueError, match="zip"):
+        model_order_sweep_batch(time, rows, sources, components=(2,))
 
 
 def test_compare_cpu_gpu_can_skip_gpu():
