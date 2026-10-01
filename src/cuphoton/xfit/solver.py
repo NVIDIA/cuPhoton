@@ -611,16 +611,16 @@ def batched_levenberg_marquardt(
                     valid_normal_equations[recovered_positions] = True
                     jacobians[recovered_indices] = fallback_jacobian
                     jacobian_current[recovered_indices] = True
-            # Reuse row indices so each array does not repeat Boolean-mask
-            # compaction and its device-to-host count synchronization.
-            valid_rows = ap.flatnonzero(valid_normal_equations)
-            active_indices = active_indices[valid_rows]
-            if active_indices.shape[0] == 0:
-                continue
-            x_active = x_active[valid_rows]
-            residual_active = residual_active[valid_rows]
-            gradient = gradient[valid_rows]
-            hessian = hessian[valid_rows]
+                # Reuse row indices so each array does not repeat Boolean-mask
+                # compaction and its device-to-host count synchronization.
+                valid_rows = ap.flatnonzero(valid_normal_equations)
+                active_indices = active_indices[valid_rows]
+                if active_indices.shape[0] == 0:
+                    continue
+                x_active = x_active[valid_rows]
+                residual_active = residual_active[valid_rows]
+                gradient = gradient[valid_rows]
+                hessian = hessian[valid_rows]
             diagnostics_current[active_indices] = True
         else:
             if (
@@ -729,17 +729,23 @@ def batched_levenberg_marquardt(
         scaled_step = scaled_step[valid_rows]
         predicted_reduction = predicted_reduction[valid_rows]
 
-        can_evaluate = evaluations[active_indices] < settings.max_evaluations
-        status[active_indices[~can_evaluate]] = int(LMStatus.MAX_EVALUATIONS)
-        evaluable_rows = ap.flatnonzero(can_evaluate)
-        active_indices = active_indices[evaluable_rows]
-        if active_indices.shape[0] == 0:
-            continue
-        x_active = x_active[evaluable_rows]
-        residual_active = residual_active[evaluable_rows]
-        step = step[evaluable_rows]
-        scaled_step = scaled_step[evaluable_rows]
-        predicted_reduction = predicted_reduction[evaluable_rows]
+        # Analytic derivatives leave the iteration-entry budget unchanged.
+        if problem.jacobian is None or settings.use_finite_difference:
+            can_evaluate = (
+                evaluations[active_indices] < settings.max_evaluations
+            )
+            status[active_indices[~can_evaluate]] = int(
+                LMStatus.MAX_EVALUATIONS
+            )
+            evaluable_rows = ap.flatnonzero(can_evaluate)
+            active_indices = active_indices[evaluable_rows]
+            if active_indices.shape[0] == 0:
+                continue
+            x_active = x_active[evaluable_rows]
+            residual_active = residual_active[evaluable_rows]
+            step = step[evaluable_rows]
+            scaled_step = scaled_step[evaluable_rows]
+            predicted_reduction = predicted_reduction[evaluable_rows]
 
         trial_x = x_active + step
         trial_residual = _call_residual(problem, trial_x, active_indices)
