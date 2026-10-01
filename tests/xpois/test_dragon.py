@@ -1,0 +1,3503 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import builtins
+import json
+import os
+import queue
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+import cuphoton.xpois.dragon as dragon_module
+from cuphoton.core.bulk import (
+    Placement,
+    WorkItem,
+    atomic_write_json,
+    audit_terminal_records,
+)
+from cuphoton.xpois.batch import (
+    BatchFitOptions,
+    load_image_pair_manifest,
+    run_image_pair_item,
+)
+from cuphoton.xpois.dragon import (
+    _aggregate_item_timings,
+    _audit_shard_results,
+    _audit_terminal_record_contract,
+    _dragon_shard_worker,
+    _DragonAPI,
+    _execute_shard,
+    _hostnames_match,
+    _load_terminal_records,
+    _select_gpu_placements,
+    _singleton_cuda_visibility,
+    _wait_terminal_artifacts,
+    discover_gpu_placements,
+    run_dragon_image_pair_batch,
+    run_dragon_work_items,
+)
+
+
+class _System:
+    nodes = (7, 11)
+
+
+class _Node:
+    def __init__(self, node_id):
+        self.hostname = f"node-{node_id}"
+        self.gpus = [2, 5] if node_id == 7 else [4]
+
+
+def _options(**overrides) -> BatchFitOptions:
+    values = {
+        "kernel_shape": (9, 9),
+        "basis_sigmas": (1.5,),
+        "basis_degrees": (0,),
+        "backend": "cupy",
+    }
+    values.update(overrides)
+    return BatchFitOptions(**values)
+
+
+def _test_placements(worker_count: int) -> tuple[Placement, ...]:
+    return tuple(
+        Placement(worker_id=index, host=f"node-{index}", gpu_id=index + 3)
+        for index in range(worker_count)
+    )
+
+
+def _valid_shard_result(
+    shard: tuple[WorkItem, ...],
+    placement: Placement,
+    *,
+    backend: str = "cupy",
+) -> dict[str, object]:
+    identity_backend = "cupy" if backend in {"cupy", "cutile"} else backend
+    return {
+        "schema": "cuphoton.xpois.dragon-shard/v1",
+        "worker_id": placement.worker_id,
+        "status": "success",
+        "item_count": len(shard),
+        "success_count": len(shard),
+        "failed_count": 0,
+        "weight_bytes": sum(item.weight_bytes for item in shard),
+        "item_ids_sha256": dragon_module._item_ids_sha256(shard),
+        "started_at_utc": "2026-08-21T00:00:00+00:00",
+        "completed_at_utc": "2026-08-21T00:00:01+00:00",
+        "worker_wall_sec": 1.0,
+        "timings_sec": {},
+        "provenance": {
+            "worker_id": placement.worker_id,
+            "requested_host": placement.host,
+            "requested_gpu_id": placement.gpu_id,
+            "hostname": placement.host,
+            "pid": 1234,
+            "cuda_visible_devices": str(placement.gpu_id),
+            "gpu": {
+                "backend": identity_backend,
+                "name": "fake-gpu",
+                "uuid": f"GPU-worker-{placement.worker_id}",
+                "pci_bus_id": f"0000:{placement.gpu_id:02x}:00.0",
+                "identity_error": None,
+            },
+        },
+        "record_write_errors": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "import_error",
+    [
+        ModuleNotFoundError("No module named 'dragon'"),
+        OSError("Dragon shared library could not be loaded"),
+    ],
+)
+def test_dragon_import_failure_explains_installation(
+    monkeypatch: pytest.MonkeyPatch, import_error: Exception
+) -> None:
+    original_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.startswith("dragon."):
+            raise import_error
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    with pytest.raises(RuntimeError) as error:
+        dragon_module._load_dragon_api()
+
+    message = str(error.value)
+    assert "pip install 'cuphoton[dragon]'" in message
+    assert "Python 3.12 or 3.13" in message
+    assert "every node" in message
+    assert "launch with dragon" in message
+    assert "no Python 3.14 wheels" in message
+    assert error.value.__cause__ is import_error
+
+
+def test_discovery_uses_actual_noncontiguous_node_gpu_ids() -> None:
+    assert discover_gpu_placements(_System, _Node) == (
+        Placement(worker_id=0, host="node-7", gpu_id=2),
+        Placement(worker_id=1, host="node-7", gpu_id=5),
+        Placement(worker_id=2, host="node-11", gpu_id=4),
+    )
+
+
+def test_discovery_rejects_non_integer_gpu_ids() -> None:
+    class InvalidNode:
+        hostname = "node-invalid"
+        gpus = ["0"]
+
+    with pytest.raises(RuntimeError, match="non-integer GPU ID"):
+        discover_gpu_placements(lambda: _System, lambda node_id: InvalidNode)
+
+
+def test_worker_selection_round_robins_across_hosts() -> None:
+    placements = discover_gpu_placements(_System, _Node)
+
+    assert _select_gpu_placements(placements, 2) == (
+        Placement(worker_id=0, host="node-7", gpu_id=2),
+        Placement(worker_id=1, host="node-11", gpu_id=4),
+    )
+
+
+def test_singleton_visibility_rejects_multiple_devices(monkeypatch) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,5")
+
+    with pytest.raises(RuntimeError, match="exactly one"):
+        _singleton_cuda_visibility()
+
+
+@pytest.mark.parametrize("visibility", [",0", "0,", "0,,1"])
+def test_singleton_visibility_rejects_empty_tokens(
+    monkeypatch, visibility
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visibility)
+
+    with pytest.raises(RuntimeError, match="exactly one"):
+        _singleton_cuda_visibility()
+
+
+def test_singleton_visibility_rejects_wrong_placed_device(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+
+    with pytest.raises(RuntimeError, match="placement mismatch"):
+        _singleton_cuda_visibility(2)
+
+
+def test_hostname_validation_accepts_short_fqdn_aliases() -> None:
+    assert _hostnames_match("gpu-node", "gpu-node.example.com")
+    assert _hostnames_match("GPU-NODE.EXAMPLE.COM.", "gpu-node")
+    assert not _hostnames_match(
+        "localhost", dragon_module.socket.gethostname()
+    )
+    assert _hostnames_match(
+        "localhost",
+        dragon_module.socket.gethostname(),
+        allow_loopback_alias=True,
+    )
+    assert not _hostnames_match("gpu-node-1", "gpu-node-2")
+    assert not _hostnames_match(
+        "gpu-node.dc1.example.com", "gpu-node.dc2.example.com"
+    )
+
+
+def test_shard_rejects_wrong_host_before_gpu_initialization(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    initialized = False
+
+    def identity_loader(backend):
+        nonlocal initialized
+        initialized = True
+        return {"backend": backend}
+
+    result = _execute_shard(
+        run_id="wrong-host",
+        run_dir=tmp_path,
+        placement=Placement(
+            worker_id=0,
+            host="definitely-not-this-host",
+            gpu_id=0,
+        ),
+        items=(WorkItem("one", {"id": "one"}, 1),),
+        options=_options(),
+        item_runner=lambda *args: pytest.fail("setup failure ran an item"),
+        gpu_identity_loader=identity_loader,
+        require_clean_cuda_imports=False,
+    )
+
+    assert initialized is False
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "RuntimeError"
+    assert "placement mismatch" in result["error"]["message"]
+    record = json.loads((tmp_path / "records" / "one.json").read_text())
+    assert record["status"] == "failed"
+    assert record["error"] == result["error"]
+    persisted = json.loads(
+        (tmp_path / "workers" / "worker-0000.json").read_text()
+    )
+    assert persisted == result
+
+
+def test_shard_rejects_wrong_gpu_before_gpu_initialization(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    initialized = False
+
+    def identity_loader(backend):
+        nonlocal initialized
+        initialized = True
+        return {"backend": backend}
+
+    result = _execute_shard(
+        run_id="wrong-gpu",
+        run_dir=tmp_path,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=2,
+        ),
+        items=(WorkItem("one", {"id": "one"}, 1),),
+        options=_options(),
+        item_runner=lambda *args: pytest.fail("setup failure ran an item"),
+        gpu_identity_loader=identity_loader,
+        require_clean_cuda_imports=False,
+    )
+
+    assert initialized is False
+    assert result["status"] == "failed"
+    assert "GPU placement mismatch" in result["error"]["message"]
+
+
+def test_shard_rejects_cuda_import_before_worker_preflight(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setitem(dragon_module.sys.modules, "cupy", object())
+    initialized = False
+
+    def identity_loader(backend):
+        nonlocal initialized
+        initialized = True
+        return {"backend": backend}
+
+    result = _execute_shard(
+        run_id="premature-cuda",
+        run_dir=tmp_path,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=2,
+        ),
+        items=(WorkItem("one", {"id": "one"}, 1),),
+        options=_options(),
+        item_runner=lambda *args: pytest.fail("setup failure ran an item"),
+        gpu_identity_loader=identity_loader,
+    )
+
+    assert initialized is False
+    assert result["status"] == "failed"
+    assert "before Dragon worker placement" in result["error"]["message"]
+
+
+def test_shard_persists_gpu_identity_setup_failure(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+
+    result = _execute_shard(
+        run_id="identity-failure",
+        run_dir=tmp_path,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=2,
+        ),
+        items=(WorkItem("one", {"id": "one"}, 1),),
+        options=_options(),
+        item_runner=lambda *args: pytest.fail("setup failure ran an item"),
+        gpu_identity_loader=lambda backend: (_ for _ in ()).throw(
+            RuntimeError("identity unavailable")
+        ),
+        require_clean_cuda_imports=False,
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"] == {
+        "type": "RuntimeError",
+        "message": "identity unavailable",
+    }
+    record = json.loads((tmp_path / "records" / "one.json").read_text())
+    assert record["error"] == result["error"]
+
+
+def test_shard_persists_success_and_failure_then_continues(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    run_dir = tmp_path / "run"
+    for name in ("items", "records", "workers"):
+        (run_dir / name).mkdir(parents=True, exist_ok=True)
+    items = (
+        WorkItem("good", {"id": "good"}, 10),
+        WorkItem("bad", {"id": "bad"}, 20),
+    )
+    visited = []
+
+    def item_runner(item, output_dir, options):
+        visited.append(item.item_id)
+        if item.item_id == "bad":
+            output_dir.mkdir(parents=True)
+            (output_dir / "partial.npy").write_bytes(b"partial")
+            error = ValueError("injected ordinary failure")
+            error.add_note("post-item input identity verification failed")
+            raise error
+        output_dir.mkdir(parents=True)
+        (output_dir / "summary.json").write_text("{}", encoding="utf-8")
+        return {
+            "run_dir": str(output_dir),
+            "summary_path": str(output_dir / "summary.json"),
+            "timings_sec": {"solve": 1.25},
+        }
+
+    result = _execute_shard(
+        run_id="test-run",
+        run_dir=run_dir,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=5,
+        ),
+        items=items,
+        options=_options(),
+        item_runner=item_runner,
+        gpu_identity_loader=lambda backend: {
+            "backend": backend,
+            "uuid": "GPU-test",
+            "pci_bus_id": "0000:01:00.0",
+        },
+        require_clean_cuda_imports=False,
+    )
+
+    assert visited == ["good", "bad"]
+    assert result["status"] == "failed"
+    assert result["success_count"] == 1
+    assert result["failed_count"] == 1
+    good = json.loads((run_dir / "records" / "good.json").read_text())
+    bad = json.loads((run_dir / "records" / "bad.json").read_text())
+    assert good["status"] == "success"
+    assert good["summary_path"] == "items/good/summary.json"
+    assert bad["status"] == "failed"
+    assert bad["error"] == {
+        "type": "ValueError",
+        "message": "injected ordinary failure",
+        "notes": "post-item input identity verification failed",
+    }
+    assert (run_dir / "items" / "bad" / "partial.npy").is_file()
+    assert not list((run_dir / "records").glob(".*.tmp-*"))
+    assert result["provenance"]["cuda_visible_devices"] == "5"
+    assert result["provenance"]["gpu"]["uuid"] == "GPU-test"
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        (
+            "missing-directory",
+            "item runner did not create a real output directory",
+        ),
+        (
+            "wrong-directory",
+            "item runner reported a different output directory",
+        ),
+        (
+            "missing-summary",
+            "item runner did not create a regular summary file",
+        ),
+        ("wrong-summary", "item runner reported a different summary path"),
+    ],
+)
+def test_shard_rejects_missing_or_wrong_success_output(
+    monkeypatch, tmp_path, case, message
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    run_dir = tmp_path / "run"
+    for name in ("items", "records", "workers"):
+        (run_dir / name).mkdir(parents=True, exist_ok=True)
+
+    def item_runner(item, output_dir, options):
+        del item, options
+        if case != "missing-directory":
+            output_dir.mkdir(parents=True)
+        if case not in {"missing-directory", "missing-summary"}:
+            (output_dir / "summary.json").write_text("{}", encoding="utf-8")
+        return {
+            "run_dir": str(
+                output_dir.parent / "other"
+                if case == "wrong-directory"
+                else output_dir
+            ),
+            "summary_path": str(
+                output_dir / "other.json"
+                if case == "wrong-summary"
+                else output_dir / "summary.json"
+            ),
+        }
+
+    result = _execute_shard(
+        run_id="invalid-output",
+        run_dir=run_dir,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=5,
+        ),
+        items=(WorkItem("item", {}, 10),),
+        options=_options(),
+        item_runner=item_runner,
+        gpu_identity_loader=lambda backend: {"backend": backend},
+        require_clean_cuda_imports=False,
+    )
+
+    record = json.loads(
+        (run_dir / "records" / "item.json").read_text(encoding="utf-8")
+    )
+    assert result["status"] == "failed"
+    assert result["success_count"] == 0
+    assert result["failed_count"] == 1
+    assert record["status"] == "failed"
+    assert record["error"] == {"type": "ValueError", "message": message}
+
+
+def test_shard_reasserts_protected_item_identity(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    run_dir = tmp_path / "run"
+    for name in ("items", "records", "workers"):
+        (run_dir / name).mkdir(parents=True, exist_ok=True)
+
+    def item_runner(item, output_dir, options):
+        del item, options
+        output_dir.mkdir(parents=True)
+        (output_dir / "summary.json").write_text("{}", encoding="utf-8")
+        return {
+            "schema": "untrusted-schema",
+            "run_id": "untrusted-run",
+            "item_id": "untrusted-item",
+            "worker_id": 99,
+            "weight_bytes": 99,
+            "started_at_utc": "1900-01-01T00:00:00+00:00",
+            "run_dir": str(output_dir),
+            "summary_path": str(output_dir / "summary.json"),
+        }
+
+    result = _execute_shard(
+        run_id="protected-identity",
+        run_dir=run_dir,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=5,
+        ),
+        items=(WorkItem("item", {}, 10),),
+        options=_options(),
+        item_runner=item_runner,
+        gpu_identity_loader=lambda backend: {"backend": backend},
+        require_clean_cuda_imports=False,
+    )
+
+    record = json.loads(
+        (run_dir / "records" / "item.json").read_text(encoding="utf-8")
+    )
+    assert result["status"] == "success"
+    assert {
+        field: record[field]
+        for field in (
+            "schema",
+            "run_id",
+            "item_id",
+            "worker_id",
+            "weight_bytes",
+        )
+    } == {
+        "schema": "cuphoton.xpois.dragon-item/v1",
+        "run_id": "protected-identity",
+        "item_id": "item",
+        "worker_id": 0,
+        "weight_bytes": 10,
+    }
+    assert record["started_at_utc"] != "1900-01-01T00:00:00+00:00"
+
+
+def test_shard_result_audit_rejects_missing_and_duplicate_workers() -> None:
+    shards = (
+        (WorkItem("zero", {}, 10),),
+        (WorkItem("one", {}, 20),),
+        (WorkItem("two", {}, 30),),
+    )
+    placements = _test_placements(len(shards))
+    incomplete = _valid_shard_result(shards[0], placements[0])
+    for field in ("item_count", "weight_bytes", "item_ids_sha256"):
+        incomplete.pop(field)
+    audit = _audit_shard_results(
+        shards,
+        [
+            incomplete,
+            dict(incomplete),
+            {"worker_id": 4},
+        ],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["missing_worker_ids"] == [1, 2]
+    assert audit["duplicate_worker_ids"] == [0]
+    assert audit["unexpected_worker_ids"] == [4]
+    assert audit["mismatched_shards"] == [
+        {
+            "worker_id": 0,
+            "fields": ["item_count", "item_ids_sha256", "weight_bytes"],
+        },
+        {
+            "worker_id": 0,
+            "fields": ["item_count", "item_ids_sha256", "weight_bytes"],
+        },
+    ]
+
+
+def test_shard_result_audit_quarantines_invalid_worker_id() -> None:
+    shards = ((WorkItem("zero", {}, 10),),)
+    placements = _test_placements(1)
+
+    audit = _audit_shard_results(
+        shards,
+        [{"worker_id": "not-an-integer"}],
+        [],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["missing_worker_ids"] == [0]
+    assert audit["invalid_results"] == [
+        {
+            "result_index": 0,
+            "field": "worker_id",
+            "message": "worker_id must be a non-boolean integer",
+        }
+    ]
+
+
+def test_shard_result_audit_rejects_status_count_mismatch() -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["status"] = "failed"
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["status"]}
+    ]
+
+
+def test_shard_result_audit_rejects_error_on_success() -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["error"] = {"type": "RuntimeError", "message": "failed"}
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["error"]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [True, {}, {"type": "RuntimeError"}, {"type": "", "message": "failed"}],
+)
+def test_shard_result_audit_rejects_invalid_error(error) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result.update(
+        status="failed", success_count=0, failed_count=1, error=error
+    )
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "failed"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["error"]}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("item_count", True),
+        ("item_count", 1.0),
+        ("weight_bytes", True),
+        ("weight_bytes", 10.0),
+    ],
+)
+def test_shard_result_audit_requires_strict_integral_totals(
+    field, value
+) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result[field] = value
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [{"worker_id": 0, "fields": [field]}]
+
+
+def test_shard_result_audit_accepts_honest_reported_failure() -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result.update(status="failed", success_count=0, failed_count=1)
+    records = [{"item_id": "zero", "status": "failed"}]
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        records,
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+    terminal_audit = audit_terminal_records(["zero"], records)
+
+    assert audit["ok"] is True
+    assert audit["mismatched_shards"] == []
+    assert audit["write_failed_shards"] == []
+    assert terminal_audit["failed_item_ids"] == ["zero"]
+
+
+def test_shard_result_audit_cross_checks_terminal_status_counts() -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "failed"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["failed_count", "success_count"]}
+    ]
+
+
+def test_shard_result_audit_separates_record_write_errors() -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    errors = [
+        {"item_id": "zero", "type": "OSError", "message": "write failed"}
+    ]
+    result.update(
+        status="failed",
+        success_count=0,
+        failed_count=1,
+        record_write_errors=errors,
+    )
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == []
+    assert audit["write_failed_shards"] == [
+        {"worker_id": 0, "record_write_errors": errors}
+    ]
+
+
+@pytest.mark.parametrize("value", [None, {"item_id": "zero"}, ["zero"]])
+def test_shard_result_audit_rejects_malformed_record_write_errors(
+    value,
+) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["record_write_errors"] = value
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["write_failed_shards"] == []
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["record_write_errors"]}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("started_at_utc", "2026-08-21T00:00:00"),
+        ("completed_at_utc", "not-a-timestamp"),
+        ("worker_wall_sec", True),
+        ("worker_wall_sec", -1.0),
+        ("worker_wall_sec", float("inf")),
+    ],
+)
+def test_shard_result_audit_rejects_invalid_worker_timing(
+    field, value
+) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result[field] = value
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [{"worker_id": 0, "fields": [field]}]
+
+
+def test_shard_result_audit_rejects_decreasing_timestamps() -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["completed_at_utc"] = "2026-08-20T23:59:59+00:00"
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["completed_at_utc"]}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("worker_id", 1),
+        ("requested_host", "different-node"),
+        ("requested_gpu_id", 99),
+        ("hostname", "different-node"),
+        ("pid", 0),
+        ("cuda_visible_devices", "3,7"),
+        ("gpu", {}),
+        ("gpu", {"backend": "", "name": "fake-gpu"}),
+        ("gpu", {"backend": "numba-cuda", "name": "fake-gpu"}),
+    ],
+)
+def test_shard_result_audit_rejects_invalid_provenance(field, value) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    provenance = result["provenance"]
+    assert isinstance(provenance, dict)
+    provenance[field] = value
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["provenance"]}
+    ]
+
+
+@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+def test_shard_result_audit_accepts_backend_identity(backend) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placement = Placement(worker_id=0, host="localhost", gpu_id=3)
+    result = _valid_shard_result(shard, placement, backend=backend)
+    provenance = result["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["hostname"] = "actual-node.example.com"
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=(placement,),
+        allow_loopback_alias=True,
+        backend=backend,
+    )
+
+    assert audit["ok"] is True
+
+
+@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize(
+    ("uuid", "pci_bus_id", "identity_error"),
+    [
+        (None, None, None),
+        ("GPU-test", "0000:03:00.0", "identity lookup failed"),
+    ],
+)
+def test_shard_result_audit_requires_stable_gpu_identity(
+    backend, uuid, pci_bus_id, identity_error
+) -> None:
+    shard = (WorkItem("zero", {}, 10),)
+    placement = Placement(worker_id=0, host="node", gpu_id=3)
+    result = _valid_shard_result(shard, placement, backend=backend)
+    provenance = result["provenance"]
+    assert isinstance(provenance, dict)
+    gpu = provenance["gpu"]
+    assert isinstance(gpu, dict)
+    gpu.update(
+        uuid=uuid,
+        pci_bus_id=pci_bus_id,
+        identity_error=identity_error,
+    )
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "zero", "status": "success"}],
+        placements=(placement,),
+        allow_loopback_alias=False,
+        backend=backend,
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["provenance"]}
+    ]
+
+
+@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("identity_field", ["uuid", "pci_bus_id"])
+def test_shard_result_audit_rejects_duplicate_physical_gpu_identity(
+    backend, identity_field
+) -> None:
+    shards = (
+        (WorkItem("zero", {}, 10),),
+        (WorkItem("one", {}, 20),),
+    )
+    placements = (
+        Placement(worker_id=0, host="node.example.com", gpu_id=3),
+        Placement(worker_id=1, host="node.example.com", gpu_id=7),
+    )
+    results = [
+        _valid_shard_result(shard, placement, backend=backend)
+        for shard, placement in zip(shards, placements, strict=True)
+    ]
+    for worker_id, result in enumerate(results):
+        provenance = result["provenance"]
+        assert isinstance(provenance, dict)
+        gpu = provenance["gpu"]
+        assert isinstance(gpu, dict)
+        if identity_field == "pci_bus_id" and worker_id == 0:
+            gpu["uuid"] = None
+        gpu[identity_field] = "shared-physical-id"
+
+    audit = _audit_shard_results(
+        shards,
+        results,
+        [
+            {"item_id": "zero", "status": "success"},
+            {"item_id": "one", "status": "success"},
+        ],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend=backend,
+    )
+
+    assert audit["ok"] is False
+    assert audit["duplicate_physical_gpu_worker_ids"] == [0, 1]
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["provenance"]},
+        {"worker_id": 1, "fields": ["provenance"]},
+    ]
+
+
+@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+def test_shard_result_audit_allows_distinct_mig_uuids_sharing_pci(
+    backend: str,
+) -> None:
+    shards = (
+        (WorkItem("zero", {}, 10),),
+        (WorkItem("one", {}, 20),),
+    )
+    placements = (
+        Placement(worker_id=0, host="node.example.com", gpu_id=3),
+        Placement(worker_id=1, host="node.example.com", gpu_id=7),
+    )
+    results = [
+        _valid_shard_result(shard, placement, backend=backend)
+        for shard, placement in zip(shards, placements, strict=True)
+    ]
+    for worker_id, result in enumerate(results):
+        gpu = result["provenance"]["gpu"]
+        gpu["uuid"] = f"MIG-GPU-instance-{worker_id}"
+        gpu["pci_bus_id"] = "0000:01:00.0"
+
+    audit = _audit_shard_results(
+        shards,
+        results,
+        [
+            {"item_id": "zero", "status": "success"},
+            {"item_id": "one", "status": "success"},
+        ],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend=backend,
+    )
+
+    assert audit["ok"] is True
+    assert audit["duplicate_physical_gpu_worker_ids"] == []
+
+
+@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+def test_shard_result_audit_rejects_incomparable_same_host_identity(
+    backend: str,
+) -> None:
+    shards = (
+        (WorkItem("zero", {}, 10),),
+        (WorkItem("one", {}, 20),),
+    )
+    placements = (
+        Placement(worker_id=0, host="node.example.com", gpu_id=3),
+        Placement(worker_id=1, host="node.example.com", gpu_id=7),
+    )
+    results = [
+        _valid_shard_result(shard, placement, backend=backend)
+        for shard, placement in zip(shards, placements, strict=True)
+    ]
+    results[0]["provenance"]["gpu"]["pci_bus_id"] = None
+    results[1]["provenance"]["gpu"]["uuid"] = None
+
+    audit = _audit_shard_results(
+        shards,
+        results,
+        [
+            {"item_id": "zero", "status": "success"},
+            {"item_id": "one", "status": "success"},
+        ],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend=backend,
+    )
+
+    assert audit["ok"] is False
+    assert audit["duplicate_physical_gpu_worker_ids"] == []
+    assert audit["incomparable_physical_gpu_worker_ids"] == [0, 1]
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["provenance"]},
+        {"worker_id": 1, "fields": ["provenance"]},
+    ]
+
+
+@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+def test_shard_result_audit_rejects_duplicate_uuid_across_hosts(
+    backend: str,
+) -> None:
+    shards = (
+        (WorkItem("zero", {}, 10),),
+        (WorkItem("one", {}, 20),),
+    )
+    placements = (
+        Placement(worker_id=0, host="node-a.example.com", gpu_id=3),
+        Placement(worker_id=1, host="node-b.example.com", gpu_id=7),
+    )
+    results = [
+        _valid_shard_result(shard, placement, backend=backend)
+        for shard, placement in zip(shards, placements, strict=True)
+    ]
+    for result in results:
+        result["provenance"]["gpu"]["uuid"] = "GPU-shared"
+
+    audit = _audit_shard_results(
+        shards,
+        results,
+        [
+            {"item_id": "zero", "status": "success"},
+            {"item_id": "one", "status": "success"},
+        ],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend=backend,
+    )
+
+    assert audit["ok"] is False
+    assert audit["duplicate_physical_gpu_worker_ids"] == [0, 1]
+
+
+def test_shard_continues_after_terminal_record_write_failure(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    run_dir = tmp_path / "run"
+    for name in ("items", "records", "workers"):
+        (run_dir / name).mkdir(parents=True, exist_ok=True)
+    original_atomic_write_json = dragon_module.atomic_write_json
+
+    def flaky_atomic_write_json(path, payload):
+        if path.parent.name == "records" and path.name == "first.json":
+            raise OSError("injected record write failure")
+        original_atomic_write_json(path, payload)
+
+    monkeypatch.setattr(
+        dragon_module, "atomic_write_json", flaky_atomic_write_json
+    )
+    visited = []
+
+    def item_runner(item, output_dir, options):
+        del options
+        visited.append(item.item_id)
+        output_dir.mkdir(parents=True)
+        (output_dir / "summary.json").write_text("{}", encoding="utf-8")
+        return {
+            "run_dir": str(output_dir),
+            "summary_path": str(output_dir / "summary.json"),
+        }
+
+    result = _execute_shard(
+        run_id="record-write-failure",
+        run_dir=run_dir,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=5,
+        ),
+        items=(
+            WorkItem("first", {}, 10),
+            WorkItem("second", {}, 20),
+        ),
+        options=_options(),
+        item_runner=item_runner,
+        gpu_identity_loader=lambda backend: {"backend": backend},
+        require_clean_cuda_imports=False,
+    )
+
+    assert visited == ["first", "second"]
+    assert result["status"] == "failed"
+    assert result["success_count"] == 1
+    assert result["failed_count"] == 1
+    assert result["record_write_errors"] == [
+        {
+            "item_id": "first",
+            "type": "OSError",
+            "message": "injected record write failure",
+        }
+    ]
+    assert not (run_dir / "records" / "first.json").exists()
+    assert (run_dir / "records" / "second.json").is_file()
+    assert (run_dir / "workers" / "worker-0000.json").is_file()
+
+
+def test_real_item_record_matches_coordinator_contract(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    reference = np.zeros((64, 64), dtype=np.float64)
+    reference[20:40, 20:40] = 1.0
+    target = reference.copy()
+    reference_path = tmp_path / "reference.npy"
+    target_path = tmp_path / "target.npy"
+    np.save(reference_path, reference, allow_pickle=False)
+    np.save(target_path, target, allow_pickle=False)
+    manifest_path = tmp_path / "pairs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "cuphoton.xpois.image-pairs/v1",
+                "pairs": [
+                    {
+                        "id": "cpu-pair",
+                        "reference": str(reference_path),
+                        "target": str(target_path),
+                    }
+                ],
+            }
+        )
+    )
+    item = load_image_pair_manifest(manifest_path).work_items()[0]
+    run_dir = tmp_path / "run"
+    for name in ("items", "records", "workers"):
+        (run_dir / name).mkdir(parents=True, exist_ok=True)
+    options = BatchFitOptions(
+        kernel_shape=(9, 9),
+        basis_sigmas=(1.5,),
+        basis_degrees=(0,),
+        backend="cpu",
+    )
+
+    result = _execute_shard(
+        run_id="real-item-contract",
+        run_dir=run_dir,
+        placement=Placement(
+            worker_id=0,
+            host=dragon_module.socket.gethostname(),
+            gpu_id=0,
+        ),
+        items=(item,),
+        options=options,
+        item_runner=run_image_pair_item,
+        gpu_identity_loader=lambda backend: {"backend": backend},
+        require_clean_cuda_imports=False,
+    )
+    records, load_errors = _load_terminal_records(run_dir)
+
+    assert result["status"] == "success"
+    assert load_errors == []
+    assert (
+        _audit_terminal_record_contract(
+            run_id="real-item-contract",
+            expected={
+                item.item_id: {
+                    "worker_id": 0,
+                    "weight_bytes": item.weight_bytes,
+                }
+            },
+            records=records,
+        )
+        == []
+    )
+
+
+def test_item_timing_aggregation_quarantines_malformed_mapping() -> None:
+    timings, errors = _aggregate_item_timings(
+        [
+            {"item_id": "good", "timings_sec": {"solve_sec": 1.0}},
+            {"item_id": "bad", "timings_sec": "not-a-mapping"},
+        ]
+    )
+
+    assert timings["solve_sec"] == {"sum": 1.0, "max": 1.0, "mean": 1.0}
+    assert errors == [
+        {
+            "item_id": "bad",
+            "type": "InvalidTimingRecord",
+            "message": "item 'bad' timings_sec must be a mapping",
+        }
+    ]
+
+
+def test_terminal_record_contract_rejects_incomplete_success() -> None:
+    errors = _audit_terminal_record_contract(
+        run_id="run",
+        expected={"item": {"worker_id": 0, "weight_bytes": 10}},
+        records=[{"item_id": "item", "status": "success"}],
+    )
+
+    assert len(errors) == 1
+    assert errors[0]["type"] == "InvalidTerminalRecord"
+    assert "schema" in errors[0]["message"]
+    assert "worker_id" in errors[0]["message"]
+    assert "summary_path" in errors[0]["message"]
+    assert "device" in errors[0]["message"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("started_at_utc", "2026-08-21T00:00:00"),
+        ("completed_at_utc", "not-a-timestamp"),
+    ],
+)
+def test_terminal_record_contract_rejects_invalid_timestamps(
+    field, value
+) -> None:
+    record = {
+        "schema": "cuphoton.xpois.dragon-item/v1",
+        "run_id": "run",
+        "item_id": "item",
+        "worker_id": 0,
+        "weight_bytes": 10,
+        "started_at_utc": "2026-08-21T00:00:00+00:00",
+        "completed_at_utc": "2026-08-21T00:00:01+00:00",
+        "worker_seconds": 1.0,
+        "status": "failed",
+        "error": {"type": "RuntimeError", "message": "failed"},
+    }
+    record[field] = value
+
+    errors = _audit_terminal_record_contract(
+        run_id="run",
+        expected={"item": {"worker_id": 0, "weight_bytes": 10}},
+        records=[record],
+    )
+
+    assert len(errors) == 1
+    assert errors[0]["message"].endswith(field)
+
+
+def test_terminal_record_contract_rejects_decreasing_timestamps() -> None:
+    errors = _audit_terminal_record_contract(
+        run_id="run",
+        expected={"item": {"worker_id": 0, "weight_bytes": 10}},
+        records=[
+            {
+                "schema": "cuphoton.xpois.dragon-item/v1",
+                "run_id": "run",
+                "item_id": "item",
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "started_at_utc": "2026-08-21T00:00:01+00:00",
+                "completed_at_utc": "2026-08-21T00:00:00+00:00",
+                "worker_seconds": 1.0,
+                "status": "failed",
+                "error": {"type": "RuntimeError", "message": "failed"},
+            }
+        ],
+    )
+
+    assert len(errors) == 1
+    assert errors[0]["message"].endswith("completed_at_utc")
+
+
+@pytest.mark.parametrize(
+    "wall_sec",
+    [
+        {"fit": True},
+        {"fit": -1.0},
+        {"fit": float("inf")},
+        {"fit": "one"},
+    ],
+)
+def test_terminal_record_contract_validates_wall_timings(wall_sec) -> None:
+    errors = _audit_terminal_record_contract(
+        run_id="run",
+        expected={
+            "item": {
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "backend": "cupy",
+            }
+        },
+        records=[
+            {
+                "schema": "cuphoton.xpois.dragon-item/v1",
+                "run_id": "run",
+                "item_id": "item",
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "started_at_utc": "2026-08-21T00:00:00+00:00",
+                "completed_at_utc": "2026-08-21T00:00:01+00:00",
+                "worker_seconds": 1.0,
+                "status": "success",
+                "run_dir": "items/item",
+                "summary_path": "items/item/summary.json",
+                "requested_backend": "cupy",
+                "backend": "cupy",
+                "device": "fake-gpu",
+                "runtime": {},
+                "timings_sec": {},
+                "wall_sec": wall_sec,
+            }
+        ],
+    )
+
+    assert len(errors) == 1
+    assert errors[0]["message"].endswith("wall_sec")
+
+
+def test_terminal_record_contract_rejects_wrong_solver() -> None:
+    errors = _audit_terminal_record_contract(
+        run_id="run",
+        expected={
+            "item": {
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "backend": "cupy",
+                "solver": "spatial-als",
+            }
+        },
+        records=[
+            {
+                "schema": "cuphoton.xpois.dragon-item/v1",
+                "run_id": "run",
+                "item_id": "item",
+                "worker_id": 0,
+                "weight_bytes": 10,
+                "started_at_utc": "2026-08-21T00:00:00+00:00",
+                "completed_at_utc": "2026-08-21T00:00:01+00:00",
+                "worker_seconds": 1.0,
+                "status": "success",
+                "run_dir": "items/item",
+                "summary_path": "items/item/summary.json",
+                "solver": "constant",
+                "requested_backend": "cupy",
+                "backend": "cupy",
+                "device": "fake-gpu",
+                "runtime": {},
+                "timings_sec": {},
+                "wall_sec": {},
+            }
+        ],
+    )
+
+    assert len(errors) == 1
+    assert errors[0]["message"].endswith("solver")
+
+
+def test_terminal_loader_exposes_unexpected_record_files(tmp_path) -> None:
+    records_dir = tmp_path / "records"
+    records_dir.mkdir()
+    atomic_write_json(
+        records_dir / "expected.json",
+        {"item_id": "expected", "status": "success"},
+    )
+    atomic_write_json(
+        records_dir / "unexpected.json",
+        {"item_id": "unexpected", "status": "success"},
+    )
+
+    records, errors = _load_terminal_records(tmp_path)
+    audit = audit_terminal_records(["expected"], records)
+
+    assert errors == []
+    assert audit["ok"] is False
+    assert audit["unexpected_item_ids"] == ["unexpected"]
+
+
+def test_terminal_loader_rejects_swapped_record_names(tmp_path) -> None:
+    for filename, item_id in (("one", "two"), ("two", "one")):
+        atomic_write_json(
+            tmp_path / "records" / f"{filename}.json",
+            {"item_id": item_id, "status": "success"},
+        )
+
+    records, errors = _load_terminal_records(tmp_path)
+
+    assert records == []
+    assert [error["record_path"] for error in errors] == [
+        "records/one.json",
+        "records/two.json",
+    ]
+    assert all("item_id differs" in error["message"] for error in errors)
+    assert all(not error.get("retryable") for error in errors)
+
+
+def test_terminal_artifact_wait_absorbs_visibility_delay(
+    monkeypatch, tmp_path
+) -> None:
+    run_dir = tmp_path / "run"
+    for name in ("items", "records"):
+        (run_dir / name).mkdir(parents=True)
+    shard = (WorkItem("expected", {"id": "expected"}, 1),)
+    result = _valid_shard_result(
+        shard,
+        Placement(worker_id=0, host="node", gpu_id=0),
+    )
+    sleeps: list[float] = []
+
+    def publish(delay: float) -> None:
+        sleeps.append(delay)
+        item_dir = run_dir / "items" / "expected"
+        item_dir.mkdir()
+        atomic_write_json(item_dir / "summary.json", {})
+        atomic_write_json(
+            run_dir / "records" / "expected.json",
+            {"item_id": "expected", "status": "success"},
+        )
+
+    monkeypatch.setattr(dragon_module.time, "sleep", publish)
+
+    records, errors = _wait_terminal_artifacts(
+        run_dir, (shard,), (result,), 1.0
+    )
+
+    assert errors == []
+    assert records == [{"item_id": "expected", "status": "success"}]
+    assert len(sleeps) == 1
+
+
+def test_terminal_artifact_wait_reads_expected_path_with_stale_listing(
+    monkeypatch, tmp_path
+) -> None:
+    run_dir = tmp_path / "run"
+    item_dir = run_dir / "items" / "expected"
+    item_dir.mkdir(parents=True)
+    (run_dir / "records").mkdir()
+    atomic_write_json(item_dir / "summary.json", {})
+    atomic_write_json(
+        run_dir / "records" / "expected.json",
+        {"item_id": "expected", "status": "success"},
+    )
+    shard = (WorkItem("expected", {"id": "expected"}, 1),)
+    result = _valid_shard_result(
+        shard,
+        Placement(worker_id=0, host="node", gpu_id=0),
+    )
+    original_glob = Path.glob
+
+    def stale_glob(path: Path, pattern: str):
+        if path == run_dir / "records" and pattern == "*.json":
+            return iter(())
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", stale_glob)
+    monkeypatch.setattr(
+        dragon_module.time,
+        "sleep",
+        lambda delay: pytest.fail("visible expected record should not wait"),
+    )
+
+    records, errors = _wait_terminal_artifacts(
+        run_dir, (shard,), (result,), 1.0
+    )
+
+    assert errors == []
+    assert records == [{"item_id": "expected", "status": "success"}]
+
+
+def test_terminal_artifact_wait_rejects_symlinked_record(
+    monkeypatch, tmp_path
+) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "records").mkdir(parents=True)
+    linked = tmp_path / "outside.json"
+    atomic_write_json(linked, {"item_id": "expected", "status": "success"})
+    (run_dir / "records" / "expected.json").symlink_to(linked)
+    shard = (WorkItem("expected", {"id": "expected"}, 1),)
+    result = _valid_shard_result(
+        shard,
+        Placement(worker_id=0, host="node", gpu_id=0),
+    )
+    monkeypatch.setattr(
+        dragon_module.time,
+        "sleep",
+        lambda delay: pytest.fail("a symlinked record should fail fast"),
+    )
+
+    records, errors = _wait_terminal_artifacts(
+        run_dir, (shard,), (result,), 60.0
+    )
+
+    assert records == []
+    assert [error["record_path"] for error in errors] == [
+        "records/expected.json"
+    ]
+    assert "regular file" in errors[0]["message"]
+
+
+def test_terminal_artifact_wait_skips_workers_without_results(
+    monkeypatch, tmp_path
+) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "records").mkdir(parents=True)
+    shard = (WorkItem("expected", {"id": "expected"}, 1),)
+    monkeypatch.setattr(
+        dragon_module.time,
+        "sleep",
+        lambda delay: pytest.fail("a missing shard result should not wait"),
+    )
+
+    assert _wait_terminal_artifacts(run_dir, (shard,), (), 60.0) == ([], [])
+
+
+def test_terminal_artifact_wait_skips_declared_record_write_failure(
+    monkeypatch, tmp_path
+) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "records").mkdir(parents=True)
+    shard = (WorkItem("expected", {"id": "expected"}, 1),)
+    result = _valid_shard_result(
+        shard,
+        Placement(worker_id=0, host="node", gpu_id=0),
+    )
+    result["record_write_errors"] = [
+        {
+            "item_id": "expected",
+            "type": "OSError",
+            "message": "record write failed",
+        }
+    ]
+    monkeypatch.setattr(
+        dragon_module.time,
+        "sleep",
+        lambda delay: pytest.fail("declared write failure should not wait"),
+    )
+
+    assert _wait_terminal_artifacts(run_dir, (shard,), (result,), 60.0) == (
+        [],
+        [],
+    )
+
+
+class _FakeQueue(queue.Queue):
+    def close(self):
+        return None
+
+
+class _FakePolicy:
+    Placement = SimpleNamespace(HOST_NAME="host-name")
+
+    def __init__(self, *, placement, host_name, gpu_affinity):
+        self.placement = placement
+        self.host_name = host_name
+        self.gpu_affinity = gpu_affinity
+
+
+class _FakeTemplate:
+    def __init__(self, *, target, args, policy):
+        self.target = target
+        self.args = args
+        self.policy = policy
+        self.argdata = b"fake compact launch arguments"
+
+
+class _FakeGroup:
+    last_walltime = None
+    last_join_timeout = None
+    last_closed = False
+    last_stopped = False
+
+    def __init__(self, *, restart, ignore_error_on_exit, walltime):
+        assert restart is False
+        assert ignore_error_on_exit is False
+        type(self).last_walltime = walltime
+        type(self).last_join_timeout = None
+        type(self).last_closed = False
+        type(self).last_stopped = False
+        self.templates = []
+        type(self).last_templates = self.templates
+        self.exit_status = []
+
+    def add_process(self, *, nproc, template):
+        assert nproc == 1
+        self.templates.append(template)
+
+    def init(self):
+        return None
+
+    def start(self):
+        original = os.environ.get("CUDA_VISIBLE_DEVICES")
+        try:
+            for index, template in enumerate(self.templates):
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(
+                    template.policy.gpu_affinity[0]
+                )
+                template.target(*template.args)
+                self.exit_status.append((1000 + index, 0))
+        finally:
+            if original is None:
+                os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            else:
+                os.environ["CUDA_VISIBLE_DEVICES"] = original
+
+    def join(self, timeout=None):
+        type(self).last_join_timeout = timeout
+        return None
+
+    def stop(self, patience=5.0):
+        assert patience == 5.0
+        type(self).last_stopped = True
+        return None
+
+    def close(self, patience=5.0):
+        assert patience == 5.0
+        type(self).last_closed = True
+        return None
+
+    @property
+    def inactive_puids(self):
+        return self.exit_status
+
+
+class _FakeSystem:
+    nodes = (1,)
+
+
+class _FakeNode:
+    hostname = "fake-node"
+    gpus = [3, 7]
+
+    def __init__(self, node_id):
+        assert node_id == 1
+
+
+class _FakeFailedGroup(_FakeGroup):
+    def start(self):
+        self.exit_status = [(1000, -9)]
+
+
+class _FakeSetupFailedGroup(_FakeGroup):
+    def add_process(self, *, nproc, template):
+        del nproc, template
+        raise RuntimeError("process setup failed")
+
+
+class _FakeJoinTimedOutGroup(_FakeGroup):
+    def start(self):
+        return None
+
+    def join(self, timeout=None):
+        type(self).last_join_timeout = timeout
+        raise TimeoutError("worker join deadline exceeded")
+
+
+class _FakeStartFailedGroup(_FakeGroup):
+    def start(self):
+        raise RuntimeError("partial worker start failed")
+
+
+class _FakeDecoratedJoinFailedGroup(_FakeGroup):
+    last_forced_closed = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        type(self).last_forced_closed = False
+
+    def start(self):
+        return None
+
+    def join(self, timeout=None):
+        type(self).last_join_timeout = timeout
+        raise RuntimeError("decorated worker failure")
+
+    def stop(self, patience=5.0):
+        assert patience == 5.0
+        type(self).last_stopped = True
+        raise RuntimeError("decorated worker failure")
+
+    def close(self, patience=5.0):
+        assert patience == 5.0
+        type(self).last_closed = True
+        raise RuntimeError("decorated worker failure")
+
+    def _close_no_decorator(self, patience=5.0):
+        assert patience == 5.0
+        type(self).last_forced_closed = True
+
+
+def _fake_worker(
+    run_id,
+    run_dir_raw,
+    placement_payload,
+    item_payloads,
+    options_payload,
+    results_queue,
+    allow_loopback_alias,
+):
+    del allow_loopback_alias
+    run_dir = dragon_module.Path(run_dir_raw)
+    worker_id = placement_payload["worker_id"]
+    requested_host = placement_payload["host"]
+    requested_gpu_id = placement_payload["gpu_id"]
+    backend = options_payload["backend"]
+    identity_backend = "cupy" if backend in {"cupy", "cutile"} else backend
+    for payload in item_payloads:
+        item = WorkItem.from_dict(payload)
+        item_dir = run_dir / "items" / item.item_id
+        item_dir.mkdir(parents=True)
+        atomic_write_json(item_dir / "summary.json", {})
+        atomic_write_json(
+            run_dir / "records" / f"{item.item_id}.json",
+            {
+                "schema": "cuphoton.xpois.dragon-item/v1",
+                "run_id": run_id,
+                "item_id": item.item_id,
+                "worker_id": worker_id,
+                "weight_bytes": item.weight_bytes,
+                "started_at_utc": "2026-08-21T00:00:00+00:00",
+                "completed_at_utc": "2026-08-21T00:00:01+00:00",
+                "worker_seconds": 1.0,
+                "status": "success",
+                "run_dir": f"items/{item.item_id}",
+                "summary_path": f"items/{item.item_id}/summary.json",
+                "solver": options_payload["solver"],
+                "requested_backend": "cupy",
+                "backend": "cupy",
+                "device": "fake-gpu",
+                "runtime": {},
+                "timings_sec": {"solve": 0.5},
+                "wall_sec": {"item_runner": 0.75},
+            },
+        )
+    results_queue.put(
+        {
+            "schema": "cuphoton.xpois.dragon-shard/v1",
+            "worker_id": worker_id,
+            "status": "success",
+            "item_count": len(item_payloads),
+            "success_count": len(item_payloads),
+            "failed_count": 0,
+            "weight_bytes": sum(
+                WorkItem.from_dict(payload).weight_bytes
+                for payload in item_payloads
+            ),
+            "item_ids_sha256": dragon_module._item_ids_sha256(
+                [WorkItem.from_dict(payload) for payload in item_payloads]
+            ),
+            "started_at_utc": "2026-08-21T00:00:00+00:00",
+            "completed_at_utc": "2026-08-21T00:00:01+00:00",
+            "worker_wall_sec": 1.0,
+            "timings_sec": {"solve": 0.5 * len(item_payloads)},
+            "provenance": {
+                "worker_id": worker_id,
+                "requested_host": requested_host,
+                "requested_gpu_id": requested_gpu_id,
+                "hostname": requested_host,
+                "pid": 1234,
+                "cuda_visible_devices": str(requested_gpu_id),
+                "gpu": {
+                    "backend": identity_backend,
+                    "name": "fake-gpu",
+                    "uuid": f"GPU-worker-{worker_id}",
+                    "pci_bus_id": f"0000:{requested_gpu_id:02x}:00.0",
+                    "identity_error": None,
+                },
+            },
+            "record_write_errors": [],
+        }
+    )
+
+
+def _fake_corrupt_worker(
+    run_id,
+    run_dir_raw,
+    placement_payload,
+    item_payloads,
+    options_payload,
+    results_queue,
+    allow_loopback_alias,
+):
+    local_results = _FakeQueue()
+    _fake_worker(
+        run_id,
+        run_dir_raw,
+        placement_payload,
+        item_payloads,
+        options_payload,
+        local_results,
+        allow_loopback_alias,
+    )
+    local_results.get_nowait()
+    for payload in item_payloads:
+        item = WorkItem.from_dict(payload)
+        record_path = (
+            dragon_module.Path(run_dir_raw)
+            / "records"
+            / f"{item.item_id}.json"
+        )
+        record = json.loads(record_path.read_text())
+        record["timings_sec"] = "corrupt"
+        atomic_write_json(record_path, record)
+    results_queue.put(["corrupt"])
+
+
+def _fake_inconsistent_shard_worker(
+    run_id,
+    run_dir_raw,
+    placement_payload,
+    item_payloads,
+    options_payload,
+    results_queue,
+    allow_loopback_alias,
+):
+    local_results = _FakeQueue()
+    _fake_worker(
+        run_id,
+        run_dir_raw,
+        placement_payload,
+        item_payloads,
+        options_payload,
+        local_results,
+        allow_loopback_alias,
+    )
+    result = local_results.get_nowait()
+    result["status"] = "failed"
+    result["success_count"] = 0
+    result["failed_count"] = len(item_payloads)
+    results_queue.put(result)
+
+
+def _fake_record_write_failure_shard_worker(
+    run_id,
+    run_dir_raw,
+    placement_payload,
+    item_payloads,
+    options_payload,
+    results_queue,
+    allow_loopback_alias,
+):
+    local_results = _FakeQueue()
+    _fake_worker(
+        run_id,
+        run_dir_raw,
+        placement_payload,
+        item_payloads,
+        options_payload,
+        local_results,
+        allow_loopback_alias,
+    )
+    result = local_results.get_nowait()
+    result["status"] = "failed"
+    result["success_count"] -= 1
+    result["failed_count"] += 1
+    result["record_write_errors"] = [
+        {
+            "item_id": item_payloads[0]["item_id"],
+            "type": "OSError",
+            "message": "injected record write failure",
+        }
+    ]
+    results_queue.put(result)
+
+
+def _write_fake_manifest(tmp_path, *, item_ids=("one",)):
+    reference = tmp_path / "reference.npy"
+    target = tmp_path / "target.npy"
+    np.save(reference, np.zeros((16, 16)), allow_pickle=False)
+    np.save(target, np.zeros((16, 16)), allow_pickle=False)
+    manifest = tmp_path / "pairs.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "cuphoton.xpois.image-pairs/v1",
+                "pairs": [
+                    {
+                        "id": item_id,
+                        "reference": str(reference),
+                        "target": str(target),
+                    }
+                    for item_id in item_ids
+                ],
+            }
+        )
+    )
+    return manifest
+
+
+def test_dragon_shard_worker_round_trips_wire_payloads(
+    monkeypatch, tmp_path
+) -> None:
+    seen = {}
+
+    def fake_execute_shard(**kwargs):
+        seen.update(kwargs)
+        return {
+            "worker_id": kwargs["placement"].worker_id,
+            "status": "success",
+        }
+
+    monkeypatch.setattr(dragon_module, "_execute_shard", fake_execute_shard)
+    results = _FakeQueue()
+    placement = Placement(worker_id=3, host="node", gpu_id=7)
+    item = WorkItem("wire-item", {"id": "wire-item"}, 42)
+
+    _dragon_shard_worker(
+        "wire-run",
+        str(tmp_path),
+        placement.to_dict(),
+        [item.to_dict()],
+        _options().to_payload(),
+        results,
+        True,
+    )
+
+    assert results.get_nowait() == {"worker_id": 3, "status": "success"}
+    assert seen["run_id"] == "wire-run"
+    assert seen["placement"] == placement
+    assert seen["items"] == (item,)
+    assert seen["options"] == _options()
+    assert seen["allow_loopback_alias"] is True
+
+
+def test_dragon_shard_worker_reports_wire_deserialization_failure(
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "wire-failure"
+    (run_dir / "workers").mkdir(parents=True)
+    results = _FakeQueue()
+    placement = Placement(worker_id=3, host="node", gpu_id=7)
+    item = WorkItem("wire-item", {"id": "wire-item"}, 42)
+
+    _dragon_shard_worker(
+        "wire-run",
+        str(run_dir),
+        placement.to_dict(),
+        [item.to_dict()],
+        {},
+        results,
+        True,
+    )
+
+    result = results.get_nowait()
+    assert result["worker_id"] == 3
+    assert result["status"] == "failed"
+    assert result["item_count"] == 1
+    assert result["failed_count"] == 1
+    assert result["error"]["type"] == "KeyError"
+    persisted = json.loads(
+        (run_dir / "workers" / "worker-0003.json").read_text()
+    )
+    assert persisted == result
+
+
+def test_dragon_shard_worker_preserves_durable_shard_result(
+    monkeypatch, tmp_path
+) -> None:
+    run_dir = tmp_path / "post-write-failure"
+    (run_dir / "workers").mkdir(parents=True)
+    results = _FakeQueue()
+    placement = Placement(worker_id=3, host="node", gpu_id=7)
+    item = WorkItem("late-item", {"id": "late-item"}, 42)
+    durable = {"worker_id": 3, "status": "success"}
+
+    def write_then_raise(**kwargs):
+        atomic_write_json(run_dir / "workers" / "worker-0003.json", durable)
+        raise OSError("synthetic post-write failure")
+
+    monkeypatch.setattr(dragon_module, "_execute_shard", write_then_raise)
+
+    _dragon_shard_worker(
+        "late-run",
+        str(run_dir),
+        placement.to_dict(),
+        [item.to_dict()],
+        _options().to_payload(),
+        results,
+        True,
+    )
+
+    result = results.get_nowait()
+    assert result["worker_id"] == 3
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "OSError"
+    persisted = json.loads(
+        (run_dir / "workers" / "worker-0003.json").read_text()
+    )
+    assert persisted == durable
+
+
+def test_coordinator_audits_fake_dragon_process_group(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(dragon_module, "_dragon_shard_worker", _fake_worker)
+    options = _options(
+        solver="spatial-als",
+        spatial_degree=3,
+        als_iterations=17,
+        als_tolerance=2e-7,
+        als_regularization=4e-5,
+    )
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "runs",
+        run_id="fake-dragon",
+        max_workers=2,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=options,
+    )
+
+    assert result.status == "success"
+    assert result.to_dict()["executor"] == "dragon"
+    assert result.summary["executor"] == "dragon"
+    assert result.summary["terminal_record_audit"]["ok"] is True
+    assert result.summary["process_exit_audit"]["ok"] is True
+    assert result.summary["shard_result_audit"]["ok"] is True
+    assert result.summary["placements"] == [
+        {"worker_id": 0, "host": "fake-node", "gpu_id": 3}
+    ]
+    assert result.summary["distinct_host_count"] == 1
+    assert result.summary["coordinator_wall_sec"] >= 0
+    coordinator_timings = result.summary["coordinator_timings_sec"]
+    assert "coordinator_setup_sec" not in coordinator_timings
+    assert result.summary["coordinator_totals_sec"]["setup"] >= 0
+    assert _FakeGroup.last_walltime == 30.0
+    assert _FakeGroup.last_join_timeout == 31.0
+    assert _FakeGroup.last_stopped is False
+    assert _FakeGroup.last_closed is True
+    launch = json.loads((result.run_dir / "run.json").read_text())
+    assert launch["record_type"] == "immutable-launch"
+    assert launch["executor"] == "dragon"
+    assert "status" not in launch
+    assert launch["options"] == options.to_payload()
+    record = json.loads((result.run_dir / "records" / "one.json").read_text())
+    assert record["solver"] == "spatial-als"
+    assert (result.run_dir / "input-identity.json").is_file()
+
+
+def test_coordinator_audits_two_worker_fanout(monkeypatch, tmp_path) -> None:
+    manifest = _write_fake_manifest(
+        tmp_path, item_ids=("one", "two", "three")
+    )
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(dragon_module, "_dragon_shard_worker", _fake_worker)
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "multi-runs",
+        run_id="fake-dragon-multi",
+        max_workers=2,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "success"
+    assert result.summary["placements"] == [
+        {"worker_id": 0, "host": "fake-node", "gpu_id": 3},
+        {"worker_id": 1, "host": "fake-node", "gpu_id": 7},
+    ]
+    assert result.summary["queue_result_count"] == 2
+    assert result.summary["terminal_record_audit"]["expected_count"] == 3
+    assert result.summary["terminal_record_audit"]["ok"] is True
+    assert result.summary["process_exit_audit"] == {
+        "ok": True,
+        "expected_count": 2,
+        "observed_count": 2,
+        "nonzero": [],
+    }
+    assert result.summary["shard_result_audit"]["ok"] is True
+    expected_shards = {
+        shard["worker_id"]: shard for shard in result.summary["shards"]
+    }
+    observed_shards = {
+        shard["worker_id"]: shard for shard in result.summary["shard_results"]
+    }
+    assert set(expected_shards) == set(observed_shards) == {0, 1}
+    assert sum(shard["item_count"] for shard in expected_shards.values()) == 3
+    for worker_id, expected in expected_shards.items():
+        observed = observed_shards[worker_id]
+        assert observed["item_count"] == expected["item_count"]
+        assert observed["weight_bytes"] == expected["weight_bytes"]
+        assert observed["item_ids_sha256"] == expected["item_ids_sha256"]
+
+
+def test_coordinator_rejects_failed_shard_with_successful_records(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(
+        dragon_module,
+        "_dragon_shard_worker",
+        _fake_inconsistent_shard_worker,
+    )
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "failed-shard-runs",
+        run_id="fake-failed-shard",
+        max_workers=1,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary["terminal_record_audit"]["ok"] is True
+    assert result.summary["shard_result_audit"]["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["failed_count", "success_count"]}
+    ]
+
+
+def test_coordinator_rejects_declared_record_write_errors(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(
+        dragon_module,
+        "_dragon_shard_worker",
+        _fake_record_write_failure_shard_worker,
+    )
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "write-failed-shard-runs",
+        run_id="fake-write-failed-shard",
+        max_workers=1,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    shard_audit = result.summary["shard_result_audit"]
+    assert shard_audit["ok"] is False
+    assert shard_audit["mismatched_shards"] == []
+    assert shard_audit["write_failed_shards"] == [
+        {
+            "worker_id": 0,
+            "record_write_errors": [
+                {
+                    "item_id": "one",
+                    "type": "OSError",
+                    "message": "injected record write failure",
+                }
+            ],
+        }
+    ]
+
+
+def test_coordinator_finalizes_corrupt_worker_payloads(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(
+        dragon_module, "_dragon_shard_worker", _fake_corrupt_worker
+    )
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "corrupt-runs",
+        run_id="fake-corrupt",
+        max_workers=1,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary_path.is_file()
+    assert result.summary["shard_result_audit"]["missing_worker_ids"] == [0]
+    assert result.summary["queue_result_count"] == 1
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "queue_result",
+            "type": "InvalidShardResult",
+            "message": "worker result was not a mapping",
+        }
+    ]
+    assert result.summary["terminal_record_errors"] == [
+        {
+            "item_id": "one",
+            "type": "InvalidTerminalRecord",
+            "message": "record 0 has invalid field(s): timings_sec",
+        },
+        {
+            "item_id": "one",
+            "type": "InvalidTimingRecord",
+            "message": "item 'one' timings_sec must be a mapping",
+        },
+    ]
+
+
+def test_coordinator_rejects_abrupt_worker_exit(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeFailedGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "failed-runs",
+        run_id="fake-worker-killed",
+        max_workers=1,
+        result_timeout_sec=0.001,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary["process_exit_audit"]["nonzero"] == [
+        {"puid": 1000, "exit_code": -9}
+    ]
+    assert result.summary["terminal_record_audit"]["missing_item_ids"] == [
+        "one"
+    ]
+    assert result.summary["shard_result_audit"]["missing_worker_ids"] == [0]
+
+
+def test_coordinator_finalizes_process_setup_failure(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeSetupFailedGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "setup-failed-runs",
+        run_id="fake-setup-failed",
+        max_workers=1,
+        result_timeout_sec=1.0,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary_path.is_file()
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "process_setup",
+            "type": "RuntimeError",
+            "message": "process setup failed",
+        }
+    ]
+    assert result.summary["terminal_record_audit"]["missing_item_ids"] == [
+        "one"
+    ]
+
+
+def test_coordinator_finalizes_join_timeout(monkeypatch, tmp_path) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeJoinTimedOutGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "join-timeout-runs",
+        run_id="fake-join-timeout",
+        max_workers=1,
+        result_timeout_sec=0.001,
+        worker_timeout_sec=0.01,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary_path.is_file()
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "join_timeout",
+            "type": "TimeoutError",
+            "message": "worker join deadline exceeded",
+        }
+    ]
+    assert _FakeJoinTimedOutGroup.last_join_timeout == pytest.approx(0.011)
+    assert _FakeJoinTimedOutGroup.last_stopped is True
+    assert _FakeJoinTimedOutGroup.last_closed is True
+
+
+def test_coordinator_stops_after_partial_start_failure(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeStartFailedGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "start-failed-runs",
+        run_id="fake-start-failed",
+        max_workers=1,
+        result_timeout_sec=0.001,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "start",
+            "type": "RuntimeError",
+            "message": "partial worker start failed",
+        }
+    ]
+    assert _FakeStartFailedGroup.last_stopped is True
+    assert _FakeStartFailedGroup.last_closed is True
+
+
+def test_coordinator_preserves_join_and_cleanup_errors(
+    monkeypatch, tmp_path
+) -> None:
+    manifest = _write_fake_manifest(tmp_path)
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=_FakeDecoratedJoinFailedGroup,
+        ProcessTemplate=_FakeTemplate,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+
+    result = run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "join-failed-runs",
+        run_id="fake-join-failed",
+        max_workers=1,
+        result_timeout_sec=0.001,
+        worker_timeout_sec=30.0,
+        options=_options(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "join",
+            "type": "RuntimeError",
+            "message": "decorated worker failure",
+        },
+        {
+            "phase": "stop_after_failure",
+            "type": "RuntimeError",
+            "message": "decorated worker failure",
+        },
+        {
+            "phase": "close",
+            "type": "RuntimeError",
+            "message": "decorated worker failure",
+        },
+    ]
+    assert _FakeDecoratedJoinFailedGroup.last_stopped is True
+    assert _FakeDecoratedJoinFailedGroup.last_closed is True
+    assert _FakeDecoratedJoinFailedGroup.last_forced_closed is True
+
+
+@pytest.mark.parametrize("backend", ["auto", "cpu"])
+def test_coordinator_requires_explicit_gpu_backend(
+    monkeypatch, tmp_path, backend
+) -> None:
+    monkeypatch.setattr(
+        dragon_module,
+        "_load_dragon_api",
+        lambda: pytest.fail("Dragon must not load before backend validation"),
+    )
+
+    with pytest.raises(ValueError, match="explicit GPU backend"):
+        run_dragon_image_pair_batch(
+            manifest_path=tmp_path / "missing.json",
+            output_root=tmp_path / "runs",
+            run_id="invalid-backend",
+            max_workers=1,
+            result_timeout_sec=1.0,
+            worker_timeout_sec=30.0,
+            options=_options(backend=backend),
+        )
+
+
+@pytest.mark.parametrize("visible_status", [None, "success", "failed"])
+def test_shard_result_audit_separates_declared_write_failure(
+    visible_status,
+) -> None:
+    shard = (WorkItem("first", {}, 10), WorkItem("second", {}, 20))
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    errors = [
+        {
+            "item_id": "first",
+            "type": "OSError",
+            "message": "[Errno 28] No space left on device",
+        }
+    ]
+    result.update(
+        status="failed",
+        success_count=1,
+        failed_count=1,
+        record_write_errors=errors,
+    )
+    records = [{"item_id": "second", "status": "success"}]
+    if visible_status is not None:
+        records.append({"item_id": "first", "status": visible_status})
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        records,
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == []
+    assert audit["write_failed_shards"] == [
+        {"worker_id": 0, "record_write_errors": errors}
+    ]
+
+
+@pytest.mark.parametrize(
+    "errors",
+    [
+        None,
+        {},
+        ["not an error mapping"],
+        [{"type": "OSError", "message": "write failed"}],
+        [{"item_id": "other", "type": "OSError", "message": "failed"}],
+        [{"item_id": "first", "type": "OSError"}],
+        [
+            {"item_id": "first", "type": "OSError", "message": "failed"},
+            {"item_id": "first", "type": "OSError", "message": "failed"},
+        ],
+    ],
+)
+def test_shard_result_audit_rejects_invalid_write_failure_evidence(
+    errors,
+) -> None:
+    shard = (WorkItem("first", {}, 10),)
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result["record_write_errors"] = errors
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "first", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert audit["mismatched_shards"] == [
+        {"worker_id": 0, "fields": ["record_write_errors"]}
+    ]
+    assert audit["write_failed_shards"] == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "mismatch"),
+    [
+        ({"status": "success"}, "status"),
+        ({"failed_count": 0}, "failed_count"),
+        ({"success_count": 2, "failed_count": 0}, "success_count"),
+    ],
+)
+def test_declared_write_failure_does_not_hide_inconsistent_counts(
+    overrides, mismatch
+) -> None:
+    shard = (WorkItem("first", {}, 10), WorkItem("second", {}, 20))
+    placements = _test_placements(1)
+    result = _valid_shard_result(shard, placements[0])
+    result.update(
+        status="failed",
+        success_count=1,
+        failed_count=1,
+        record_write_errors=[
+            {"item_id": "first", "type": "OSError", "message": "failed"}
+        ],
+    )
+    result.update(overrides)
+
+    audit = _audit_shard_results(
+        (shard,),
+        [result],
+        [{"item_id": "second", "status": "success"}],
+        placements=placements,
+        allow_loopback_alias=False,
+        backend="cupy",
+    )
+
+    assert audit["ok"] is False
+    assert len(audit["mismatched_shards"]) == 1
+    assert mismatch in audit["mismatched_shards"][0]["fields"]
+    assert len(audit["write_failed_shards"]) == 1
+
+
+def _fake_generic_worker(
+    run_id,
+    run_dir_raw,
+    placement,
+    items,
+    options,
+    results,
+    allow_loopback_alias,
+):
+    def run_item(item, item_dir, worker_options):
+        if item.payload.get("fail"):
+            raise ValueError("deliberate item failure")
+        item_dir.mkdir(parents=True)
+        atomic_write_json(item_dir / "summary.json", {})
+        return {
+            "run_dir": str(item_dir),
+            "summary_path": str(item_dir / "summary.json"),
+            "requested_backend": worker_options["backend"],
+            "backend": worker_options["backend"],
+            "device": "fake-gpu",
+            "runtime": {},
+            "timings_sec": {},
+            "wall_sec": {},
+        }
+
+    results.put(
+        _execute_shard(
+            run_id=run_id,
+            run_dir=Path(run_dir_raw),
+            placement=Placement(**placement),
+            items=tuple(WorkItem.from_dict(item) for item in items),
+            options=options,
+            item_runner=run_item,
+            gpu_identity_loader=lambda backend: {
+                "backend": backend,
+                "name": "fake-gpu",
+                "uuid": "GPU-generic",
+                "pci_bus_id": "0000:03:00.0",
+                "identity_error": None,
+            },
+            record_schema="example.dragon-item/v1",
+            shard_schema="example.dragon-shard/v1",
+            require_clean_cuda_imports=False,
+            allow_loopback_alias=allow_loopback_alias,
+        )
+    )
+
+
+def _generic_kwargs(tmp_path, **overrides):
+    values = {
+        "items": (WorkItem("generic", {"value": 1}, 12),),
+        "output_root": tmp_path / "runs",
+        "run_id": "generic-dragon",
+        "max_workers": 1,
+        "result_timeout_sec": 0.01,
+        "worker_timeout_sec": 30.0,
+        "backend": "cupy",
+        "options_payload": {"backend": "cupy"},
+        "manifest_payload": {"schema": "example.manifest/v1"},
+        "input_identity_payload": {"schema": "example.identity/v1"},
+        "manifest_sha256": "0" * 64,
+        "worker_target": _fake_generic_worker,
+        "run_prefix": "generic",
+        "run_schema": "example.dragon-run/v1",
+        "summary_schema": "example.dragon-summary/v1",
+        "record_schema": "example.dragon-item/v1",
+        "shard_schema": "example.dragon-shard/v1",
+    }
+    values.update(overrides)
+    return values
+
+
+def _generic_api(monkeypatch, *, template=_FakeTemplate, group=_FakeGroup):
+    api = _DragonAPI(
+        System=_FakeSystem,
+        Node=_FakeNode,
+        Policy=_FakePolicy,
+        ProcessGroup=group,
+        ProcessTemplate=template,
+        Queue=_FakeQueue,
+    )
+    monkeypatch.setattr(dragon_module, "_load_dragon_api", lambda: api)
+    monkeypatch.setattr(
+        dragon_module.socket, "gethostname", lambda: "fake-node"
+    )
+
+
+def test_generic_coordinator_preserves_large_file_backed_workload(
+    monkeypatch, tmp_path
+) -> None:
+    _generic_api(monkeypatch)
+    validated = []
+
+    def validate(record):
+        validated.append(record["item_id"])
+        return ()
+
+    result = run_dragon_work_items(
+        **_generic_kwargs(
+            tmp_path,
+            items=(WorkItem("generic", {"value": "x" * 300_000}, 12),),
+            success_record_validator=validate,
+        )
+    )
+
+    assert result.status == "success"
+    assert result.summary["schema"] == "example.dragon-summary/v1"
+    assert result.summary["shard_result_audit"]["ok"]
+    assert result.summary["terminal_record_audit"]["ok"]
+    assert validated == ["generic"]
+    template = _FakeGroup.last_templates[0]
+    assert template.target is dragon_module._dragon_launch_worker
+    assert len(template.args) == 5
+    assert len(repr(template.args)) < 2000
+    descriptor = json.loads(Path(template.args[1]).read_text())
+    assert len(descriptor["items"][0]["payload"]["value"]) == 300_000
+    assert descriptor["worker_target"] == {
+        "module": __name__,
+        "qualname": "_fake_generic_worker",
+    }
+    record = json.loads((result.run_dir / "records/generic.json").read_text())
+    assert record["schema"] == "example.dragon-item/v1"
+
+
+@pytest.mark.parametrize("failed_item", [False, True])
+def test_generic_coordinator_runs_workload_terminal_validators(
+    monkeypatch, tmp_path, failed_item
+) -> None:
+    _generic_api(monkeypatch)
+    validated = []
+
+    def validate(record):
+        validated.append(record["status"])
+        return ("workload_evidence",)
+
+    result = run_dragon_work_items(
+        **_generic_kwargs(
+            tmp_path,
+            items=(WorkItem("generic", {"fail": failed_item}, 12),),
+            success_record_validator=validate,
+            failed_record_validator=validate,
+        )
+    )
+
+    assert result.status == "failed"
+    assert validated == ["failed" if failed_item else "success"]
+    assert result.summary["terminal_record_errors"][0]["message"].endswith(
+        "workload_evidence"
+    )
+    assert _FakeGroup.last_closed
+
+
+@pytest.mark.parametrize("failure", ["digest", "size", "symlink"])
+@pytest.mark.parametrize("rounds", [False, True])
+@pytest.mark.parametrize("identity_failure", [False, True])
+def test_launch_worker_retains_descriptor_failures(
+    monkeypatch, tmp_path, failure, rounds, identity_failure
+) -> None:
+    def process_id():
+        if identity_failure:
+            raise RuntimeError("process identity unavailable")
+        return 1000
+
+    monkeypatch.setattr(dragon_module, "_dragon_process_id", process_id)
+    run_dir = tmp_path / "run"
+    descriptor = run_dir / "launch/worker-0000.json"
+    atomic_write_json(descriptor, {"invalid": True}, overwrite=False)
+    descriptor_bytes = descriptor.stat().st_size
+    if failure == "size":
+        descriptor_bytes += 1
+    elif failure == "symlink":
+        outside = tmp_path / "outside.json"
+        descriptor.rename(outside)
+        descriptor.symlink_to(outside)
+    results = _FakeQueue()
+    with pytest.raises(ValueError):
+        dragon_module._dragon_launch_worker(
+            "run",
+            str(descriptor),
+            "0" * 64,
+            {
+                "run_dir": str(run_dir),
+                "worker_id": 0,
+                "shard_schema": "example.dragon-shard/v1",
+                "item_count": 1,
+                "weight_bytes": 12,
+                "item_ids_sha256": "1" * 64,
+                "descriptor_bytes": descriptor_bytes,
+            },
+            results,
+            *([_FakeQueue()] if rounds else []),
+        )
+    result = results.get_nowait()
+    assert result["status"] == "failed"
+    assert result["worker_id"] == 0
+    if rounds:
+        assert result["kind"] == "ready"
+        assert result["run_id"] == "run"
+        assert result["round_id"] is None
+        assert result["puid"] == (None if identity_failure else 1000)
+        if identity_failure:
+            assert result["identity_error"]["message"] == (
+                "process identity unavailable"
+            )
+    assert result["error"]["type"] == "ValueError"
+    receipt = json.loads(
+        (run_dir / "launch/worker-0000-failure.json").read_text()
+    )
+    assert receipt == result
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"worker_target": lambda: None}, "package-importable"),
+        ({"options_payload": {"backend": "numba-cuda"}}, "must match"),
+        ({"items": ()}, "must not be empty"),
+    ],
+)
+def test_generic_coordinator_rejects_invalid_input_before_dragon(
+    monkeypatch, tmp_path, overrides, message
+) -> None:
+    monkeypatch.setattr(
+        dragon_module,
+        "_load_dragon_api",
+        lambda: pytest.fail("invalid input must not initialize Dragon"),
+    )
+    with pytest.raises(ValueError, match=message):
+        run_dragon_work_items(**_generic_kwargs(tmp_path, **overrides))
+
+
+def test_coordinator_rejects_oversized_arguments_before_init(
+    monkeypatch, tmp_path
+) -> None:
+    class OversizedTemplate(_FakeTemplate):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.argdata = b"x" * (96 * 1024 + 1)
+
+    class UninitializedGroup(_FakeGroup):
+        def init(self):
+            pytest.fail("oversized arguments must fail before initialization")
+
+    _generic_api(
+        monkeypatch, template=OversizedTemplate, group=UninitializedGroup
+    )
+    result = run_dragon_work_items(**_generic_kwargs(tmp_path))
+    assert result.status == "failed"
+    assert result.summary["lifecycle_errors"] == [
+        {
+            "phase": "process_setup",
+            "type": "ValueError",
+            "message": "Dragon worker launch arguments exceed 96 KiB",
+        }
+    ]
+    assert UninitializedGroup.last_closed
+
+
+def _install_round_runtime(
+    monkeypatch, *, mutate=None, close_failure=False, template=_FakeTemplate
+):
+    """Run persistent targets in threads with CUDA and Dragon faked."""
+    import threading
+
+    state = SimpleNamespace(
+        groups=[],
+        queues=[],
+        calls=[],
+        preflights=[],
+        initialized=[],
+        local=threading.local(),
+    )
+
+    class RoundQueue(_FakeQueue):
+        def __init__(self, maxsize=0, policy=None):
+            super().__init__(maxsize=maxsize)
+            self.policy = policy
+            self.closed = False
+            state.queues.append(self)
+
+        def put(self, value, block=True, timeout=None):
+            values = [value]
+            if self.policy is None and mutate is not None:
+                values = mutate(value)
+            for message in values:
+                super().put(message, block=block, timeout=timeout)
+
+        def close(self):
+            self.closed = True
+            if close_failure and self.policy is None:
+                raise RuntimeError("synthetic result queue close failure")
+
+    class RoundGroup(_FakeGroup):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.threads = []
+            self.stopped = False
+            self.closed = False
+            self.join_timeout = None
+            state.groups.append(self)
+
+        def start(self):
+            def invoke(index, template):
+                state.local.puid = 1000 + index
+                try:
+                    template.target(*template.args)
+                except BaseException:
+                    self.exit_status.append((1000 + index, 1))
+                else:
+                    self.exit_status.append((1000 + index, 0))
+
+            for index, template in enumerate(self.templates):
+                thread = threading.Thread(
+                    target=invoke, args=(index, template)
+                )
+                thread.start()
+                self.threads.append(thread)
+
+        def join(self, timeout=None):
+            self.join_timeout = timeout
+            deadline = dragon_module.time.monotonic() + timeout
+            for thread in self.threads:
+                thread.join(max(0, deadline - dragon_module.time.monotonic()))
+            if any(thread.is_alive() for thread in self.threads):
+                raise TimeoutError("fake group join timed out")
+
+        def stop(self, patience=5.0):
+            self.stopped = True
+            for template in self.templates:
+                try:
+                    template.args[5].put_nowait(None)
+                except queue.Full:
+                    pass
+            for thread in self.threads:
+                thread.join(patience)
+            assert not any(thread.is_alive() for thread in self.threads)
+
+        def close(self, patience=5.0):
+            self.closed = True
+
+    def preflight(
+        placement, *, require_clean_cuda_imports, allow_loopback_alias
+    ):
+        del allow_loopback_alias
+        state.local.placement = placement
+        state.preflights.append(
+            (placement.worker_id, require_clean_cuda_imports)
+        )
+        return placement.host, str(placement.gpu_id)
+
+    def identity(backend):
+        placement = state.local.placement
+        state.initialized.append(placement.worker_id)
+        return _valid_shard_result((), placement, backend=backend)[
+            "provenance"
+        ]["gpu"]
+
+    def item_runner(item, output_dir, options):
+        state.calls.append(
+            (
+                state.local.placement.worker_id,
+                output_dir.parent.parent.name,
+                threading.get_ident(),
+            )
+        )
+        output_dir.mkdir(parents=True)
+        atomic_write_json(output_dir / "summary.json", {})
+        return {
+            "run_dir": str(output_dir),
+            "summary_path": str(output_dir / "summary.json"),
+            "solver": options.solver,
+            "requested_backend": options.backend,
+            "backend": options.backend,
+            "device": "fake-gpu",
+            "runtime": {},
+            "timings_sec": {"solve": 0.1},
+            "wall_sec": {"item_runner": 0.2},
+        }
+
+    monkeypatch.setattr(
+        dragon_module, "_validate_worker_placement", preflight
+    )
+    monkeypatch.setattr(dragon_module, "_collect_gpu_identity", identity)
+    monkeypatch.setattr(
+        dragon_module, "_dragon_process_id", lambda: state.local.puid
+    )
+    monkeypatch.setattr(
+        dragon_module.socket, "gethostname", lambda: "fake-node"
+    )
+    monkeypatch.setattr(dragon_module, "run_image_pair_item", item_runner)
+    monkeypatch.setattr(
+        dragon_module,
+        "_load_dragon_api",
+        lambda: _DragonAPI(
+            System=_FakeSystem,
+            Node=_FakeNode,
+            Policy=_FakePolicy,
+            ProcessGroup=RoundGroup,
+            ProcessTemplate=template,
+            Queue=RoundQueue,
+        ),
+    )
+    return state
+
+
+def _run_round_test(
+    tmp_path,
+    *,
+    warmup=1,
+    measure=2,
+    worker_count=2,
+    worker_timeout=10.0,
+    item_ids=("one", "two"),
+):
+    from cuphoton.core.benchmark import BenchmarkOptions
+
+    manifest = _write_fake_manifest(tmp_path, item_ids=item_ids)
+    return run_dragon_image_pair_batch(
+        manifest_path=manifest,
+        output_root=tmp_path / "runs",
+        run_id="repeated",
+        max_workers=worker_count,
+        result_timeout_sec=0.2,
+        worker_timeout_sec=worker_timeout,
+        options=_options(),
+        benchmark=BenchmarkOptions(
+            warmup_rounds=warmup, measure_rounds=measure
+        ),
+    )
+
+
+def test_benchmark_keeps_placed_workers_alive_and_audits_all_rounds(
+    monkeypatch, tmp_path
+):
+    state = _install_round_runtime(monkeypatch)
+    result = _run_round_test(tmp_path)
+
+    assert result.status == "success", result.summary
+    assert len(state.groups) == 1
+    assert len(state.groups[0].templates) == 2
+    assert state.groups[0].closed and not state.groups[0].stopped
+    assert state.groups[0].join_timeout == 0.2
+    assert result.summary["join_timeout_sec"] == 0.2
+    assert (
+        result.summary["schema"]
+        == "cuphoton.xpois.dragon-benchmark-summary/v1"
+    )
+    assert all(channel.closed for channel in state.queues)
+    assert sorted(state.initialized) == [0, 1]
+    assert [
+        channel.policy.host_name for channel in state.queues if channel.policy
+    ] == ["fake-node", "fake-node"]
+    expected_rounds = ["warmup-0000", "measure-0000", "measure-0001"]
+    for worker_id in range(2):
+        calls = [call for call in state.calls if call[0] == worker_id]
+        assert [call[1] for call in calls] == expected_rounds
+        assert len({call[2] for call in calls}) == 1
+        assert [
+            clean for worker, clean in state.preflights if worker == worker_id
+        ] == [True, False, False, False]
+    report = result.summary["benchmark"]
+    assert [
+        receipt["round_id"] for receipt in report["rounds"]
+    ] == expected_rounds
+    assert report["measured_batch_wall_sec"] is not None
+    assert result.summary["coordinator_timings_sec"]["readiness_sec"] > 0
+    record_run_ids = []
+    for receipt in report["rounds"]:
+        summary = json.loads(
+            (result.run_dir / receipt["summary_path"]).read_text()
+        )
+        assert summary["terminal_record_audit"]["ok"]
+        assert summary["shard_result_audit"]["ok"]
+        assert summary["parent_run_id"] == result.run_id
+        assert not (
+            result.run_dir / "rounds" / receipt["round_id"] / "receipts"
+        ).exists()
+        record = json.loads(
+            (
+                result.run_dir
+                / "rounds"
+                / receipt["round_id"]
+                / "records"
+                / "one.json"
+            ).read_text()
+        )
+        record_run_ids.append(record["run_id"])
+        assert record["run_id"] == summary["run_id"]
+    assert len(set(record_run_ids)) == 3
+    assert not (result.run_dir / "items").exists()
+
+
+def test_benchmark_preserves_large_file_backed_workload(
+    monkeypatch, tmp_path
+):
+    state = _install_round_runtime(monkeypatch)
+    item_ids = tuple(f"image-{index:04d}" for index in range(512))
+    result = _run_round_test(
+        tmp_path,
+        warmup=0,
+        measure=1,
+        worker_count=1,
+        item_ids=item_ids,
+    )
+
+    assert result.status == "success", result.summary
+    template = state.groups[0].templates[0]
+    assert template.target is dragon_module._dragon_launch_worker
+    assert len(template.args) == 6
+    assert len(repr(template.args)) < 2000
+    descriptor_path = Path(template.args[1])
+    assert descriptor_path.stat().st_size > 131_072
+    descriptor = json.loads(descriptor_path.read_text())
+    assert [item["item_id"] for item in descriptor["items"]] == list(item_ids)
+    assert descriptor["benchmark"] == {
+        "warmup_rounds": 0,
+        "measure_rounds": 1,
+    }
+    assert descriptor["worker_target"] == {
+        "module": dragon_module.__name__,
+        "qualname": "_dragon_round_worker",
+    }
+    assert len(state.calls) == 512
+    assert state.initialized == [0]
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is not None
+
+
+def test_benchmark_rejects_oversized_arguments_before_init(
+    monkeypatch, tmp_path
+):
+    class OversizedTemplate(_FakeTemplate):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.argdata = b"x" * (96 * 1024 + 1)
+
+    state = _install_round_runtime(monkeypatch, template=OversizedTemplate)
+    monkeypatch.setattr(
+        dragon_module._load_dragon_api().ProcessGroup,
+        "init",
+        lambda _: pytest.fail("oversized arguments must fail before init"),
+    )
+    result = _run_round_test(tmp_path, worker_count=1)
+
+    assert result.status == "failed"
+    assert result.summary["lifecycle_errors"][0] == {
+        "phase": "process_setup",
+        "type": "ValueError",
+        "message": "Dragon worker launch arguments exceed 96 KiB",
+    }
+    assert result.summary["benchmark"]["rounds"] == []
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert not state.calls and not state.initialized
+    assert state.groups[0].closed
+    assert all(channel.closed for channel in state.queues)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "ready-duplicate",
+        "wrong-round",
+        "missing-round",
+        "failed-round",
+        "changed-worker",
+        "invalid-duration",
+        "ready-bad-provenance",
+    ],
+)
+def test_benchmark_rejects_bad_receipts_and_preserves_partial_evidence(
+    monkeypatch, tmp_path, corruption
+):
+    def mutate(message):
+        if (
+            corruption == "ready-bad-provenance"
+            and message["kind"] == "ready"
+        ):
+            return [{**message, "provenance": {}}]
+        if corruption == "ready-duplicate" and message["kind"] == "ready":
+            return [message, message]
+        if message["kind"] == "round":
+            if corruption == "wrong-round":
+                return [{**message, "round_id": "measure-9999"}]
+            if corruption == "missing-round":
+                return []
+            if corruption == "failed-round":
+                return [{**message, "status": "failed"}]
+            if corruption == "changed-worker":
+                result = dict(message["result"])
+                result["provenance"] = {
+                    **result["provenance"],
+                    "pid": 99999999,
+                }
+                return [{**message, "result": result}]
+            if corruption == "invalid-duration":
+                return [{**message, "worker_wall_sec": True}]
+        return [message]
+
+    state = _install_round_runtime(monkeypatch, mutate=mutate)
+    result = _run_round_test(
+        tmp_path,
+        worker_count=1,
+        worker_timeout=0.5 if corruption == "missing-round" else 10.0,
+    )
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert result.summary["lifecycle_errors"]
+    assert state.groups[0].stopped and state.groups[0].closed
+    assert all(channel.closed for channel in state.queues)
+    assert len(result.summary["benchmark"]["rounds"]) <= 1
+    assert (result.run_dir / "summary.json").is_file()
+    assert not any(thread.is_alive() for thread in state.groups[0].threads)
+    if corruption == "ready-bad-provenance":
+        assert result.summary["lifecycle_errors"][0] == {
+            "phase": "ready",
+            "type": "ValueError",
+            "message": "invalid Dragon READY provenance",
+        }
+        assert result.summary["benchmark"]["rounds"] == []
+        assert not state.calls
+
+
+def test_benchmark_cleanup_failure_invalidates_successful_rounds(
+    monkeypatch, tmp_path
+):
+    _install_round_runtime(monkeypatch, close_failure=True)
+    result = _run_round_test(tmp_path, warmup=0, measure=1)
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["rounds"][0]["status"] == "success"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert any(
+        error["phase"] == "queue_close"
+        for error in result.summary["lifecycle_errors"]
+    )
+
+
+def test_benchmark_notifies_startup_artifact_failure(monkeypatch, tmp_path):
+    state = _install_round_runtime(monkeypatch)
+    original_write = dragon_module.atomic_write_json
+
+    def fail_startup(path, payload, **kwargs):
+        if path.parent.name == "startup":
+            raise OSError("synthetic startup write failure")
+        original_write(path, payload, **kwargs)
+
+    monkeypatch.setattr(dragon_module, "atomic_write_json", fail_startup)
+    result = _run_round_test(tmp_path, worker_count=1)
+
+    assert result.status == "failed"
+    assert result.summary["ready_messages"][0]["status"] == "failed"
+    assert "artifact_error" in result.summary["ready_messages"][0]
+    assert not state.calls
+    assert state.groups[0].stopped
+
+
+@pytest.mark.parametrize("exit_code", [0, -9])
+def test_round_collector_detects_receiptless_exit_without_deadline_wait(
+    exit_code,
+):
+    class EmptyResults:
+        def get(self, *, timeout):
+            assert 0 <= timeout <= dragon_module._WORKER_POLL_SEC
+            raise queue.Empty
+
+    with pytest.raises(RuntimeError, match="exited before ready completion"):
+        dragon_module._collect_worker_messages(
+            EmptyResults(),
+            [],
+            worker_count=1,
+            run_id="run",
+            kind="ready",
+            round_id=None,
+            deadline=dragon_module.time.monotonic() + 30,
+            group=SimpleNamespace(inactive_puids=[(1000, exit_code)]),
+        )
+
+
+def test_round_collector_drains_receipt_delivered_during_exit_check():
+    receipt = {
+        "kind": "ready",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "puid": 1000,
+        "status": "success",
+    }
+
+    class RacingResults:
+        delivered = False
+
+        def get(self, *, timeout):
+            if self.delivered:
+                assert timeout == 0
+                return receipt
+            raise queue.Empty
+
+    results = RacingResults()
+
+    class ExitedGroup:
+        @property
+        def inactive_puids(self):
+            results.delivered = True
+            return [(1000, 0)]
+
+    messages = []
+    dragon_module._collect_worker_messages(
+        results,
+        messages,
+        worker_count=1,
+        run_id="run",
+        kind="ready",
+        round_id=None,
+        deadline=dragon_module.time.monotonic() + 30,
+        group=ExitedGroup(),
+    )
+    assert messages == [receipt]
+
+
+def test_round_collector_waits_for_peers_after_reported_worker_exit():
+    failed = {
+        "kind": "ready",
+        "run_id": "run",
+        "round_id": None,
+        "worker_id": 0,
+        "puid": 1000,
+        "status": "failed",
+    }
+    healthy = {**failed, "worker_id": 1, "puid": 1001, "status": "success"}
+
+    class Results:
+        pending = iter((failed, None, None, healthy))
+
+        def get(self, *, timeout):
+            message = next(self.pending)
+            if message is None:
+                raise queue.Empty
+            return message
+
+    messages = []
+    with pytest.raises(RuntimeError, match=r"workers \[0\] ready failed"):
+        dragon_module._collect_worker_messages(
+            Results(),
+            messages,
+            worker_count=2,
+            run_id="run",
+            kind="ready",
+            round_id=None,
+            deadline=dragon_module.time.monotonic() + 30,
+            group=SimpleNamespace(inactive_puids=[(1000, 1)]),
+        )
+    assert messages == [failed, healthy]
+
+
+@pytest.mark.parametrize("phase", ["ready", "round"])
+def test_benchmark_detects_worker_exit_without_receipt(
+    monkeypatch, tmp_path, phase
+):
+    state = _install_round_runtime(monkeypatch)
+    monkeypatch.setattr(dragon_module, "_WORKER_POLL_SEC", 0.01)
+    attribute = (
+        "_collect_gpu_identity" if phase == "ready" else "run_image_pair_item"
+    )
+    original = getattr(dragon_module, attribute)
+
+    def exit_worker(*args, **kwargs):
+        if state.local.placement.worker_id == 0:
+            raise SystemExit("synthetic abrupt worker exit")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(dragon_module, attribute, exit_worker)
+    result = _run_round_test(tmp_path, warmup=0, measure=1, worker_timeout=2)
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    if phase == "ready":
+        errors = result.summary["lifecycle_errors"]
+    else:
+        summary = json.loads(
+            (result.run_dir / "rounds/measure-0000/summary.json").read_text()
+        )
+        errors = summary["errors"]
+    assert any(
+        f"exited before {phase} completion" in error["message"]
+        for error in errors
+    )
+    assert not any(thread.is_alive() for thread in state.groups[0].threads)
+
+
+def test_benchmark_finishes_healthy_shard_after_peer_failure(
+    monkeypatch, tmp_path
+):
+    import threading
+
+    state = _install_round_runtime(monkeypatch)
+    monkeypatch.setattr(dragon_module, "_WORKER_POLL_SEC", 0.01)
+    original_runner = dragon_module.run_image_pair_item
+    healthy_can_finish = threading.Event()
+    failed_receipt_read = threading.Event()
+    results_type = dragon_module._load_dragon_api().Queue
+    original_get = results_type.get
+
+    def get(channel, *args, **kwargs):
+        if channel.policy is None and failed_receipt_read.is_set():
+            healthy_can_finish.set()
+        message = original_get(channel, *args, **kwargs)
+        if (
+            channel.policy is None
+            and message.get("kind") == "round"
+            and message.get("status") == "failed"
+        ):
+            failed_receipt_read.set()
+        return message
+
+    def run_item(item, output_dir, options):
+        if state.local.placement.worker_id == 0:
+            raise RuntimeError("synthetic failed item")
+        assert healthy_can_finish.wait(2), (
+            "coordinator stopped collecting receipts"
+        )
+        return original_runner(item, output_dir, options)
+
+    monkeypatch.setattr(results_type, "get", get)
+    monkeypatch.setattr(dragon_module, "run_image_pair_item", run_item)
+    result = _run_round_test(tmp_path, warmup=0, measure=2, worker_timeout=3)
+
+    assert result.status == "failed"
+    assert len(result.summary["benchmark"]["rounds"]) == 1
+    summary = json.loads(
+        (result.run_dir / "rounds/measure-0000/summary.json").read_text()
+    )
+    assert sorted(
+        message["worker_id"] for message in summary["messages"]
+    ) == [0, 1]
+    assert summary["shard_result_audit"]["missing_worker_ids"] == []
+    assert summary["terminal_record_audit"]["missing_item_ids"] == []
+    records = list(
+        (result.run_dir / "rounds/measure-0000/records").glob("*.json")
+    )
+    assert sorted(
+        json.loads(path.read_text())["status"] for path in records
+    ) == [
+        "failed",
+        "success",
+    ]
+    assert not any(thread.is_alive() for thread in state.groups[0].threads)
+
+
+@pytest.mark.parametrize("exit_status", [[], [(1000, -9)]])
+def test_benchmark_exit_audit_invalidates_successful_round(
+    monkeypatch, tmp_path, exit_status
+):
+    state = _install_round_runtime(monkeypatch)
+    group_type = dragon_module._load_dragon_api().ProcessGroup
+    original_join = group_type.join
+
+    def join(group, timeout=None):
+        original_join(group, timeout=timeout)
+        group.exit_status = exit_status
+
+    monkeypatch.setattr(group_type, "join", join)
+    result = _run_round_test(tmp_path, warmup=0, measure=1, worker_count=1)
+
+    assert result.status == "failed"
+    assert result.summary["benchmark"]["rounds"][0]["status"] == "success"
+    assert result.summary["benchmark"]["measured_batch_wall_sec"] is None
+    assert result.summary["process_exit_audit"]["ok"] is False
+    assert any(
+        error["phase"] == "exit_status"
+        for error in result.summary["lifecycle_errors"]
+    )
+    assert state.groups[0].join_timeout == 0.2

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Data helpers for XPOIS."""
+"""Data helpers for xPois."""
 
 from __future__ import annotations
 
@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from astropy.io import fits
 from astropy.wcs import WCS
 
 from cuphoton.core.cli import ApplicationContext
+from cuphoton.core.fits_io import (
+    inspect_fits_image,
+    inspect_fits_images,
+    read_fits_images,
+)
 
 FITS_SUFFIXES = {".fits", ".fit", ".fts"}
 MASK_EXTENSION_NAMES = {
@@ -47,7 +51,7 @@ def discover_shared_hsc_dir(start_dir: Path | None = None) -> Path | None:
 
 
 def default_shared_hsc_dir() -> Path:
-    """Resolve the XPOIS HSC data directory without creating it."""
+    """Resolve the xPois HSC data directory without creating it."""
 
     explicit = os.environ.get(_SHARED_HSC_ENV)
     if explicit:
@@ -136,7 +140,9 @@ def inspect_hsc_data_tree(base: Path | None = None) -> dict[str, Any]:
     return summary
 
 
-def load_image_array(path: Path, hdu: int | None = None) -> np.ndarray:
+def load_image_array(
+    path: Path, hdu: int | None = None, *, fits_reader: str = "astropy"
+) -> np.ndarray:
     """Load a two-dimensional FITS or NumPy image.
 
     Parameters
@@ -152,188 +158,221 @@ def load_image_array(path: Path, hdu: int | None = None) -> np.ndarray:
         Floating-point image data.
     """
 
-    array, _, _ = load_image_with_wcs(path, hdu=hdu)
+    array, _, _ = load_image_with_wcs(path, hdu=hdu, fits_reader=fits_reader)
     return array
 
 
-def load_variance_array(path: Path, hdu: int | None = None) -> np.ndarray:
+def load_variance_array(
+    path: Path, hdu: int | None = None, *, fits_reader: str = "astropy"
+) -> np.ndarray:
     """Load a two-dimensional variance image from FITS or NumPy."""
 
-    array, _, _ = load_variance_with_wcs(path, hdu=hdu)
+    array, _, _ = load_variance_with_wcs(
+        path, hdu=hdu, fits_reader=fits_reader
+    )
     return array
 
 
-def load_mask_array(path: Path, hdu: int | None = None) -> np.ndarray:
+def load_mask_array(
+    path: Path, hdu: int | None = None, *, fits_reader: str = "astropy"
+) -> np.ndarray:
     """Load a two-dimensional integer mask from FITS or NumPy."""
 
-    array, _, _ = load_mask_with_planes(path, hdu=hdu)
+    array, _, _ = load_mask_with_planes(
+        path, hdu=hdu, fits_reader=fits_reader
+    )
     return array
+
+
+def load_fit_positions(
+    path: Path,
+    *,
+    image_shape: tuple[int, int],
+    kernel_shape: tuple[int, int],
+) -> np.ndarray:
+    """Load strict post-crop ``(y, x)`` fit rows from an NPY file."""
+
+    resolved = path.expanduser().resolve()
+    if resolved.suffix.lower() != ".npy":
+        raise ValueError("fit_positions must be an NPY file")
+    positions = np.asarray(np.load(resolved, allow_pickle=False))
+    if positions.ndim != 2 or positions.shape[1] != 2:
+        raise ValueError("fit_positions must have shape (row, 2)")
+    if positions.shape[0] == 0:
+        raise ValueError("fit_positions must not be empty")
+    if positions.dtype == bool or not np.issubdtype(
+        positions.dtype, np.integer
+    ):
+        raise ValueError("fit_positions must contain integers")
+
+    margin_y = kernel_shape[0] // 2
+    margin_x = kernel_shape[1] // 2
+    sample_y = positions[:, 0]
+    sample_x = positions[:, 1]
+    if (
+        np.any(sample_y < margin_y)
+        or np.any(sample_y >= image_shape[0] - margin_y)
+        or np.any(sample_x < margin_x)
+        or np.any(sample_x >= image_shape[1] - margin_x)
+    ):
+        raise ValueError(
+            "fit_positions must lie inside the valid kernel interior"
+        )
+    return positions.astype(np.int64, copy=False)
+
+
+def _load_plane(path, hdu, *, reader, dtype, read_metadata):
+    result = read_fits_images(path, [hdu], reader=reader)
+    if read_metadata is not None:
+        read_metadata.append(result.metadata())
+    return np.asarray(result.arrays[0], dtype=dtype)
 
 
 def load_image_with_wcs(
     path: Path,
     hdu: int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray, WCS | None, int | None]:
-    """Load a two-dimensional image together with optional FITS WCS.
-
-    Returns
-    -------
-    array
-        Floating-point image.
-    wcs
-        FITS world-coordinate system, or ``None`` for NumPy input.
-    hdu
-        Selected FITS HDU index, or ``None`` for NumPy input.
-    """
-
+    """Load a host image with optional GPU FITS decompression and its WCS."""
     resolved = path.expanduser().resolve()
-    suffix = resolved.suffix.lower()
-    if suffix == ".npy":
+    if resolved.suffix.lower() == ".npy":
         if hdu is not None:
             raise ValueError(
                 "HDU selectors are not supported for NumPy inputs: "
                 f"{resolved}"
             )
-        return np.asarray(np.load(resolved), dtype=np.float64), None, None
-    if suffix not in FITS_SUFFIXES:
+        return (
+            np.asarray(
+                np.load(resolved, allow_pickle=False), dtype=np.float64
+            ),
+            None,
+            None,
+        )
+    if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported image format: {resolved}")
-
-    with fits.open(resolved) as hdul:
-        if hdu is not None:
-            if hdu >= len(hdul):
-                raise ValueError(f"HDU {hdu} is out of range for {resolved}")
-            data = hdul[hdu].data
-            if data is None or data.ndim != 2:
-                raise ValueError(f"HDU {hdu} in {resolved} is not a 2D image")
-            return (
-                np.asarray(data, dtype=np.float64),
-                WCS(hdul[hdu].header),
-                hdu,
-            )
-
-        for index, item in enumerate(hdul):
-            data = item.data
-            if data is not None and data.ndim == 2:
-                return (
-                    np.asarray(data, dtype=np.float64),
-                    WCS(item.header),
-                    index,
-                )
-
-    raise ValueError(f"Could not find a 2D image HDU in {resolved}")
+    info = inspect_fits_image(resolved, hdu=hdu)
+    array = _load_plane(
+        resolved,
+        info.hdu,
+        reader=fits_reader,
+        dtype=np.float64,
+        read_metadata=read_metadata,
+    )
+    return array, WCS(info.header), info.hdu
 
 
 def load_variance_with_wcs(
     path: Path,
     hdu: int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray, WCS | None, int | None]:
-    """Load a variance image, preferring an unambiguous named FITS HDU."""
-
+    """Load variance, preserving the unambiguous named-HDU policy."""
     resolved = path.expanduser().resolve()
-    suffix = resolved.suffix.lower()
-    if suffix == ".npy":
-        if hdu is not None:
-            raise ValueError(
-                "HDU selectors are not supported for NumPy inputs: "
-                f"{resolved}"
-            )
-        return np.asarray(np.load(resolved), dtype=np.float64), None, None
-    if suffix not in FITS_SUFFIXES:
+    if resolved.suffix.lower() == ".npy" or hdu is not None:
+        return load_image_with_wcs(
+            resolved,
+            hdu,
+            fits_reader=fits_reader,
+            read_metadata=read_metadata,
+        )
+    if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported image format: {resolved}")
-
-    with fits.open(resolved) as hdul:
-        if hdu is not None:
-            return _load_fits_hdu(hdul, resolved, hdu)
-
-        named_candidates: list[int] = []
-        image_candidates: list[int] = []
-        error_candidates: list[int] = []
-        for index, item in enumerate(hdul):
-            data = item.data
-            if data is None or data.ndim != 2:
-                continue
-            image_candidates.append(index)
-            extname = str(item.header.get("EXTNAME", "")).strip().upper()
-            if extname in VARIANCE_EXTENSION_NAMES:
-                named_candidates.append(index)
-            if extname in ERROR_EXTENSION_NAMES:
-                error_candidates.append(index)
-
-        if len(named_candidates) == 1:
-            return _load_fits_hdu(hdul, resolved, named_candidates[0])
-        if len(named_candidates) > 1:
+    images = inspect_fits_images(resolved)
+    named = [
+        info
+        for info in images
+        if str(info.header.get("EXTNAME", "")).strip().upper()
+        in VARIANCE_EXTENSION_NAMES
+    ]
+    if len(named) > 1:
+        raise ValueError(
+            "multiple variance-like FITS HDUs found; "
+            "specify --variance-hdu explicitly"
+        )
+    if len(named) == 1:
+        selected = named[0]
+    elif len(images) == 1:
+        selected = images[0]
+        if (
+            str(selected.header.get("EXTNAME", "")).strip().upper()
+            in ERROR_EXTENSION_NAMES
+        ):
             raise ValueError(
-                "multiple variance-like FITS HDUs found; "
+                "variance FITS uses an error/sigma extension; "
                 "specify --variance-hdu explicitly"
             )
-        if len(image_candidates) == 1:
-            if image_candidates[0] in error_candidates:
-                raise ValueError(
-                    "variance FITS uses an error/sigma extension; "
-                    "specify --variance-hdu explicitly"
-                )
-            return _load_fits_hdu(hdul, resolved, image_candidates[0])
-    raise ValueError(
-        "variance FITS is ambiguous; specify --variance-hdu explicitly"
+    else:
+        raise ValueError(
+            "variance FITS is ambiguous; specify --variance-hdu explicitly"
+        )
+    return load_image_with_wcs(
+        resolved,
+        selected.hdu,
+        fits_reader=fits_reader,
+        read_metadata=read_metadata,
     )
 
 
 def load_mask_with_planes(
     path: Path,
     hdu: int | None = None,
+    *,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray, int | None, dict[str, int] | None]:
-    """Load an integer mask and any FITS mask-plane mapping."""
-
+    """Load an integer mask and preserve its FITS mask-plane mapping."""
     resolved = path.expanduser().resolve()
-    suffix = resolved.suffix.lower()
-    if suffix == ".npy":
+    if resolved.suffix.lower() == ".npy":
         if hdu is not None:
             raise ValueError(
                 "HDU selectors are not supported for NumPy mask inputs: "
                 f"{resolved}"
             )
-        return np.asarray(np.load(resolved), dtype=np.int64), None, None
-    if suffix not in FITS_SUFFIXES:
+        return (
+            np.asarray(np.load(resolved, allow_pickle=False), dtype=np.int64),
+            None,
+            None,
+        )
+    if resolved.suffix.lower() not in FITS_SUFFIXES:
         raise ValueError(f"Unsupported mask format: {resolved}")
-
-    with fits.open(resolved) as hdul:
-        if hdu is not None:
-            return _load_mask_hdu(hdul, resolved, hdu)
-
-        named_candidates: list[int] = []
-        for index, item in enumerate(hdul):
-            data = item.data
-            if data is None or data.ndim != 2:
-                continue
-            extname = str(item.header.get("EXTNAME", "")).strip().upper()
-            if extname in MASK_EXTENSION_NAMES:
-                named_candidates.append(index)
-
-        if len(named_candidates) == 1:
-            return _load_mask_hdu(hdul, resolved, named_candidates[0])
-        if len(named_candidates) > 1:
+    if hdu is None:
+        named = [
+            info
+            for info in inspect_fits_images(resolved)
+            if str(info.header.get("EXTNAME", "")).strip().upper()
+            in MASK_EXTENSION_NAMES
+        ]
+        if len(named) > 1:
             raise ValueError(
-                "multiple mask-like FITS HDUs found; specify a mask HDU "
-                "explicitly"
+                "multiple mask-like FITS HDUs found; "
+                "specify a mask HDU explicitly"
             )
-    raise ValueError("mask FITS is ambiguous; specify a mask HDU explicitly")
-
-
-def _load_fits_hdu(
-    hdul: fits.HDUList,
-    resolved: Path,
-    hdu: int,
-) -> tuple[np.ndarray, WCS | None, int]:
-    if hdu >= len(hdul):
-        raise ValueError(f"HDU {hdu} is out of range for {resolved}")
-    data = hdul[hdu].data
-    if data is None or data.ndim != 2:
-        raise ValueError(f"HDU {hdu} in {resolved} is not a 2D image")
-    return (
-        np.asarray(data, dtype=np.float64),
-        WCS(hdul[hdu].header),
-        hdu,
+        if not named:
+            raise ValueError(
+                "mask FITS is ambiguous; specify a mask HDU explicitly"
+            )
+        info = named[0]
+    else:
+        info = inspect_fits_image(resolved, hdu=hdu)
+    plane_map = {}
+    for key, value in info.header.items():
+        if key.startswith("MP_"):
+            try:
+                plane_map[key[3:].strip().upper()] = int(value)
+            except (TypeError, ValueError):
+                continue
+    array = _load_plane(
+        resolved,
+        info.hdu,
+        reader=fits_reader,
+        dtype=np.int64,
+        read_metadata=read_metadata,
     )
+    return array, info.hdu, plane_map or None
 
 
 def apply_rectangular_cutout(
@@ -370,29 +409,3 @@ def apply_rectangular_cutout(
     if y1 > array.shape[0] or x1 > array.shape[1]:
         raise ValueError("requested cutout exceeds image bounds")
     return np.asarray(array[y0:y1, x0:x1])
-
-
-def _load_mask_hdu(
-    hdul: fits.HDUList,
-    resolved: Path,
-    hdu: int,
-) -> tuple[np.ndarray, int, dict[str, int] | None]:
-    if hdu >= len(hdul):
-        raise ValueError(f"HDU {hdu} is out of range for {resolved}")
-    data = hdul[hdu].data
-    if data is None or data.ndim != 2:
-        raise ValueError(f"HDU {hdu} in {resolved} is not a 2D mask image")
-    plane_map: dict[str, int] = {}
-    for key, value in hdul[hdu].header.items():
-        if not key.startswith("MP_"):
-            continue
-        try:
-            bit = int(value)
-        except Exception:
-            continue
-        plane_map[key[3:].strip().upper()] = bit
-    return (
-        np.asarray(data, dtype=np.int64),
-        hdu,
-        plane_map or None,
-    )

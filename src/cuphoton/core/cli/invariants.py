@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Never
 
 _MISSING = object()
 
@@ -82,7 +82,7 @@ class Invariant:
         return bool(cls._mandatory or cls._required)
 
     @classmethod
-    def _invalid(cls, value: Any, detail: str | None = None) -> None:
+    def _invalid(cls, value: Any, detail: str | None = None) -> Never:
         if cls._parser_error:
             raise InvariantError(cls._parser_error)
         expected = getattr(cls, "expected", None)
@@ -265,11 +265,10 @@ class CSVInvariant(Invariant):
         return text
 
 
-class CSVStringInvariant(Invariant):
+class CSVStringInvariant(CSVInvariant):
     """Comma-separated string values."""
 
-    _item_type = str
-    validate = classmethod(CSVInvariant.validate.__func__)
+    _item_type: type[Any] = str
 
 
 class CSVIntegerInvariant(CSVStringInvariant):
@@ -279,20 +278,23 @@ class CSVIntegerInvariant(CSVStringInvariant):
 
 
 class SequenceInvariant(StringInvariant):
-    """Repeatable option whose item conversion is applied per occurrence."""
+    """Repeatable option whose item conversion is applied per occurrence.
 
-    _action = "append"
+    Validation reuses string bounds but intentionally returns converted items.
+    """
+
+    _action: str | None = "append"
     _item_type: type[Any] = str
 
     @classmethod
-    def validate(cls, value: Any) -> list[Any] | None:
+    def validate(cls, value: Any) -> list[Any] | None:  # type: ignore[override]
         if value is None:
             return None
         items = value if isinstance(value, (list, tuple)) else [value]
         try:
             converted = []
             for item in items:
-                StringInvariant.validate.__func__(cls, item)
+                super().validate(item)
                 converted.append(cls._item_type(item))
             return converted
         except (TypeError, ValueError):
@@ -307,14 +309,14 @@ class PairInvariant(SequenceInvariant):
     _item_type: type[Any] = str
 
     @classmethod
-    def validate(cls, value: Any) -> tuple[Any, Any] | None:
+    def validate(cls, value: Any) -> tuple[Any, Any] | None:  # type: ignore[override]
         if value is None:
             return None
         if not isinstance(value, (list, tuple)) or len(value) != 2:
             cls._invalid(value, "must contain exactly two values")
         try:
-            StringInvariant.validate.__func__(cls, value[0])
-            StringInvariant.validate.__func__(cls, value[1])
+            super(SequenceInvariant, cls).validate(value[0])
+            super(SequenceInvariant, cls).validate(value[1])
             return (cls._item_type(value[0]), cls._item_type(value[1]))
         except (TypeError, ValueError):
             cls._invalid(value, "contains an invalid item")
@@ -333,7 +335,7 @@ class VariablePositionalInvariant(StringInvariant):
     _required = False
 
     @classmethod
-    def validate(cls, value: Any) -> list[Any] | None:
+    def validate(cls, value: Any) -> list[Any] | None:  # type: ignore[override]
         if value is None:
             return None
         items = value if isinstance(value, (list, tuple)) else [value]
@@ -358,7 +360,7 @@ class PathValueInvariant(StringInvariant):
     _maxlen = 4096
 
     @classmethod
-    def validate(cls, value: Any) -> Path | None:
+    def validate(cls, value: Any) -> Path | None:  # type: ignore[override]
         if value is None:
             return None
         text = super().validate(value)

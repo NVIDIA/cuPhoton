@@ -2,15 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Workflow helpers for XPOIS."""
+"""Workflow helpers for xPois."""
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,23 +24,31 @@ from cuphoton.core.runtime import runtime_metadata
 
 from .data import (
     apply_rectangular_cutout,
+    load_fit_positions,
     load_image_with_wcs,
     load_mask_with_planes,
     load_variance_with_wcs,
 )
 from .ois import (
     EXPLICIT_BACKENDS,
+    ConstantKernelFitResult,
     GaussianBasisComponent,
     build_compact_source_stamp_mask,
     solve_constant_kernel,
 )
 from .review import identify_residual_hotspots, write_review_metadata
 from .review_bokeh import write_interactive_review_artifact
+from .solver_options import resolve_spatial_als_config
+from .spatial_als import (
+    SpatialALSConfig,
+    SpatialALSFitResult,
+    solve_spatial_als,
+)
 
 
 @dataclass
 class WorkflowResult:
-    """Persisted XPOIS workflow result.
+    """Persisted xPois workflow result.
 
     Attributes
     ----------
@@ -51,6 +62,8 @@ class WorkflowResult:
     run_dir: Path
     summary: dict[str, Any]
 
+
+_LOGGER = logging.getLogger(__name__)
 
 MASK_POLICY_NONE = "none"
 MASK_POLICY_STRICT = "strict"
@@ -72,6 +85,314 @@ _HSC_MASKLITE_PLANES = (
     "CROSSTALK",
     "UNMASKEDNAN",
 )
+
+
+@dataclass
+class _PreparedKernelInputs:
+    reference: np.ndarray
+    target: np.ndarray
+    variance: np.ndarray | None
+    raw_reference: np.ndarray | None
+    raw_target: np.ndarray | None
+    reference_mask: np.ndarray | None
+    target_mask: np.ndarray | None
+    reference_plane_map: dict[str, int] | None
+    target_plane_map: dict[str, int] | None
+    used_reference_hdu: int | None
+    used_target_hdu: int | None
+    used_variance_hdu: int | None
+    crop_metadata: dict[str, int] | None
+    normalized_mask_policy: str
+    preprocessing_metadata: dict[str, Any]
+    fit_mask: np.ndarray | None
+    fit_positions: np.ndarray | None
+    fit_mask_kind: str | None
+    fit_mask_metadata: dict[str, Any] | None
+    input_read_sec: float
+    fits_reads: list[dict[str, Any]]
+    preprocess_sec: float
+
+
+def _prepare_kernel_inputs(
+    *,
+    reference_path: Path,
+    target_path: Path,
+    reference_hdu: int | None,
+    target_hdu: int | None,
+    variance_path: Path | None,
+    variance_hdu: int | None,
+    reference_mask_path: Path | None,
+    target_mask_path: Path | None,
+    reference_mask_hdu: int | None,
+    target_mask_hdu: int | None,
+    mask_policy: str,
+    crop_y0: int | None,
+    crop_x0: int | None,
+    crop_height: int | None,
+    crop_width: int | None,
+    fit_mask_path: Path | None,
+    auto_stamp_mask: bool,
+    auto_stamp_size: int,
+    auto_stamp_count: int,
+    auto_peak_percentile: float,
+    kernel_shape: tuple[int, int],
+    fit_positions_path: Path | None = None,
+    review: bool = False,
+    fits_reader: str = "astropy",
+) -> _PreparedKernelInputs:
+    prepare_start = time.perf_counter()
+    input_read_sec = 0.0
+    fits_reads: list[dict[str, Any]] = []
+    if variance_hdu is not None and variance_path is None:
+        raise ValueError("variance_hdu requires a variance image path")
+    if fit_mask_path is not None and fit_positions_path is not None:
+        raise ValueError(
+            "Specify either fit_mask_path or fit_positions_path, not both"
+        )
+    if fit_positions_path is not None and auto_stamp_mask:
+        raise ValueError(
+            "Specify either fit_positions_path or auto_stamp_mask, not both"
+        )
+    if fit_mask_path is not None and auto_stamp_mask:
+        raise ValueError(
+            "Specify either fit_mask_path or auto_stamp_mask, not both"
+        )
+    crop_metadata = _resolve_crop_metadata(
+        crop_y0=crop_y0,
+        crop_x0=crop_x0,
+        crop_height=crop_height,
+        crop_width=crop_width,
+    )
+    if reference_mask_hdu is not None and reference_mask_path is None:
+        if reference_path.suffix.lower() == ".npy":
+            raise ValueError(
+                "reference_mask_hdu requires a FITS-backed reference "
+                "mask source"
+            )
+    if target_mask_hdu is not None and target_mask_path is None:
+        if target_path.suffix.lower() == ".npy":
+            raise ValueError(
+                "target_mask_hdu requires a FITS-backed target mask source"
+            )
+    normalized_mask_policy = _normalize_mask_policy(mask_policy)
+    if normalized_mask_policy == MASK_POLICY_NONE and (
+        reference_mask_path is not None
+        or target_mask_path is not None
+        or reference_mask_hdu is not None
+        or target_mask_hdu is not None
+    ):
+        raise ValueError(
+            "reference/target mask inputs require a non-'none' mask_policy"
+        )
+    if normalized_mask_policy != MASK_POLICY_NONE:
+        for name, image_path, mask_path in (
+            ("reference", reference_path, reference_mask_path),
+            ("target", target_path, target_mask_path),
+        ):
+            if mask_path is None and image_path.suffix.lower() == ".npy":
+                raise ValueError(
+                    f"{name}_mask_path is required for NPY {name} input "
+                    "when mask_policy is enabled"
+                )
+    input_read_start = time.perf_counter()
+    try:
+        reference, _, used_reference_hdu = load_image_with_wcs(
+            reference_path,
+            hdu=reference_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
+        )
+        target, _, used_target_hdu = load_image_with_wcs(
+            target_path,
+            hdu=target_hdu,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
+        )
+        variance = None
+        used_variance_hdu = None
+        if variance_path is not None:
+            variance, _, used_variance_hdu = load_variance_with_wcs(
+                variance_path,
+                hdu=variance_hdu,
+                fits_reader=fits_reader,
+                read_metadata=fits_reads,
+            )
+    finally:
+        input_read_sec += time.perf_counter() - input_read_start
+    full_shape = target.shape
+    if reference.shape != full_shape:
+        raise ValueError("reference and target must share the same shape")
+    if variance is not None and variance.shape != full_shape:
+        raise ValueError("variance must match the image shape")
+    if crop_metadata is not None:
+        reference = apply_rectangular_cutout(reference, **crop_metadata)
+        target = apply_rectangular_cutout(target, **crop_metadata)
+        if variance is not None:
+            variance = apply_rectangular_cutout(variance, **crop_metadata)
+    raw_reference = None
+    raw_target = None
+    if review:
+        raw_reference = np.asarray(reference, dtype=np.float64).copy()
+        raw_target = np.asarray(target, dtype=np.float64).copy()
+    reference_bad_mask = ~np.isfinite(reference)
+    target_bad_mask = ~np.isfinite(target)
+    preprocessing_metadata: dict[str, Any] | None = None
+    if normalized_mask_policy != MASK_POLICY_NONE:
+        reference_mask_source = reference_mask_path or reference_path
+        target_mask_source = target_mask_path or target_path
+        input_read_start = time.perf_counter()
+        try:
+            (
+                reference_mask,
+                used_reference_mask_hdu,
+                reference_plane_map,
+            ) = load_mask_with_planes(
+                reference_mask_source,
+                hdu=reference_mask_hdu,
+                fits_reader=fits_reader,
+                read_metadata=fits_reads,
+            )
+            target_mask, used_target_mask_hdu, target_plane_map = (
+                load_mask_with_planes(
+                    target_mask_source,
+                    hdu=target_mask_hdu,
+                    fits_reader=fits_reader,
+                    read_metadata=fits_reads,
+                )
+            )
+        finally:
+            input_read_sec += time.perf_counter() - input_read_start
+        if reference_mask.shape != full_shape:
+            raise ValueError(
+                "reference mask array shape does not match the image shape"
+            )
+        if target_mask.shape != full_shape:
+            raise ValueError(
+                "target mask array shape does not match the image shape"
+            )
+        if crop_metadata is not None:
+            reference_mask = apply_rectangular_cutout(
+                reference_mask,
+                **crop_metadata,
+            )
+            target_mask = apply_rectangular_cutout(
+                target_mask,
+                **crop_metadata,
+            )
+        reference, reference_bad_mask, reference_mask_metadata = (
+            _apply_mask_policy(
+                reference,
+                mask=reference_mask,
+                mask_policy=normalized_mask_policy,
+                plane_map=reference_plane_map,
+            )
+        )
+        target, target_bad_mask, target_mask_metadata = _apply_mask_policy(
+            target,
+            mask=target_mask,
+            mask_policy=normalized_mask_policy,
+            plane_map=target_plane_map,
+        )
+        if variance is not None:
+            variance = np.where(target_bad_mask, np.nan, variance)
+        preprocessing_metadata = {
+            "mask_policy": normalized_mask_policy,
+            "reference_mask_source": str(
+                reference_mask_source.expanduser().resolve()
+            ),
+            "target_mask_source": str(
+                target_mask_source.expanduser().resolve()
+            ),
+            "reference_mask_hdu": used_reference_mask_hdu,
+            "target_mask_hdu": used_target_mask_hdu,
+            "reference_mask_fraction": float(np.mean(reference_bad_mask)),
+            "target_mask_fraction": float(np.mean(target_bad_mask)),
+            "reference_mask": reference_mask_metadata,
+            "target_mask": target_mask_metadata,
+        }
+    else:
+        reference_mask = None
+        target_mask = None
+        reference_plane_map = None
+        target_plane_map = None
+        preprocessing_metadata = {
+            "mask_policy": normalized_mask_policy,
+            "reference_mask_fraction": float(np.mean(reference_bad_mask)),
+            "target_mask_fraction": float(np.mean(target_bad_mask)),
+        }
+    fit_mask = None
+    fit_positions = None
+    fit_mask_kind: str | None = None
+    fit_mask_metadata: dict[str, Any] | None = None
+    if fit_mask_path is not None:
+        input_read_start = time.perf_counter()
+        try:
+            fit_mask = _load_fit_mask(
+                fit_mask_path.expanduser().resolve(),
+            )
+        finally:
+            input_read_sec += time.perf_counter() - input_read_start
+        if crop_metadata is not None and fit_mask.shape == full_shape:
+            fit_mask = apply_rectangular_cutout(fit_mask, **crop_metadata)
+        if fit_mask.shape != target.shape:
+            raise ValueError(
+                "fit_mask array shape does not match the image shape"
+            )
+        fit_mask_kind = "explicit_mask"
+    elif fit_positions_path is not None:
+        input_read_start = time.perf_counter()
+        try:
+            fit_positions = load_fit_positions(
+                fit_positions_path,
+                image_shape=target.shape,
+                kernel_shape=kernel_shape,
+            )
+        finally:
+            input_read_sec += time.perf_counter() - input_read_start
+        fit_mask_kind = "explicit_positions"
+    elif auto_stamp_mask:
+        selection_image = np.where(
+            np.isfinite(reference) & np.isfinite(target),
+            0.5 * (reference + target),
+            np.nan,
+        )
+        auto_mask = build_compact_source_stamp_mask(
+            selection_image,
+            variance=variance,
+            stamp_size=auto_stamp_size,
+            max_stamps=auto_stamp_count,
+            peak_percentile=auto_peak_percentile,
+        )
+        fit_mask = auto_mask.mask
+        fit_mask_kind = "auto_stamp_mask"
+        fit_mask_metadata = auto_mask.to_metadata()
+
+    prepare_sec = time.perf_counter() - prepare_start
+    preprocess_sec = max(0.0, prepare_sec - input_read_sec)
+    return _PreparedKernelInputs(
+        reference=reference,
+        target=target,
+        variance=variance,
+        raw_reference=raw_reference,
+        raw_target=raw_target,
+        reference_mask=reference_mask,
+        target_mask=target_mask,
+        reference_plane_map=reference_plane_map,
+        target_plane_map=target_plane_map,
+        used_reference_hdu=used_reference_hdu,
+        used_target_hdu=used_target_hdu,
+        used_variance_hdu=used_variance_hdu,
+        crop_metadata=crop_metadata,
+        normalized_mask_policy=normalized_mask_policy,
+        preprocessing_metadata=preprocessing_metadata,
+        fit_mask=fit_mask,
+        fit_positions=fit_positions,
+        fit_mask_kind=fit_mask_kind,
+        fit_mask_metadata=fit_mask_metadata,
+        input_read_sec=input_read_sec,
+        fits_reads=fits_reads,
+        preprocess_sec=preprocess_sec,
+    )
 
 
 def run_constant_kernel_fit(
@@ -96,6 +417,7 @@ def run_constant_kernel_fit(
     crop_height: int | None = None,
     crop_width: int | None = None,
     fit_mask_path: Path | None,
+    fit_positions_path: Path | None = None,
     auto_stamp_mask: bool = False,
     auto_stamp_size: int = 31,
     auto_stamp_count: int = 5,
@@ -103,15 +425,32 @@ def run_constant_kernel_fit(
     background_degree: int,
     flux_conserve: bool,
     backend: str = "auto",
+    fits_reader: str = "auto",
+    review: bool = True,
+    solver: str = "constant",
+    spatial_degree: int | None = None,
+    als_iterations: int | None = None,
+    als_tolerance: float | None = None,
+    als_regularization: float | None = None,
     workflow_name: str = "fit_kernel",
     run_prefix: str = "fit-kernel",
 ) -> WorkflowResult:
-    """Fit a constant kernel and persist a reproducible subtraction run.
+    """Fit a kernel model and persist a reproducible subtraction run.
 
     The workflow loads the reference and target images, applies the requested
     crop and masks, solves the kernel, and writes the matched image and
     ``target - matched`` residual. Image, variance, and mask paths may name
     NumPy arrays or FITS products; HDU selectors apply only to FITS inputs.
+    Spatial ALS may instead load ordered post-crop ``(y, x)`` fit rows from
+    ``fit_positions_path``; duplicate rows retain multiplicity weighting.
+
+    ``solver`` selects the model: ``"constant"`` fits one two-dimensional
+    kernel with :func:`solve_constant_kernel`, and ``"spatial-als"`` fits the
+    position-dependent separable model with :func:`solve_spatial_als`.
+    ``spatial_degree``, ``als_iterations``, ``als_tolerance``, and
+    ``als_regularization`` apply only to the spatial solver; ``None`` uses
+    the :class:`SpatialALSConfig` default and any explicit value is rejected
+    for the constant solver.
 
     Returns
     -------
@@ -119,200 +458,123 @@ def run_constant_kernel_fit(
         Run directory and JSON-compatible summary of saved artifacts.
     """
 
+    if solver not in {"constant", "spatial-als"}:
+        raise ValueError(f"unsupported solver: {solver}")
+    if solver == "spatial-als" and backend not in {"auto", "cpu", "cupy"}:
+        raise ValueError(
+            "solver 'spatial-als' supports only auto, cpu, and cupy backends"
+        )
+    als_config = resolve_spatial_als_config(
+        solver,
+        background_degree=background_degree,
+        flux_conserve=flux_conserve,
+        spatial_degree=spatial_degree,
+        als_iterations=als_iterations,
+        als_tolerance=als_tolerance,
+        als_regularization=als_regularization,
+    )
+
+    if fit_positions_path is not None and solver != "spatial-als":
+        raise ValueError("fit_positions require solver='spatial-als'")
+
+    workflow_start = time.perf_counter()
+    run_setup_start = time.perf_counter()
     run_dir = _resolve_run_dir(output_root, name, run_prefix)
     run_dir.mkdir(parents=True, exist_ok=False)
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir()
+    run_setup_sec = time.perf_counter() - run_setup_start
 
     try:
-        if variance_hdu is not None and variance_path is None:
-            raise ValueError("variance_hdu requires a variance image path")
-        if fit_mask_path is not None and auto_stamp_mask:
-            raise ValueError(
-                "Specify either fit_mask_path or auto_stamp_mask, not both"
-            )
-        crop_is_none = [
-            crop_y0 is None,
-            crop_x0 is None,
-            crop_height is None,
-            crop_width is None,
-        ]
-        if any(crop_is_none) and not all(crop_is_none):
-            raise ValueError(
-                "Specify either all crop parameters or none of them"
-            )
-        if reference_mask_hdu is not None and reference_mask_path is None:
-            if reference_path.suffix.lower() == ".npy":
-                raise ValueError(
-                    "reference_mask_hdu requires a FITS-backed reference "
-                    "mask source"
-                )
-        if target_mask_hdu is not None and target_mask_path is None:
-            if target_path.suffix.lower() == ".npy":
-                raise ValueError(
-                    "target_mask_hdu requires a FITS-backed target mask "
-                    "source"
-                )
-        normalized_mask_policy = _normalize_mask_policy(mask_policy)
-        if normalized_mask_policy == MASK_POLICY_NONE and (
-            reference_mask_path is not None
-            or target_mask_path is not None
-            or reference_mask_hdu is not None
-            or target_mask_hdu is not None
-        ):
-            raise ValueError(
-                "reference/target mask inputs require a non-'none' "
-                "mask_policy"
-            )
-        reference, _, used_reference_hdu = load_image_with_wcs(
-            reference_path,
-            hdu=reference_hdu,
-        )
-        target, _, used_target_hdu = load_image_with_wcs(
-            target_path,
-            hdu=target_hdu,
-        )
-        variance = None
-        used_variance_hdu = None
-        if variance_path is not None:
-            variance, _, used_variance_hdu = load_variance_with_wcs(
-                variance_path,
-                hdu=variance_hdu,
-            )
-        crop_metadata: dict[str, int] | None = None
-        if crop_y0 is not None:
-            crop_metadata = {
-                "y0": int(crop_y0),
-                "x0": int(crop_x0),
-                "height": int(crop_height),
-                "width": int(crop_width),
-            }
-            reference = apply_rectangular_cutout(reference, **crop_metadata)
-            target = apply_rectangular_cutout(target, **crop_metadata)
-            if variance is not None:
-                variance = apply_rectangular_cutout(variance, **crop_metadata)
-        raw_reference = np.asarray(reference, dtype=np.float64).copy()
-        raw_target = np.asarray(target, dtype=np.float64).copy()
-        reference_bad_mask = ~np.isfinite(raw_reference)
-        target_bad_mask = ~np.isfinite(raw_target)
-        preprocessing_metadata: dict[str, Any] | None = None
-        if normalized_mask_policy != MASK_POLICY_NONE:
-            reference_mask_source = reference_mask_path or reference_path
-            target_mask_source = target_mask_path or target_path
-            reference_mask, used_reference_mask_hdu, reference_plane_map = (
-                load_mask_with_planes(
-                    reference_mask_source,
-                    hdu=reference_mask_hdu,
-                )
-            )
-            target_mask, used_target_mask_hdu, target_plane_map = (
-                load_mask_with_planes(
-                    target_mask_source,
-                    hdu=target_mask_hdu,
-                )
-            )
-            if crop_metadata is not None:
-                reference_mask = apply_rectangular_cutout(
-                    reference_mask,
-                    **crop_metadata,
-                )
-                target_mask = apply_rectangular_cutout(
-                    target_mask,
-                    **crop_metadata,
-                )
-            reference, reference_bad_mask, reference_mask_metadata = (
-                _apply_mask_policy(
-                    reference,
-                    mask=reference_mask,
-                    mask_policy=normalized_mask_policy,
-                    plane_map=reference_plane_map,
-                )
-            )
-            target, target_bad_mask, target_mask_metadata = (
-                _apply_mask_policy(
-                    target,
-                    mask=target_mask,
-                    mask_policy=normalized_mask_policy,
-                    plane_map=target_plane_map,
-                )
-            )
-            if variance is not None:
-                variance = np.where(target_bad_mask, np.nan, variance)
-            preprocessing_metadata = {
-                "mask_policy": normalized_mask_policy,
-                "reference_mask_source": str(
-                    reference_mask_source.expanduser().resolve()
-                ),
-                "target_mask_source": str(
-                    target_mask_source.expanduser().resolve()
-                ),
-                "reference_mask_hdu": used_reference_mask_hdu,
-                "target_mask_hdu": used_target_mask_hdu,
-                "reference_mask_fraction": float(np.mean(reference_bad_mask)),
-                "target_mask_fraction": float(np.mean(target_bad_mask)),
-                "reference_mask": reference_mask_metadata,
-                "target_mask": target_mask_metadata,
-            }
-        else:
-            reference_mask = None
-            target_mask = None
-            reference_plane_map = None
-            target_plane_map = None
-            preprocessing_metadata = {
-                "mask_policy": normalized_mask_policy,
-                "reference_mask_fraction": float(np.mean(reference_bad_mask)),
-                "target_mask_fraction": float(np.mean(target_bad_mask)),
-            }
-        fit_mask = None
-        fit_mask_kind: str | None = None
-        fit_mask_metadata: dict[str, Any] | None = None
-        if fit_mask_path is not None:
-            fit_mask = _load_fit_mask(
-                fit_mask_path.expanduser().resolve(),
-                expected_shape=target.shape,
-            )
-            fit_mask_kind = "explicit_mask"
-        elif auto_stamp_mask:
-            selection_image = np.where(
-                np.isfinite(reference) & np.isfinite(target),
-                0.5 * (reference + target),
-                np.nan,
-            )
-            auto_mask = build_compact_source_stamp_mask(
-                selection_image,
-                variance=variance,
-                stamp_size=auto_stamp_size,
-                max_stamps=auto_stamp_count,
-                peak_percentile=auto_peak_percentile,
-            )
-            fit_mask = auto_mask.mask
-            fit_mask_kind = "auto_stamp_mask"
-            fit_mask_metadata = auto_mask.to_metadata()
-
-        result = solve_constant_kernel(
-            reference,
-            target,
-            components,
+        prepared = _prepare_kernel_inputs(
+            fits_reader=(
+                "astropy"
+                if fits_reader == "auto" and backend == "cpu"
+                else fits_reader
+            ),
+            reference_path=reference_path,
+            target_path=target_path,
+            reference_hdu=reference_hdu,
+            target_hdu=target_hdu,
+            variance_path=variance_path,
+            variance_hdu=variance_hdu,
+            reference_mask_path=reference_mask_path,
+            target_mask_path=target_mask_path,
+            reference_mask_hdu=reference_mask_hdu,
+            target_mask_hdu=target_mask_hdu,
+            mask_policy=mask_policy,
+            crop_y0=crop_y0,
+            crop_x0=crop_x0,
+            crop_height=crop_height,
+            crop_width=crop_width,
+            fit_mask_path=fit_mask_path,
+            auto_stamp_mask=auto_stamp_mask,
+            auto_stamp_size=auto_stamp_size,
+            auto_stamp_count=auto_stamp_count,
+            auto_peak_percentile=auto_peak_percentile,
             kernel_shape=kernel_shape,
-            variance=variance,
-            fit_mask=fit_mask,
-            background_degree=background_degree,
-            flux_conserve=flux_conserve,
-            backend=backend,
+            review=review,
+            fit_positions_path=fit_positions_path,
         )
+        solve_start = time.perf_counter()
+        result: ConstantKernelFitResult | SpatialALSFitResult
+        if solver == "constant":
+            result = solve_constant_kernel(
+                prepared.reference,
+                prepared.target,
+                components,
+                kernel_shape=kernel_shape,
+                variance=prepared.variance,
+                fit_mask=prepared.fit_mask,
+                background_degree=background_degree,
+                flux_conserve=flux_conserve,
+                backend=backend,
+            )
+        else:
+            result = solve_spatial_als(
+                prepared.reference,
+                prepared.target,
+                components,
+                kernel_shape=kernel_shape,
+                variance=prepared.variance,
+                fit_mask=prepared.fit_mask,
+                sample_positions=prepared.fit_positions,
+                config=als_config,
+                backend=backend,
+            )
+        solve_sec = time.perf_counter() - solve_start
 
+        postprocess_start = time.perf_counter()
+        artifact_write_sec = 0.0
+        review_generation_and_write_sec = 0.0
+        output_start = time.perf_counter()
         saved = _save_artifacts(artifacts_dir, result)
-        if fit_mask_metadata is not None:
+        artifact_write_sec += time.perf_counter() - output_start
+        if prepared.fit_positions is not None:
+            fit_positions_artifact = artifacts_dir / "fit_positions.npy"
+            output_start = time.perf_counter()
+            _save_array(fit_positions_artifact, prepared.fit_positions)
+            artifact_write_sec += time.perf_counter() - output_start
+            saved["fit_positions"] = str(
+                fit_positions_artifact.relative_to(artifacts_dir.parent)
+            )
+        if prepared.fit_mask_metadata is not None:
             fit_mask_metadata_path = artifacts_dir / "fit_mask_metadata.json"
-            _write_json(fit_mask_metadata_path, fit_mask_metadata)
+            output_start = time.perf_counter()
+            _write_json(fit_mask_metadata_path, prepared.fit_mask_metadata)
+            artifact_write_sec += time.perf_counter() - output_start
             saved["fit_mask_metadata"] = str(
                 fit_mask_metadata_path.relative_to(artifacts_dir.parent)
             )
-        if preprocessing_metadata is not None:
+        if prepared.preprocessing_metadata is not None:
             preprocessing_metadata_path = (
                 artifacts_dir / "input_mask_metadata.json"
             )
-            _write_json(preprocessing_metadata_path, preprocessing_metadata)
+            output_start = time.perf_counter()
+            _write_json(
+                preprocessing_metadata_path, prepared.preprocessing_metadata
+            )
+            artifact_write_sec += time.perf_counter() - output_start
             saved["input_mask_metadata"] = str(
                 preprocessing_metadata_path.relative_to(artifacts_dir.parent)
             )
@@ -328,132 +590,262 @@ def run_constant_kernel_fit(
             result.residual,
             empty_error="no finite residual pixels remain in the saved run",
         )
-        review_metrics = {
-            "residual_mean": float(np.mean(fit_region_residual)),
-            "residual_std": float(np.std(fit_region_residual)),
-            "residual_rms": float(np.sqrt(np.mean(fit_region_residual**2))),
-            "residual_median": float(np.median(fit_region_residual)),
-            "robust_sigma": float(
-                1.4826
-                * np.median(
-                    np.abs(
-                        fit_region_residual - np.median(fit_region_residual)
-                    )
-                )
-            ),
-        }
-        review_saved, hotspots = write_review_metadata(
-            artifacts_dir,
-            run_name=run_dir.name,
-            residual=result.residual,
-            review_metrics=review_metrics,
-        )
-        saved.update(review_saved)
-        interactive_saved = write_interactive_review_artifact(
-            artifacts_dir,
-            run_name=run_dir.name,
-            raw_reference=raw_reference,
-            raw_target=raw_target,
-            matched=result.matched,
-            residual=result.residual,
-            fit_mask_metadata=fit_mask_metadata,
-            input_mask_metadata=preprocessing_metadata,
-            reference_mask_values=reference_mask,
-            target_mask_values=target_mask,
-            reference_plane_map=reference_plane_map,
-            target_plane_map=target_plane_map,
-            hotspots=hotspots,
-            raw_gray_lo=float(
-                np.nanpercentile(
-                    np.concatenate(
-                        [
-                            raw_reference[np.isfinite(raw_reference)],
-                            raw_target[np.isfinite(raw_target)],
-                        ]
-                    ),
-                    5.0,
-                )
-            ),
-            raw_gray_hi=float(
-                np.nanpercentile(
-                    np.concatenate(
-                        [
-                            raw_reference[np.isfinite(raw_reference)],
-                            raw_target[np.isfinite(raw_target)],
-                        ]
-                    ),
-                    99.9,
-                )
-            ),
-            matched_lo=float(
-                np.nanpercentile(
-                    result.matched[np.isfinite(result.matched)], 1.0
-                )
-            ),
-            matched_hi=float(
-                np.nanpercentile(
-                    result.matched[np.isfinite(result.matched)], 99.5
-                )
-            ),
-            residual_limit=(
-                float(
-                    np.nanpercentile(
+        residual_mean = float(np.mean(fit_region_residual))
+        residual_std = float(np.std(fit_region_residual))
+        if review:
+            assert prepared.raw_reference is not None
+            assert prepared.raw_target is not None
+            review_metrics = {
+                "residual_mean": residual_mean,
+                "residual_std": residual_std,
+                "residual_rms": float(
+                    np.sqrt(np.mean(fit_region_residual**2))
+                ),
+                "residual_median": float(np.median(fit_region_residual)),
+                "robust_sigma": float(
+                    1.4826
+                    * np.median(
                         np.abs(
-                            result.residual[
-                                np.isfinite(result.residual) & result.fit_mask
+                            fit_region_residual
+                            - np.median(fit_region_residual)
+                        )
+                    )
+                ),
+            }
+            review_start = time.perf_counter()
+            review_saved, hotspots = write_review_metadata(
+                artifacts_dir,
+                run_name=run_dir.name,
+                residual=result.residual,
+                review_metrics=review_metrics,
+            )
+            review_generation_and_write_sec += (
+                time.perf_counter() - review_start
+            )
+            saved.update(review_saved)
+            review_start = time.perf_counter()
+            interactive_saved = write_interactive_review_artifact(
+                artifacts_dir,
+                run_name=run_dir.name,
+                raw_reference=prepared.raw_reference,
+                raw_target=prepared.raw_target,
+                matched=result.matched,
+                residual=result.residual,
+                fit_mask_metadata=prepared.fit_mask_metadata,
+                input_mask_metadata=prepared.preprocessing_metadata,
+                reference_mask_values=prepared.reference_mask,
+                target_mask_values=prepared.target_mask,
+                reference_plane_map=prepared.reference_plane_map,
+                target_plane_map=prepared.target_plane_map,
+                hotspots=hotspots,
+                raw_gray_lo=float(
+                    np.nanpercentile(
+                        np.concatenate(
+                            [
+                                prepared.raw_reference[
+                                    np.isfinite(prepared.raw_reference)
+                                ],
+                                prepared.raw_target[
+                                    np.isfinite(prepared.raw_target)
+                                ],
                             ]
                         ),
-                        99.5,
+                        5.0,
                     )
-                )
-                if np.any(np.isfinite(result.residual) & result.fit_mask)
-                else 1.0
-            ),
-        )
-        saved.update(interactive_saved)
+                ),
+                raw_gray_hi=float(
+                    np.nanpercentile(
+                        np.concatenate(
+                            [
+                                prepared.raw_reference[
+                                    np.isfinite(prepared.raw_reference)
+                                ],
+                                prepared.raw_target[
+                                    np.isfinite(prepared.raw_target)
+                                ],
+                            ]
+                        ),
+                        99.9,
+                    )
+                ),
+                matched_lo=float(
+                    np.nanpercentile(
+                        result.matched[np.isfinite(result.matched)], 1.0
+                    )
+                ),
+                matched_hi=float(
+                    np.nanpercentile(
+                        result.matched[np.isfinite(result.matched)], 99.5
+                    )
+                ),
+                residual_limit=(
+                    float(
+                        np.nanpercentile(
+                            np.abs(
+                                result.residual[
+                                    np.isfinite(result.residual)
+                                    & result.fit_mask
+                                ]
+                            ),
+                            99.5,
+                        )
+                    )
+                    if np.any(np.isfinite(result.residual) & result.fit_mask)
+                    else 1.0
+                ),
+            )
+            review_generation_and_write_sec += (
+                time.perf_counter() - review_start
+            )
+            saved.update(interactive_saved)
 
         runtime = runtime_metadata(
             backend=result.backend,
-            dtype=str(result.kernel.dtype),
+            dtype=str(result.matched.dtype),
         )
+        postprocess_total_sec = time.perf_counter() - postprocess_start
+        postprocess_other_sec = max(
+            0.0,
+            postprocess_total_sec
+            - artifact_write_sec
+            - review_generation_and_write_sec,
+        )
+        timings_sec = {
+            "run_setup_sec": run_setup_sec,
+            "input_read_sec": prepared.input_read_sec,
+            "preprocess_sec": prepared.preprocess_sec,
+            "solve_sec": solve_sec,
+            "artifact_write_sec": artifact_write_sec,
+            "review_generation_and_write_sec": (
+                review_generation_and_write_sec
+            ),
+            "postprocess_other_sec": postprocess_other_sec,
+        }
+        wall_sec = {
+            "workflow_before_summary_write": (
+                time.perf_counter() - workflow_start
+            )
+        }
         summary = {
             "workflow": workflow_name,
+            "review_enabled": review,
             "package_version": __version__,
             "reference_path": str(reference_path.expanduser().resolve()),
             "target_path": str(target_path.expanduser().resolve()),
-            "reference_hdu": used_reference_hdu,
-            "target_hdu": used_target_hdu,
-            "variance_hdu": used_variance_hdu,
-            "crop": crop_metadata,
-            "mask_policy": normalized_mask_policy,
+            "reference_hdu": prepared.used_reference_hdu,
+            "target_hdu": prepared.used_target_hdu,
+            "variance_hdu": prepared.used_variance_hdu,
+            "fit_positions_path": (
+                str(fit_positions_path.expanduser().resolve())
+                if fit_positions_path is not None
+                else None
+            ),
+            "crop": prepared.crop_metadata,
+            "mask_policy": prepared.normalized_mask_policy,
+            "solver": solver,
+            "image_shape": list(prepared.target.shape),
             "kernel_shape": list(kernel_shape),
             "basis": [component.__dict__ for component in components],
             "background_degree": background_degree,
             "flux_conserve": flux_conserve,
             "requested_backend": backend,
+            "fits_reader": fits_reader,
+            "fits_reads": prepared.fits_reads,
             "backend": result.backend,
             "device": runtime["device"],
-            "dtype": str(result.kernel.dtype),
+            "dtype": str(result.matched.dtype),
             "runtime": runtime,
+            "timings_sec": timings_sec,
+            "wall_sec": wall_sec,
             "fit_pixel_count": result.fit_pixel_count,
             "chi2": result.chi2,
             "dof": result.dof,
-            "kernel_sum": float(result.kernel.sum()),
-            "residual_mean": review_metrics["residual_mean"],
-            "residual_std": review_metrics["residual_std"],
+            "residual_mean": residual_mean,
+            "residual_std": residual_std,
             "all_pixels_residual_mean": float(np.mean(valid_residual)),
             "all_pixels_residual_std": float(np.std(valid_residual)),
             "fit_region": _fit_region_summary(
-                image_shape=target.shape,
+                image_shape=prepared.target.shape,
                 fit_pixel_count=result.fit_pixel_count,
-                fit_mask_kind=fit_mask_kind,
+                fit_mask_kind=prepared.fit_mask_kind,
                 kernel_shape=kernel_shape,
-                fit_mask_metadata=fit_mask_metadata,
+                fit_mask_metadata=prepared.fit_mask_metadata,
+                unique_fit_pixel_count=(
+                    result.unique_fit_pixel_count
+                    if isinstance(result, SpatialALSFitResult)
+                    else result.fit_pixel_count
+                ),
             ),
             "saved": saved,
         }
-        if preprocessing_metadata is not None:
-            summary["input_mask"] = preprocessing_metadata
+        if isinstance(result, ConstantKernelFitResult):
+            summary["kernel_sum"] = float(result.kernel.sum())
+        else:
+            center_y = (result.image_shape[0] - 1) / 2.0
+            center_x = (result.image_shape[1] - 1) / 2.0
+            summary["kernel_sum_center"] = float(
+                result.kernel_at(center_y, center_x).sum()
+            )
+            assert als_config is not None
+            final_relative_change = _final_relative_objective_change(
+                result.objective_history
+            )
+            summary["converged"] = result.converged
+            summary["iterations"] = result.iterations
+            if not result.converged:
+                _LOGGER.warning(
+                    "spatial ALS did not converge in %d of %d sweeps "
+                    "(final relative objective change %s, tolerance %g); "
+                    "the persisted kernel may be far from the optimum",
+                    result.iterations,
+                    als_config.max_iterations,
+                    "n/a"
+                    if final_relative_change is None
+                    else f"{final_relative_change:.3e}",
+                    als_config.tolerance,
+                )
+            summary["spatial_als"] = {
+                "spatial_degree": als_config.spatial_degree,
+                "spatial_terms": [
+                    list(term) for term in result.spatial_terms
+                ],
+                "background_terms": [
+                    list(term) for term in result.background_terms
+                ],
+                "coordinate_order": "y,x",
+                "term_degree_order": "x,y",
+                "coordinate_normalization": (
+                    "fitted image axes recorded in image_shape (the crop "
+                    "when a crop is applied) mapped to [-1,1]"
+                ),
+                "line_basis_normalization": (
+                    "unit-sum reference and unit-L2 corrections"
+                ),
+                "max_iterations": als_config.max_iterations,
+                "iterations": result.iterations,
+                "converged": result.converged,
+                "final_relative_objective_change": final_relative_change,
+                "tolerance": als_config.tolerance,
+                "regularization": result.regularization,
+                "vertical_reference_scale": result.flux_scale,
+                "vertical_reference_scale_interpretation": (
+                    "position-independent signed kernel sum"
+                    if result.flux_conserve
+                    else "vertical reference multiplier needed to evaluate "
+                    "the saved factors; not a standalone photometric scale "
+                    "without flux_conserve"
+                ),
+                "condition_number": result.condition_number,
+                "design_chunk_size": result.design_chunk_size,
+                "unique_fit_pixel_count": result.unique_fit_pixel_count,
+                "dof_interpretation": (
+                    "nominal N minus parameter count; not ridge effective dof"
+                ),
+            }
+            if result.flux_conserve:
+                summary["spatial_als"]["flux_scale"] = result.flux_scale
+        if prepared.preprocessing_metadata is not None:
+            summary["input_mask"] = prepared.preprocessing_metadata
         _write_json(run_dir / "summary.json", summary)
         return WorkflowResult(run_dir=run_dir, summary=summary)
     except Exception:
@@ -473,6 +865,15 @@ def benchmark_constant_kernel_backends(
     components: list[GaussianBasisComponent],
     variance_path: Path | None,
     variance_hdu: int | None = None,
+    reference_mask_path: Path | None = None,
+    target_mask_path: Path | None = None,
+    reference_mask_hdu: int | None = None,
+    target_mask_hdu: int | None = None,
+    mask_policy: str = MASK_POLICY_NONE,
+    auto_stamp_mask: bool = False,
+    auto_stamp_size: int = 31,
+    auto_stamp_count: int = 5,
+    auto_peak_percentile: float = 99.5,
     fit_mask_path: Path | None = None,
     crop_y0: int | None = None,
     crop_x0: int | None = None,
@@ -482,14 +883,43 @@ def benchmark_constant_kernel_backends(
     flux_conserve: bool = False,
     backends: list[str] | tuple[str, ...] = ("cpu", "cupy"),
     reference_backend: str = "cpu",
+    fits_reader: str = "auto",
     repeats: int = 3,
     warmup: int = 1,
     atol: float = 1e-8,
     rtol: float = 1e-9,
+    solver: str = "constant",
+    spatial_degree: int | None = None,
+    als_iterations: int | None = None,
+    als_tolerance: float | None = None,
+    als_regularization: float | None = None,
 ) -> WorkflowResult:
-    """Benchmark constant-kernel solve/application backends with parity."""
+    """Benchmark kernel-solver backends with numerical parity checks.
+
+    The spatial ALS options follow :func:`run_constant_kernel_fit`: ``None``
+    uses the :class:`SpatialALSConfig` default and any explicit value is
+    rejected for the constant solver.
+    """
 
     backend_names = _normalize_backend_list(backends)
+    if solver not in {"constant", "spatial-als"}:
+        raise ValueError(f"unsupported solver: {solver}")
+    if solver == "spatial-als":
+        unsupported = sorted(set(backend_names) - {"cpu", "cupy"})
+        if unsupported:
+            raise ValueError(
+                "solver 'spatial-als' supports only cpu and cupy benchmark "
+                "backends; unsupported: " + ", ".join(unsupported)
+            )
+    als_config = resolve_spatial_als_config(
+        solver,
+        background_degree=background_degree,
+        flux_conserve=flux_conserve,
+        spatial_degree=spatial_degree,
+        als_iterations=als_iterations,
+        als_tolerance=als_tolerance,
+        als_regularization=als_regularization,
+    )
     if reference_backend not in backend_names:
         raise ValueError("reference_backend must be included in backends")
     if repeats <= 0:
@@ -504,94 +934,97 @@ def benchmark_constant_kernel_backends(
     artifacts_dir.mkdir(parents=True, exist_ok=False)
 
     try:
-        if variance_hdu is not None and variance_path is None:
-            raise ValueError("variance_hdu requires a variance image path")
-        crop_metadata = _resolve_crop_metadata(
+        prepared = _prepare_kernel_inputs(
+            fits_reader=(
+                "astropy"
+                if fits_reader == "auto" and backend_names == ["cpu"]
+                else fits_reader
+            ),
+            reference_path=reference_path,
+            target_path=target_path,
+            reference_hdu=reference_hdu,
+            target_hdu=target_hdu,
+            variance_path=variance_path,
+            variance_hdu=variance_hdu,
+            reference_mask_path=reference_mask_path,
+            target_mask_path=target_mask_path,
+            reference_mask_hdu=reference_mask_hdu,
+            target_mask_hdu=target_mask_hdu,
+            mask_policy=mask_policy,
             crop_y0=crop_y0,
             crop_x0=crop_x0,
             crop_height=crop_height,
             crop_width=crop_width,
+            fit_mask_path=fit_mask_path,
+            auto_stamp_mask=auto_stamp_mask,
+            auto_stamp_size=auto_stamp_size,
+            auto_stamp_count=auto_stamp_count,
+            auto_peak_percentile=auto_peak_percentile,
+            kernel_shape=kernel_shape,
         )
 
-        load_start = time.perf_counter()
-        reference, _, used_reference_hdu = load_image_with_wcs(
-            reference_path,
-            hdu=reference_hdu,
-        )
-        target, _, used_target_hdu = load_image_with_wcs(
-            target_path,
-            hdu=target_hdu,
-        )
-        variance = None
-        used_variance_hdu = None
-        if variance_path is not None:
-            variance, _, used_variance_hdu = load_variance_with_wcs(
-                variance_path,
-                hdu=variance_hdu,
-            )
-        fit_mask = None
-        if fit_mask_path is not None:
-            fit_mask = _load_fit_mask(
-                fit_mask_path.expanduser().resolve(),
-                expected_shape=target.shape,
-            )
-        if crop_metadata is not None:
-            reference = apply_rectangular_cutout(reference, **crop_metadata)
-            target = apply_rectangular_cutout(target, **crop_metadata)
-            if variance is not None:
-                variance = apply_rectangular_cutout(
-                    variance,
-                    **crop_metadata,
-                )
-            if fit_mask is not None:
-                fit_mask = apply_rectangular_cutout(
-                    fit_mask,
-                    **crop_metadata,
-                )
-        load_seconds = float(time.perf_counter() - load_start)
-
+        warmup_timings_by_backend: dict[str, list[dict[str, float]]] = {}
         timings_by_backend: dict[str, list[dict[str, float]]] = {}
+        pre_benchmark_sync_seconds_by_backend: dict[str, float] = {}
         results = {}
         saved: dict[str, str] = {}
+        for key, metadata in (
+            ("input_mask_metadata", prepared.preprocessing_metadata),
+            ("fit_mask_metadata", prepared.fit_mask_metadata),
+        ):
+            if metadata is not None:
+                path = artifacts_dir / f"{key}.json"
+                _write_json(path, metadata)
+                saved[key] = str(path.relative_to(run_dir))
         for backend in backend_names:
-            for _ in range(warmup):
+            sync_start = time.perf_counter()
+            try:
                 _sync_backend(backend)
-                solve_constant_kernel(
-                    reference,
-                    target,
-                    components,
+            except Exception as exc:
+                raise RuntimeError(
+                    f"backend={backend!r} requires a usable CUDA device"
+                ) from exc
+            pre_benchmark_sync_seconds_by_backend[backend] = float(
+                time.perf_counter() - sync_start
+            )
+
+            def solve_backend(
+                backend: str = backend,
+            ) -> ConstantKernelFitResult | SpatialALSFitResult:
+                return _solve_benchmark_model(
+                    solver=solver,
+                    reference=prepared.reference,
+                    target=prepared.target,
+                    components=components,
                     kernel_shape=kernel_shape,
-                    variance=variance,
-                    fit_mask=fit_mask,
+                    variance=prepared.variance,
+                    fit_mask=prepared.fit_mask,
                     background_degree=background_degree,
                     flux_conserve=flux_conserve,
                     backend=backend,
+                    als_config=als_config,
                 )
-                _sync_backend(backend)
+
+            warmup_rows: list[dict[str, float]] = []
+            for _ in range(warmup):
+                _, timing = _time_benchmark_solve(
+                    backend,
+                    solve_backend,
+                )
+                warmup_rows.append(timing)
 
             rows: list[dict[str, float]] = []
             last_result = None
             for _ in range(repeats):
-                _sync_backend(backend)
-                start = time.perf_counter()
-                result = solve_constant_kernel(
-                    reference,
-                    target,
-                    components,
-                    kernel_shape=kernel_shape,
-                    variance=variance,
-                    fit_mask=fit_mask,
-                    background_degree=background_degree,
-                    flux_conserve=flux_conserve,
-                    backend=backend,
+                result, timing = _time_benchmark_solve(
+                    backend,
+                    solve_backend,
                 )
-                _sync_backend(backend)
-                rows.append(
-                    {"solve_seconds": float(time.perf_counter() - start)}
-                )
+                rows.append(timing)
                 last_result = result
 
             assert last_result is not None
+            warmup_timings_by_backend[backend] = warmup_rows
             timings_by_backend[backend] = rows
             results[backend] = last_result
             saved.update(
@@ -604,7 +1037,8 @@ def benchmark_constant_kernel_backends(
 
         reference_result = results[reference_backend]
         comparisons = {
-            backend: _compare_constant_kernel_results(
+            backend: _compare_benchmark_results(
+                solver,
                 reference_result,
                 result,
                 atol=atol,
@@ -621,31 +1055,74 @@ def benchmark_constant_kernel_backends(
         saved["timings_json"] = str(timings_path.relative_to(run_dir))
         saved["comparisons_json"] = str(comparisons_path.relative_to(run_dir))
 
+        timing_summaries = {
+            backend: _summarize_backend_timing_rows(rows)
+            for backend, rows in timings_by_backend.items()
+        }
+        first_solve_timings = {
+            backend: (
+                warmup_timings_by_backend[backend][0]
+                if warmup_timings_by_backend[backend]
+                else timings_by_backend[backend][0]
+            )
+            for backend in backend_names
+        }
+        warm_rows = {
+            backend: (
+                timings_by_backend[backend]
+                if warmup_timings_by_backend[backend]
+                else timings_by_backend[backend][1:]
+            )
+            for backend in backend_names
+        }
+        warm_timings = {
+            backend: (_summarize_backend_timing_rows(rows) if rows else None)
+            for backend, rows in warm_rows.items()
+        }
+
         summary = {
             "workflow": "benchmark-backends",
+            "solver": solver,
             "package_version": __version__,
             "created_at_utc": _timestamp(),
             "reference_path": str(reference_path.expanduser().resolve()),
             "target_path": str(target_path.expanduser().resolve()),
-            "reference_hdu": used_reference_hdu,
-            "target_hdu": used_target_hdu,
-            "variance_hdu": used_variance_hdu,
+            "reference_hdu": prepared.used_reference_hdu,
+            "target_hdu": prepared.used_target_hdu,
+            "variance_hdu": prepared.used_variance_hdu,
+            "variance_path": (
+                str(variance_path.expanduser().resolve())
+                if variance_path is not None
+                else None
+            ),
             "fit_mask_path": (
                 str(fit_mask_path.expanduser().resolve())
                 if fit_mask_path is not None
                 else None
             ),
-            "crop": crop_metadata,
+            "crop": prepared.crop_metadata,
+            "mask_policy": prepared.normalized_mask_policy,
+            "input_mask": prepared.preprocessing_metadata,
+            "fit_region": _fit_region_summary(
+                image_shape=prepared.target.shape,
+                fit_pixel_count=reference_result.fit_pixel_count,
+                fit_mask_kind=prepared.fit_mask_kind,
+                kernel_shape=kernel_shape,
+                fit_mask_metadata=prepared.fit_mask_metadata,
+            ),
+            "image_shape": list(prepared.target.shape),
             "kernel_shape": list(kernel_shape),
             "basis": [component.__dict__ for component in components],
             "background_degree": background_degree,
             "flux_conserve": flux_conserve,
             "backends": backend_names,
+            "fits_reader": fits_reader,
+            "fits_reads": prepared.fits_reads,
             "reference_backend": reference_backend,
             "runtimes": {
                 backend: runtime_metadata(
                     backend=result.backend,
-                    dtype=str(result.kernel.dtype),
+                    dtype=str(result.matched.dtype),
                 )
                 for backend, result in results.items()
             },
@@ -656,12 +1133,40 @@ def benchmark_constant_kernel_backends(
                 "rtol": rtol,
             },
             "setup_timings": {
-                "load_seconds": load_seconds,
+                "load_seconds": prepared.input_read_sec,
+                "preprocess_seconds": prepared.preprocess_sec,
+                "pre_benchmark_sync_seconds": (
+                    pre_benchmark_sync_seconds_by_backend
+                ),
             },
-            "timings": {
-                backend: _summarize_timing_rows(rows, "solve_seconds")
-                for backend, rows in timings_by_backend.items()
+            "timing_boundary": {
+                "wall": (
+                    "authoritative end-to-end solver call after a pre-call "
+                    "backend synchronization and including the post-call "
+                    "synchronization"
+                ),
+                "cuda_event": (
+                    "optional CUDA-stream interval spanning the CuPy solver "
+                    "call; it includes device work and host-induced stream "
+                    "idle gaps and is not a sum of kernel times"
+                ),
+                "first_solve": (
+                    "first solver call after a pre-benchmark sync; it may "
+                    "include remaining solver-specific lazy import, library-"
+                    "handle, or JIT initialization"
+                ),
             },
+            "first_solve_timings": first_solve_timings,
+            "timings": timing_summaries,
+            "warm_timings": warm_timings,
+            "median_speedup_vs_reference": _median_speedups(
+                timing_summaries,
+                reference_backend=reference_backend,
+            ),
+            "warm_median_speedup_vs_reference": _median_speedups(
+                warm_timings,
+                reference_backend=reference_backend,
+            ),
             "parity": {
                 "ok": parity_ok,
                 "comparisons": comparisons,
@@ -674,8 +1179,53 @@ def benchmark_constant_kernel_backends(
                 backend: float(result.chi2)
                 for backend, result in results.items()
             },
+            "solver_facts": {
+                backend: _benchmark_solver_facts(result)
+                for backend, result in results.items()
+            },
+            "cpu_thread_environment": {
+                name: os.environ.get(name)
+                for name in (
+                    "OMP_NUM_THREADS",
+                    "OPENBLAS_NUM_THREADS",
+                    "MKL_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS",
+                    "BLIS_NUM_THREADS",
+                )
+            },
             "saved": saved,
         }
+        if solver == "spatial-als":
+            assert als_config is not None
+            assert isinstance(reference_result, SpatialALSFitResult)
+            summary["spatial_als"] = {
+                "spatial_degree": als_config.spatial_degree,
+                "spatial_terms": [
+                    list(term) for term in reference_result.spatial_terms
+                ],
+                "background_terms": [
+                    list(term) for term in reference_result.background_terms
+                ],
+                "coordinate_order": "y,x",
+                "term_degree_order": "x,y",
+                "coordinate_normalization": (
+                    "fitted image axes recorded in image_shape (the crop "
+                    "when a crop is applied) mapped to [-1,1]"
+                ),
+                "line_basis_normalization": (
+                    "unit-sum reference and unit-L2 corrections"
+                ),
+                "max_iterations": als_config.max_iterations,
+                "tolerance": als_config.tolerance,
+                "regularization": als_config.regularization,
+                "flux_conserve": als_config.flux_conserve,
+            }
+            summary["kernel_sample_positions_yx"] = [
+                list(position)
+                for position in _representative_kernel_positions(
+                    prepared.target.shape
+                )
+            ]
         _write_json(run_dir / "summary.json", summary)
         return WorkflowResult(run_dir=run_dir, summary=summary)
     except Exception:
@@ -745,9 +1295,10 @@ def evaluate_subtraction_run(run_dir: Path) -> dict[str, Any]:
         above_3sigma = int(np.count_nonzero(deviation > 3.0 * robust_sigma))
         above_5sigma = int(np.count_nonzero(deviation > 5.0 * robust_sigma))
 
+    solver = summary.get("solver", "constant")
     result = {
         "run_dir": str(resolved),
-        "kernel_sum": summary.get("kernel_sum"),
+        "solver": solver,
         "residual_mean": float(np.mean(fit_residual)),
         "residual_std": float(np.std(fit_residual)),
         "residual_rms": float(np.sqrt(np.mean(fit_residual**2))),
@@ -767,6 +1318,13 @@ def evaluate_subtraction_run(run_dir: Path) -> dict[str, Any]:
         "fit_region_residual_median": float(np.median(fit_residual)),
         "fit_region_pixel_count": int(fit_mask.sum()),
     }
+    if solver == "constant":
+        result["kernel_sum"] = summary.get("kernel_sum")
+    else:
+        if "kernel_sum_center" in summary:
+            result["kernel_sum_center"] = summary["kernel_sum_center"]
+        result["converged"] = summary.get("converged")
+        result["iterations"] = summary.get("iterations")
     _write_json(resolved / "evaluation.json", result)
     return result
 
@@ -780,13 +1338,14 @@ def rebuild_interactive_review(run_dir: Path) -> dict[str, Any]:
         summary = json.load(handle)
 
     artifacts_dir = resolved / "artifacts"
-    required = (
-        "kernel.npy",
+    required = [
         "matched.npy",
         "residual.npy",
         "fit_mask.npy",
         "background.npy",
-    )
+    ]
+    if summary.get("solver", "constant") == "constant":
+        required.append("kernel.npy")
     missing = [
         name for name in required if not (artifacts_dir / name).exists()
     ]
@@ -956,7 +1515,7 @@ def _validate_run_name(name: str) -> str:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _resolve_crop_metadata(
@@ -976,6 +1535,9 @@ def _resolve_crop_metadata(
         raise ValueError("Specify either all crop parameters or none of them")
     if crop_y0 is None:
         return None
+    assert crop_x0 is not None
+    assert crop_height is not None
+    assert crop_width is not None
     return {
         "y0": int(crop_y0),
         "x0": int(crop_x0),
@@ -1005,6 +1567,115 @@ def _normalize_backend_list(
     return unique
 
 
+def _solve_benchmark_model(
+    *,
+    solver: str,
+    reference: np.ndarray,
+    target: np.ndarray,
+    components: list[GaussianBasisComponent],
+    kernel_shape: tuple[int, int],
+    variance: np.ndarray | None,
+    fit_mask: np.ndarray | None,
+    background_degree: int,
+    flux_conserve: bool,
+    backend: str,
+    als_config: SpatialALSConfig | None,
+) -> ConstantKernelFitResult | SpatialALSFitResult:
+    if solver == "constant":
+        return solve_constant_kernel(
+            reference,
+            target,
+            components,
+            kernel_shape=kernel_shape,
+            variance=variance,
+            fit_mask=fit_mask,
+            background_degree=background_degree,
+            flux_conserve=flux_conserve,
+            backend=backend,
+        )
+    return solve_spatial_als(
+        reference,
+        target,
+        components,
+        kernel_shape=kernel_shape,
+        variance=variance,
+        fit_mask=fit_mask,
+        config=als_config,
+        backend=backend,
+    )
+
+
+def _time_benchmark_solve(
+    backend: str,
+    solve: Callable[[], ConstantKernelFitResult | SpatialALSFitResult],
+) -> tuple[
+    ConstantKernelFitResult | SpatialALSFitResult,
+    dict[str, float],
+]:
+    _sync_backend(backend)
+    memory_before = _cupy_memory_snapshot(backend, suffix="before")
+    events = _cupy_timing_events(backend)
+    start = time.perf_counter()
+    if events is not None:
+        try:
+            events[0].record()
+        except Exception:
+            events = None
+    result = solve()
+    if events is not None:
+        try:
+            events[1].record()
+        except Exception:
+            events = None
+    _sync_backend(backend)
+    row = {"solve_seconds": float(time.perf_counter() - start)}
+    row.update(memory_before)
+    row.update(_cupy_memory_snapshot(backend, suffix="after"))
+    if events is not None:
+        try:
+            import cupy as cp
+
+            row["cuda_event_seconds"] = float(
+                cp.cuda.get_elapsed_time(*events) / 1000.0
+            )
+        except Exception:
+            pass
+    return result, row
+
+
+def _cupy_memory_snapshot(
+    backend: str,
+    *,
+    suffix: str,
+) -> dict[str, float]:
+    if backend != "cupy":
+        return {}
+    try:
+        import cupy as cp
+
+        free_bytes, total_bytes = cp.cuda.runtime.memGetInfo()
+        pool = cp.get_default_memory_pool()
+        return {
+            f"gpu_free_bytes_{suffix}": float(free_bytes),
+            f"gpu_total_bytes_{suffix}": float(total_bytes),
+            f"cupy_pool_used_bytes_{suffix}": float(pool.used_bytes()),
+            f"cupy_pool_reserved_bytes_{suffix}": float(pool.total_bytes()),
+        }
+    except Exception:
+        return {}
+
+
+def _cupy_timing_events(backend: str) -> tuple[Any, Any] | None:
+    if backend != "cupy":
+        return None
+    try:
+        import cupy as cp
+
+        return cp.cuda.Event(), cp.cuda.Event()
+    except Exception:
+        return None
+
+
 def _sync_backend(backend: str) -> None:
     if backend == "numba-cuda":
         from numba import cuda
@@ -1016,7 +1687,7 @@ def _sync_backend(backend: str) -> None:
 
     import cupy as cp
 
-    cp.cuda.Stream.null.synchronize()
+    cp.cuda.get_current_stream().synchronize()
 
 
 def _artifact_label(value: str) -> str:
@@ -1034,21 +1705,74 @@ def _save_benchmark_result_artifacts(
     artifacts_dir: Path,
     *,
     backend: str,
-    result,
+    result: ConstantKernelFitResult | SpatialALSFitResult,
 ) -> dict[str, str]:
     saved: dict[str, str] = {}
     label = _artifact_label(backend)
-    for name, array in (
-        ("kernel", result.kernel),
+    arrays: list[tuple[str, np.ndarray]] = [
         ("matched", result.matched),
         ("residual", result.residual),
         ("fit_mask", result.fit_mask),
         ("background", result.background),
-    ):
+    ]
+    if isinstance(result, ConstantKernelFitResult):
+        arrays.insert(0, ("kernel", result.kernel))
+    else:
+        sample_positions = np.asarray(
+            _representative_kernel_positions(result.image_shape),
+            dtype=np.float64,
+        )
+        realized_kernels = np.stack(
+            [result.kernel_at(y, x) for y, x in sample_positions]
+        )
+        arrays.extend(
+            [
+                ("horizontal_reference", result.horizontal_reference),
+                ("horizontal_basis", result.horizontal_basis),
+                (
+                    "horizontal_coefficients",
+                    result.horizontal_coefficients,
+                ),
+                ("vertical_reference", result.vertical_reference),
+                ("vertical_basis", result.vertical_basis),
+                ("vertical_coefficients", result.vertical_coefficients),
+                ("background_coefficients", result.background_coefficients),
+                (
+                    "flux_scale",
+                    np.asarray([result.flux_scale], dtype=np.float64),
+                ),
+                ("objective_history", result.objective_history),
+                (
+                    "spatial_terms",
+                    np.asarray(result.spatial_terms, dtype=np.int64),
+                ),
+                (
+                    "background_terms",
+                    np.asarray(result.background_terms, dtype=np.int64),
+                ),
+                ("kernel_sample_positions_yx", sample_positions),
+                ("realized_kernels", realized_kernels),
+            ]
+        )
+    for name, array in arrays:
         path = artifacts_dir / f"{label}_{name}.npy"
         _save_array(path, array)
         saved[f"{label}_{name}"] = str(path.relative_to(artifacts_dir.parent))
     return saved
+
+
+def _representative_kernel_positions(
+    image_shape: tuple[int, int],
+) -> tuple[tuple[float, float], ...]:
+    max_y = float(image_shape[0] - 1)
+    max_x = float(image_shape[1] - 1)
+    return (
+        (0.0, 0.0),
+        (0.0, max_x),
+        (max_y / 2.0, max_x / 2.0),
+        (max_y, 0.0),
+        (max_y, max_x),
+    )
 
 
 def _summarize_timing_rows(
@@ -1064,8 +1788,101 @@ def _summarize_timing_rows(
         "std": float(np.std(values)),
         "min": float(np.min(values)),
         "max": float(np.max(values)),
+        "median": float(np.median(values)),
         "best": float(np.min(values)),
     }
+
+
+def _summarize_backend_timing_rows(
+    rows: list[dict[str, float]],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = _summarize_timing_rows(
+        rows,
+        "solve_seconds",
+    )
+    event_rows = [row for row in rows if "cuda_event_seconds" in row]
+    if event_rows:
+        summary["cuda_event"] = _summarize_timing_rows(
+            event_rows,
+            "cuda_event_seconds",
+        )
+    return summary
+
+
+def _median_speedups(
+    timings: Mapping[str, dict[str, Any] | None],
+    *,
+    reference_backend: str,
+) -> dict[str, float | None]:
+    reference = timings[reference_backend]
+    if reference is None:
+        return {backend: None for backend in timings}
+    reference_median = float(reference["median"])
+    return {
+        backend: (
+            reference_median / float(item["median"])
+            if item is not None and float(item["median"]) > 0.0
+            else None
+        )
+        for backend, item in timings.items()
+    }
+
+
+def _benchmark_solver_facts(
+    result: ConstantKernelFitResult | SpatialALSFitResult,
+) -> dict[str, Any]:
+    facts: dict[str, Any] = {
+        "resolved_backend": result.backend,
+        "fit_pixel_count": int(result.fit_pixel_count),
+        "chi2": float(result.chi2),
+        "dof": int(result.dof),
+    }
+    if isinstance(result, SpatialALSFitResult):
+        facts["flux_scale"] = float(result.flux_scale)
+    for name in (
+        "unique_fit_pixel_count",
+        "iterations",
+        "converged",
+        "condition_number",
+        "design_chunk_size",
+    ):
+        value = getattr(result, name, None)
+        if value is None:
+            continue
+        if isinstance(value, (bool, np.bool_)):
+            facts[name] = bool(value)
+        elif isinstance(value, (int, np.integer)):
+            facts[name] = int(value)
+        else:
+            facts[name] = float(value)
+    return facts
+
+
+def _compare_benchmark_results(
+    solver: str,
+    reference: ConstantKernelFitResult | SpatialALSFitResult,
+    candidate: ConstantKernelFitResult | SpatialALSFitResult,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    if solver == "constant":
+        assert isinstance(reference, ConstantKernelFitResult)
+        assert isinstance(candidate, ConstantKernelFitResult)
+        return _compare_constant_kernel_results(
+            reference,
+            candidate,
+            atol=atol,
+            rtol=rtol,
+        )
+    assert isinstance(reference, SpatialALSFitResult)
+    assert isinstance(candidate, SpatialALSFitResult)
+    return _compare_spatial_als_results(
+        reference,
+        candidate,
+        atol=atol,
+        rtol=rtol,
+    )
 
 
 def _compare_constant_kernel_results(
@@ -1110,6 +1927,149 @@ def _compare_constant_kernel_results(
         "chi2_ok": chi2_ok,
         "dof_equal": dof_equal,
         "fit_pixel_count_equal": fit_pixel_count_equal,
+    }
+
+
+def _compare_spatial_als_results(
+    reference: SpatialALSFitResult,
+    candidate: SpatialALSFitResult,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    positions = _representative_kernel_positions(reference.image_shape)
+    reference_kernels = np.stack(
+        [reference.kernel_at(y, x) for y, x in positions]
+    )
+    candidate_kernels = np.stack(
+        [candidate.kernel_at(y, x) for y, x in positions]
+    )
+    array_pairs = {
+        name: (getattr(reference, name), getattr(candidate, name))
+        for name in (
+            "horizontal_reference",
+            "horizontal_basis",
+            "horizontal_coefficients",
+            "vertical_reference",
+            "vertical_basis",
+            "vertical_coefficients",
+            "background_coefficients",
+            "background",
+            "matched",
+            "residual",
+        )
+    }
+    array_pairs["realized_kernels"] = (
+        reference_kernels,
+        candidate_kernels,
+    )
+    array_comparisons = {
+        name: _compare_arrays(
+            reference_array,
+            candidate_array,
+            atol=atol,
+            rtol=rtol,
+        )
+        for name, (reference_array, candidate_array) in array_pairs.items()
+    }
+    scalar_comparisons = {
+        name: _compare_scalars(
+            getattr(reference, name),
+            getattr(candidate, name),
+            atol=atol,
+            rtol=rtol,
+        )
+        for name in (
+            "flux_scale",
+            "chi2",
+            "regularization",
+        )
+    }
+    exact_comparisons = {
+        name: bool(getattr(reference, name) == getattr(candidate, name))
+        for name in (
+            "spatial_terms",
+            "background_terms",
+            "image_shape",
+            "dof",
+            "fit_pixel_count",
+            "unique_fit_pixel_count",
+            "flux_conserve",
+        )
+    }
+    diagnostic_comparisons = {
+        "objective_history": _compare_arrays(
+            reference.objective_history,
+            candidate.objective_history,
+            atol=atol,
+            rtol=rtol,
+        ),
+        "condition_number": _compare_scalars(
+            reference.condition_number,
+            candidate.condition_number,
+            atol=atol,
+            rtol=rtol,
+        ),
+        "iterations_equal": bool(
+            reference.iterations == candidate.iterations
+        ),
+        "converged_equal": bool(reference.converged == candidate.converged),
+        "reference_iterations": int(reference.iterations),
+        "candidate_iterations": int(candidate.iterations),
+        "reference_converged": bool(reference.converged),
+        "candidate_converged": bool(candidate.converged),
+    }
+    fit_mask_mismatch_count = int(
+        np.count_nonzero(reference.fit_mask != candidate.fit_mask)
+    )
+    ok = bool(
+        all(item["ok"] for item in array_comparisons.values())
+        and all(item["ok"] for item in scalar_comparisons.values())
+        and all(exact_comparisons.values())
+        and fit_mask_mismatch_count == 0
+    )
+    return {
+        "ok": ok,
+        "arrays": array_comparisons,
+        "scalars": scalar_comparisons,
+        "exact": exact_comparisons,
+        "diagnostics": diagnostic_comparisons,
+        "fit_mask_mismatch_count": fit_mask_mismatch_count,
+        "kernel_sample_positions_yx": [
+            list(position) for position in positions
+        ],
+    }
+
+
+def _compare_scalars(
+    reference: float,
+    candidate: float,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    reference_value = float(reference)
+    candidate_value = float(candidate)
+    ok = bool(
+        np.isclose(
+            reference_value,
+            candidate_value,
+            atol=atol,
+            rtol=rtol,
+            equal_nan=True,
+        )
+    )
+    if np.isfinite(reference_value) and np.isfinite(candidate_value):
+        abs_diff: float | None = abs(reference_value - candidate_value)
+    elif ok:
+        abs_diff = 0.0
+    else:
+        abs_diff = None
+    return {
+        "ok": ok,
+        "reference": reference_value,
+        "candidate": candidate_value,
+        "abs_diff": abs_diff,
     }
 
 
@@ -1211,19 +2171,57 @@ def _load_fit_mask(
     return mask_arr.astype(bool)
 
 
-def _save_artifacts(artifacts_dir: Path, result) -> dict[str, str]:
+def _save_artifacts(
+    artifacts_dir: Path,
+    result: ConstantKernelFitResult | SpatialALSFitResult,
+) -> dict[str, str]:
     saved: dict[str, str] = {}
-    for name, array in (
-        ("kernel", result.kernel),
+    arrays: list[tuple[str, np.ndarray]] = [
         ("matched", result.matched),
         ("residual", result.residual),
         ("fit_mask", result.fit_mask),
         ("background", result.background),
-    ):
+    ]
+    if isinstance(result, ConstantKernelFitResult):
+        arrays.insert(0, ("kernel", result.kernel))
+    else:
+        center_y = (result.image_shape[0] - 1) / 2.0
+        center_x = (result.image_shape[1] - 1) / 2.0
+        arrays.extend(
+            [
+                ("kernel_center", result.kernel_at(center_y, center_x)),
+                ("horizontal_reference", result.horizontal_reference),
+                ("horizontal_basis", result.horizontal_basis),
+                (
+                    "horizontal_coefficients",
+                    result.horizontal_coefficients,
+                ),
+                ("vertical_reference", result.vertical_reference),
+                ("vertical_basis", result.vertical_basis),
+                ("vertical_coefficients", result.vertical_coefficients),
+                ("background_coefficients", result.background_coefficients),
+                ("objective_history", result.objective_history),
+            ]
+        )
+    for name, array in arrays:
         path = artifacts_dir / f"{name}.npy"
         _save_array(path, array)
         saved[name] = str(path.relative_to(artifacts_dir.parent))
     return saved
+
+
+def _final_relative_objective_change(
+    objective_history: np.ndarray,
+) -> float | None:
+    """Relative change between the last two ALS objectives, if any."""
+
+    if objective_history.size < 2:
+        return None
+    prior = float(objective_history[-2])
+    current = float(objective_history[-1])
+    if prior == 0.0:
+        return 0.0 if current == 0.0 else float("inf")
+    return abs(prior - current) / abs(prior)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -1239,6 +2237,7 @@ def _fit_region_summary(
     fit_mask_kind: str | None,
     kernel_shape: tuple[int, int],
     fit_mask_metadata: dict[str, Any] | None = None,
+    unique_fit_pixel_count: int | None = None,
 ) -> dict[str, Any]:
     if fit_mask_kind is None:
         margin_y = kernel_shape[0] // 2
@@ -1257,6 +2256,16 @@ def _fit_region_summary(
         if fit_mask_metadata is not None:
             summary.update(fit_mask_metadata)
         return summary
+    if fit_mask_kind == "explicit_positions":
+        assert unique_fit_pixel_count is not None
+        return {
+            "kind": "explicit_positions",
+            "coordinate_order": "y,x",
+            "duplicates_preserved": True,
+            "row_count": fit_pixel_count,
+            "pixel_count": unique_fit_pixel_count,
+            "duplicate_row_count": (fit_pixel_count - unique_fit_pixel_count),
+        }
     return {
         "kind": "explicit_mask",
         "pixel_count": fit_pixel_count,
@@ -1285,6 +2294,7 @@ def _apply_mask_policy(
     if mask_arr.shape != image_arr.shape:
         raise ValueError("mask array shape does not match the image shape")
 
+    metadata: dict[str, str | list[str] | list[int] | float | None]
     if mask_policy == MASK_POLICY_STRICT:
         bad_mask = mask_arr != 0
         metadata = {

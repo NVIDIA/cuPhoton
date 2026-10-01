@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
@@ -22,6 +23,7 @@ from cuphoton import __version__
 from cuphoton.core.artifacts import array_sha256, file_sha256
 
 from ._types import FIT_MODES, MODEL_NAMES, FitMode, ModelName
+from .backend import as_numpy
 from .models import GaussianDipoleModel, StampDipoleModel
 
 if TYPE_CHECKING:
@@ -48,6 +50,8 @@ class XFitDataset:
     mask: np.ndarray | None = None
     variance: np.ndarray | None = None
     stamp_basis: np.ndarray | None = None
+    input_sources: tuple[dict[str, Any], ...] = ()
+    reader_metadata: tuple[dict[str, Any], ...] = ()
 
     @property
     def batch_size(self) -> int:
@@ -62,8 +66,8 @@ def _require_npz_path(path: str | Path) -> Path:
     resolved = Path(path).expanduser().resolve()
     if resolved.suffix.lower() != ".npz":
         raise ValueError(
-            "xFit accepts .npz inputs only; .npy and pickle-backed inputs "
-            "are not supported"
+            "xFit accepts .npz inputs only for array archives; use .json "
+            "for a FITS manifest. .npy and pickle inputs are unsupported"
         )
     if not resolved.is_file():
         raise FileNotFoundError(f"xFit input does not exist: {resolved}")
@@ -131,8 +135,16 @@ def _validate_real_array(
     valid_kinds = "fiub" if allow_bool else "fiu"
     if array.dtype.kind not in valid_kinds:
         raise ValueError(f"{name} must be a real numeric array")
-    if finite and not np.isfinite(array).all():
+    if finite and not _array_module(array).isfinite(array).all():
         raise ValueError(f"{name} must contain only finite values")
+
+
+def _array_module(array):
+    if type(array).__module__.split(".", maxsplit=1)[0] == "cupy":
+        import cupy
+
+        return cupy
+    return np
 
 
 def _validate_images(images: np.ndarray) -> None:
@@ -187,7 +199,7 @@ def _broadcast_image_auxiliary(
         *images.shape[-2:],
     ):
         array = array[:, None, :, :]
-    return np.broadcast_to(array, images.shape)
+    return _array_module(images).broadcast_to(array, images.shape)
 
 
 def _validate_dataset_contract(
@@ -196,6 +208,7 @@ def _validate_dataset_contract(
     mode: FitMode | None,
     model: ModelName | None,
 ) -> None:
+    ap = _array_module(dataset.images)
     _validate_images(dataset.images)
     _validate_candidate_id(dataset.candidate_id, dataset.batch_size)
     if dataset.batch_size == 0:
@@ -218,14 +231,14 @@ def _validate_dataset_contract(
             allow_bool=True,
         )
     included = (
-        np.ones(dataset.images.shape, dtype=bool)
+        ap.ones(dataset.images.shape, dtype=bool)
         if dataset.mask is None
         else _broadcast_image_auxiliary(
             dataset.mask,
             dataset.images,
         ).astype(bool)
     )
-    if np.any(included & ~np.isfinite(dataset.images)):
+    if ap.any(included & ~ap.isfinite(dataset.images)):
         raise ValueError("images must be finite at included pixels")
     if dataset.variance is not None:
         _validate_image_auxiliary(
@@ -238,8 +251,8 @@ def _validate_dataset_contract(
             dataset.variance,
             dataset.images,
         )
-        invalid = ~np.isfinite(variance) | (variance <= 0)
-        if np.any(included & invalid):
+        invalid = ~ap.isfinite(variance) | (variance <= 0)
+        if ap.any(included & invalid):
             raise ValueError(
                 "variance must be finite and strictly positive at included "
                 "pixels"
@@ -292,8 +305,17 @@ def load_xfit_dataset(
     *,
     mode: FitMode | None = None,
     model: ModelName | None = None,
+    reader: str = "auto",
+    device: bool = False,
 ) -> XFitDataset:
-    """Load one pickle-free xFit ``.npz`` of numeric or Unicode arrays."""
+    """Load a safe NPZ batch or an explicit FITS candidate manifest."""
+
+    if Path(path).suffix.lower() == ".json":
+        from .fits_input import load_fits_input
+
+        return load_fits_input(
+            path, mode=mode, model=model, reader=reader, device=device
+        )
 
     resolved = _require_npz_path(path)
     input_archive_sha256 = file_sha256(resolved)
@@ -405,7 +427,7 @@ def _fit_rows(
         row: dict[str, Any] = {
             "candidate_index": index,
             "candidate_id": _python_scalar(candidate_id[index]),
-            "input_image_sha256": array_sha256(images[index]),
+            "input_image_sha256": array_sha256(as_numpy(images[index])),
             "model": str(result.model),
             "mode": str(result.mode),
             "status": _status_text(per_candidate_fields["status"][index]),
@@ -474,6 +496,7 @@ def write_fit_artifacts(
     dataset: XFitDataset,
     result: DipoleFitResult,
     effective_config: Mapping[str, Any],
+    fits_worker_setup_reads: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Persist the stable xFit fit table, arrays, config, and summary."""
 
@@ -528,7 +551,7 @@ def write_fit_artifacts(
         "schema_version": 1,
         "workflow": "fit-dipoles",
         "package_version": __version__,
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "input": str(dataset.path),
         "model": str(result.model),
         "mode": str(result.mode),
@@ -544,6 +567,25 @@ def write_fit_artifacts(
             "input_archive_sha256": dataset.input_archive_sha256,
             "mask_present": dataset.mask is not None,
             "variance_present": dataset.variance is not None,
+            **(
+                {
+                    "fits_sources": list(dataset.input_sources),
+                    **(
+                        {"fits_reads": list(dataset.reader_metadata)}
+                        if fits_worker_setup_reads is None
+                        else {
+                            "fits_finalizer_audit_reads": list(
+                                dataset.reader_metadata
+                            ),
+                            "fits_worker_setup_reads": (
+                                fits_worker_setup_reads
+                            ),
+                        }
+                    ),
+                }
+                if dataset.input_sources
+                else {}
+            ),
         },
         "metrics": {
             "candidate_count": dataset.batch_size,

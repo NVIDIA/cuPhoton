@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Four process slots per host, for four available GPUs on each host.
+gpu-node-01 slots=4
+gpu-node-02 slots=4

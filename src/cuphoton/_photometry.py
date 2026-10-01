@@ -329,7 +329,7 @@ def _load_background_api():
         from photutils.background import Background2D, MedianBackground
     except ImportError as exc:
         raise RuntimeError(
-            "Photometry requires the `photutils` package."
+            "Photometry requires `photutils`; install cuphoton[photometry]."
         ) from exc
     return Background2D, MedianBackground
 
@@ -341,7 +341,8 @@ def _load_segmentation_api():
         from photutils.utils.exceptions import NoDetectionsWarning
     except ImportError as exc:
         raise RuntimeError(
-            "Source detection requires the `photutils` package."
+            "Source detection requires `photutils`; "
+            "install cuphoton[photometry]."
         ) from exc
     return photutils_detect, SourceCatalog, NoDetectionsWarning
 
@@ -354,6 +355,7 @@ def _load_aperture_api():
         )
     except ImportError as exc:
         raise RuntimeError(
-            "Aperture photometry requires the `photutils` package."
+            "Aperture photometry requires `photutils`; "
+            "install cuphoton[photometry]."
         ) from exc
     return EllipticalAperture, aperture_photometry

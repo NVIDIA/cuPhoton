@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import numpy as np
 

@@ -13,7 +13,20 @@ import pytest
 
 from cuphoton import xfit, xpois, xrep
 from cuphoton.core.cli import ComponentSpec
+from cuphoton.xpois.noise import (
+    ConstantKernelNoiseResult,
+    standardize_constant_kernel_residual,
+)
 from cuphoton.xpois.ois import ConstantKernelFitResult
+from cuphoton.xpois.spatial_gaussian_polynomial import (
+    SpatialGaussianPolynomialKernelFitResult,
+    solve_spatial_gaussian_polynomial_kernel,
+)
+from cuphoton.xpois.statistics import (
+    StandardizedResidualStatistics,
+    StandardizedResidualSummary,
+    summarize_standardized_residuals,
+)
 from cuphoton.xray.linear_prediction import LinearPredictionResult
 from cuphoton.xrep.geometry import MaskedReprojectionResult, ReprojectionSpec
 from cuphoton.xrep.mapping import PreparedReprojection
@@ -27,19 +40,77 @@ def test_curated_root_exports_are_real_objects() -> None:
     assert callable(xrep.build_stack_spec_from_fits)
     assert callable(xpois.inspect_hsc_data_tree)
     assert callable(xpois.load_image_array)
+    assert callable(xpois.solve_spatial_als)
+    assert xpois.SpatialALSConfig().spatial_degree == 2
+    assert xpois.ConstantKernelNoiseResult is ConstantKernelNoiseResult
+    assert (
+        xpois.standardize_constant_kernel_residual
+        is standardize_constant_kernel_residual
+    )
+    assert (
+        xpois.StandardizedResidualStatistics is StandardizedResidualStatistics
+    )
+    assert xpois.StandardizedResidualSummary is StandardizedResidualSummary
+    assert (
+        xpois.summarize_standardized_residuals
+        is summarize_standardized_residuals
+    )
+
+
+def test_xpois_noise_signature_is_explicit() -> None:
+    assert list(
+        inspect.signature(
+            xpois.standardize_constant_kernel_residual
+        ).parameters
+    ) == [
+        "residual",
+        "kernel",
+        "target_variance",
+        "reference_variance",
+        "valid_mask",
+    ]
+
+
+def test_research_solver_requires_module_qualified_import() -> None:
+    assert callable(solve_spatial_gaussian_polynomial_kernel)
+    assert "solve_spatial_gaussian_polynomial_kernel" not in xpois.__all__
+    assert "SpatialGaussianPolynomialKernelConfig" not in xpois.__all__
+    assert "SpatialGaussianPolynomialKernelFitResult" not in xpois.__all__
+    assert "SpatialGaussianPolynomialKernelFitSamples" not in xpois.__all__
+    assert "SpatialKernelDomain" not in xpois.__all__
+    assert not hasattr(xpois, "solve_spatial_gaussian_polynomial_kernel")
+    assert not hasattr(xpois, "SpatialGaussianPolynomialKernelConfig")
+    assert not hasattr(xpois, "SpatialGaussianPolynomialKernelFitResult")
+    assert not hasattr(xpois, "SpatialGaussianPolynomialKernelFitSamples")
+    assert not hasattr(xpois, "SpatialKernelDomain")
+
+
+def test_xpois_statistics_signature_is_explicit() -> None:
+    assert list(
+        inspect.signature(xpois.summarize_standardized_residuals).parameters
+    ) == [
+        "standardized_residual_stamps",
+        "valid_mask",
+    ]
 
 
 def test_xfit_curated_exports_and_fit_signature() -> None:
     expected = {
         "BatchedLeastSquaresProblem",
+        "DeviceDipoleFitResult",
         "DipoleFitResult",
+        "DipoleFitUncertaintyReason",
         "GaussianDipoleModel",
+        "JacobianFunction",
         "LMConfig",
         "LMResult",
         "LMStatus",
+        "NormalEquationsFunction",
+        "ResidualFunction",
         "StampDipoleModel",
         "batched_levenberg_marquardt",
         "fit_dipoles",
+        "fit_dipoles_device",
     }
 
     assert expected <= set(xfit.__all__)
@@ -52,6 +123,81 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mode",
         "backend",
         "config",
+    ]
+    assert list(inspect.signature(xfit.fit_dipoles_device).parameters) == [
+        "images",
+        "model",
+        "initial",
+        "mask",
+        "variance",
+        "mode",
+        "config",
+    ]
+    assert [field.name for field in fields(xfit.DipoleFitResult)] == [
+        "parameters",
+        "parameter_names",
+        "status",
+        "converged",
+        "evaluations",
+        "residual_norm",
+        "chi_square",
+        "valid_pixel_count",
+        "valid_pixel_fraction",
+        "null_chi_square",
+        "delta_chi_square",
+        "fractional_null_improvement",
+        "degrees_of_freedom",
+        "reduced_chi_square",
+        "covariance",
+        "standard_errors",
+        "uncertainty_valid",
+        "uncertainty_reason",
+        "residuals",
+        "backend",
+        "device",
+        "dtype",
+        "model",
+        "mode",
+    ]
+
+
+def test_xpois_device_api_is_additive_and_legacy_signature_is_stable() -> (
+    None
+):
+    expected = {
+        "ConstantKernelFitResult",
+        "DeviceConstantKernelFitResult",
+        "solve_constant_kernel",
+        "solve_constant_kernel_device",
+    }
+
+    assert expected <= set(xpois.__all__)
+    assert list(
+        inspect.signature(xpois.solve_constant_kernel).parameters
+    ) == [
+        "reference",
+        "target",
+        "components",
+        "kernel_shape",
+        "variance",
+        "fit_mask",
+        "background_degree",
+        "flux_conserve",
+        "flux_reference_index",
+        "backend",
+    ]
+    assert list(
+        inspect.signature(xpois.solve_constant_kernel_device).parameters
+    ) == [
+        "reference",
+        "target",
+        "components",
+        "kernel_shape",
+        "variance",
+        "fit_mask",
+        "background_degree",
+        "flux_conserve",
+        "flux_reference_index",
     ]
 
 
@@ -102,7 +248,12 @@ def test_xrep_existing_function_signatures_remain_stable() -> None:
     ("obj", "required_text"),
     [
         (ConstantKernelFitResult, "target - matched"),
+        (ConstantKernelNoiseResult, "marginal diagonal"),
+        (StandardizedResidualStatistics, "performs no whitening"),
+        (StandardizedResidualSummary, "empirical diagnostics"),
         (xpois.SeparableKernelFitResult, "target - matched"),
+        (xpois.SpatialALSFitResult, "target - matched"),
+        (SpatialGaussianPolynomialKernelFitResult, "target - matched"),
         (PreparedReprojection, "d(source pixel)/d(destination pixel)"),
         (StampDataset, "do not alias the memory-mapped files"),
         (LinearPredictionResult, "radians per input time unit"),
@@ -123,7 +274,7 @@ def test_public_contract_docstrings_are_specific(
     [
         (
             "xdr",
-            "xDataReader: GPU-native FITS and HDF5 metadata loading.",
+            "xDataReader: GPU-native FITS loading.",
         ),
         (
             "xfit",
@@ -169,6 +320,40 @@ def test_cli_first_package_roots_do_not_import_torch() -> None:
             (
                 "import sys; import cuphoton.xscan, cuphoton.xray; "
                 "raise SystemExit('torch' in sys.modules)"
+            ),
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_xpois_device_api_does_not_eagerly_import_cupy() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from cuphoton import xpois; "
+                "assert callable(xpois.solve_constant_kernel_device); "
+                "raise SystemExit('cupy' in sys.modules)"
+            ),
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_xfit_device_api_does_not_eagerly_import_cupy() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from cuphoton import xfit; "
+                "assert callable(xfit.fit_dipoles_device); "
+                "raise SystemExit('cupy' in sys.modules)"
             ),
         ],
         check=False,

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,7 @@ SRC_DIR = ROOT / "src"
 _NVCOMP_LIB_ENV = "CUPHOTON_XDR_NVCOMP_LIB_DIR"
 _KVIKIO_LIB_ENV = "CUPHOTON_XDR_KVIKIO_LIB_DIR"
 _CFITSIO_ROOT_ENV = "CUPHOTON_XDR_CFITSIO_ROOT"
+_NATIVE_PREFIX_ENV = "CUPHOTON_XDR_NATIVE_PREFIX"
 
 
 def _unique(paths):
@@ -37,7 +39,10 @@ def _require_dir(path: Path, description: str) -> Path:
 
 
 def _package_dir(module_name: str) -> Path:
-    spec = importlib.util.find_spec(module_name)
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ModuleNotFoundError:
+        spec = None
     if spec is None:
         raise RuntimeError(
             f"Required Python package is not importable: {module_name}"
@@ -62,6 +67,7 @@ def _find_library_dir(
     *,
     env_var: str,
     description: str,
+    recursive: bool = True,
 ) -> Path:
     env_value = os.environ.get(env_var)
     if env_value:
@@ -78,20 +84,30 @@ def _find_library_dir(
         if _library_in_dir(lib_dir, names):
             return lib_dir
 
-    for name in names:
-        matches = sorted(package_base.rglob(name))
-        if matches:
-            return matches[0].parent
+    if recursive:
+        for name in names:
+            matches = sorted(package_base.rglob(name))
+            if matches:
+                return matches[0].parent
 
     raise RuntimeError(
         f"Could not find {description} under {package_base}. "
-        "Searched lib64, lib, and recursive matches for: "
+        "Searched lib64, lib"
+        f"{' and subdirectories' if recursive else ''} for: "
         f"{', '.join(names)}. "
         f"Set {env_var} to the directory containing the library."
     )
 
 
 def _cuda_home_candidates():
+    native_prefix = os.environ.get(_NATIVE_PREFIX_ENV)
+    if native_prefix:
+        root = Path(native_prefix)
+        yield root
+        machine = platform.machine()
+        target = "sbsa" if machine == "aarch64" else machine
+        yield root / "targets" / f"{target}-linux"
+        return
     seen = set()
     for value in (
         os.environ.get("CUDA_HOME"),
@@ -102,6 +118,14 @@ def _cuda_home_candidates():
             if path not in seen:
                 seen.add(path)
                 yield path
+    for module_name in ("nvidia.cu13", "nvidia.cuda_runtime"):
+        try:
+            path = _package_dir(module_name)
+        except RuntimeError:
+            continue
+        if path not in seen:
+            seen.add(path)
+            yield path
     default = Path("/usr/local/cuda")
     if default not in seen:
         seen.add(default)
@@ -116,24 +140,21 @@ def _cuda_home_candidates():
 def _find_cuda_toolkit():
     for cuda_home in _cuda_home_candidates():
         include_dir = cuda_home / "include"
-        if not (include_dir / "cuda_runtime.h").is_file():
+        if not all(
+            (include_dir / header).is_file()
+            for header in ("cuda_runtime.h", "crt/host_config.h")
+        ):
             continue
 
         for lib_name in ("lib64", "lib"):
             lib_dir = cuda_home / lib_name
-            if any(
-                (lib_dir / soname).is_file()
-                for soname in (
-                    "libcudart.so",
-                    "libcudart.so.13",
-                )
-            ):
+            if (lib_dir / "libcudart.so.13").is_file():
                 return include_dir, lib_dir
 
     raise RuntimeError(
-        "CUDA toolkit with cuda_runtime.h and libcudart is required to build "
-        "cuphoton.xdr._nvcomp_batch_ext. Set CUDA_HOME to the "
-        "toolkit root."
+        "CUDA 13 headers (including CRT) and libcudart.so.13 are required "
+        "to build cuphoton.xdr._nvcomp_batch_ext. Install the CUDA 13 "
+        "development wheels or set CUDA_HOME to the toolkit root."
     )
 
 
@@ -141,14 +162,19 @@ def _find_gpu_package_paths():
     import pybind11
 
     pybind11_include = Path(pybind11.get_include())
-    kvikio_base = _package_dir("libkvikio")
-    nvcomp_base = _package_dir("nvidia.libnvcomp")
+    native_prefix = os.environ.get(_NATIVE_PREFIX_ENV)
+    if native_prefix:
+        kvikio_base = nvcomp_base = Path(native_prefix)
+    else:
+        kvikio_base = _package_dir("libkvikio")
+        nvcomp_base = _package_dir("nvidia.libnvcomp")
     kvikio_include = kvikio_base / "include"
     kvikio_lib = _find_library_dir(
         kvikio_base,
         ("libkvikio.so",),
         env_var=_KVIKIO_LIB_ENV,
         description="KvikIO library",
+        recursive=not native_prefix,
     )
     nvcomp_include = nvcomp_base / "include"
     nvcomp_lib = _find_library_dir(
@@ -156,6 +182,7 @@ def _find_gpu_package_paths():
         ("libnvcomp.so.5", "libnvcomp.so"),
         env_var=_NVCOMP_LIB_ENV,
         description="nvCOMP library",
+        recursive=not native_prefix,
     )
 
     return {
@@ -177,12 +204,22 @@ def _find_cufile_include(cuda_include: Path) -> Path:
     if (cuda_include / "cufile.h").is_file():
         return cuda_include
 
-    try:
-        candidate = _package_dir("nvidia.cufile") / "include"
+    if os.environ.get(_NATIVE_PREFIX_ENV):
+        for root in _cuda_home_candidates():
+            candidate = root / "include"
+            if (candidate / "cufile.h").is_file():
+                return candidate
+        raise RuntimeError(
+            f"{_NATIVE_PREFIX_ENV} must contain the cuFile header cufile.h"
+        )
+
+    for module_name in ("nvidia.cu13", "nvidia.cufile"):
+        try:
+            candidate = _package_dir(module_name) / "include"
+        except RuntimeError:
+            continue
         if (candidate / "cufile.h").is_file():
             return candidate
-    except RuntimeError:
-        pass
 
     raise RuntimeError(
         "cuFile header cufile.h is required to build "
@@ -200,7 +237,12 @@ def _split_pkg_config_flags(flags: str, prefix: str) -> list[str]:
 
 
 def _find_cfitsio_paths():
-    env_value = os.environ.get(_CFITSIO_ROOT_ENV)
+    root_env = (
+        _CFITSIO_ROOT_ENV
+        if os.environ.get(_CFITSIO_ROOT_ENV)
+        else _NATIVE_PREFIX_ENV
+    )
+    env_value = os.environ.get(root_env)
     if env_value:
         root = Path(env_value)
         include_candidates = [root / "include", root]
@@ -226,8 +268,7 @@ def _find_cfitsio_paths():
         )
         if include_dir is None or lib_dir is None:
             raise RuntimeError(
-                f"{_CFITSIO_ROOT_ENV}={root} must contain fitsio.h and "
-                "libcfitsio"
+                f"{root_env}={root} must contain fitsio.h and libcfitsio"
             )
         return {
             "include_dirs": [str(include_dir)],
@@ -322,7 +363,7 @@ def get_extensions():
                 "-pthread",
                 "-l:libnvcomp.so.5",
                 "-l:libkvikio.so",
-                "-lcudart",
+                "-l:libcudart.so.13",
                 *cfitsio_paths["extra_link_args"],
             ],
         )

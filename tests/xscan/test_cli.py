@@ -55,6 +55,35 @@ def _run_cli(argv: list[str]) -> int:
     return run_component("xscan", argv)
 
 
+@pytest.mark.parametrize(
+    "command,workflow",
+    [
+        ("data-build-autoscan-raw", "build_raw_autoscan_workflow"),
+        ("data-build-nodiff-raw", "build_raw_nodiff_workflow"),
+        ("data-build-lsstcomcam-smoke", "build_lsstcomcam_smoke_workflow"),
+    ],
+)
+@pytest.mark.parametrize("reader", [None, "auto", "astropy", "xdr"])
+def test_fits_builder_cli_reader_override(
+    monkeypatch, command, workflow, reader
+):
+    received = []
+
+    def build(**kwargs):
+        received.append(kwargs)
+        return SimpleNamespace(summary={})
+
+    monkeypatch.setattr(xscan_commands, workflow, build)
+    args = [command, "--manifest", "inputs.json", "--output-dir", "dataset"]
+    if reader is not None:
+        args.extend(["--fits-reader", reader])
+    assert _run_cli(args) == 0
+    assert received[0]["fits_reader"] == reader
+    received.clear()
+    assert _run_cli([*args, "--fits-reader", "gds"]) != 0
+    assert not received
+
+
 def test_default_output_root_uses_product_state_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -495,6 +524,27 @@ def write_fake_hsc_fits_products(root: Path) -> Path:
         ).write_bytes(b"")
     (coadd_dir / "deepCoadd_0001_01_i_test-run.fits").write_bytes(b"")
     return fits_root
+
+
+def _build_hsc_registry(
+    fits_root: Path, hsc_npy: Path, output_path: Path
+) -> int:
+    # write_fake_hsc_fits_products writes empty FITS files, so the registry
+    # builder warns once per file while recording fits_header_status=failed.
+    with pytest.warns(
+        RuntimeWarning, match="could not read lightweight FITS header"
+    ):
+        return _run_cli(
+            [
+                "data-build-hsc-registry",
+                "--fits-root",
+                str(fits_root),
+                "--hsc-npy-dir",
+                str(hsc_npy),
+                "--output-path",
+                str(output_path),
+            ]
+        )
 
 
 def write_fake_lsstcomcam_fits(
@@ -1066,7 +1116,7 @@ def write_raw_autoscan_image_manifest(root: Path) -> Path:
     rows = []
     coords = [(20, 20), (20, 40), (40, 20), (40, 40)]
     labels = [1, 0, 1, 0]
-    for idx, ((y0, x0), label) in enumerate(zip(coords, labels)):
+    for idx, ((y0, x0), label) in enumerate(zip(coords, labels, strict=True)):
         search = np.zeros((64, 64), dtype=np.float32)
         template = np.zeros((64, 64), dtype=np.float32)
         difference = np.zeros((64, 64), dtype=np.float32)
@@ -2013,17 +2063,7 @@ def test_cli_build_hsc_registry_and_registry_backed_manifest(
     fits_root = write_fake_hsc_fits_products(tmp_path / "data")
     registry_path = tmp_path / "hsc_registry.parquet"
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
@@ -2056,17 +2096,7 @@ def test_cli_build_hsc_registry_and_registry_backed_manifest(
         json.dumps(sidecar_payload) + "\n",
         encoding="utf-8",
     )
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     preserved_sidecar = json.loads(
         collections_path.read_text(encoding="utf-8")
@@ -2218,17 +2248,7 @@ def test_cli_build_hsc_registry_includes_uppercase_fits_suffix(
     warp_path.rename(warp_path.with_suffix(".FITS"))
     registry_path = tmp_path / "hsc_uppercase_suffix_registry.parquet"
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
@@ -2250,16 +2270,8 @@ def test_cli_build_hsc_registry_rejects_unexpected_hsc_npy_layout(
         allow_pickle=False,
     )
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(tmp_path / "bad-layout-registry.parquet"),
-        ]
+    rc = _build_hsc_registry(
+        fits_root, hsc_npy, tmp_path / "bad-layout-registry.parquet"
     )
     captured = capsys.readouterr()
 
@@ -2287,17 +2299,7 @@ def test_cli_build_hsc_registry_assigns_exposure_index_per_band(
         ).write_bytes(b"")
     registry_path = tmp_path / "hsc_multiband_registry.parquet"
 
-    rc = _run_cli(
-        [
-            "data-build-hsc-registry",
-            "--fits-root",
-            str(fits_root),
-            "--hsc-npy-dir",
-            str(hsc_npy),
-            "--output-path",
-            str(registry_path),
-        ]
-    )
+    rc = _build_hsc_registry(fits_root, hsc_npy, registry_path)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     registry = pd.read_parquet(registry_path)
@@ -8265,7 +8267,7 @@ def test_cli_smoke_build_train_infer_evaluate_compare(
     compare_summary = json.loads(captured.out)
     assert rc == 0
     assert compare_summary["best_run_dir"] == str(run_dir.resolve())
-    assert "# XScan Compare Inputs" in compare_summary["leaderboard_markdown"]
+    assert "# xScan Compare Inputs" in compare_summary["leaderboard_markdown"]
 
 
 def test_cli_train_inada_pair_finetunes_from_checkpoint(
@@ -8772,7 +8774,7 @@ def test_cli_reproduce_pair_triplet_uses_one_reviewed_dataset(
     assert (run_dir / "summary.md").exists()
     assert payload["saved"]["summary_markdown"] == "summary.md"
     assert (
-        "# XScan Pair/Triplet Comparison Summary"
+        "# xScan Pair/Triplet Comparison Summary"
         in (payload["summary_markdown"])
     )
     assert "TPR @ 1% FPR" in payload["summary_markdown"]
@@ -8993,7 +8995,7 @@ def test_cli_reproduce_hsc_comparison(tmp_path, capsys, monkeypatch) -> None:
     ).exists()
     assert (run_dir / "summary.md").exists()
     assert payload["saved"]["summary_markdown"] == "summary.md"
-    assert "# XScan HSC Comparison Summary" in payload["summary_markdown"]
+    assert "# xScan HSC Comparison Summary" in payload["summary_markdown"]
 
 
 def test_cli_reproduce_hsc_xpois_sweep(tmp_path, capsys, monkeypatch) -> None:
@@ -9107,7 +9109,7 @@ def test_cli_reproduce_hsc_xpois_sweep(tmp_path, capsys, monkeypatch) -> None:
     assert other["difference_diagnostics"]["mean_abs_delta"] > 0.0
     assert (run_dir / "summary.md").exists()
     assert payload["saved"]["summary_markdown"] == "summary.md"
-    assert "# XScan HSC XPOIS Sweep Summary" in payload["summary_markdown"]
+    assert "# xScan HSC xPois Sweep Summary" in payload["summary_markdown"]
     assert (
         "Unranked because no run has defined ROC and PR AUC"
         in payload["summary_markdown"]
@@ -9417,3 +9419,52 @@ def test_cli_reproduce_hsc_xpois_sweep_marks_nonfinite_variants_unstable(
     assert "non-finite" in unstable["failure"]["message"]
     assert "triplet_xpois_nan_variant" not in payload["jobs"]
     assert "triplet_xpois_nan_variant" in payload["unstable_variants"]
+
+
+@pytest.mark.parametrize("runtime", ["dragon", "mpi"])
+def test_distributed_inference_validates_output_name_before_launch(
+    tmp_path, monkeypatch, capsys, runtime
+):
+    from cuphoton.core import executors
+
+    monkeypatch.setattr(
+        executors, "run_workload", lambda **kwargs: pytest.fail("launched")
+    )
+    rc = run_component(
+        "xscan",
+        [
+            "infer-real-bogus",
+            "--run-dir",
+            str(tmp_path),
+            "--dataset-dir",
+            str(tmp_path),
+            "--executor",
+            runtime,
+            "--output-dir",
+            str(tmp_path / "invalid name"),
+        ],
+    )
+    assert rc != 0
+    assert "--output-dir basename" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "option,value", [("--task-batches", "1"), ("--output-dir", "output")]
+)
+def test_local_inference_rejects_distributed_options(
+    tmp_path, capsys, option, value
+):
+    rc = run_component(
+        "xscan",
+        [
+            "infer-real-bogus",
+            "--run-dir",
+            str(tmp_path),
+            "--dataset-dir",
+            str(tmp_path),
+            option,
+            value,
+        ],
+    )
+    assert rc != 0
+    assert "require --executor dragon or mpi" in capsys.readouterr().err

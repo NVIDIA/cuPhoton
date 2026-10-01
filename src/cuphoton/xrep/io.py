@@ -13,67 +13,53 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
+
 from .geometry import BBox, Grid, bbox_wcs
 
 FITS_SUFFIXES = {".fits", ".fit", ".fts"}
+
+
+def inspect_fits_image_with_wcs(path: Path, *, hdu: int | None = None):
+    """Return image geometry and WCS without reading pixels."""
+    info = inspect_fits_image(path, hdu=hdu)
+    return info.shape, WCS(info.header), info.header, info.hdu
 
 
 def load_fits_image_with_wcs(
     path: Path,
     *,
     hdu: int | None = None,
-) -> tuple[np.ndarray, WCS, fits.Header, int]:
-    """Load a 2D FITS image and its WCS."""
-
-    resolved = path.expanduser().resolve()
-    if resolved.suffix.lower() not in FITS_SUFFIXES:
-        raise ValueError(f"Unsupported FITS image path: {resolved}")
-
-    with fits.open(resolved, memmap=True) as hdul:
-        if hdu is not None:
-            return _load_2d_image_hdu(hdul, resolved, hdu)
-
-        for index, item in enumerate(hdul):
-            data = item.data
-            if data is None or data.ndim != 2:
-                continue
-            return (
-                np.asarray(data),
-                WCS(item.header),
-                item.header.copy(),
-                index,
-            )
-
-    raise ValueError(f"Could not find a 2D FITS image HDU in {resolved}")
+    fits_reader: str = "astropy",
+    device: bool = False,
+    read_metadata: list[dict[str, Any]] | None = None,
+) -> tuple[Any, WCS, fits.Header, int]:
+    """Load a FITS plane on the host or device, with its unchanged WCS."""
+    info = inspect_fits_image(path, hdu=hdu)
+    result = read_fits_images(
+        path, [info.hdu], reader=fits_reader, device=device
+    )
+    if read_metadata is not None:
+        read_metadata.append(result.metadata())
+    return result.arrays[0], WCS(info.header), info.header, info.hdu
 
 
 def load_fits_mask(
     path: Path,
     *,
     hdu: int | None = None,
-) -> tuple[np.ndarray, fits.Header, int]:
-    """Load a 2D FITS mask image."""
-
-    resolved = path.expanduser().resolve()
-    if resolved.suffix.lower() not in FITS_SUFFIXES:
-        raise ValueError(f"Unsupported FITS mask path: {resolved}")
-
-    with fits.open(resolved, memmap=True) as hdul:
-        if hdu is not None:
-            data, header, used = _load_2d_mask_hdu(hdul, resolved, hdu)
-            return data, header, used
-
-        for index, item in enumerate(hdul):
-            data = item.data
-            if data is None or data.ndim != 2:
-                continue
-            return (
-                np.asarray(data),
-                item.header.copy(),
-                index,
-            )
-
-    raise ValueError(f"Could not find a 2D FITS mask HDU in {resolved}")
+    fits_reader: str = "astropy",
+    device: bool = False,
+    read_metadata: list[dict[str, Any]] | None = None,
+) -> tuple[Any, fits.Header, int]:
+    """Load a FITS mask without narrowing its integer bit representation."""
+    info = inspect_fits_image(path, hdu=hdu)
+    result = read_fits_images(
+        path, [info.hdu], reader=fits_reader, device=device
+    )
+    if read_metadata is not None:
+        read_metadata.append(result.metadata())
+    return result.arrays[0], info.header, info.hdu
 
 
 def write_reprojected_fits(
@@ -87,7 +73,7 @@ def write_reprojected_fits(
 ) -> Path:
     """Write one reprojected image (and optional mask) to FITS."""
 
-    header = bbox_wcs(grid, bbox).to_header()
+    header = bbox_wcs(grid, bbox).to_header(relax=True)
     if metadata:
         for key, value in metadata.items():
             fits_key = str(key).upper()[:8]
@@ -131,7 +117,7 @@ def write_stack_fits(
 ) -> Path:
     """Write a stack of reprojected images to FITS."""
 
-    header = bbox_wcs(grid, bbox).to_header()
+    header = bbox_wcs(grid, bbox).to_header(relax=True)
     if metadata:
         for key, value in metadata.items():
             fits_key = str(key).upper()[:8]
@@ -148,35 +134,3 @@ def write_stack_fits(
         header=header,
     ).writeto(output, overwrite=True)
     return output
-
-
-def _load_2d_image_hdu(
-    hdul: fits.HDUList,
-    resolved: Path,
-    hdu: int,
-) -> tuple[np.ndarray, WCS, fits.Header, int]:
-    if hdu >= len(hdul):
-        raise ValueError(f"HDU {hdu} is out of range for {resolved}")
-    data = hdul[hdu].data
-    if data is None or data.ndim != 2:
-        raise ValueError(f"HDU {hdu} in {resolved} is not a 2D image")
-    header = hdul[hdu].header.copy()
-    return (
-        np.asarray(data),
-        WCS(header),
-        header,
-        hdu,
-    )
-
-
-def _load_2d_mask_hdu(
-    hdul: fits.HDUList,
-    resolved: Path,
-    hdu: int,
-) -> tuple[np.ndarray, fits.Header, int]:
-    if hdu >= len(hdul):
-        raise ValueError(f"HDU {hdu} is out of range for {resolved}")
-    data = hdul[hdu].data
-    if data is None or data.ndim != 2:
-        raise ValueError(f"HDU {hdu} in {resolved} is not a 2D mask")
-    return np.asarray(data), hdul[hdu].header.copy(), hdu

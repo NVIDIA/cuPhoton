@@ -17,7 +17,13 @@ from ._types import (
     ResolvedBackend,
     StampEvaluation,
 )
-from .api import DipoleFitResult, fit_dipoles
+from .api import (
+    DeviceDipoleFitResult,
+    DipoleFitResult,
+    DipoleFitUncertaintyReason,
+    fit_dipoles,
+    fit_dipoles_device,
+)
 from .models import GaussianDipoleModel, StampDipoleModel
 from .solver import (
     BatchedLeastSquaresProblem,
@@ -25,6 +31,7 @@ from .solver import (
     LMConfig,
     LMResult,
     LMStatus,
+    NormalEquationsFunction,
     ResidualFunction,
     batched_levenberg_marquardt,
 )
@@ -36,7 +43,9 @@ __all__ = [
     "BackendRequest",
     "BatchedLeastSquaresProblem",
     "ComputeDType",
+    "DeviceDipoleFitResult",
     "DipoleFitResult",
+    "DipoleFitUncertaintyReason",
     "FitMode",
     "FloatDType",
     "GaussianDipoleModel",
@@ -45,10 +54,12 @@ __all__ = [
     "LMResult",
     "LMStatus",
     "ModelName",
+    "NormalEquationsFunction",
     "ResidualFunction",
     "ResolvedBackend",
     "StampEvaluation",
     "StampDipoleModel",
     "batched_levenberg_marquardt",
     "fit_dipoles",
+    "fit_dipoles_device",
 ]

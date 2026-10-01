@@ -9,11 +9,14 @@ from __future__ import annotations
 import base64
 import html
 import json
+from collections.abc import Mapping, Sequence
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
+
+from .review import ResidualHotspot, _component_coordinates
 
 _REVIEW_TEMPLATE = """
 {% block preamble %}
@@ -203,6 +206,17 @@ def _review_logo_html(size_px: int = 76) -> str:
     )
 
 
+class MaskComponent(TypedDict):
+    """Numeric summary of one connected masked region."""
+
+    bbox_y0y1x0x1: list[int]
+    pixel_count: int
+    planes: list[str]
+    values: list[int]
+    centroid_yx: list[float]
+    max_signal: float | None
+
+
 def identify_mask_components(
     mask_values: np.ndarray | None,
     *,
@@ -210,7 +224,7 @@ def identify_mask_components(
     plane_map: dict[str, int] | None,
     masked_plane_names: list[str] | None,
     max_regions: int = 32,
-) -> list[dict[str, object]]:
+) -> list[MaskComponent]:
     """Summarize connected masked regions for interactive hover overlays."""
 
     from scipy import ndimage
@@ -231,11 +245,8 @@ def identify_mask_components(
         return []
 
     labels, count = ndimage.label(mask)
-    components: list[dict[str, object]] = []
-    for label in range(1, count + 1):
-        ys, xs = np.where(labels == label)
-        if ys.size == 0:
-            continue
+    components: list[MaskComponent] = []
+    for ys, xs in _component_coordinates(labels, count):
         values = np.unique(np.asarray(mask_values)[ys, xs])
         planes: set[str] = set()
         for value in values.tolist():
@@ -280,7 +291,7 @@ def write_interactive_review_artifact(
     target_mask_values: np.ndarray | None,
     reference_plane_map: dict[str, int] | None,
     target_plane_map: dict[str, int] | None,
-    hotspots: list[dict[str, object]],
+    hotspots: list[ResidualHotspot],
     raw_gray_lo: float,
     raw_gray_hi: float,
     matched_lo: float,
@@ -378,7 +389,7 @@ def write_interactive_review_artifact(
         return fig
 
     def overlay_source(
-        items: list[dict[str, object]], *, mode: str
+        items: Sequence[Mapping[str, object]], *, mode: str
     ) -> ColumnDataSource:
         return ColumnDataSource(
             {
@@ -535,6 +546,7 @@ def write_interactive_review_artifact(
             fit_mask_metadata.get("stamps_y0y1x0x1", []),
             fit_mask_metadata.get("scores", []),
             fit_mask_metadata.get("compact_fractions", []),
+            strict=False,
         ):
             stamp_items.append(
                 {
@@ -600,7 +612,7 @@ def write_interactive_review_artifact(
             "<div style='min-width:0;'>"
             "<h1 style='color:#07145c;font-size:34px;font-weight:760;"
             "line-height:1.08;margin:0 0 12px;'>"
-            "XPOIS Subtraction Review</h1>"
+            "xPois Subtraction Review</h1>"
             "</div>"
             "</div>"
             "<p style='color:#7080b5;font-size:15px;line-height:1.5;"
@@ -685,6 +697,7 @@ def write_interactive_review_artifact(
                     (input_mask_metadata or {})
                     .get("reference_mask", {})
                     .get("masked_plane_names", [])
+                    or []
                 ),
             ),
             (
@@ -832,7 +845,7 @@ def write_interactive_review_artifact(
         file_html(
             layout,
             INLINE,
-            f"XPOIS interactive review: {run_name}",
+            f"xPois interactive review: {run_name}",
             template=_REVIEW_TEMPLATE,
             template_variables={
                 "favicon_href": _asset_data_uri("favicon.ico", "image/x-icon")

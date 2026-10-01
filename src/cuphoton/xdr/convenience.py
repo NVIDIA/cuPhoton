@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 from .prefetch import batch_to_device_stream
 

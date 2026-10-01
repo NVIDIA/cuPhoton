@@ -2,14 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure-numpy binary metrics for XScan runs."""
+"""Pure-numpy binary metrics for xScan runs."""
 
 from __future__ import annotations
 
 import csv
 import math
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -433,6 +434,10 @@ def evaluate_predictions(
     # Report JSON null (None) with a reason and skip the curves, rather than a
     # fabricated 1.0/0.0; callers must exclude undefined runs from ranking.
     both_classes = 0 < positive_count < sample_count
+    roc_auc: float | None
+    pr_auc: float | None
+    tpr_1pct: float | None
+    tpr_5pct: float | None
     if both_classes:
         fpr, tpr, _ = roc_curve(y_true, probs)
         precision, recall, _ = precision_recall_curve(y_true, probs)
@@ -1175,7 +1180,7 @@ def build_markdown_report(metrics: dict[str, Any]) -> str:
         return f"{value:.6f}" if value is not None else "n/a"
 
     lines = [
-        "# XScan Evaluation Summary",
+        "# xScan Evaluation Summary",
         "",
         f"- Samples: {metrics['sample_count']}",
         f"- Positives: {metrics['positive_count']}",

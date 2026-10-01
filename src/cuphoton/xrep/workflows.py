@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import os
 import time
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +24,9 @@ from cuphoton.core.cli import ApplicationContext
 from cuphoton.core.runtime import runtime_metadata
 
 from .backends import SUPPORTED_BACKENDS, get_backend, resolve_backend
-from .geometry import Grid, ReprojectionSpec
+from .geometry import BBox, Grid, ReprojectionSpec
 from .io import (
+    inspect_fits_image_with_wcs,
     load_fits_image_with_wcs,
     load_fits_mask,
     write_reprojected_fits,
@@ -76,10 +78,10 @@ def inspect_image(
 ) -> dict[str, Any]:
     """Inspect a FITS image and summarize its default reprojection grid."""
 
-    image, wcs, header, used_hdu = load_fits_image_with_wcs(path, hdu=hdu)
+    shape, wcs, header, used_hdu = inspect_fits_image_with_wcs(path, hdu=hdu)
     native_scale = _pixel_scale_arcsec(wcs)
     center_crval = wcs.all_pix2world(
-        [[image.shape[1] / 2.0, image.shape[0] / 2.0]],
+        [[shape[1] / 2.0, shape[0] / 2.0]],
         0,
     )[0]
     grid = _resolve_grid(
@@ -87,13 +89,13 @@ def inspect_image(
         grid_crval_dec=grid_crval_dec,
         pixel_scale_arcsec=pixel_scale_arcsec,
         fallback_wcs=wcs,
-        image_shape=image.shape,
+        image_shape=shape,
     )
-    bbox = estimate_source_bbox_on_grid(wcs, shape=image.shape, grid=grid)
+    bbox = estimate_source_bbox_on_grid(wcs, shape=shape, grid=grid)
     return {
         "path": str(path.expanduser().resolve()),
         "hdu": used_hdu,
-        "shape": list(image.shape),
+        "shape": list(shape),
         "native_pixel_scale_arcsec": native_scale,
         "native_center_crval": [
             float(center_crval[0]),
@@ -121,6 +123,7 @@ def inspect_image(
 def run_reproject_image(
     *,
     input_path: Path,
+    fits_reader: str = "auto",
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -146,6 +149,7 @@ def run_reproject_image(
     grid = None
     result, grid, timings = _execute_single_reprojection(
         input_path=input_path,
+        fits_reader=fits_reader,
         hdu=hdu,
         grid_crval_ra=grid_crval_ra,
         grid_crval_dec=grid_crval_dec,
@@ -181,6 +185,8 @@ def run_reproject_image(
     runtime = _reprojection_runtime(result)
     summary = {
         "workflow": "reproject-image",
+        "fits_reader": fits_reader,
+        "fits_reads": result.metadata["fits_reads"],
         "package_version": __version__,
         "created_at_utc": _timestamp(),
         "input": str(input_path.expanduser().resolve()),
@@ -210,6 +216,7 @@ def run_reproject_image(
 def benchmark_reproject_image(
     *,
     input_path: Path,
+    fits_reader: str = "auto",
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -245,6 +252,7 @@ def benchmark_reproject_image(
     for _ in range(warmup):
         _execute_single_reprojection(
             input_path=input_path,
+            fits_reader=fits_reader,
             hdu=hdu,
             grid_crval_ra=grid_crval_ra,
             grid_crval_dec=grid_crval_dec,
@@ -259,6 +267,7 @@ def benchmark_reproject_image(
     for _ in range(repeats):
         result, grid, timings = _execute_single_reprojection(
             input_path=input_path,
+            fits_reader=fits_reader,
             hdu=hdu,
             grid_crval_ra=grid_crval_ra,
             grid_crval_dec=grid_crval_dec,
@@ -311,6 +320,8 @@ def benchmark_reproject_image(
     runtime = _reprojection_runtime(last_result)
     summary = {
         "workflow": "benchmark-reproject-image",
+        "fits_reader": fits_reader,
+        "fits_reads": last_result.metadata["fits_reads"],
         "package_version": __version__,
         "created_at_utc": _timestamp(),
         "input": str(input_path.expanduser().resolve()),
@@ -342,6 +353,7 @@ def benchmark_reproject_image(
 def compare_backends_reproject_image(
     *,
     input_path: Path,
+    fits_reader: str = "auto",
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -387,6 +399,7 @@ def compare_backends_reproject_image(
         for _ in range(warmup):
             _execute_single_reprojection(
                 input_path=input_path,
+                fits_reader=fits_reader,
                 hdu=hdu,
                 grid_crval_ra=grid_crval_ra,
                 grid_crval_dec=grid_crval_dec,
@@ -403,6 +416,7 @@ def compare_backends_reproject_image(
         for _ in range(repeats):
             result, grid, timings = _execute_single_reprojection(
                 input_path=input_path,
+                fits_reader=fits_reader,
                 hdu=hdu,
                 grid_crval_ra=grid_crval_ra,
                 grid_crval_dec=grid_crval_dec,
@@ -478,6 +492,11 @@ def compare_backends_reproject_image(
     bbox = reference.bbox
     summary = {
         "workflow": "compare-backends",
+        "fits_reader": fits_reader,
+        "fits_reads": {
+            key: result.metadata["fits_reads"]
+            for key, result in results.items()
+        },
         "package_version": __version__,
         "created_at_utc": _timestamp(),
         "input": str(input_path.expanduser().resolve()),
@@ -518,6 +537,7 @@ def compare_backends_reproject_image(
 def benchmark_backend_variants_reproject_image(
     *,
     input_path: Path,
+    fits_reader: str = "auto",
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -556,8 +576,17 @@ def benchmark_backend_variants_reproject_image(
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=False)
 
+    fits_reads: list[dict[str, Any]] = []
+    reader = (
+        "astropy"
+        if fits_reader == "auto"
+        and all(v.backend == "cpu" for v in variant_specs)
+        else fits_reader
+    )
     load_start = time.perf_counter()
-    image, wcs, _, _ = load_fits_image_with_wcs(input_path, hdu=hdu)
+    image, wcs, _, _ = load_fits_image_with_wcs(
+        input_path, hdu=hdu, fits_reader=reader, read_metadata=fits_reads
+    )
     grid = _resolve_grid(
         grid_crval_ra=grid_crval_ra,
         grid_crval_dec=grid_crval_dec,
@@ -567,7 +596,12 @@ def benchmark_backend_variants_reproject_image(
     )
     input_mask = None
     if mask_path is not None:
-        input_mask, _, _ = load_fits_mask(mask_path, hdu=mask_hdu)
+        input_mask, _, _ = load_fits_mask(
+            mask_path,
+            hdu=mask_hdu,
+            fits_reader=reader,
+            read_metadata=fits_reads,
+        )
     load_seconds = float(time.perf_counter() - load_start)
 
     mapping_start = time.perf_counter()
@@ -717,6 +751,8 @@ def benchmark_backend_variants_reproject_image(
 
     summary = {
         "workflow": "benchmark-backend-variants",
+        "fits_reader": fits_reader,
+        "fits_reads": fits_reads,
         "package_version": __version__,
         "created_at_utc": _timestamp(),
         "input": str(input_path.expanduser().resolve()),
@@ -785,6 +821,7 @@ def benchmark_backend_variants_reproject_image(
 def run_reproject_stack(
     *,
     input_paths: list[Path],
+    fits_reader: str = "auto",
     output_root: Path | None,
     name: str | None,
     hdu: int | None,
@@ -796,6 +833,8 @@ def run_reproject_stack(
     mapping_grid_step: int,
     area_scaling: bool,
     write_fits: bool,
+    target_wcs_path: Path | None = None,
+    target_hdu: int | None = None,
 ) -> WorkflowResult:
     """Reproject multiple FITS inputs onto one shared grid."""
 
@@ -803,21 +842,66 @@ def run_reproject_stack(
     backend = resolve_backend(backend)
     if not input_paths:
         raise ValueError("input_paths must not be empty")
-    first_image, first_wcs, _, _ = load_fits_image_with_wcs(
-        input_paths[0],
-        hdu=hdu,
+    if target_hdu is not None and target_wcs_path is None:
+        raise ValueError("target_hdu requires target_wcs_path")
+    fits_reads: list[dict[str, Any]] = []
+    reader = (
+        "astropy"
+        if fits_reader == "auto" and backend == "cpu"
+        else fits_reader
     )
-    grid = _resolve_grid(
-        grid_crval_ra=grid_crval_ra,
-        grid_crval_dec=grid_crval_dec,
-        pixel_scale_arcsec=pixel_scale_arcsec,
-        fallback_wcs=first_wcs,
-        image_shape=first_image.shape,
-    )
+    output_bbox = None
+    target = None
+    if target_wcs_path is not None:
+        if any(
+            value is not None
+            for value in (grid_crval_ra, grid_crval_dec, pixel_scale_arcsec)
+        ):
+            raise ValueError(
+                "--target-wcs conflicts with synthetic-grid options"
+            )
+        target_shape, target_wcs, _, used_hdu = inspect_fits_image_with_wcs(
+            target_wcs_path, hdu=target_hdu
+        )
+        grid = Grid.from_wcs(target_wcs)
+        assert grid.wcs is not None
+        if grid.wcs.sip is not None and mapping_grid_step > 1:
+            warnings.warn(
+                "target WCS carries SIP distortion but mapping_grid_step is "
+                f"{mapping_grid_step}; the coarse mapping grid interpolates "
+                "the distortion. Use --mapping-grid-step 1 for an exact "
+                "mapping.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        output_bbox = BBox(0, 0, target_shape[1], target_shape[0])
+        assert grid.wcs is not None
+        target = {
+            "path": str(target_wcs_path.expanduser().resolve()),
+            "hdu": used_hdu,
+            "shape": list(target_shape),
+            "wcs_header": grid.wcs.to_header(relax=True).tostring(),
+        }
+    else:
+        first_shape, first_wcs, _, _ = inspect_fits_image_with_wcs(
+            input_paths[0],
+            hdu=hdu,
+        )
+        grid = _resolve_grid(
+            grid_crval_ra=grid_crval_ra,
+            grid_crval_dec=grid_crval_dec,
+            pixel_scale_arcsec=pixel_scale_arcsec,
+            fallback_wcs=first_wcs,
+            image_shape=first_shape,
+        )
     images, spec = build_stack_spec_from_fits(
         input_paths,
+        fits_reader=reader,
+        device=backend == "cupy",
+        read_metadata=fits_reads,
         grid=grid,
         hdu=hdu,
+        output_bbox=output_bbox,
         interpolation=interpolation,
         mapping_grid_step=mapping_grid_step,
         area_scaling=area_scaling,
@@ -856,6 +940,8 @@ def run_reproject_stack(
     runtime = _reprojection_runtime(result.results[0])
     summary = {
         "workflow": "reproject-stack",
+        "fits_reader": fits_reader,
+        "fits_reads": fits_reads,
         "package_version": __version__,
         "created_at_utc": _timestamp(),
         "inputs": [str(path.expanduser().resolve()) for path in input_paths],
@@ -878,6 +964,8 @@ def run_reproject_stack(
         "stack_shape": list(result.images.shape),
         "saved": _rewrite_saved_paths(saved, run_dir),
     }
+    if target is not None:
+        summary["target_wcs"] = target
     _write_json(run_dir / "summary.json", summary)
     return WorkflowResult(run_dir=run_dir, summary=summary)
 
@@ -932,6 +1020,7 @@ def _resolve_grid(
 def _execute_single_reprojection(
     *,
     input_path: Path,
+    fits_reader: str = "auto",
     hdu: int | None,
     grid_crval_ra: float | None,
     grid_crval_dec: float | None,
@@ -946,8 +1035,20 @@ def _execute_single_reprojection(
     total_start = time.perf_counter()
     backend = resolve_backend(backend)
 
+    reader = (
+        "astropy"
+        if fits_reader == "auto" and backend == "cpu"
+        else fits_reader
+    )
+    fits_reads: list[dict[str, Any]] = []
     load_start = time.perf_counter()
-    image, wcs, _, _ = load_fits_image_with_wcs(input_path, hdu=hdu)
+    image, wcs, _, _ = load_fits_image_with_wcs(
+        input_path,
+        hdu=hdu,
+        fits_reader=reader,
+        device=backend == "cupy",
+        read_metadata=fits_reads,
+    )
     grid = _resolve_grid(
         grid_crval_ra=grid_crval_ra,
         grid_crval_dec=grid_crval_dec,
@@ -957,7 +1058,13 @@ def _execute_single_reprojection(
     )
     mask = None
     if mask_path is not None:
-        mask, _, _ = load_fits_mask(mask_path, hdu=mask_hdu)
+        mask, _, _ = load_fits_mask(
+            mask_path,
+            hdu=mask_hdu,
+            fits_reader=reader,
+            device=backend == "cupy",
+            read_metadata=fits_reads,
+        )
     load_seconds = float(time.perf_counter() - load_start)
 
     mapping_start = time.perf_counter()
@@ -999,6 +1106,8 @@ def _execute_single_reprojection(
     total_seconds = float(time.perf_counter() - total_start)
     result.metadata.update(
         {
+            "fits_reader": fits_reader,
+            "fits_reads": fits_reads,
             "path": str(Path(input_path).expanduser().resolve()),
             "grid_crval": list(grid.crval),
             "grid_pixel_scale_arcsec": grid.pixel_scale_arcsec,
@@ -1246,11 +1355,11 @@ def _temporary_environ(updates: dict[str, str]):
             os.environ[key] = value
         yield
     finally:
-        for key, value in previous.items():
-            if value is None:
+        for key, previous_value in previous.items():
+            if previous_value is None:
                 os.environ.pop(key, None)
             else:
-                os.environ[key] = value
+                os.environ[key] = previous_value
 
 
 def _compare_reprojection_results(
@@ -1399,7 +1508,7 @@ def _resolve_run_dir(
         else ApplicationContext.for_component("xrep").runs_dir
     )
     root.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_name = name or f"{prefix}-{timestamp}"
     run_dir = root / run_name
     if run_dir.exists():
@@ -1451,4 +1560,4 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

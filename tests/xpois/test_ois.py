@@ -4,17 +4,29 @@
 
 from __future__ import annotations
 
+import gc
+import pickle
+from dataclasses import FrozenInstanceError, replace
+from typing import Any
+
 import numpy as np
 import pytest
 from scipy.signal import fftconvolve
 
 from cuphoton.xpois.ois import (
+    DeviceConstantKernelFitResult,
     GaussianBasisComponent,
+    _accumulate_normal_equations,
+    _accumulate_normal_equations_cutile,
+    _cached_cutile_padded_basis,
+    _default_fit_mask,
+    background_design,
     build_compact_source_stamp_mask,
     build_gaussian_polynomial_basis,
     make_stamp_mask,
     resolve_backend,
     solve_constant_kernel,
+    solve_constant_kernel_device,
     solve_separable_kernel,
     triangular_degree_pairs,
 )
@@ -133,6 +145,20 @@ def _constant_kernel_parity_fixture() -> tuple[
     target = fftconvolve(reference, true_kernel, mode="same") + background
     variance = np.full_like(target, 0.5)
     return reference, target, variance, components
+
+
+def _require_cupy_device(*, minimum_count: int = 1):
+    cp = pytest.importorskip("cupy")
+    try:
+        count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    if count < minimum_count:
+        pytest.skip(
+            f"test requires {minimum_count} visible CUDA device(s); "
+            f"got {count}"
+        )
+    return cp
 
 
 def _assert_constant_kernel_matches_cpu(cpu, result, *, backend: str) -> None:
@@ -302,15 +328,276 @@ def test_solve_constant_kernel_recovers_synthetic_match() -> None:
 
 
 def test_solve_constant_kernel_cupy_matches_cpu() -> None:
-    cp = pytest.importorskip("cupy")
-    try:
-        cp.cuda.runtime.getDeviceCount()
-    except Exception as exc:
-        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    _require_cupy_device()
 
     cpu = _solve_parity_fixture_backend("cpu")
     gpu = _solve_parity_fixture_backend("cupy")
     _assert_constant_kernel_matches_cpu(cpu, gpu, backend="cupy")
+
+
+@pytest.mark.parametrize("input_location", ["host", "device"])
+def test_solve_constant_kernel_device_matches_cpu_and_stays_on_device(
+    monkeypatch: pytest.MonkeyPatch,
+    input_location: str,
+) -> None:
+    cp = _require_cupy_device()
+
+    reference, target, variance, components = (
+        _constant_kernel_parity_fixture()
+    )
+    cpu = _solve_parity_fixture_backend("cpu")
+    asarray = cp.asarray if input_location == "device" else np.asarray
+    active_device = cp.cuda.Device()
+    reference_device = asarray(reference)
+    target_device = asarray(target)
+    variance_device = asarray(variance)
+    fit_mask = asarray(np.ones_like(target, dtype=bool))
+    reference_before = reference_device.copy()
+    target_before = target_device.copy()
+    variance_before = variance_device.copy()
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            cp,
+            "asnumpy",
+            lambda *_args, **_kwargs: pytest.fail(
+                "device solve materialized an array on the host"
+            ),
+        )
+        result = solve_constant_kernel_device(
+            reference_device,
+            target_device,
+            components,
+            kernel_shape=(9, 9),
+            variance=variance_device,
+            fit_mask=fit_mask,
+            background_degree=1,
+            flux_conserve=np.bool_(False),
+        )
+
+    assert isinstance(result, DeviceConstantKernelFitResult)
+    assert result.schema == "cuphoton.xpois.device-fit-result/v1"
+    assert result.solver == "constant"
+    assert result.backend == "cupy"
+    assert result.result_location == "device"
+    assert result.flux_conserve is False
+    assert result.device_id == int(active_device.id)
+    for value in (
+        result.kernel,
+        result.matched,
+        result.residual,
+        result.fit_mask,
+        result.background,
+        result.kernel_coefficients,
+        result.background_coefficients,
+        result.basis_kernels,
+    ):
+        assert isinstance(value, cp.ndarray)
+        assert value.device == active_device
+    assert result.kernel.dtype == cp.float64
+    assert result.matched.dtype == cp.float64
+    assert result.residual.dtype == cp.float64
+    assert result.fit_mask.dtype == cp.bool_
+    assert result.background.dtype == cp.float64
+    assert result.kernel_coefficients.dtype == cp.float64
+    assert result.background_coefficients.dtype == cp.float64
+    assert result.basis_kernels.dtype == cp.float64
+    assert result.matched.shape == reference_device.shape
+    assert result.residual.shape == reference_device.shape
+    assert result.fit_mask.shape == reference_device.shape
+    assert result.background.shape == reference_device.shape
+    assert result.basis_kernels.shape[1:] == result.kernel.shape
+    assert result.kernel_coefficients.size == result.basis_kernels.shape[0]
+    assert len(result.basis_terms) == result.basis_kernels.shape[0]
+    assert np.array_equal(
+        cp.asnumpy(reference_device), cp.asnumpy(reference_before)
+    )
+    assert np.array_equal(
+        cp.asnumpy(target_device), cp.asnumpy(target_before)
+    )
+    assert np.array_equal(
+        cp.asnumpy(variance_device), cp.asnumpy(variance_before)
+    )
+
+    finite = np.isfinite(cpu.matched)
+    assert result.fit_pixel_count == cpu.fit_pixel_count
+    assert result.dof == cpu.dof
+    assert np.array_equal(cp.asnumpy(result.fit_mask), cpu.fit_mask)
+    assert np.allclose(
+        cp.asnumpy(result.kernel),
+        cpu.kernel,
+        rtol=1e-9,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        cp.asnumpy(result.background),
+        cpu.background,
+        rtol=1e-9,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        cp.asnumpy(result.matched)[finite],
+        cpu.matched[finite],
+        rtol=1e-9,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        cp.asnumpy(result.residual)[finite],
+        cpu.residual[finite],
+        rtol=1e-9,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        cp.asnumpy(result.kernel_coefficients),
+        cpu.kernel_coefficients,
+        rtol=1e-9,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        cp.asnumpy(result.background_coefficients),
+        cpu.background_coefficients,
+        rtol=1e-9,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        cp.asnumpy(result.basis_kernels),
+        cpu.basis_kernels,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert np.isclose(result.chi2, cpu.chi2, rtol=1e-9, atol=1e-8)
+
+    with pytest.raises(FrozenInstanceError):
+        result.device_id = result.device_id + 1  # type: ignore[misc]
+    with pytest.raises(ValueError, match="CUDA device"):
+        replace(result, device_id=result.device_id + 1)
+    with pytest.raises(TypeError, match="float64"):
+        replace(result, kernel=result.kernel.astype(cp.float32))
+    with pytest.raises(ValueError, match="matched image shape"):
+        replace(result, background=result.background[:-1])
+    with pytest.raises(ValueError):
+        replace(result, solver="spatial-als")  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="cannot be pickled"):
+        pickle.dumps(result)
+
+    residual_sum = float(cp.nansum(result.residual).item())
+    del reference_device, target_device, variance_device
+    gc.collect()
+    assert float(cp.nansum(result.residual).item()) == residual_sum
+
+
+@pytest.mark.parametrize(
+    "argument_name",
+    ["reference", "target", "variance", "fit_mask"],
+)
+def test_solve_constant_kernel_device_rejects_wrong_device_inputs(
+    argument_name: str,
+) -> None:
+    cp = _require_cupy_device(minimum_count=2)
+    active_device_id = int(cp.cuda.runtime.getDevice())
+    other_device_id = next(
+        device_id
+        for device_id in range(int(cp.cuda.runtime.getDeviceCount()))
+        if device_id != active_device_id
+    )
+    try:
+        with cp.cuda.Device(other_device_id):
+            wrong_device_values = {
+                "reference": cp.ones((16, 16), dtype=cp.float64),
+                "target": cp.ones((16, 16), dtype=cp.float64),
+                "variance": cp.ones((16, 16), dtype=cp.float64),
+                "fit_mask": cp.ones((16, 16), dtype=cp.bool_),
+            }
+    except Exception as exc:
+        pytest.skip(f"second CUDA device is not usable: {exc}")
+
+    arguments = {
+        "reference": cp.ones((16, 16), dtype=cp.float64),
+        "target": cp.ones((16, 16), dtype=cp.float64),
+        "variance": cp.ones((16, 16), dtype=cp.float64),
+        "fit_mask": cp.ones((16, 16), dtype=cp.bool_),
+    }
+    arguments[argument_name] = wrong_device_values[argument_name]
+
+    with pytest.raises(ValueError, match=argument_name):
+        solve_constant_kernel_device(
+            arguments["reference"],
+            arguments["target"],
+            [GaussianBasisComponent(sigma=1.5, degree=0)],
+            kernel_shape=(9, 9),
+            variance=arguments["variance"],
+            fit_mask=arguments["fit_mask"],
+        )
+
+
+def test_solve_constant_kernel_device_reports_no_visible_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeRuntime:
+        @staticmethod
+        def getDeviceCount() -> int:
+            return 0
+
+    class FakeCuda:
+        runtime = FakeRuntime()
+
+    class FakeCupy:
+        cuda = FakeCuda()
+
+    monkeypatch.setattr(
+        "cuphoton.xpois.ois._load_cupy",
+        lambda: (FakeCupy(), None),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires at least one visible CUDA device",
+    ):
+        solve_constant_kernel_device(
+            np.ones((16, 16)),
+            np.ones((16, 16)),
+            [GaussianBasisComponent(sigma=1.5, degree=0)],
+            kernel_shape=(9, 9),
+        )
+
+
+def test_solve_constant_kernel_device_masks_non_finite_pixels_exactly() -> (
+    None
+):
+    cp = _require_cupy_device()
+
+    reference = _reference_image((64, 64))
+    components = [GaussianBasisComponent(sigma=1.8, degree=0)]
+    basis, _ = build_gaussian_polynomial_basis((9, 9), components)
+    target = fftconvolve(reference, basis[0], mode="same")
+    variance = np.full_like(target, 1.0)
+    fit_mask = np.ones_like(target, dtype=np.uint8)
+    reference[24, 24] = np.nan
+    target[30, 30] = np.nan
+    variance[34, 34] = np.inf
+
+    cpu = solve_constant_kernel(
+        reference,
+        target,
+        components,
+        kernel_shape=(9, 9),
+        variance=variance,
+        fit_mask=fit_mask,
+        background_degree=0,
+        backend="cpu",
+    )
+    device = solve_constant_kernel_device(
+        cp.asarray(reference),
+        cp.asarray(target),
+        components,
+        kernel_shape=(9, 9),
+        variance=cp.asarray(variance),
+        fit_mask=cp.asarray(fit_mask),
+        background_degree=0,
+    )
+
+    assert np.array_equal(cp.asnumpy(device.fit_mask), cpu.fit_mask)
+    assert device.fit_pixel_count == cpu.fit_pixel_count
 
 
 def test_solve_constant_kernel_numba_cuda_matches_cpu() -> None:
@@ -324,19 +611,267 @@ def test_solve_constant_kernel_numba_cuda_matches_cpu() -> None:
 
 
 def test_solve_constant_kernel_cutile_matches_cpu() -> None:
-    cp = pytest.importorskip("cupy")
+    _require_cupy_device()
     try:
         import cuda.tile  # noqa: F401
     except Exception as exc:
         pytest.skip(f"cuda.tile is not usable: {exc}")
-    try:
-        cp.cuda.runtime.getDeviceCount()
-    except Exception as exc:
-        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
 
     cpu = _solve_parity_fixture_backend("cpu")
     gpu = _solve_parity_fixture_backend("cutile")
     _assert_constant_kernel_matches_cpu(cpu, gpu, backend="cutile")
+
+
+_SPARSE_ROWS_COMPONENTS = (
+    GaussianBasisComponent(sigma=1.5, degree=2),
+    GaussianBasisComponent(sigma=3.0, degree=1),
+    GaussianBasisComponent(sigma=6.0, degree=0),
+)
+
+
+def _require_cutile() -> Any:
+    cp = pytest.importorskip("cupy")
+    try:
+        import cuda.tile as ct
+    except Exception as exc:
+        pytest.skip(f"cuda.tile is not usable: {exc}")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA devices visible")
+    except Exception as exc:
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    return ct
+
+
+def _sparse_rows_fixture(
+    *,
+    component_count: int,
+    background_degree: int,
+    constant_basis: bool = False,
+) -> tuple[np.ndarray, ...]:
+    rng = np.random.default_rng(1219)
+    shape = (97, 91)
+    kernel_shape = (15, 15)
+    reference = rng.normal(size=shape)
+    target = rng.normal(size=shape)
+    variance = rng.uniform(0.25, 2.0, size=shape)
+    mask = _default_fit_mask(shape, kernel_shape)
+    mask &= rng.random(size=shape) < 0.61
+    basis, _ = build_gaussian_polynomial_basis(
+        kernel_shape,
+        (GaussianBasisComponent(sigma=1.5, degree=0),)
+        if constant_basis
+        else _SPARSE_ROWS_COMPONENTS[:component_count],
+    )
+    background = background_design(shape, degree=background_degree)
+    return reference, target, variance, mask, basis, background
+
+
+@pytest.mark.parametrize(
+    "large_tiles",
+    [False, True],
+    ids=["rows32", "rows128"],
+)
+@pytest.mark.parametrize(
+    ("component_count", "background_degree", "column_count"),
+    [
+        pytest.param(1, 0, 2, id="width4"),
+        pytest.param(3, 0, 11, id="width16"),
+        pytest.param(2, 2, 15, id="width16-full"),
+        pytest.param(3, 2, 16, id="width32"),
+    ],
+)
+def test_cutile_mma_normal_equations_match_cpu_for_sparse_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    component_count: int,
+    background_degree: int,
+    column_count: int,
+    large_tiles: bool,
+) -> None:
+    _require_cutile()
+    if large_tiles:
+        # Force the 128-row specialization; the fixture row count is not a
+        # multiple of either tile size, so the last tile is always partial.
+        monkeypatch.setattr(
+            "cuphoton.xpois.ois._CUTILE_MMA_LARGE_ROW_THRESHOLD",
+            0,
+        )
+    reference, target, variance, mask, basis, background = (
+        _sparse_rows_fixture(
+            component_count=component_count,
+            background_degree=background_degree,
+            constant_basis=column_count == 2,
+        )
+    )
+    assert basis.shape[0] + background.shape[0] == column_count
+
+    expected_gram, expected_rhs, expected_rows = _accumulate_normal_equations(
+        reference,
+        target,
+        variance,
+        mask,
+        basis,
+        background,
+    )
+    gram, rhs, rows = _accumulate_normal_equations_cutile(
+        reference,
+        target,
+        variance,
+        mask,
+        basis,
+        background,
+    )
+
+    assert rows == expected_rows
+    assert np.allclose(gram, expected_gram, rtol=2e-12, atol=1e-8)
+    assert np.allclose(rhs, expected_rhs, rtol=2e-12, atol=1e-9)
+
+
+def test_cutile_reuses_basis_upload_across_calls_and_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_cutile()
+    cp = pytest.importorskip("cupy")
+    reference, target, variance, mask, basis, background = (
+        _sparse_rows_fixture(component_count=3, background_degree=0)
+    )
+    uploads = []
+    real_asarray = cp.asarray
+
+    def recording_asarray(value, *args, **kwargs):
+        if isinstance(value, np.ndarray) and value.shape == (240, 16):
+            uploads.append(value.copy())
+        return real_asarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "asarray", recording_asarray)
+    _cached_cutile_padded_basis.cache_clear()
+    try:
+        first = _accumulate_normal_equations_cutile(
+            reference, target, variance, mask, basis, background
+        )
+        # Public solves build equivalent fresh arrays. A different stream
+        # must see the completed upload without uploading it again.
+        with cp.cuda.Stream(non_blocking=True):
+            second = _accumulate_normal_equations_cutile(
+                reference, target, variance, mask, basis.copy(), background
+            )
+        assert len(uploads) == 1
+        for actual, previous in zip(second, first, strict=True):
+            np.testing.assert_array_equal(actual, previous)
+
+        # NumPy basis arrays remain mutable: changing values must miss.
+        basis[0] *= 1.25
+        changed = _accumulate_normal_equations_cutile(
+            reference, target, variance, mask, basis, background
+        )
+        assert len(uploads) == 2
+        expected = _accumulate_normal_equations(
+            reference, target, variance, mask, basis, background
+        )
+        assert changed[2] == expected[2]
+        assert np.allclose(changed[0], expected[0], rtol=2e-12, atol=1e-8)
+        assert np.allclose(changed[1], expected[1], rtol=2e-12, atol=1e-9)
+        assert not np.allclose(changed[0], first[0])
+    finally:
+        _cached_cutile_padded_basis.cache_clear()
+
+
+def test_cutile_basis_upload_separates_shapes_and_widths() -> None:
+    _require_cutile()
+    cp = pytest.importorskip("cupy")
+    device = int(cp.cuda.runtime.getDevice())
+    basis = np.arange(9, dtype=np.float64).reshape(1, 3, 3)
+    _cached_cutile_padded_basis.cache_clear()
+    try:
+        narrow = _cached_cutile_padded_basis(
+            device, basis.shape, 4, basis.tobytes()
+        )
+        wide = _cached_cutile_padded_basis(
+            device, basis.shape, 8, basis.tobytes()
+        )
+        reshaped = _cached_cutile_padded_basis(
+            device, (3, 1, 3), 4, basis.tobytes()
+        )
+        assert narrow.shape == reshaped.shape == (16, 4)
+        assert wide.shape == (16, 8)
+        assert wide is not narrow and reshaped is not narrow
+        np.testing.assert_array_equal(cp.asnumpy(wide[:, :4]), narrow.get())
+        assert not np.array_equal(narrow.get(), reshaped.get())
+        assert not cp.asnumpy(wide[:, 4:]).any()
+    finally:
+        _cached_cutile_padded_basis.cache_clear()
+
+
+def test_cutile_basis_upload_stays_on_its_device() -> None:
+    _require_cutile()
+    cp = pytest.importorskip("cupy")
+    if cp.cuda.runtime.getDeviceCount() < 2:
+        pytest.skip("two CUDA devices are required")
+    basis = np.ones((1, 3, 3), dtype=np.float64)
+    _cached_cutile_padded_basis.cache_clear()
+    try:
+        first = _cached_cutile_padded_basis(
+            0, basis.shape, 4, basis.tobytes()
+        )
+        second = _cached_cutile_padded_basis(
+            1, basis.shape, 4, basis.tobytes()
+        )
+        assert first.device.id == 0
+        assert second.device.id == 1
+        assert first is not second
+        np.testing.assert_array_equal(first.get(), second.get())
+        assert (
+            _cached_cutile_padded_basis(0, basis.shape, 4, basis.tobytes())
+            is first
+        )
+    finally:
+        _cached_cutile_padded_basis.cache_clear()
+
+
+def test_cutile_mma_kernel_signature_ignores_row_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ct = _require_cutile()
+    reference, target, variance, mask, basis, background = (
+        _sparse_rows_fixture(component_count=3, background_degree=0)
+    )
+    launches: list[tuple[Any, tuple[Any, ...]]] = []
+    real_launch = ct.launch
+
+    def recording_launch(stream, grid, kernel, kernel_args):
+        launches.append((kernel, kernel_args))
+        return real_launch(stream, grid, kernel, kernel_args)
+
+    monkeypatch.setattr(ct, "launch", recording_launch)
+    # Drop one fit pixel so only the row count changes. Neither count is a
+    # multiple of 16, so cuda.tile's array-length divisibility
+    # specialization does not apply to the index arrays.
+    ys, xs = np.nonzero(mask)
+    smaller_mask = mask.copy()
+    smaller_mask[ys[0], xs[0]] = False
+    assert int(mask.sum()) % 16 != 0
+    assert int(smaller_mask.sum()) % 16 != 0
+    for fit_mask in (mask, smaller_mask):
+        _accumulate_normal_equations_cutile(
+            reference,
+            target,
+            variance,
+            fit_mask,
+            basis,
+            background,
+        )
+
+    convention = ct.compilation.CallingConvention.cutile_python_v1()
+    signatures = [
+        ct.compilation.KernelSignature.from_kernel_args(
+            kernel,
+            kernel_args,
+            convention,
+        )
+        for kernel, kernel_args in launches
+    ]
+    assert len(signatures) == 2
+    assert signatures[0].parameters == signatures[1].parameters
 
 
 def test_solve_constant_kernel_rejects_unknown_backend() -> None:
@@ -519,3 +1054,20 @@ def test_solve_constant_kernel_rejects_malformed_numeric_fit_mask() -> None:
             background_degree=0,
             flux_conserve=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("component", "message"),
+    [
+        (GaussianBasisComponent(sigma=np.nan, degree=0), "sigma must be"),
+        (GaussianBasisComponent(sigma=1.2, degree=1.5), "degree must be"),
+    ],
+)
+def test_solve_separable_kernel_rejects_invalid_line_basis_components(
+    component: GaussianBasisComponent,
+    message: str,
+) -> None:
+    image = np.ones((9, 9))
+
+    with pytest.raises(ValueError, match=message):
+        solve_separable_kernel(image, image, [component], kernel_shape=(3, 3))

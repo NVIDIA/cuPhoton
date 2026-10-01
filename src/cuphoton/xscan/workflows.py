@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Workflow helpers for XScan."""
+"""Workflow helpers for xScan."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import yaml
 from cuphoton.core.cli import ApplicationContext
 
 from .butler import build_hsc_fits_registry
-from .config import dump_config, load_training_config
+from .config import TrainingConfig, dump_config, load_training_config
 from .dataset import (
     StampDataset,
     build_dataset_from_manifest,
@@ -65,12 +65,13 @@ from .training import (
     XFIT_COVERAGE_MISMATCH_THRESHOLD,
     check_training_label_provenance,
     load_model_from_checkpoint,
+    normalize_performance_config,
     predict_dataset,
     resolve_device,
     train_classifier,
     xfit_fit_coverage,
 )
-from .types import InputMode, MissingPolicy
+from .types import InputMode, MissingPolicy, TrainingMode
 
 if TYPE_CHECKING:
     from .xfit_features import XFitFeatureMatrix
@@ -78,7 +79,7 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class WorkflowResult:
-    """Persisted XScan workflow result.
+    """Persisted xScan workflow result.
 
     Attributes
     ----------
@@ -236,6 +237,7 @@ def load_hsc_xpois_sweep_variants(
     payload = (
         yaml.safe_load(sweep_config_path.read_text(encoding="utf-8")) or {}
     )
+    variant_rows: object
     if isinstance(payload, list):
         variant_rows = payload
     elif isinstance(payload, dict):
@@ -663,15 +665,25 @@ def validate_dataset_workflow(
 
 
 def export_xfit_input_workflow(
-    *, dataset_dir: Path, output_path: Path
+    *,
+    dataset_dir: Path,
+    output_path: Path,
+    variance_path: Path | None = None,
+    mask_path: Path | None = None,
+    image_unit: str | None = None,
+    verify_sources_after_copy: bool = True,
 ) -> dict[str, Any]:
-    """Export exact XScan difference stamps for the xFit CLI."""
+    """Export exact xScan difference stamps and optional xFit planes."""
 
     from .xfit_features import export_xfit_input
 
     return export_xfit_input(
         dataset_dir=dataset_dir,
         output_path=output_path,
+        variance_path=variance_path,
+        mask_path=mask_path,
+        image_unit=image_unit,
+        verify_sources_after_copy=verify_sources_after_copy,
     )
 
 
@@ -682,7 +694,7 @@ def build_xfit_feature_bundle_workflow(
     output_dir: Path,
     missing_policy: MissingPolicy = "error",
 ) -> WorkflowResult:
-    """Convert portable xFit artifacts into an ordered XScan sidecar."""
+    """Convert portable xFit artifacts into an ordered xScan sidecar."""
 
     from .xfit_features import build_xfit_feature_bundle
 
@@ -736,10 +748,12 @@ def build_raw_autoscan_workflow(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> WorkflowResult:
     result = build_autoscan_dataset_from_raw(
         manifest_path=manifest_path,
         output_dir=output_dir,
+        fits_reader=fits_reader,
     )
     return WorkflowResult(run_dir=result.output_dir, summary=result.summary)
 
@@ -748,10 +762,12 @@ def build_raw_nodiff_workflow(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> WorkflowResult:
     result = build_nodiff_dataset_from_raw(
         manifest_path=manifest_path,
         output_dir=output_dir,
+        fits_reader=fits_reader,
     )
     return WorkflowResult(run_dir=result.output_dir, summary=result.summary)
 
@@ -784,10 +800,12 @@ def build_lsstcomcam_smoke_workflow(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> WorkflowResult:
     result = build_lsstcomcam_smoke_dataset_from_manifest(
         manifest_path=manifest_path,
         output_dir=output_dir,
+        fits_reader=fits_reader,
     )
     return WorkflowResult(run_dir=result.output_dir, summary=result.summary)
 
@@ -931,9 +949,12 @@ def infer_workflow(
     dataset_dir: Path,
     split: str,
     batch_size: int = 32,
+    num_workers: int | None = None,
     xfit_feature_dir: Path | None = None,
     use_xfit_features: bool = False,
 ) -> WorkflowResult:
+    if num_workers is not None and num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
     device = resolve_device("auto")
     run_dir = run_dir.expanduser().resolve()
     dataset_dir = dataset_dir.expanduser().resolve()
@@ -943,6 +964,10 @@ def infer_workflow(
         run_dir,
         device=device,
     )
+    if num_workers is not None:
+        performance = normalize_performance_config(
+            replace(performance, num_workers=num_workers), device=device
+        )
     xfit_feature_matrix = _checkpoint_xfit_feature_matrix(
         checkpoint=checkpoint,
         dataset_dir=dataset_dir,
@@ -976,6 +1001,8 @@ def infer_workflow(
         "run_dir": str(run_dir),
         "dataset_dir": str(dataset_dir),
         "split": split,
+        "batch_size": batch_size,
+        "performance": asdict(performance),
         "xfit_features": {
             "enabled": use_xfit_features,
             "feature_dir": (
@@ -1579,7 +1606,9 @@ def reproduce_hsc_comparison_workflow(
         ]
     )
 
-    training_variants = [
+    training_variants: list[
+        tuple[str, str, InputMode, TrainingMode, Path | None, Path]
+    ] = [
         (
             "pair",
             "pair",
@@ -1665,6 +1694,7 @@ def reproduce_hsc_comparison_workflow(
                 ),
             )
             seeded.model = replace(base_config.model, input_mode=input_mode)
+            assert seeded.output_root is not None
             run_dir = resolve_run_dir(
                 Path(seeded.output_root),
                 seeded.run_name,
@@ -1952,7 +1982,7 @@ def reproduce_hsc_xpois_sweep_workflow(
         [dataset_refs[label] for label in aggregate["stable_variants"]]
     )
 
-    training_variants = [
+    training_variants: list[tuple[str, InputMode, Path]] = [
         (
             "pair",
             "pair",
@@ -1963,15 +1993,12 @@ def reproduce_hsc_xpois_sweep_workflow(
             "triplet",
             triplet_config,
         ),
-    ] + [
-        (
-            label,
-            "triplet",
-            triplet_config,
-        )
+    ]
+    training_variants.extend(
+        (label, "triplet", triplet_config)
         for label in aggregate["stable_variants"]
         if label.startswith("triplet_xpois_")
-    ]
+    )
 
     for label, input_mode, config_path in training_variants:
         base_config = load_training_config(config_path)
@@ -1986,6 +2013,7 @@ def reproduce_hsc_xpois_sweep_workflow(
                 run_name=f"{label}-seed-{seed}",
             )
             seeded.model = replace(base_config.model, input_mode=input_mode)
+            assert seeded.output_root is not None
             run_dir = resolve_run_dir(
                 Path(seeded.output_root),
                 seeded.run_name,
@@ -2070,7 +2098,7 @@ def reproduce_inada_workflow(
     nodiff_pair_config: Path | None,
     seeds: list[int],
 ) -> dict[str, Any]:
-    jobs = []
+    jobs: list[tuple[str, Path, InputMode]] = []
     if pair_config is not None:
         jobs.append(("autoscan_pair", pair_config, "pair"))
     if triplet_config is not None:
@@ -2254,7 +2282,7 @@ def reproduce_pair_triplet_workflow(
         "jobs": {},
     }
 
-    training_variants = [
+    training_variants: list[tuple[str, InputMode, Path, TrainingConfig]] = [
         ("pair", "pair", pair_config, pair_base_config),
         ("triplet", "triplet", triplet_config, triplet_base_config),
     ]
@@ -2270,6 +2298,7 @@ def reproduce_pair_triplet_workflow(
                 run_name=f"{label}-seed-{seed}",
             )
             seeded.model = replace(base_config.model, input_mode=input_mode)
+            assert seeded.output_root is not None
             run_dir = resolve_run_dir(
                 Path(seeded.output_root),
                 seeded.run_name,
@@ -2349,9 +2378,9 @@ def reproduce_pair_triplet_workflow(
 
 def build_compare_markdown(rows: list[dict[str, Any]]) -> str:
     if not rows:
-        return "# XScan Compare Inputs\n\nNo runs provided.\n"
+        return "# xScan Compare Inputs\n\nNo runs provided.\n"
     lines = [
-        "# XScan Compare Inputs",
+        "# xScan Compare Inputs",
         "",
         "| Run Dir | Input Mode | ROC AUC | PR AUC | Accuracy | Samples |",
         "|---|---|---:|---:|---:|---:|",
@@ -2375,7 +2404,7 @@ def build_compare_markdown(rows: list[dict[str, Any]]) -> str:
 
 def build_pair_triplet_markdown(aggregate: dict[str, Any]) -> str:
     lines = [
-        "# XScan Pair/Triplet Comparison Summary",
+        "# xScan Pair/Triplet Comparison Summary",
         "",
         f"- Dataset: `{aggregate['dataset_dir']}`",
         f"- Pair config: `{aggregate['pair_config']}`",
@@ -2443,7 +2472,7 @@ def build_pair_triplet_markdown(aggregate: dict[str, Any]) -> str:
 
 def build_reproduction_markdown(aggregate: dict[str, Any]) -> str:
     lines = [
-        "# XScan Reproduction Summary",
+        "# xScan Reproduction Summary",
         "",
         "| Job | Mean ROC AUC | Std ROC AUC | Mean Accuracy | "
         "Std Accuracy | Runs |",
@@ -2533,7 +2562,7 @@ def compare_hsc_dataset_alignment(dataset_dirs: list[Path]) -> dict[str, Any]:
 
 def build_hsc_comparison_markdown(aggregate: dict[str, Any]) -> str:
     lines = [
-        "# XScan HSC Comparison Summary",
+        "# xScan HSC Comparison Summary",
         "",
         f"- Manifest: `{aggregate['manifest_path']}`",
         f"- Pair config: `{aggregate['pair_config']}`",
@@ -2695,7 +2724,7 @@ def build_hsc_xpois_sweep_markdown(aggregate: dict[str, Any]) -> str:
         return f"{plane} ({count}, mean={mean_fraction:.3f})"
 
     lines = [
-        "# XScan HSC XPOIS Sweep Summary",
+        "# xScan HSC xPois Sweep Summary",
         "",
         f"- Manifest: `{aggregate['manifest_path']}`",
         f"- Pair config: `{aggregate['pair_config']}`",

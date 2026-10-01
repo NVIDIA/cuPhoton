@@ -48,7 +48,7 @@ def test_estimator_recovers_known_modes_exactly_at_zero_noise():
         tolerance=0.05,
     )
     assert all(h is not None for h in hit)
-    for m, h in zip(fx.modes, hit):
+    for m, h in zip(fx.modes, hit, strict=True):
         assert abs(float(r.angular_frequency[h]) - m.angular_frequency) < 1e-6
         assert abs(float(r.decay[h]) - m.decay) < 1e-6
 

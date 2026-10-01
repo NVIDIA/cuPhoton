@@ -1,0 +1,76 @@
+#!/bin/bash -p
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+fail() {
+  printf 'cuphoton-openmpi-rank-exec: %s\n' "$*" >&2
+  exit 2
+}
+
+if [[ ${1:-} != -- ]]; then
+  fail 'the target command must be preceded by --'
+fi
+shift
+if (($# == 0)); then
+  fail 'a target command is required after --'
+fi
+
+if [[ -z ${CUDA_VISIBLE_DEVICES+x} ]]; then
+  fail 'CUDA_VISIBLE_DEVICES is required'
+fi
+readonly allocated_devices=${CUDA_VISIBLE_DEVICES}
+if [[ ${allocated_devices} == *$'\n'* ]]; then
+  fail 'CUDA_VISIBLE_DEVICES must not contain a newline'
+fi
+case ${allocated_devices} in
+  '' | -1)
+    fail 'CUDA_VISIBLE_DEVICES exposes no devices'
+    ;;
+  ,* | *, | *,,*)
+    fail 'CUDA_VISIBLE_DEVICES contains an empty token'
+    ;;
+esac
+
+IFS=',' read -r -a visible_devices <<<"${allocated_devices}"
+readonly visible_device_count=${#visible_devices[@]}
+for ((device_index = 0; device_index < visible_device_count; device_index++)); do
+  device=${visible_devices[device_index]}
+  if [[ ${device} == -* ]]; then
+    fail 'CUDA_VISIBLE_DEVICES contains a negative device token'
+  fi
+  if [[ -z ${device} || ${device} =~ [[:space:]] ]]; then
+    printf -v quoted_device '%q' "${device}"
+    fail "invalid CUDA_VISIBLE_DEVICES token: ${quoted_device}"
+  fi
+  for ((seen_index = 0; seen_index < device_index; seen_index++)); do
+    seen_device=${visible_devices[seen_index]}
+    if [[ ${device} == "${seen_device}" ]]; then
+      fail "duplicate CUDA_VISIBLE_DEVICES token: ${device}"
+    fi
+  done
+done
+
+readonly local_rank_raw=${OMPI_COMM_WORLD_LOCAL_RANK:-}
+if [[ ! ${local_rank_raw} =~ ^[0-9]{1,18}$ ]]; then
+  fail 'OMPI_COMM_WORLD_LOCAL_RANK must be a non-negative integer'
+fi
+readonly local_size_raw=${OMPI_COMM_WORLD_LOCAL_SIZE:-}
+if [[ ! ${local_size_raw} =~ ^[0-9]{1,18}$ ]] || ((10#${local_size_raw} == 0)); then
+  fail 'OMPI_COMM_WORLD_LOCAL_SIZE must be a positive integer'
+fi
+
+readonly local_rank=$((10#${local_rank_raw}))
+readonly local_size=$((10#${local_size_raw}))
+if ((local_rank >= local_size)); then
+  fail 'OMPI_COMM_WORLD_LOCAL_RANK must be smaller than OMPI_COMM_WORLD_LOCAL_SIZE'
+fi
+if ((local_size > ${#visible_devices[@]})); then
+  fail "OMPI_COMM_WORLD_LOCAL_SIZE requests ${local_size} ranks but CUDA_VISIBLE_DEVICES exposes ${#visible_devices[@]} devices"
+fi
+
+export CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES=${allocated_devices}
+export CUDA_VISIBLE_DEVICES=${visible_devices[local_rank]}
+exec -- "$@"
