@@ -38,11 +38,15 @@ inline void check_nvcomp(nvcompStatus_t s, const char* ctx) {
 
 py::object batch_deflate_decompress_impl(
     std::uintptr_t d_concat_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rel_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> lengths,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        rel_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        lengths,
     std::uintptr_t d_out_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_sizes,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_sizes,
     std::uintptr_t stream_ptr,
     bool use_native_pool);
 
@@ -68,42 +72,69 @@ py::object batch_deflate_decompress_impl(
 // Raises on nvcomp / CUDA failure. Returns None.
 void batch_deflate_decompress(
     std::uintptr_t d_concat_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rel_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> lengths,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        rel_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        lengths,
     std::uintptr_t d_out_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_sizes,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_sizes,
     std::uintptr_t stream_ptr) {
     batch_deflate_decompress_impl(
-        d_concat_ptr, rel_offsets, lengths, d_out_ptr, out_offsets, out_sizes, stream_ptr, false);
+        d_concat_ptr,
+        rel_offsets,
+        lengths,
+        d_out_ptr,
+        out_offsets,
+        out_sizes,
+        stream_ptr,
+        false);
 }
 
 py::object batch_deflate_decompress_pooled(
     std::uintptr_t d_concat_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rel_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> lengths,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        rel_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        lengths,
     std::uintptr_t d_out_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_sizes,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_sizes,
     std::uintptr_t stream_ptr) {
     return batch_deflate_decompress_impl(
-        d_concat_ptr, rel_offsets, lengths, d_out_ptr, out_offsets, out_sizes, stream_ptr, true);
+        d_concat_ptr,
+        rel_offsets,
+        lengths,
+        d_out_ptr,
+        out_offsets,
+        out_sizes,
+        stream_ptr,
+        true);
 }
 
 py::object batch_deflate_decompress_impl(
     std::uintptr_t d_concat_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rel_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> lengths,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        rel_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        lengths,
     std::uintptr_t d_out_ptr,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_offsets,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> out_sizes,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_offsets,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
+        out_sizes,
     std::uintptr_t stream_ptr,
     bool use_native_pool) {
     const std::size_t n = static_cast<std::size_t>(rel_offsets.size());
     if (lengths.size() != static_cast<py::ssize_t>(n)
         || out_offsets.size() != static_cast<py::ssize_t>(n)
         || out_sizes.size() != static_cast<py::ssize_t>(n)) {
-        throw std::invalid_argument("all per-tile arrays must have the same length");
+        throw std::invalid_argument(
+            "all per-tile arrays must have the same length");
     }
     if (n == 0) {
         return py::none();
@@ -126,14 +157,17 @@ py::object batch_deflate_decompress_impl(
     std::size_t total_uncomp = 0;
     for (std::size_t i = 0; i < n; ++i) {
         if (ro(i) < 0 || ln(i) < 0 || oo(i) < 0 || os(i) < 0) {
-            throw std::invalid_argument("per-tile offsets and sizes must be non-negative");
+            throw std::invalid_argument(
+                "per-tile offsets and sizes must be non-negative");
         }
-        h_comp_ptrs[i] =
-            reinterpret_cast<const void*>(d_concat_ptr + static_cast<std::size_t>(ro(i)));
+        h_comp_ptrs[i] = reinterpret_cast<const void*>(
+            d_concat_ptr + static_cast<std::size_t>(ro(i)));
         if (reinterpret_cast<std::uintptr_t>(h_comp_ptrs[i]) % 4 != 0) {
-            throw std::invalid_argument("raw DEFLATE inputs must be 4-byte aligned");
+            throw std::invalid_argument(
+                "raw DEFLATE inputs must be 4-byte aligned");
         }
-        h_out_ptrs[i] = reinterpret_cast<void*>(d_out_ptr + static_cast<std::size_t>(oo(i)));
+        h_out_ptrs[i] = reinterpret_cast<void*>(
+            d_out_ptr + static_cast<std::size_t>(oo(i)));
         h_comp_sizes[i] = static_cast<std::size_t>(ln(i));
         h_out_sizes[i] = static_cast<std::size_t>(os(i));
         max_uncomp = std::max(max_uncomp, h_out_sizes[i]);
@@ -177,15 +211,21 @@ py::object batch_deflate_decompress_impl(
     try {
         if (use_native_pool) {
             int device_id = -1;
-            check_cuda(cudaGetDevice(&device_id), "cudaGetDevice native nvcomp scratch");
-            auto comp_ptrs = acquire_native_device_allocation(device_id, n * sizeof(void*));
-            auto out_ptrs = acquire_native_device_allocation(device_id, n * sizeof(void*));
-            auto comp_sizes = acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
-            auto out_sizes_buf =
-                acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
-            auto statuses = acquire_native_device_allocation(device_id, n * sizeof(nvcompStatus_t));
-            auto actual_sizes =
-                acquire_native_device_allocation(device_id, n * sizeof(std::size_t));
+            check_cuda(
+                cudaGetDevice(&device_id),
+                "cudaGetDevice native nvcomp scratch");
+            auto comp_ptrs =
+                acquire_native_device_allocation(device_id, n * sizeof(void*));
+            auto out_ptrs =
+                acquire_native_device_allocation(device_id, n * sizeof(void*));
+            auto comp_sizes = acquire_native_device_allocation(
+                device_id, n * sizeof(std::size_t));
+            auto out_sizes_buf = acquire_native_device_allocation(
+                device_id, n * sizeof(std::size_t));
+            auto statuses = acquire_native_device_allocation(
+                device_id, n * sizeof(nvcompStatus_t));
+            auto actual_sizes = acquire_native_device_allocation(
+                device_id, n * sizeof(std::size_t));
             d_comp_ptrs = comp_ptrs.data;
             d_out_ptrs = out_ptrs.data;
             d_comp_sizes = comp_sizes.data;
@@ -199,35 +239,53 @@ py::object batch_deflate_decompress_impl(
             pooled_keepalive.push_back(std::move(statuses.owner));
             pooled_keepalive.push_back(std::move(actual_sizes.owner));
             if (temp_bytes > 0) {
-                auto temp = acquire_native_device_allocation(device_id, temp_bytes);
+                auto temp =
+                    acquire_native_device_allocation(device_id, temp_bytes);
                 d_temp = temp.data;
                 pooled_keepalive.push_back(std::move(temp.owner));
             }
         } else {
-            check_cuda(cudaMallocAsync(&d_comp_ptrs, n * sizeof(void*), stream), "alloc comp_ptrs");
-            check_cuda(cudaMallocAsync(&d_out_ptrs, n * sizeof(void*), stream), "alloc out_ptrs");
+            check_cuda(
+                cudaMallocAsync(&d_comp_ptrs, n * sizeof(void*), stream),
+                "alloc comp_ptrs");
+            check_cuda(
+                cudaMallocAsync(&d_out_ptrs, n * sizeof(void*), stream),
+                "alloc out_ptrs");
             check_cuda(
                 cudaMallocAsync(&d_comp_sizes, n * sizeof(std::size_t), stream),
                 "alloc comp_sizes");
             check_cuda(
-                cudaMallocAsync(&d_out_sizes, n * sizeof(std::size_t), stream), "alloc out_sizes");
+                cudaMallocAsync(&d_out_sizes, n * sizeof(std::size_t), stream),
+                "alloc out_sizes");
             check_cuda(
-                cudaMallocAsync(&d_statuses, n * sizeof(nvcompStatus_t), stream), "alloc statuses");
+                cudaMallocAsync(
+                    &d_statuses, n * sizeof(nvcompStatus_t), stream),
+                "alloc statuses");
             check_cuda(
-                cudaMallocAsync(&d_actual_sizes, n * sizeof(std::size_t), stream),
+                cudaMallocAsync(
+                    &d_actual_sizes, n * sizeof(std::size_t), stream),
                 "alloc actual sizes");
             if (temp_bytes > 0) {
-                check_cuda(cudaMallocAsync(&d_temp, temp_bytes, stream), "alloc temp");
+                check_cuda(
+                    cudaMallocAsync(&d_temp, temp_bytes, stream), "alloc temp");
             }
         }
 
         check_cuda(
             cudaMemcpyAsync(
-                d_comp_ptrs, h_comp_ptrs.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream),
+                d_comp_ptrs,
+                h_comp_ptrs.data(),
+                n * sizeof(void*),
+                cudaMemcpyHostToDevice,
+                stream),
             "copy comp_ptrs");
         check_cuda(
             cudaMemcpyAsync(
-                d_out_ptrs, h_out_ptrs.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream),
+                d_out_ptrs,
+                h_out_ptrs.data(),
+                n * sizeof(void*),
+                cudaMemcpyHostToDevice,
+                stream),
             "copy out_ptrs");
         check_cuda(
             cudaMemcpyAsync(
@@ -268,7 +326,8 @@ py::object batch_deflate_decompress_impl(
         }
 
         if (use_native_pool) {
-            auto holder = std::make_unique<std::vector<std::shared_ptr<void>>>();
+            auto holder =
+                std::make_unique<std::vector<std::shared_ptr<void>>>();
             py::capsule owner(holder.get(), [](void* p) {
                 delete reinterpret_cast<std::vector<std::shared_ptr<void>>*>(p);
             });
@@ -294,7 +353,8 @@ py::object batch_deflate_decompress_impl(
 }  // namespace xdr_gpu
 
 PYBIND11_MODULE(_nvcomp_batch_ext, m) {
-    m.doc() = "Batched DEFLATE decompression — device-pointer interface to nvcomp.";
+    m.doc() =
+        "Batched DEFLATE decompression — device-pointer interface to nvcomp.";
 
     xdr_gpu::bind_io(m);
     xdr_gpu::bind_memory_manager(m);

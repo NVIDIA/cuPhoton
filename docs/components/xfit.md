@@ -161,9 +161,9 @@ cuphoton xfit fit-dipoles \
 Both `fit_dipoles` and `fit_dipoles_device` accept `backend="native"`.
 Device results retain CuPy arrays and record the selected execution backend.
 Each calling thread reuses an independent native workspace. A native call
-waits for its producer stream, detaches Python
-thread state while iterating, and completes its CUDA work before returning
-or raising an error. Inputs must remain unchanged for the call's duration.
+waits for its producer stream, detaches Python thread state while iterating,
+and completes its CUDA work before returning or raising an error. Inputs must
+remain unchanged for the call's duration.
 The existing residual-evaluation budget bounds the loop; Python interrupts
 are reported after the native call drains its work.
 
@@ -176,13 +176,34 @@ python examples/xfit/benchmark_gaussian.py \
   --execution threads --rounds 5
 ```
 
-Use the same batch and CPU budget with `--execution processes` for the process
-control. An externally managed MPS service can supply the MPS treatment; the
-benchmark does not start or stop that service. Worker count changes the fit
-batch size in this example; compare execution modes at the same worker count
-to keep that numerical boundary fixed. Native iteration CUDA-event
-times include gaps between launches and are separate from end-to-end fit
-and process-communication timings.
+The native backend also works with
+[CUDA Multi-Process Service (MPS)](https://docs.nvidia.com/deploy/mps/).
+Native execution reduces Python orchestration within each fit, while MPS
+allows work from separate CUDA processes to execute concurrently on the same
+GPU. These benefits can combine when the workers leave GPU capacity available;
+their speedup factors depend on the workload and should be measured together.
+Multiple threads in one process already share a CUDA context, so adding MPS
+to the threaded benchmark does not test its cross-process benefit.
+
+Use the same batch, worker count, CPU budget, and CUDA runtime with
+`--execution processes` for both the ordinary-process and MPS treatments:
+
+```bash
+python examples/xfit/benchmark_gaussian.py \
+  --compare-native --batch 256 --workers 4 --cpus 8 \
+  --execution processes --rounds 6
+```
+
+Run once without an MPS service and once with an externally managed service,
+setting `CUDA_MPS_PIPE_DIRECTORY` to that service's pipe directory before
+starting Python. Verify the workers connect to the service using the MPS
+control interface; the benchmark's `mps_pipe_configured` field only reports
+whether the environment variable is set. The benchmark does not start or stop
+the service. Compare CuPy and native within each treatment, then compare the
+same backend across treatments. Worker count changes the fit batch size in
+this example; keep it fixed to preserve that numerical boundary. Native
+iteration CUDA-event times include gaps between launches and are separate
+from end-to-end fit and process-communication timings.
 The default per-round wait is 180 seconds. `--timeout-seconds` allows longer
 cold compilation; worker cleanup may take additional time after a timeout.
 

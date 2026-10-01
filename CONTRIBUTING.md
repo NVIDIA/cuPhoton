@@ -90,11 +90,17 @@ for Python 3.12 (`UP`). Mypy checks annotated Python code throughout
 without consistent typing support are skipped, so type checks do not require
 CUDA. Unannotated function bodies are not yet checked.
 
-The full pre-commit suite also runs clang-format on C/C++/CUDA sources and
-ShellCheck on shell scripts, including extensionless scripts with a shell
-shebang. `.clang-format` preserves the existing four-space indentation,
-attached braces, and pointer/reference spacing. Hook tools are installed
-automatically by pre-commit; no system clang-format or ShellCheck is required.
+The full pre-commit suite also runs clang-format on C/C++/CUDA sources,
+including `.cu` and `.cuh`, and ShellCheck on shell scripts, including
+extensionless scripts with a shell shebang. C/C++/CUDA control-flow bodies
+require braces. `.clang-format` inserts them automatically, uses an 80-column
+limit, and right-aligns macro continuation backslashes at column 80. It keeps
+four-space indentation, attached braces, and pointer/reference spacing.
+Hook tools are installed automatically by pre-commit; no system clang-format
+or ShellCheck is required.
+Apply the same brace and macro alignment rules manually to CUDA embedded in
+Python strings. Clang-format does not inspect those strings or insert braces
+inside preprocessor macro definitions.
 Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 
 Validation logs should be clean. If warnings are expected, describe them in the
