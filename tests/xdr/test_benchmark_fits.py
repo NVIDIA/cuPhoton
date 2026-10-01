@@ -391,11 +391,9 @@ def test_json_report_matches_returned_and_printed_phases(
     assert report["ok"] is True
     assert report["phases"] == [asdict(phase) for phase in results]
     assert report["storage"]["mode"] == mode
-    assert report["capabilities"] == {
-        "cpp_helper_available": True,
-        "gds_active": True,
-        "gds_probe": "cuphoton.xdr.is_gds_active",
-    }
+    assert report["capabilities"]["cpp_helper_available"] is True
+    assert report["capabilities"]["gds_active"] is True
+    assert report["capabilities"]["gds_probe"] == "cuphoton.xdr.is_gds_active"
     assert report["options"] == {
         "hdu_indices": [2, 1],
         "iterations": 2,
@@ -430,6 +428,77 @@ def test_json_report_matches_returned_and_printed_phases(
     )
     assert printed == expected_printed
     assert not list(tmp_path.glob(".benchmark.json.*"))
+
+
+@pytest.mark.parametrize(
+    "mask,maximum,failed_attribute",
+    [
+        (7, 4194304, None),
+        (0, 0, None),
+        (6, 4194304, None),
+        (0, 0, 136),
+        (7, 4194304, 137),
+    ],
+)
+def test_json_reports_device_decompression_capabilities(
+    json_benchmark, monkeypatch, tmp_path, mask, maximum, failed_attribute
+):
+    import json
+
+    bench, path, phases = json_benchmark
+    queries = []
+
+    def current_device():
+        assert phases[-1].phase == "batch_to_device_stream"
+        return 3
+
+    def device_get(pointer, ordinal):
+        assert ordinal == 3
+        pointer._obj.value = ordinal
+        return 0
+
+    def attribute_get(pointer, attribute, device):
+        assert device == 3
+        queries.append(attribute)
+        if attribute == failed_attribute:
+            return 1  # CUDA_ERROR_INVALID_VALUE: attribute unsupported.
+        pointer._obj.value = {136: mask, 137: maximum}[attribute]
+        return 0
+
+    monkeypatch.setattr(
+        bench,
+        "cp",
+        SimpleNamespace(
+            __version__="test-cupy",
+            cuda=SimpleNamespace(
+                runtime=SimpleNamespace(getDevice=current_device)
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        bench.ctypes,
+        "CDLL",
+        lambda _name: SimpleNamespace(
+            cuDeviceGet=device_get, cuDeviceGetAttribute=attribute_get
+        ),
+    )
+    output = tmp_path / "capabilities.json"
+    bench.run_benchmark([path], output_json=output, out=lambda _: None)
+    report = json.loads(output.read_text())
+    capability = report["capabilities"]["hardware_decompression"]
+    assert queries == ([136] if failed_attribute == 136 else [136, 137])
+    if failed_attribute is None:
+        assert capability["algorithm_mask"] == mask
+        assert capability["supports_deflate"] is bool(mask & 1)
+        assert capability["max_chunk_bytes"] == maximum
+        assert capability["error"] is None
+    else:
+        assert capability["algorithm_mask"] is None
+        assert capability["supports_deflate"] is None
+        assert capability["max_chunk_bytes"] is None
+        assert f"({failed_attribute})" in capability["error"]
+        assert "CUDA error 1" in capability["error"]
+        assert report["ok"] is True
 
 
 @pytest.mark.parametrize("native_batcher", ["auto", "off", "on"])
@@ -589,6 +658,9 @@ def test_benchmark_without_json_keeps_return_and_text_output(
         pytest.fail("optional report probes must not run without output_json")
 
     monkeypatch.setattr(bench, "cpp_helper_available", unexpected_metadata)
+    monkeypatch.setattr(
+        bench, "_hardware_decompression_capabilities", unexpected_metadata
+    )
     printed = []
     assert bench.run_benchmark([path], out=printed.append) == phases
     assert any("batch_to_device_stream" in line for line in printed)
