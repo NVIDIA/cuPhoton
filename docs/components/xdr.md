@@ -124,16 +124,39 @@ tiles beyond the hardware limit.
 
 Batch readers retain native pooled scratch buffers. The low-level non-pooled
 path, including `GpuCompImageReader.read()` without an explicit stream, uses
-`cudaMallocAsync` scratch; these allocations can cause CUDA fallback even on
-a GPU with an engine. Custom CuPy allocators can also affect eligibility.
+`cudaMallocAsync` scratch, which is not hardware-decompression capable. That
+path selects CUDA directly, including with `decompression_backend="auto"`,
+to avoid a failed hardware attempt on each call. Custom CuPy allocators can
+also affect eligibility in pooled calls.
 An `auto` receipt and a compatible GPU therefore do not establish hardware use.
 See [nvCOMP logging](../troubleshooting.md#confirm-the-decompression-engine)
 to inspect the actual decoder calls.
+
+The benchmark's `--output-json` report includes
+`capabilities.hardware_decompression`: the current device's algorithm mask,
+`supports_deflate`, and `max_chunk_bytes`. Unavailable queries leave those
+values `null` and record an `error`. These device limits are collected after
+the timed phases and do not identify the engine used by an individual call.
 
 The native decoder expects valid compressed payloads and correct output sizes.
 Header validation and a successful launch do not verify payload integrity;
 nvCOMP's [C API](https://docs.nvidia.com/cuda/nvcomp/c_api.html)
 does not guarantee safe decoding of corrupt Gzip or DEFLATE streams.
+
+### Tile size and batch size
+
+Gzip tiles provide independent work for the decoder. A batch with only a few
+large tiles can leave much of the GPU idle, including on GPUs without a
+hardware decompression engine. Increasing `decode_batch_files` can supply
+more tiles per decode call when GPU memory allows it.
+
+For newly written FITS files, start with the usual row-sized tiles or tiles
+of a few tens of KiB, then measure the complete read with representative
+data. In one 128 MiB workload, 8–64 KiB tiles gave similar read times;
+multi-MiB tiles were much slower. That result is a starting point, not a
+universal optimum. Tiles beyond the device's hardware chunk limit use CUDA
+in automatic mode; changing the backend alone does not restore the missing
+tile parallelism.
 
 ## Read FITS images in a workflow
 

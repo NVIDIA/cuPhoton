@@ -240,8 +240,12 @@ py::object batch_decompress_impl(
     // Raw DEFLATE retains its CUDA path in either mode.
     opts.backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
     auto gzip_opts = nvcompBatchedGzipDecompressDefaultOpts;
-    // DEFAULT selects compatible hardware and falls back to CUDA otherwise.
-    gzip_opts.backend = backend;
+    // Non-pooled scratch uses cudaMallocAsync, whose allocations are not
+    // hardware-decompression capable. Select CUDA directly to avoid a failed
+    // hardware launch followed by fallback on every call. Pooled calls retain
+    // nvCOMP's automatic selection when requested.
+    gzip_opts.backend =
+        use_native_pool ? backend : NVCOMP_DECOMPRESS_BACKEND_CUDA;
     // NAIVE accepts byte-aligned FITS gzip tile starts. LOOKAHEAD requires
     // additional input alignment and is intended for much larger chunks.
     gzip_opts.algorithm = NVCOMP_GZIP_DECOMPRESS_ALGORITHM_NAIVE;
