@@ -21,6 +21,7 @@ from cuphoton.xray.synthetic_validation import (
     distort_trace,
     match_modes,
     synthetic_modes_trace,
+    validate_linear_prediction,
     validation_sweep,
     write_validation_run,
 )
@@ -264,6 +265,39 @@ def test_summary_schema_and_run_artifacts(tmp_path):
     assert figure is None or (out / figure).exists()
     with pytest.raises(ValueError):
         build_summary([])
+
+
+@pytest.mark.parametrize("write_artifacts", [False, True])
+def test_validation_report_summarizes_the_run(tmp_path, write_artifacts):
+    out = tmp_path / "run" if write_artifacts else None
+    report = validate_linear_prediction(
+        samples=64,
+        snr_db=(30.0,),
+        trials=1,
+        n_components=4,
+        seed=7,
+        distortion=("chirp", 0.05),
+        output_dir=out,
+    )
+    summary = report.to_dict()
+    assert json.loads(json.dumps(summary, allow_nan=False)) == summary
+    config = summary["config"]
+    assert config["sampling"]["samples"] == 64
+    assert config["seed"] == 7 and config["trials_per_level"] == 1
+    assert config["n_components"] == 4
+    assert config["distortions"] == ["chirp:0.05"]
+    assert report.sweeps[0].levels[0].snr_db == 30.0
+    text = str(report)
+    assert text.startswith("samples=64\nsignal_rms=")
+    assert "estimator=cpu\ndistortion=chirp:0.05\nsnr_db=30 " in text
+    if out is not None:
+        assert json.loads((out / "summary.json").read_text()) == summary
+        assert "summary=summary.json" in text
+        for name in summary["artifacts"].values():
+            assert name is None or (out / name).is_file()
+    else:
+        assert summary["artifacts"] == {}
+        assert not (tmp_path / "run").exists()
 
 
 @pytest.mark.parametrize("trials", [1, 2])
