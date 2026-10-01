@@ -17,9 +17,16 @@ a rank-one separable-kernel alternating least-squares extension:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Iterable, Sequence
+from numbers import Integral, Real
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    SupportsIndex,
+)
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -31,7 +38,11 @@ _SUPPORTED_BACKENDS_SET = frozenset(SUPPORTED_BACKENDS)
 _NUMBA_MAX_COLUMNS = 64
 _NUMBA_THREADS_PER_BLOCK = 256
 _NUMBA_ROWS_PER_BLOCK = 1024
-_CUTILE_ROWS_PER_TILE = 256
+_CUTILE_MMA_SMALL_ROWS_PER_TILE = 32
+_CUTILE_MMA_LARGE_ROWS_PER_TILE = 128
+# Fits with at least this many rows use the 128-row tile specialization.
+_CUTILE_MMA_LARGE_ROW_THRESHOLD = 1 << 20
+_CUTILE_MMA_K_TILE = 16
 _NUMBA_ACCUMULATE_KERNEL: Any | None = None
 ct: Any | None = None
 
@@ -122,6 +133,169 @@ class ConstantKernelFitResult:
     fit_pixel_count: int
     flux_conserve: bool
     backend: str = "cpu"
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceConstantKernelFitResult:
+    """CuPy-resident result of a constant-kernel least-squares fit.
+
+    The array-valued fields remain on the active CUDA device. Scalar
+    diagnostics and basis metadata are host values so callers can record
+    compact receipts without materializing any image-sized arrays. The result
+    holds strong references to every returned array, but it must remain in the
+    producing process and on ``device_id``; it is not a Dragon payload or an
+    artifact. Callers should treat its arrays as read-only. Consumers on a
+    different CUDA stream are responsible for establishing stream ordering.
+
+    Input arrays are borrowed and are not mutated. Completion timing is not
+    part of this contract: callers that measure or materialize results must
+    synchronize explicitly.
+
+    Attributes
+    ----------
+    kernel
+        Fitted convolution kernel as a CuPy array.
+    matched
+        Device-resident reference image convolved with ``kernel`` plus the
+        fitted background.
+    residual
+        Device-resident ``target - matched`` image.
+    fit_mask
+        Device-resident boolean mask of pixels that entered the solve.
+    background
+        Device-resident differential-background image.
+    kernel_coefficients, background_coefficients
+        Device-resident fitted model coefficients.
+    basis_kernels
+        Device-resident concrete Gaussian-polynomial basis kernels.
+    basis_terms
+        Host metadata corresponding to ``basis_kernels``.
+    chi2, dof, fit_pixel_count
+        Compact fit diagnostics copied to host scalars.
+    flux_conserve
+        Whether a unit-sum/zero-sum basis rewrite was requested.
+    backend
+        Always ``"cupy"``.
+    schema, solver, result_location
+        Immutable tags identifying this device-only result contract.
+    device_id
+        CUDA device ordinal shared by every array-valued field.
+    """
+
+    kernel: Any
+    matched: Any
+    residual: Any
+    fit_mask: Any
+    background: Any
+    kernel_coefficients: Any
+    background_coefficients: Any
+    basis_kernels: Any
+    basis_terms: tuple[BasisTerm, ...]
+    chi2: float
+    dof: int
+    fit_pixel_count: int
+    flux_conserve: bool
+    device_id: int
+    schema: Literal["cuphoton.xpois.device-fit-result/v1"] = field(
+        init=False,
+        default="cuphoton.xpois.device-fit-result/v1",
+    )
+    solver: Literal["constant"] = field(init=False, default="constant")
+    backend: Literal["cupy"] = field(init=False, default="cupy")
+    result_location: Literal["device"] = field(
+        init=False,
+        default="device",
+    )
+
+    def __post_init__(self) -> None:
+        if isinstance(self.device_id, bool) or not isinstance(
+            self.device_id, (int, np.integer)
+        ):
+            raise TypeError(
+                "device_id must be an integer CUDA device ordinal"
+            )
+        if self.device_id < 0:
+            raise ValueError("device_id must be non-negative")
+
+        cp, _ = _load_cupy()
+        arrays = {
+            "kernel": self.kernel,
+            "matched": self.matched,
+            "residual": self.residual,
+            "fit_mask": self.fit_mask,
+            "background": self.background,
+            "kernel_coefficients": self.kernel_coefficients,
+            "background_coefficients": self.background_coefficients,
+            "basis_kernels": self.basis_kernels,
+        }
+        for name, value in arrays.items():
+            if not isinstance(value, cp.ndarray):
+                raise TypeError(f"{name} must be a CuPy array")
+            if int(value.device.id) != int(self.device_id):
+                raise ValueError(
+                    f"{name} is on CUDA device {int(value.device.id)}, "
+                    f"expected {int(self.device_id)}"
+                )
+
+        image_shape = tuple(int(value) for value in self.matched.shape)
+        for name in ("residual", "fit_mask", "background"):
+            value = arrays[name]
+            if tuple(int(item) for item in value.shape) != image_shape:
+                raise ValueError(f"{name} must match the matched image shape")
+        if len(image_shape) != 2:
+            raise ValueError("matched image must be two-dimensional")
+        if self.kernel.ndim != 2:
+            raise ValueError("kernel must be two-dimensional")
+        if self.basis_kernels.ndim != 3:
+            raise ValueError("basis_kernels must be three-dimensional")
+        if tuple(
+            int(value) for value in self.basis_kernels.shape[1:]
+        ) != tuple(int(value) for value in self.kernel.shape):
+            raise ValueError("basis_kernels must match the kernel shape")
+        if self.kernel_coefficients.ndim != 1:
+            raise ValueError("kernel_coefficients must be one-dimensional")
+        if self.background_coefficients.ndim != 1:
+            raise ValueError(
+                "background_coefficients must be one-dimensional"
+            )
+        basis_count = int(self.basis_kernels.shape[0])
+        if int(self.kernel_coefficients.size) != basis_count:
+            raise ValueError(
+                "kernel_coefficients must align with basis_kernels"
+            )
+        if len(self.basis_terms) != basis_count:
+            raise ValueError("basis_terms must align with basis_kernels")
+        if np.dtype(self.fit_mask.dtype) != np.dtype(bool):
+            raise TypeError("fit_mask must have boolean dtype")
+        for name, value in arrays.items():
+            if name == "fit_mask":
+                continue
+            if np.dtype(value.dtype) != np.dtype(np.float64):
+                raise TypeError(f"{name} must have float64 dtype")
+
+        if not isinstance(self.fit_pixel_count, int):
+            raise TypeError("fit_pixel_count must be an integer")
+        if self.fit_pixel_count < 1:
+            raise ValueError("fit_pixel_count must be positive")
+        if not isinstance(self.dof, int):
+            raise TypeError("dof must be an integer")
+        expected_dof = self.fit_pixel_count - int(
+            self.kernel_coefficients.size + self.background_coefficients.size
+        )
+        if self.dof != expected_dof:
+            raise ValueError(
+                "dof is inconsistent with the fitted coefficients"
+            )
+        if not np.isfinite(self.chi2) or self.chi2 < 0.0:
+            raise ValueError("chi2 must be finite and non-negative")
+        if not isinstance(self.flux_conserve, bool):
+            raise TypeError("flux_conserve must be boolean")
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
+        raise TypeError(
+            "DeviceConstantKernelFitResult cannot be pickled; keep device "
+            "results inside the producing process"
+        )
 
 
 @dataclass
@@ -564,7 +738,9 @@ def build_gaussian_polynomial_basis(
         )
     ]
 
-    for index, (kernel, term) in enumerate(zip(raw_kernels, raw_terms)):
+    for index, (kernel, term) in enumerate(
+        zip(raw_kernels, raw_terms, strict=True)
+    ):
         if index == flux_reference_index:
             continue
         kernel_sum = float(kernel.sum())
@@ -773,6 +949,173 @@ def solve_constant_kernel(
     )
 
 
+def solve_constant_kernel_device(
+    reference: Any,
+    target: Any,
+    components: Sequence[GaussianBasisComponent],
+    *,
+    kernel_shape: tuple[int, int] = (15, 15),
+    variance: Any | None = None,
+    fit_mask: Any | None = None,
+    background_degree: int = 0,
+    flux_conserve: bool = False,
+    flux_reference_index: int = 0,
+) -> DeviceConstantKernelFitResult:
+    """Fit a constant kernel while keeping array results on the GPU.
+
+    Parameters match :func:`solve_constant_kernel`, except this experimental
+    seam is explicitly CuPy-only and therefore has no backend selector.
+    NumPy inputs are accepted and copied to the active CUDA device; CuPy
+    inputs already on that device are reused when their dtype permits.
+
+    Returns
+    -------
+    DeviceConstantKernelFitResult
+        CuPy-resident fitted arrays and compact host diagnostics.
+    """
+
+    cp, cupy_fftconvolve = _load_cupy()
+    active_device_id = _active_cupy_device_id(cp)
+    for name, value in (
+        ("reference", reference),
+        ("target", target),
+        ("variance", variance),
+        ("fit_mask", fit_mask),
+    ):
+        _validate_cupy_input_device(
+            value,
+            name=name,
+            active_device_id=active_device_id,
+            cp=cp,
+        )
+
+    reference_arr = cp.asarray(reference, dtype=cp.float64)
+    target_arr = cp.asarray(target, dtype=cp.float64)
+    if int(reference_arr.device.id) != active_device_id:
+        raise ValueError("reference must reside on the active CUDA device")
+    if int(target_arr.device.id) != active_device_id:
+        raise ValueError("target must reside on the active CUDA device")
+    _validate_image_pair(reference_arr, target_arr)
+
+    reference_model_arr = cp.where(
+        cp.isfinite(reference_arr), reference_arr, 0.0
+    )
+    target_model_arr = cp.where(cp.isfinite(target_arr), target_arr, 0.0)
+    variance_arr = _coerce_variance_cupy(
+        target_arr.shape,
+        variance,
+        cp=cp,
+    )
+    mask_arr = _coerce_mask_cupy(
+        target_arr.shape,
+        fit_mask,
+        kernel_shape,
+        cp=cp,
+    )
+    if int(variance_arr.device.id) != active_device_id:
+        raise ValueError("variance must reside on the active CUDA device")
+    if int(mask_arr.device.id) != active_device_id:
+        raise ValueError("fit_mask must reside on the active CUDA device")
+    boundary_mask = _default_fit_mask_cupy(
+        target_arr.shape,
+        kernel_shape,
+        cp=cp,
+    )
+    invalid_pixel_mask = _invalid_input_mask_cupy(
+        reference_arr,
+        target_arr,
+        variance_arr,
+        kernel_shape,
+        cp=cp,
+    )
+    mask_arr &= ~invalid_pixel_mask
+    if not bool(cp.any(mask_arr).item()):
+        raise ValueError("no finite pixels remain within the fit region")
+
+    basis_kernels_host, basis_terms = build_gaussian_polynomial_basis(
+        kernel_shape,
+        components,
+        flux_conserve=flux_conserve,
+        flux_reference_index=flux_reference_index,
+    )
+    basis_kernels = cp.asarray(basis_kernels_host, dtype=cp.float64)
+    background_terms = _background_design_cupy(
+        target_arr.shape,
+        background_degree,
+        cp=cp,
+    )
+    gram_matrix, rhs_vector, row_count = (
+        _accumulate_normal_equations_cupy_device(
+            reference_model_arr,
+            target_model_arr,
+            variance_arr,
+            mask_arr,
+            basis_kernels,
+            background_terms,
+            cp=cp,
+        )
+    )
+    column_count = int(gram_matrix.shape[0])
+    if row_count < column_count:
+        raise ValueError(
+            "fit region is underdetermined for the requested basis: "
+            f"{row_count} equations for {column_count} coefficients"
+        )
+    try:
+        condition_number = float(cp.linalg.cond(gram_matrix).item())
+    except cp.linalg.LinAlgError as exc:
+        raise ValueError(
+            "fit normal equations are singular for the requested basis"
+        ) from exc
+    if not np.isfinite(condition_number) or condition_number > 1e12:
+        raise ValueError(
+            "fit normal equations are ill-conditioned for the requested basis"
+        )
+    try:
+        coefficients = cp.linalg.solve(gram_matrix, rhs_vector)
+    except cp.linalg.LinAlgError as exc:
+        raise ValueError("fit normal equations could not be solved") from exc
+
+    kernel_coeff_count = int(basis_kernels.shape[0])
+    kernel_coeffs = coefficients[:kernel_coeff_count]
+    background_coeffs = coefficients[kernel_coeff_count:]
+    kernel = cp.tensordot(kernel_coeffs, basis_kernels, axes=(0, 0))
+    background = cp.tensordot(
+        background_coeffs,
+        background_terms,
+        axes=(0, 0),
+    )
+    matched = (
+        cupy_fftconvolve(reference_model_arr, kernel, mode="same")
+        + background
+    )
+    residual = target_model_arr - matched
+    output_invalid_mask = invalid_pixel_mask | ~boundary_mask
+    matched[output_invalid_mask] = cp.nan
+    residual[output_invalid_mask] = cp.nan
+
+    residual_fit = residual[mask_arr]
+    chi2 = float(cp.sum((residual_fit**2) / variance_arr[mask_arr]).item())
+    dof = int(row_count) - int(coefficients.size)
+
+    return DeviceConstantKernelFitResult(
+        kernel=kernel,
+        matched=matched,
+        residual=residual,
+        fit_mask=mask_arr,
+        background=background,
+        kernel_coefficients=kernel_coeffs,
+        background_coefficients=background_coeffs,
+        basis_kernels=basis_kernels,
+        basis_terms=basis_terms,
+        chi2=chi2,
+        dof=dof,
+        fit_pixel_count=int(row_count),
+        flux_conserve=bool(flux_conserve),
+        device_id=active_device_id,
+    )
+
+
 def solve_separable_kernel(
     reference: np.ndarray,
     target: np.ndarray,
@@ -866,7 +1209,7 @@ def solve_separable_kernel(
     converged = False
     last_chi2: float | None = None
     row_count = int(mask_arr.sum())
-    for iteration in range(max_iterations):
+    for _iteration in range(max_iterations):
         vertical_kernel = np.tensordot(
             vertical_coeffs,
             vertical_basis,
@@ -966,7 +1309,7 @@ def solve_separable_kernel(
         chi2=chi2,
         dof=dof,
         fit_pixel_count=int(row_count),
-        iterations=iteration + 1,
+        iterations=_iteration + 1,
         converged=converged,
         flux_conserve=flux_conserve,
     )
@@ -998,6 +1341,25 @@ def background_design(
     for deg_x, deg_y in triangular_degree_pairs(degree):
         terms.append((x_coords**deg_x) * (y_coords**deg_y))
     return np.stack(terms, axis=0)
+
+
+def _background_design_cupy(
+    image_shape: tuple[int, int],
+    degree: int,
+    *,
+    cp: Any,
+) -> Any:
+    if degree < 0:
+        raise ValueError("background degree must be non-negative")
+
+    height, width = image_shape
+    y = cp.linspace(-1.0, 1.0, num=height, dtype=cp.float64)
+    x = cp.linspace(-1.0, 1.0, num=width, dtype=cp.float64)
+    y_coords, x_coords = cp.meshgrid(y, x, indexing="ij")
+    terms = []
+    for deg_x, deg_y in triangular_degree_pairs(degree):
+        terms.append((x_coords**deg_x) * (y_coords**deg_y))
+    return cp.stack(terms, axis=0)
 
 
 def evaluate_background_model(
@@ -1064,10 +1426,22 @@ def _build_line_basis(
     if length <= 0:
         raise ValueError("line basis length must be positive")
     x_coords = np.arange(length, dtype=np.float64) - length // 2
-    basis_rows = []
+    basis_rows: list[np.ndarray] = []
     for component in components:
-        if component.sigma <= 0:
+        if not isinstance(component.sigma, Real) or isinstance(
+            component.sigma,
+            bool,
+        ):
+            raise ValueError("basis sigma must be a real number")
+        if not np.isfinite(component.sigma) or component.sigma <= 0:
             raise ValueError("basis sigma must be positive")
+        if not isinstance(component.degree, Integral) or isinstance(
+            component.degree,
+            bool,
+        ):
+            raise ValueError("basis degree must be an integer")
+        if component.degree < 0:
+            raise ValueError("basis degree must be non-negative")
         gaussian = np.exp(-(x_coords**2) / (2.0 * component.sigma**2))
         for degree in range(component.degree + 1):
             basis_rows.append(gaussian * (x_coords**degree))
@@ -1083,17 +1457,33 @@ def _validate_image_pair(reference: np.ndarray, target: np.ndarray) -> None:
         raise ValueError("reference and target must share the same shape")
 
 
+def _coerce_variance_impl(
+    xp: Any, image_shape: tuple[int, int], variance: Any | None
+) -> Any:
+    if variance is None:
+        return xp.ones(image_shape, dtype=xp.float64)
+    variance_arr = xp.asarray(variance, dtype=xp.float64)
+    if variance_arr.shape != image_shape:
+        raise ValueError("variance must match the image shape")
+    invalid = xp.isfinite(variance_arr) & (variance_arr <= 0)
+    if bool(xp.any(invalid).item()):
+        raise ValueError("variance must be strictly positive")
+    return variance_arr
+
+
 def _coerce_variance(
     image_shape: tuple[int, int], variance: np.ndarray | None
 ) -> np.ndarray:
-    if variance is None:
-        return np.ones(image_shape, dtype=np.float64)
-    variance_arr = np.asarray(variance, dtype=np.float64)
-    if variance_arr.shape != image_shape:
-        raise ValueError("variance must match the image shape")
-    if np.any(np.isfinite(variance_arr) & (variance_arr <= 0)):
-        raise ValueError("variance must be strictly positive")
-    return variance_arr
+    return _coerce_variance_impl(np, image_shape, variance)
+
+
+def _coerce_variance_cupy(
+    image_shape: tuple[int, int],
+    variance: Any | None,
+    *,
+    cp: Any,
+) -> Any:
+    return _coerce_variance_impl(cp, image_shape, variance)
 
 
 def _coerce_mask(
@@ -1117,17 +1507,60 @@ def _coerce_mask(
     return mask_arr
 
 
-def _coerce_boolean_mask(mask: np.ndarray) -> np.ndarray:
+def _coerce_mask_cupy(
+    image_shape: tuple[int, int],
+    fit_mask: Any | None,
+    kernel_shape: tuple[int, int],
+    *,
+    cp: Any,
+) -> Any:
+    valid_mask = _default_fit_mask_cupy(
+        image_shape,
+        kernel_shape,
+        cp=cp,
+    )
+    if not bool(cp.any(valid_mask).item()):
+        raise ValueError(
+            "kernel_shape leaves no valid interior pixels to fit"
+        )
+    if fit_mask is None:
+        return valid_mask
+    mask_arr = _coerce_boolean_mask_cupy(fit_mask, cp=cp)
+    if mask_arr.shape != image_shape:
+        raise ValueError("fit_mask must match the image shape")
+    mask_arr = mask_arr & valid_mask
+    if not bool(cp.any(mask_arr).item()):
+        raise ValueError("fit_mask must select at least one interior pixel")
+    return mask_arr
+
+
+def _coerce_boolean_mask(
+    mask: np.ndarray, *, name: str = "fit_mask"
+) -> np.ndarray:
     mask_arr = np.asarray(mask)
     if mask_arr.dtype == bool:
         return mask_arr
     if not np.issubdtype(mask_arr.dtype, np.number):
-        raise ValueError("fit_mask array must be boolean or binary numeric")
+        raise ValueError(f"{name} array must be boolean or binary numeric")
     if not np.isfinite(mask_arr).all():
-        raise ValueError("fit_mask array must not contain NaN or inf values")
+        raise ValueError(f"{name} array must not contain NaN or inf values")
     if not np.all((mask_arr == 0) | (mask_arr == 1)):
-        raise ValueError("fit_mask array must contain only 0/1 values")
+        raise ValueError(f"{name} array must contain only 0/1 values")
     return mask_arr.astype(bool)
+
+
+def _coerce_boolean_mask_cupy(mask: Any, *, cp: Any) -> Any:
+    mask_arr = cp.asarray(mask)
+    if mask_arr.dtype == cp.bool_:
+        return mask_arr
+    if not np.issubdtype(mask_arr.dtype, np.number):
+        raise ValueError("fit_mask array must be boolean or binary numeric")
+    if not bool(cp.isfinite(mask_arr).all().item()):
+        raise ValueError("fit_mask array must not contain NaN or inf values")
+    is_binary = (mask_arr == 0) | (mask_arr == 1)
+    if not bool(cp.all(is_binary).item()):
+        raise ValueError("fit_mask array must contain only 0/1 values")
+    return mask_arr.astype(cp.bool_)
 
 
 def _validate_kernel_shape(kernel_shape: tuple[int, int]) -> tuple[int, int]:
@@ -1170,19 +1603,34 @@ def _normalized_coordinates(
     return y_coords, x_coords
 
 
-def _default_fit_mask(
-    image_shape: tuple[int, int], kernel_shape: tuple[int, int]
-) -> np.ndarray:
+def _default_fit_mask_impl(
+    xp: Any, image_shape: tuple[int, int], kernel_shape: tuple[int, int]
+) -> Any:
     height, width = image_shape
     kernel_height, kernel_width = kernel_shape
     margin_y = kernel_height // 2
     margin_x = kernel_width // 2
-    mask = np.zeros(image_shape, dtype=bool)
+    mask = xp.zeros(image_shape, dtype=xp.bool_)
     mask[
         margin_y : height - margin_y,
         margin_x : width - margin_x,
     ] = True
     return mask
+
+
+def _default_fit_mask(
+    image_shape: tuple[int, int], kernel_shape: tuple[int, int]
+) -> np.ndarray:
+    return _default_fit_mask_impl(np, image_shape, kernel_shape)
+
+
+def _default_fit_mask_cupy(
+    image_shape: tuple[int, int],
+    kernel_shape: tuple[int, int],
+    *,
+    cp: Any,
+) -> Any:
+    return _default_fit_mask_impl(cp, image_shape, kernel_shape)
 
 
 def _invalid_input_mask(
@@ -1195,6 +1643,23 @@ def _invalid_input_mask(
     reference_patch_invalid = _reference_patch_invalid_mask(
         reference,
         kernel_shape,
+    )
+    return center_invalid | reference_patch_invalid
+
+
+def _invalid_input_mask_cupy(
+    reference: Any,
+    target: Any,
+    variance: Any,
+    kernel_shape: tuple[int, int],
+    *,
+    cp: Any,
+) -> Any:
+    center_invalid = ~(cp.isfinite(target) & cp.isfinite(variance))
+    reference_patch_invalid = _reference_patch_invalid_mask_cupy(
+        reference,
+        kernel_shape,
+        cp=cp,
     )
     return center_invalid | reference_patch_invalid
 
@@ -1214,6 +1679,31 @@ def _reference_patch_invalid_mask(
         invalid_reference.astype(np.int16),
         kernel,
         mode="same",
+    )
+    return counts > 0
+
+
+def _reference_patch_invalid_mask_cupy(
+    reference: Any,
+    kernel_shape: tuple[int, int],
+    *,
+    cp: Any,
+) -> Any:
+    invalid_reference = ~cp.isfinite(reference)
+    if not bool(cp.any(invalid_reference).item()):
+        return cp.zeros(reference.shape, dtype=cp.bool_)
+
+    try:
+        from cupyx.scipy.ndimage import maximum_filter
+    except ImportError as exc:
+        raise ImportError(
+            "solve_constant_kernel_device requires cupyx.scipy.ndimage"
+        ) from exc
+    counts = maximum_filter(
+        invalid_reference.astype(cp.uint8),
+        size=kernel_shape,
+        mode="constant",
+        cval=0,
     )
     return counts > 0
 
@@ -1271,7 +1761,7 @@ def _normalize_backend(backend: str) -> str:
 
 
 def resolve_backend(backend: str = "auto") -> str:
-    """Resolve an XPOIS backend name.
+    """Resolve an xPois backend name.
 
     Parameters
     ----------
@@ -1333,6 +1823,40 @@ def _load_cupy() -> tuple[Any, Any]:
     return cp, cupy_fftconvolve
 
 
+def _active_cupy_device_id(cp: Any) -> int:
+    message = (
+        "solve_constant_kernel_device requires at least one visible "
+        "CUDA device"
+    )
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+    if device_count < 1:
+        raise RuntimeError(message)
+    try:
+        return int(cp.cuda.runtime.getDevice())
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+
+
+def _validate_cupy_input_device(
+    value: Any,
+    *,
+    name: str,
+    active_device_id: int,
+    cp: Any,
+) -> None:
+    if value is None or not isinstance(value, cp.ndarray):
+        return
+    device_id = int(value.device.id)
+    if device_id != active_device_id:
+        raise ValueError(
+            f"{name} is on CUDA device {device_id}; "
+            f"active CUDA device is {active_device_id}"
+        )
+
+
 def _accumulate_normal_equations_cupy(
     reference: np.ndarray,
     target: np.ndarray,
@@ -1344,37 +1868,62 @@ def _accumulate_normal_equations_cupy(
     chunk_size: int = 65536,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     cp, _ = _load_cupy()
+    gram_matrix, rhs_vector, row_count = (
+        _accumulate_normal_equations_cupy_device(
+            cp.asarray(reference, dtype=cp.float64),
+            cp.asarray(target, dtype=cp.float64),
+            cp.asarray(variance, dtype=cp.float64),
+            cp.asarray(mask, dtype=cp.bool_),
+            cp.asarray(basis_kernels, dtype=cp.float64),
+            cp.asarray(background_terms, dtype=cp.float64),
+            cp=cp,
+            chunk_size=chunk_size,
+        )
+    )
+    return cp.asnumpy(gram_matrix), cp.asnumpy(rhs_vector), row_count
+
+
+def _accumulate_normal_equations_cupy_device(
+    reference: Any,
+    target: Any,
+    variance: Any,
+    mask: Any,
+    basis_kernels: Any,
+    background_terms: Any,
+    *,
+    cp: Any,
+    chunk_size: int = 65536,
+) -> tuple[Any, Any, int]:
     try:
         cupy_sliding_window_view = cp.lib.stride_tricks.sliding_window_view
     except AttributeError as exc:
         raise ImportError(
-            "backend='cupy' requires a CuPy build with "
+            "solve_constant_kernel_device requires a CuPy build with "
             "cp.lib.stride_tricks.sliding_window_view"
         ) from exc
-
-    reference_gpu = cp.asarray(reference, dtype=cp.float64)
-    target_gpu = cp.asarray(target, dtype=cp.float64)
-    variance_gpu = cp.asarray(variance, dtype=cp.float64)
-    mask_gpu = cp.asarray(mask, dtype=cp.bool_)
-    basis_gpu = cp.asarray(basis_kernels, dtype=cp.float64)
-    background_gpu = cp.asarray(background_terms, dtype=cp.float64)
 
     kernel_height, kernel_width = basis_kernels.shape[1:]
     margin_y = kernel_height // 2
     margin_x = kernel_width // 2
-    basis_flat = basis_gpu[:, ::-1, ::-1].reshape(basis_gpu.shape[0], -1)
+    basis_flat = basis_kernels[:, ::-1, ::-1].reshape(
+        basis_kernels.shape[0],
+        -1,
+    )
     patch_view = cupy_sliding_window_view(
-        reference_gpu,
+        reference,
         (kernel_height, kernel_width),
     )
-    ys, xs = cp.nonzero(mask_gpu)
-    column_count = int(basis_gpu.shape[0] + background_gpu.shape[0])
-    gram_matrix = cp.zeros((column_count, column_count), dtype=cp.float64)
+    ys, xs = cp.nonzero(mask)
+    column_count = int(basis_kernels.shape[0] + background_terms.shape[0])
+    gram_matrix = cp.zeros(
+        (column_count, column_count),
+        dtype=cp.float64,
+    )
     rhs_vector = cp.zeros(column_count, dtype=cp.float64)
-    row_count = 0
+    row_count = int(ys.size)
 
-    for start in range(0, int(ys.size), chunk_size):
-        stop = min(start + chunk_size, int(ys.size))
+    for start in range(0, row_count, chunk_size):
+        stop = min(start + chunk_size, row_count)
         y_chunk = ys[start:stop]
         x_chunk = xs[start:stop]
         patch_chunk = patch_view[
@@ -1382,19 +1931,18 @@ def _accumulate_normal_equations_cupy(
             x_chunk - margin_x,
         ].reshape(stop - start, -1)
         basis_chunk = patch_chunk @ basis_flat.T
-        background_chunk = background_gpu[:, y_chunk, x_chunk].T
+        background_chunk = background_terms[:, y_chunk, x_chunk].T
         design_chunk = cp.concatenate(
             (basis_chunk, background_chunk),
             axis=1,
         )
-        weights = 1.0 / cp.sqrt(variance_gpu[y_chunk, x_chunk])
+        weights = 1.0 / cp.sqrt(variance[y_chunk, x_chunk])
         weighted_design = design_chunk * weights[:, None]
-        weighted_target = target_gpu[y_chunk, x_chunk] * weights
+        weighted_target = target[y_chunk, x_chunk] * weights
         gram_matrix += weighted_design.T @ weighted_design
         rhs_vector += weighted_design.T @ weighted_target
-        row_count += int(y_chunk.size)
 
-    return cp.asnumpy(gram_matrix), cp.asnumpy(rhs_vector), row_count
+    return gram_matrix, rhs_vector, row_count
 
 
 def _load_numba_cuda() -> Any:
@@ -1639,8 +2187,11 @@ def _load_cutile() -> tuple[Any, Any]:
 
 
 @lru_cache(maxsize=1)
-def _cutile_design_rhs_kernel() -> Any:
-    _, ct = _load_cutile()
+def _cutile_mma_normal_equations_kernel() -> Any:
+    if TYPE_CHECKING:
+        import cuda.tile as ct
+    else:
+        _, ct = _load_cutile()
 
     @ct.kernel
     def kernel(
@@ -1649,144 +2200,151 @@ def _cutile_design_rhs_kernel() -> Any:
         variance,
         y_indices,
         x_indices,
-        basis_kernels,
+        padded_basis,
         background_terms,
-        partial_rhs,
-        row_count: ct.Constant[int],
+        partial_normal,
+        # A runtime row count lets masks of any size share one compiled
+        # kernel; only structural parameters are compile-time constants.
+        row_count,
         rows_per_tile: ct.Constant[int],
+        k_tile: ct.Constant[int],
+        normal_width: ct.Constant[int],
+        column_count: ct.Constant[int],
         basis_count: ct.Constant[int],
         kernel_height: ct.Constant[int],
         kernel_width: ct.Constant[int],
+        k_tile_count: ct.Constant[int],
     ):
         block = ct.bid(0)
-        column = ct.bid(1)
-        row_number = block * rows_per_tile + ct.arange(
-            rows_per_tile,
-            dtype=ct.int32,
-        )
-        valid = row_number < row_count
+        local_row = ct.arange(rows_per_tile, dtype=ct.int32)
+        row_number = block * rows_per_tile + local_row
+        valid_row = row_number < row_count
         y = ct.gather(y_indices, row_number, padding_value=0)
         x = ct.gather(x_indices, row_number, padding_value=0)
+        y_column = ct.reshape(y, (rows_per_tile, 1))
+        x_column = ct.reshape(x, (rows_per_tile, 1))
+        valid_row_column = ct.reshape(valid_row, (rows_per_tile, 1))
         margin_y = kernel_height // 2
         margin_x = kernel_width // 2
-        basis_value = ct.full((rows_per_tile,), 0.0, dtype=ct.float64)
-        for ky in range(kernel_height):
-            ref_y = y + ky - margin_y
-            basis_y = kernel_height - 1 - ky
-            for kx in range(kernel_width):
-                ref_x = x + kx - margin_x
-                basis_x = kernel_width - 1 - kx
-                reference_value = ct.gather(
-                    reference,
-                    (ref_y, ref_x),
-                    padding_value=0.0,
-                )
-                kernel_value = ct.gather(
-                    basis_kernels,
-                    (column, basis_y, basis_x),
-                    padding_value=0.0,
-                )
-                basis_value += reference_value * kernel_value
+        kernel_size = kernel_height * kernel_width
+        # Project each image patch onto every basis column once. The former
+        # kernel repeated this convolution for every Gram-matrix pair.
+        design = ct.zeros(
+            (rows_per_tile, normal_width),
+            dtype=ct.float64,
+        )
 
-        background_index = column - basis_count
-        background_value = ct.gather(
+        for tile_k in range(k_tile_count):
+            flat_kernel_index = tile_k * k_tile + ct.arange(
+                k_tile,
+                dtype=ct.int32,
+            )
+            kernel_y = flat_kernel_index // kernel_width
+            kernel_x = flat_kernel_index - kernel_y * kernel_width
+            ref_y = y_column + ct.reshape(kernel_y, (1, k_tile)) - margin_y
+            ref_x = x_column + ct.reshape(kernel_x, (1, k_tile)) - margin_x
+            valid_kernel = flat_kernel_index < kernel_size
+            gather_mask = valid_row_column & ct.reshape(
+                valid_kernel,
+                (1, k_tile),
+            )
+            patch = ct.gather(
+                reference,
+                (ref_y, ref_x),
+                mask=gather_mask,
+                padding_value=0.0,
+            )
+            basis_tile = ct.load(
+                padded_basis,
+                index=(tile_k, 0),
+                shape=(k_tile, normal_width),
+            )
+            design = ct.mma(patch, basis_tile, design)
+
+        columns = ct.arange(normal_width, dtype=ct.int32)
+        column_row = ct.reshape(columns, (1, normal_width))
+        background_index = column_row - basis_count
+        background = ct.gather(
             background_terms,
-            (background_index, y, x),
+            (background_index, y_column, x_column),
             padding_value=0.0,
         )
-        design = ct.where(column < basis_count, basis_value, background_value)
-        target_value = ct.gather(target, (y, x), padding_value=0.0)
-        variance_value = ct.gather(variance, (y, x), padding_value=1.0)
-        term = design * target_value / variance_value
-        total = ct.sum(ct.where(valid, term, 0.0))
-        ct.scatter(partial_rhs, (block, column), total)
+        design = ct.where(column_row < basis_count, design, background)
+        target_value = ct.gather(
+            target,
+            (y_column, x_column),
+            padding_value=0.0,
+        )
+        design = ct.where(column_row == column_count, target_value, design)
+        design = ct.where(
+            column_row <= column_count,
+            design,
+            ct.zeros(
+                (rows_per_tile, normal_width),
+                dtype=ct.float64,
+            ),
+        )
+        variance_value = ct.gather(
+            variance,
+            (y_column, x_column),
+            padding_value=1.0,
+        )
+        weighted = design / ct.sqrt(variance_value)
+        weighted = ct.where(
+            valid_row_column,
+            weighted,
+            ct.zeros(
+                (rows_per_tile, normal_width),
+                dtype=ct.float64,
+            ),
+        )
+        # Appending the weighted target makes one MMA produce both D.T @ D
+        # and D.T @ y. Padded rows and columns are explicitly zero.
+        normal = ct.mma(
+            ct.transpose(weighted),
+            weighted,
+            ct.zeros((normal_width, normal_width), dtype=ct.float64),
+        )
+        normal_rows = ct.reshape(
+            ct.arange(normal_width, dtype=ct.int32),
+            (normal_width, 1),
+        )
+        normal_columns = ct.reshape(
+            ct.arange(normal_width, dtype=ct.int32),
+            (1, normal_width),
+        )
+        ct.scatter(
+            partial_normal,
+            (block, normal_rows, normal_columns),
+            normal,
+            mask=(normal_rows < column_count)
+            & (normal_columns <= column_count),
+        )
 
     return kernel
 
 
-@lru_cache(maxsize=1)
-def _cutile_design_gram_kernel() -> Any:
-    _, ct = _load_cutile()
-
-    @ct.kernel
-    def kernel(
-        reference,
-        variance,
-        y_indices,
-        x_indices,
-        basis_kernels,
-        background_terms,
-        partial_gram,
-        row_count: ct.Constant[int],
-        rows_per_tile: ct.Constant[int],
-        basis_count: ct.Constant[int],
-        kernel_height: ct.Constant[int],
-        kernel_width: ct.Constant[int],
-    ):
-        block = ct.bid(0)
-        left = ct.bid(1)
-        right = ct.bid(2)
-        row_number = block * rows_per_tile + ct.arange(
-            rows_per_tile,
-            dtype=ct.int32,
-        )
-        valid = row_number < row_count
-        y = ct.gather(y_indices, row_number, padding_value=0)
-        x = ct.gather(x_indices, row_number, padding_value=0)
-        margin_y = kernel_height // 2
-        margin_x = kernel_width // 2
-        left_basis = ct.full((rows_per_tile,), 0.0, dtype=ct.float64)
-        right_basis = ct.full((rows_per_tile,), 0.0, dtype=ct.float64)
-        for ky in range(kernel_height):
-            ref_y = y + ky - margin_y
-            basis_y = kernel_height - 1 - ky
-            for kx in range(kernel_width):
-                ref_x = x + kx - margin_x
-                basis_x = kernel_width - 1 - kx
-                reference_value = ct.gather(
-                    reference,
-                    (ref_y, ref_x),
-                    padding_value=0.0,
-                )
-                left_kernel = ct.gather(
-                    basis_kernels,
-                    (left, basis_y, basis_x),
-                    padding_value=0.0,
-                )
-                right_kernel = ct.gather(
-                    basis_kernels,
-                    (right, basis_y, basis_x),
-                    padding_value=0.0,
-                )
-                left_basis += reference_value * left_kernel
-                right_basis += reference_value * right_kernel
-
-        left_background = ct.gather(
-            background_terms,
-            (left - basis_count, y, x),
-            padding_value=0.0,
-        )
-        right_background = ct.gather(
-            background_terms,
-            (right - basis_count, y, x),
-            padding_value=0.0,
-        )
-        left_design = ct.where(
-            left < basis_count,
-            left_basis,
-            left_background,
-        )
-        right_design = ct.where(
-            right < basis_count,
-            right_basis,
-            right_background,
-        )
-        variance_value = ct.gather(variance, (y, x), padding_value=1.0)
-        term = left_design * right_design / variance_value
-        total = ct.sum(ct.where(valid, term, 0.0))
-        ct.scatter(partial_gram, (block, left, right), total)
-
-    return kernel
+@lru_cache(maxsize=4)
+def _cached_cutile_padded_basis(
+    device_id: int,
+    basis_shape: tuple[int, int, int],
+    normal_width: int,
+    basis_values: bytes,
+) -> Any:
+    """Retain at most four immutable padded uploads across bases/devices."""
+    cp, _ = _load_cutile()
+    basis = np.frombuffer(basis_values, dtype=np.float64).reshape(basis_shape)
+    kernel_size = basis_shape[1] * basis_shape[2]
+    k_tile = _CUTILE_MMA_K_TILE
+    padded_rows = math.ceil(kernel_size / k_tile) * k_tile
+    padded = np.zeros((padded_rows, normal_width), dtype=np.float64)
+    padded[:kernel_size, : basis_shape[0]] = (
+        basis[:, ::-1, ::-1].reshape(basis_shape[0], -1).T
+    )
+    with cp.cuda.Device(device_id):
+        # Finish the miss's upload before publishing it to another stream.
+        # Kernels only read this private cached array.
+        return cp.asarray(padded, blocking=True)
 
 
 def _accumulate_normal_equations_cutile(
@@ -1796,21 +2354,23 @@ def _accumulate_normal_equations_cutile(
     mask: np.ndarray,
     basis_kernels: np.ndarray,
     background_terms: np.ndarray,
-    *,
-    rows_per_tile: int = _CUTILE_ROWS_PER_TILE,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     cp, ct = _load_cutile()
     reference_gpu = cp.asarray(reference, dtype=cp.float64)
     target_gpu = cp.asarray(target, dtype=cp.float64)
     variance_gpu = cp.asarray(variance, dtype=cp.float64)
     mask_gpu = cp.asarray(mask, dtype=cp.bool_)
-    basis_gpu = cp.asarray(basis_kernels, dtype=cp.float64)
     background_gpu = cp.asarray(background_terms, dtype=cp.float64)
     ys, xs = cp.nonzero(mask_gpu)
     ys = ys.astype(cp.int32, copy=False)
     xs = xs.astype(cp.int32, copy=False)
     row_count = int(ys.size)
     column_count = int(basis_kernels.shape[0] + background_terms.shape[0])
+    rows_per_tile = (
+        _CUTILE_MMA_LARGE_ROWS_PER_TILE
+        if row_count >= _CUTILE_MMA_LARGE_ROW_THRESHOLD
+        else _CUTILE_MMA_SMALL_ROWS_PER_TILE
+    )
     block_count = math.ceil(row_count / rows_per_tile)
     if block_count == 0:
         return (
@@ -1819,51 +2379,47 @@ def _accumulate_normal_equations_cutile(
             0,
         )
 
-    partial_gram = cp.empty(
-        (block_count, column_count, column_count),
+    kernel_height, kernel_width = basis_kernels.shape[1:]
+    # cuda.tile MMA dimensions are powers of two. Reserve the next column
+    # after the design for the weighted target.
+    normal_width = 1 << column_count.bit_length()
+    kernel_size = int(kernel_height * kernel_width)
+    k_tile = _CUTILE_MMA_K_TILE
+    k_tile_count = math.ceil(kernel_size / k_tile)
+    padded_basis = _cached_cutile_padded_basis(
+        int(cp.cuda.runtime.getDevice()),
+        basis_kernels.shape,
+        normal_width,
+        np.asarray(basis_kernels, dtype=np.float64).tobytes(),
+    )
+    partial_normal = cp.empty(
+        (block_count, column_count, column_count + 1),
         dtype=cp.float64,
     )
-    partial_rhs = cp.empty((block_count, column_count), dtype=cp.float64)
-    kernel_height, kernel_width = basis_kernels.shape[1:]
     stream = cp.cuda.get_current_stream()
     try:
         ct.launch(
             stream,
-            (block_count, column_count, column_count),
-            _cutile_design_gram_kernel(),
-            (
-                reference_gpu,
-                variance_gpu,
-                ys,
-                xs,
-                basis_gpu,
-                background_gpu,
-                partial_gram,
-                row_count,
-                int(rows_per_tile),
-                int(basis_kernels.shape[0]),
-                int(kernel_height),
-                int(kernel_width),
-            ),
-        )
-        ct.launch(
-            stream,
-            (block_count, column_count, 1),
-            _cutile_design_rhs_kernel(),
+            (block_count, 1, 1),
+            _cutile_mma_normal_equations_kernel(),
             (
                 reference_gpu,
                 target_gpu,
                 variance_gpu,
                 ys,
                 xs,
-                basis_gpu,
+                padded_basis,
                 background_gpu,
-                partial_rhs,
+                partial_normal,
                 row_count,
                 int(rows_per_tile),
+                int(k_tile),
+                int(normal_width),
+                int(column_count),
                 int(basis_kernels.shape[0]),
                 int(kernel_height),
                 int(kernel_width),
+                int(k_tile_count),
             ),
         )
     except Exception as exc:
@@ -1871,8 +2427,9 @@ def _accumulate_normal_equations_cutile(
             "backend='cutile' failed to compile or launch its cuda.tile "
             "accumulator; check that cuda-tile and tileiras versions match"
         ) from exc
-    gram_matrix = cp.asnumpy(partial_gram.sum(axis=0))
-    rhs_vector = cp.asnumpy(partial_rhs.sum(axis=0))
+    normal = partial_normal.sum(axis=0)
+    gram_matrix = cp.asnumpy(normal[:, :column_count])
+    rhs_vector = cp.asnumpy(normal[:, column_count])
     return gram_matrix, rhs_vector, row_count
 
 

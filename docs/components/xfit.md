@@ -56,8 +56,8 @@ masks and variances select and weight fitted pixels. Results include fit
 status, evaluation counts, valid-pixel coverage, fitted and zero-signal
 chi-square statistics, covariance, standard errors, and an explicit
 uncertainty-validity reason. Nonfinite image or variance values are accepted
-only where the mask excludes that pixel; residual entries for excluded
-nonfinite image values are not meaningful.
+only where the mask excludes that pixel. Interpret residual entries at pixels
+with finite image values.
 
 Python inputs may be NumPy arrays, CuPy arrays, or array-like values accepted
 by the resolved backend. `backend="auto"` can therefore transfer a host input
@@ -66,13 +66,35 @@ applies one mask or variance plane to every channel of each candidate. If the
 batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
+An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
+form its weighted 8-by-8 normal equations directly. Select this backend
+explicitly and install the `cuphoton[cutile]` extra on Linux with Python
+3.12 or 3.13. Final rank and covariance diagnostics use the analytic
+Jacobian and a singular-value factorization. Sampled-stamp fits stay on the
+NumPy or CuPy backends. The Tile backend requires analytic derivatives and
+rejects finite-difference fitting.
+
+The `cutile` extra installs cuTile's Python package. Execution also needs
+`tileiras` and its companion CUDA compiler libraries, supplied by a compatible
+CUDA Toolkit or cuTile's optional `tileiras` extra. When using compiler wheels,
+keep `nvidia-cuda-tileiras`, `nvidia-cuda-nvcc` and `nvidia-nvvm` on the same
+CUDA major/minor release; mismatches make cuTile fall back to the system
+compiler. See the [cuTile 1.4 installation guide](https://github.com/NVIDIA/cutile-python/blob/v1.4.0/docs/source/quickstart.rst#L25-L49)
+for compiler setup. GPU support depends on the compiler version.
+
+Compare warmed end-to-end Gaussian fits with:
+
+```bash
+uv run --locked --python 3.12 --extra gpu --extra cutile \
+  python examples/xfit/benchmark_gaussian.py --dtype float64
+```
+
 Split mode uses diagonal per-plane weights. When the difference plane is
 derived from the positive and negative planes, those residuals are correlated;
-the reported split-mode covariance is therefore not statistically calibrated
-unless the caller's weighting model accounts for that dependence. The XScan
-feature adapter accepts difference-mode xFit runs only.
-`uncertainty_valid` establishes numerical and rank validity; it does not
-override this split-plane calibration caveat.
+statistical calibration of the reported covariance requires a caller-supplied
+weighting model that accounts for that dependence. `uncertainty_valid` reports
+numerical and rank validity. The xScan feature adapter requires difference-mode
+xFit runs.
 
 ## CLI and artifacts
 
@@ -96,36 +118,160 @@ and pickle-backed inputs are rejected. A successful fit writes
 `fit-arrays.npz`; residuals remain numeric arrays within the NPZ
 archive.
 
-These inputs and outputs are data-bearing, not privacy-sanitized. Input
-archives contain candidate identifiers and exact image pixels; fit artifacts
-contain identifiers, hashes, parameters, uncertainties, covariance, and
-optional residuals. Do not publish them unless the underlying data and
-metadata are cleared for release.
+### FITS images and candidate positions
+
+To fit directly from aligned FITS images, pass a JSON candidate manifest
+instead of preparing an NPZ of stamps:
+
+```json
+{
+  "schema": "cuphoton.xfit.fits-input/v1",
+  "mode": "difference",
+  "stamp_shape": [51, 51],
+  "images": [
+    {
+      "path": "difference.fits",
+      "hdu": 1,
+      "mask_hdu": 2,
+      "variance_hdu": 3,
+      "bad_mask_bits": 15
+    }
+  ],
+  "candidates": [
+    {"candidate_id": "source-a", "x": 100, "y": 200},
+    {"candidate_id": "source-b", "x": 300, "y": 400}
+  ]
+}
+```
+
+```bash
+cuphoton xfit fit-dipoles --input candidates.json \
+  --model gaussian --mode difference --backend cupy \
+  --fits-reader auto --output-dir fit-run
+```
+
+FITS paths resolve relative to the manifest. HDUs are zero-based integer
+indices. Candidate centers are zero-based integer `(x, y)` pixels;
+`stamp_shape` is odd positive `[height, width]`. Candidate IDs retain their
+order and must be unique integers or unique strings. Stamps that extend
+outside an image are rejected.
+
+Difference mode reads one supplied difference plane. Split mode reads exactly
+three supplied planes in **difference, positive, negative** order. All planes
+must already be aligned and have matching dimensions. This route performs
+no registration, image subtraction, candidate detection or background removal.
+
+Mask and variance HDUs are optional. A mask pixel is included when none of
+its `bad_mask_bits` are set; omit that field to exclude every nonzero mask
+pixel. The example value `15` selects bits 0–3; choose the bits appropriate
+for your own data. No instrument-specific mask policy is assumed. Split mode
+requires variance on every plane or on none. Nonfinite values retain the
+ordinary xFit validation rules described above.
+
+Optional `initial` is a numeric array with one parameter row per candidate,
+using the same stamp-local model coordinates as NPZ inputs. Sampled-stamp
+models accept `"stamp_basis": {"path": "psf.fits", "hdu": 0}`.
+
+`--fits-reader auto` uses Astropy for NumPy fits and selects xDR for supported
+GPU-fit inputs when its dependencies are available. `astropy` selects CPU
+FITS decoding; `xdr` requires the xDR route and reports unsupported inputs.
+GPU fits crop and retain stamps on device. The reader uses one bounding
+rectangle enclosing all candidate stamps where supported. Automatic reads
+of uncompressed cutouts use Astropy sections; explicit xDR reads those
+images in full before cropping. Widely separated candidates can therefore
+read much of an image even when the stamps are small.
+Selecting xDR does not assert native GPUDirect Storage use. Run artifacts
+record the manifest and source-file hashes, selected reader and any automatic
+fallback. Existing NPZ loading is unaffected by this option.
+
+Input archives contain candidate identifiers and exact image pixels. Fit
+artifacts contain identifiers, hashes, parameters, uncertainties, covariance,
+and optional residuals. Confirm that the underlying data and metadata are cleared
+for release before publishing these artifacts.
 
 For the sampled-stamp model, choose `--stamp-evaluation bilinear`,
-`bilinear-vignetted`, or `finite-volume` and provide `stamp_basis` in the input
-archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
+`bilinear-vignetted`, or `finite-volume` and provide `stamp_basis` in the
+input archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
 `--max-evaluations`, and `--use-finite-difference`. Gaussian fits use their
-analytic Jacobian unless finite differences are requested; sampled-stamp fits
-always use finite differences and record that resolved choice in the effective
-configuration.
-`--x-tol` is an absolute step-norm tolerance; unlike a parameter-relative
-criterion, it cannot declare convergence merely because a periodic parameter
-has drifted to a large equivalent value.
+analytic Jacobian unless finite differences are requested; sampled-stamp
+fits always use finite differences and record that resolved choice in the
+effective configuration. `--x-tol` is an absolute step-norm tolerance, so
+its convergence criterion stays consistent when a periodic parameter drifts
+to a large equivalent value.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
-or `float64` to run the solver at an explicit precision without changing the
-input arrays or their recorded per-candidate hashes. Float64 is preferable for
+or `float64` to run the solver at an explicit precision while preserving the
+input arrays and their recorded per-candidate hashes. Float64 is preferable for
 ill-conditioned observational fits when the additional compute cost is
 acceptable.
 
 See [Data and artifact contracts](../data-artifacts.md#xfit-dipole-batches)
 for the stable shapes and output fields.
 
+## Distributed fitting
+
+`fit-dipoles --executor dragon|mpi` distributes independent candidate chunks
+across GPUs. The default `--executor local` retains the original batch fit.
+Distributed fitting requires `--backend cupy` or `--backend cutile`, a shared
+filesystem for the input and output, and the same installed environment on
+every worker. `--chunk-size` sets candidates per task independently of worker
+count. Keep it fixed for matched comparisons; candidate IDs and input order
+are restored in the merged artifacts.
+The task count must be at least the MPI rank count. Dragon uses the smaller
+of the requested worker count and task count.
+
+The same executor commands accept a FITS candidate manifest. Planning checks
+headers, candidate bounds and source hashes without decoding image pixels.
+Each bound worker reads the candidate region and retains its stamps during
+worker setup, before measured rounds. The first ordinary artifact finalization
+reads host stamps for per-candidate input hashes after the timed worker phase.
+The coordinator retains these stamps for later rounds and verifies referenced
+file hashes before reuse. Setting `retain_input=False` in the workload API
+instead reloads the host stamps each round.
+Worker item receipts retain `fits_setup_reads`; the merged scientific
+summary separates `fits_worker_setup_reads` from
+`fits_finalizer_audit_reads`. Each read identifies its source and plane role;
+the audit receipt's `reused` flag distinguishes retained data from a new read.
+These setup/finalization reads are separate from reported worker timing;
+include them explicitly when measuring a complete ingestion-to-result run.
+All referenced FITS files must be visible to every worker and the coordinator.
+
+Under an allocation with Dragon configured, run one warmup and two measured
+passes with workers retained across all three passes:
+
+```bash
+dragon .venv/bin/cuphoton xfit fit-dipoles \
+  --executor dragon --max-workers 8 \
+  --input /shared/dipoles.npz --model gaussian --backend cupy \
+  --chunk-size 256 --output-dir /shared/results/xfit-dragon \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+With Open MPI, use the installed rank wrapper to narrow GPU visibility before
+Python starts. The parent mask must list allocated GPUs in local-rank order:
+
+```bash
+: "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"
+mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+  .venv/bin/cuphoton-openmpi-rank-exec -- \
+  .venv/bin/cuphoton xfit fit-dipoles \
+  --executor mpi --input /shared/dipoles.npz --model gaussian --backend cupy \
+  --chunk-size 256 --output-dir /shared/results/xfit-mpi \
+  --warmup-rounds 1 --measure-rounds 2
+```
+
+The output directory must be new. Its basename is the run ID: 1–128 ASCII
+letters, digits, dots, underscores or hyphens, starting with a letter or digit.
+Each pass retains normal xFit artifacts
+under `rounds/<round-id>/scientific/`, including warmup passes. Without round
+flags, a single pass writes them under `scientific/`. The execution summary
+records placement, item receipts and round timing; scientific merging and
+validation occur after the timed worker phase.
+
 ## Opt-in observational-data checks
 
-No observational fixture is committed. The external checks read caller-owned
-FITS files and create every injection in memory.
+The observational checks read caller-supplied FITS files and create every
+injection in memory.
 
 The public ZTF check uses an independently shifted empirical difference PSF
 on quiet regions of a real subtraction image. Download the two products from
@@ -167,5 +313,5 @@ An optional Rubin check accepts a Parquet candidate inventory through
 `CUPHOTON_XFIT_RUBIN_METADATA`. Each row must identify a local difference
 FITS path, pixel center, stamp size, and pipeline `candidate_isDipole` value.
 The check reads `IMAGE`, `MASK`, and `VARIANCE` directly from FITS. That
-pipeline flag is useful for a dipole smoke test, but is not a human-reviewed
-real/bogus label and must not be treated as training truth.
+pipeline flag supports dipole smoke tests. Real/bogus training requires
+human-reviewed labels.

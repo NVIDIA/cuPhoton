@@ -9,9 +9,9 @@ gzip-compressed tile payloads plus per-tile (offset, length) tables, and
 produces a contiguous device buffer holding the decompressed tiles plus the
 out-offsets table.
 
-No host roundtrip on the compressed-data path. The only host cost is parsing
-the per-tile gzip headers, which requires a small peek of the first ~16 bytes
-of each tile — done via a single batched D2H (`N * 16` bytes).
+No host roundtrip on the compressed-data path except gzip header parsing.
+Fixed and variable prefixes are gathered in bounded batches; uncommon
+variable headers are extended geometrically up to a fixed safety limit.
 """
 
 from __future__ import annotations
@@ -19,12 +19,15 @@ from __future__ import annotations
 import ctypes
 import importlib.util
 import os
+import platform
 import struct
+import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
+_REPACK_DEFLATE_KERNEL = None
 _DEFLATE_CODEC = None
 _CPP_EXT = None
 _CPP_EXT_PROBED = False
@@ -34,6 +37,9 @@ _FALLBACK_WARNED = False
 _NVCOMP_LIB_ENV = "CUPHOTON_XDR_NVCOMP_LIB_DIR"
 _KVIKIO_LIB_ENV = "CUPHOTON_XDR_KVIKIO_LIB_DIR"
 _RAPIDS_LOGGER_LIB_ENV = "CUPHOTON_XDR_RAPIDS_LOGGER_LIB_DIR"
+_MAX_GZIP_HEADER_BYTES = 1 << 20
+# Each individual header must fit within one aggregate gather group.
+_MAX_GZIP_PROBE_GATHER_BYTES = _MAX_GZIP_HEADER_BYTES
 
 
 def _load_shared_library(path: Path | str) -> None:
@@ -41,7 +47,10 @@ def _load_shared_library(path: Path | str) -> None:
 
 
 def _package_dir(module_name: str) -> Path | None:
-    spec = importlib.util.find_spec(module_name)
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ModuleNotFoundError:
+        return None
     if spec is None:
         return None
     locations = spec.submodule_search_locations
@@ -66,6 +75,7 @@ def _find_library_path(
     *,
     env_var: str,
     description: str,
+    recursive: bool = True,
 ) -> Path:
     env_value = os.environ.get(env_var)
     if env_value:
@@ -83,14 +93,16 @@ def _find_library_path(
         if path is not None:
             return path
 
-    for name in names:
-        matches = sorted(package_base.rglob(name))
-        if matches:
-            return matches[0]
+    if recursive:
+        for name in names:
+            matches = sorted(package_base.rglob(name))
+            if matches:
+                return matches[0]
 
     raise ImportError(
         f"Could not find {description} under {package_base}. "
-        "Searched lib64, lib, and recursive matches for: "
+        "Searched lib64, lib"
+        f"{' and subdirectories' if recursive else ''} for: "
         f"{', '.join(names)}. "
         f"Set {env_var} to the directory containing the library."
     )
@@ -107,6 +119,22 @@ def _candidate_cuda_homes():
             if path not in seen:
                 seen.add(path)
                 yield path
+    for module_name in ("nvidia.cu13", "nvidia.cuda_runtime"):
+        path = _package_dir(module_name)
+        if path is not None and path not in seen:
+            seen.add(path)
+            yield path
+    prefix = Path(sys.prefix)
+    if (prefix / "conda-meta").is_dir():
+        machine = platform.machine()
+        target = "sbsa" if machine == "aarch64" else machine
+        for path in (
+            prefix,
+            prefix / "targets" / f"{target}-linux",
+        ):
+            if path not in seen:
+                seen.add(path)
+                yield path
     default = Path("/usr/local/cuda")
     if default not in seen:
         yield default
@@ -117,25 +145,9 @@ def _preload_cudart() -> None:
     for cuda_home in _candidate_cuda_homes():
         for lib_name in ("lib64", "lib"):
             lib_dir = cuda_home / lib_name
-            candidates.extend(
-                [
-                    lib_dir / "libcudart.so.13",
-                    lib_dir / "libcudart.so",
-                ]
-            )
-
-    cuda_runtime_base = _package_dir("nvidia.cuda_runtime")
-    if cuda_runtime_base is not None:
-        runtime_lib = cuda_runtime_base / "lib"
-        candidates.extend(
-            [
-                runtime_lib / "libcudart.so.13",
-                runtime_lib / "libcudart.so",
-            ]
-        )
+            candidates.append(lib_dir / "libcudart.so.13")
 
     candidates.append("libcudart.so.13")
-    candidates.append("libcudart.so")
 
     last_error: OSError | None = None
     for candidate in candidates:
@@ -149,9 +161,10 @@ def _preload_cudart() -> None:
 
     detail = f" Last loader error was: {last_error}" if last_error else ""
     raise ImportError(
-        "Could not preload libcudart for "
+        "Could not preload libcudart.so.13 for "
         "cuphoton.xdr._nvcomp_batch_ext. "
-        "Set CUDA_HOME to a CUDA toolkit root containing libcudart." + detail
+        "Install cuphoton[io] or set CUDA_HOME to a CUDA 13 toolkit root."
+        + detail
     )
 
 
@@ -159,35 +172,40 @@ def _preload_gpu_package_libraries() -> None:
     nvcomp_base = _package_dir("nvidia.libnvcomp")
     rapids_logger_base = _package_dir("rapids_logger")
     kvikio_base = _package_dir("libkvikio")
+    prefix = Path(sys.prefix)
     if (
         nvcomp_base is None
         or rapids_logger_base is None
         or kvikio_base is None
     ):
-        raise ImportError(
-            "Could not find libkvikio, rapids-logger, or "
-            "nvidia-libnvcomp Python packages required by "
-            "cuphoton.xdr._nvcomp_batch_ext."
-        )
+        if not (prefix / "conda-meta").is_dir():
+            raise ImportError(
+                "Could not find libkvikio, rapids-logger, or "
+                "nvidia-libnvcomp Python packages required by "
+                "cuphoton.xdr._nvcomp_batch_ext."
+            )
 
     libraries = [
         _find_library_path(
-            nvcomp_base,
+            nvcomp_base or prefix,
             ("libnvcomp.so.5", "libnvcomp.so"),
             env_var=_NVCOMP_LIB_ENV,
             description="nvCOMP library",
+            recursive=nvcomp_base is not None,
         ),
         _find_library_path(
-            rapids_logger_base,
+            rapids_logger_base or prefix,
             ("librapids_logger.so",),
             env_var=_RAPIDS_LOGGER_LIB_ENV,
             description="RAPIDS logger library",
+            recursive=rapids_logger_base is not None,
         ),
         _find_library_path(
-            kvikio_base,
+            kvikio_base or prefix,
             ("libkvikio.so",),
             env_var=_KVIKIO_LIB_ENV,
             description="KvikIO library",
+            recursive=kvikio_base is not None,
         ),
     ]
     for library in libraries:
@@ -266,7 +284,8 @@ def get_native_batch_builder(required: bool = False):
         msg = (
             "native_batcher=True but "
             "`_nvcomp_batch_ext.NativeBatchBuilder` is "
-            "not importable. Build it from a source checkout with "
+            "not importable. Install `cuphoton[io]` from a native wheel, "
+            "or build it from a source checkout with "
             "`bash src/cuphoton/xdr/src/build.sh` (see "
             "docs/components/xdr.md); the native builder requires KvikIO."
         )
@@ -293,7 +312,8 @@ def get_native_plan_files(required: bool = False):
         msg = (
             "native_batcher=True but "
             "`_nvcomp_batch_ext.plan_native_files` is "
-            "not importable. Build it from a source checkout with "
+            "not importable. Install `cuphoton[io]` from a native wheel, "
+            "or build it from a source checkout with "
             "`bash src/cuphoton/xdr/src/build.sh` (see "
             "docs/components/xdr.md); the native planner requires CFITSIO."
         )
@@ -441,7 +461,8 @@ def _warn_python_fallback_once() -> None:
         "Python `nvcomp.as_array` fallback path, which is ~6x slower "
         "than the "
         "optional C++ helper (`_nvcomp_batch_ext`). "
-        "To enable the fast path, build the native extension: "
+        "To enable the fast path, install `cuphoton[io]` from a native wheel "
+        "or build the native extension from source: "
         "`bash src/cuphoton/xdr/src/build.sh`."
     )
     if _CPP_EXT_IMPORT_ERROR:
@@ -452,21 +473,28 @@ def _warn_python_fallback_once() -> None:
     warnings.warn(msg, RuntimeWarning, stacklevel=3)
 
 
-def _parse_gzip_header_len(head: bytes) -> int:
-    """Return the length of a gzip RFC 1952 header given its first ~16 bytes.
+class _TruncatedGzipHeader(ValueError):
+    """The supplied prefix ends before its gzip header does."""
+
+
+def _parse_gzip_header_len(head: bytes | memoryview) -> int:
+    """Return the length of a gzip RFC 1952 header within ``head``.
 
     Raises ValueError if the magic bytes are wrong. Handles FEXTRA / FNAME /
-    FCOMMENT / FHCRC flags. Most FITS producers (astropy, cfitsio/fpack) emit
-    a minimal 10-byte header (FLG=0), but we parse for correctness.
+    FCOMMENT / FHCRC flags. Callers must bound the view before the trailer.
     """
     if len(head) < 10 or head[0] != 0x1F or head[1] != 0x8B:
         raise ValueError("not a gzip stream (wrong magic)")
+    if head[2] != 0x08:
+        raise ValueError("gzip stream does not use DEFLATE compression")
     flg = head[3]
+    if flg & 0xE0:
+        raise ValueError("gzip stream uses reserved header flags")
     pos = 10
 
     def require(count: int) -> None:
         if pos + count > len(head):
-            raise ValueError("truncated gzip header")
+            raise _TruncatedGzipHeader("truncated gzip header")
 
     def skip_c_string() -> int:
         nonlocal pos
@@ -493,47 +521,289 @@ def _parse_gzip_header_len(head: bytes) -> int:
     return pos
 
 
+def _integer_values_as_int64(values: np.ndarray, name: str) -> np.ndarray:
+    """Return integer-valued metadata in an int64 array."""
+    if values.dtype.kind in "iu":
+        if values.dtype.kind == "u" and np.any(
+            values > np.iinfo(np.int64).max
+        ):
+            raise ValueError(
+                f"{name} must contain int64-representable values"
+            )
+        return values.astype(np.int64, copy=False)
+    if values.dtype.kind == "f":
+        if np.any(~np.isfinite(values)) or np.any(values != np.trunc(values)):
+            raise ValueError(f"{name} must contain integer-valued numbers")
+        # At this boundary adjacent integers can map to the same float.
+        consecutive_limit = 1 << (np.finfo(values.dtype).nmant + 1)
+        if np.any(np.abs(values) >= consecutive_limit):
+            raise ValueError(
+                f"{name} floating-point values exceed consecutive integer "
+                "precision"
+            )
+        int64_limit = np.float64(1 << 63)
+        if np.any(values < -int64_limit) or np.any(values >= int64_limit):
+            raise ValueError(
+                f"{name} must contain int64-representable values"
+            )
+        return values.astype(np.int64)
+    raise ValueError(f"{name} must contain integer-valued numbers")
+
+
+def _validate_tile_ranges(
+    rel_offsets,
+    lengths,
+    span_nbytes: int,
+    *,
+    minimum_length: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return safe 1D int64 tile ranges within one containing buffer."""
+    rel_offsets = np.asarray(rel_offsets)
+    lengths = np.asarray(lengths)
+    if rel_offsets.ndim != 1 or lengths.ndim != 1:
+        raise ValueError("tile offsets and lengths must be 1D")
+    if rel_offsets.size != lengths.size:
+        raise ValueError("tile offsets and lengths must have the same size")
+    rel_offsets = _integer_values_as_int64(rel_offsets, "tile offsets")
+    lengths = _integer_values_as_int64(lengths, "tile lengths")
+    if np.any(rel_offsets < 0) or np.any(lengths < 0):
+        raise ValueError("tile offsets and lengths must be nonnegative")
+    if minimum_length and np.any(lengths < minimum_length):
+        raise ValueError(
+            "gzip tile is too short to contain a header, DEFLATE payload, "
+            "and trailer"
+        )
+    span_nbytes = int(span_nbytes)
+    if span_nbytes < 0:
+        raise ValueError("tile containing buffer size is negative")
+    if np.any(rel_offsets > span_nbytes) or np.any(
+        lengths > span_nbytes - rel_offsets
+    ):
+        raise ValueError("tile range exceeds containing buffer")
+    return rel_offsets, lengths
+
+
 def _compute_header_sizes_from_device(
-    d_concat, rel_offsets: np.ndarray, lengths: np.ndarray
+    d_concat,
+    rel_offsets: np.ndarray,
+    lengths: np.ndarray,
+    *,
+    _ranges_validated: bool = False,
 ) -> np.ndarray:
     """Parse the gzip header length for each tile.
 
-    Does a single D2H of the first 16 bytes of each tile (N_tiles × 16 bytes),
-    then parses each header on host. Fast for any realistic tile count.
+    Reads fixed prefixes in bounded D2H batches. Tiles with optional fields
+    use geometrically growing prefix reads, capped at one MiB per header and
+    one MiB of gathered data per transfer.
     """
-    rel_offsets = np.asarray(rel_offsets, dtype=np.int64)
-    lengths = np.asarray(lengths, dtype=np.int64)
-    n = rel_offsets.size
-    peek_len = 16
-    if lengths.size != n:
-        raise ValueError("gzip tile offsets and lengths must have same size")
-    buffer_size = int(d_concat.size)
-    invalid_probe = (
-        (lengths < peek_len)
-        | (rel_offsets < 0)
-        | (rel_offsets > buffer_size - peek_len)
-    )
-    if np.any(invalid_probe):
-        raise ValueError(
-            "gzip tile header probe exceeds tile or device buffer"
+    if _ranges_validated:
+        rel_offsets = np.asarray(rel_offsets, dtype=np.int64)
+        lengths = np.asarray(lengths, dtype=np.int64)
+    else:
+        rel_offsets, lengths = _validate_tile_ranges(
+            rel_offsets,
+            lengths,
+            int(d_concat.size),
+            minimum_length=20,
         )
+    n = rel_offsets.size
+    if n == 0:
+        return np.empty(0, dtype=np.int64)
 
     import cupy as cp
 
-    # Gather first `peek_len` bytes of each tile into one contiguous host buf.
-    # Indexing by a CuPy index array is a single kernel launch + D2H.
-    idx = np.repeat(rel_offsets.astype(np.int64), peek_len) + np.tile(
-        np.arange(peek_len, dtype=np.int64), n
-    )
-    peeks_d = d_concat[cp.asarray(idx)]
-    peeks = cp.asnumpy(peeks_d).reshape(n, peek_len).tobytes()
-
-    header_sizes = np.empty(n, dtype=np.int64)
-    for i in range(n):
-        header_sizes[i] = _parse_gzip_header_len(
-            peeks[i * peek_len : (i + 1) * peek_len]
+    def gather_prefixes(indices, probe_lengths):
+        """Gather bounded tile prefixes into one contiguous host buffer."""
+        total = int(np.sum(probe_lengths, dtype=np.int64))
+        if total > _MAX_GZIP_PROBE_GATHER_BYTES:
+            raise RuntimeError("internal gzip probe byte budget exceeded")
+        starts = rel_offsets[np.asarray(indices, dtype=np.int64)]
+        segment_starts = (
+            np.cumsum(probe_lengths, dtype=np.int64) - probe_lengths
         )
+        probe_indices = np.repeat(starts - segment_starts, probe_lengths)
+        probe_indices += np.arange(total, dtype=np.int64)
+        return cp.asnumpy(d_concat[cp.asarray(probe_indices)]).tobytes()
+
+    def bounded_groups(probe_lengths):
+        """Yield slices whose aggregate gather stays within the byte cap."""
+        cumulative = np.empty(len(probe_lengths) + 1, dtype=np.int64)
+        cumulative[0] = 0
+        np.cumsum(probe_lengths, dtype=np.int64, out=cumulative[1:])
+        start = 0
+        while start < len(probe_lengths):
+            limit = int(cumulative[start]) + _MAX_GZIP_PROBE_GATHER_BYTES
+            stop = int(np.searchsorted(cumulative, limit, side="right")) - 1
+            if stop <= start:
+                raise RuntimeError(
+                    "gzip header probe exceeds aggregate byte budget"
+                )
+            yield slice(start, stop)
+            start = stop
+
+    # Gather each fixed RFC 1952 prefix into bounded contiguous host buffers.
+    # Indexing by a CuPy index array is one kernel launch + D2H per group.
+    peek_len = 10
+    header_sizes = np.empty(n, dtype=np.int64)
+    pending: list[int] = []
+    all_indices = np.arange(n, dtype=np.int64)
+    fixed_lengths = np.full(n, peek_len, dtype=np.int64)
+    for group in bounded_groups(fixed_lengths):
+        group_indices = all_indices[group]
+        peeks = gather_prefixes(group_indices, fixed_lengths[group])
+        for cursor, index in enumerate(group_indices):
+            head = peeks[cursor * peek_len : (cursor + 1) * peek_len]
+            try:
+                header_sizes[index] = _parse_gzip_header_len(head)
+            except _TruncatedGzipHeader:
+                pending.append(int(index))
+
+    # Neither the trailer nor a valid two-byte DEFLATE stream can contain
+    # header bytes. Re-gather still-truncated tiles in bounded groups per
+    # growth step so producers that always set FNAME avoid an O(N) sync storm.
+    probe_limit = 64
+    while pending:
+        pending_array = np.asarray(pending, dtype=np.int64)
+        tile_header_limits = lengths[pending_array] - 10
+        max_lengths = np.minimum(tile_header_limits, _MAX_GZIP_HEADER_BYTES)
+        probe_lengths = np.minimum(probe_limit, max_lengths)
+        next_pending: list[int] = []
+        for group in bounded_groups(probe_lengths):
+            group_indices = pending_array[group]
+            group_probe_lengths = probe_lengths[group]
+            prefixes = gather_prefixes(group_indices, group_probe_lengths)
+            cursor = 0
+            entries = enumerate(group_indices, start=group.start)
+            for position, index in entries:
+                probe_length = int(probe_lengths[position])
+                max_length = int(max_lengths[position])
+                stop = cursor + probe_length
+                try:
+                    header_sizes[index] = _parse_gzip_header_len(
+                        prefixes[cursor:stop]
+                    )
+                except _TruncatedGzipHeader:
+                    if probe_length == max_length:
+                        if int(tile_header_limits[position]) > max_length:
+                            raise ValueError(
+                                "gzip header exceeds "
+                                f"{_MAX_GZIP_HEADER_BYTES}-byte safety limit"
+                            ) from None
+                        raise
+                    next_pending.append(int(index))
+                cursor = stop
+        pending = next_pending
+        probe_limit *= 4
     return header_sizes
+
+
+def _validate_gzip_header_sizes(
+    header_sizes,
+    lengths: np.ndarray,
+) -> np.ndarray:
+    """Return safe one-dimensional gzip header lengths."""
+    raw_values = np.asarray(header_sizes)
+    if raw_values.ndim != 1:
+        raise ValueError("header_sizes must be a 1D array")
+    if raw_values.size != lengths.size:
+        raise ValueError("header_sizes must have one entry per gzip tile")
+    values = _integer_values_as_int64(raw_values, "header_sizes")
+    if np.any(values > _MAX_GZIP_HEADER_BYTES):
+        raise ValueError(
+            f"gzip header exceeds {_MAX_GZIP_HEADER_BYTES}-byte safety limit"
+        )
+    if np.any(values < 10):
+        raise ValueError("header_sizes must be at least 10 bytes")
+    if np.any(lengths < 20):
+        raise ValueError(
+            "gzip tile is too short to contain a header, DEFLATE payload, "
+            "and trailer"
+        )
+    if np.any(values > lengths - 10):
+        raise ValueError(
+            "header_sizes leave fewer than 2 DEFLATE payload bytes"
+        )
+    return values
+
+
+def _checked_output_offsets(
+    uncompressed_sizes: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Return per-tile offsets after checking the aggregate size."""
+    total = sum(int(size) for size in uncompressed_sizes)
+    if total > np.iinfo(np.int64).max:
+        raise ValueError(
+            "aggregate uncompressed size exceeds the int64 offset range"
+        )
+
+    offsets = np.empty(uncompressed_sizes.size, dtype=np.int64)
+    if offsets.size:
+        offsets[0] = 0
+        np.cumsum(
+            uncompressed_sizes[:-1],
+            dtype=np.int64,
+            out=offsets[1:],
+        )
+    return offsets, total
+
+
+def _align_deflate_inputs(d_concat, offsets, lengths):
+    """Pack raw DEFLATE payloads at nvCOMP's required four-byte alignment."""
+    if not np.any((int(d_concat.data.ptr) + offsets) % 4):
+        return d_concat, offsets, ()
+
+    import cupy as cp
+
+    global _REPACK_DEFLATE_KERNEL
+    if _REPACK_DEFLATE_KERNEL is None:
+        _REPACK_DEFLATE_KERNEL = cp.RawKernel(
+            r"""
+            extern "C" __global__ void align_deflate(
+                const unsigned char* src, const long long* offsets,
+                const long long* lengths, const long long* out_offsets,
+                unsigned char* dst) {
+                const int tile = blockIdx.x;
+                for (long long i = threadIdx.x; i < lengths[tile];
+                     i += blockDim.x) {
+                    dst[out_offsets[tile] + i] = src[offsets[tile] + i];
+                }
+            }
+            """,
+            "align_deflate",
+        )
+    if np.any(lengths > np.iinfo(np.int64).max - 3):
+        raise ValueError("aligned DEFLATE size exceeds the int64 range")
+    aligned_offsets, total = _checked_output_offsets((lengths + 3) & ~3)
+    packed = cp.empty(total, dtype=cp.uint8)
+    tables = []
+    try:
+        for table in (offsets, lengths, aligned_offsets):
+            tables.append(cp.asarray(table))
+        _REPACK_DEFLATE_KERNEL(
+            (len(offsets),), (256,), (d_concat, *tables, packed)
+        )
+    except Exception:
+        # Keep the input and metadata alive through any queued copies.
+        cp.cuda.get_current_stream().synchronize()
+        raise
+    return packed, aligned_offsets, (d_concat, packed, *tables)
+
+
+def _retain_decode_inputs(d_out, owners):
+    """Keep repacked input alive until the decoded output is released."""
+    import cupy as cp
+
+    memory = cp.cuda.UnownedMemory(
+        int(d_out.data.ptr),
+        int(d_out.nbytes),
+        (d_out, *owners),
+        device_id=int(d_out.device.id),
+    )
+    return cp.ndarray(
+        d_out.shape,
+        dtype=d_out.dtype,
+        memptr=cp.cuda.MemoryPointer(memory, 0),
+    )
 
 
 def gpu_gzip_decompress_batch(
@@ -546,6 +816,7 @@ def gpu_gzip_decompress_batch(
     use_cpp_helper: str | bool = "auto",
     use_native_pool: bool = False,
     keepalive: list | None = None,
+    header_sizes=None,
 ):
     """Batch-decompress gzip tiles already resident on the device.
 
@@ -568,6 +839,10 @@ def gpu_gzip_decompress_batch(
     keepalive : list or None
         Optional owner list that keeps pooled scratch alive until the caller's
         stream event says the decode/scatter work has completed.
+    header_sizes : array-like of int64 or None
+        Optional precomputed per-tile gzip header lengths. When provided,
+        the blocking device-to-host header probe is skipped. Only valid when
+        ``gzip_wrapped=True``.
 
     Returns
     -------
@@ -578,26 +853,49 @@ def gpu_gzip_decompress_batch(
     """
     import cupy as cp
 
-    rel_offsets = np.asarray(rel_offsets, dtype=np.int64)
-    lengths = np.asarray(lengths, dtype=np.int64)
-    uncompressed_sizes = np.asarray(uncompressed_sizes, dtype=np.int64)
-    n = rel_offsets.size
+    concat_size = int(d_concat.size)
+    offset_array, length_array = _validate_tile_ranges(
+        rel_offsets,
+        lengths,
+        concat_size,
+        minimum_length=20 if gzip_wrapped else 0,
+    )
+    n = offset_array.size
+    size_array = np.asarray(uncompressed_sizes)
+    if size_array.ndim != 1:
+        raise ValueError("uncompressed_sizes must be 1D")
+    if size_array.size != n:
+        raise ValueError(
+            "uncompressed_sizes must have one entry per compressed tile"
+        )
+    size_array = _integer_values_as_int64(size_array, "uncompressed_sizes")
+    if np.any(size_array < 0):
+        raise ValueError("uncompressed_sizes must be nonnegative")
 
     if gzip_wrapped:
-        header_sizes = _compute_header_sizes_from_device(
-            d_concat, rel_offsets, lengths
-        )
+        if header_sizes is None:
+            header_sizes = _compute_header_sizes_from_device(
+                d_concat,
+                offset_array,
+                length_array,
+                _ranges_validated=True,
+            )
+        header_sizes = _validate_gzip_header_sizes(header_sizes, length_array)
         trailer_sizes = np.full(n, 8, dtype=np.int64)
     else:
+        if header_sizes is not None:
+            raise ValueError("header_sizes requires gzip_wrapped=True")
         header_sizes = np.zeros(n, dtype=np.int64)
         trailer_sizes = np.zeros(n, dtype=np.int64)
 
-    deflate_offsets = rel_offsets + header_sizes
-    deflate_lengths = lengths - header_sizes - trailer_sizes
+    deflate_offsets = offset_array + header_sizes
+    deflate_lengths = length_array - header_sizes - trailer_sizes
     if np.any(deflate_lengths < 0):
         raise ValueError(
             "negative DEFLATE payload length — malformed gzip tile?"
         )
+
+    out_offsets, total = _checked_output_offsets(size_array)
 
     # Pick the backend.
     if use_cpp_helper is True:
@@ -606,9 +904,13 @@ def gpu_gzip_decompress_batch(
             raise RuntimeError(
                 "use_cpp_helper=True but `_nvcomp_batch_ext` is not "
                 "importable. "
-                "Run `bash src/cuphoton/xdr/src/build.sh` first. "
+                "Install `cuphoton[io]` from a native wheel or run "
+                "`bash src/cuphoton/xdr/src/build.sh` from source. "
                 f"Import error: {_CPP_EXT_IMPORT_ERROR}"
             )
+    elif n == 0:
+        # No backend work is needed, so an automatic fallback is not useful.
+        ext = None
     elif use_cpp_helper is False:
         ext = None
     else:
@@ -616,68 +918,84 @@ def gpu_gzip_decompress_batch(
         if ext is None:
             _warn_python_fallback_once()
 
-    # Allocate one concatenated output buffer and slice it per tile.
-    out_offsets = np.concatenate(
-        ([0], np.cumsum(uncompressed_sizes)[:-1])
-    ).astype(np.int64)
-    total = int(uncompressed_sizes.sum())
-    d_out = (
-        _native_device_empty_uint8(total, ext=ext)
-        if use_native_pool and ext is not None
-        else cp.empty(total, dtype=cp.uint8)
-    )
+    if n == 0:
+        return cp.empty(0, dtype=cp.uint8), out_offsets
 
-    if ext is not None:
-        # C++ path: device pointers + length arrays, no per-tile Python loop.
-        stream_ptr = int(cp.cuda.get_current_stream().ptr)
-        d_concat_ptr = int(d_concat.data.ptr)
-        d_out_ptr = int(d_out.data.ptr)
-        pooled_fn = getattr(ext, "batch_deflate_decompress_pooled", None)
-        if (
-            use_native_pool
-            and pooled_fn is not None
-            and keepalive is not None
-        ):
-            scratch_owner = pooled_fn(
+    d_concat, deflate_offsets, aligned_owners = _align_deflate_inputs(
+        d_concat, deflate_offsets, deflate_lengths
+    )
+    if keepalive is not None:
+        keepalive.extend(aligned_owners)
+
+    try:
+        # Allocate one concatenated output buffer and slice it per tile.
+        d_out = (
+            _native_device_empty_uint8(total, ext=ext)
+            if use_native_pool and ext is not None
+            else cp.empty(total, dtype=cp.uint8)
+        )
+        if aligned_owners and keepalive is None:
+            d_out = _retain_decode_inputs(d_out, aligned_owners)
+        if keepalive is not None:
+            keepalive.append(d_out)
+
+        if ext is not None:
+            # C++ path: device pointers and tables, without a per-tile loop.
+            stream_ptr = int(cp.cuda.get_current_stream().ptr)
+            d_concat_ptr = int(d_concat.data.ptr)
+            d_out_ptr = int(d_out.data.ptr)
+            pooled_fn = getattr(ext, "batch_deflate_decompress_pooled", None)
+            if (
+                use_native_pool
+                and pooled_fn is not None
+                and keepalive is not None
+            ):
+                scratch_owner = pooled_fn(
+                    d_concat_ptr,
+                    deflate_offsets,
+                    deflate_lengths,
+                    d_out_ptr,
+                    out_offsets,
+                    uncompressed_sizes,
+                    stream_ptr,
+                )
+                keepalive.append(scratch_owner)
+                return d_out, out_offsets
+
+            ext.batch_deflate_decompress(
                 d_concat_ptr,
                 deflate_offsets,
                 deflate_lengths,
                 d_out_ptr,
                 out_offsets,
-                uncompressed_sizes,
+                size_array,
                 stream_ptr,
             )
-            keepalive.append(scratch_owner)
             return d_out, out_offsets
 
-        ext.batch_deflate_decompress(
-            d_concat_ptr,
-            deflate_offsets,
-            deflate_lengths,
-            d_out_ptr,
-            out_offsets,
-            uncompressed_sizes,
-            stream_ptr,
-        )
+        # Python fallback: original path, retained for compile-less checkouts.
+        import nvidia.nvcomp as nvcomp
+
+        src_arrays = [
+            nvcomp.as_array(
+                d_concat[
+                    deflate_offsets[i] : deflate_offsets[i]
+                    + deflate_lengths[i]
+                ]
+            )
+            for i in range(n)
+        ]
+        out_arrays = [
+            nvcomp.as_array(
+                d_out[out_offsets[i] : out_offsets[i] + size_array[i]]
+            )
+            for i in range(n)
+        ]
+        codec = _get_codec()
+        codec.decode(src_arrays, out=out_arrays)
         return d_out, out_offsets
-
-    # Python fallback: original path, retained for compile-less checkouts.
-    import nvidia.nvcomp as nvcomp
-
-    src_arrays = [
-        nvcomp.as_array(
-            d_concat[
-                deflate_offsets[i] : deflate_offsets[i] + deflate_lengths[i]
-            ]
-        )
-        for i in range(n)
-    ]
-    out_arrays = [
-        nvcomp.as_array(
-            d_out[out_offsets[i] : out_offsets[i] + uncompressed_sizes[i]]
-        )
-        for i in range(n)
-    ]
-    codec = _get_codec()
-    codec.decode(src_arrays, out=out_arrays)
-    return d_out, out_offsets
+    except Exception:
+        # A failed decode cannot return an output to retain its input owners.
+        if keepalive is None and (aligned_owners or use_native_pool):
+            cp.cuda.get_current_stream().synchronize()
+        raise

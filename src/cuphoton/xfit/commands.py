@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Literal, ParamSpec, TypeVar
+from typing import Any, Literal, ParamSpec, TypeVar
 
 import numpy as np
 
+from cuphoton.core.bulk import validate_identifier
 from cuphoton.core.cli import (
     BoolInvariant,
     CommandError,
@@ -22,6 +24,7 @@ from cuphoton.core.cli import (
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.executor import ExecutorOptions
 
 from ._types import (
     BACKEND_REQUESTS,
@@ -29,6 +32,11 @@ from ._types import (
     FIT_MODES,
     MODEL_NAMES,
     STAMP_EVALUATIONS,
+    BackendRequest,
+    ComputeDType,
+    FitMode,
+    ModelName,
+    StampEvaluation,
 )
 from .io import (
     XFitDataset,
@@ -59,7 +67,11 @@ class PathSpecInvariant(StringInvariant):
 
 
 class ExistingNPZInvariant(ExistingPathInvariant):
-    _type_desc = "existing .npz path"
+    _type_desc = "existing .npz or FITS manifest .json path"
+
+
+class FitsReaderInvariant(SetInvariant):
+    _set = frozenset({"auto", "astropy", "xdr"})
 
 
 class ModelInvariant(SetInvariant):
@@ -127,29 +139,41 @@ class XFitCommand(InvariantAwareCommand):
 
 
 class DataInspectCommand(XFitCommand):
-    """Inspect a pickle-free NPZ of numeric or Unicode arrays."""
+    """Inspect an NPZ candidate batch or FITS candidate manifest."""
 
-    input = None
+    # This CLI path intentionally replaces the base command input stream.
+    input: str | None = None  # type: ignore[assignment]
 
     class InputArg(ExistingNPZInvariant):
         _arg = "--input"
-        _help = "Input .npz containing candidate_id and images arrays."
+        _help = "Input candidate .npz or FITS candidate manifest .json."
         _mandatory = True
 
     def run(self) -> None:
+        assert self.input is not None
         dataset = self._call(load_xfit_dataset, self.input)
         self._emit_json(inspect_xfit_dataset(dataset))
 
 
 class _ValidatedDatasetCommand(XFitCommand):
-    input = None
-    model = None
-    mode = None
+    # This CLI path intentionally replaces the base command input stream.
+    input: str | None = None  # type: ignore[assignment]
+    model: ModelName | None = None
+    mode: FitMode | None = None
+    fits_reader = None
 
     class InputArg(ExistingNPZInvariant):
         _arg = "--input"
-        _help = "Input .npz containing candidate_id and images arrays."
+        _help = "Input candidate .npz or FITS candidate manifest .json."
         _mandatory = True
+
+    class FitsReaderArg(FitsReaderInvariant):
+        _arg = "--fits-reader"
+        _help = (
+            "FITS input reader: auto, astropy, or xdr. [default: %default]"
+        )
+        _mandatory = False
+        _default = "auto"
 
     class ModelArg(ModelInvariant):
         _arg = "--model"
@@ -162,17 +186,24 @@ class _ValidatedDatasetCommand(XFitCommand):
         _mandatory = False
         _default = "difference"
 
-    def _load_dataset(self) -> XFitDataset:
+    def _load_dataset(self, *, device: bool = False) -> XFitDataset:
+        assert self.input is not None
+        reader = self.fits_reader
+        assert reader is not None
+        if not device and reader == "auto":
+            reader = "astropy"
         return self._call(
             load_xfit_dataset,
             self.input,
             model=self.model,
             mode=self.mode,
+            reader=reader,
+            device=device,
         )
 
 
 class DataValidateCommand(_ValidatedDatasetCommand):
-    """Validate an xFit NPZ input for a selected model and image mode."""
+    """Validate an xFit NPZ or FITS input for a model and image mode."""
 
     def run(self) -> None:
         dataset = self._load_dataset()
@@ -186,19 +217,26 @@ class DataValidateCommand(_ValidatedDatasetCommand):
         self._emit_json(payload)
 
 
-class FitDipolesCommand(_ValidatedDatasetCommand):
+class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     """Fit a batch of astronomical dipoles and persist safe artifacts."""
 
-    output_dir = None
-    backend = None
-    compute_dtype = None
-    stamp_evaluation = None
-    stamp_scale = None
+    output_dir: str | None = None
+    backend: BackendRequest | None = None
+    compute_dtype: ComputeDType | None = None
+    stamp_evaluation: StampEvaluation | None = None
+    stamp_scale: float | None = None
     f_tol = None
     x_tol = None
     g_tol = None
     max_evaluations = None
     use_finite_difference = None
+    chunk_size = None
+
+    class ChunkSizeArg(PositiveIntegerInvariant):
+        _arg = "--chunk-size"
+        _help = "Candidates per distributed task. [default: 256]"
+        _mandatory = False
+        _default = None
 
     class OutputDirArg(PathSpecInvariant):
         _arg = "--output-dir"
@@ -207,7 +245,9 @@ class FitDipolesCommand(_ValidatedDatasetCommand):
 
     class BackendArg(BackendInvariant):
         _arg = "--backend"
-        _help = "Array backend: auto, numpy, or cupy. [default: %default]"
+        _help = (
+            "Array backend: auto, numpy, cupy, or cutile. [default: %default]"
+        )
         _mandatory = False
         _default = "auto"
 
@@ -270,6 +310,8 @@ class FitDipolesCommand(_ValidatedDatasetCommand):
         if self.model == "gaussian":
             return "gaussian"
 
+        assert self.stamp_evaluation is not None
+        assert self.stamp_scale is not None
         basis = np.asarray(dataset.stamp_basis)
         if basis.ndim == 3:
             basis = basis[0]
@@ -281,9 +323,77 @@ class FitDipolesCommand(_ValidatedDatasetCommand):
         )
 
     def run(self) -> None:
+        executor_options = self.executor_options()
+        if self.executor != "local":
+            from cuphoton.core.executors import run_workload
+
+            from .executor import prepare_xfit_workload
+
+            if self.executor == "mpi":
+                executor_options["prepare_on_root"] = True
+            assert self.output_dir is not None
+            assert self.input is not None
+            assert self.executor is not None
+            input_path = Path(self.input)
+            output_dir = Path(self.output_dir).expanduser().resolve()
+            self._call(
+                validate_identifier,
+                output_dir.name,
+                field="--output-dir basename",
+            )
+            fit_options = {
+                name: getattr(self, name)
+                for name in (
+                    "model",
+                    "mode",
+                    "backend",
+                    "compute_dtype",
+                    "stamp_evaluation",
+                    "stamp_scale",
+                    "f_tol",
+                    "x_tol",
+                    "g_tol",
+                    "max_evaluations",
+                    "use_finite_difference",
+                    "fits_reader",
+                )
+            }
+            execution_result = self._call(
+                run_workload,
+                executor=self.executor,
+                prepare_workload=lambda rank: prepare_xfit_workload(
+                    input_path=input_path,
+                    chunk_size=self.chunk_size or 256,
+                    fit_options=fit_options,
+                    retain_input=rank == 0,
+                ),
+                output_root=output_dir.parent,
+                run_id=output_dir.name,
+                **executor_options,
+            )
+            if execution_result is not None:
+                self._emit_json(execution_result.to_dict())
+                if execution_result.status != "success":
+                    raise CommandError("distributed xFit execution failed")
+            return
+        if self.chunk_size is not None:
+            raise CommandError(
+                "--chunk-size requires --executor dragon or mpi"
+            )
+
         from . import LMConfig, fit_dipoles
 
-        dataset = self._load_dataset()
+        assert self.output_dir is not None
+        assert self.mode is not None
+        assert self.backend is not None
+        assert self.compute_dtype is not None
+        device = False
+        assert self.input is not None
+        if Path(self.input).suffix.lower() == ".json":
+            from .backend import resolve_backend
+
+            device = self._call(resolve_backend, self.backend).name != "numpy"
+        dataset = self._load_dataset(device=device)
         fit_images = (
             dataset.images
             if self.compute_dtype == "input"
@@ -326,6 +436,11 @@ class FitDipolesCommand(_ValidatedDatasetCommand):
             "model": self.model,
             "mode": self.mode,
             "backend": self.backend,
+            **(
+                {"fits_reader": self.fits_reader}
+                if dataset.input_sources
+                else {}
+            ),
             "compute_dtype": {
                 "requested": self.compute_dtype,
                 "resolved": result.dtype,

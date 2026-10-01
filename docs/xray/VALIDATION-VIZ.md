@@ -1,4 +1,4 @@
-# XRay validation visualization
+# xRay validation visualization
 
 `validation-viz`, `workflow-viz`, and `phonon-viz` create standalone Bokeh HTML
 files from persisted numeric products. Install the visualization profile:
@@ -12,17 +12,15 @@ arrays, and command metadata needed to regenerate them.
 
 ## Publishable metadata
 
-Generated HTML uses source basenames and sanitized labels rather than caller
-local absolute paths. Workflow bundle manifest version 3 follows the same
-rule: it records input file labels, trace filenames, source kind, ROI, fit
-settings, array dimensions, thresholds, and counts without persisting the
-original HDF5, trace, or detector-artifact directory.
+Generated HTML identifies sources with basenames and sanitized labels.
+Workflow bundle manifest version 3 records input file labels, trace filenames,
+source kind, ROI, fit settings, array dimensions, thresholds, and counts.
 
-The input artifacts are not rewritten. A trace NPZ supplied by the caller may
-still contain its own metadata, and caller-provided titles and file basenames
-remain visible. Review those explicit labels before publishing. CLI status
-output can include the requested output destination, but that destination is
-not embedded in the standalone HTML.
+Input artifacts retain their original contents, including any caller-supplied
+trace NPZ metadata. Caller-provided titles and file basenames remain visible;
+review those labels before publishing. CLI status output can include the
+requested output destination, which stays separate from the standalone HTML's
+metadata.
 
 ## Trace review
 
@@ -33,8 +31,8 @@ uv run cuphoton xray validation-viz \
   --title "Validation review"
 ```
 
-The view can include CPU linear-prediction overlays. Use `--no-fit` to render
-only trace and profile data, and `--max-traces` to bound a large directory.
+The view can include CPU linear-prediction overlays. Use `--no-fit` to show
+traces and profiles, and `--max-traces` to bound a large directory.
 
 ## Workflow bundles
 
@@ -47,7 +45,7 @@ uv run cuphoton xray workflow-viz \
   --output /path/to/workflow.html
 ```
 
-Render that bundle later without the source trace directory:
+Render that self-contained bundle later:
 
 ```bash
 uv run cuphoton xray workflow-viz \
@@ -57,6 +55,12 @@ uv run cuphoton xray workflow-viz \
 
 `workflow-viz` can also combine trace, HDF5 ROI, and detector-artifact context;
 use `cuphoton xray help workflow-viz` for the mutually optional input modes.
+
+Trace overlays in `validation-viz` and newly built workflow bundles use
+CPU linear prediction. They do not read iterative reconstructions from
+`fit_diagnostics.npz`. For an iterative detector run, inspect the stored
+full diagnostics and fit statuses to assess that optimizer's reconstruction;
+detector frequency and amplitude panels display the saved modal arrays.
 
 ## Phonon-style view
 
@@ -69,3 +73,8 @@ uv run cuphoton xray phonon-viz \
 Detector-artifact mode accepts a detector artifact directory and optional
 x/y bounds. Record the amplitude threshold and fit parameters with any
 published view.
+
+The detector phonon panel labels frequency in THz and assumes that the source
+delay axis is in picoseconds. The view does not convert units. For other
+delay units, inspect the numeric frequencies as cycles per input time unit
+and convert them before preparing a figure with a THz label.

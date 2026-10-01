@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Portable, row-aligned xFit feature bundles for XScan."""
+"""Portable, row-aligned xFit feature bundles for xScan."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ import math
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Literal, SupportsIndex, cast
 
 import numpy as np
 import pyarrow as pa
@@ -21,6 +23,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from cuphoton.core.artifacts import array_sha256, file_sha256
+from cuphoton.xfit import DeviceDipoleFitResult, DipoleFitResult
 
 from .types import (
     MissingPolicy,
@@ -224,7 +227,7 @@ _PARAMETER_FEATURE_NAMES = (
 
 @dataclass(frozen=True, slots=True)
 class XFitFeatureMatrix:
-    """Loaded XScan-row-aligned scalar features."""
+    """Loaded xScan-row-aligned scalar features."""
 
     dataset_dir: Path
     candidate_id: np.ndarray
@@ -239,6 +242,77 @@ class XFitFeatureMatrix:
 
     def __getitem__(self, index: int) -> np.ndarray:
         return self.values[index]
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceXFitFeatures:
+    """Canonical xScan xFit features retained on one CUDA device.
+
+    ``values`` owns a contiguous ``(batch, 17)`` float32 CuPy array. The
+    result is an in-process device object, not an interprocess payload or an
+    artifact, and cannot be pickled. Consume it on the CuPy stream used for
+    transformation, or initiate a stream-aware DLPack handoff while that
+    stream is current. This result does not retain a stream or completion
+    event for unordered direct consumption on another stream.
+    """
+
+    values: Any
+    device_id: int
+    model: XFitModel
+    image_shape: tuple[int, int]
+    variance_present: bool
+    feature_names: tuple[str, ...] = field(init=False, default=FEATURE_NAMES)
+    schema: Literal["cuphoton.xscan.device-xfit-features/v1"] = field(
+        init=False,
+        default="cuphoton.xscan.device-xfit-features/v1",
+    )
+    backend: Literal["cupy"] = field(init=False, default="cupy")
+    result_location: Literal["device"] = field(
+        init=False,
+        default="device",
+    )
+
+    def __post_init__(self) -> None:
+        if isinstance(self.device_id, bool) or not isinstance(
+            self.device_id, (int, np.integer)
+        ):
+            raise TypeError(
+                "device_id must be an integer CUDA device ordinal"
+            )
+        if self.device_id < 0:
+            raise ValueError("device_id must be non-negative")
+        if self.model not in {"gaussian", "stamp"}:
+            raise ValueError("model must be 'gaussian' or 'stamp'")
+        _validate_live_feature_metadata(
+            image_shape=self.image_shape,
+            variance_present=self.variance_present,
+        )
+        cp = _load_cupy()
+        if not isinstance(self.values, cp.ndarray):
+            raise TypeError("values must be a CuPy array")
+        if int(self.values.device.id) != int(self.device_id):
+            raise ValueError(
+                f"values are on CUDA device {int(self.values.device.id)}, "
+                f"expected {int(self.device_id)}"
+            )
+        if self.values.ndim != 2 or self.values.shape[1] != len(
+            FEATURE_NAMES
+        ):
+            raise ValueError(
+                f"values must have shape (batch, {len(FEATURE_NAMES)})"
+            )
+        if self.values.shape[0] < 1:
+            raise ValueError("values must contain at least one feature row")
+        if np.dtype(self.values.dtype) != np.dtype(np.float32):
+            raise TypeError("values must have float32 dtype")
+        if not self.values.flags.c_contiguous:
+            raise ValueError("values must be C-contiguous")
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
+        raise TypeError(
+            "DeviceXFitFeatures cannot be pickled; keep device features "
+            "inside the producing process"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,7 +563,7 @@ def _load_dataset_metadata(
     root = dataset_dir.expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(
-            f"XScan dataset directory does not exist: {root}"
+            f"xScan dataset directory does not exist: {root}"
         )
     jsonl_path = root / "metadata.jsonl"
     candidate_values: list[Any] | np.ndarray
@@ -512,7 +586,7 @@ def _load_dataset_metadata(
                         )
                     if "candidate_id" not in row:
                         raise ValueError(
-                            "XScan metadata row "
+                            "xScan metadata row "
                             f"{len(candidate_values)} is missing candidate_id"
                         )
                     candidate_values.append(row["candidate_id"])
@@ -520,18 +594,18 @@ def _load_dataset_metadata(
                     split_group_values.append(row.get("split_group"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError(
-                f"cannot read XScan metadata: {jsonl_path}"
+                f"cannot read xScan metadata: {jsonl_path}"
             ) from exc
     else:
         parquet_path = root / "metadata.parquet"
         if not parquet_path.is_file():
             raise FileNotFoundError(
-                "XScan dataset lacks metadata.jsonl or metadata.parquet: "
+                "xScan dataset lacks metadata.jsonl or metadata.parquet: "
                 f"{root}"
             )
         schema_names = set(pq.read_schema(parquet_path).names)
         if "candidate_id" not in schema_names:
-            raise ValueError("XScan metadata is missing candidate_id")
+            raise ValueError("xScan metadata is missing candidate_id")
         columns = [
             name
             for name in ("candidate_id", "split", "split_group")
@@ -551,7 +625,7 @@ def _load_dataset_metadata(
             else [None] * row_count
         )
     if len(candidate_values) == 0:
-        raise ValueError("XScan metadata contains no rows")
+        raise ValueError("xScan metadata contains no rows")
     candidate_id = _candidate_array(candidate_values, allow_duplicates=True)
     split = np.asarray(split_values, dtype=object)
     split_group = np.asarray(split_group_values, dtype=object)
@@ -560,7 +634,7 @@ def _load_dataset_metadata(
         search = np.load(search_path, mmap_mode="r", allow_pickle=False)
         if search.shape[0] != candidate_id.shape[0]:
             raise ValueError(
-                "XScan metadata row count does not match search.npy"
+                "xScan metadata row count does not match search.npy"
             )
     return candidate_id, split, split_group
 
@@ -577,7 +651,7 @@ def _load_dataset_contract(
     difference_path = dataset_dir / "difference.npy"
     if not difference_path.is_file():
         raise FileNotFoundError(
-            "XScan xFit features require dataset difference.npy"
+            "xScan xFit features require dataset difference.npy"
         )
     try:
         difference = np.load(
@@ -585,12 +659,12 @@ def _load_dataset_contract(
         )
     except ValueError as exc:
         raise ValueError(
-            "XScan difference.npy must be a pickle-free numeric array"
+            "xScan difference.npy must be a pickle-free numeric array"
         ) from exc
     expected_shape = (candidate_id.shape[0], *image_shape)
     if difference.shape != expected_shape or difference.dtype.kind != "f":
         raise ValueError(
-            "XScan difference.npy must be a floating array with shape "
+            "xScan difference.npy must be a floating array with shape "
             f"{expected_shape}"
         )
     image_hashes = np.empty(candidate_id.shape[0], dtype="S64")
@@ -604,7 +678,7 @@ def _load_dataset_contract(
             continue
         if image_hashes[first_row] != image_hashes[row_index]:
             raise ValueError(
-                "duplicate XScan candidate_id rows must have identical "
+                "duplicate xScan candidate_id rows must have identical "
                 "difference.npy stamps"
             )
         first_identity = (split[first_row], split_group[first_row])
@@ -614,7 +688,7 @@ def _load_dataset_contract(
             or first_identity != row_identity
         ):
             raise ValueError(
-                "duplicate XScan candidate_id rows must have the same split "
+                "duplicate xScan candidate_id rows must have the same split "
                 "and split_group"
             )
     return _DatasetContract(
@@ -681,7 +755,7 @@ def _summary_contract(
         raise ValueError("xFit summary model must be 'gaussian' or 'stamp'")
     if mode != "difference":
         raise ValueError(
-            "XScan xFit features require a difference-mode xFit run"
+            "xScan xFit features require a difference-mode xFit run"
         )
     expected_parameters = (
         _GAUSSIAN_PARAMETERS if model == "gaussian" else _STAMP_PARAMETERS
@@ -924,7 +998,7 @@ def _separation_error(
     return math.sqrt(variance)
 
 
-def _feature_row(
+def _canonical_feature_row(
     columns: Mapping[str, np.ndarray],
     row_index: int,
     covariance: np.ndarray,
@@ -1070,6 +1144,548 @@ def _feature_row(
     return feature.astype(np.float32)
 
 
+def _validate_live_feature_metadata(
+    *,
+    image_shape: tuple[int, int],
+    variance_present: bool,
+) -> None:
+    if (
+        not isinstance(image_shape, tuple)
+        or len(image_shape) != 2
+        or any(isinstance(value, bool) for value in image_shape)
+        or any(not isinstance(value, int) for value in image_shape)
+        or any(value <= 0 for value in image_shape)
+    ):
+        raise ValueError("image_shape must contain two positive integers")
+    if not isinstance(variance_present, bool):
+        raise TypeError("variance_present must be a boolean")
+
+
+def _validate_live_feature_source(
+    result: DipoleFitResult | DeviceDipoleFitResult,
+) -> tuple[str, ...]:
+    if result.mode != "difference":
+        raise ValueError("xScan xFit features require difference-mode fits")
+    if result.model not in {"gaussian", "stamp"}:
+        raise ValueError("xFit result model must be 'gaussian' or 'stamp'")
+    expected_parameters = (
+        _GAUSSIAN_PARAMETERS
+        if result.model == "gaussian"
+        else _STAMP_PARAMETERS
+    )
+    parameter_names = tuple(result.parameter_names)
+    if parameter_names != expected_parameters:
+        raise ValueError(
+            f"xFit result parameter_names do not match the {result.model} "
+            "model"
+        )
+    return parameter_names
+
+
+def transform_xfit_result_features(
+    result: DipoleFitResult,
+    *,
+    image_shape: tuple[int, int],
+    variance_present: bool,
+) -> np.ndarray:
+    """Transform a portable xFit result into canonical xScan features.
+
+    This live-result adapter calls the same row transform used by
+    :func:`build_xfit_feature_bundle`. Residual images are neither required
+    nor inspected.
+    """
+
+    parameter_names = _validate_live_feature_source(result)
+    _validate_live_feature_metadata(
+        image_shape=image_shape,
+        variance_present=variance_present,
+    )
+
+    parameters = np.asarray(result.parameters)
+    standard_errors = np.asarray(result.standard_errors)
+    covariance = np.asarray(result.covariance)
+    if parameters.ndim != 2 or parameters.shape[1] != len(parameter_names):
+        raise ValueError("xFit result parameters have an inconsistent shape")
+    batch_size = parameters.shape[0]
+    if standard_errors.shape != parameters.shape:
+        raise ValueError(
+            "xFit result standard_errors have an inconsistent shape"
+        )
+    if covariance.shape != (
+        batch_size,
+        len(parameter_names),
+        len(parameter_names),
+    ):
+        raise ValueError("xFit result covariance has an inconsistent shape")
+
+    columns: dict[str, np.ndarray] = {}
+    for name in (
+        "converged",
+        "degrees_of_freedom",
+        "valid_pixel_fraction",
+        "fractional_null_improvement",
+        "delta_chi_square",
+        "reduced_chi_square",
+        "uncertainty_valid",
+    ):
+        values = np.asarray(getattr(result, name))
+        if values.shape != (batch_size,):
+            raise ValueError(f"xFit result {name} has an inconsistent shape")
+        columns[name] = values
+    for parameter_index, parameter_name in enumerate(parameter_names):
+        columns[parameter_name] = parameters[:, parameter_index]
+        columns[f"{parameter_name}_standard_error"] = standard_errors[
+            :, parameter_index
+        ]
+
+    features = np.empty((batch_size, len(FEATURE_NAMES)), dtype=np.float32)
+    for row_index in range(batch_size):
+        features[row_index] = _canonical_feature_row(
+            columns,
+            row_index,
+            covariance[row_index],
+            model=result.model,
+            parameter_names=parameter_names,
+            image_shape=image_shape,
+            variance_present=variance_present,
+        )
+    return features
+
+
+def _load_cupy() -> Any:
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        raise ImportError(
+            "transform_xfit_result_features_device requires CuPy; run "
+            "'uv sync --extra gpu' for development or install "
+            "'cuphoton[gpu]'"
+        ) from exc
+    return cp
+
+
+def _active_cupy_device_id(cp: Any) -> int:
+    message = (
+        "transform_xfit_result_features_device requires at least one "
+        "visible CUDA device"
+    )
+    try:
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+    if device_count < 1:
+        raise RuntimeError(message)
+    try:
+        return int(cp.cuda.runtime.getDevice())
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+
+
+def _validate_device_feature_source(
+    result: DeviceDipoleFitResult,
+    *,
+    cp: Any,
+    active_device_id: int,
+) -> tuple[str, ...]:
+    if result.schema != "cuphoton.xfit.device-fit-result/v1":
+        raise ValueError("xFit device result schema is unsupported")
+    if result.solver != "levenberg-marquardt":
+        raise ValueError("xFit device result solver is unsupported")
+    if result.backend != "cupy" or result.result_location != "device":
+        raise ValueError("xFit result must be a CuPy device result")
+    parameter_names = _validate_live_feature_source(result)
+    if int(result.device_id) != active_device_id:
+        raise ValueError(
+            f"xFit result is on CUDA device {int(result.device_id)}, "
+            f"but active device is {active_device_id}"
+        )
+
+    arrays = {
+        "parameters": result.parameters,
+        "converged": result.converged,
+        "degrees_of_freedom": result.degrees_of_freedom,
+        "valid_pixel_fraction": result.valid_pixel_fraction,
+        "fractional_null_improvement": result.fractional_null_improvement,
+        "delta_chi_square": result.delta_chi_square,
+        "reduced_chi_square": result.reduced_chi_square,
+        "uncertainty_valid": result.uncertainty_valid,
+        "standard_errors": result.standard_errors,
+        "covariance": result.covariance,
+    }
+    for name, value in arrays.items():
+        if not isinstance(value, cp.ndarray):
+            raise TypeError(f"xFit result {name} must be a CuPy array")
+        if int(value.device.id) != active_device_id:
+            raise ValueError(
+                f"xFit result {name} is on CUDA device "
+                f"{int(value.device.id)}, expected {active_device_id}"
+            )
+
+    parameters = result.parameters
+    batch_size = int(parameters.shape[0]) if parameters.ndim == 2 else -1
+    parameter_count = len(parameter_names)
+    if parameters.shape != (batch_size, parameter_count) or batch_size < 1:
+        raise ValueError("xFit result parameters have an inconsistent shape")
+    if result.standard_errors.shape != parameters.shape:
+        raise ValueError(
+            "xFit result standard_errors have an inconsistent shape"
+        )
+    if result.covariance.shape != (
+        batch_size,
+        parameter_count,
+        parameter_count,
+    ):
+        raise ValueError("xFit result covariance has an inconsistent shape")
+    for name in (
+        "converged",
+        "degrees_of_freedom",
+        "valid_pixel_fraction",
+        "fractional_null_improvement",
+        "delta_chi_square",
+        "reduced_chi_square",
+        "uncertainty_valid",
+    ):
+        if arrays[name].shape != (batch_size,):
+            raise ValueError(f"xFit result {name} has an inconsistent shape")
+    compute_dtype = np.dtype(result.dtype)
+    if compute_dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
+        raise ValueError("xFit result dtype must be 'float32' or 'float64'")
+    for name in (
+        "parameters",
+        "delta_chi_square",
+        "standard_errors",
+        "covariance",
+    ):
+        if np.dtype(arrays[name].dtype) != compute_dtype:
+            raise TypeError(
+                f"xFit result {name} must have {result.dtype} dtype"
+            )
+    expected_dtypes = {
+        "converged": np.dtype(bool),
+        "degrees_of_freedom": np.dtype(np.int64),
+        "valid_pixel_fraction": np.dtype(np.float64),
+        "fractional_null_improvement": np.dtype(np.float64),
+        "reduced_chi_square": np.dtype(np.float64),
+        "uncertainty_valid": np.dtype(bool),
+    }
+    for name, expected_dtype in expected_dtypes.items():
+        if np.dtype(arrays[name].dtype) != expected_dtype:
+            raise TypeError(
+                f"xFit result {name} must have {expected_dtype.name} dtype"
+            )
+    return parameter_names
+
+
+def _device_scaled_log(
+    values: Any, valid: Any, scale: float, *, cp: Any
+) -> Any:
+    transformed = cp.log1p(cp.where(valid, values, 0.0)) / scale
+    return cp.where(
+        valid & cp.isfinite(transformed),
+        cp.clip(transformed, 0.0, 1.0),
+        0.0,
+    )
+
+
+@lru_cache(maxsize=2)
+def _device_float_cast_kernel(to_float32: bool) -> Any:
+    cp = _load_cupy()
+    # CuPy appends -ftz=true even after a caller requests --ftz=false:
+    # https://github.com/cupy/cupy/issues/9576
+    # Explicit PTX without .ftz preserves subnormals on both boundaries;
+    # .rn keeps NumPy's round-to-nearest-even behavior when narrowing.
+    if to_float32:
+        return cp.ElementwiseKernel(
+            "float64 x",
+            "float32 y",
+            'asm("cvt.rn.f32.f64 %0, %1;" : "=f"(y) : "d"(x));',
+            "xscan_preserve_float32",
+        )
+    return cp.ElementwiseKernel(
+        "float32 x",
+        "float64 y",
+        'asm("cvt.f64.f32 %0, %1;" : "=d"(y) : "f"(x));',
+        "xscan_preserve_float64",
+    )
+
+
+def _device_float_cast(values: Any, dtype: Any) -> Any:
+    """Cast on the current device stream without flushing float32 values."""
+
+    source_dtype = np.dtype(values.dtype)
+    target_dtype = np.dtype(dtype)
+    if source_dtype == np.float64 and target_dtype == np.float32:
+        return _device_float_cast_kernel(True)(values)
+    if source_dtype == np.float32 and target_dtype == np.float64:
+        return _device_float_cast_kernel(False)(values)
+    return values.astype(dtype, copy=False)
+
+
+def transform_xfit_result_features_device(
+    result: DeviceDipoleFitResult,
+    *,
+    image_shape: tuple[int, int],
+    variance_present: bool,
+) -> DeviceXFitFeatures:
+    """Transform a device xFit result without crossing the host boundary.
+
+    ``image_shape`` supplies the stamp geometry, as in the host adapter.
+    Residual images are neither required nor inspected.
+
+    Array-valued inputs remain borrowed on the active CUDA device. The
+    returned feature array is newly allocated and retains its own storage.
+    Call on the same current CuPy stream that produced ``result`` and consume
+    or export the features before leaving that stream's context. Retain
+    ``result`` until transformation has finished reading its arrays.
+    """
+
+    if not isinstance(result, DeviceDipoleFitResult):
+        raise TypeError("result must be a DeviceDipoleFitResult")
+    _validate_live_feature_metadata(
+        image_shape=image_shape,
+        variance_present=variance_present,
+    )
+    cp = _load_cupy()
+    active_device_id = _active_cupy_device_id(cp)
+    parameter_names = _validate_device_feature_source(
+        result,
+        cp=cp,
+        active_device_id=active_device_id,
+    )
+
+    batch_size = int(result.parameters.shape[0])
+    values = cp.zeros((batch_size, len(FEATURE_NAMES)), dtype=cp.float64)
+    index = {name: position for position, name in enumerate(FEATURE_NAMES)}
+    parameters = _device_float_cast(result.parameters, cp.float64)
+    standard_errors = _device_float_cast(result.standard_errors, cp.float64)
+    covariance = _device_float_cast(result.covariance, cp.float64)
+    parameter_index = {
+        name: position for position, name in enumerate(parameter_names)
+    }
+
+    height, width = image_shape
+    half_width = (width - 1) / 2.0
+    half_height = (height - 1) / 2.0
+    stamp_diagonal = max(math.hypot(width - 1, height - 1), 1.0)
+    stamp_half_diagonal = max(stamp_diagonal / 2.0, 1.0)
+    stamp_radius = max(min(half_width, half_height), 1.0)
+
+    values[:, index["fit_present"]] = 1.0
+    values[:, index["variance_weighted"]] = float(variance_present)
+    valid_fraction = result.valid_pixel_fraction
+    values[:, index["valid_pixel_fraction"]] = cp.where(
+        cp.isfinite(valid_fraction),
+        cp.clip(valid_fraction, 0.0, 1.0),
+        0.0,
+    )
+    improvement = result.fractional_null_improvement
+    values[:, index["fractional_null_improvement"]] = cp.where(
+        cp.isfinite(improvement),
+        cp.clip(improvement, -1.0, 1.0),
+        0.0,
+    )
+    if variance_present:
+        delta_chi_square = _device_float_cast(
+            result.delta_chi_square, cp.float64
+        )
+        finite_delta_chi_square = cp.isfinite(delta_chi_square)
+        safe_delta_chi_square = cp.where(
+            finite_delta_chi_square, delta_chi_square, 0.0
+        )
+        delta_transform = (
+            cp.sign(safe_delta_chi_square)
+            * cp.log1p(cp.abs(safe_delta_chi_square))
+            / LOG_DELTA_CHI_SQUARE_SCALE
+        )
+        values[:, index["log_delta_chi_square"]] = cp.where(
+            finite_delta_chi_square & cp.isfinite(delta_transform),
+            cp.clip(delta_transform, -1.0, 1.0),
+            0.0,
+        )
+        reduced_chi_square = result.reduced_chi_square
+        valid_reduced_chi_square = cp.isfinite(reduced_chi_square) & (
+            reduced_chi_square > 0
+        )
+        safe_reduced_chi_square = cp.where(
+            valid_reduced_chi_square,
+            reduced_chi_square,
+            1.0,
+        )
+        reduced_transform = (
+            cp.log(cp.maximum(safe_reduced_chi_square, FLOAT_EPSILON))
+            / LOG_REDUCED_CHI_SQUARE_SCALE
+        )
+        values[:, index["log_reduced_chi_square"]] = cp.where(
+            valid_reduced_chi_square,
+            cp.clip(reduced_transform, -1.0, 1.0),
+            0.0,
+        )
+
+    finite_parameters = cp.all(cp.isfinite(parameters), axis=1)
+    fit_valid = (
+        result.converged & (result.degrees_of_freedom > 0) & finite_parameters
+    )
+    x_pos = parameters[:, parameter_index["x_pos"]]
+    y_pos = parameters[:, parameter_index["y_pos"]]
+    x_neg = parameters[:, parameter_index["x_neg"]]
+    y_neg = parameters[:, parameter_index["y_neg"]]
+    fit_valid &= (
+        (cp.abs(x_pos) <= half_width)
+        & (cp.abs(y_pos) <= half_height)
+        & (cp.abs(x_neg) <= half_width)
+        & (cp.abs(y_neg) <= half_height)
+    )
+    if result.model == "gaussian":
+        sigma_x = parameters[:, parameter_index["sigma_x"]]
+        sigma_y = parameters[:, parameter_index["sigma_y"]]
+        fit_valid &= (
+            (sigma_x > 0)
+            & (sigma_y > 0)
+            & (cp.maximum(sigma_x, sigma_y) <= stamp_radius)
+        )
+    values[:, index["fit_valid"]] = fit_valid
+    uncertainty_valid = fit_valid & result.uncertainty_valid
+    values[:, index["uncertainty_valid"]] = uncertainty_valid
+
+    strength_name = "amplitude" if result.model == "gaussian" else "flux"
+    strength = parameters[:, parameter_index[strength_name]]
+    strength_error = standard_errors[:, parameter_index[strength_name]]
+    safe_strength_error = cp.where(strength_error > 0, strength_error, 1.0)
+    strength_ratio = cp.abs(strength) / safe_strength_error
+    valid_strength = (
+        uncertainty_valid
+        & cp.isfinite(strength)
+        & cp.isfinite(strength_error)
+        & (strength_error > 0)
+        & cp.isfinite(strength_ratio)
+        & (strength_ratio > 0)
+    )
+    values[:, index["log_strength_snr"]] = _device_scaled_log(
+        strength_ratio,
+        valid_strength,
+        LOG_SIGNIFICANCE_SCALE,
+        cp=cp,
+    )
+
+    dx = x_pos - x_neg
+    dy = y_pos - y_neg
+    separation = cp.hypot(dx, dy)
+    values[:, index["separation_over_stamp"]] = cp.where(
+        fit_valid,
+        cp.clip(separation / stamp_diagonal, 0.0, 1.0),
+        0.0,
+    )
+    midpoint_radius = cp.hypot(
+        (x_pos + x_neg) / 2.0,
+        (y_pos + y_neg) / 2.0,
+    )
+    values[:, index["midpoint_offset_over_stamp"]] = cp.where(
+        fit_valid,
+        cp.clip(midpoint_radius / stamp_half_diagonal, 0.0, 1.0),
+        0.0,
+    )
+    edge_margin = cp.minimum(
+        cp.minimum(half_width - cp.abs(x_pos), half_height - cp.abs(y_pos)),
+        cp.minimum(half_width - cp.abs(x_neg), half_height - cp.abs(y_neg)),
+    )
+    values[:, index["edge_margin_over_stamp"]] = cp.where(
+        fit_valid,
+        cp.clip(edge_margin / stamp_radius, 0.0, 1.0),
+        0.0,
+    )
+
+    covariance_finite = cp.all(cp.isfinite(covariance), axis=(1, 2))
+    safe_separation = cp.where(separation > 0, separation, 1.0)
+    gradients = (
+        dx / safe_separation,
+        dy / safe_separation,
+        -dx / safe_separation,
+        -dy / safe_separation,
+    )
+    position_indices = tuple(
+        parameter_index[name] for name in ("x_pos", "y_pos", "x_neg", "y_neg")
+    )
+    separation_variance = cp.zeros(batch_size, dtype=cp.float64)
+    for row_position, row_gradient in zip(
+        position_indices, gradients, strict=True
+    ):
+        for column_position, column_gradient in zip(
+            position_indices, gradients, strict=True
+        ):
+            separation_variance += (
+                row_gradient
+                * covariance[:, row_position, column_position]
+                * column_gradient
+            )
+    valid_separation_error = (
+        uncertainty_valid
+        & (separation > 0)
+        & covariance_finite
+        & cp.isfinite(separation_variance)
+        & (separation_variance > 0)
+    )
+    separation_error = cp.sqrt(
+        cp.where(valid_separation_error, separation_variance, 1.0)
+    )
+    separation_ratio = separation / separation_error
+    valid_separation_ratio = (
+        valid_separation_error
+        & cp.isfinite(separation_ratio)
+        & (separation_ratio > 0)
+    )
+    values[:, index["separation_significance"]] = _device_scaled_log(
+        separation_ratio,
+        valid_separation_ratio,
+        LOG_SIGNIFICANCE_SCALE,
+        cp=cp,
+    )
+
+    if result.model == "gaussian":
+        theta = parameters[:, parameter_index["theta"]]
+        x_is_major = sigma_x >= sigma_y
+        major = cp.where(x_is_major, sigma_x, sigma_y)
+        minor = cp.where(x_is_major, sigma_y, sigma_x)
+        major_axis = cp.where(x_is_major, theta, theta + math.pi / 2.0)
+        values[:, index["gaussian_shape_available"]] = fit_valid
+        shape_product = cp.where(fit_valid, major * minor, 0.0)
+        values[:, index["size_over_stamp"]] = cp.where(
+            fit_valid,
+            cp.clip(cp.sqrt(shape_product) / stamp_radius, 0.0, 1.0),
+            0.0,
+        )
+        safe_major = cp.where(major > 0, major, 1.0)
+        values[:, index["axis_ratio"]] = cp.where(
+            fit_valid,
+            cp.clip(minor / safe_major, 0.0, 1.0),
+            0.0,
+        )
+        separation_axis = cp.arctan2(dy, dx)
+        major_minor_sum = major + minor
+        safe_major_minor_sum = cp.where(
+            major_minor_sum != 0, major_minor_sum, 1.0
+        )
+        ellipticity = (major - minor) / safe_major_minor_sum
+        aligned_ellipticity = ellipticity * cp.cos(
+            2.0 * (major_axis - separation_axis)
+        )
+        values[:, index["aligned_ellipticity"]] = cp.where(
+            fit_valid & (separation > 0),
+            cp.clip(aligned_ellipticity, -1.0, 1.0),
+            0.0,
+        )
+
+    feature_values = cp.ascontiguousarray(
+        _device_float_cast(values, cp.float32)
+    )
+    return DeviceXFitFeatures(
+        values=feature_values,
+        device_id=active_device_id,
+        model=result.model,
+        image_shape=image_shape,
+        variance_present=variance_present,
+    )
+
+
 def _json_candidate_ids(
     values: Sequence[Any] | np.ndarray[Any, np.dtype[Any]],
 ) -> list[int | str]:
@@ -1180,6 +1796,8 @@ def _write_indexed_image_member(
     archive: zipfile.ZipFile,
     difference: np.ndarray,
     row_indices: Sequence[int],
+    *,
+    name: str = "images.npy",
 ) -> None:
     output_shape = (len(row_indices), *difference.shape[1:])
     header = {
@@ -1193,7 +1811,7 @@ def _write_indexed_image_member(
         1,
     )
     batch_rows = max(1, _EXPORT_BATCH_BYTES // bytes_per_row)
-    with archive.open("images.npy", mode="w", force_zip64=True) as member:
+    with archive.open(name, mode="w", force_zip64=True) as member:
         np.lib.format.write_array_header_2_0(member, header)
         for start in range(0, len(row_indices), batch_rows):
             selected_rows = row_indices[start : start + batch_rows]
@@ -1207,6 +1825,8 @@ def _write_xfit_input_archive(
     candidate_id: np.ndarray,
     difference: np.ndarray,
     row_indices: Sequence[int],
+    auxiliary: Mapping[str, np.ndarray],
+    source_hashes: Sequence[tuple[Path, str]],
 ) -> None:
     created = False
     try:
@@ -1220,6 +1840,16 @@ def _write_xfit_input_archive(
         with archive:
             _write_npy_member(archive, "candidate_id.npy", candidate_id)
             _write_indexed_image_member(archive, difference, row_indices)
+            for name, values in auxiliary.items():
+                _write_indexed_image_member(
+                    archive, values, row_indices, name=f"{name}.npy"
+                )
+        for source_path, expected_hash in source_hashes:
+            if file_sha256(source_path) != expected_hash:
+                raise ValueError(
+                    "xFit input source changed during export: "
+                    f"{source_path.name}"
+                )
     except BaseException:
         if created:
             path.unlink(missing_ok=True)
@@ -1230,14 +1860,28 @@ def export_xfit_input(
     *,
     dataset_dir: str | Path,
     output_path: str | Path,
+    variance_path: str | Path | None = None,
+    mask_path: str | Path | None = None,
+    image_unit: str | None = None,
+    verify_sources_after_copy: bool = True,
 ) -> dict[str, Any]:
-    """Export exact, unique stamps in a pickle-free xFit NPZ."""
+    """Export exact, unique stamps and optional row-aligned xFit planes.
+
+    Variance and mask inputs are pickle-free NPY arrays with the same shape
+    as ``difference.npy``. Nonzero mask values include pixels. Variance must
+    be positive and finite on included pixels, in squared image units.
+    ``image_unit`` records a caller-supplied label without converting values.
+    Sources are hashed before and after copying by default. Set
+    ``verify_sources_after_copy=False`` only when inputs remain immutable
+    throughout export; initial source hashes and the archive hash are
+    retained.
+    """
 
     dataset_root = Path(dataset_dir).expanduser().resolve()
     difference_path = dataset_root / "difference.npy"
     if not difference_path.is_file():
         raise FileNotFoundError(
-            "XScan xFit export requires dataset difference.npy"
+            "xScan xFit export requires dataset difference.npy"
         )
     try:
         difference = np.load(
@@ -1245,30 +1889,101 @@ def export_xfit_input(
         )
     except ValueError as exc:
         raise ValueError(
-            "XScan difference.npy must be a pickle-free numeric array"
+            "xScan difference.npy must be a pickle-free numeric array"
         ) from exc
-    if difference.ndim != 3 or difference.dtype.kind != "f":
+    if (
+        difference.ndim != 3
+        or difference.dtype.kind != "f"
+        or any(size == 0 for size in difference.shape)
+    ):
         raise ValueError(
-            "XScan difference.npy must be a floating array with shape "
+            "xScan difference.npy must be a floating array with shape "
             "(sample, y, x)"
         )
     dataset = _load_dataset_contract(
         dataset_root,
         image_shape=(int(difference.shape[1]), int(difference.shape[2])),
     )
-    for row_index in range(difference.shape[0]):
-        if not np.isfinite(difference[row_index]).all():
+    if image_unit is not None:
+        if not isinstance(image_unit, str) or not image_unit.strip():
+            raise ValueError("image_unit must be a nonempty string")
+        image_unit = image_unit.strip()
+    auxiliary = {}
+    source_paths = {"images": difference_path}
+    sources = {
+        "images": {
+            "name": difference_path.name,
+            "sha256": file_sha256(difference_path),
+        }
+    }
+    for name, path in (("variance", variance_path), ("mask", mask_path)):
+        if path is None:
+            continue
+        resolved = Path(path).expanduser().resolve()
+        if resolved.suffix.lower() != ".npy":
+            raise ValueError(f"{name} input must be a pickle-free .npy array")
+        try:
+            values = np.load(resolved, mmap_mode="r", allow_pickle=False)
+        except ValueError as exc:
             raise ValueError(
-                "XScan difference.npy contains non-finite pixels at row "
-                f"{row_index}; construct a masked xFit input explicitly"
+                f"{name} must be a pickle-free numeric array"
+            ) from exc
+        if not isinstance(values, np.ndarray):
+            values.close()
+            raise ValueError(f"{name} must be a single .npy array")
+        allowed_kinds = "fiub" if name == "mask" else "fiu"
+        if values.dtype.kind not in allowed_kinds:
+            raise ValueError(f"{name} must be a real numeric array")
+        if values.shape != difference.shape:
+            raise ValueError(
+                f"{name} must have the same shape as difference.npy: "
+                f"{difference.shape}"
             )
-    keys = [_candidate_key(value) for value in dataset.candidate_id]
+        auxiliary[name] = values
+        source_paths[name] = resolved
+        sources[name] = {
+            "name": resolved.name,
+            "sha256": file_sha256(resolved),
+        }
+    mask = auxiliary.get("mask")
+    variance = auxiliary.get("variance")
     unique_rows: list[int] = []
-    seen: set[tuple[str, int | str]] = set()
-    for row_index, key in enumerate(keys):
-        if key not in seen:
+    first_rows: dict[tuple[str, int | str], int] = {}
+    for row_index, value in enumerate(dataset.candidate_id):
+        included = True
+        if mask is not None:
+            if not np.isfinite(mask[row_index]).all():
+                raise ValueError(
+                    f"mask must contain only finite values at row {row_index}"
+                )
+            included = mask[row_index].astype(bool)
+        if np.any(included & ~np.isfinite(difference[row_index])):
+            raise ValueError(
+                "difference.npy contains non-finite included pixels at row "
+                f"{row_index}"
+            )
+        if variance is not None:
+            invalid = ~np.isfinite(variance[row_index]) | (
+                variance[row_index] <= 0
+            )
+            if np.any(included & invalid):
+                raise ValueError(
+                    "variance must be finite and strictly positive at "
+                    f"included pixels at row {row_index}"
+                )
+        key = _candidate_key(value)
+        first_row = first_rows.setdefault(key, row_index)
+        if first_row == row_index:
             unique_rows.append(row_index)
-            seen.add(key)
+        else:
+            for name, values in auxiliary.items():
+                if not np.array_equal(
+                    values[first_row], values[row_index], equal_nan=True
+                ):
+                    raise ValueError(
+                        "duplicate candidate_id rows have conflicting "
+                        f"{name} planes"
+                    )
     candidate_id = np.asarray(dataset.candidate_id[unique_rows])
 
     resolved_output = Path(output_path).expanduser().resolve()
@@ -1284,6 +1999,13 @@ def export_xfit_input(
         candidate_id=candidate_id,
         difference=difference,
         row_indices=unique_rows,
+        auxiliary=auxiliary,
+        source_hashes=[
+            (path, sources[name]["sha256"])
+            for name, path in source_paths.items()
+        ]
+        if verify_sources_after_copy
+        else [],
     )
     images_shape = (len(unique_rows), *difference.shape[1:])
     return {
@@ -1299,6 +2021,16 @@ def export_xfit_input(
         "images_shape": list(images_shape),
         "images_dtype": str(difference.dtype),
         "input_archive_sha256": file_sha256(resolved_output),
+        "mask_present": mask is not None,
+        "variance_present": variance is not None,
+        "source_arrays": sources,
+        "source_hash_verification": "before_and_after_copy"
+        if verify_sources_after_copy
+        else "before_copy_only",
+        "image_unit": image_unit,
+        "variance_unit": f"({image_unit})^2"
+        if image_unit and variance is not None
+        else None,
     }
 
 
@@ -1309,7 +2041,7 @@ def build_xfit_feature_bundle(
     output_dir: str | Path,
     missing_policy: MissingPolicy = "error",
 ) -> XFitFeatureSchema:
-    """Build finite, pickle-free xFit features in XScan row order."""
+    """Build finite, pickle-free xFit features in xScan row order."""
 
     if missing_policy not in {"error", "indicator"}:
         raise ValueError("missing_policy must be 'error' or 'indicator'")
@@ -1429,7 +2161,7 @@ def build_xfit_feature_bundle(
                 raise ValueError(
                     "fits.parquet model or mode conflicts with summary.json"
                 )
-            fit_features[fit_row] = _feature_row(
+            fit_features[fit_row] = _canonical_feature_row(
                 columns,
                 batch_row,
                 fit_arrays.covariance[array_row],
@@ -1475,7 +2207,7 @@ def build_xfit_feature_bundle(
     missing_candidate_id = np.unique(dataset_candidate_id[~matched])
     if missing_candidate_id.size and missing_policy == "error":
         raise ValueError(
-            "xFit run is missing XScan candidate_id value(s): "
+            "xFit run is missing xScan candidate_id value(s): "
             + ", ".join(str(value) for value in missing_candidate_id[:8])
         )
     matched_dataset_rows = np.flatnonzero(matched)
@@ -1486,7 +2218,7 @@ def build_xfit_feature_bundle(
         if mismatched.size:
             row_index = int(mismatched[0])
             raise ValueError(
-                "xFit input_image_sha256 does not match the XScan "
+                "xFit input_image_sha256 does not match the xScan "
                 "difference.npy stamp for candidate_id "
                 f"{dataset_candidate_id[row_index]!r}"
             )
@@ -1861,7 +2593,7 @@ def _validate_canonical_schema(raw: dict[str, Any]) -> XFitFeatureSchema:
 def _load_bundle_array(
     feature_root: Path,
     schema: XFitFeatureSchema,
-    key: str,
+    key: Literal["candidate_id", "features", "input_image_sha256"],
 ) -> tuple[np.ndarray, str]:
     artifact = schema["artifacts"][key]
     artifact_name = artifact["name"]
@@ -1899,7 +2631,7 @@ def load_xfit_feature_matrix(
     feature_dir: str | Path,
     expected_feature_names: Sequence[str] | None = None,
 ) -> XFitFeatureMatrix:
-    """Load and validate one feature bundle against XScan metadata order."""
+    """Load and validate one feature bundle against xScan metadata order."""
 
     feature_root = Path(feature_dir).expanduser().resolve()
     schema_path = feature_root / SCHEMA_ARTIFACT_NAME
@@ -1944,7 +2676,7 @@ def load_xfit_feature_matrix(
         or not np.array_equal(candidate_id, dataset_candidate_id)
     ):
         raise ValueError(
-            "xFit feature candidate_id order does not match XScan metadata"
+            "xFit feature candidate_id order does not match xScan metadata"
         )
     if (
         input_image_sha256.shape != candidate_id.shape
@@ -1960,7 +2692,7 @@ def load_xfit_feature_matrix(
         )
         if recorded.encode("ascii") != dataset.image_sha256[row_index]:
             raise ValueError(
-                "xFit feature bundle does not match the current XScan "
+                "xFit feature bundle does not match the current xScan "
                 "difference.npy stamp at row "
                 f"{row_index}"
             )
@@ -2056,8 +2788,11 @@ __all__ = [
     "FEATURE_SCHEMA_VERSION",
     "FEATURE_TRANSFORMS",
     "TRANSFORM_CONSTANTS",
+    "DeviceXFitFeatures",
     "XFitFeatureMatrix",
     "build_xfit_feature_bundle",
     "export_xfit_input",
     "load_xfit_feature_matrix",
+    "transform_xfit_result_features",
+    "transform_xfit_result_features_device",
 ]

@@ -8,7 +8,7 @@ linear-prediction fit.
 The fixture generates traces with known modes so the workflow can be
 validated without external datasets. The validation sweep compares the
 estimator's scatter and bias with the Cramer-Rao lower bound computed from
-the exact Fisher information of the same model, together with the rate at
+the Fisher information of the same model, together with the rate at
 which true modes are lost from the fit. Everything here runs on NumPy; the
 estimator under test is :func:`linear_prediction_numpy` unless another
 estimator callable is supplied.
@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from cuphoton.core.runtime import runtime_metadata
 
@@ -85,7 +87,8 @@ def modes_to_theta(
             for m in modes
             for v in (m.amplitude, m.decay, m.angular_frequency, m.phase)
         ]
-        + [constant]
+        + [constant],
+        dtype=np.float64,
     )
 
 
@@ -105,6 +108,10 @@ def synthetic_modes_trace(
     """
     if samples < 16:
         raise ValueError("samples must be at least 16")
+    if not np.isfinite(duration) or duration <= 0:
+        raise ValueError("duration must be finite and positive")
+    if not np.isfinite(noise_sigma) or noise_sigma < 0:
+        raise ValueError("noise_sigma must be finite and nonnegative")
     time = np.linspace(0.0, duration, samples, dtype=np.float64)
     clean = modes_model(modes_to_theta(modes, constant), time, len(modes))
     trace = clean
@@ -136,26 +143,38 @@ def distort_trace(
 
     ``chirp``: every frequency rises by the fraction ``amount`` across the
     record. ``gaussian_envelope``: the first mode decays as a Gaussian with
-    1/e time ``amount`` instead of an exponential. ``baseline_drift``: a
+    1/e time ``amount`` from the first sample instead of an exponential.
+    ``baseline_drift``: a
     linear ramp of ``amount`` across the record. ``clip``: the trace is
     clipped above ``amount``. ``glitch``: one sample at mid-record is
     offset by ``amount``. These are outside the model class on purpose:
     the sweep reports how the fit responds and the residual-to-noise ratio
-    that should flag them.
+    that can help diagnose them.
     """
     if kind not in DISTORTIONS:
         raise ValueError(f"unknown distortion {kind!r}")
+    if not np.isfinite(amount):
+        raise ValueError("distortion amount must be finite")
+    if kind == "gaussian_envelope" and amount <= 0:
+        raise ValueError("gaussian_envelope amount must be positive")
     span = float(time[-1] - time[0])
     out = np.full(time.shape, float(constant))
     for k, m in enumerate(modes):
-        w = m.angular_frequency
+        phase = m.angular_frequency * time + m.phase
         if kind == "chirp":
-            w = w * (1.0 + amount * (time - time[0]) / span)
+            phase = phase + (
+                0.5
+                * m.angular_frequency
+                * amount
+                * (time - time[0]) ** 2
+                / span
+            )
         if kind == "gaussian_envelope" and k == 0:
-            env = np.exp(-((time / amount) ** 2))
+            with np.errstate(over="ignore", under="ignore"):
+                env = np.exp(-(((time - time[0]) / amount) ** 2))
         else:
             env = np.exp(-m.decay * time)
-        out = out + m.amplitude * env * np.cos(w * time + m.phase)
+        out = out + m.amplitude * env * np.cos(phase)
     if kind == "baseline_drift":
         out = out + amount * (time - time[0]) / span
     elif kind == "clip":
@@ -181,8 +200,14 @@ def cramer_rao_bounds(
     its inverse. Returned per mode as arrays ``amplitude``, ``decay``,
     ``angular_frequency``, ``phase`` plus the scalar ``constant``.
     """
-    if noise_sigma <= 0:
-        raise ValueError("noise_sigma must be positive")
+    if not np.isfinite(noise_sigma) or noise_sigma <= 0:
+        raise ValueError("noise_sigma must be finite and positive")
+    with np.errstate(over="ignore", under="ignore"):
+        noise_variance = np.square(np.float64(noise_sigma))
+    if not np.isfinite(noise_variance) or noise_variance <= 0:
+        raise ValueError("noise_sigma must have a finite, positive variance")
+    if not np.isfinite(step) or step <= 0:
+        raise ValueError("step must be finite and positive")
     theta = modes_to_theta(modes, constant)
     n = len(modes)
     jac = np.empty((time.size, theta.size))
@@ -194,8 +219,17 @@ def cramer_rao_bounds(
         jac[:, k] = (modes_model(tp, time, n) - modes_model(tm, time, n)) / (
             2 * step
         )
-    fisher = jac.T @ jac / noise_sigma**2
-    sd = np.sqrt(np.diag(np.linalg.inv(fisher)))
+    try:
+        with np.errstate(over="raise", divide="raise", invalid="raise"):
+            fisher = jac.T @ jac / noise_variance
+            sd = np.sqrt(np.diag(np.linalg.inv(fisher)))
+    except (FloatingPointError, np.linalg.LinAlgError) as exc:
+        raise ValueError(
+            "noise_sigma or modes produce singular or nonfinite "
+            "Cramer-Rao bounds"
+        ) from exc
+    if not np.all(np.isfinite(sd)) or np.any(sd <= 0):
+        raise ValueError("Cramer-Rao bounds must be finite and positive")
     return {
         "amplitude": sd[0 : 4 * n : 4],
         "decay": sd[1 : 4 * n : 4],
@@ -223,22 +257,28 @@ def match_modes(
     """For each true mode, the index of the fitted mode within ``tolerance``
     (rad per time unit) or ``None``.
     """
-    out: list[int | None] = []
-    used: set[int] = set()
-    for m in modes:
-        if angular_frequency.size == 0:
-            out.append(None)
-            continue
-        err = np.abs(angular_frequency - m.angular_frequency)
-        for idx in np.argsort(err):
-            if idx in used:
-                continue
-            if err[idx] <= tolerance:
-                out.append(int(idx))
-                used.add(int(idx))
-                break
-        else:
-            out.append(None)
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
+    out: list[int | None] = [None] * len(modes)
+    if not modes or angular_frequency.size == 0:
+        return out
+    err = np.abs(
+        np.array([m.angular_frequency for m in modes])[:, None]
+        - angular_frequency[None, :]
+    )
+    # A missing match costs more than every valid distance combined:
+    # maximize recovered modes first, then minimize total frequency error.
+    missing_cost = len(modes) + 1
+    cost = np.full(
+        (len(modes), angular_frequency.size + len(modes)), float(missing_cost)
+    )
+    cost[:, : angular_frequency.size] = np.where(
+        err <= tolerance, err / (tolerance or 1.0), np.inf
+    )
+    rows, columns = linear_sum_assignment(cost)
+    for row, column in zip(rows, columns, strict=True):
+        if column < angular_frequency.size:
+            out[int(row)] = int(column)
     return out
 
 
@@ -340,7 +380,7 @@ def _stats(
         err = _wrap_phase(err)
     n = err.size
     bias = float(err.mean()) if n else float("nan")
-    std = float(err.std(ddof=1)) if n > 2 else float("nan")
+    std = float(err.std(ddof=1)) if n > 1 else float("nan")
     rmse = float(np.sqrt(np.mean(err**2))) if n else float("nan")
     return ParameterStats(
         truth=float(truth),
@@ -389,17 +429,35 @@ def validation_sweep(
     trial in which the estimator raises is counted in ``estimator_errors``
     and as a loss of every mode.
 
+    Truth and fitted modes use nonnegative amplitudes and phases in
+    ``[-pi, pi)``. The returned truth uses the same convention as the
+    parameter statistics.
+
     ``distortion`` = (kind, amount) replaces the clean trace with one from
     :func:`distort_trace`, outside the model class; ``residual_ratio`` is
     then the median rms residual of the reconstruction divided by the
-    noise sigma. It is close to 1 when the model fits and well above 1
-    when the trace is not a sum of damped sinusoids.
+    noise sigma. Large values can reflect model mismatch, missed modes or
+    estimator error; this ratio alone does not distinguish those causes.
     """
     if trials < 1:
         raise ValueError("trials must be at least 1")
-    if not snr_db:
+    if n_components <= 0:
+        raise ValueError("n_components must be positive")
+    if not np.isfinite(match_tolerance) or match_tolerance < 0:
+        raise ValueError("match_tolerance must be finite and nonnegative")
+    if len(snr_db) == 0:
         raise ValueError("snr_db must contain at least one level")
-    est = estimator or (lambda t, y, k: linear_prediction_numpy(t, y, k))
+    if not np.all(np.isfinite(snr_db)):
+        raise ValueError("snr_db levels must be finite")
+    amplitudes, phases = _canonical(
+        np.array([m.amplitude for m in modes]),
+        np.array([m.phase for m in modes]),
+    )
+    modes = tuple(
+        replace(m, amplitude=float(a), phase=float(p))
+        for m, a, p in zip(modes, amplitudes, phases, strict=True)
+    )
+    est = estimator or linear_prediction_numpy
     base = synthetic_modes_trace(
         samples, modes=modes, constant=constant, duration=duration
     )
@@ -409,11 +467,19 @@ def validation_sweep(
             base.time, modes, constant, distortion[0], distortion[1]
         )
     signal_rms = float(np.std(clean - clean.mean()))
+    with np.errstate(over="ignore", under="ignore", divide="ignore"):
+        noise_sigmas = signal_rms / np.power(10.0, np.asarray(snr_db) / 20)
+    # Validate every level before trials, including underflow/overflow in
+    # the SNR conversion, so a later invalid level cannot yield partial work.
+    bounds_per_level = [
+        cramer_rao_bounds(modes, constant, base.time, float(sigma))
+        for sigma in noise_sigmas
+    ]
     rng = np.random.default_rng(seed)
     levels = []
-    for snr in snr_db:
-        sigma = signal_rms / 10 ** (snr / 20)
-        bounds = cramer_rao_bounds(modes, constant, base.time, sigma)
+    for snr, sigma, bounds in zip(
+        snr_db, noise_sigmas, bounds_per_level, strict=True
+    ):
         found: list[dict[str, list[float]]] = [
             {name: [] for name in PARAMETERS} for _ in modes
         ]
@@ -497,19 +563,38 @@ def validation_sweep(
     )
 
 
-def source_revision() -> str | None:
-    """Git revision of the checkout containing this module, if any."""
+def _source_provenance() -> tuple[str | None, bool | None]:
+    """Revision and tracked-file dirtiness for this module's checkout."""
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parent,
-            capture_output=True,
-            text=True,
-            timeout=5,
+        source = Path(__file__).resolve()
+        options: dict[str, Any] = {
+            "cwd": source.parent,
+            "capture_output": True,
+            "text": True,
+            "timeout": 5,
+            "check": True,
+        }
+        # A wheel installed in another project's .venv can have an enclosing
+        # Git checkout without belonging to that checkout's source tree.
+        subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", source.name],
+            **options,
+        )
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], **options
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            **options,
         )
     except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout.strip() if out.returncode == 0 else None
+        return None, None
+    return revision, bool(status.stdout.strip())
+
+
+def source_revision() -> str | None:
+    """Git revision when this module belongs to a tracked source checkout."""
+    return _source_provenance()[0]
 
 
 def build_summary(
@@ -530,6 +615,34 @@ def build_summary(
     if not sweeps:
         raise ValueError("at least one sweep is required")
     first = sweeps[0]
+    shared_fields = (
+        "samples",
+        "duration",
+        "modes",
+        "constant",
+        "seed",
+        "match_tolerance",
+    )
+    first_levels = [
+        (level.snr_db, level.trials_attempted, level.n_components)
+        for level in first.levels
+    ]
+    for sweep in sweeps[1:]:
+        if (
+            any(
+                getattr(sweep, name) != getattr(first, name)
+                for name in shared_fields
+            )
+            or [
+                (level.snr_db, level.trials_attempted, level.n_components)
+                for level in sweep.levels
+            ]
+            != first_levels
+        ):
+            raise ValueError(
+                "summary sweeps must share truth, sampling, seed, "
+                "matching and trial settings"
+            )
     dt = first.duration / (first.samples - 1)
     config = {
         "model": (
@@ -568,15 +681,17 @@ def build_summary(
             "criterion": (
                 "a true mode is recovered when a fitted mode lies within "
                 "the tolerance of its angular frequency; fitted modes are "
-                "assigned nearest-first and each is used at most once"
+                "assigned to maximize matches, then minimize total frequency "
+                "error, and each is used at most once"
             ),
             "tolerance_rad_per_time": first.match_tolerance,
         },
         "statistics": (
             "bias, std (ddof 1) and rmse are computed over the recovered "
             "trials of each mode; crlb_std and crlb_variance are the "
-            "unconditional Cramer-Rao bounds from the exact Fisher "
-            "information of the model at the true parameters; the phase "
+            "unconditional Cramer-Rao bounds from the model's Fisher "
+            "information using a numerical Jacobian at the true "
+            "parameters; the phase "
             "error is wrapped to [-pi, pi)"
         ),
         "estimators": sorted({s.backend for s in sweeps}),
@@ -595,7 +710,7 @@ def build_summary(
     except ImportError:  # pragma: no cover - scipy is a dependency
         scipy_version = None
     runtime["scipy_version"] = scipy_version
-    runtime["source_revision"] = source_revision()
+    runtime["source_revision"], runtime["source_dirty"] = _source_provenance()
     results = []
     for sweep in sweeps:
         for lvl in sweep.levels:
@@ -611,6 +726,7 @@ def build_summary(
                         else None
                     ),
                     "snr_db": lvl.snr_db,
+                    "signal_rms": sweep.signal_rms,
                     "noise_sigma": lvl.noise_sigma,
                     "trials": {
                         "attempted": lvl.trials_attempted,
@@ -619,14 +735,23 @@ def build_summary(
                         "estimator_errors": lvl.estimator_errors,
                     },
                     "any_mode_lost_rate": lvl.any_mode_lost_rate,
-                    "residual_rms_over_sigma_median": lvl.residual_ratio,
+                    "residual_rms_over_sigma_median": (
+                        lvl.residual_ratio
+                        if np.isfinite(lvl.residual_ratio)
+                        else None
+                    ),
                     "modes": [
                         {
                             "recovered_trials": m.recovered_trials,
                             "loss_rate": m.loss_rate,
                             "statistics_over": "recovered_trials",
                             **{
-                                name: asdict(getattr(m, name))
+                                name: {
+                                    key: value if np.isfinite(value) else None
+                                    for key, value in asdict(
+                                        getattr(m, name)
+                                    ).items()
+                                }
                                 for name in PARAMETERS
                             },
                         }
@@ -651,8 +776,10 @@ def write_validation_figure(
     standard deviation against the bound versus signal-to-noise, and the
     loss rate. Returns False when the ``viz`` extra is not installed."""
     try:
+        from bokeh.embed import file_html
         from bokeh.layouts import gridplot
-        from bokeh.plotting import figure, output_file, save
+        from bokeh.plotting import figure
+        from bokeh.resources import INLINE
     except ImportError:
         return False
     palette = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"]
@@ -717,8 +844,9 @@ def write_validation_figure(
         fig.legend.label_text_font_size = "8pt"
         row.append(fig)
         rows.append(row)
-    output_file(str(path), title=title)
-    save(gridplot(rows))
+    path.write_text(
+        file_html(gridplot(rows), INLINE, title), encoding="utf-8"
+    )
     return True
 
 
@@ -742,6 +870,6 @@ def write_validation_run(
     }
     summary = build_summary(sweeps, command=command, artifacts=artifacts)
     with open(out / "summary.json", "w", encoding="utf-8", newline="\n") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+        json.dump(summary, f, indent=2, sort_keys=True, allow_nan=False)
         f.write("\n")
     return summary

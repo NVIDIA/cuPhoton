@@ -22,14 +22,18 @@ import numpy as np
 from cuphoton import __version__ as CUPHOTON_VERSION
 
 from .detector_artifacts import (
+    DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION,
     DETECTOR_ARTIFACT_MANIFEST_VERSION,
+    FIT_DIAGNOSTICS_LEVELS,
     detector_artifact_complete,
     detector_artifact_input_identity,
     detector_artifact_resume_identity,
     detector_normalization_identity,
     merge_detector_artifact_shards,
+    validate_detector_fit_options,
 )
 from .detector_mask import format_y_ranges, parse_y_ranges
+from .detector_storage import ARTIFACT_LAYOUTS
 from .hdf5 import probe_hdf5_file
 
 _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
@@ -41,6 +45,9 @@ _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
     "fit_trailing_drop": 1,
     "integrate": 3,
     "components": 30,
+    "fit_method": "linear-prediction",
+    "iterative_options": None,
+    "p2_ridge_alpha": 0.0,
     "roots_backend": "eigvals",
     "savgol_window": 5,
     "savgol_polyorder": 3,
@@ -49,6 +56,8 @@ _DETECTOR_OPTION_DEFAULTS: dict[str, Any] = {
     "hdf5_reader": "h5py",
     "hdf5_reader_workers": 2,
     "max_tiles": None,
+    "fit_diagnostics": "none",
+    "artifact_layout": "dense",
 }
 
 
@@ -119,7 +128,12 @@ def build_detector_artifact_distributed_plan(
     python_executable: str | None = None,
     work_dir: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Build a serializable plan for an x-sharded detector artifact run."""
+    """Build a serializable plan for an x-sharded detector artifact run.
+
+    Pass ``detector_options={"artifact_layout": "tile-rows"}`` to store
+    compact spectra in every shard and merged output. The default ``dense``
+    layout preserves pixel-shaped NPY files for direct NumPy consumers.
+    """
 
     _require_positive("tile width", tile_shape[0])
     _require_positive("tile height", tile_shape[1])
@@ -179,6 +193,28 @@ def build_detector_artifact_distributed_plan(
     options = dict(_DETECTOR_OPTION_DEFAULTS)
     options.update(detector_options or {})
     options["tile_shape"] = tuple(tile_shape)
+    if options["artifact_layout"] not in ARTIFACT_LAYOUTS:
+        raise ValueError("artifact_layout must be dense or tile-rows")
+    if options["fit_diagnostics"] not in FIT_DIAGNOSTICS_LEVELS:
+        raise ValueError(
+            "fit_diagnostics must be one of: "
+            + ", ".join(FIT_DIAGNOSTICS_LEVELS)
+        )
+    p2_ridge_alpha = float(options["p2_ridge_alpha"])
+    if not np.isfinite(p2_ridge_alpha) or p2_ridge_alpha < 0:
+        raise ValueError("p2_ridge_alpha must be finite and non-negative")
+    options["p2_ridge_alpha"] = p2_ridge_alpha
+    iterative_options = options["iterative_options"]
+    if isinstance(iterative_options, dict):
+        from .iterative_fit import IterativeFitOptions
+
+        iterative_options = IterativeFitOptions(**iterative_options)
+    iterative_options = validate_detector_fit_options(
+        options["fit_method"], iterative_options, p2_ridge_alpha
+    )
+    options["iterative_options"] = (
+        None if iterative_options is None else iterative_options.to_dict()
+    )
     on_path = _resolve_path(h5dir_path, fon)
     off_path = _resolve_path(h5dir_path, foff)
     input_identity = detector_artifact_input_identity(on_path, off_path)
@@ -235,7 +271,11 @@ def build_detector_artifact_distributed_plan(
         "normalization_cache": (
             None if normalization_cache is None else str(normalization_cache)
         ),
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": (
+            DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
+            if options["fit_method"] == "iterative"
+            else DETECTOR_ARTIFACT_MANIFEST_VERSION
+        ),
         "package_version": CUPHOTON_VERSION,
         "dtype": "float64",
         "input_identity": input_identity,
@@ -628,7 +668,7 @@ def _write_or_submit_slurm_plan(
             encoding="utf-8",
         )
         merge_script_path.chmod(0o755)
-    payload = {
+    payload: dict[str, Any] = {
         "kind": "xray-detector-artifact-slurm-plan",
         "plan_path": str(plan_path),
         "script_path": str(script_path),
@@ -730,9 +770,13 @@ def _request_manifest_for_shard(
     detector_options: dict[str, Any],
 ) -> dict[str, Any]:
     options = detector_options
-    return {
+    manifest = {
         "kind": "xray-detector-artifacts",
-        "manifest_schema_version": DETECTOR_ARTIFACT_MANIFEST_VERSION,
+        "manifest_schema_version": (
+            DETECTOR_ARTIFACT_ITERATIVE_MANIFEST_VERSION
+            if options.get("fit_method") == "iterative"
+            else DETECTOR_ARTIFACT_MANIFEST_VERSION
+        ),
         "package_version": CUPHOTON_VERSION,
         "backend": "cupy",
         "dtype": "float64",
@@ -764,6 +808,7 @@ def _request_manifest_for_shard(
         "exclude_y": format_y_ranges(parse_y_ranges(options["exclude_y"])),
         "integrate_pixels": int(options["integrate"]),
         "components": int(options["components"]),
+        "p2_ridge_alpha": float(options["p2_ridge_alpha"]),
         "roots_backend": str(options["roots_backend"]),
         "savgol_window": int(options["savgol_window"]),
         "savgol_polyorder": int(options["savgol_polyorder"]),
@@ -776,6 +821,9 @@ def _request_manifest_for_shard(
             if options["max_tiles"] is None
             else int(options["max_tiles"])
         ),
+        "fit_diagnostics": {
+            "level": str(options["fit_diagnostics"]),
+        },
         "shard": {
             "index": int(shard.index),
             "count": int(shard.count),
@@ -793,6 +841,12 @@ def _request_manifest_for_shard(
             ],
         },
     }
+    if options.get("fit_method") == "iterative":
+        manifest["fit_method"] = "iterative"
+        manifest["iterative_options"] = options["iterative_options"]
+    if options.get("artifact_layout", "dense") != "dense":
+        manifest["artifact_layout"] = options["artifact_layout"]
+    return manifest
 
 
 def _plan_identity(shards: list[dict[str, Any]]) -> str:
@@ -890,6 +944,17 @@ def _append_detector_worker_options(
             cmd.extend([flag, str(value)])
     for item in options.get("exclude_y", ()) or ():
         cmd.extend(["--exclude-y", str(item)])
+    if options.get("artifact_layout", "dense") != "dense":
+        cmd.extend(["--artifact-layout", str(options["artifact_layout"])])
+    if options.get("fit_diagnostics", "none") != "none":
+        cmd.extend(["--fit-diagnostics", str(options["fit_diagnostics"])])
+    if float(options.get("p2_ridge_alpha", 0.0)) != 0.0:
+        cmd.extend(["--p2-ridge-alpha", str(options["p2_ridge_alpha"])])
+    if options.get("fit_method", "linear-prediction") == "iterative":
+        cmd.extend(["--fit-method", "iterative"])
+        for name, value in options["iterative_options"].items():
+            if value is not None:
+                cmd.append(f"--iterative-{name.replace('_', '-')}={value}")
 
 
 def _read_detector_input_spec(
@@ -989,7 +1054,7 @@ def _plan_x_shards(
 
 
 def _json_safe_options(options: dict[str, Any]) -> dict[str, Any]:
-    payload = {}
+    payload: dict[str, Any] = {}
     for key, value in options.items():
         if isinstance(value, Path):
             payload[key] = str(value)

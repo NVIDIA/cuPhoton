@@ -2,6 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from dataclasses import replace
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -48,7 +52,7 @@ def test_estimator_recovers_known_modes_exactly_at_zero_noise():
         tolerance=0.05,
     )
     assert all(h is not None for h in hit)
-    for m, h in zip(fx.modes, hit):
+    for m, h in zip(fx.modes, hit, strict=True):
         assert abs(float(r.angular_frequency[h]) - m.angular_frequency) < 1e-6
         assert abs(float(r.decay[h]) - m.decay) < 1e-6
 
@@ -86,6 +90,64 @@ def test_single_mode_bound_matches_the_undamped_closed_form():
     assert numerical < closed * 1.03
 
 
+def test_integer_mode_parameters_have_the_same_bounds_as_floats():
+    time = np.linspace(0, 25.5, 256)
+    actual = cramer_rao_bounds((DampedMode(1, 0, 2, 0),), 0, time, 0.01)
+    expected = cramer_rao_bounds(
+        (DampedMode(1.0, 0.0, 2.0, 0.0),), 0.0, time, 0.01
+    )
+    for name in (*PARAMETERS, "constant"):
+        np.testing.assert_allclose(actual[name], expected[name])
+        assert np.all(np.isfinite(actual[name]))
+
+
+@pytest.mark.parametrize(
+    "modes",
+    [
+        (DampedMode(0.0, 0.1, 2.0, 0.3),),
+        (DampedMode(1.0, 0.1, 2.0, 0.3),) * 2,
+    ],
+    ids=["zero-amplitude", "duplicate-modes"],
+)
+def test_bounds_reject_unidentifiable_modes(modes):
+    with pytest.raises(ValueError, match="Cramer-Rao bounds"):
+        cramer_rao_bounds(modes, 0.0, np.linspace(0.0, 9.5, 96), 0.01)
+
+
+@pytest.mark.parametrize("start", [0.0, 3.0])
+def test_chirp_integrates_the_requested_frequency_ramp(start):
+    time = np.linspace(start, start + 10.0, 256)
+    # Integrating omega(t) = 2 + .04 * (t - start) gives this phase.
+    expected = np.cos(2 * time + 0.02 * (time - start) ** 2 + 0.3)
+    actual = distort_trace(time, (DampedMode(1, 0, 2, 0.3),), 0, "chirp", 0.2)
+    np.testing.assert_allclose(actual, expected)
+
+
+@pytest.mark.parametrize("start", [0.0, 3.0])
+def test_gaussian_envelope_starts_at_the_first_sample(start):
+    time = np.linspace(start, start + 10.0, 256)
+    expected = np.exp(-(((time - start) / 5.0) ** 2)) * np.cos(2 * time + 0.3)
+    actual = distort_trace(
+        time, (DampedMode(1, 0.1, 2, 0.3),), 0, "gaussian_envelope", 5.0
+    )
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_matching_recovers_close_modes_independent_of_truth_order():
+    modes = (DampedMode(1, 0, 1.0), DampedMode(1, 0, 1.15))
+    fitted = np.array([1.05, 0.85])
+    decay = np.zeros(2)
+    assert match_modes(modes, fitted, decay, tolerance=0.2) == [1, 0]
+    assert match_modes(modes[::-1], fitted, decay, tolerance=0.2) == [0, 1]
+    assert match_modes(modes, fitted[:1], decay[:1], tolerance=0.2) == [
+        0,
+        None,
+    ]
+    assert match_modes(
+        modes, np.array([np.nan]), decay[:1], tolerance=0.2
+    ) == [None, None]
+
+
 def test_validation_sweep_reports_bound_ratios_and_loss_rates():
     sweep = validation_sweep(snr_db=(40.0, 20.0), trials=40, seed=1)
     assert len(sweep.levels) == 2
@@ -93,8 +155,9 @@ def test_validation_sweep_reports_bound_ratios_and_loss_rates():
     w = strong.angular_frequency
     assert w.crlb_std > 0 and w.std > 0
     assert w.crlb_variance == pytest.approx(w.crlb_std**2)
-    assert w.std_over_crlb_std >= 1.0  # an estimator cannot beat the bound
-    assert w.std_over_crlb_std < 10.0
+    # A coarse plausibility check: finite-sample, recovered-trial scatter
+    # from a biased estimator need not exceed the unconditional CRLB.
+    assert 0.2 < w.std_over_crlb_std < 10.0
     assert abs(w.bias) < 0.01
     assert w.rmse >= abs(w.bias)
     for name in PARAMETERS:
@@ -121,6 +184,49 @@ def test_estimator_errors_count_as_failed_trials():
     assert level.trials_failed == 3 and level.trials_successful == 0
     assert all(m.loss_rate == 1.0 for m in level.modes)
     assert np.isnan(level.residual_ratio)
+
+
+@pytest.mark.parametrize("amplitude", [-1.0, 1.0])
+@pytest.mark.parametrize("phase", [0.3, 0.3 + 4 * np.pi])
+def test_sweep_uses_the_same_amplitude_phase_convention_for_truth_and_fit(
+    amplitude, phase
+):
+    mode = DampedMode(amplitude, 0.1, 2.0, phase)
+    fixture = synthetic_modes_trace(modes=(mode,))
+
+    def exact_estimator(t, y, k):
+        return SimpleNamespace(
+            amplitude=np.array([mode.amplitude]),
+            decay=np.array([mode.decay]),
+            angular_frequency=np.array([mode.angular_frequency]),
+            phase=np.array([mode.phase]),
+            reconstruction=fixture.clean,
+        )
+
+    sweep = validation_sweep(
+        modes=(mode,),
+        snr_db=(30.0,),
+        trials=2,
+        n_components=1,
+        estimator=exact_estimator,
+    )
+    result = sweep.levels[0].modes[0]
+    assert result.recovered_trials == 2
+    for name in PARAMETERS:
+        stats = getattr(result, name)
+        assert stats.bias == pytest.approx(0.0, abs=1e-14)
+        assert stats.rmse == pytest.approx(0.0, abs=1e-14)
+        assert stats.truth == getattr(sweep.modes[0], name)
+
+    canonical = synthetic_modes_trace(modes=sweep.modes)
+    np.testing.assert_allclose(canonical.clean, fixture.clean, atol=1e-14)
+    summary = build_summary([sweep])
+    truth = summary["config"]["truth"]["modes"][0]
+    assert truth["amplitude"] == 1.0
+    expected_phase = 0.3 - np.pi if amplitude < 0 else 0.3
+    assert truth["phase"] == pytest.approx(expected_phase)
+    for name in PARAMETERS:
+        assert summary["results"][0]["modes"][0][name]["truth"] == truth[name]
 
 
 def test_summary_schema_and_run_artifacts(tmp_path):
@@ -160,6 +266,52 @@ def test_summary_schema_and_run_artifacts(tmp_path):
         build_summary([])
 
 
+@pytest.mark.parametrize("trials", [1, 2])
+def test_small_sweeps_write_strict_json_and_two_trials_have_std(
+    tmp_path, trials
+):
+    sweep = validation_sweep(snr_db=(30.0,), trials=trials, seed=3)
+    summary = write_validation_run(tmp_path, [sweep])
+    encoded = json.dumps(summary, allow_nan=False)
+    assert json.loads(encoded) == json.loads(
+        (tmp_path / "summary.json").read_text()
+    )
+    strong = summary["results"][0]["modes"][0]
+    assert strong["recovered_trials"] == trials
+    assert (strong["angular_frequency"]["std"] is None) == (trials == 1)
+
+
+def test_failed_sweep_statistics_are_null_in_summary():
+    def broken(t, y, k):
+        raise RuntimeError("no fit")
+
+    sweep = validation_sweep(snr_db=(30.0,), trials=2, estimator=broken)
+    summary = build_summary([sweep])
+    json.dumps(summary, allow_nan=False)
+    result = summary["results"][0]
+    assert result["residual_rms_over_sigma_median"] is None
+    assert result["modes"][0]["angular_frequency"]["bias"] is None
+
+
+@pytest.mark.parametrize(
+    "change", [{"samples": 192}, {"seed": 77}, {"match_tolerance": 0.1}]
+)
+def test_summary_rejects_incompatible_sweep_provenance(change):
+    sweep = validation_sweep(snr_db=(30.0,), trials=2)
+    with pytest.raises(ValueError, match="summary sweeps must share"):
+        build_summary([sweep, replace(sweep, **change)])
+
+
+def test_summary_preserves_distortion_signal_scale():
+    sweep = validation_sweep(snr_db=(30.0,), trials=2)
+    distorted = replace(
+        sweep, backend="other", distortion=("clip", 0.5), signal_rms=0.1
+    )
+    summary = build_summary([sweep, distorted])
+    assert summary["results"][0]["signal_rms"] == sweep.signal_rms
+    assert summary["results"][1]["signal_rms"] == 0.1
+
+
 def test_invalid_inputs_are_rejected():
     fx = synthetic_modes_trace(96)
     with pytest.raises(ValueError):
@@ -170,6 +322,56 @@ def test_invalid_inputs_are_rejected():
         validation_sweep(trials=5, snr_db=())
     with pytest.raises(ValueError):
         synthetic_modes_trace(8)
+
+
+@pytest.mark.parametrize("sigma", [-0.1, np.nan, np.inf, -np.inf])
+def test_fixture_rejects_invalid_noise_sigma(sigma):
+    with pytest.raises(ValueError, match="noise_sigma"):
+        synthetic_modes_trace(noise_sigma=sigma)
+
+
+@pytest.mark.parametrize(
+    "sigma", [np.nan, np.inf, -0.1, 1e-200, 1e-160, 1e200]
+)
+def test_bounds_reject_invalid_noise_scales_without_runtime_warnings(sigma):
+    fx = synthetic_modes_trace()
+    with (
+        np.errstate(all="raise"),
+        pytest.raises(ValueError, match="noise_sigma"),
+    ):
+        cramer_rao_bounds(fx.modes, fx.constant, fx.time, sigma)
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"snr_db": (30.0, np.nan)}, "snr_db"),
+        ({"snr_db": (30.0, np.inf)}, "snr_db"),
+        ({"snr_db": (30.0, -np.inf)}, "snr_db"),
+        ({"snr_db": (30.0, 1e308)}, "noise_sigma"),
+        ({"snr_db": (30.0, -1e308)}, "noise_sigma"),
+        ({"snr_db": (30.0, 4000.0)}, "noise_sigma"),
+        ({"snr_db": (30.0, -4000.0)}, "noise_sigma"),
+        ({"n_components": 0}, "n_components"),
+        ({"distortion": ("gaussian_envelope", 0.0)}, "must be positive"),
+        ({"distortion": ("gaussian_envelope", -1.0)}, "must be positive"),
+        ({"distortion": ("glitch", np.inf)}, "must be finite"),
+        ({"match_tolerance": np.nan}, "match_tolerance"),
+        ({"duration": 0.0}, "duration"),
+    ],
+)
+def test_invalid_sweep_input_is_rejected_before_any_estimator_calls(
+    kwargs, message
+):
+    calls = []
+
+    def estimator(*args):
+        calls.append(args)
+        raise RuntimeError("invalid input must not reach the estimator")
+
+    with np.errstate(all="raise"), pytest.raises(ValueError, match=message):
+        validation_sweep(trials=1, estimator=estimator, **kwargs)
+    assert not calls
 
 
 def test_undistorted_residual_ratio_is_near_one():

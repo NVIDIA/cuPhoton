@@ -7,13 +7,12 @@
 *.yaml text eol=lf
 *.md text eol=lf
 
+# GitHub community files and workflows are public release inputs. The release
+# controller enforces their exact allowlist before export.
 # Keep internal development and release-process files out of public exports.
-/.github export-ignore
-/.github/** export-ignore
 /.gitlab export-ignore
 /.gitlab/** export-ignore
-/scripts export-ignore
-/scripts/** export-ignore
+/.gitlab-ci.yml export-ignore
 /AGENTS.md export-ignore
 /CLAUDE.md export-ignore
 /CHANGELOG.md export-ignore
@@ -31,3 +30,6 @@
 *.pdf filter=lfs diff=lfs merge=lfs -text
 *.pptx filter=lfs diff=lfs merge=lfs -text
 *.ipynb filter=lfs diff=lfs merge=lfs -text
+
+# Keep this small, reviewed, output-free walkthrough readable in code reviews.
+/examples/imaging-pipeline/run_imaging_pipeline.ipynb -filter diff merge text eol=lf

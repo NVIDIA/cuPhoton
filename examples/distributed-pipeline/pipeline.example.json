@@ -1,0 +1,95 @@
+{
+  "schema": "cuphoton.xscan.pipeline-manifest/v1",
+  "configuration": {
+    "schema": "cuphoton.xscan.device-pipeline.config/v2",
+    "device": "cuda:0",
+    "checkpoint_dir": "model",
+    "checkpoint_sha256": "<SHA256 of model/checkpoint.pt>",
+    "feature_schema_path": "model/schema.json",
+    "feature_schema_sha256": "<SHA256 of model/schema.json>",
+    "stamp_shape": [
+      63,
+      63
+    ],
+    "decision_threshold": 0.5,
+    "xpois": {
+      "kernel_shape": [
+        15,
+        15
+      ],
+      "basis_sigmas": [
+        1.5
+      ],
+      "basis_degrees": [
+        0
+      ],
+      "background_degree": 0,
+      "flux_conserve": false,
+      "flux_reference_index": 0,
+      "solver": "constant"
+    },
+    "xfit": {
+      "model": "gaussian",
+      "mode": "difference",
+      "f_tol": null,
+      "x_tol": null,
+      "g_tol": null,
+      "max_evaluations": null,
+      "initial_damping": 0.001,
+      "damping_increase": 10.0,
+      "damping_decrease": 0.3,
+      "finite_difference_step": null,
+      "use_finite_difference": false
+    },
+    "inference_policy": {
+      "amp_dtype": "off",
+      "allow_tf32": false,
+      "cudnn_benchmark": false,
+      "compile": false,
+      "compile_mode": null,
+      "compile_backend": null,
+      "compile_threads": null,
+      "compile_worker_start_method": null,
+      "num_workers": 0,
+      "worker_start_method": null,
+      "worker_cpu_threads": 1,
+      "pin_memory": false,
+      "persistent_workers": false,
+      "non_blocking_transfers": false
+    }
+  },
+  "items": [
+    {
+      "schema": "cuphoton.xscan.device-pipeline.item/v1",
+      "item_id": "pair-0000",
+      "reference": {
+        "path": "data/reference-0000.npy",
+        "sha256": "<SHA256 of data/reference-0000.npy>",
+        "shape": [
+          4096,
+          4096
+        ],
+        "dtype": "<f4"
+      },
+      "target": {
+        "path": "data/target-0000.npy",
+        "sha256": "<SHA256 of data/target-0000.npy>",
+        "shape": [
+          4096,
+          4096
+        ],
+        "dtype": "<f4"
+      },
+      "variance": null,
+      "fit_mask": null,
+      "candidates": [
+        {
+          "candidate_id": "candidate-0000",
+          "center_x": 2048,
+          "center_y": 2048,
+          "source_index": 0
+        }
+      ]
+    }
+  ]
+}

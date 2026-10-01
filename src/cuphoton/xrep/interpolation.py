@@ -308,6 +308,8 @@ def propagate_mask_or(
     fx = safe_x - x0
     fy = safe_y - y0
 
+    x_contributors: tuple[tuple[int, np.ndarray], ...]
+    y_contributors: tuple[tuple[int, np.ndarray], ...]
     if interpolation == "bilinear":
         x_contributors = ((0, (1.0 - fx) != 0.0), (1, fx != 0.0))
         y_contributors = ((0, (1.0 - fy) != 0.0), (1, fy != 0.0))

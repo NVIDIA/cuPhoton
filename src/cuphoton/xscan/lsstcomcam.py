@@ -18,6 +18,8 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.core.fits_io import read_fits_images, validate_fits_reader
+
 from .butler import (
     _is_missing,
     _jsonable,
@@ -392,8 +394,15 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
     *,
     manifest_path: Path,
     output_dir: Path,
+    fits_reader: str | None = None,
 ) -> DatasetBuildResult:
     payload = load_manifest(manifest_path)
+    fits_reader = validate_fits_reader(
+        payload.get("fits_reader", "auto")
+        if fits_reader is None
+        else fits_reader
+    )
+    fits_reads: list[dict[str, Any]] = []
     registry_path = _registry_path_from_manifest(payload)
     sample_count = int(payload.get("sample_count", payload.get("limit", 8)))
     if sample_count <= 0:
@@ -531,6 +540,8 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
             Path(str(visit_row["path"])),
             hdu=image_hdu,
             stamp_size=stamp_size,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
             center_x=sample.center_x,
             center_y=sample.center_y,
         )
@@ -538,6 +549,8 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
             Path(str(difference_row["path"])),
             hdu=difference_hdu,
             stamp_size=stamp_size,
+            fits_reader=fits_reader,
+            read_metadata=fits_reads,
             center_x=search_stamp.center_x,
             center_y=search_stamp.center_y,
         )
@@ -631,6 +644,8 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
     summary = {
         "dataset_dir": str(output_dir),
         "dataset_kind": LSSTCOMCAM_SMOKE_DATASET_KIND,
+        "fits_reader": fits_reader,
+        "fits_reads": fits_reads,
         "manifest_path": str(manifest_path.expanduser().resolve()),
         "registry_path": str(selection.registry_path),
         "registry_filters": selection.filters,
@@ -1292,7 +1307,7 @@ def _staging_plan_samples(
     shuffle: bool,
 ) -> LsstComCamStagingPlanSamples:
     if candidate_catalog_path is None:
-        available = [
+        available: list[dict[str, Any]] = [
             {
                 "pair": pair,
                 "candidate_row": None,
@@ -1609,6 +1624,8 @@ def read_fits_stamp(
     stamp_size: int,
     center_x: int | None = None,
     center_y: int | None = None,
+    fits_reader: str = "astropy",
+    read_metadata: list[dict[str, Any]] | None = None,
 ) -> FitsStamp:
     """Read a small centered FITS stamp without materializing full images."""
     try:
@@ -1634,11 +1651,16 @@ def read_fits_stamp(
                 f"stamp centered at x={center_x}, y={center_y} with "
                 f"size={stamp_size} does not fit inside {path}"
             )
-        section = getattr(image_hdu, "section", None)
-        if section is not None:
-            data = section[y0:y1, x0:x1]
-        else:
-            data = image_hdu.data[y0:y1, x0:x1]
+        used_hdu = hdul.index_of(image_hdu)
+        result = read_fits_images(
+            path,
+            [used_hdu],
+            reader=fits_reader,
+            section=(slice(y0, y1), slice(x0, x1)),
+        )
+        if read_metadata is not None:
+            read_metadata.append(result.metadata())
+        data = result.arrays[0]
         return FitsStamp(
             data=np.asarray(data, dtype=np.float32),
             center_x=center_x,
@@ -1996,7 +2018,7 @@ def _split_fractions_from_manifest(
     values = tuple(float(value) for value in raw)
     if not math.isclose(sum(values), 1.0, rel_tol=0.0, abs_tol=1e-6):
         raise ValueError("split_fractions must sum to 1.0")
-    return values
+    return (values[0], values[1], values[2])
 
 
 def _select_fits_image_hdu(hdul, hdu: str | int):
@@ -2019,7 +2041,8 @@ def _select_fits_image_hdu(hdul, hdu: str | int):
 
 
 def _fits_hdu_image_shape(image_hdu) -> tuple[int, int]:
-    return tuple(int(value) for value in image_hdu.shape)
+    height, width = (int(value) for value in image_hdu.shape)
+    return (height, width)
 
 
 def _fits_image_shape(path: Path, *, hdu: str | int) -> tuple[int, int]:
@@ -2530,7 +2553,7 @@ def _sort_key(row: dict[str, Any]) -> tuple[str, ...]:
 
 def _registry_row_preference_key(row: dict[str, Any]) -> tuple[int, int, str]:
     value = row.get("mtime_ns")
-    if _is_missing(value):
+    if value is None or _is_missing(value):
         mtime_ns = -1
         has_mtime = 0
     else:
@@ -2592,6 +2615,8 @@ def _canonical_filter_value(value: Any) -> str | None:
 def _numeric_range_bound(value: Any, *, column: str) -> float:
     canonical = _canonical_filter_value(value)
     try:
+        if canonical is None:
+            raise TypeError("missing numeric bound")
         return float(canonical)
     except (TypeError, ValueError) as exc:
         raise ValueError(

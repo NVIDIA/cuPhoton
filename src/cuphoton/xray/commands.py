@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Invariant-backed commands for the XRay CLI surface."""
+"""Invariant-backed commands for the xRay CLI surface."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import asdict as dataclass_asdict
 from pathlib import Path
+from typing import Any
 
 from cuphoton.core.cli import (
     BoolInvariant,
@@ -20,12 +21,21 @@ from cuphoton.core.cli import (
     NonNegativeIntegerInvariant,
     PairInvariant,
     PathValueInvariant,
+    PositiveIntegerInvariant,
     SequenceInvariant,
     SetInvariant,
     StringInvariant,
     VariablePositionalInvariant,
 )
 
+from ._cli_output import (
+    print_file_probe,
+    print_model_order_sweep_batch,
+    print_model_order_sweep_payload,
+    print_subspace_benchmark_batch,
+    print_validation_sweep,
+)
+from ._types import FIT_DIAGNOSTICS_LEVELS
 from .doctor import (
     collect_doctor_report,
     format_doctor_json,
@@ -45,7 +55,7 @@ _KNOWN_COMMAND_EXCEPTIONS = (
 
 
 class _XRayCommand(InvariantAwareCommand):
-    """Run one XRay domain handler with invariant-backed options."""
+    """Run one xRay domain handler with invariant-backed options."""
 
     _log_level_ = False
     _quiet_ = False
@@ -114,14 +124,15 @@ class ReportCommand(_XRayCommand):
     _shortname_ = None
     _handler_name_ = "_report"
 
-    input = None
+    # Handler options intentionally reuse the framework stream names.
+    input: Path | None = None  # type: ignore[assignment]
 
     class InputArg(PathValueInvariant):
         _arg = "-i/--input"
         _help = "Run output directory containing analysis artifacts."
         _required = True
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "-o/--output"
@@ -162,7 +173,7 @@ class ValidationVizCommand(_XRayCommand):
         _help = "Directory containing extracted trace NPZ files."
         _required = False
 
-    profile_log = []
+    profile_log: list[Path] = []
 
     class ProfileLogArg(SequenceInvariant):
         _arg = "--profile-log"
@@ -171,20 +182,20 @@ class ValidationVizCommand(_XRayCommand):
         _item_type = Path
         _default = []
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
         _help = "Output standalone HTML path."
         _required = True
 
-    title = "XRay Validation Review"
+    title = "xRay Validation Review"
 
     class TitleArg(StringInvariant):
         _arg = "--title"
         _help = "Dashboard title."
         _required = False
-        _default = "XRay Validation Review"
+        _default = "xRay Validation Review"
 
     components = 30
 
@@ -257,8 +268,7 @@ class PhononVizCommand(_XRayCommand):
     class DetectorArtifactDirArg(PathValueInvariant):
         _arg = "--detector-artifact-dir"
         _help = (
-            "Directory containing freq_all.npy, amp_all.npy, "
-            "fft_all.npy, and fft_freq_all.npy from a dumped "
+            "Directory containing dense or tile-row spectra from a dumped "
             "detector-wide analysis run."
         )
         _required = False
@@ -284,20 +294,20 @@ class PhononVizCommand(_XRayCommand):
         _help = "Exclusive last detector row for detector artifact mode."
         _required = False
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
         _help = "Output standalone HTML path."
         _required = True
 
-    title = "XRay Phonon Dispersion"
+    title = "xRay Phonon Dispersion"
 
     class TitleArg(StringInvariant):
         _arg = "--title"
         _help = "Dashboard title."
         _required = False
-        _default = "XRay Phonon Dispersion"
+        _default = "xRay Phonon Dispersion"
 
     components = 30
 
@@ -348,7 +358,7 @@ class PhononVizCommand(_XRayCommand):
 
 
 class WorkflowVizCommand(_XRayCommand):
-    _description_ = "Build a linked XRay workflow visualization workbench."
+    _description_ = "Build a linked xRay workflow visualization workbench."
     _shortname_ = "wv"
     _handler_name_ = "_workflow_viz"
 
@@ -389,8 +399,7 @@ class WorkflowVizCommand(_XRayCommand):
     class DetectorArtifactDirArg(PathValueInvariant):
         _arg = "--detector-artifact-dir"
         _help = (
-            "Optional directory containing detector-wide freq_all.npy "
-            "and amp_all.npy for trace proxy context."
+            "Optional detector artifact directory for trace proxy context."
         )
         _required = False
 
@@ -452,7 +461,7 @@ class WorkflowVizCommand(_XRayCommand):
         _item_type = int
         _metavar = ("WIDTH", "HEIGHT")
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -486,20 +495,20 @@ class WorkflowVizCommand(_XRayCommand):
         _help = "Disable the reference off-signal shift used for ratios."
         _required = False
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
         _help = "Output standalone HTML path."
         _required = True
 
-    title = "XRay Workflow Workbench"
+    title = "xRay Workflow Workbench"
 
     class TitleArg(StringInvariant):
         _arg = "--title"
         _help = "Dashboard title."
         _required = False
-        _default = "XRay Workflow Workbench"
+        _default = "xRay Workflow Workbench"
 
     components = 30
 
@@ -613,7 +622,7 @@ class LinearPredictionValidateCommand(_XRayCommand):
 
     components = 6
 
-    class ComponentsArg(IntegerInvariant):
+    class ComponentsArg(PositiveIntegerInvariant):
         _arg = "--components"
         _help = "Number of SVD components to fit."
         _required = False
@@ -621,7 +630,7 @@ class LinearPredictionValidateCommand(_XRayCommand):
 
     trials = 200
 
-    class TrialsArg(IntegerInvariant):
+    class TrialsArg(PositiveIntegerInvariant):
         _arg = "--trials"
         _help = "Monte Carlo trials per signal-to-noise level."
         _required = False
@@ -1966,7 +1975,7 @@ class ModelOrderSweepCommand(_XRayCommand):
         _help = "Absolute detector row to extract inside the ROI."
         _required = False
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2163,7 +2172,7 @@ class SubspaceBenchmarkCommand(_XRayCommand):
         _help = "Absolute detector row to extract inside the ROI."
         _required = False
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2461,7 +2470,7 @@ class ExtractTraceCommand(_XRayCommand):
         _help = "Laser-off HDF5 filename or absolute path."
         _required = True
 
-    output = None
+    output: Path | None = None  # type: ignore[assignment]
 
     class OutputArg(PathValueInvariant):
         _arg = "--output"
@@ -2514,7 +2523,7 @@ class ExtractTraceCommand(_XRayCommand):
         _required = False
         _item_type = int
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2627,7 +2636,7 @@ class DetectorArtifactsCommand(_XRayCommand):
         _default = (16, 16)
         _metavar = ("WIDTH", "HEIGHT")
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -2689,9 +2698,62 @@ class DetectorArtifactsCommand(_XRayCommand):
 
     class ComponentsArg(IntegerInvariant):
         _arg = "--components"
-        _help = "Linear-prediction component count."
+        _help = "LP component count or iterative damped-cosine mode count."
         _required = False
         _default = 30
+
+    fit_method = "linear-prediction"
+
+    class FitMethodArg(SetInvariant):
+        _arg = "--fit-method"
+        _help = "Detector fitting method; iterative fitting is opt-in."
+        _required = False
+        _set = {"linear-prediction", "iterative"}
+        _default = "linear-prediction"
+        _metavar = "{linear-prediction,iterative}"
+
+    iterative_max_iterations = None
+
+    class IterativeMaxIterationsArg(IntegerInvariant):
+        _arg = "--iterative-max-iterations"
+        _help = "Maximum iterative solver iterations (default: 600)."
+        _required = False
+
+    iterative_tolerance = None
+
+    class IterativeToleranceArg(FloatInvariant):
+        _arg = "--iterative-tolerance"
+        _help = "Iterative convergence tolerance (default: 1e-8)."
+        _required = False
+
+    iterative_amplitude_l2 = None
+
+    class IterativeAmplitudeL2Arg(FloatInvariant):
+        _arg = "--iterative-amplitude-l2"
+        _help = "Iterative amplitude L2 penalty (default: 0)."
+        _required = False
+
+    iterative_min_frequency = None
+
+    class IterativeMinFrequencyArg(FloatInvariant):
+        _arg = "--iterative-min-frequency"
+        _help = "Signed LM lower frequency bound in cycles per delay unit."
+        _required = False
+
+    iterative_max_frequency = None
+
+    class IterativeMaxFrequencyArg(FloatInvariant):
+        _arg = "--iterative-max-frequency"
+        _help = "Signed LM upper frequency bound (default: Nyquist)."
+        _required = False
+
+    p2_ridge_alpha = 0.0
+
+    class P2RidgeAlphaArg(FloatInvariant):
+        _arg = "--p2-ridge-alpha"
+        _help = "P2 ridge penalty; zero preserves unregularized fitting."
+        _required = False
+        _default = 0.0
 
     roots_backend = "eigvals"
 
@@ -2734,6 +2796,26 @@ class DetectorArtifactsCommand(_XRayCommand):
         _help = "Maximum row-fit failures allowed before the command fails."
         _required = False
         _default = 0
+
+    artifact_layout = "dense"
+
+    class ArtifactLayoutArg(SetInvariant):
+        _arg = "--artifact-layout"
+        _help = "Output storage: dense NPY (default) or compact tile rows."
+        _required = False
+        _set = {"dense", "tile-rows"}
+        _default = "dense"
+        _metavar = "{dense,tile-rows}"
+
+    fit_diagnostics = "none"
+
+    class FitDiagnosticsArg(SetInvariant):
+        _arg = "--fit-diagnostics"
+        _help = "Retain no, summary, or full per-fit diagnostics."
+        _required = False
+        _set = set(FIT_DIAGNOSTICS_LEVELS)
+        _default = "none"
+        _metavar = "{none,summary,full}"
 
     hdf5_reader = "h5py"
 
@@ -2967,7 +3049,7 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _default = (16, 16)
         _metavar = ("WIDTH", "HEIGHT")
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -3022,6 +3104,59 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _required = False
         _default = 30
 
+    fit_method = "linear-prediction"
+
+    class FitMethodArg(SetInvariant):
+        _arg = "--fit-method"
+        _help = "Detector fitting method; iterative fitting is opt-in."
+        _required = False
+        _set = {"linear-prediction", "iterative"}
+        _default = "linear-prediction"
+        _metavar = "{linear-prediction,iterative}"
+
+    iterative_max_iterations = None
+
+    class IterativeMaxIterationsArg(IntegerInvariant):
+        _arg = "--iterative-max-iterations"
+        _help = "Maximum iterative solver iterations (default: 600)."
+        _required = False
+
+    iterative_tolerance = None
+
+    class IterativeToleranceArg(FloatInvariant):
+        _arg = "--iterative-tolerance"
+        _help = "Iterative convergence tolerance (default: 1e-8)."
+        _required = False
+
+    iterative_amplitude_l2 = None
+
+    class IterativeAmplitudeL2Arg(FloatInvariant):
+        _arg = "--iterative-amplitude-l2"
+        _help = "Iterative amplitude L2 penalty (default: 0)."
+        _required = False
+
+    iterative_min_frequency = None
+
+    class IterativeMinFrequencyArg(FloatInvariant):
+        _arg = "--iterative-min-frequency"
+        _help = "Signed LM lower frequency bound in cycles per delay unit."
+        _required = False
+
+    iterative_max_frequency = None
+
+    class IterativeMaxFrequencyArg(FloatInvariant):
+        _arg = "--iterative-max-frequency"
+        _help = "Signed LM upper frequency bound (default: Nyquist)."
+        _required = False
+
+    p2_ridge_alpha = 0.0
+
+    class P2RidgeAlphaArg(FloatInvariant):
+        _arg = "--p2-ridge-alpha"
+        _help = "P2 ridge penalty; zero preserves unregularized fitting."
+        _required = False
+        _default = 0.0
+
     roots_backend = "eigvals"
 
     class RootsBackendArg(SetInvariant):
@@ -3058,6 +3193,26 @@ class DetectorArtifactDistributedCommand(_XRayCommand):
         _arg = "--max-fit-failures"
         _required = False
         _default = 0
+
+    artifact_layout = "dense"
+
+    class ArtifactLayoutArg(SetInvariant):
+        _arg = "--artifact-layout"
+        _help = "Output storage: dense NPY (default) or compact tile rows."
+        _required = False
+        _set = {"dense", "tile-rows"}
+        _default = "dense"
+        _metavar = "{dense,tile-rows}"
+
+    fit_diagnostics = "none"
+
+    class FitDiagnosticsArg(SetInvariant):
+        _arg = "--fit-diagnostics"
+        _help = "Retain no, summary, or full per-fit diagnostics."
+        _required = False
+        _set = set(FIT_DIAGNOSTICS_LEVELS)
+        _default = "none"
+        _metavar = "{none,summary,full}"
 
     hdf5_reader = "h5py"
 
@@ -3218,7 +3373,7 @@ class DetectorArtifactMergeCommand(_XRayCommand):
         _help = "Distributed plan JSON containing shard output directories."
         _required = False
 
-    shard_dir = []
+    shard_dir: list[Path] = []
 
     class ShardDirArg(SequenceInvariant):
         _arg = "--shard-dir"
@@ -3395,7 +3550,7 @@ class RoiCandidatesCommand(_XRayCommand):
         _required = False
         _default = 10
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -3455,7 +3610,7 @@ class DetectorMaskCommand(_XRayCommand):
         _required = False
         _default = 16
 
-    exclude_y = []
+    exclude_y: list[str] = []
 
     class ExcludeYArg(SequenceInvariant):
         _arg = "--exclude-y"
@@ -3676,8 +3831,8 @@ def _data_probe(args):
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        _print_file_probe("on", result.on)
-        _print_file_probe("off", result.off)
+        print_file_probe("on", result.on)
+        print_file_probe("off", result.off)
     return 0
 
 
@@ -3877,6 +4032,26 @@ def _extract_trace_to_npz(
     return summary
 
 
+def _iterative_options_from_args(args):
+    names = (
+        "max_iterations",
+        "tolerance",
+        "amplitude_l2",
+        "min_frequency",
+        "max_frequency",
+    )
+    values = {
+        name: getattr(args, "iterative_" + name)
+        for name in names
+        if getattr(args, "iterative_" + name) is not None
+    }
+    if not values and args.fit_method == "linear-prediction":
+        return None
+    from .iterative_fit import IterativeFitOptions
+
+    return IterativeFitOptions(**values)
+
+
 def _detector_artifacts(args):
     from .detector_artifacts import build_detector_artifacts_cupy
     from .detector_mask import parse_y_ranges
@@ -3897,6 +4072,9 @@ def _detector_artifacts(args):
         fit_trailing_drop=args.fit_trailing_drop,
         integrate_pixels=args.integrate,
         components=args.components,
+        fit_method=args.fit_method,
+        iterative_options=_iterative_options_from_args(args),
+        p2_ridge_alpha=args.p2_ridge_alpha,
         roots_backend=args.roots_backend,
         savgol_window=args.savgol_window,
         savgol_polyorder=args.savgol_polyorder,
@@ -3906,6 +4084,8 @@ def _detector_artifacts(args):
         hdf5_reader_workers=args.hdf5_reader_workers,
         max_tiles=args.max_tiles,
         normalization_cache=args.normalization_cache,
+        fit_diagnostics=args.fit_diagnostics,
+        artifact_layout=args.artifact_layout,
         shard_index=args.shard_index,
         shard_count=args.shard_count,
         global_roi_lower=(
@@ -3931,6 +4111,7 @@ def _detector_artifacts(args):
         print(f"zero_offset_index={result.zero_offset_index}")
         print(f"zero_offset_status={result.zero_offset_status}")
         print(f"processed_tiles={result.processed_tiles}")
+        print(f"batched_tiles={result.batched_tiles}")
         print(f"raw_fits={result.raw_fits}")
         print(f"failures={result.failures}")
         print(f"skipped_fits={result.skipped_fits}")
@@ -3984,11 +4165,16 @@ def _detector_artifact_distributed(args):
         "fit_trailing_drop": args.fit_trailing_drop,
         "integrate": args.integrate,
         "components": args.components,
+        "fit_method": args.fit_method,
+        "iterative_options": _iterative_options_from_args(args),
+        "p2_ridge_alpha": args.p2_ridge_alpha,
         "roots_backend": args.roots_backend,
         "savgol_window": args.savgol_window,
         "savgol_polyorder": args.savgol_polyorder,
         "amp_threshold": args.amp_threshold,
         "max_fit_failures": args.max_fit_failures,
+        "fit_diagnostics": args.fit_diagnostics,
+        "artifact_layout": args.artifact_layout,
         "hdf5_reader": args.hdf5_reader,
         "hdf5_reader_workers": args.hdf5_reader_workers,
         "max_tiles": args.max_tiles,
@@ -4198,25 +4384,6 @@ def _detector_mask(args):
     return 0
 
 
-def _print_file_probe(label, probe):
-    print(f"{label}_path={probe.path}")
-    print(f"{label}_size_bytes={probe.size_bytes}")
-    print(f"{label}_schema={probe.schema}")
-    print(f"{label}_ipm_pairs={','.join(probe.ipm_pairs) or '-'}")
-    print(f"{label}_keys={','.join(probe.keys)}")
-    for dataset in probe.datasets:
-        shape = "x".join(str(dim) for dim in dataset.shape)
-        chunks = (
-            "-"
-            if dataset.chunks is None
-            else "x".join(str(dim) for dim in dataset.chunks)
-        )
-        print(
-            f"{label}_dataset={dataset.name} "
-            f"shape={shape} dtype={dataset.dtype} chunks={chunks}"
-        )
-
-
 def _linear_prediction_smoke(args):
     from .linear_prediction import (
         LinearPredictionComparison,
@@ -4299,31 +4466,6 @@ def _linear_prediction_smoke(args):
     return 0
 
 
-def _print_validation_sweep(sweep):
-    print(f"estimator={sweep.backend}")
-    if sweep.distortion is not None:
-        print(f"distortion={sweep.distortion[0]}:{sweep.distortion[1]:g}")
-    for level in sweep.levels:
-        print(
-            f"snr_db={level.snr_db:g} sigma={level.noise_sigma:.4g} "
-            f"trials={level.trials_successful}/{level.trials_attempted} "
-            f"any_mode_lost_rate={level.any_mode_lost_rate:.3f} "
-            f"residual_ratio={level.residual_ratio:.2f}"
-        )
-        for m in level.modes:
-            w = m.angular_frequency
-            d = m.decay
-            print(
-                f"  mode w={w.truth:g} decay={d.truth:g}: "
-                f"freq std/crlb={w.std:.3g}/{w.crlb_std:.3g} "
-                f"({w.std_over_crlb_std:.2f}x) bias={w.bias:+.3g}; "
-                f"decay std/crlb={d.std:.3g}/{d.crlb_std:.3g} "
-                f"({d.std_over_crlb_std:.2f}x) bias={d.bias:+.3g}; "
-                f"recovered={m.recovered_trials} "
-                f"loss_rate={m.loss_rate:.3f}"
-            )
-
-
 def _linear_prediction_validate(args):
     from .synthetic_validation import (
         build_summary,
@@ -4334,8 +4476,16 @@ def _linear_prediction_validate(args):
     snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
     distortion = None
     if args.distortion:
-        kind, _, amount = str(args.distortion).partition(":")
-        distortion = (kind.strip(), float(amount))
+        try:
+            kind, amount = str(args.distortion).split(":", maxsplit=1)
+            if not kind.strip():
+                raise ValueError("missing distortion kind")
+            distortion = (kind.strip(), float(amount))
+        except ValueError as exc:
+            raise ValueError(
+                "--distortion must be kind:amount with a numeric amount "
+                "(for example chirp:0.05)"
+            ) from exc
     sweeps = [
         validation_sweep(
             samples=args.samples,
@@ -4369,12 +4519,12 @@ def _linear_prediction_validate(args):
     else:
         summary = build_summary(sweeps)
     if args.json:
-        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
         return 0
     print(f"samples={sweeps[0].samples}")
     print(f"signal_rms={sweeps[0].signal_rms:.6g}")
     for sweep in sweeps:
-        _print_validation_sweep(sweep)
+        print_validation_sweep(sweep)
     if args.output_dir is not None:
         for key, name in summary["artifacts"].items():
             print(f"{key}={name if name else 'not written'}")
@@ -5439,9 +5589,9 @@ def _model_order_sweep(args):
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif payload["source"]["kind"] == "trace-npz-batch":
-        _print_model_order_sweep_batch(payload)
+        print_model_order_sweep_batch(payload)
     else:
-        _print_model_order_sweep_payload(payload)
+        print_model_order_sweep_payload(payload)
     return 0
 
 
@@ -5519,62 +5669,6 @@ def _model_order_sweep_batch_payload(
     }
 
 
-def _print_model_order_sweep_payload(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"samples={payload['samples']}")
-    print(f"roots_backend={payload['roots_backend']}")
-    print(f"best_components={payload['best_components']}")
-    print(f"best_selected_model_order={payload['best_selected_model_order']}")
-    print(f"best_rms_residual={payload['best_rms_residual']:.6g}")
-    print(
-        "best_reconstruction_rms_error="
-        f"{payload['best_reconstruction_rms_error']:.6g}"
-    )
-    for entry in payload["entries"]:
-        print(
-            f"components={entry['components']} "
-            f"selected_model_order={entry['selected_model_order']} "
-            f"rms_residual={entry['rms_residual']:.6g} "
-            "reconstruction_rms_error="
-            f"{entry['reconstruction_rms_error']:.6g} "
-            f"chi2={entry['chi2']:.6g} "
-            f"selected_roots={entry['selected_root_count']} "
-            f"decaying_roots={entry['decaying_root_count']}"
-        )
-
-
-def _print_model_order_sweep_batch(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"trace_count={payload['trace_count']}")
-    print(f"samples={payload['samples']}")
-    print(f"roots_backend={payload['roots_backend']}")
-    component_counts = ",".join(
-        str(item) for item in payload["component_counts"]
-    )
-    print(f"component_counts={component_counts}")
-    print(
-        "best_components_unique="
-        + ",".join(str(item) for item in payload["best_components_unique"])
-    )
-    print(
-        "best_selected_model_orders_unique="
-        + ",".join(
-            str(item) for item in payload["best_selected_model_orders_unique"]
-        )
-    )
-    for trace_payload in payload["traces"]:
-        print(f"trace_index={trace_payload['trace_index']}")
-        print(f"  best_components={trace_payload['best_components']}")
-        print(
-            "  best_selected_model_order="
-            f"{trace_payload['best_selected_model_order']}"
-        )
-        print(
-            "  best_reconstruction_rms_error="
-            f"{trace_payload['best_reconstruction_rms_error']:.6g}"
-        )
-
-
 def _subspace_benchmark(args):
     from .subspace import compare_subspace_methods
 
@@ -5642,7 +5736,7 @@ def _subspace_benchmark(args):
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif payload["source"]["kind"] == "trace-npz-batch":
-        _print_subspace_benchmark_batch(payload)
+        print_subspace_benchmark_batch(payload)
     else:
         print(f"source={payload['source']['kind']}")
         print(f"samples={payload['samples']}")
@@ -5770,32 +5864,6 @@ def _subspace_benchmark_batch_payload(
         "method_summary": summaries,
         "traces": tuple(trace_payloads),
     }
-
-
-def _print_subspace_benchmark_batch(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"trace_count={payload['trace_count']}")
-    print(f"samples={payload['samples']}")
-    print(f"model_order={payload['model_order']}")
-    print(f"components={payload['components']}")
-    print(
-        "baseline_rms_residual_range="
-        f"{payload['baseline_rms_residual_min']:.6g}:"
-        f"{payload['baseline_rms_residual_max']:.6g}"
-    )
-    for summary in payload["method_summary"]:
-        print(f"method={summary['method']}")
-        print(f"  svd_backend={summary['svd_backend']}")
-        print(f"  trace_count={summary['trace_count']}")
-        print(
-            "  rms_residual_range="
-            f"{summary['rms_residual_min']:.6g}:"
-            f"{summary['rms_residual_max']:.6g}"
-        )
-        print(
-            "  max_abs_reconstruction_diff_max="
-            f"{summary['max_abs_reconstruction_diff_max']:.6g}"
-        )
 
 
 def _subspace_acceptance(args):
@@ -6163,7 +6231,7 @@ def _load_trace_npz(path: Path):
             )
         time = np.asarray(loaded["time"], dtype=float)
         trace = np.asarray(loaded["trace"], dtype=float)
-        source = {
+        source: dict[str, Any] = {
             "kind": "trace-npz",
             "path": str(trace_path),
         }

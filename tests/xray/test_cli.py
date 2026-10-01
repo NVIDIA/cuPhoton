@@ -137,6 +137,76 @@ def test_nonnegative_option_preserves_parser_error(capsys):
     )
 
 
+def test_detector_artifacts_help_declares_opt_in_fit_quality_options(capsys):
+    assert main(["help", "detector-artifacts"]) == 0
+    captured = capsys.readouterr()
+    assert "--fit-diagnostics {none,summary,full}" in captured.out
+    assert "--p2-ridge-alpha" in captured.out
+
+
+def test_distributed_detector_help_describes_fit_quality_options(capsys):
+    assert main(["help", "detector-artifact-distributed"]) == 0
+    captured = capsys.readouterr()
+    help_text = " ".join(captured.out.split())
+    assert (
+        "P2 ridge penalty; zero preserves unregularized fitting." in help_text
+    )
+    assert "Retain no, summary, or full per-fit diagnostics." in help_text
+
+
+def test_detector_artifacts_cli_rejects_negative_ridge_before_gpu(
+    tmp_path,
+    capsys,
+):
+    assert (
+        main(
+            [
+                "detector-artifacts",
+                "--h5dir",
+                str(tmp_path),
+                "--fon",
+                "on.h5",
+                "--foff",
+                "off.h5",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--p2-ridge-alpha",
+                "-1",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "p2_ridge_alpha must be finite and non-negative" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_detector_artifacts_cli_rejects_unknown_diagnostic_level(
+    tmp_path,
+    capsys,
+):
+    assert (
+        main(
+            [
+                "detector-artifacts",
+                "--h5dir",
+                str(tmp_path),
+                "--fon",
+                "on.h5",
+                "--foff",
+                "off.h5",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--fit-diagnostics",
+                "verbose",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert "invalid choice: 'verbose'" in captured.err
+
+
 def test_linear_prediction_validate_text_json_and_output_dir(
     tmp_path, capsys
 ):
@@ -185,6 +255,51 @@ def test_linear_prediction_validate_text_json_and_output_dir(
     written = json.loads((out / "summary.json").read_text())
     assert written["results"][0]["trials"]["attempted"] == 3
     assert written["artifacts"]["summary"] == "summary.json"
+
+
+@pytest.mark.parametrize("option", ["--components", "--trials"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_linear_prediction_validate_requires_positive_counts(
+    capsys, option, value
+):
+    assert main(["lpv", option, value]) == 2
+    captured = capsys.readouterr()
+    assert f"argument {option}: must be at least 1" in captured.err
+    assert not captured.out
+
+
+@pytest.mark.parametrize("json_args", [[], ["--json"]])
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--snr-db", "nan"], "snr_db"),
+        (["--snr-db", "inf"], "snr_db"),
+        (["--distortion", "gaussian_envelope:0"], "gaussian_envelope"),
+        (["--distortion", "chirp"], "--distortion must be kind:amount"),
+        (["--distortion", "chirp:bad"], "--distortion must be kind:amount"),
+    ],
+)
+def test_linear_prediction_validate_rejects_invalid_reports(
+    capsys, args, message, json_args
+):
+    _assert_cli_error(capsys, ["lpv", *args, *json_args], message)
+
+
+def test_linear_prediction_validate_text_distinguishes_estimator_errors(
+    capsys, monkeypatch
+):
+    from cuphoton.xray import synthetic_validation
+
+    def broken(t, y, k):
+        raise RuntimeError("estimator failed")
+
+    monkeypatch.setattr(
+        synthetic_validation, "linear_prediction_numpy", broken
+    )
+    assert main(["lpv", "--trials", "2", "--snr-db", "30"]) == 0
+    output = capsys.readouterr().out
+    assert "trials=0/2 estimator_errors=2" in output
+    assert "any_mode_lost_rate=1.000" in output
 
 
 def test_linear_prediction_validate_refine_adds_a_second_estimator(capsys):

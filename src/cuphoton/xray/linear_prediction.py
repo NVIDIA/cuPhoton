@@ -17,6 +17,45 @@ _CUPY_INSTALL_HINT = (
 
 
 @dataclass(frozen=True)
+class LinearPredictionDiagnostics:
+    """Numerical quality metrics for one linear-prediction fit.
+
+    ``trace_std`` and ``residual_std`` retain the input trace's units, while
+    ``relative_residual`` is their dimensionless ratio. ``residual_std`` is
+    the standard deviation of the same residual samples that ``chi2`` sums,
+    which exclude the final sample. Detector artifacts
+    normalize traces before fitting, so their manifests label these fields as
+    normalized trace units. The ratio is ``None`` when the input trace has
+    zero standard deviation. ``chi2`` retains the historical
+    squared-trace-units definition used by :class:`LinearPredictionResult`.
+
+    ``p1_rank`` is the numerical rank of the full P1 Hankel matrix using the
+    same relative ``1e-12`` singular-value cutoff as model-order selection;
+    it is distinct from ``selected_model_order``. ``p2_rank`` and the P2
+    singular values describe the unregularized P2 design, including when the
+    fitted coefficients came from the augmented ridge system. Matrix condition
+    numbers and singular-value ratios are dimensionless. A nonempty spectrum
+    containing a zero or nonfinite singular value has infinite condition
+    number; an empty spectrum has no ratio or condition number.
+    """
+
+    trace_std: float
+    residual_std: float
+    relative_residual: float | None
+    chi2: float
+    selected_model_order: int
+    mode_count: int
+    max_amplitude: float
+    p1_rank: int
+    p1_singular_value_ratio: float | None
+    p1_condition: float | None
+    p2_rank: int
+    p2_singular_values: np.ndarray
+    p2_singular_value_ratio: float | None
+    p2_condition: float | None
+
+
+@dataclass(frozen=True)
 class LinearPredictionResult:
     """One fitted linear-prediction trace and its modal decomposition.
 
@@ -56,6 +95,9 @@ class LinearPredictionResult:
         Optional root-solver execution metadata.
     elapsed_s
         End-to-end fit time in seconds.
+    diagnostics
+        Numerical fit diagnostics, or ``None`` unless the fit was run with
+        ``fit_diagnostics=True``.
     """
 
     backend: str
@@ -75,6 +117,7 @@ class LinearPredictionResult:
     singular_values: np.ndarray
     roots_stats: PredictionRootsStats | None
     elapsed_s: float
+    diagnostics: LinearPredictionDiagnostics | None = None
 
 
 @dataclass(frozen=True)
@@ -430,6 +473,13 @@ class _P2Result:
 
 
 @dataclass(frozen=True)
+class _P2LstsqResult:
+    coefficients: Any
+    rank: Any
+    singular_values: Any
+
+
+@dataclass(frozen=True)
 class LinearPredictionP2Artifacts:
     coefficients: Any
     amplitude: Any
@@ -526,6 +576,7 @@ def amplitudes_and_phases_cupy(a0: Any, a1: Any):
 
 __all__ = [
     "LinearPredictionComparison",
+    "LinearPredictionDiagnostics",
     "LinearPredictionFixedStagesBenchmark",
     "LinearPredictionFitStats",
     "LinearPredictionModeGroup",
@@ -646,8 +697,18 @@ def linear_prediction_numpy(
     n_components: int,
     *,
     roots_backend: str = "eigvals",
+    p2_ridge_alpha: float = 0.0,
+    fit_diagnostics: bool = False,
 ):
-    """Run the linear-prediction fit on NumPy arrays."""
+    """Run the linear-prediction fit on NumPy arrays.
+
+    ``p2_ridge_alpha`` must be finite and non-negative; a positive value
+    applies a dimensionless ridge penalty to the fitted cosine and sine
+    coefficients, while the fitted intercept is never penalized. Invalid
+    values raise :class:`ValueError`. Pass ``fit_diagnostics=True`` to
+    populate ``result.diagnostics`` with a
+    :class:`LinearPredictionDiagnostics`; it is ``None`` otherwise.
+    """
 
     start = perf_counter()
     result = _linear_prediction_impl(
@@ -657,6 +718,8 @@ def linear_prediction_numpy(
         trace=trace,
         n_components=n_components,
         roots_backend=roots_backend,
+        p2_ridge_alpha=p2_ridge_alpha,
+        fit_diagnostics=fit_diagnostics,
     )
     return _with_elapsed(result, perf_counter() - start)
 
@@ -667,8 +730,18 @@ def linear_prediction_cupy(
     n_components: int,
     *,
     roots_backend: str = "eigvals",
+    p2_ridge_alpha: float = 0.0,
+    fit_diagnostics: bool = False,
 ):
-    """Run the CuPy linear-prediction fit and return NumPy output."""
+    """Run the CuPy linear-prediction fit and return NumPy output.
+
+    ``p2_ridge_alpha`` must be finite and non-negative; a positive value
+    applies a dimensionless ridge penalty to the fitted cosine and sine
+    coefficients, while the fitted intercept is never penalized. Invalid
+    values raise :class:`ValueError`. Pass ``fit_diagnostics=True`` to
+    populate ``result.diagnostics`` with a
+    :class:`LinearPredictionDiagnostics`; it is ``None`` otherwise.
+    """
 
     try:
         import cupy as cp
@@ -685,6 +758,8 @@ def linear_prediction_cupy(
         trace=trace,
         n_components=n_components,
         roots_backend=roots_backend,
+        p2_ridge_alpha=p2_ridge_alpha,
+        fit_diagnostics=fit_diagnostics,
     )
     cp.cuda.Stream.null.synchronize()
     return _with_elapsed(result, perf_counter() - start)
@@ -695,7 +770,7 @@ def linear_prediction_modes_from_roots_numpy(
     roots,
     singular_value_count: int,
 ) -> LinearPredictionModes:
-    """Select current XRay P2 modes from P1 roots on NumPy arrays."""
+    """Select current xRay P2 modes from P1 roots on NumPy arrays."""
 
     return _linear_prediction_modes_from_roots(
         np,
@@ -710,7 +785,7 @@ def linear_prediction_modes_from_roots_cupy(
     roots,
     singular_value_count: int,
 ) -> LinearPredictionModes:
-    """Select current XRay P2 modes from P1 roots on CuPy arrays."""
+    """Select current xRay P2 modes from P1 roots on CuPy arrays."""
 
     try:
         import cupy as cp
@@ -733,7 +808,7 @@ def linear_prediction_mode_batch_from_roots_numpy(
     root_rows,
     singular_value_counts,
 ) -> LinearPredictionModeBatch:
-    """Select and pad current XRay P2 modes from NumPy P1 root rows."""
+    """Select and pad current xRay P2 modes from NumPy P1 root rows."""
 
     return _linear_prediction_mode_batch_from_roots(
         np,
@@ -748,7 +823,7 @@ def linear_prediction_mode_batch_from_roots_cupy(
     root_rows,
     singular_value_counts,
 ) -> LinearPredictionModeBatch:
-    """Select and pad current XRay P2 modes from CuPy P1 root rows."""
+    """Select and pad current xRay P2 modes from CuPy P1 root rows."""
 
     try:
         import cupy as cp
@@ -771,12 +846,16 @@ def linear_prediction_p2_artifacts_numpy(
     trace,
     decay,
     angular_frequency,
+    *,
+    p2_ridge_alpha: float = 0.0,
 ) -> LinearPredictionP2Artifacts:
     """Run production P2 artifact construction on NumPy arrays.
 
     The caller supplies the already-selected decay and angular-frequency
     modes. This keeps root/model-order behavior identical to the caller's P1
     path while exposing the P2 artifact surface used for production parity.
+    A positive ``p2_ridge_alpha`` applies a dimensionless ridge penalty to the
+    cosine and sine coefficients without penalizing the intercept.
     """
 
     return _linear_prediction_p2_artifacts_impl(
@@ -785,6 +864,7 @@ def linear_prediction_p2_artifacts_numpy(
         trace=trace,
         decay=decay,
         angular_frequency=angular_frequency,
+        p2_ridge_alpha=p2_ridge_alpha,
     )
 
 
@@ -806,14 +886,18 @@ def linear_prediction_variable_artifacts_cupy_batched(
     many entries in each row are active. Passing ``window_length`` and
     ``polyorder`` applies the same axis-wise Savitzky-Golay filtering used by
     the accepted variable-artifact workbench before the batched P2 solve.
+    ``serial-lstsq`` retains the production row-wise least-squares solve while
+    batching the artifact construction that follows it.
     """
 
     if (window_length is None) != (polyorder is None):
         raise ValueError(
             "window_length and polyorder must be provided together"
         )
-    if solver not in ("pinv", "grouped-pinv"):
-        raise ValueError("solver must be 'pinv' or 'grouped-pinv'")
+    if solver not in ("pinv", "grouped-pinv", "serial-lstsq"):
+        raise ValueError(
+            "solver must be 'pinv', 'grouped-pinv', or 'serial-lstsq'"
+        )
 
     try:
         import cupy as cp
@@ -829,6 +913,7 @@ def linear_prediction_variable_artifacts_cupy_batched(
     else:
         from cupyx.scipy.signal import savgol_filter as cupy_savgol_filter
 
+        assert polyorder is not None
         filtered = _savgol_cupy_batched(
             gpu_traces,
             window_length=window_length,
@@ -963,8 +1048,8 @@ def linear_prediction_batched_legacy_tiles_cupy(
         raise ValueError("time must be one-dimensional")
 
     row_counts = []
-    flat_roots = []
-    flat_singular_values = []
+    flat_roots: list[cp.ndarray] = []
+    flat_singular_values: list[cp.ndarray] = []
     for tile, roots, singular_values in zip(
         tiles,
         root_tiles,
@@ -1195,8 +1280,10 @@ def benchmark_linear_prediction_p1_batch(
     """Benchmark serial P1 against a batched CuPy P1 prototype.
 
     P1 is the SVD + companion-eigenvalue phase that dominates the reference
-    fit path. The production app still runs one detector row at a time; this
-    benchmark tests whether the expensive fixed-shape part can be batched.
+    fit path. The production app still runs P1 (SVD and companion roots) one
+    detector row at a time even where it batches the artifact work that
+    follows; this benchmark tests whether that expensive fixed-shape part
+    can be batched.
     """
 
     if repeat < 1:
@@ -1295,6 +1382,7 @@ def benchmark_linear_prediction_p1_batch(
                     np.max(np.abs(cpu_coefficients - gpu_coefficients))
                 )
             if roots_backend == "eigvals":
+                assert batched_result is not None
                 gpu_eigenvalues = np.stack(
                     [
                         _sort_complex(row)
@@ -3247,7 +3335,7 @@ def _linear_prediction_modes_from_roots(
     sorted_roots = xp.sort(roots)[::-1]
     active_roots = sorted_roots[: int(singular_value_count)]
     decay = xp.log(xp.abs(active_roots)) / delta_t
-    # XRay's fitted components use exp(-decay * t), so nonnegative
+    # xRay's fitted components use exp(-decay * t), so nonnegative
     # fitted decay values are the decaying/stable candidates preserved by
     # the current root filter.
     decaying_root_count = _scalar_int(xp.sum(decay >= 0))
@@ -3281,7 +3369,10 @@ def _linear_prediction_impl(
     trace,
     n_components,
     roots_backend,
+    p2_ridge_alpha=0.0,
+    fit_diagnostics=False,
 ):
+    p2_ridge_alpha = _validate_p2_ridge_alpha(p2_ridge_alpha)
     bins, signal = _validate_inputs(xp, time, trace, n_components)
     nbins = bins.shape[0]
     delta_t = bins[1] - bins[0]
@@ -3336,7 +3427,14 @@ def _linear_prediction_impl(
     xbar[:, 1:-1:2] = (-exp_bt * sin_wt).T
     xbar[:, -1] = 1
 
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    p2_solve = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=p2_ridge_alpha,
+        diagnostics=fit_diagnostics,
+    )
+    coefficients = p2_solve.coefficients
     a0 = coefficients[: nw * 2 : 2]
     a1 = coefficients[1 : nw * 2 : 2]
     amplitude, phase = _amplitudes_and_phases_backend(xp, a0, a1)
@@ -3360,6 +3458,49 @@ def _linear_prediction_impl(
     residual = reconstruction[:-1] - signal[:-1]
     chi2 = xp.sum(residual**2) / (n - 1)
 
+    singular_values_numpy = _to_numpy(xp, singular_values)
+    chi2_float = float(_to_numpy(xp, chi2))
+    diagnostics = None
+    if fit_diagnostics:
+        if p2_solve.singular_values is None:
+            p2_singular_values_numpy = np.asarray([], dtype=np.float64)
+        else:
+            p2_singular_values_numpy = _to_numpy(xp, p2_solve.singular_values)
+        p1_ratio, p1_condition = _singular_value_ratio_and_condition(
+            singular_values_numpy
+        )
+        p2_ratio, p2_condition = _singular_value_ratio_and_condition(
+            p2_singular_values_numpy
+        )
+        trace_std = float(_to_numpy(xp, xp.std(signal)))
+        residual_std = float(_to_numpy(xp, xp.std(residual)))
+        relative_residual = (
+            None if trace_std == 0 else residual_std / trace_std
+        )
+        mode_count = int(nw)
+        max_amplitude = (
+            float(_to_numpy(xp, xp.max(amplitude))) if mode_count else 0.0
+        )
+        diagnostics = LinearPredictionDiagnostics(
+            trace_std=trace_std,
+            residual_std=residual_std,
+            relative_residual=relative_residual,
+            chi2=chi2_float,
+            selected_model_order=int(selected_model_order),
+            mode_count=mode_count,
+            max_amplitude=max_amplitude,
+            p1_rank=_numerical_rank_from_singular_values(
+                singular_values_numpy,
+                relative_tolerance=1e-12,
+            ),
+            p1_singular_value_ratio=p1_ratio,
+            p1_condition=p1_condition,
+            p2_rank=_scalar_int(p2_solve.rank),
+            p2_singular_values=np.asarray(p2_singular_values_numpy),
+            p2_singular_value_ratio=p2_ratio,
+            p2_condition=p2_condition,
+        )
+
     return LinearPredictionResult(
         backend=backend,
         time=_to_numpy(xp, fit_time),
@@ -3372,12 +3513,13 @@ def _linear_prediction_impl(
         decay=_to_numpy(xp, decay),
         amplitude=_to_numpy(xp, amplitude),
         phase=_to_numpy(xp, phase),
-        chi2=float(_to_numpy(xp, chi2)),
+        chi2=chi2_float,
         selected_model_order=int(selected_model_order),
         decaying_root_count=modes.decaying_root_count,
-        singular_values=_to_numpy(xp, singular_values),
+        singular_values=singular_values_numpy,
         roots_stats=roots_result.stats,
         elapsed_s=0.0,
+        diagnostics=diagnostics,
     )
 
 
@@ -3496,30 +3638,104 @@ def _linear_prediction_p1_cupy_batched(time, traces, n_components):
         cp.isfinite(singular_values),
         singular_values > max_s[:, None] * 1e-12,
     )
-    valid_components = int(cp.min(cp.count_nonzero(valid, axis=1)).get())
-    selected_model_order = min(int(n_components), rows, m, valid_components)
-    if selected_model_order <= 0:
+    valid_components = cp.asnumpy(cp.count_nonzero(valid, axis=1))
+    selected_model_orders = np.minimum(
+        valid_components,
+        min(int(n_components), rows, m),
+    ).astype(np.int64, copy=False)
+    if np.any(selected_model_orders <= 0):
         raise ValueError("insufficient finite singular values")
 
-    v = cp.swapaxes(vh.conj(), -2, -1)[:, :, :selected_model_order]
-    u_h = cp.swapaxes(u.conj(), -2, -1)[:, :selected_model_order, :]
     xvector = signals[:, :rows]
-    projected = cp.matmul(u_h, xvector[:, :, None])[:, :, 0]
-    scaled = projected / singular_values[:, :selected_model_order]
-    coefficients = cp.matmul(v, scaled[:, :, None])[:, :, 0]
+    coefficients = cp.empty((signals.shape[0], m), dtype=signals.dtype)
+    for selected_model_order in np.unique(selected_model_orders):
+        row_indices = cp.asarray(
+            np.flatnonzero(selected_model_orders == selected_model_order)
+        )
+        v = cp.swapaxes(vh[row_indices].conj(), -2, -1)[
+            :, :, :selected_model_order
+        ]
+        u_h = cp.swapaxes(u[row_indices].conj(), -2, -1)[
+            :, :selected_model_order, :
+        ]
+        projected = cp.matmul(
+            u_h,
+            xvector[row_indices, :, None],
+        )[:, :, 0]
+        scaled = (
+            projected / singular_values[row_indices, :selected_model_order]
+        )
+        coefficients[row_indices] = cp.matmul(
+            v,
+            scaled[:, :, None],
+        )[:, :, 0]
 
-    companion = cp.zeros(
-        (signals.shape[0], m, m),
-        dtype=coefficients.dtype,
-    )
-    companion[:, :-1, 1:] = cp.eye(m - 1, dtype=companion.dtype)
-    companion[:, -1, :] = cp.flip(coefficients, axis=1)
+    companion = _batched_companion_matrix(cp, coefficients)
     eigenvalues = cp.linalg.eigvals(companion)
     return _P1Result(
         singular_values=singular_values,
         coefficients=coefficients,
         eigenvalues=eigenvalues,
-        selected_model_order=int(selected_model_order),
+        selected_model_order=tuple(
+            int(value) for value in selected_model_orders
+        ),
+    )
+
+
+def _p2_lstsq(
+    xp,
+    design,
+    signal,
+    *,
+    p2_ridge_alpha: float,
+    diagnostics: bool,
+) -> _P2LstsqResult:
+    """Solve P2 directly or by intercept-excluding ridge augmentation."""
+
+    if p2_ridge_alpha == 0 or int(design.shape[1]) <= 1:
+        coefficients, _residuals, rank, singular_values = xp.linalg.lstsq(
+            design,
+            signal,
+            rcond=None,
+        )
+        return _P2LstsqResult(
+            coefficients=coefficients,
+            rank=rank,
+            singular_values=singular_values,
+        )
+
+    modal_count = int(design.shape[1]) - 1
+    modal_design = design[:, :modal_count]
+    penalty_scale = float(
+        _to_numpy(xp, xp.mean(xp.sum(modal_design**2, axis=0)))
+    )
+    penalty_weight = p2_ridge_alpha * penalty_scale
+    if not np.isfinite(penalty_scale) or not np.isfinite(penalty_weight):
+        raise ValueError("p2_ridge_alpha produces a nonfinite scaled penalty")
+    penalty_rows = xp.zeros(
+        (modal_count, int(design.shape[1])),
+        dtype=design.dtype,
+    )
+    penalty_rows[:, :modal_count] = xp.eye(
+        modal_count, dtype=design.dtype
+    ) * xp.sqrt(penalty_weight)
+    augmented_design = xp.concatenate((design, penalty_rows), axis=0)
+    augmented_signal = xp.concatenate(
+        (signal, xp.zeros(modal_count, dtype=signal.dtype))
+    )
+    coefficients, _residuals, rank, singular_values = xp.linalg.lstsq(
+        augmented_design,
+        augmented_signal,
+        rcond=None,
+    )
+    if diagnostics:
+        _unregularized_coefficients, _residuals, rank, singular_values = (
+            xp.linalg.lstsq(design, signal, rcond=None)
+        )
+    return _P2LstsqResult(
+        coefficients=coefficients,
+        rank=rank,
+        singular_values=singular_values,
     )
 
 
@@ -3530,6 +3746,7 @@ def _linear_prediction_p2_impl(
     trace,
     decay,
     angular_frequency,
+    p2_ridge_alpha: float = 0.0,
 ) -> _P2Result:
     bins = xp.asarray(time, dtype=xp.float64)
     signal = xp.asarray(trace, dtype=xp.float64)
@@ -3553,7 +3770,13 @@ def _linear_prediction_p2_impl(
         angular_frequency,
         dtype=signal.dtype,
     )
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    coefficients = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=_validate_p2_ridge_alpha(p2_ridge_alpha),
+        diagnostics=False,
+    ).coefficients
     reconstruction = _p2_reconstruction(
         xp,
         fit_time=fit_time,
@@ -3574,7 +3797,9 @@ def _linear_prediction_p2_artifacts_impl(
     trace,
     decay,
     angular_frequency,
+    p2_ridge_alpha=0.0,
 ) -> _P2Artifacts:
+    p2_ridge_alpha = _validate_p2_ridge_alpha(p2_ridge_alpha)
     bins = xp.asarray(time, dtype=xp.float64)
     signal = xp.asarray(trace, dtype=xp.float64)
     decay = xp.asarray(decay, dtype=xp.float64)
@@ -3597,7 +3822,13 @@ def _linear_prediction_p2_artifacts_impl(
         angular_frequency,
         dtype=signal.dtype,
     )
-    coefficients = xp.linalg.lstsq(xbar, signal, rcond=None)[0]
+    coefficients = _p2_lstsq(
+        xp,
+        xbar,
+        signal,
+        p2_ridge_alpha=p2_ridge_alpha,
+        diagnostics=False,
+    ).coefficients
     mode_counts = xp.asarray((int(decay.shape[0]),), dtype=xp.int64)
     artifacts = _p2_artifacts_from_coefficients_batched(
         xp,
@@ -3651,9 +3882,15 @@ def _linear_prediction_p2_cupy_batched(
     traces,
     decay,
     angular_frequency,
+    p2_ridge_alpha: float = 0.0,
 ):
     import cupy as cp
 
+    if _validate_p2_ridge_alpha(p2_ridge_alpha) != 0:
+        raise ValueError(
+            "batched CuPy P2 fitting does not support a nonzero "
+            "p2_ridge_alpha"
+        )
     bins = cp.asarray(time, dtype=cp.float64)
     signals = cp.asarray(traces, dtype=cp.float64)
     decay = cp.asarray(decay, dtype=cp.float64)
@@ -3810,13 +4047,17 @@ def _p2_artifacts_from_coefficients_batched(
         safe_ww = ww
 
     reconstruction = reconstruction + coefficients[:, -1:]
+    # Build the spectral grid the way the row path's
+    # ``linspace(0, stop, 1000)`` does for an array ``stop``: scale the
+    # sample index by ``stop / 999`` and pin the endpoint. Scaling a unit
+    # ``linspace`` instead rounds twice and shifts grid points by an ULP,
+    # which is enough to move ``frequency_centers`` off the serial fit.
+    grid_stop = 1.5 * xp.where(mode_counts > 0, max_w, 1e-5) / (2 * xp.pi)
     frequency = (
-        xp.linspace(0, 1, 1000, dtype=signals.dtype)[None, :]
-        * (1.5 * xp.where(mode_counts > 0, max_w, 1e-5) / (2 * xp.pi))[
-            :,
-            None,
-        ]
+        xp.arange(1000, dtype=signals.dtype)[None, :]
+        * (grid_stop / 999)[:, None]
     )
+    frequency[:, -1] = grid_stop
     spectrum_components = xp.zeros(
         (row_count, frequency.shape[1], max_modes),
         dtype=signals.dtype,
@@ -4558,7 +4799,17 @@ def _variable_p2_artifacts_cupy_batched_solver(
             angular_frequency,
             mode_counts,
         )
-    raise ValueError("solver must be 'pinv' or 'grouped-pinv'")
+    if solver == "serial-lstsq":
+        return _variable_p2_artifacts_cupy_serial_lstsq(
+            time,
+            traces,
+            decay,
+            angular_frequency,
+            mode_counts,
+        )
+    raise ValueError(
+        "solver must be 'pinv', 'grouped-pinv', or 'serial-lstsq'"
+    )
 
 
 def _variable_p2_coefficients_cupy_batched_pinv(
@@ -4615,8 +4866,15 @@ def _variable_p2_coefficients_cupy_batched_pinv(
         active = cp.zeros((signals.shape[0], 0), dtype=cp.bool_)
     xbar[:, :, -1] = 1
 
+    # Match ``cp.linalg.lstsq(..., rcond=None)`` in the serial fit. CuPy's
+    # pseudoinverse otherwise defaults to a smaller fixed cutoff and can
+    # retain near-null columns that the production least-squares path drops.
+    rcond = np.finfo(np.float64).eps * cp.maximum(
+        int(xbar.shape[-2]),
+        2 * mode_counts + 1,
+    )
     coefficients = cp.matmul(
-        cp.linalg.pinv(xbar),
+        cp.linalg.pinv(xbar, rcond=rcond),
         signals[:, :, None],
     )[:, :, 0]
     return fit_time, active, coefficients
@@ -4784,6 +5042,75 @@ def _variable_p2_artifacts_cupy_grouped_pinv(
                 : mode_count * 2,
             ]
         coefficients[row_indices, -1] = group_coefficients[:, -1]
+
+    return _p2_artifacts_from_coefficients_batched(
+        cp,
+        fit_time=fit_time,
+        signals=signals,
+        decay=decay,
+        angular_frequency=angular_frequency,
+        coefficients=coefficients,
+        mode_counts=mode_counts,
+    )
+
+
+def _variable_p2_artifacts_cupy_serial_lstsq(
+    time,
+    traces,
+    decay,
+    angular_frequency,
+    mode_counts,
+):
+    """Preserve row-wise ``lstsq`` while batching artifact construction."""
+
+    import cupy as cp
+
+    bins = cp.asarray(time, dtype=cp.float64)
+    signals = cp.asarray(traces, dtype=cp.float64)
+    decay = cp.asarray(decay, dtype=cp.float64)
+    angular_frequency = cp.asarray(angular_frequency, dtype=cp.float64)
+    mode_counts = cp.asarray(mode_counts, dtype=cp.int64)
+    if bins.ndim != 1 or signals.ndim != 2:
+        raise ValueError("time must be 1D and traces must be 2D")
+    if signals.shape[1] != bins.shape[0]:
+        raise ValueError("traces must have one row per time sample")
+    if decay.shape != angular_frequency.shape:
+        raise ValueError("decay and angular_frequency must have same shape")
+    if decay.ndim != 2 or decay.shape[0] != signals.shape[0]:
+        raise ValueError("mode arrays must have one row per trace")
+    if mode_counts.shape != (signals.shape[0],):
+        raise ValueError("mode_counts must have one item per trace")
+
+    row_count = int(signals.shape[0])
+    max_modes = int(decay.shape[1])
+    coefficients = cp.zeros(
+        (row_count, max_modes * 2 + 1),
+        dtype=signals.dtype,
+    )
+    fit_time = _fit_time_from_bins(cp, bins)
+    for row, mode_count_item in enumerate(cp.asnumpy(mode_counts)):
+        mode_count = int(mode_count_item)
+        if mode_count < 0 or mode_count > max_modes:
+            raise ValueError("mode_counts entries must fit padded modes")
+        design, _row_fit_time = _p2_design_matrix(
+            cp,
+            bins,
+            decay[row, :mode_count],
+            angular_frequency[row, :mode_count],
+            dtype=signals.dtype,
+        )
+        row_coefficients = _p2_lstsq(
+            cp,
+            design,
+            signals[row],
+            p2_ridge_alpha=0.0,
+            diagnostics=False,
+        ).coefficients
+        if mode_count:
+            coefficients[row, : mode_count * 2] = row_coefficients[
+                : mode_count * 2
+            ]
+        coefficients[row, -1] = row_coefficients[-1]
 
     return _p2_artifacts_from_coefficients_batched(
         cp,
@@ -5027,6 +5354,18 @@ def _validate_inputs(xp, time, trace, n_components):
     return bins, signal
 
 
+def _validate_p2_ridge_alpha(value: float) -> float:
+    try:
+        alpha = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "p2_ridge_alpha must be a finite nonnegative number"
+        ) from exc
+    if not np.isfinite(alpha) or alpha < 0:
+        raise ValueError("p2_ridge_alpha must be a finite nonnegative number")
+    return alpha
+
+
 def _component_count(xp, singular_values, *, requested: int, limit: int):
     components = min(int(requested), int(limit))
     if components <= 0:
@@ -5041,6 +5380,49 @@ def _component_count(xp, singular_values, *, requested: int, limit: int):
     if components <= 0:
         raise ValueError("insufficient finite singular values")
     return components
+
+
+def _numerical_rank_from_singular_values(
+    singular_values,
+    *,
+    relative_tolerance: float,
+) -> int:
+    """Return rank under an explicit relative singular-value cutoff."""
+
+    values = np.abs(np.asarray(singular_values, dtype=np.float64).reshape(-1))
+    if values.size == 0:
+        return 0
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 0
+    maximum = float(np.max(finite_values))
+    if maximum <= 0:
+        return 0
+    return int(
+        np.count_nonzero(
+            np.isfinite(values) & (values > maximum * relative_tolerance)
+        )
+    )
+
+
+def _singular_value_ratio_and_condition(
+    singular_values,
+) -> tuple[float | None, float | None]:
+    """Return smallest/largest singular ratio and its reciprocal."""
+
+    values = np.abs(np.asarray(singular_values, dtype=np.float64).reshape(-1))
+    if values.size == 0:
+        return None, None
+    if not np.all(np.isfinite(values)):
+        return None, float("inf")
+    maximum = float(np.max(values))
+    minimum = float(np.min(values))
+    if maximum == 0 or minimum == 0:
+        return 0.0, float("inf")
+    ratio = minimum / maximum
+    if ratio == 0:
+        return 0.0, float("inf")
+    return ratio, 1.0 / ratio
 
 
 def _prediction_roots_result(
@@ -5333,6 +5715,7 @@ def _with_elapsed(result: LinearPredictionResult, elapsed_s: float):
         singular_values=result.singular_values,
         roots_stats=result.roots_stats,
         elapsed_s=elapsed_s,
+        diagnostics=result.diagnostics,
     )
 
 

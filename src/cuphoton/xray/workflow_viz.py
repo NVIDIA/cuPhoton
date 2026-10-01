@@ -22,6 +22,7 @@ from .detector_mask import (
 from .detector_mask import (
     excluded_row_mask as detector_excluded_row_mask,
 )
+from .detector_storage import load_detector_array
 from .validation_viz import (
     TraceRecord,
     _fit_traces,
@@ -172,7 +173,7 @@ def build_workflow_viz(
     drop_leading: int = 1,
     chunk_frames: int = 16,
     reference_shift: bool = True,
-    title: str = "XRay Workflow Workbench",
+    title: str = "xRay Workflow Workbench",
     components: int = 30,
     roots_backend: str = "eigvals",
     max_traces: int = 48,
@@ -385,10 +386,10 @@ def load_workflow_bundle(path: Path | str) -> WorkflowVizBundle:
             )
         manifest = _publishable_manifest(_loaded_manifest(loaded["manifest"]))
         if manifest.get("kind") != "xray-workflow-viz-bundle":
-            raise ValueError("not an XRay workflow-viz bundle")
+            raise ValueError("not an xRay workflow-viz bundle")
         if manifest.get("version") != WORKFLOW_BUNDLE_VERSION:
             raise ValueError(
-                "unsupported XRay workflow-viz bundle version: "
+                "unsupported xRay workflow-viz bundle version: "
                 f"{manifest.get('version')!r}; expected "
                 f"{WORKFLOW_BUNDLE_VERSION}"
             )
@@ -1035,8 +1036,8 @@ def _detector_artifact_view(
             float(display_x),
         )
 
-    freq_all = np.load(root / "freq_all.npy", mmap_mode="r")
-    amp_all = np.load(root / "amp_all.npy", mmap_mode="r")
+    freq_all = load_detector_array(root / "freq_all.npy")
+    amp_all = load_detector_array(root / "amp_all.npy")
     if freq_all.shape != amp_all.shape or freq_all.ndim != 3:
         raise ValueError("detector artifact freq_all/amp_all shapes differ")
     height, width, depth = freq_all.shape
@@ -1086,8 +1087,8 @@ def _detector_filtered_phonon_data(
     if amp_threshold is None:
         return _empty_filtered_phonon_data()
     root = Path(detector_artifact_dir)
-    freq_all = np.load(root / "freq_all.npy", mmap_mode="r")
-    amp_all = np.load(root / "amp_all.npy", mmap_mode="r")
+    freq_all = load_detector_array(root / "freq_all.npy")
+    amp_all = load_detector_array(root / "amp_all.npy")
     if freq_all.shape != amp_all.shape or freq_all.ndim != 3:
         raise ValueError("detector artifact freq_all/amp_all shapes differ")
     height, width, depth = freq_all.shape

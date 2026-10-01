@@ -34,7 +34,8 @@ OFFSETS = (
     (1.4, 110.0),
 )
 SEEDS = (20260807, 20260808, 20260809, 20260810)
-START_SEPARATIONS = (0.6, 1.8)
+# A middle start avoids relying on a single BLAS rounding path to converge.
+START_SEPARATIONS = (0.6, 1.2, 1.8)
 
 _Y_GRID, _X_GRID = np.mgrid[-HALF : HALF + 1, -HALF : HALF + 1]
 _CORE = (_X_GRID * _X_GRID + _Y_GRID * _Y_GRID) <= 10**2
@@ -186,7 +187,7 @@ def _fit_start(
 def _fit_best(
     images: np.ndarray, masks: np.ndarray, backend: str
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Fit from both valley starts and keep the better chi-square row."""
+    """Fit from multiple valley starts and keep the best chi-square row."""
 
     parameters: np.ndarray | None = None
     converged: np.ndarray | None = None

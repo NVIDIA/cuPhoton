@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""YAML-backed workflow config helpers for XScan."""
+"""YAML-backed workflow config helpers for xScan."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ class PerformanceConfig:
 
 @dataclass(slots=True)
 class TrainingConfig:
-    """Complete configuration for one XScan training workflow.
+    """Complete configuration for one xScan training workflow.
 
     Paths are interpreted relative to the invoking process unless already
     absolute. ``device="auto"`` prefers CUDA and otherwise selects CPU.
@@ -158,6 +158,10 @@ def dump_config(path: Path, config: Any) -> None:
     """Write a dataclass or mapping as human-readable YAML."""
 
     if is_dataclass(config):
+        if isinstance(config, type):
+            raise TypeError(
+                "asdict() should be called on dataclass instances"
+            )
         payload = asdict(config)
     else:
         payload = config

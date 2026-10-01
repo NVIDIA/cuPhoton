@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Human review queue and annotation helpers for XScan."""
+"""Human review queue and annotation helpers for xScan."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import json
 import math
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -180,7 +180,7 @@ def build_review_queue(
         max_items=max_items,
         strategy=strategy,
     )
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if output_dir is None:
         output_dir = run_dir / "review" / f"{split}-{timestamp}"
     review_dir = output_dir.expanduser().resolve()
@@ -254,7 +254,7 @@ def build_dataset_review_queue(
         prepared,
         max_items=max_items,
     )
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if output_dir is None:
         output_dir = dataset_dir / "review" / f"{split}-dataset-{timestamp}"
     review_dir = output_dir.expanduser().resolve()
@@ -1161,6 +1161,13 @@ def apply_review_annotations(
     )
 
     validation = validate_dataset_dir(output_dir)
+    saved = {
+        "search": "search.npy",
+        "template": "template.npy",
+        "labels": "labels.npy",
+        "split": "split.npy",
+        "metadata_jsonl": "metadata.jsonl",
+    }
     summary = {
         "workflow": "review-apply",
         "created_at_utc": _utc_now(),
@@ -1184,18 +1191,12 @@ def apply_review_annotations(
         "skipped_no_actionable_count": skipped_no_actionable,
         "skipped_insufficient_review_count": skipped_insufficient_review,
         "validation": validation,
-        "saved": {
-            "search": "search.npy",
-            "template": "template.npy",
-            "labels": "labels.npy",
-            "split": "split.npy",
-            "metadata_jsonl": "metadata.jsonl",
-        },
+        "saved": saved,
     }
     if (output_dir / "difference.npy").exists():
-        summary["saved"]["difference"] = "difference.npy"
+        saved["difference"] = "difference.npy"
     if (output_dir / "metadata.parquet").exists():
-        summary["saved"]["metadata_parquet"] = "metadata.parquet"
+        saved["metadata_parquet"] = "metadata.parquet"
     (output_dir / "summary.json").write_text(
         _json_dumps(summary) + "\n",
         encoding="utf-8",
@@ -1254,7 +1255,7 @@ def review_bokeh_server_summary(
         allow_websocket_origin=allow_origin,
     )
     server.start()
-    print(f"XScan review server: {url}")
+    print(f"xScan review server: {url}")
     try:
         server.io_loop.start()
     except KeyboardInterrupt:
@@ -1320,7 +1321,7 @@ def entity_review_bokeh_server_summary(
         allow_websocket_origin=allow_origin,
     )
     server.start()
-    print(f"XScan entity review server: {url}")
+    print(f"xScan entity review server: {url}")
     try:
         server.io_loop.start()
     except KeyboardInterrupt:
@@ -2101,7 +2102,7 @@ def build_review_document(doc, *, review_dir: Path) -> None:
         tag_control.active = active_tags
         others_div.text = ""
         title.text = _review_header_html(
-            title="XScan Review",
+            title="xScan Review",
             subtitle="Review astronomical detections with human insight",
             id_label="Candidate ID",
             item=item,
@@ -2418,7 +2419,7 @@ def build_review_document(doc, *, review_dir: Path) -> None:
         css_classes=["review-shell"],
         styles={"margin": "18px auto 34px", "gap": "12px"},
     )
-    doc.title = "XScan Review"
+    doc.title = "xScan Review"
     doc.add_root(layout)
     refresh()
 
@@ -2688,7 +2689,7 @@ def build_entity_review_document(doc, *, review_dir: Path) -> None:
             else ""
         )
         title.text = _review_header_html(
-            title="XScan Entity Review",
+            title="xScan Entity Review",
             subtitle="Review astronomical detections with human insight",
             id_label="Entity ID",
             item=item,
@@ -3043,7 +3044,7 @@ def build_entity_review_document(doc, *, review_dir: Path) -> None:
         css_classes=["review-shell"],
         styles={"margin": "18px auto 34px", "gap": "12px"},
     )
-    doc.title = "XScan Entity Review"
+    doc.title = "xScan Entity Review"
     doc.add_root(layout)
     refresh()
 
@@ -3138,6 +3139,10 @@ def export_review_contact_sheets(
             }
         )
 
+    saved = {
+        "index": "index.json",
+        "pages": [page["path"] for page in pages],
+    }
     summary = {
         "workflow": "review-contact-sheet",
         "review_dir": str(review_dir),
@@ -3150,10 +3155,7 @@ def export_review_contact_sheets(
         "items_per_page": int(items_per_page),
         "columns": int(columns),
         "stamp_size": int(stamp_size),
-        "saved": {
-            "index": "index.json",
-            "pages": [page["path"] for page in pages],
-        },
+        "saved": saved,
         "pages": pages,
         "items": [_contact_sheet_item_summary(item) for item in selected],
     }
@@ -3225,6 +3227,7 @@ def export_review_annotation_template(
                     "rank_reason": item.get("rank_reason"),
                 }
             )
+    saved = {"template_csv": str(output_csv)}
     summary = {
         "workflow": "review-annotation-template",
         "review_dir": str(review_dir),
@@ -3232,7 +3235,7 @@ def export_review_annotation_template(
         "output_csv": str(output_csv),
         "queue_count": len(queue),
         "reviewer": reviewer_name or None,
-        "saved": {"template_csv": str(output_csv)},
+        "saved": saved,
         "reviewer_labels": ["real", "bogus", "unsure"],
         "morphology_tags": list(MORPHOLOGY_TAGS),
     }
@@ -3353,6 +3356,7 @@ def import_review_annotations_from_csv(
             label_counts.get(payload["reviewer_label"], 0) + 1
         )
         reviewers.add(payload["reviewer"])
+    saved = {"annotations": "annotations.jsonl"}
     summary = {
         "workflow": "review-import-annotations",
         "review_dir": str(review_dir),
@@ -3366,7 +3370,7 @@ def import_review_annotations_from_csv(
         "reviewer_count": len(reviewers),
         "reviewers": sorted(reviewers),
         "reviewer_label_counts": label_counts,
-        "saved": {"annotations": "annotations.jsonl"},
+        "saved": saved,
     }
     return ReviewAnnotationImportResult(
         review_dir=review_dir,
@@ -4320,8 +4324,8 @@ def _parse_review_timestamp(timestamp: str) -> datetime:
     normalized = timestamp.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _review_aggregation_metadata(
@@ -5189,7 +5193,7 @@ def _entity_metadata_row(
 
 def _dataset_fingerprint(dataset_dir: Path) -> dict[str, Any]:
     dataset_dir = dataset_dir.expanduser().resolve()
-    files = {}
+    files: dict[str, dict[str, str | int] | None] = {}
     for name in (
         "search.npy",
         "template.npy",
@@ -5805,7 +5809,7 @@ def _render_review_contact_sheet_page(
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
     strong_font = ImageFont.load_default()
-    title = f"XScan Review Contact Sheet - Page {page_index}"
+    title = f"xScan Review Contact Sheet - Page {page_index}"
     draw.text((margin, margin), title, fill=(15, 23, 42), font=strong_font)
 
     y0 = margin + title_h
@@ -5926,7 +5930,7 @@ def _contact_sheet_stamp_image(
         gray = _scaled_contact_sheet_gray(array)
         rgb = np.stack([gray, gray, gray], axis=-1)
     result = Image.fromarray(rgb.astype(np.uint8), mode="RGB")
-    resampling = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
+    resampling = getattr(Image, "Resampling", Image).BILINEAR
     return result.resize((size, size), resampling)
 
 
@@ -6110,7 +6114,7 @@ def _metadata_table(item: dict[str, Any]) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _fmt_metadata_value(value: Any) -> str:
