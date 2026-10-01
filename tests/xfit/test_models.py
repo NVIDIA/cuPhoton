@@ -1365,6 +1365,77 @@ def test_cutile_gaussian_normal_equations_match_noisy_float32(mode) -> None:
     assert cp.allclose(hessian, expected_hessian, rtol=3e-5, atol=3e-5).item()
 
 
+@pytest.mark.parametrize("axis", [0, 1], ids=["sigma-x", "sigma-y"])
+@pytest.mark.parametrize(
+    ("dtype", "width", "mode"),
+    [
+        pytest.param(np.float32, 1e-16, "difference", id="tiny-float32"),
+        pytest.param(np.float64, 1e-110, "difference", id="tiny-float64"),
+        pytest.param(np.float32, 1e13, "split", id="huge-float32"),
+        pytest.param(np.float64, 1e103, "split", id="huge-float64"),
+    ],
+)
+def test_cutile_extreme_gaussian_widths_match_cupy(
+    dtype, width, mode, axis
+) -> None:
+    _require_cutile()
+    model = GaussianDipoleModel(
+        (5, 7), split_weights=(1.0, 1.0, 1.0), dtype=dtype
+    )
+    initial = np.asarray([[1, 1, 1, 0, 0, 0, 0, 0]], dtype=dtype)
+    initial[:, 1 + axis] = width
+    offset = 0.25 if width < 1 else width
+    initial[:, 4 + axis] = -offset
+    initial[:, 6 + axis] = offset
+    mask = None
+    if width < 1:
+        images = np.ones((1, *model.image_shape), dtype=dtype)
+    else:
+        images = model.evaluate(initial, mode=mode) * dtype(1.01)
+        # Isolate the broad direction so an incorrect width derivative
+        # changes the LM step instead of being hidden by the other width.
+        mask = np.zeros_like(images, dtype=bool)
+        if axis == 0:
+            mask[..., 2, :] = True
+        else:
+            mask[..., :, 3] = True
+    config = LMConfig(max_evaluations=2, f_tol=0, x_tol=0, g_tol=0)
+    results = [
+        fit_dipoles(
+            images,
+            model=model,
+            initial=initial,
+            mask=mask,
+            mode=mode,
+            backend=backend,
+            config=config,
+        )
+        for backend in ("cupy", "cutile")
+    ]
+    cupy_result, cutile_result = results
+
+    # The physical-width Jacobian divides by sigma**3 before applying
+    # the log-width chain rule. Its underflow/overflow must affect both
+    # backends consistently, even though sigma itself is finite.
+    expected_status = "invalid_residual" if width < 1 else "max_evaluations"
+    assert cupy_result.status.tolist() == [expected_status]
+    for field in ("status", "evaluations", "converged", "uncertainty_valid"):
+        np.testing.assert_array_equal(
+            getattr(cutile_result, field), getattr(cupy_result, field)
+        )
+    tolerance = 3e-5 if dtype is np.float32 else 5e-12
+    np.testing.assert_allclose(
+        cutile_result.parameters,
+        cupy_result.parameters,
+        rtol=tolerance,
+        atol=tolerance,
+    )
+    assert cutile_result.uncertainty_reason == cupy_result.uncertainty_reason
+    assert not cutile_result.uncertainty_valid.any()
+    assert np.isnan(cutile_result.covariance).all()
+    assert np.isnan(cutile_result.standard_errors).all()
+
+
 def test_cutile_weighting_and_compacted_indices_match_cupy() -> None:
     _require_cutile()
     split_weights = (1.0, 0.25, 1.75)

@@ -109,16 +109,22 @@ def _gaussian_normal_equations_kernel() -> Any:
                 )
             )
             star_positive = amplitude * unit_positive
+            width_x_positive = (
+                star_positive
+                * x_rotated_positive
+                * x_rotated_positive
+                / (sigma_x**3)
+            )
+            width_y_positive = (
+                star_positive
+                * y_rotated_positive
+                * y_rotated_positive
+                / (sigma_y**3)
+            )
             derivatives_positive = (
                 unit_positive,
-                star_positive
-                * x_rotated_positive
-                * x_rotated_positive
-                * inverse_x_squared,
-                star_positive
-                * y_rotated_positive
-                * y_rotated_positive
-                * inverse_y_squared,
+                width_x_positive,
+                width_y_positive,
                 -star_positive
                 * x_rotated_positive
                 * y_rotated_positive
@@ -155,16 +161,22 @@ def _gaussian_normal_equations_kernel() -> Any:
                 )
             )
             star_negative = amplitude * unit_negative
+            width_x_negative = (
+                star_negative
+                * x_rotated_negative
+                * x_rotated_negative
+                / (sigma_x**3)
+            )
+            width_y_negative = (
+                star_negative
+                * y_rotated_negative
+                * y_rotated_negative
+                / (sigma_y**3)
+            )
             derivatives_negative = (
                 unit_negative,
-                star_negative
-                * x_rotated_negative
-                * x_rotated_negative
-                * inverse_x_squared,
-                star_negative
-                * y_rotated_negative
-                * y_rotated_negative
-                * inverse_y_squared,
+                width_x_negative,
+                width_y_negative,
                 -star_negative
                 * x_rotated_negative
                 * y_rotated_negative
@@ -254,6 +266,11 @@ def _gaussian_normal_equations_kernel() -> Any:
                     -derivatives_negative[5],
                     ct.where(plane == 2, derivatives_negative[5], zero),
                 )
+
+            # Preserve the model's physical-width derivative and chain
+            # rule order, including overflow/underflow of sigma**3.
+            derivative_1 *= sigma_x
+            derivative_2 *= sigma_y
 
             weight = ct.load(
                 weights,
