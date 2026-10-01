@@ -16,61 +16,71 @@ from __future__ import annotations
 import cupy as cp
 
 _MASK_OR_RAW_SOURCE = r"""
-#define DEFINE_MASK_OR_KERNEL(NAME, T)                                \
-extern "C" __global__ void NAME(                                      \
-    const T* __restrict__ source_mask,                                \
-    long long H,                                                      \
-    long long W,                                                      \
-    const double* __restrict__ x_in,                                  \
-    const double* __restrict__ y_in,                                  \
-    T invalid_mask_value,                                             \
-    T* __restrict__ out,                                              \
-    long long n                                                       \
-) {                                                                   \
-    long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x; \
-    if (idx >= n) return;                                             \
-                                                                      \
-    double x = x_in[idx];                                             \
-    double y = y_in[idx];                                             \
-    long long x0 = (long long)floor(x);                               \
-    long long y0 = (long long)floor(y);                               \
-    long long x1 = x0 + 1;                                            \
-    long long y1 = y0 + 1;                                            \
-                                                                      \
-    double fx = x - (double)x0;                                       \
-    double fy = y - (double)y0;                                       \
-    double w0x = 1.0 - fx;                                            \
-    double w1x = fx;                                                  \
-    double w0y = 1.0 - fy;                                            \
-    double w1y = fy;                                                  \
-                                                                      \
-    bool in00 = (x0 >= 0) && (x0 < W) && (y0 >= 0) && (y0 < H);       \
-    bool in10 = (x1 >= 0) && (x1 < W) && (y0 >= 0) && (y0 < H);       \
-    bool in01 = (x0 >= 0) && (x0 < W) && (y1 >= 0) && (y1 < H);       \
-    bool in11 = (x1 >= 0) && (x1 < W) && (y1 >= 0) && (y1 < H);       \
-                                                                      \
-    bool k00 = in00 && (w0x > 0.0) && (w0y > 0.0);                    \
-    bool k10 = in10 && (w1x > 0.0) && (w0y > 0.0);                    \
-    bool k01 = in01 && (w0x > 0.0) && (w1y > 0.0);                    \
-    bool k11 = in11 && (w1x > 0.0) && (w1y > 0.0);                    \
-                                                                      \
-    long long cx0 = x0 < 0 ? 0 : (x0 >= W ? W - 1 : x0);              \
-    long long cy0 = y0 < 0 ? 0 : (y0 >= H ? H - 1 : y0);              \
-    long long cx1 = x1 < 0 ? 0 : (x1 >= W ? W - 1 : x1);              \
-    long long cy1 = y1 < 0 ? 0 : (y1 >= H ? H - 1 : y1);              \
-                                                                      \
-    T value = (T)0;                                                   \
-    if (k00) value = (T)(value | source_mask[cy0 * W + cx0]);         \
-    if (k10) value = (T)(value | source_mask[cy0 * W + cx1]);         \
-    if (k01) value = (T)(value | source_mask[cy1 * W + cx0]);         \
-    if (k11) value = (T)(value | source_mask[cy1 * W + cx1]);         \
-                                                                      \
-    bool invalid = !(                                                 \
-        isfinite(x) && isfinite(y) &&                                 \
-        (x >= 0.0) && (x <= (double)(W - 1)) &&                       \
-        (y >= 0.0) && (y <= (double)(H - 1))                          \
-    );                                                                \
-    out[idx] = invalid ? (T)(value | invalid_mask_value) : value;     \
+#define DEFINE_MASK_OR_KERNEL(NAME, T)                                         \
+extern "C" __global__ void NAME(                                               \
+    const T* __restrict__ source_mask,                                         \
+    long long H,                                                               \
+    long long W,                                                               \
+    const double* __restrict__ x_in,                                           \
+    const double* __restrict__ y_in,                                           \
+    T invalid_mask_value,                                                      \
+    T* __restrict__ out,                                                       \
+    long long n                                                                \
+) {                                                                            \
+    long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;          \
+    if (idx >= n) {                                                            \
+        return;                                                                \
+    }                                                                          \
+                                                                               \
+    double x = x_in[idx];                                                      \
+    double y = y_in[idx];                                                      \
+    long long x0 = (long long)floor(x);                                        \
+    long long y0 = (long long)floor(y);                                        \
+    long long x1 = x0 + 1;                                                     \
+    long long y1 = y0 + 1;                                                     \
+                                                                               \
+    double fx = x - (double)x0;                                                \
+    double fy = y - (double)y0;                                                \
+    double w0x = 1.0 - fx;                                                     \
+    double w1x = fx;                                                           \
+    double w0y = 1.0 - fy;                                                     \
+    double w1y = fy;                                                           \
+                                                                               \
+    bool in00 = (x0 >= 0) && (x0 < W) && (y0 >= 0) && (y0 < H);                \
+    bool in10 = (x1 >= 0) && (x1 < W) && (y0 >= 0) && (y0 < H);                \
+    bool in01 = (x0 >= 0) && (x0 < W) && (y1 >= 0) && (y1 < H);                \
+    bool in11 = (x1 >= 0) && (x1 < W) && (y1 >= 0) && (y1 < H);                \
+                                                                               \
+    bool k00 = in00 && (w0x > 0.0) && (w0y > 0.0);                             \
+    bool k10 = in10 && (w1x > 0.0) && (w0y > 0.0);                             \
+    bool k01 = in01 && (w0x > 0.0) && (w1y > 0.0);                             \
+    bool k11 = in11 && (w1x > 0.0) && (w1y > 0.0);                             \
+                                                                               \
+    long long cx0 = x0 < 0 ? 0 : (x0 >= W ? W - 1 : x0);                       \
+    long long cy0 = y0 < 0 ? 0 : (y0 >= H ? H - 1 : y0);                       \
+    long long cx1 = x1 < 0 ? 0 : (x1 >= W ? W - 1 : x1);                       \
+    long long cy1 = y1 < 0 ? 0 : (y1 >= H ? H - 1 : y1);                       \
+                                                                               \
+    T value = (T)0;                                                            \
+    if (k00) {                                                                 \
+        value = (T)(value | source_mask[cy0 * W + cx0]);                       \
+    }                                                                          \
+    if (k10) {                                                                 \
+        value = (T)(value | source_mask[cy0 * W + cx1]);                       \
+    }                                                                          \
+    if (k01) {                                                                 \
+        value = (T)(value | source_mask[cy1 * W + cx0]);                       \
+    }                                                                          \
+    if (k11) {                                                                 \
+        value = (T)(value | source_mask[cy1 * W + cx1]);                       \
+    }                                                                          \
+                                                                               \
+    bool invalid = !(                                                          \
+        isfinite(x) && isfinite(y) &&                                          \
+        (x >= 0.0) && (x <= (double)(W - 1)) &&                                \
+        (y >= 0.0) && (y <= (double)(H - 1))                                   \
+    );                                                                         \
+    out[idx] = invalid ? (T)(value | invalid_mask_value) : value;              \
 }
 
 DEFINE_MASK_OR_KERNEL(mask_or_bool, bool)
@@ -82,7 +92,7 @@ DEFINE_MASK_OR_KERNEL(mask_or_i32, int)
 DEFINE_MASK_OR_KERNEL(mask_or_u32, unsigned int)
 DEFINE_MASK_OR_KERNEL(mask_or_i64, long long)
 DEFINE_MASK_OR_KERNEL(mask_or_u64, unsigned long long)
-"""
+"""  # noqa: E501 - CUDA macro continuation backslashes use column 80.
 
 _MASK_OR_RAW_KERNELS = {
     ("b", 1): cp.RawKernel(_MASK_OR_RAW_SOURCE, "mask_or_bool"),
@@ -105,8 +115,12 @@ extern "C" {
 __device__ __forceinline__ double sincpi(double t) {
     const double PI = 3.14159265358979323846;
     double at = fabs(t);
-    if (at < 1e-18) return 1.0;
-    if (t == trunc(t)) return 0.0;
+    if (at < 1e-18) {
+        return 1.0;
+    }
+    if (t == trunc(t)) {
+        return 0.0;
+    }
     return sin(PI * t) / (PI * t);
 }
 
@@ -182,16 +196,24 @@ _lanczos_elem = cp.ElementwiseKernel(
         double num = 0.0;
         for (int iy=0; iy<win; ++iy){
             double wyv = wy[iy];
-            if (wyv == 0.0) continue;
+            if (wyv == 0.0) {
+                continue;
+            }
             long long yy = j0 + (long long)(start + iy);
-            if (yy < 0 || yy >= H) continue;
+            if (yy < 0 || yy >= H) {
+                continue;
+            }
             long long base = yy * W;
 
             for (int ix=0; ix<win; ++ix){
                 double wxv = wx[ix];
-                if (wxv == 0.0) continue;
+                if (wxv == 0.0) {
+                    continue;
+                }
                 long long xx = i0 + (long long)(start + ix);
-                if (xx < 0 || xx >= W) continue;
+                if (xx < 0 || xx >= W) {
+                    continue;
+                }
 
                 double weight = wyv * wxv;
                 double v = src[base + xx];
@@ -208,8 +230,16 @@ _lanczos_elem = cp.ElementwiseKernel(
         } else {
             long long nnx = llround(x);
             long long nny = llround(y);
-            if (nnx < 0) nnx = 0; else if (nnx >= W) nnx = W-1;
-            if (nny < 0) nny = 0; else if (nny >= H) nny = H-1;
+            if (nnx < 0) {
+                nnx = 0;
+            } else if (nnx >= W) {
+                nnx = W-1;
+            }
+            if (nny < 0) {
+                nny = 0;
+            } else if (nny >= H) {
+                nny = H-1;
+            }
             out = src[nny * W + nnx];
         }
     """,
@@ -224,8 +254,12 @@ extern "C" {
 __device__ __forceinline__ double xrep_sincpi(double t) {
     const double PI = 3.14159265358979323846;
     double at = fabs(t);
-    if (at < 1e-18) return 1.0;
-    if (t == trunc(t)) return 0.0;
+    if (at < 1e-18) {
+        return 1.0;
+    }
+    if (t == trunc(t)) {
+        return 0.0;
+    }
     return sin(PI * t) / (PI * t);
 }
 
@@ -288,17 +322,25 @@ __device__ __forceinline__ double xrep_lanczos3_sample_one(
     #pragma unroll
     for (int iy = 0; iy < win; ++iy) {
         double wyv = wy[iy];
-        if (wyv == 0.0) continue;
+        if (wyv == 0.0) {
+            continue;
+        }
         long long yy = j0 + (long long)(start + iy);
-        if (yy < 0 || yy >= H) continue;
+        if (yy < 0 || yy >= H) {
+            continue;
+        }
         long long base = yy * W;
 
         #pragma unroll
         for (int ix = 0; ix < win; ++ix) {
             double wxv = wx[ix];
-            if (wxv == 0.0) continue;
+            if (wxv == 0.0) {
+                continue;
+            }
             long long xx = i0 + (long long)(start + ix);
-            if (xx < 0 || xx >= W) continue;
+            if (xx < 0 || xx >= W) {
+                continue;
+            }
 
             double v = src[base + xx];
             num += (wyv * wxv) * v;
@@ -310,8 +352,16 @@ __device__ __forceinline__ double xrep_lanczos3_sample_one(
     } else {
         long long nnx = llround(x);
         long long nny = llround(y);
-        if (nnx < 0) nnx = 0; else if (nnx >= W) nnx = W - 1;
-        if (nny < 0) nny = 0; else if (nny >= H) nny = H - 1;
+        if (nnx < 0) {
+            nnx = 0;
+        } else if (nnx >= W) {
+            nnx = W - 1;
+        }
+        if (nny < 0) {
+            nny = 0;
+        } else if (nny >= H) {
+            nny = H - 1;
+        }
         return src[nny * W + nnx];
     }
 }
@@ -327,7 +377,9 @@ __global__ void lanczos3_sample_raw_fp64(
     long long n
 ) {
     long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n) return;
+    if (idx >= n) {
+        return;
+    }
 
     out[idx] = xrep_lanczos3_sample_one(
         src,
@@ -354,7 +406,9 @@ __global__ void lanczos3_reproject_raw_fp64(
     long long n
 ) {
     long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n) return;
+    if (idx >= n) {
+        return;
+    }
 
     if (!valid[idx]) {
         out[idx] = fill_value;

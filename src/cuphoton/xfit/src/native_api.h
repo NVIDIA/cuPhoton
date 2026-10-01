@@ -46,7 +46,10 @@ public:
     // producer_stream is borrowed only for recording a dependency event.
     // Successful calls and exceptions both drain all submitted work before
     // returning, so caller-owned buffers may then be released safely.
-    Timings run(const Batch& batch, const Settings& settings, std::uintptr_t producer_stream);
+    Timings run(
+        const Batch& batch,
+        const Settings& settings,
+        std::uintptr_t producer_stream);
 
 private:
     struct Impl;

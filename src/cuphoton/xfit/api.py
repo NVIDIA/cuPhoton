@@ -1081,9 +1081,9 @@ def fit_dipoles_device(
 
     This experimental seam uses CuPy-owned buffers. The optional native
     backend runs Gaussian LM iterations in CUDA C++. NumPy inputs are copied
-    to the active device. Existing CuPy
-    inputs must already reside on that device and are checked before any input
-    conversion. Input arrays are borrowed and are not mutated.
+    to the active device. Existing CuPy inputs must already reside on that
+    device and are checked before any input conversion. Input arrays are
+    borrowed and are not mutated.
 
     The solver may copy per-fit status, evaluation counts and boolean
     diagnostic masks to the host for control flow. Parameters, residuals,

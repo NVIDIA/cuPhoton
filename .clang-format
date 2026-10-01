@@ -6,9 +6,10 @@ BasedOnStyle: LLVM
 Standard: c++17
 IndentWidth: 4
 ContinuationIndentWidth: 4
-ColumnLimit: 100
+ColumnLimit: 80
 AccessModifierOffset: -4
 AlignAfterOpenBracket: false
+AlignEscapedNewlines: Right
 AlignOperands: DontAlign
 AllowShortFunctionsOnASingleLine: Empty
 BinPackArguments: false
@@ -18,6 +19,7 @@ BreakBeforeBinaryOperators: NonAssignment
 BreakConstructorInitializers: BeforeColon
 BreakStringLiterals: false
 BreakTemplateDeclarations: Yes
+InsertBraces: true
 PackConstructorInitializers: Never
 PointerAlignment: Left
 ReflowComments: Never
