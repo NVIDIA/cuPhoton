@@ -28,13 +28,6 @@ from cuphoton.core.cli import (
     VariablePositionalInvariant,
 )
 
-from ._cli_output import (
-    print_file_probe,
-    print_model_order_sweep_batch,
-    print_model_order_sweep_payload,
-    print_subspace_benchmark_batch,
-    print_validation_sweep,
-)
 from ._types import FIT_DIAGNOSTICS_LEVELS
 from .doctor import (
     collect_doctor_report,
@@ -3772,10 +3765,9 @@ def _data_probe(args):
     result = probe_hdf5_pair(h5dir=args.h5dir, fon=args.fon, foff=args.foff)
     payload = result.to_dict()
     if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        args._out(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print_file_probe("on", result.on)
-        print_file_probe("off", result.off)
+        args._out(result)
     return 0
 
 
@@ -4410,11 +4402,7 @@ def _linear_prediction_smoke(args):
 
 
 def _linear_prediction_validate(args):
-    from .synthetic_validation import (
-        build_summary,
-        validation_sweep,
-        write_validation_run,
-    )
+    from .synthetic_validation import validate_linear_prediction
 
     snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
     distortion = None
@@ -4429,30 +4417,22 @@ def _linear_prediction_validate(args):
                 "--distortion must be kind:amount with a numeric amount "
                 "(for example chirp:0.05)"
             ) from exc
-    sweeps = [
-        validation_sweep(
-            samples=args.samples,
-            snr_db=snr,
-            trials=args.trials,
-            n_components=args.components,
-            seed=args.seed,
-            distortion=distortion,
+    report = validate_linear_prediction(
+        samples=args.samples,
+        snr_db=snr,
+        trials=args.trials,
+        n_components=args.components,
+        seed=args.seed,
+        distortion=distortion,
+        output_dir=args.output_dir,
+    )
+    args._out(
+        json.dumps(
+            report.to_dict(), indent=2, sort_keys=True, allow_nan=False
         )
-    ]
-    if args.output_dir is not None:
-        summary = write_validation_run(args.output_dir, sweeps)
-    else:
-        summary = build_summary(sweeps)
-    if args.json:
-        print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
-        return 0
-    print(f"samples={sweeps[0].samples}")
-    print(f"signal_rms={sweeps[0].signal_rms:.6g}")
-    for sweep in sweeps:
-        print_validation_sweep(sweep)
-    if args.output_dir is not None:
-        for key, name in summary["artifacts"].items():
-            print(f"{key}={name if name else 'not written'}")
+        if args.json
+        else report
+    )
     return 0
 
 
@@ -5439,132 +5419,54 @@ def _prediction_roots_benchmark(args):
 
 
 def _model_order_sweep(args):
-    from .linear_prediction import model_order_sweep
+    from .linear_prediction import model_order_sweep, model_order_sweep_batch
 
     components = _component_sweep_values(args)
     trace_paths = _trace_npz_batch_paths_from_args(args, required=False)
+    source = None
     if trace_paths:
         _reject_trace_npz_hdf5_options(args)
-        if len(trace_paths) == 1:
-            time, trace, source = _load_trace_npz(trace_paths[0])
-            payload = _single_model_order_sweep_payload(
-                model_order_sweep(
-                    time,
-                    trace,
-                    components,
-                    roots_backend=args.roots_backend,
-                    relative_tolerance=args.relative_tolerance,
-                ),
-                source=source,
-            )
-        else:
-            time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
-            payload = _model_order_sweep_batch_payload(
-                time,
-                trace_rows,
-                sources,
-                components=components,
-                roots_backend=args.roots_backend,
-                relative_tolerance=args.relative_tolerance,
-            )
-    else:
-        time, trace, source = _trace_for_workbench(args)
-        payload = _single_model_order_sweep_payload(
-            model_order_sweep(
-                time,
-                trace,
-                components,
-                roots_backend=args.roots_backend,
-                relative_tolerance=args.relative_tolerance,
-            ),
-            source=source,
+    if len(trace_paths) > 1:
+        time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
+        result = model_order_sweep_batch(
+            time,
+            trace_rows,
+            sources,
+            components=components,
+            roots_backend=args.roots_backend,
+            relative_tolerance=args.relative_tolerance,
         )
-
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    elif payload["source"]["kind"] == "trace-npz-batch":
-        print_model_order_sweep_batch(payload)
     else:
-        print_model_order_sweep_payload(payload)
-    return 0
-
-
-def _single_model_order_sweep_payload(result, *, source):
-    payload = dataclass_asdict(result)
-    payload["source"] = source
-    return payload
-
-
-def _model_order_sweep_batch_payload(
-    time,
-    trace_rows,
-    sources,
-    *,
-    components,
-    roots_backend: str,
-    relative_tolerance: float,
-):
-    from .linear_prediction import model_order_sweep
-
-    trace_payloads = []
-    best_components = []
-    best_selected_model_orders = []
-    best_rms_residuals = []
-    best_reconstruction_errors = []
-    for trace_index, (trace, source) in enumerate(
-        zip(trace_rows, sources, strict=True)
-    ):
+        time, trace, source = (
+            _load_trace_npz(trace_paths[0])
+            if trace_paths
+            else _trace_for_workbench(args)
+        )
         result = model_order_sweep(
             time,
             trace,
             components,
-            roots_backend=roots_backend,
-            relative_tolerance=relative_tolerance,
-        )
-        trace_payload = _single_model_order_sweep_payload(
-            result,
-            source=source,
-        )
-        trace_payload["trace_index"] = trace_index
-        trace_payloads.append(trace_payload)
-        best_components.append(int(result.best_components))
-        best_selected_model_orders.append(
-            int(result.best_selected_model_order)
-        )
-        best_rms_residuals.append(float(result.best_rms_residual))
-        best_reconstruction_errors.append(
-            float(result.best_reconstruction_rms_error)
+            roots_backend=args.roots_backend,
+            relative_tolerance=args.relative_tolerance,
         )
 
-    return {
-        "source": {
-            "kind": "trace-npz-batch",
-            "trace_count": len(sources),
-            "traces": sources,
-        },
-        "trace_count": len(sources),
-        "samples": int(time.shape[0]),
-        "roots_backend": roots_backend,
-        "relative_tolerance": float(relative_tolerance),
-        "component_counts": tuple(int(item) for item in components),
-        "best_components_by_trace": tuple(best_components),
-        "best_components_unique": tuple(sorted(set(best_components))),
-        "best_selected_model_orders_by_trace": tuple(
-            best_selected_model_orders
-        ),
-        "best_selected_model_orders_unique": tuple(
-            sorted(set(best_selected_model_orders))
-        ),
-        "best_rms_residual_min": min(best_rms_residuals),
-        "best_rms_residual_max": max(best_rms_residuals),
-        "best_reconstruction_rms_error_min": min(best_reconstruction_errors),
-        "best_reconstruction_rms_error_max": max(best_reconstruction_errors),
-        "traces": tuple(trace_payloads),
-    }
+    if args.json:
+        payload = result.to_dict()
+        if source is not None:
+            payload["source"] = source
+        args._out(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if source is not None:
+            args._out(f"source={source['kind']}")
+        args._out(result)
+    return 0
 
 
 def _subspace_benchmark(args):
-    from .subspace import compare_subspace_methods
+    from .subspace import (
+        compare_subspace_methods,
+        compare_subspace_methods_batch,
+    )
 
     trace_paths = _trace_npz_batch_paths_from_args(args, required=False)
     svd_backends = _subspace_svd_backends(args)
@@ -5573,191 +5475,54 @@ def _subspace_benchmark(args):
         if args.method is None
         else tuple(args.method)
     )
+    source = None
     if trace_paths:
         _reject_trace_npz_hdf5_options(args)
-        if len(trace_paths) == 1:
-            time, trace, source = _load_trace_npz(trace_paths[0])
-            payload = _single_subspace_benchmark_payload(
-                compare_subspace_methods(
-                    time,
-                    trace,
-                    model_order=args.model_order,
-                    components=args.components,
-                    methods=methods,
-                    svd_backends=svd_backends,
-                    pencil_rows=args.pencil_rows,
-                    randomized_oversamples=args.randomized_oversamples,
-                    power_iterations=args.power_iterations,
-                    random_seed=args.random_seed,
-                ),
-                source=source,
-                svd_backends=svd_backends,
-            )
-        else:
-            time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
-            payload = _subspace_benchmark_batch_payload(
-                time,
-                trace_rows,
-                sources,
-                model_order=args.model_order,
-                components=args.components,
-                methods=methods,
-                svd_backends=svd_backends,
-                pencil_rows=args.pencil_rows,
-                randomized_oversamples=args.randomized_oversamples,
-                power_iterations=args.power_iterations,
-                random_seed=args.random_seed,
-            )
-    else:
-        time, trace, source = _trace_for_workbench(args)
-        payload = _single_subspace_benchmark_payload(
-            compare_subspace_methods(
-                time,
-                trace,
-                model_order=args.model_order,
-                components=args.components,
-                methods=methods,
-                svd_backends=svd_backends,
-                pencil_rows=args.pencil_rows,
-                randomized_oversamples=args.randomized_oversamples,
-                power_iterations=args.power_iterations,
-                random_seed=args.random_seed,
-            ),
-            source=source,
+    if len(trace_paths) > 1:
+        time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
+        result = compare_subspace_methods_batch(
+            time,
+            trace_rows,
+            sources,
+            model_order=args.model_order,
+            components=args.components,
+            methods=methods,
             svd_backends=svd_backends,
+            pencil_rows=args.pencil_rows,
+            randomized_oversamples=args.randomized_oversamples,
+            power_iterations=args.power_iterations,
+            random_seed=args.random_seed,
         )
-
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    elif payload["source"]["kind"] == "trace-npz-batch":
-        print_subspace_benchmark_batch(payload)
     else:
-        print(f"source={payload['source']['kind']}")
-        print(f"samples={payload['samples']}")
-        print(f"model_order={payload['model_order']}")
-        print(f"components={payload['components']}")
-        print(f"baseline_chi2={payload['baseline_chi2']:.6g}")
-        print(f"baseline_rms_residual={payload['baseline_rms_residual']:.6g}")
-        for method in payload["methods"]:
-            print(f"method={method['method']}")
-            print(f"  svd_backend={method['svd_backend']}")
-            print(f"  svd_rank={method['svd_rank']}")
-            print(f"  rms_residual={method['rms_residual']:.6g}")
-            print(
-                "  max_abs_reconstruction_diff="
-                f"{method['max_abs_reconstruction_diff']:.6g}"
-            )
-            print(f"  elapsed_s={method['elapsed_s']:.6g}")
-    return 0
-
-
-def _single_subspace_benchmark_payload(result, *, source, svd_backends):
-    payload = dataclass_asdict(result)
-    payload["source"] = source
-    payload["svd_backends"] = svd_backends
-    return payload
-
-
-def _subspace_benchmark_batch_payload(
-    time,
-    trace_rows,
-    sources,
-    *,
-    model_order: int,
-    components: int,
-    methods,
-    svd_backends,
-    pencil_rows: int | None,
-    randomized_oversamples: int,
-    power_iterations: int,
-    random_seed: int,
-):
-    from .subspace import compare_subspace_methods
-
-    method_summary = {
-        (method, svd_backend): {
-            "method": method,
-            "svd_backend": svd_backend,
-            "trace_count": 0,
-            "rms_residual_min": float("inf"),
-            "rms_residual_max": 0.0,
-            "max_abs_reconstruction_diff_max": 0.0,
-            "elapsed_s_total": 0.0,
-        }
-        for method in methods
-        for svd_backend in svd_backends
-    }
-    trace_payloads = []
-    baseline_chi2_values = []
-    baseline_rms_values = []
-
-    for trace_index, (trace, source) in enumerate(
-        zip(trace_rows, sources, strict=True)
-    ):
+        time, trace, source = (
+            _load_trace_npz(trace_paths[0])
+            if trace_paths
+            else _trace_for_workbench(args)
+        )
         result = compare_subspace_methods(
             time,
             trace,
-            model_order=model_order,
-            components=components,
+            model_order=args.model_order,
+            components=args.components,
             methods=methods,
             svd_backends=svd_backends,
-            pencil_rows=pencil_rows,
-            randomized_oversamples=randomized_oversamples,
-            power_iterations=power_iterations,
-            random_seed=random_seed,
+            pencil_rows=args.pencil_rows,
+            randomized_oversamples=args.randomized_oversamples,
+            power_iterations=args.power_iterations,
+            random_seed=args.random_seed,
         )
-        trace_payload = _single_subspace_benchmark_payload(
-            result,
-            source=source,
-            svd_backends=svd_backends,
-        )
-        trace_payload["trace_index"] = trace_index
-        trace_payloads.append(trace_payload)
-        baseline_chi2_values.append(float(result.baseline_chi2))
-        baseline_rms_values.append(float(result.baseline_rms_residual))
 
-        for method_result in result.methods:
-            summary = method_summary[
-                (method_result.method, method_result.svd_backend)
-            ]
-            summary["trace_count"] += 1
-            summary["rms_residual_min"] = min(
-                float(summary["rms_residual_min"]),
-                float(method_result.rms_residual),
-            )
-            summary["rms_residual_max"] = max(
-                float(summary["rms_residual_max"]),
-                float(method_result.rms_residual),
-            )
-            summary["max_abs_reconstruction_diff_max"] = max(
-                float(summary["max_abs_reconstruction_diff_max"]),
-                float(method_result.max_abs_reconstruction_diff),
-            )
-            summary["elapsed_s_total"] += float(method_result.elapsed_s)
-
-    summaries = tuple(
-        method_summary[(method, svd_backend)]
-        for method in methods
-        for svd_backend in svd_backends
-    )
-    return {
-        "source": {
-            "kind": "trace-npz-batch",
-            "trace_count": len(sources),
-            "traces": sources,
-        },
-        "trace_count": len(sources),
-        "samples": int(time.shape[0]),
-        "model_order": int(model_order),
-        "components": int(components),
-        "svd_backends": svd_backends,
-        "baseline_chi2_min": min(baseline_chi2_values),
-        "baseline_chi2_max": max(baseline_chi2_values),
-        "baseline_rms_residual_min": min(baseline_rms_values),
-        "baseline_rms_residual_max": max(baseline_rms_values),
-        "method_summary": summaries,
-        "traces": tuple(trace_payloads),
-    }
+    if args.json:
+        payload = result.to_dict()
+        if source is not None:
+            payload["source"] = source
+            payload["svd_backends"] = svd_backends
+        args._out(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if source is not None:
+            args._out(f"source={source['kind']}")
+        args._out(result)
+    return 0
 
 
 def _subspace_acceptance(args):

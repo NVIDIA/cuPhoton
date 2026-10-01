@@ -313,6 +313,19 @@ class ModeValidation:
     recovered_trials: int
     loss_rate: float
 
+    def __str__(self) -> str:
+        w = self.angular_frequency
+        d = self.decay
+        return (
+            f"mode w={w.truth:g} decay={d.truth:g}: "
+            f"freq std/crlb={w.std:.3g}/{w.crlb_std:.3g} "
+            f"({w.std_over_crlb_std:.2f}x) bias={w.bias:+.3g}; "
+            f"decay std/crlb={d.std:.3g}/{d.crlb_std:.3g} "
+            f"({d.std_over_crlb_std:.2f}x) bias={d.bias:+.3g}; "
+            f"recovered={self.recovered_trials} "
+            f"loss_rate={self.loss_rate:.3f}"
+        )
+
     @property
     def frequency_ratio(self) -> float:
         return self.angular_frequency.std_over_crlb_std
@@ -339,6 +352,17 @@ class ValidationLevel:
     any_mode_lost_rate: float
     residual_ratio: float
 
+    def __str__(self) -> str:
+        lines = [
+            f"snr_db={self.snr_db:g} sigma={self.noise_sigma:.4g} "
+            f"trials={self.trials_successful}/{self.trials_attempted} "
+            f"estimator_errors={self.estimator_errors} "
+            f"any_mode_lost_rate={self.any_mode_lost_rate:.3f} "
+            f"residual_ratio={self.residual_ratio:.2f}"
+        ]
+        lines.extend(f"  {mode}" for mode in self.modes)
+        return "\n".join(lines)
+
 
 @dataclass(frozen=True)
 class ValidationSweep:
@@ -354,8 +378,41 @@ class ValidationSweep:
     distortion: tuple[str, float] | None = None
     extra: dict = field(default_factory=dict)
 
+    def __str__(self) -> str:
+        lines = [f"estimator={self.backend}"]
+        if self.distortion is not None:
+            lines.append(
+                f"distortion={self.distortion[0]}:{self.distortion[1]:g}"
+            )
+        lines.extend(str(level) for level in self.levels)
+        return "\n".join(lines)
+
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    """Validation sweeps with their serializable summary and artifacts."""
+
+    sweeps: tuple[ValidationSweep, ...]
+    summary: dict[str, Any]
+
+    def __str__(self) -> str:
+        first = self.sweeps[0]
+        lines = [
+            f"samples={first.samples}",
+            f"signal_rms={first.signal_rms:.6g}",
+        ]
+        lines.extend(str(sweep) for sweep in self.sweeps)
+        lines.extend(
+            f"{key}={name if name else 'not written'}"
+            for key, name in self.summary["artifacts"].items()
+        )
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.summary
 
 
 def _wrap_phase(values: np.ndarray) -> np.ndarray:
@@ -561,6 +618,40 @@ def validation_sweep(
         seed=seed,
         distortion=distortion,
     )
+
+
+def validate_linear_prediction(
+    *,
+    samples: int = 96,
+    snr_db: Sequence[float] = (40.0, 30.0, 20.0, 10.0),
+    trials: int = 200,
+    n_components: int = 6,
+    seed: int = 20260914,
+    distortion: tuple[str, float] | None = None,
+    output_dir: Path | str | None = None,
+) -> ValidationReport:
+    """Validate linear prediction and optionally write its run artifacts.
+
+    The returned report provides text and strict-JSON-compatible summaries
+    of the same sweep. Set ``output_dir`` to write ``summary.json`` and,
+    when Bokeh is available, a validation figure.
+    """
+    sweeps = (
+        validation_sweep(
+            samples=samples,
+            snr_db=snr_db,
+            trials=trials,
+            n_components=n_components,
+            seed=seed,
+            distortion=distortion,
+        ),
+    )
+    summary = (
+        build_summary(sweeps)
+        if output_dir is None
+        else write_validation_run(output_dir, sweeps)
+    )
+    return ValidationReport(sweeps=sweeps, summary=summary)
 
 
 def _source_provenance() -> tuple[str | None, bool | None]:
