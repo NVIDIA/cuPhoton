@@ -403,6 +403,10 @@ def run_dragon_work_items(
                     results_queue,
                 ),
                 policy=policy,
+                # Native Dragon workers use their own transport. Keep Python
+                # multiprocessing unpatched so local spawn children receive
+                # ordinary queues and can complete their bootstrap.
+                env={"DRAGON_PATCH_MP": ""},
             )
             if len(template.argdata) > _TEMPLATE_BUDGET_BYTES:
                 raise ValueError(
