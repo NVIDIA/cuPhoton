@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 
 import numpy as np
@@ -35,6 +36,52 @@ def test_cli_help(capsys):
     assert main([]) == 0
     captured = capsys.readouterr()
     assert "GPU-accelerated X-ray detector analysis tools" in captured.out
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    ("command_name", "marker"),
+    [
+        ("DataProbeCommand", "on"),
+        ("LinearPredictionValidateCommand", "samples"),
+        ("ModelOrderSweepCommand", "trace_count"),
+        ("SubspaceBenchmarkCommand", "trace_count"),
+    ],
+)
+def test_report_commands_use_injected_output(
+    command_name, marker, as_json, tmp_path, capsys
+):
+    from cuphoton.xray import commands
+
+    options = {"json": as_json}
+    if command_name == "DataProbeCommand":
+        h5py = pytest.importorskip("h5py")
+        with h5py.File(tmp_path / "cube.h5", "w") as handle:
+            handle.create_dataset("imgs", data=np.zeros((2, 3, 4)))
+        options.update(h5dir=tmp_path, fon="cube.h5", foff="cube.h5")
+    elif command_name == "LinearPredictionValidateCommand":
+        options.update(samples=48, snr_db="30", trials=2)
+    else:
+        time, rows = synthetic_trace_batch(samples=48, traces=2)
+        paths = [tmp_path / f"trace-{index}.npz" for index in range(2)]
+        for path, trace in zip(paths, rows, strict=True):
+            np.savez(path, time=time, trace=trace)
+        options["trace_npz"] = paths
+        if command_name == "ModelOrderSweepCommand":
+            options["component_values"] = [2, 4]
+
+    output, error = io.StringIO(), io.StringIO()
+    command = getattr(commands, command_name)(output=output, error=error)
+    command.start(options)
+
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == error.getvalue() == ""
+    text = output.getvalue()
+    assert text.endswith("\n")
+    if as_json:
+        assert isinstance(json.loads(text), dict)
+    else:
+        assert marker in text
 
 
 def test_app_spec_uses_canonical_namespace():
