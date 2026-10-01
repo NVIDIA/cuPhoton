@@ -62,6 +62,7 @@ more than one license.
 | `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
 | `dev` | `setuptools>=83.0.0` | `83.0.0` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
+| `dev` | `virtualenv>=21.7.12` | `21.7.12` | `MIT` | [virtualenv](https://github.com/pypa/virtualenv) | `uv / PyPI; pre-commit environment creation` |
 | `dev` | `pytest>=8.3` | `9.1.1` | `MIT` | [pytest](https://github.com/pytest-dev/pytest) | `uv / PyPI` |
 | `dev` | `ruff>=0.15.12` | `0.15.20` | `MIT` | [Ruff](https://github.com/astral-sh/ruff) | `uv / PyPI` |
 | `dev` | `mypy==1.19.1` | `1.19.1` | `MIT` | [mypy](https://github.com/python/mypy) | `uv / PyPI` |
