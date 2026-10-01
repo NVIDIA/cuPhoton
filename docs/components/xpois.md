@@ -48,10 +48,19 @@ to require xDR. With `--backend cpu`, automatic reading uses Astropy.
 The option also applies to batch, MPI and Dragon execution. NPY inputs keep
 their existing loading path.
 
-`--xdr-postprocess auto|fused|separate` selects xDR's postprocessing path
-when xDR is the active reader. Python workflows and `BatchFitOptions` accept
-`xdr_options={"postprocess": "separate"}`; batch workers retain these choices.
-Omitting the option uses xDR's default without changing FITS reader selection.
+FITS commands accept `--xdr-postprocess`, `--xdr-gzip-decoder`, and
+`--xdr-decompression-backend` when xDR is the active reader. Python workflows
+and `BatchFitOptions` accept the corresponding `xdr_options` keys
+`postprocess`, `gzip_decoder`, and `decompression_backend`. For a CUDA-only
+decoding comparison, pass `--xdr-decompression-backend cuda` or
+`xdr_options={"decompression_backend": "cuda"}`. See
+[xDR runtime choices](xdr.md#runtime-choices) for all values and automatic
+capability selection.
+
+Configure batch choices through the command flags or `BatchFitOptions`;
+they apply to every pair and are retained by MPI and Dragon workers.
+Omitted keys use xDR defaults. These controls leave the `fits_reader` policy
+in charge of reader selection.
 
 Image, variance and mask HDU selection stays the same. `summary.json` records
 `fits_reader` and `fits_reads`, including the reader used and any fallback.

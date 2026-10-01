@@ -69,6 +69,39 @@ another reader. Check file accessibility, the selected HDU, and the native
 error. GPUDirect Storage also requires host and storage configuration; use
 `KVIKIO_COMPAT_MODE=ON` for ordinary file I/O when GDS is not configured.
 
+### An explicit compression choice is unavailable
+
+`--xdr-gzip-decoder gzip` requires native Gzip support;
+`--xdr-decompression-backend cuda` requires an extension with backend selection.
+An importable extension may predate those entry points. After updating a source
+checkout, rebuild it with the [native build instructions](components/xdr.md#native-extension-availability)
+in the environment running your command. Use `auto` when capability fallback
+is acceptable. A Python prefetcher still performs GPU decoding, and an `auto`
+backend in a report does not prove that a hardware decompression engine ran.
+See [runtime choices](components/xdr.md#runtime-choices) for the separate
+reader, decoder and backend policies.
+
+### Confirm the decompression engine
+
+Enable [nvCOMP logging](https://docs.nvidia.com/cuda/nvcomp/getting_started.html#logging)
+for a diagnostic run. Level 5 includes API calls as well as informational
+messages; use a separate log file to keep them out of the command output:
+
+```bash
+NVCOMP_LOG_LEVEL=5 NVCOMP_LOG_FILE=nvcomp.log \
+  cuphoton xdr benchmark-fits --hdu-indices 1 \
+  --xdr-gzip-decoder gzip --xdr-decompression-backend auto exposure.fits
+```
+
+In nvCOMP 5.2, `Trying HW decompression` records an attempt, while
+`Launching HW decompression` and `HW Decompression successful` identify
+hardware execution. `launching SM decompression` identifies the CUDA path.
+Inspect the messages for the measured calls; a hardware attempt alone does
+not prove success. Compare with `--xdr-decompression-backend cuda`, and disable
+logging for timings. See [hardware eligibility](components/xdr.md#hardware-eligibility-and-diagnostics)
+for buffer and tile-size requirements. FITS receipts retain requested choices,
+including choices that did not apply when the selected reader was Astropy.
+
 ## A command rejected the input
 
 Use the component inspection or validation command before the expensive step.

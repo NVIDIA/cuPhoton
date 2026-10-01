@@ -12,6 +12,7 @@ benchmarks HDU 1; use ``--hdu-indices 1,2,3`` for multi-extension FITS files.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import json
 import os
 import platform
@@ -164,6 +165,7 @@ class _BatchOptions(TypedDict):
     native_batcher: str | bool
     postprocess: str
     gzip_decoder: str
+    decompression_backend: str
 
 
 def parse_hdu_indices(value: str) -> tuple[int, ...]:
@@ -422,6 +424,7 @@ def bench_batch_load(
     data_mb: float,
     postprocess: str = "auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
 ) -> PhaseResult:
     fn = batch_to_device_stream if use_stream else batch_to_device
     phase = "batch_to_device_stream" if use_stream else "batch_to_device"
@@ -435,13 +438,14 @@ def bench_batch_load(
         native_batcher=native_batcher,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
+        decompression_backend=decompression_backend,
     )
 
     times: list[float] = []
     note = (
         f"{len(paths)} files x {len(tuple(hdu_indices))} HDUs, "
         f"native_batcher={native_batcher}, postprocess={postprocess}, "
-        f"gzip_decoder={gzip_decoder}"
+        f"gzip_decoder={gzip_decoder}, backend={decompression_backend}"
     )
     with nvtx_range(f"xdr.{phase}"):
         try:
@@ -549,6 +553,60 @@ def _nvcomp_version() -> str | None:
         return None
 
 
+def _hardware_decompression_capabilities() -> dict[
+    str, int | bool | str | None
+]:
+    """Query device support, independently of the engine used by nvCOMP."""
+    result: dict[str, int | bool | str | None] = {
+        "algorithm_mask": None,
+        "supports_deflate": None,
+        "max_chunk_bytes": None,
+        "error": None,
+    }
+    try:
+        ordinal = int(cp.cuda.runtime.getDevice())
+        driver = ctypes.CDLL("libcuda.so.1")
+        driver.cuDeviceGet.argtypes = [
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.c_int,
+        ]
+        driver.cuDeviceGet.restype = ctypes.c_int
+        driver.cuDeviceGetAttribute.argtypes = [
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        driver.cuDeviceGetAttribute.restype = ctypes.c_int
+        device = ctypes.c_int()
+        status = driver.cuDeviceGet(ctypes.byref(device), ordinal)
+        if status != 0:
+            raise RuntimeError(f"cuDeviceGet returned CUDA error {status}")
+
+        def attribute(identifier: int) -> int:
+            value = ctypes.c_int()
+            status = driver.cuDeviceGetAttribute(
+                ctypes.byref(value), identifier, device.value
+            )
+            if status != 0:
+                raise RuntimeError(
+                    f"cuDeviceGetAttribute({identifier}) returned "
+                    f"CUDA error {status}"
+                )
+            return value.value
+
+        # CUDA Driver API: MEM_DECOMPRESS_ALGORITHM_MASK / MAXIMUM_LENGTH.
+        # CU_MEM_DECOMPRESS_ALGORITHM_DEFLATE is bit 0 of the mask.
+        mask, maximum = attribute(136), attribute(137)
+        result.update(
+            algorithm_mask=mask,
+            supports_deflate=bool(mask & 1),
+            max_chunk_bytes=maximum,
+        )
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def run_benchmark(
     fits_files: Sequence[str | Path],
     *,
@@ -564,6 +622,7 @@ def run_benchmark(
     native_batcher: str = "auto",
     postprocess: str = "auto",
     gzip_decoder: str = "auto",
+    decompression_backend: str = "auto",
     mock_storage_kind: str | None = None,
     skip_gds_read: bool = False,
     output_json: Path | None = None,
@@ -574,10 +633,21 @@ def run_benchmark(
     ``output_json`` requires an existing parent directory. Report metadata
     is collected after the timed phases so it cannot warm their native
     helpers; the return value remains a list of phases.
+
+    ``postprocess``, ``gzip_decoder`` and ``decompression_backend`` use the
+    choices documented by :func:`cuphoton.xdr.batch_to_device_stream`. They
+    affect the two batch-load phases, independently of planner/raw-read
+    phases. JSON ``options`` records the requested values; ``auto`` does not
+    identify the actual nvCOMP engine. Keep inputs and scheduling fixed and
+    vary one control at a time when comparing implementations.
     """
 
     normalize_xdr_options(
-        {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+        {
+            "postprocess": postprocess,
+            "gzip_decoder": gzip_decoder,
+            "decompression_backend": decompression_backend,
+        }
     )
     paths = resolve_paths(
         fits_files,
@@ -656,6 +726,7 @@ def run_benchmark(
                 native_batcher=resolved_native_batcher,
                 postprocess=postprocess,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 use_stream=False,
                 data_mb=total_data_mb,
             )
@@ -673,6 +744,7 @@ def run_benchmark(
                 native_batcher=resolved_native_batcher,
                 postprocess=postprocess,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 use_stream=True,
                 data_mb=total_data_mb,
             )
@@ -701,6 +773,9 @@ def run_benchmark(
                     "cpp_helper_available": cpp_helper_available(),
                     "gds_active": gds_active,
                     "gds_probe": "cuphoton.xdr.is_gds_active",
+                    "hardware_decompression": (
+                        _hardware_decompression_capabilities()
+                    ),
                 },
                 "storage": {
                     "mode": storage_mode,
@@ -717,6 +792,7 @@ def run_benchmark(
                     "native_batcher": native_batcher,
                     "postprocess": postprocess,
                     "gzip_decoder": gzip_decoder,
+                    "decompression_backend": decompression_backend,
                     "native_batcher_enabled": batcher_enabled,
                     "native_batcher_error": batcher_error,
                     "skip_gds_read": skip_gds_read,
