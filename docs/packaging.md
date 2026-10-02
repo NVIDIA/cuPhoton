@@ -3,15 +3,17 @@
 The release build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
 x86-64 and ARM64) plus one source archive. Wheels target glibc 2.28 or later.
 The runtime dependencies may impose a newer glibc floor; the installed-wheel
-CI tests use Debian 12. Native conda builds cover the same six Python and
-architecture combinations, as described below. Free-threaded Python, Windows,
-and macOS are outside both matrices.
+CI tests use Debian 12. Local native Conda builds cover the same six Python
+and architecture combinations, as described below. Version 0.1.3 packages
+are published on PyPI; Conda channel publication is not configured.
+Free-threaded Python, Windows, and macOS are outside both matrices.
 
 Each wheel contains `cuphoton.xdr._nvcomp_batch_ext` and a privately renamed,
 reentrant CFITSIO 4.7.0 shared library. CUDA, cuFile, KvikIO, and nvCOMP remain
 in their upstream wheels, installed through `cuphoton[io]`. `cuphoton[gpu]`
 also includes the photometry, PyTorch, and Numba backends. Installing Photutils
-from PyPI currently requires a source build and C compiler on ARM64;
+from PyPI currently requires a source build, C compiler, and Python
+development headers on ARM64;
 `cuphoton` and `cuphoton[io]` do not install it. Conda provides ARM64 Photutils
 binaries.
 

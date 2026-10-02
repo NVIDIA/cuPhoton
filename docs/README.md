@@ -18,7 +18,7 @@ requirements.
 
 - [Getting started](getting-started.md): prerequisites and installation
   profiles.
-- [Packaging](packaging.md): native wheels, Conda packages, source builds,
+- [Packaging](packaging.md): native wheels, local Conda builds, source builds,
   and release procedures.
 - [Quickstarts](quickstarts.md): data-independent CPU and GPU smoke runs.
 - Imaging walkthrough:

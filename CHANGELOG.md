@@ -2,8 +2,8 @@
 
 ## 0.1.3
 
-These changes are relative to 0.1.2. Install from the checkout until 0.1.3
-packages are published.
+These changes are relative to 0.1.2. Version 0.1.3 is available on
+[PyPI](https://pypi.org/project/cuphoton/0.1.3/).
 
 ### Breaking changes
 
@@ -20,7 +20,7 @@ packages are published.
 
 - Native Linux x86-64 and ARM64 wheels include the xDR extension and a
   private, thread-safe CFITSIO library for CPython 3.12, 3.13, and 3.14.
-  Native Conda packages cover the same Python and architecture matrix.
+  Release packages are distributed through PyPI.
   Source and editable installs still require an explicit native build.
 - The `io`, `gpu`, `cutile`, `mpi`, and `dragon` extras separate GPU I/O,
   numerical backends, and distributed runtimes. This release supports CUDA
