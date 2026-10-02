@@ -13,7 +13,7 @@ cfitsio_build_dir=$(mktemp -d)
 trap 'rm -rf "$cfitsio_build_dir"' EXIT
 
 cd "$cfitsio_build_dir"
-curl --fail --location --retry 3 \
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' \
   --output cfitsio.tar.gz \
   "https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-${cfitsio_version}.tar.gz"
 printf '%s  cfitsio.tar.gz\n' "$cfitsio_sha256" | sha256sum --check --strict
