@@ -31,13 +31,25 @@ Changes in 0.1.3 include:
   manifests for xFit and direct FITS inference through xScan's Python API.
 - A reusable GPU context connecting xPois, xFit, and xScan, with persistent
   Dragon or MPI workers for supported batch workflows.
-- Native Linux wheels and Conda packages, spatially varying image matching,
+- Native Linux wheels, spatially varying image matching,
   optional cuTile fitting, and expanded xRay fitting and diagnostics.
 
-See the [changelog](CHANGELOG.md) for migration details. Until the release is
-published, use the source checkout instructions below.
+Version 0.1.3 is available on [PyPI](https://pypi.org/project/cuphoton/0.1.3/).
+See the [changelog](CHANGELOG.md) for migration details.
 
 ## Start here
+
+For GPU workflows with visualization on Linux, use CPython 3.12, 3.13, or
+3.14 and a CUDA 13-compatible NVIDIA driver:
+
+```bash
+python -m pip install --only-binary=cuphoton 'cuphoton[gpu,viz]==0.1.3'
+```
+
+See [Installation profiles](#installation-profiles) for other dependency
+profiles and ARM64 compiler requirements.
+
+### Run repository examples
 
 [uv](https://docs.astral.sh/uv/) manages the supported development
 environments and lock file. On a Linux system with a CUDA 13-capable driver:
@@ -172,20 +184,21 @@ upstream release has no Python 3.14 wheel.
 | `viz` | Bokeh reviews and Pillow image outputs |
 
 Linux x86-64 and ARM64 wheels include the native xDR extension and a private,
-thread-safe CFITSIO library. After the first PyPI release is published, install
-it with the commands below. Until then, use the checkout instructions above:
+thread-safe CFITSIO library. Install the profile needed for your workflow:
 
 ```bash
 python -m pip install cuphoton          # CPU data workflows
-python -m pip install 'cuphoton[io]'    # GPU FITS loading
 python -m pip install 'cuphoton[gpu]'   # CuPy, Numba, PyTorch, I/O and photometry
+python -m pip install 'cuphoton[gpu,viz]'  # GPU workflows with visualization
+python -m pip install 'cuphoton[io]'    # GPU FITS loading only
 python -m pip install 'cuphoton[gpu,mpi]'  # Also install MPI Python bindings
 python -m pip install 'cuphoton[gpu,dragon]'  # Python 3.12 or 3.13
 ```
 
 The `io` profile needs a CUDA 13-compatible NVIDIA driver, but no compiler,
 system CFITSIO, or locally installed CUDA toolkit. On ARM64, Photutils currently
-builds from source; `photometry` and `gpu` therefore need a C compiler.
+builds from source; `photometry` and `gpu` therefore need a C compiler and
+Python development headers.
 Free-threaded Python, Windows, and macOS wheels are not provided.
 
 Typical editable installs are:
