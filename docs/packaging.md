@@ -37,6 +37,14 @@ a development version. There is no version constant to bump: builds generate
 Git. An unbuilt source checkout reports `0.0.0.dev0` until installed or built;
 a Git-free copy without archive metadata cannot produce a release.
 
+On `main` and topic branches, development builds target the next minor
+release: commits after `v0.1.3` produce `0.2.0.devN+gHASH`. Detached
+development checkouts use the same policy. A matching `X.Y.x` maintenance
+branch instead advances the patch or release-candidate version, so commits
+after `v0.1.3` on `0.1.x` produce `0.1.4.devN+gHASH`. The existing `0.1.x`
+branch retains its patch-based version configuration, including for detached
+builds. Exact release and release-candidate tags retain their tagged versions.
+
 Release CI explicitly selects the triggering tag's version. This also works
 when an RC tag and a final tag refer to the same commit. A final release needs
 a new build and qualification because its version and metadata change; do not

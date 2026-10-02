@@ -73,7 +73,7 @@ def source(tmp_path: Path) -> Path:
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("excluded source-only file\n")
-    _run("git", "init", cwd=source)
+    _run("git", "init", "--initial-branch=main", cwd=source)
     _run("git", "config", "user.name", "Packaging Tests", cwd=source)
     _run("git", "config", "user.email", "tests@example.org", cwd=source)
     _run("git", "config", "commit.gpgsign", "false", cwd=source)
@@ -178,24 +178,41 @@ def test_event_version_selects_rc_or_final_on_same_commit(
     assert _run("git", "rev-parse", "HEAD", cwd=source).stdout == head
 
 
+@pytest.mark.parametrize(
+    ("branch", "release"),
+    [
+        ("main", (0, 2, 0)),
+        ("codex/versioning", (0, 2, 0)),
+        (None, (0, 2, 0)),
+        ("0.1.x", (0, 1, 4)),
+    ],
+)
 def test_untagged_descendant_is_next_development_version(
-    source: Path, tmp_path: Path
+    source: Path,
+    tmp_path: Path,
+    branch: str | None,
+    release: tuple[int, int, int],
 ) -> None:
-    _run("git", "tag", "v0.1.2", cwd=source)
+    _run("git", "tag", "v0.1.3", cwd=source)
+    if branch is None:
+        _run("git", "checkout", "--detach", cwd=source)
+    elif branch != "main":
+        _run("git", "checkout", "-b", branch, cwd=source)
     (source / "README.md").write_text("Development change\n")
     _run("git", "add", "README.md", cwd=source)
     _run("git", "commit", "-m", "Development change", cwd=source)
     wheel = _build(source, tmp_path / "wheel", "wheel")
     version = Version(_wheel_version(wheel, tmp_path / "installed"))
-    assert version.release == (0, 1, 3)
+    assert version.release == release
     assert version.dev == 1
     assert version.local is not None
 
 
+@pytest.mark.parametrize("tag", ["v0.1.3beta0", "v0.1.x"])
 def test_unrecognized_release_tag_is_rejected(
-    source: Path, tmp_path: Path
+    source: Path, tmp_path: Path, tag: str
 ) -> None:
-    _run("git", "tag", "v0.1.3beta0", cwd=source)
+    _run("git", "tag", tag, cwd=source)
     with pytest.raises(subprocess.CalledProcessError):
         _build(source, tmp_path / "wheel", "wheel")
 
