@@ -77,8 +77,10 @@ def test_fits_builder_cli_reader_override(
     args = [command, "--manifest", "inputs.json", "--output-dir", "dataset"]
     if reader is not None:
         args.extend(["--fits-reader", reader])
+    args.extend(["--xdr-postprocess", "fused"])
     assert _run_cli(args) == 0
     assert received[0]["fits_reader"] == reader
+    assert received[0]["xdr_options"] == {"postprocess": "fused"}
     received.clear()
     assert _run_cli([*args, "--fits-reader", "gds"]) != 0
     assert not received

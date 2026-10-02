@@ -24,6 +24,7 @@ from cuphoton.core.bulk import (
     json_mapping,
     read_json_mapping,
 )
+from cuphoton.core.fits_options import normalize_xdr_options
 
 from .api import DipoleFitResult, _floating_dtype, fit_dipoles
 from .io import (
@@ -62,6 +63,7 @@ _DEFAULTS = {
     "max_evaluations": None,
     "use_finite_difference": False,
     "fits_reader": "auto",
+    "xdr_options": None,
 }
 
 
@@ -103,6 +105,9 @@ def _plan_xfit_chunks(
         raise ValueError("unsupported xFit compute dtype")
     if settings["fits_reader"] not in {"auto", "astropy", "xdr"}:
         raise ValueError("unsupported xFit FITS reader")
+    xdr_options = normalize_xdr_options(settings.pop("xdr_options"))
+    if xdr_options:
+        settings["xdr_options"] = xdr_options
     fits_plan = None
     if Path(input_path).suffix.lower() == ".json":
         from .fits_input import plan_fits_input
@@ -182,6 +187,7 @@ def _load_input(options: Mapping[str, Any], *, device=False) -> XFitDataset:
         reader_options = {
             "reader": settings["fits_reader"] if device else "astropy",
             "device": device,
+            "xdr_options": settings.get("xdr_options"),
         }
     dataset = load_xfit_dataset(
         options["input_path"],

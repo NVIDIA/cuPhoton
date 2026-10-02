@@ -123,8 +123,11 @@ def test_fits_planning_does_not_decode_or_initialize_a_gpu(
     assert len(spec.options_payload["input_sources"]) == 1
 
 
+@pytest.mark.parametrize(
+    "xdr_options", [None, {}, {"postprocess": "separate"}]
+)
 def test_worker_reads_fits_only_after_binding_and_requests_device(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, xdr_options
 ):
     path, _, _, _, _ = _input(tmp_path)
 
@@ -146,13 +149,62 @@ def test_worker_reads_fits_only_after_binding_and_requests_device(
 
     monkeypatch.setattr(executor, "load_xfit_dataset", load)
     items, options = executor.plan_xfit_chunks(
-        path, chunk_size=1, fit_options={"fits_reader": "xdr"}
+        path,
+        chunk_size=1,
+        fit_options={
+            "fits_reader": "xdr",
+            "xdr_options": xdr_options,
+        },
     )
     worker = executor.XFitWorker(options)
     assert calls[0]["device"] is True
     assert calls[0]["reader"] == "xdr"
+    assert calls[0]["xdr_options"] == (xdr_options or None)
     assert len(items) == 2
     worker.close()
+
+
+def test_empty_xdr_options_preserve_configuration_and_work_items(tmp_path):
+    path, _, _, _, _ = _input(tmp_path)
+    items, options = executor.plan_xfit_chunks(
+        path, chunk_size=1, fit_options={}
+    )
+    assert "xdr_options" not in options["fit_options"]
+    for empty in (None, {}):
+        same_items, same_options = executor.plan_xfit_chunks(
+            path, chunk_size=1, fit_options={"xdr_options": empty}
+        )
+        assert same_options == options
+        assert same_items == items
+
+    changed_items, changed_options = executor.plan_xfit_chunks(
+        path,
+        chunk_size=1,
+        fit_options={"xdr_options": {"postprocess": "separate"}},
+    )
+    assert (
+        changed_options["configuration_sha256"]
+        != options["configuration_sha256"]
+    )
+    assert changed_items != items
+
+
+@pytest.mark.parametrize(
+    "override,expected",
+    [(None, "separate"), ({"postprocess": "fused"}, "fused")],
+)
+def test_fits_manifest_options_preserved_and_explicitly_overridden(
+    tmp_path, override, expected
+):
+    path, _, _, _, _ = _input(tmp_path)
+    manifest = json.loads(path.read_text())
+    manifest["xdr_options"] = {"postprocess": "auto"}
+    manifest["images"][0]["xdr_options"] = {"postprocess": "separate"}
+    path.write_text(json.dumps(manifest))
+    dataset = load_xfit_dataset(path, reader="astropy", xdr_options=override)
+    assert dataset.reader_metadata[0]["xdr_options"] == {
+        "postprocess": expected
+    }
 
 
 def test_source_hash_change_is_rejected_even_with_unchanged_stat(tmp_path):

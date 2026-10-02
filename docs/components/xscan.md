@@ -55,6 +55,11 @@ cutouts remain bounded reads, and the prepared dataset format is unchanged.
 Automatic uncompressed cutouts use Astropy sections. Explicit `xdr` requires
 supported tile-compressed cutouts and rejects uncompressed section reads.
 
+Builders also accept `--xdr-postprocess auto|fused|separate`, or the Python
+keyword `xdr_options={"postprocess": "separate"}`. A manifest's
+`xdr_options` mapping supplies defaults; explicit options override only
+their matching keys. These choices apply when the selected reader uses xDR.
+
 The raw builders (`data-build-autoscan-raw`, `data-build-nodiff-raw`, and
 `data-build-lsstcomcam-smoke`) also accept `--fits-reader auto|astropy|xdr`.
 An explicit option overrides the manifest for that run; omitting it preserves
@@ -470,6 +475,13 @@ An explicit value overrides every FITS descriptor, including variance and
 masks, before work is sent to MPI or Dragon workers or benchmark children.
 The effective policies are retained in workload identities and read receipts.
 Omitting the option preserves per-descriptor choices; NPY inputs are unchanged.
+
+FITS descriptors can additionally carry `"xdr_options": {"postprocess":
+"separate"}`. The same mapping is accepted by `predict_fits`, manifest
+execution and benchmark input loading. `--xdr-postprocess` overrides that
+key for all FITS descriptors. Effective choices travel with work items to
+MPI/Dragon workers and benchmark subprocesses, and appear in read receipts.
+HDUs grouped into one file read must use matching xDR choices.
 
 ```bash
 : "${CUDA_VISIBLE_DEVICES:?must enumerate the allocated GPUs}"

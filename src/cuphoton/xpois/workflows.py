@@ -139,6 +139,7 @@ def _prepare_kernel_inputs(
     fit_positions_path: Path | None = None,
     review: bool = False,
     fits_reader: str = "astropy",
+    xdr_options=None,
 ) -> _PreparedKernelInputs:
     prepare_start = time.perf_counter()
     input_read_sec = 0.0
@@ -201,12 +202,14 @@ def _prepare_kernel_inputs(
             hdu=reference_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         target, _, used_target_hdu = load_image_with_wcs(
             target_path,
             hdu=target_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         variance = None
         used_variance_hdu = None
@@ -216,6 +219,7 @@ def _prepare_kernel_inputs(
                 hdu=variance_hdu,
                 fits_reader=fits_reader,
                 read_metadata=fits_reads,
+                xdr_options=xdr_options,
             )
     finally:
         input_read_sec += time.perf_counter() - input_read_start
@@ -251,6 +255,7 @@ def _prepare_kernel_inputs(
                 hdu=reference_mask_hdu,
                 fits_reader=fits_reader,
                 read_metadata=fits_reads,
+                xdr_options=xdr_options,
             )
             target_mask, used_target_mask_hdu, target_plane_map = (
                 load_mask_with_planes(
@@ -258,6 +263,7 @@ def _prepare_kernel_inputs(
                     hdu=target_mask_hdu,
                     fits_reader=fits_reader,
                     read_metadata=fits_reads,
+                    xdr_options=xdr_options,
                 )
             )
         finally:
@@ -434,6 +440,7 @@ def run_constant_kernel_fit(
     als_regularization: float | None = None,
     workflow_name: str = "fit_kernel",
     run_prefix: str = "fit-kernel",
+    xdr_options=None,
 ) -> WorkflowResult:
     """Fit a kernel model and persist a reproducible subtraction run.
 
@@ -515,6 +522,7 @@ def run_constant_kernel_fit(
             kernel_shape=kernel_shape,
             review=review,
             fit_positions_path=fit_positions_path,
+            xdr_options=xdr_options,
         )
         solve_start = time.perf_counter()
         result: ConstantKernelFitResult | SpatialALSFitResult
@@ -893,6 +901,7 @@ def benchmark_constant_kernel_backends(
     als_iterations: int | None = None,
     als_tolerance: float | None = None,
     als_regularization: float | None = None,
+    xdr_options=None,
 ) -> WorkflowResult:
     """Benchmark kernel-solver backends with numerical parity checks.
 
@@ -961,6 +970,7 @@ def benchmark_constant_kernel_backends(
             auto_stamp_count=auto_stamp_count,
             auto_peak_percentile=auto_peak_percentile,
             kernel_shape=kernel_shape,
+            xdr_options=xdr_options,
         )
 
         warmup_timings_by_backend: dict[str, list[dict[str, float]]] = {}

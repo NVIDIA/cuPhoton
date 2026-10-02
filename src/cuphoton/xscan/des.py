@@ -20,6 +20,7 @@ from cuphoton.core.fits_io import (
     read_fits_images,
     validate_fits_reader,
 )
+from cuphoton.core.fits_options import merge_xdr_options
 
 from .dataset import (
     INDEX_TO_SPLIT,
@@ -89,6 +90,7 @@ def build_autoscan_dataset_from_raw(
     manifest_path: Path,
     output_dir: Path,
     fits_reader: str | None = None,
+    xdr_options=None,
 ) -> DatasetBuildResult:
     manifest = load_manifest(manifest_path)
     fits_reader = validate_fits_reader(
@@ -96,6 +98,7 @@ def build_autoscan_dataset_from_raw(
         if fits_reader is None
         else fits_reader
     )
+    xdr_options = merge_xdr_options(manifest.get("xdr_options"), xdr_options)
     fits_reads: list[dict[str, Any]] = []
     rows = load_table_rows(resolve_required_path(manifest, "records_path"))
     if not rows:
@@ -137,6 +140,7 @@ def build_autoscan_dataset_from_raw(
             hdu=search_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         template = load_stamp_or_image_cutout(
             template_path,
@@ -146,6 +150,7 @@ def build_autoscan_dataset_from_raw(
             hdu=template_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         if not difference_path:
             raise ValueError("autoScan raw rows must include difference_path")
@@ -157,6 +162,7 @@ def build_autoscan_dataset_from_raw(
             hdu=difference_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         if search.shape != template.shape or search.shape != difference.shape:
             raise ValueError(
@@ -251,6 +257,7 @@ def build_nodiff_dataset_from_raw(
     manifest_path: Path,
     output_dir: Path,
     fits_reader: str | None = None,
+    xdr_options=None,
 ) -> DatasetBuildResult:
     manifest = load_manifest(manifest_path)
     fits_reader = validate_fits_reader(
@@ -258,6 +265,7 @@ def build_nodiff_dataset_from_raw(
         if fits_reader is None
         else fits_reader
     )
+    xdr_options = merge_xdr_options(manifest.get("xdr_options"), xdr_options)
     fits_reads: list[dict[str, Any]] = []
     exposures = load_table_rows(
         resolve_required_path(manifest, "exposures_path")
@@ -304,6 +312,7 @@ def build_nodiff_dataset_from_raw(
             hdu=search_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         template = load_image_array(
             get_required_alias(
@@ -314,6 +323,7 @@ def build_nodiff_dataset_from_raw(
             hdu=template_hdu,
             fits_reader=fits_reader,
             read_metadata=fits_reads,
+            xdr_options=xdr_options,
         )
         if search.shape != template.shape:
             raise ValueError("search and template images must share a shape")
@@ -329,6 +339,7 @@ def build_nodiff_dataset_from_raw(
                 hdu=difference_hdu,
                 fits_reader=fits_reader,
                 read_metadata=fits_reads,
+                xdr_options=xdr_options,
             )
             if difference.shape != search.shape:
                 raise ValueError(
@@ -1109,6 +1120,7 @@ def load_stamp_or_image_cutout(
     hdu: str | int | None = None,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
+    xdr_options=None,
 ) -> np.ndarray:
     resolved = Path(path).expanduser().resolve()
     if resolved.suffix.lower() in {".fits", ".fit", ".fts"}:
@@ -1133,7 +1145,11 @@ def load_stamp_or_image_cutout(
                 raise ValueError("stamp exceeds image bounds")
             section = (slice(y0, y1), slice(x0, x1))
         result = read_fits_images(
-            resolved, [info.hdu], reader=fits_reader, section=section
+            resolved,
+            [info.hdu],
+            reader=fits_reader,
+            section=section,
+            xdr_options=xdr_options,
         )
         if read_metadata is not None:
             read_metadata.append(result.metadata())
@@ -1143,6 +1159,7 @@ def load_stamp_or_image_cutout(
         hdu=hdu,
         fits_reader=fits_reader,
         read_metadata=read_metadata,
+        xdr_options=xdr_options,
     )
     if array.ndim != 2:
         raise ValueError(f"array at {path} must be 2D")
@@ -1166,6 +1183,7 @@ def load_image_array(
     *,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
+    xdr_options=None,
 ) -> np.ndarray:
     """Load a host image, optionally decompressing FITS pixels with xDR."""
     resolved = Path(path).expanduser().resolve()
@@ -1176,7 +1194,9 @@ def load_image_array(
         info = inspect_fits_image(
             resolved, hdu=_resolve_fits_hdu(resolved, hdu)
         )
-        result = read_fits_images(resolved, [info.hdu], reader=fits_reader)
+        result = read_fits_images(
+            resolved, [info.hdu], reader=fits_reader, xdr_options=xdr_options
+        )
         if read_metadata is not None:
             read_metadata.append(result.metadata())
         return np.asarray(result.arrays[0])

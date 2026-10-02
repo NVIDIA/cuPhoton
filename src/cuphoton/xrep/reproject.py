@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -285,6 +286,7 @@ def reproject_fits(
     interpolation: str = "lanczos3",
     backend: str | None = None,
     fits_reader: str = "auto",
+    xdr_options: Mapping[str, str] | None = None,
     mapping_grid_step: int = 100,
     area_scaling: bool = True,
 ) -> ReprojectionResult:
@@ -310,6 +312,9 @@ def reproject_fits(
         Coarse WCS mapping interval in output pixels.
     area_scaling
         Apply relative pixel-area scaling.
+    xdr_options
+        Optional xDR runtime choices, such as ``{"postprocess": "separate"}``,
+        forwarded to image and mask reads when using the xDR reader.
 
     Returns
     -------
@@ -328,6 +333,7 @@ def reproject_fits(
         path,
         hdu=hdu,
         fits_reader=reader,
+        xdr_options=xdr_options,
         device=backend == "cupy",
         read_metadata=fits_reads,
     )
@@ -347,6 +353,7 @@ def reproject_fits(
             mask_path,
             hdu=mask_hdu,
             fits_reader=reader,
+            xdr_options=xdr_options,
             device=backend == "cupy",
             read_metadata=fits_reads,
         )
@@ -462,6 +469,7 @@ def build_stack_spec_from_fits(
     mapping_grid_step: int = 100,
     area_scaling: bool = True,
     fits_reader: str = "astropy",
+    xdr_options: Mapping[str, str] | None = None,
     device: bool = False,
     read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[list[np.ndarray], StackReprojectionSpec]:
@@ -483,6 +491,9 @@ def build_stack_spec_from_fits(
         Coarse WCS mapping interval in output pixels.
     area_scaling
         Apply relative pixel-area scaling.
+    xdr_options
+        Optional xDR runtime choices, such as ``{"postprocess": "separate"}``,
+        forwarded to every source image when using the xDR reader.
 
     Returns
     -------
@@ -501,6 +512,7 @@ def build_stack_spec_from_fits(
             path,
             hdu=hdu,
             fits_reader=fits_reader,
+            xdr_options=xdr_options,
             device=device,
             read_metadata=read_metadata,
         )

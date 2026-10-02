@@ -5,8 +5,9 @@
 """GPU-native FITS loading.
 
 Pipeline: NVMe -> GPU memory via kvikio (GPUDirect Storage) -> nvCOMP batched
-decompression on device -> CuPy kernels for GZIP_2 unshuffle, dequantize, and
-tile scatter -> cupy.ndarray. Headers remain parsed on the CPU.
+decompression on device -> pixel restoration and tile scatter (fused by
+default) -> dequantization when needed -> cupy.ndarray. Headers are parsed
+on the CPU.
 
 Scope: GZIP_1 / GZIP_2 compressed images and uncompressed ImageHDU /
 PrimaryHDU pixel data. RICE_1 and HCOMPRESS_1 are explicitly out of scope

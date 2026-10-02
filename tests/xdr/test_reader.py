@@ -475,3 +475,24 @@ def test_comp_geometry_rejects_nonpositive_dims(data_shape, tile_shape):
 
 def test_comp_geometry_accepts_positive_dims_case():
     _validate_comp_geometry((100, 100), (64, 64))
+
+
+@pytest.mark.parametrize("io_complete", [False, True])
+def test_read_completion_requires_io_before_cuda_wait(io_complete):
+    from cuphoton.xdr.reader import _ReadCompletion
+
+    waits = []
+
+    class Stream:
+        def synchronize(self):
+            waits.append("cuda")
+
+    completion = _ReadCompletion(Stream())
+    completion.io_complete = io_complete
+    if io_complete:
+        completion.synchronize()
+        assert waits == ["cuda"]
+    else:
+        with pytest.raises(RuntimeError, match="GDS I/O completes"):
+            completion.synchronize()
+        assert waits == []

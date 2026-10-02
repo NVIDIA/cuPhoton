@@ -15,6 +15,42 @@ from astropy.io import fits
 from cuphoton.core import fits_io
 
 
+@pytest.mark.parametrize("postprocess", ["fused", "separate"])
+def test_xdr_options_reach_batch_dispatch(tmp_path, monkeypatch, postprocess):
+    import cuphoton.xdr as xdr
+
+    data = np.arange(12, dtype=np.float32).reshape(3, 4)
+    path = _write(tmp_path, data, compression="GZIP_2")
+    observed = {}
+
+    def batch(paths, hdus, **options):
+        observed.update(options)
+        return [data[None]]
+
+    monkeypatch.setattr(fits_io, "_xdr_available", lambda: True)
+    monkeypatch.setattr(xdr, "batch_to_device_stream", batch)
+    result = fits_io.read_fits_images(
+        path,
+        [1],
+        reader="xdr",
+        device=True,
+        xdr_options={"postprocess": postprocess},
+    )
+    assert observed["postprocess"] == postprocess
+    assert result.metadata()["xdr_options"] == {"postprocess": postprocess}
+    np.testing.assert_array_equal(result.arrays[0], data)
+
+
+@pytest.mark.parametrize(
+    "options", ["fused", {"unknown": "auto"}, {"postprocess": True}]
+)
+def test_invalid_xdr_options_fail_before_input_access(tmp_path, options):
+    with pytest.raises(ValueError, match="xDR|xdr_options"):
+        fits_io.read_fits_images(
+            tmp_path / "missing.fits", [1], xdr_options=options
+        )
+
+
 def _write(tmp_path, array, *, compression=None, **kwargs):
     path = tmp_path / "images.fits"
     hdu = (

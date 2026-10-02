@@ -21,6 +21,8 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.core.cli.fits import xdr_option_cli_args
+
 CLI = [sys.executable, "-m", "cuphoton", "xscan", "benchmark-pipeline"]
 
 
@@ -33,6 +35,7 @@ def read_inputs(
     items_path: Path,
     *,
     fits_reader: str | None = None,
+    xdr_options=None,
 ) -> tuple[Any, list[Any]]:
     from cuphoton.xscan.device_pipeline import (
         DevicePipelineConfig,
@@ -43,7 +46,9 @@ def read_inputs(
         json.loads(config_path.read_text())
     )
     items = [
-        DevicePipelineItem.from_payload(value, fits_reader=fits_reader)
+        DevicePipelineItem.from_payload(
+            value, fits_reader=fits_reader, xdr_options=xdr_options
+        )
         for value in json.loads(items_path.read_text())
     ]
     if not items or len({item.item_id for item in items}) != len(items):
@@ -123,6 +128,7 @@ def pipeline_worker(args: SimpleNamespace) -> None:
         args.config,
         args.items,
         fits_reader=getattr(args, "fits_reader", None),
+        xdr_options=getattr(args, "xdr_options", None),
     )
     ordinal = int(config.device.split(":")[1])
     torch.set_num_threads(config.inference_policy["worker_cpu_threads"])
@@ -218,6 +224,7 @@ def measure_pipeline(args: SimpleNamespace) -> dict[str, Any]:
             "--repeat",
             str(args.repeat),
             *(["--fits-reader", reader] if reader is not None else []),
+            *xdr_option_cli_args(getattr(args, "xdr_options", None)),
         ],
         output / "process.log",
         timeout=args.timeout,
@@ -261,6 +268,9 @@ def measure_stages(args: SimpleNamespace) -> dict[str, Any]:
                             ["--fits-reader", reader]
                             if reader is not None
                             else []
+                        ),
+                        *xdr_option_cli_args(
+                            getattr(args, "xdr_options", None)
                         ),
                     ],
                     root / f"{stage}.log",
@@ -321,6 +331,7 @@ def audit(args: SimpleNamespace) -> dict[str, Any]:
         args.config,
         args.items,
         fits_reader=getattr(args, "fits_reader", None),
+        xdr_options=getattr(args, "xdr_options", None),
     )
     checks = []
     for index in range(args.warmup + args.repeat):
@@ -474,6 +485,7 @@ def run_benchmark(args: SimpleNamespace) -> None:
                 args.config,
                 args.items,
                 fits_reader=getattr(args, "fits_reader", None),
+                xdr_options=getattr(args, "xdr_options", None),
             )
             run_stage(args.stage, config, items, args.output)
         return
@@ -496,6 +508,7 @@ def run_benchmark(args: SimpleNamespace) -> None:
             args.config,
             args.items,
             fits_reader=getattr(args, "fits_reader", None),
+            xdr_options=getattr(args, "xdr_options", None),
         )
         report: dict[str, Any] = {
             "schema": "cuphoton.pipeline-stage-benchmark/v1",

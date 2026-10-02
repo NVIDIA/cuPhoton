@@ -116,7 +116,7 @@ def _plan_inputs(planes, centers_yx, candidate_ids, stamp_shape):
     return ids, shape, tuple(slices)
 
 
-def _read_planes(planes, *, reader, stream):
+def _read_planes(planes, *, reader, stream, xdr_options=None):
     groups: dict[Path, list[int]] = {}
     for plane in planes:
         groups.setdefault(plane.path, []).append(plane.hdu)
@@ -125,7 +125,12 @@ def _read_planes(planes, *, reader, stream):
     for path, hdus in groups.items():
         selected = tuple(dict.fromkeys(hdus))
         result = read_fits_images(
-            path, selected, reader=reader, device=True, stream=stream
+            path,
+            selected,
+            reader=reader,
+            device=True,
+            stream=stream,
+            xdr_options=xdr_options,
         )
         arrays.update(
             ((path, hdu), array)
@@ -178,6 +183,7 @@ def predict_fits(
     difference: FitsPlane | None = None,
     xfit_features: torch.Tensor | None = None,
     fits_reader: str = "auto",
+    xdr_options=None,
 ) -> FitsInferenceResult:
     """Crop aligned FITS planes on one GPU and run the existing tensor model.
 
@@ -241,7 +247,10 @@ def predict_fits(
                         "xfit_features must contain only finite values"
                     )
                 arrays, receipts = _read_planes(
-                    planes, reader=fits_reader, stream=producer
+                    planes,
+                    reader=fits_reader,
+                    stream=producer,
+                    xdr_options=xdr_options,
                 )
                 owners.extend(arrays)
                 stamps = _crop_planes(cp, arrays, slices, shape, owners)

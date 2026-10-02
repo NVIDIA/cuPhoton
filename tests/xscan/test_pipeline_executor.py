@@ -338,6 +338,8 @@ def test_pipeline_command_forwards_execution_options(
                 "3",
                 "--fits-reader",
                 "astropy",
+                "--xdr-postprocess",
+                "separate",
             ],
         )
         == 0
@@ -345,6 +347,7 @@ def test_pipeline_command_forwards_execution_options(
     assert json.loads(capsys.readouterr().out) == {"executor": executor}
     assert seen["run_id"] == "qualified"
     assert seen["fits_reader"] == "astropy"
+    assert seen["xdr_options"] == {"postprocess": "separate"}
     assert seen["benchmark"].to_payload() == {
         "warmup_rounds": 1,
         "measure_rounds": 3,

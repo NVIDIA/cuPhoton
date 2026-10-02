@@ -163,6 +163,8 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
             "2,1,2",
             "--native-batcher",
             "off",
+            "--xdr-postprocess",
+            "separate",
             "--mock-storage",
             "host",
             "--skip-gds-read",
@@ -183,6 +185,7 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
     ]
     assert received["hdu_indices"] == [2, 1, 2]
     assert received["native_batcher"] == "off"
+    assert received["postprocess"] == "separate"
     assert received["mock_storage_kind"] == "host"
     assert received["skip_gds_read"] is True
     assert received["output_json"] == Path("report.json")
@@ -396,6 +399,7 @@ def test_json_report_matches_returned_and_printed_phases(
         "native_read_threads": 5,
         "native_plan_threads": 6,
         "native_batcher": "auto",
+        "postprocess": "auto",
         "native_batcher_enabled": mode == "real",
         "native_batcher_error": None,
         "skip_gds_read": mode != "real",

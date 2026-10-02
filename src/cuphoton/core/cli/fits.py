@@ -2,12 +2,53 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional FITS reader overrides for manifest-driven commands."""
+"""Optional FITS reader overrides shared by FITS-consuming commands."""
+
+from cuphoton.core.fits_options import (
+    XDR_OPTION_CHOICES,
+    normalize_xdr_options,
+)
 
 from .invariants import SetInvariant
 
 
-class FitsReaderOptions:
+class XdrOptionsMixin:
+    """Optional xDR choices shared by FITS-consuming commands."""
+
+    xdr_postprocess = None
+
+    class XdrPostprocessArg(SetInvariant):
+        _arg = "--xdr-postprocess"
+        _help = (
+            "xDR postprocessing: auto, fused, or separate. Omitted preserves "
+            "input choices or uses xDR defaults; applies when the FITS "
+            "reader uses xDR."
+        )
+        _set = XDR_OPTION_CHOICES["postprocess"]
+        _default = None
+
+
+def xdr_options_from_cli(command) -> dict[str, str]:
+    """Collect explicit flags without replacing omitted manifest choices."""
+    return normalize_xdr_options(
+        {
+            name: value
+            for name in XDR_OPTION_CHOICES
+            if (value := getattr(command, f"xdr_{name}", None)) is not None
+        }
+    )
+
+
+def xdr_option_cli_args(options) -> list[str]:
+    """Serialize explicit options for a component's benchmark subprocess."""
+    return [
+        argument
+        for name, value in normalize_xdr_options(options).items()
+        for argument in (f"--xdr-{name.replace('_', '-')}", value)
+    ]
+
+
+class FitsReaderOptions(XdrOptionsMixin):
     """Preserve manifest policies unless a reader is explicitly selected."""
 
     fits_reader = None

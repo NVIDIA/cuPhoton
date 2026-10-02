@@ -22,6 +22,7 @@ from cuphoton.core.cli import (
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.fits import XdrOptionsMixin, xdr_options_from_cli
 
 from .workflows import (
     benchmark_backend_variants_reproject_image,
@@ -283,7 +284,7 @@ class InspectImageCommand(_SharedReprojectionCommand):
         self._emit_json(payload)
 
 
-class _FitsReprojectionCommand(_SharedReprojectionCommand):
+class _FitsReprojectionCommand(XdrOptionsMixin, _SharedReprojectionCommand):
     fits_reader = None
 
     class FitsReaderArg(SetInvariant):
@@ -332,6 +333,7 @@ class ReprojectImageCommand(_FitsReprojectionCommand):
             mask_hdu=self.mask_hdu,
             backend=self.backend,
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -379,6 +381,7 @@ class ReprojectStackCommand(_FitsReprojectionCommand):
             target_hdu=self.target_hdu,
             backend=self.backend,
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -425,6 +428,7 @@ class BenchmarkReprojectImageCommand(_FitsReprojectionCommand):
             mask_hdu=self.mask_hdu,
             backend=self.backend,
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,
             grid_crval_dec=self.grid_crval_dec,
@@ -512,6 +516,7 @@ class BenchmarkBackendVariantsCommand(_FitsReprojectionCommand):
             mask_hdu=self.mask_hdu,
             variants=self._csv_backend_variants(self.variants),
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
             reference_variant=self.reference_variant,
             mask_cases=self._csv_mask_cases(self.mask_cases),
             interpolation=self.interpolation,
@@ -595,6 +600,7 @@ class CompareBackendsCommand(_FitsReprojectionCommand):
             mask_hdu=self.mask_hdu,
             backends=self._csv_backends(self.backends),
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
             reference_backend=self.reference_backend,
             interpolation=self.interpolation,
             grid_crval_ra=self.grid_crval_ra,

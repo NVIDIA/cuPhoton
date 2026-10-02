@@ -5,6 +5,7 @@
 """FITS geometry inspection must not decode image payloads."""
 
 import numpy as np
+import pytest
 from astropy.io import fits
 
 from cuphoton.xrep import Grid, io, make_north_up_wcs, mapping
@@ -52,10 +53,12 @@ def test_cpu_reprojection_reads_image_once_and_retains_reader(
         grid=Grid.from_wcs(wcs),
         backend="cpu",
         interpolation="bilinear",
+        xdr_options={"postprocess": "separate"},
     )
     assert len(calls) == 1
     assert calls[0]["reader"] == "astropy"
     assert calls[0]["device"] is False
+    assert calls[0]["xdr_options"] == {"postprocess": "separate"}
     assert result.metadata["fits_reads"][0]["reader"] == "astropy"
 
 
@@ -68,8 +71,11 @@ def test_mask_host_reader_preserves_unsigned_bits(tmp_path):
     np.testing.assert_array_equal(loaded, mask)
 
 
-def test_device_image_loader_retains_reader_array_ownership(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "loader", [io.load_fits_image_with_wcs, io.load_fits_mask]
+)
+def test_device_loader_retains_reader_array_ownership_and_options(
+    tmp_path, monkeypatch, loader
 ):
     from types import SimpleNamespace
 
@@ -85,10 +91,23 @@ def test_device_image_loader_retains_reader_array_ownership(
 
     monkeypatch.setattr(io, "read_fits_images", device_read)
     receipts = []
-    array, _, _, hdu = io.load_fits_image_with_wcs(
-        path, fits_reader="xdr", device=True, read_metadata=receipts
+    array, *_, hdu = loader(
+        path,
+        fits_reader="xdr",
+        device=True,
+        read_metadata=receipts,
+        xdr_options={"postprocess": "separate"},
     )
     assert array is sentinel
     assert hdu == 0
-    assert requests == [([0], {"reader": "xdr", "device": True})]
+    assert requests == [
+        (
+            [0],
+            {
+                "reader": "xdr",
+                "device": True,
+                "xdr_options": {"postprocess": "separate"},
+            },
+        )
+    ]
     assert receipts == [{"reader": "xdr"}]

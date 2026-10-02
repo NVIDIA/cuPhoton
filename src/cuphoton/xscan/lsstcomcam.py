@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from cuphoton.core.fits_io import read_fits_images, validate_fits_reader
+from cuphoton.core.fits_options import merge_xdr_options
 
 from .butler import (
     _is_missing,
@@ -395,6 +396,7 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
     manifest_path: Path,
     output_dir: Path,
     fits_reader: str | None = None,
+    xdr_options=None,
 ) -> DatasetBuildResult:
     payload = load_manifest(manifest_path)
     fits_reader = validate_fits_reader(
@@ -402,6 +404,7 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
         if fits_reader is None
         else fits_reader
     )
+    xdr_options = merge_xdr_options(payload.get("xdr_options"), xdr_options)
     fits_reads: list[dict[str, Any]] = []
     registry_path = _registry_path_from_manifest(payload)
     sample_count = int(payload.get("sample_count", payload.get("limit", 8)))
@@ -544,6 +547,7 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
             read_metadata=fits_reads,
             center_x=sample.center_x,
             center_y=sample.center_y,
+            xdr_options=xdr_options,
         )
         difference_stamp = read_fits_stamp(
             Path(str(difference_row["path"])),
@@ -553,6 +557,7 @@ def build_lsstcomcam_smoke_dataset_from_manifest(
             read_metadata=fits_reads,
             center_x=search_stamp.center_x,
             center_y=search_stamp.center_y,
+            xdr_options=xdr_options,
         )
         if difference_stamp.image_shape != search_stamp.image_shape:
             raise ValueError(
@@ -1626,6 +1631,7 @@ def read_fits_stamp(
     center_y: int | None = None,
     fits_reader: str = "astropy",
     read_metadata: list[dict[str, Any]] | None = None,
+    xdr_options=None,
 ) -> FitsStamp:
     """Read a small centered FITS stamp without materializing full images."""
     try:
@@ -1657,6 +1663,7 @@ def read_fits_stamp(
             [used_hdu],
             reader=fits_reader,
             section=(slice(y0, y1), slice(x0, x1)),
+            xdr_options=xdr_options,
         )
         if read_metadata is not None:
             read_metadata.append(result.metadata())

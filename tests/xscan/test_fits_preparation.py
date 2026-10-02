@@ -176,6 +176,7 @@ def test_dataset_fits_reader_override_reaches_decoding_and_summary(
     expected,
 ):
     workflow, module, manifest, expected_reads = fits_dataset_builder
+    manifest["xdr_options"] = {"postprocess": "separate"}
     if manifest_reader is not None:
         manifest["fits_reader"] = manifest_reader
     path = tmp_path / "manifest.json"
@@ -185,6 +186,7 @@ def test_dataset_fits_reader_override_reaches_decoding_and_summary(
 
     def read_on_cpu(*args, reader, **kwargs):
         readers.append(reader)
+        assert kwargs["xdr_options"] == {"postprocess": "separate"}
         result = original(*args, reader="astropy", **kwargs)
         return replace(result, requested_reader=reader)
 
