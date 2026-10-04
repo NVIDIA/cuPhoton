@@ -329,6 +329,7 @@ def test_native_gaussian_fit_matches_cupy(dtype, mode):
         (17, (5, 7), "difference"),
         (193, (33, 35), "difference"),
         (769, (17, 19), "split"),
+        (193, (51, 51), "difference"),
     ],
 )
 def test_native_varied_gaussian_batches_match_cupy(count, shape, mode):
