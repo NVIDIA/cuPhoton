@@ -121,13 +121,22 @@ and multiprocessing workers contribute to the report. Compiled C++/CUDA
 code, scripts, and examples are outside this Python package measurement.
 No minimum percentage is enforced while establishing a baseline.
 
-CI collects coverage from the CPU matrix and synthetic CPU quickstarts.
-Vetted push runs also include the GPU parity tests and GPU quickstarts.
-The `Python coverage report` job combines the data and uploads
-`coverage-<commit-SHA>`, containing `coverage.xml`, the combined `.coverage`
-database, and `coverage-revision.txt`. Artifacts are retained for 14 days.
-Pull-request reports contain CPU coverage only; use a successful vetted
-push run for a report that includes GPU execution.
+Regular CI runs without coverage instrumentation. To collect a report for
+static analysis, manually run the `coverage` workflow on the desired ref:
+
+```bash
+gh workflow run coverage.yml --ref <ref>
+```
+
+It runs the CPU suite and synthetic quickstarts with Python 3.12. Maintainers
+can add `--field gpu=true` to include the GPU parity tests and GPU quickstarts
+on a separate L40G runner. Select a trusted revision before enabling GPU
+coverage. The GPU job shares the regular CI GPU queue.
+
+The report job combines the data and uploads `coverage-<commit-SHA>`,
+containing `coverage.xml`, the combined `.coverage` database,
+`coverage-revision.txt`, and `coverage-profile.txt`. The profile records
+whether GPU collection was requested. Artifacts are retained for 14 days.
 
 Download the artifact from the desired CI run before scanning that revision:
 
@@ -137,8 +146,7 @@ test "$(git rev-parse HEAD)" = "$(cat coverage-revision.txt)" && \
   echo "Coverage matches this checkout"
 ```
 
-Run this in a checkout of the recorded revision. On pull-request events,
-GitHub tests a merge commit, so use the revision recorded in the artifact.
+Run this in a checkout of the recorded revision.
 The XML report uses relative source paths so static-analysis tools can
 import it from another machine's checkout. Configure the tool's Python
 coverage input to use `coverage.xml` before running analysis.
