@@ -106,7 +106,7 @@ Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 Validation logs should be clean. If warnings are expected, describe them in the
 pull request.
 
-### Python coverage
+### Coverage for static analysis
 
 Run the CPU suite with line and branch coverage from the repository root:
 
@@ -123,8 +123,9 @@ No minimum percentage is enforced while establishing a baseline.
 
 Each CI run collects coverage once in a separate Python 3.12/Linux CPU job,
 running the CPU suite and synthetic quickstarts. The regular test matrix
-runs without coverage instrumentation. CI requires the coverage job to
-succeed and upload a report for static analysis.
+runs without coverage instrumentation. Vetted CI pushes also run one native
+xDR coverage job on an L40G runner. CI requires the applicable coverage jobs
+to succeed and upload their reports.
 
 To collect an additional report on a chosen ref, run the `coverage`
 workflow manually:
@@ -134,13 +135,15 @@ gh workflow run coverage.yml --ref <ref>
 ```
 
 Maintainers can add `--field gpu=true` to include GPU parity tests and quickstarts
-on a separate L40G runner. Select a trusted revision before enabling GPU
-coverage. The GPU job shares the regular CI GPU queue.
+and native xDR coverage on separate L40G jobs. Select a trusted revision before
+enabling GPU coverage. These jobs share the regular CI GPU queue.
 
 The report job combines the data and uploads `coverage-<commit-SHA>`,
 containing `coverage.xml`, the combined `.coverage` database,
 `coverage-revision.txt`, and `coverage-profile.txt`. The profile records
-whether GPU collection was requested. Artifacts are retained for 14 days.
+whether Python GPU collection was requested and whether native xDR coverage
+ran. When collected, `native-coverage/` contains the native Cobertura XML,
+JSON, test results, and revision. Artifacts are retained for 14 days.
 
 Download the artifact from the desired CI run before scanning that revision:
 
@@ -154,7 +157,32 @@ Run this in a checkout of the recorded revision. Pull-request CI tests a
 merge commit, so use the revision recorded in the artifact.
 The XML report uses relative source paths so static-analysis tools can
 import it from another machine's checkout. Configure the tool's Python
-coverage input to use `coverage.xml` before running analysis.
+coverage input to use `coverage.xml` and its C++ Cobertura input to use
+`native-coverage/coverage-native.xml` when present.
+
+#### Native xDR coverage
+
+On Linux with GCC, matching `gcov`, a CUDA 13-capable GPU, uv, and reentrant
+CFITSIO available, run:
+
+```bash
+CC=gcc CXX=g++ GCOV=gcov KVIKIO_COMPAT_MODE=ON \
+  CUPHOTON_XDR_CFITSIO_ROOT=/path/to/cfitsio \
+  CUDA_HOME= CUDA_PATH= make test-xdr-coverage
+```
+
+The target installs the pinned native build dependencies and uses their CUDA
+SDK headers. It sets `CUPHOTON_XDR_BUILD_EXT=1` and
+`CUPHOTON_XDR_COVERAGE=1` to compile xDR with GCC line/branch counters and
+atomic counter updates. It builds into `build/xdr-coverage/`, runs native FITS
+read, decompression, and buffer-ownership tests, and exports
+`coverage-native.xml` and `coverage-native.json` there. The run fails if tests
+skip or any xDR C++ source file has no measured execution. Normal builds use
+the existing optimized compiler flags.
+
+This measures xDR's host C++ code. CUDA device kernels and third-party
+libraries are outside the report. CI uses KvikIO compatibility-mode reads;
+these tests do not establish GPUDirect Storage coverage.
 
 ### GPU CI
 
