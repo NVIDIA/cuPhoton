@@ -74,6 +74,7 @@ dragon = [
   "dragonhpc>=0.14.2,<0.15",
 ]
 dev = [
+  "coverage>=7.10.6,<8",
   "mypy==1.19.1",
   "setuptools>=83.0.0",
   "pre-commit>=4.0",
@@ -177,6 +178,18 @@ markers = [
 ]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/cuphoton"]
+relative_files = true
+parallel = true
+concurrency = ["multiprocessing", "thread"]
+patch = ["subprocess"]
+omit = ["src/cuphoton/_version.py"]
+
+[tool.coverage.xml]
+output = "coverage.xml"
 
 [tool.cibuildwheel]
 build = "cp312-manylinux_* cp313-manylinux_* cp314-manylinux_*"
