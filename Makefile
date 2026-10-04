@@ -56,7 +56,7 @@ coverage-report:
 	$(UV_RUN) --extra dev coverage report
 
 test-xdr-coverage:
-	$(UV_RUN) $(GPU_EXTRAS) bash scripts/coverage/xdr.sh
+	$(UV_RUN) --extra dev --extra io bash scripts/coverage/xdr.sh
 
 test-core:
 	$(UV_RUN) $(CORE_EXTRAS) pytest tests/core
