@@ -5,6 +5,12 @@
 name: coverage
 
 on:
+  workflow_call:
+    inputs:
+      gpu:
+        description: Include GPU tests and quickstarts
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       gpu:
@@ -16,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: coverage-${{ github.ref }}
+  group: coverage-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

@@ -121,15 +121,19 @@ and multiprocessing workers contribute to the report. Compiled C++/CUDA
 code, scripts, and examples are outside this Python package measurement.
 No minimum percentage is enforced while establishing a baseline.
 
-Regular CI runs without coverage instrumentation. To collect a report for
-static analysis, manually run the `coverage` workflow on the desired ref:
+Each CI run collects coverage once in a separate Python 3.12/Linux CPU job,
+running the CPU suite and synthetic quickstarts. The regular test matrix
+runs without coverage instrumentation. CI requires the coverage job to
+succeed and upload a report for static analysis.
+
+To collect an additional report on a chosen ref, run the `coverage`
+workflow manually:
 
 ```bash
 gh workflow run coverage.yml --ref <ref>
 ```
 
-It runs the CPU suite and synthetic quickstarts with Python 3.12. Maintainers
-can add `--field gpu=true` to include the GPU parity tests and GPU quickstarts
+Maintainers can add `--field gpu=true` to include GPU parity tests and quickstarts
 on a separate L40G runner. Select a trusted revision before enabling GPU
 coverage. The GPU job shares the regular CI GPU queue.
 
@@ -146,7 +150,8 @@ test "$(git rev-parse HEAD)" = "$(cat coverage-revision.txt)" && \
   echo "Coverage matches this checkout"
 ```
 
-Run this in a checkout of the recorded revision.
+Run this in a checkout of the recorded revision. Pull-request CI tests a
+merge commit, so use the revision recorded in the artifact.
 The XML report uses relative source paths so static-analysis tools can
 import it from another machine's checkout. Configure the tool's Python
 coverage input to use `coverage.xml` before running analysis.
