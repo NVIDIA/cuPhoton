@@ -127,7 +127,12 @@ def test_native_build_is_enabled_independently(
         str(cccl / "thrust"),
         str(root / "include"),
     ]
-    assert "src/cuphoton/xfit/src/native_norm.cu" in extension.depends
+    assert {
+        "src/cuphoton/xfit/src/native_norm.cu",
+        "src/cuphoton/xfit/src/native_jacobian.h",
+        "src/cuphoton/xfit/src/native_jacobian.cu",
+        "src/cuphoton/xfit/src/native_jacobian_lean.cu",
+    } <= set(extension.depends)
     assert "build_ext" in captured["cmdclass"]
 
 
@@ -195,12 +200,16 @@ def test_native_build_requires_explicit_complete_cccl(monkeypatch, tmp_path):
         _helpers().get_extensions()
 
 
-def test_both_cuda_objects_relink_and_restore_dependencies(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("architectures", [None, "89", "100;120"])
+def test_cuda_targets_math_flags_and_relink_dependencies(
+    monkeypatch, tmp_path, architectures
 ):
     monkeypatch.setenv("CUDA_HOME", str(_toolkit(tmp_path)))
     monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
-    monkeypatch.setenv("CUPHOTON_XFIT_CUDA_ARCHS", "120")
+    if architectures is None:
+        monkeypatch.delenv("CUPHOTON_XFIT_CUDA_ARCHS", raising=False)
+    else:
+        monkeypatch.setenv("CUPHOTON_XFIT_CUDA_ARCHS", architectures)
     helper = _helpers()
     (extension,) = helper.get_extensions()
     previous_objects, previous_depends = (
@@ -209,19 +218,54 @@ def test_both_cuda_objects_relink_and_restore_dependencies(
     )
     command = helper.CUDABuildExt(setuptools.Distribution())
     command.build_temp = str(tmp_path / "build")
-    compiled = []
+    compiled = {}
 
     def compile_object(arguments):
-        compiled.append(Path(arguments[arguments.index("-c") + 1]).name)
+        source = Path(arguments[arguments.index("-c") + 1]).name
+        assert source not in compiled
+        compiled[source] = arguments
         Path(arguments[arguments.index("-o") + 1]).touch()
 
     def fail_link(self, linked):
-        assert compiled == ["native.cu", "native_norm.cu"]
+        assert set(compiled) == {
+            "native.cu",
+            "native_norm.cu",
+            "native_jacobian.cu",
+            "native_jacobian_lean.cu",
+        }
         assert {Path(path).name for path in linked.extra_objects} == {
             "native.o",
             "native_norm.o",
+            "native_jacobian.o",
+            "native_jacobian_lean.o",
         }
         assert all(path in linked.depends for path in linked.extra_objects)
+        portable_targets = {
+            None: {"75"},
+            "89": {"89"},
+            "100;120": {"100", "120"},
+        }[architectures]
+        for source, arguments in compiled.items():
+            specialized = source.startswith("native_jacobian")
+            targets = {"100"} if specialized else portable_targets
+            ptx_target = max(targets, key=int)
+            assert {
+                flag
+                for flag in arguments
+                if flag.startswith("--generate-code=")
+            } == {
+                *(
+                    f"--generate-code=arch=compute_{target},code=sm_{target}"
+                    for target in targets
+                ),
+                f"--generate-code=arch=compute_{ptx_target},"
+                f"code=compute_{ptx_target}",
+            }
+            assert f"--fmad={str(source == 'native.cu').lower()}" in arguments
+            assert f"--ftz={str(not specialized).lower()}" in arguments
+            assert ("-DCUB_DISABLE_BF16_SUPPORT" in arguments) == (
+                source == "native_norm.cu"
+            )
         raise RuntimeError("link failed")
 
     monkeypatch.setattr(command, "spawn", compile_object)

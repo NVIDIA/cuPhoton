@@ -116,7 +116,11 @@ CUPHOTON_XFIT_BUILD_EXT=1 CUPHOTON_XFIT_CUDA_ARCHS=120 \
 The architecture setting accepts comma-separated CUDA architecture numbers;
 `120` targets compute capability 12.0. The build also retains PTX for its
 highest selected architecture. Its default is `75`. Install the wheel into
-the matching Python environment together with CuPy for CUDA 13. The CUDA
+the matching Python environment together with CuPy for CUDA 13. FP64 fits
+on compute capability 10.0 with thread-block cluster support also use a fused
+Jacobian and equation-packing kernel, built separately for SM 100 with
+compute 100 PTX. Other devices and
+FP32 fits use the portable native kernels. The CUDA
 runtime and cuBLAS libraries (`libcudart.so.13`, `libcublas.so.13`, and
 `libcublasLt.so.13`) must be on the loader's library path, for
 example through `LD_LIBRARY_PATH="$CUDA_HOME/lib64"`. Ordinary and

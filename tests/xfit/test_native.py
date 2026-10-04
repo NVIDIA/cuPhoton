@@ -323,6 +323,40 @@ def test_native_gaussian_fit_matches_cupy(dtype, mode):
     _assert_fit_matches(actual, expected, dtype)
 
 
+@pytest.mark.parametrize(
+    "count,shape,mode",
+    [
+        (17, (5, 7), "difference"),
+        (193, (33, 35), "difference"),
+        (769, (17, 19), "split"),
+    ],
+)
+def test_native_varied_gaussian_batches_match_cupy(count, shape, mode):
+    _require_native()
+    model, truth, _, initial = _fixture(shape=shape, mode=mode)
+    repeats = ((count + 1) // 2, 1)
+    truth = np.tile(truth, repeats)[:count].copy()
+    initial = np.tile(initial, repeats)[:count].copy()
+    # Each row has distinct source positions and amplitudes so comparison
+    # against the reference detects misplaced rows throughout the batch.
+    offsets = np.linspace(-0.125, 0.125, count)
+    for parameters in (truth, initial):
+        parameters[:, 0] += offsets
+        parameters[:, 4:] += offsets[:, None] * [1.0, -0.5, 0.25, -1.0]
+    images = model.evaluate(truth, mode=mode)
+    options = dict(
+        model=model,
+        initial=initial,
+        mode=mode,
+        variance=np.full(images.shape, 0.5),
+        config=LMConfig(max_evaluations=4),
+    )
+    expected = fit_dipoles(images, backend="cupy", **options)
+    actual = fit_dipoles(images, backend="native", **options)
+    assert (actual.evaluations > 1).all()
+    _assert_fit_matches(actual, expected)
+
+
 def test_native_fit_with_bright_overlapping_lobes():
     _require_native()
     shape = (51, 51)
@@ -413,6 +447,59 @@ def test_native_failure_statuses_and_diagnostics_match_cupy(case):
         assert actual.evaluations.tolist() == [1, 1]
     elif case == "nonfinite":
         assert actual.status.tolist() == ["invalid_residual"] * 2
+
+
+@pytest.mark.parametrize(
+    "bad_rows",
+    [(0,), (1,), (2,), (0, 1, 2)],
+    ids=["first", "middle", "last", "all"],
+)
+def test_native_filters_nonfinite_jacobians_without_reordering_rows(bad_rows):
+    cp = _require_native()
+    from cuphoton.xfit._native import last_timings
+
+    model, truth, _, initial = _fixture()
+    truth = np.concatenate((truth, truth[:1]))
+    initial = np.concatenate((initial, initial[:1]))
+    # Distinct amplitudes make a survivor-row permutation observable.
+    truth[:, 0] += np.arange(3)
+    initial[:, 0] += np.arange(3)
+    images = model.evaluate(truth)
+    bad = np.zeros(3, dtype=bool)
+    bad[list(bad_rows)] = True
+    # Inverse squared widths remain finite, while cubed widths underflow.
+    # These rows reach Jacobian filtering after valid initial residuals.
+    initial[bad, 1:3] = 1.0e-110
+    reference = model.to_backend("cupy")
+    assert bool(
+        cp.isfinite(reference.evaluate(initial) - cp.asarray(images)).all()
+    )
+    finite_jacobian = cp.asnumpy(
+        cp.isfinite(reference.jacobian(initial)).reshape(3, -1).all(axis=1)
+    )
+    np.testing.assert_array_equal(finite_jacobian, ~bad)
+    options = dict(
+        model=model,
+        initial=initial,
+        variance=np.full(images.shape, 0.5),
+        config=LMConfig(max_evaluations=2, f_tol=0, x_tol=0, g_tol=0),
+    )
+    expected = fit_dipoles(images, backend="cupy", **options)
+    actual = fit_dipoles(images, backend="native", **options)
+    _assert_fit_matches(actual, expected)
+    np.testing.assert_array_equal(
+        actual.status, np.where(bad, "invalid_residual", "max_evaluations")
+    )
+    np.testing.assert_array_equal(actual.evaluations, np.where(bad, 1, 2))
+    assert last_timings()["iterations"] == (1 if bad.all() else 2)
+    if not bad.all():
+        assert np.all(
+            np.max(np.abs(actual.parameters[~bad] - initial[~bad]), axis=1)
+            > 1.0e-4
+        )
+    assert actual.backend == "native"
+    for name in ("parameter_names", "device", "dtype", "model", "mode"):
+        assert getattr(actual, name) == getattr(expected, name)
 
 
 def test_repeated_calls_own_outputs_and_recover_after_invalid_configuration():
