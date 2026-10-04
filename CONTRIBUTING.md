@@ -106,6 +106,43 @@ Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 Validation logs should be clean. If warnings are expected, describe them in the
 pull request.
 
+### Python coverage
+
+Run the CPU suite with line and branch coverage from the repository root:
+
+```bash
+make test-cpu-coverage
+```
+
+This clears previous coverage data and writes `coverage.xml` in Cobertura
+format. Coverage includes Python under `src/cuphoton`, including unexecuted
+modules, and excludes the generated `_version.py`. Child Python processes
+and multiprocessing workers contribute to the report. Compiled C++/CUDA
+code, scripts, and examples are outside this Python package measurement.
+No minimum percentage is enforced while establishing a baseline.
+
+CI collects coverage from the CPU matrix and synthetic CPU quickstarts.
+Vetted push runs also include the GPU parity tests and GPU quickstarts.
+The `Python coverage report` job combines the data and uploads
+`coverage-<commit-SHA>`, containing `coverage.xml`, the combined `.coverage`
+database, and `coverage-revision.txt`. Artifacts are retained for 14 days.
+Pull-request reports contain CPU coverage only; use a successful vetted
+push run for a report that includes GPU execution.
+
+Download the artifact from the desired CI run before scanning that revision:
+
+```bash
+gh run download <run-id> --name coverage-<commit-SHA> --dir .
+test "$(git rev-parse HEAD)" = "$(cat coverage-revision.txt)" && \
+  echo "Coverage matches this checkout"
+```
+
+Run this in a checkout of the recorded revision. On pull-request events,
+GitHub tests a merge commit, so use the revision recorded in the artifact.
+The XML report uses relative source paths so static-analysis tools can
+import it from another machine's checkout. Configure the tool's Python
+coverage input to use `coverage.xml` before running analysis.
+
 ### GPU CI
 
 Pull requests first run CPU and package checks on GitHub-hosted runners.

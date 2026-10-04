@@ -75,13 +75,22 @@ jobs:
       - run: >-
           uv sync --locked --python "${PYTHON_VERSION}"
           --extra dev --extra torch --extra viz --extra photometry
-      - run: make ci-test-cpu
+      - run: uv run --no-sync coverage erase
+      - run: make ci-test-cpu PYTEST="coverage run -m pytest"
       - name: Run synthetic CPU quickstarts
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
         run: >-
           uv run --locked --extra dev --extra torch --extra viz --extra photometry
-          python examples/run_quickstarts.py --profile cpu
+          coverage run examples/run_quickstarts.py --profile cpu
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - name: Upload CPU coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.name }}-py${{ matrix.python }}-${{ github.sha }}
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   test-gpu:
     name: xFit and GPU quickstarts / L40G / py3.12
@@ -149,9 +158,10 @@ jobs:
           assert float((tensor * tensor).sum().item()) == 1240.0
           print("CuPy and PyTorch CUDA kernels and DLPack passed")
           PY
+      - run: uv run --no-sync coverage erase
       - name: Run xFit GPU parity tests
         run: >-
-          uv run --no-sync pytest -q -rs
+          uv run --no-sync coverage run -m pytest -q -rs
           --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
           tests/xfit/test_models.py::test_cupy_fit_matches_numpy_when_cuda_is_available
           tests/xfit/test_models.py::test_cupy_finite_difference_theta_fix_matches_numpy
@@ -194,8 +204,16 @@ jobs:
           PY
       - name: Run synthetic GPU quickstarts
         run: >-
-          uv run --no-sync python examples/run_quickstarts.py
+          uv run --no-sync coverage run examples/run_quickstarts.py
           --require-gpu --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - name: Upload GPU coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-gpu-l40g-py3.12-${{ github.sha }}
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -205,6 +223,49 @@ jobs:
             ${{ runner.temp }}/xfit-gpu.xml
             ${{ runner.temp }}/xfit-native-gpu.xml
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  coverage:
+    name: Python coverage report
+    needs: [test-cpu, test-gpu]
+    if: >-
+      ${{ !cancelled() && needs.test-cpu.result == 'success' &&
+          (needs.test-gpu.result == 'success' ||
+           (needs.test-gpu.result == 'skipped' &&
+            !(github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --locked --extra dev --python 3.12
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*-${{ github.sha }}
+          path: coverage-data
+          merge-multiple: true
+      - name: Combine coverage and export Cobertura XML
+        run: |
+          uv run --no-sync coverage combine coverage-data
+          uv run --no-sync coverage xml
+          uv run --no-sync coverage report
+          git rev-parse HEAD > coverage-revision.txt
+      - name: Upload coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            coverage.xml
+            coverage-revision.txt
+            .coverage
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
@@ -219,7 +280,7 @@ jobs:
   ci-required:
     # PR checks do not satisfy the merge gate before GPU qualification.
     name: ${{ github.event_name == 'pull_request' && 'ci-pr-checks' || 'ci-required' }}
-    needs: [lint, test-cpu, test-gpu, package, conda]
+    needs: [lint, test-cpu, test-gpu, coverage, package, conda]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -229,11 +290,12 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
           GPU_RESULT: ${{ needs.test-gpu.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
           REQUIRE_GPU: ${{ github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton' }}
           PACKAGE_RESULT: ${{ needs.package.result }}
           CONDA_RESULT: ${{ needs.conda.result }}
         run: |
-          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
+          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${COVERAGE_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done
           if [ "${REQUIRE_GPU}" = true ]; then

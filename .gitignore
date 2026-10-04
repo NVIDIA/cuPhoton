@@ -9,6 +9,10 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.coverage.*
+/coverage.xml
+/coverage-data/
+/coverage-revision.txt
 htmlcov/
 build/
 dist/
