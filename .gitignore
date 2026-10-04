@@ -12,6 +12,7 @@ __pycache__/
 .coverage.*
 /coverage.xml
 /coverage-data/
+/native-coverage/
 /coverage-revision.txt
 /coverage-profile.txt
 htmlcov/
