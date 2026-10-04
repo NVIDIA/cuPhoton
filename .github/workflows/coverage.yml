@@ -199,7 +199,7 @@ jobs:
           version: "0.12.1"
           enable-cache: false
       - run: uv python install 3.12
-      - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+      - run: uv sync --locked --python 3.12 --extra dev --extra io
       - name: Build reentrant CFITSIO
         env:
           CUPHOTON_XDR_CFITSIO_ROOT: ${{ runner.temp }}/cfitsio
