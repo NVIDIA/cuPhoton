@@ -98,10 +98,10 @@ class CUDABuildExt(build_ext):
         for name, fmad, ftz, architectures in (
             ("native", _MAIN_FMAD, _MAIN_FTZ, extension.architectures),
             ("native_norm", _NORM_FMAD, True, extension.architectures),
-            # The FP64 Jacobian specialization uses its qualified SM 100
-            # target independently of the portable kernels above.
-            ("native_jacobian", False, False, (100,)),
-            ("native_jacobian_lean", False, False, (100,)),
+            # Match native transcendental contraction; explicit RN intrinsics
+            # preserve the Jacobian's individual arithmetic boundaries.
+            ("native_jacobian", True, False, (100,)),
+            ("native_jacobian_lean", True, False, (100,)),
         ):
             architecture_flags = [
                 f"--generate-code=arch=compute_{architecture},"

@@ -261,7 +261,10 @@ def test_cuda_targets_math_flags_and_relink_dependencies(
                 f"--generate-code=arch=compute_{ptx_target},"
                 f"code=compute_{ptx_target}",
             }
-            assert f"--fmad={str(source == 'native.cu').lower()}" in arguments
+            assert (
+                f"--fmad={str(source != 'native_norm.cu').lower()}"
+                in arguments
+            )
             assert f"--ftz={str(not specialized).lower()}" in arguments
             assert ("-DCUB_DISABLE_BF16_SUPPORT" in arguments) == (
                 source == "native_norm.cu"
