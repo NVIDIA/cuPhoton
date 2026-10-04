@@ -11,7 +11,7 @@ VIZ_EXTRAS = --extra dev --extra viz --extra photometry
 UV_RUN = uv run --locked
 PYTEST = pytest
 
-.PHONY: test-cpu-coverage coverage-report
+.PHONY: test-cpu-coverage test-xdr-coverage coverage-report
 
 sync:
 	uv sync --locked $(CPU_EXTRAS)
@@ -54,6 +54,9 @@ coverage-report:
 	$(UV_RUN) --extra dev coverage combine
 	$(UV_RUN) --extra dev coverage xml
 	$(UV_RUN) --extra dev coverage report
+
+test-xdr-coverage:
+	$(UV_RUN) $(GPU_EXTRAS) bash scripts/coverage/xdr.sh
 
 test-core:
 	$(UV_RUN) $(CORE_EXTRAS) pytest tests/core
