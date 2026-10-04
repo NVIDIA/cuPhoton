@@ -13,6 +13,7 @@ __pycache__/
 /coverage.xml
 /coverage-data/
 /coverage-revision.txt
+/coverage-profile.txt
 htmlcov/
 build/
 dist/
