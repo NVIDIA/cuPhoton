@@ -313,6 +313,7 @@ def _find_cfitsio_paths():
 
 
 def get_extensions():
+    coverage = os.environ.get("CUPHOTON_XDR_COVERAGE", "0") == "1"
     cuda_include, cuda_lib = _find_cuda_toolkit()
     cufile_include = _find_cufile_include(cuda_include)
     package_paths = _find_gpu_package_paths()
@@ -353,13 +354,18 @@ def get_extensions():
                 ("KVIKIO_CUFILE_VERSION_API_FOUND", "1"),
             ],
             extra_compile_args=[
-                "-O3",
+                *(
+                    ["-O0", "-g", "--coverage", "-fprofile-update=atomic"]
+                    if coverage
+                    else ["-O3"]
+                ),
                 "-Wall",
                 "-std=c++17",
                 "-fvisibility=hidden",
                 "-pthread",
             ],
             extra_link_args=[
+                *(["--coverage"] if coverage else []),
                 "-pthread",
                 "-l:libnvcomp.so.5",
                 "-l:libkvikio.so",
