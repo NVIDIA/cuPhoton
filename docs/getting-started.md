@@ -14,14 +14,14 @@ also available for integration into an existing environment.
 
 ## Install a release
 
-Version 0.1.3 is available on [PyPI](https://pypi.org/project/cuphoton/0.1.3/).
-Install the profile needed for your workflow:
+Once the [0.1.3 GitHub release](https://github.com/NVIDIA/cuPhoton/releases/tag/v0.1.3)
+is published, download the wheel matching your CPython version and Linux
+architecture. Until then, use the [checkout instructions](#clone-and-select-a-profile).
+Install the downloaded file, replacing `<tags>` with its wheel tags:
 
 ```bash
-python -m pip install cuphoton
-python -m pip install 'cuphoton[gpu]'  # GPU workflows, including FITS I/O
-python -m pip install 'cuphoton[gpu,viz]'  # GPU workflows with visualization
-python -m pip install 'cuphoton[io]'  # Native GPU FITS loading only
+python -m pip install './cuphoton-0.1.3-<tags>.whl[gpu,viz]'
+python -m pip install './cuphoton-0.1.3-<tags>.whl[io]'  # Native GPU FITS loading only
 ```
 
 The Linux x86-64 and ARM64 wheels include the xDR extension and private
@@ -29,7 +29,7 @@ CFITSIO. `io` installs the CUDA 13 runtime dependencies; no compiler or local
 CUDA toolkit is needed. GPU execution still requires a compatible NVIDIA
 driver. See [xDR](components/xdr.md) for GPUDirect Storage requirements.
 
-Install `cuphoton[photometry]` for source detection, background estimation,
+Select the `photometry` extra for source detection, background estimation,
 and aperture photometry. It uses Photutils, which currently requires a C
 compiler and Python development headers on ARM64. The broader `gpu` profile
 includes `io` and `photometry`.

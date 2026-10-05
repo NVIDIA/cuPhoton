@@ -87,10 +87,14 @@ reader by default.
 
 ## Install
 
-Install the I/O profile from PyPI for GPU FITS loading:
+Once the [0.1.3 GitHub release](https://github.com/NVIDIA/cuPhoton/releases/tag/v0.1.3)
+is published, download the wheel matching your CPython version and Linux
+architecture, then install its I/O profile for GPU FITS loading. Replace
+`<tags>` below with the downloaded wheel's tags. Until then, use the source
+checkout instructions below:
 
 ```bash
-python -m pip install 'cuphoton[io]'
+python -m pip install './cuphoton-0.1.3-<tags>.whl[io]'
 ```
 
 Linux x86-64 and ARM64 wheels for CPython 3.12–3.14 include the native

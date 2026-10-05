@@ -2,14 +2,14 @@
 
 ## 0.1.3
 
-These changes are relative to 0.1.2. Version 0.1.3 is available on
-[PyPI](https://pypi.org/project/cuphoton/0.1.3/).
+These changes are relative to 0.1.2. Python wheels for 0.1.3 will be available
+as GitHub release assets. Until the release is published, install from the checkout.
 
 ### Breaking changes
 
 - Python 3.11 is no longer supported. Use Python 3.12, 3.13, or 3.14.
-- Photutils is now optional and is no longer installed by `pip install cuphoton`.
-  Install `cuphoton[photometry]` for CPU photometry or `cuphoton[gpu]` for the
+- Photutils is now optional and is no longer part of the base installation.
+  Select the `photometry` extra for CPU photometry or `gpu` for the
   combined GPU and photometry dependencies.
 - xDR's Legate-backed HDF5 loader has been removed. Use `h5py` for local HDF5
   reads and explicitly transfer arrays to a GPU when needed. xRay continues
@@ -20,7 +20,7 @@ These changes are relative to 0.1.2. Version 0.1.3 is available on
 
 - Native Linux x86-64 and ARM64 wheels include the xDR extension and a
   private, thread-safe CFITSIO library for CPython 3.12, 3.13, and 3.14.
-  Release packages are distributed through PyPI.
+  Release wheels are distributed as GitHub release assets.
   Source and editable installs still require an explicit native build.
 - The `io`, `gpu`, `cutile`, `mpi`, and `dragon` extras separate GPU I/O,
   numerical backends, and distributed runtimes. This release supports CUDA

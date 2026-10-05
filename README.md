@@ -34,22 +34,11 @@ Changes in 0.1.3 include:
 - Native Linux wheels, spatially varying image matching,
   optional cuTile fitting, and expanded xRay fitting and diagnostics.
 
-Version 0.1.3 is available on [PyPI](https://pypi.org/project/cuphoton/0.1.3/).
-See the [changelog](CHANGELOG.md) for migration details.
+See the [changelog](CHANGELOG.md) for migration details. Python wheels for
+0.1.3 will be available as GitHub release assets. Until the release is
+published, use the source checkout instructions below.
 
 ## Start here
-
-For GPU workflows with visualization on Linux, use CPython 3.12, 3.13, or
-3.14 and a CUDA 13-compatible NVIDIA driver:
-
-```bash
-python -m pip install --only-binary=cuphoton 'cuphoton[gpu,viz]==0.1.3'
-```
-
-See [Installation profiles](#installation-profiles) for other dependency
-profiles and ARM64 compiler requirements.
-
-### Run repository examples
 
 [uv](https://docs.astral.sh/uv/) manages the supported development
 environments and lock file. On a Linux system with a CUDA 13-capable driver:
@@ -95,7 +84,7 @@ xDataReader (`cuphoton.xdr`) reads selected images from local FITS files,
 decodes supported compression, and applies byte-order and scaling rules to
 produce CuPy arrays. Use it to feed a GPU workflow while retaining the headers
 and scientific metadata in your application. Linux release wheels include its
-native FITS extension; install `cuphoton[io]` for the GPU runtime dependencies.
+native FITS extension; select the `io` extra for the GPU runtime dependencies.
 Whether reads use native GPUDirect Storage depends on the storage and driver
 configuration.
 
@@ -184,16 +173,17 @@ upstream release has no Python 3.14 wheel.
 | `viz` | Bokeh reviews and Pillow image outputs |
 
 Linux x86-64 and ARM64 wheels include the native xDR extension and a private,
-thread-safe CFITSIO library. Install the profile needed for your workflow:
+thread-safe CFITSIO library. Once the [0.1.3 GitHub release](https://github.com/NVIDIA/cuPhoton/releases/tag/v0.1.3)
+is published, download the wheel matching your CPython version and architecture,
+then install the local file with the extras you need:
 
 ```bash
-python -m pip install cuphoton          # CPU data workflows
-python -m pip install 'cuphoton[gpu]'   # CuPy, Numba, PyTorch, I/O and photometry
-python -m pip install 'cuphoton[gpu,viz]'  # GPU workflows with visualization
-python -m pip install 'cuphoton[io]'    # GPU FITS loading only
-python -m pip install 'cuphoton[gpu,mpi]'  # Also install MPI Python bindings
-python -m pip install 'cuphoton[gpu,dragon]'  # Python 3.12 or 3.13
+python -m pip install './cuphoton-0.1.3-<tags>.whl[gpu,viz]'
 ```
+
+Replace `<tags>` with the downloaded wheel's tags. Use `io` for GPU FITS
+loading, `gpu,mpi` or `gpu,dragon` for distributed GPU workflows, or omit
+the extras for CPU data workflows. See the table above for each profile.
 
 The `io` profile needs a CUDA 13-compatible NVIDIA driver, but no compiler,
 system CFITSIO, or locally installed CUDA toolkit. On ARM64, Photutils currently
