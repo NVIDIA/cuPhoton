@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import tarfile
 import zipfile
@@ -17,6 +18,10 @@ from pathlib import Path
 ABIS = ("cp312", "cp313", "cp314")
 ARCHITECTURES = ("x86_64", "aarch64")
 LICENSES = {"LICENSE", "THIRD_PARTY_NOTICES.md"}
+# Full upstream text: https://github.com/pybind/pybind11/blob/v3.0.4/LICENSE
+PYBIND11_LICENSE_SHA256 = (
+    "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb"
+)
 SOURCES = {
     "setup.py",
     "pyproject.toml",
@@ -39,6 +44,19 @@ BINARY = re.compile(r"\.(?:so(?:\.\d+)*|a|o|pyd|dll|dylib|whl|pyc|pyo)$")
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def check_pybind11_notice(content, artifact):
+    blocks = re.findall(
+        rb"```text\n(.*?)```", content.replace(b"\r\n", b"\n"), re.DOTALL
+    )
+    require(
+        any(
+            hashlib.sha256(block).hexdigest() == PYBIND11_LICENSE_SHA256
+            for block in blocks
+        ),
+        f"{artifact}: missing or altered full pybind11 license notice",
+    )
 
 
 def check_metadata(content, version, artifact, license_expression):
@@ -98,7 +116,7 @@ def check_wheel(path):
             archive.read(info + "METADATA"),
             version,
             path.name,
-            "Apache-2.0 AND CFITSIO",
+            "Apache-2.0 AND CFITSIO AND BSD-3-Clause",
         )
         wheel = BytesParser().parsebytes(archive.read(info + "WHEEL"))
         require(
@@ -126,9 +144,11 @@ def check_wheel(path):
             f"{path.name}: unexpected bundled binaries: "
             f"{sorted(binaries - {native} - cfitsio)}",
         )
+        notices = archive.read(info + "licenses/THIRD_PARTY_NOTICES.md")
+        check_pybind11_notice(notices, path.name)
         require(
             b"Permission to freely use, copy, modify, and distribute"
-            in archive.read(info + "licenses/THIRD_PARTY_NOTICES.md"),
+            in notices,
             f"{path.name}: missing CFITSIO notice",
         )
     return (abi, arch), version
@@ -154,6 +174,10 @@ def check_sdist(path):
         require(
             not binaries,
             f"{path.name}: source archive contains binaries: {binaries}",
+        )
+        check_pybind11_notice(
+            archive.extractfile(prefix + "THIRD_PARTY_NOTICES.md").read(),
+            path.name,
         )
         check_metadata(
             archive.extractfile(prefix + "PKG-INFO").read(),

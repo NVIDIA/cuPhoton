@@ -147,6 +147,46 @@ cuPhoton wheels.
 | Package | Version or version range | License identifier | Upstream | Use in cuPhoton | Distribution |
 | --- | --- | --- | --- | --- | --- |
 | `CFITSIO` | The local wheel recipe bundles `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
+| `pybind11` | Native wheel builds use `3.0.4`. | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11/tree/v3.0.4) | C++ bindings for the xDR extension. | Header code is compiled into the native extension; its copyright and license notice follow below. No separate pybind11 runtime package is bundled. |
+
+### pybind11 copyright and license notice
+
+The following notice is reproduced from the
+[pybind11 3.0.4 LICENSE](https://github.com/pybind/pybind11/blob/v3.0.4/LICENSE).
+The final upstream paragraph refers to
+[pybind11's contribution guidance](https://github.com/pybind/pybind11/blob/v3.0.4/.github/CONTRIBUTING.md).
+
+```text
+Copyright (c) 2016 Wenzel Jakob <wenzel.jakob@epfl.ch>, All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Please also refer to the file .github/CONTRIBUTING.md, which clarifies licensing of
+external contributions to this project including patches, pull requests, etc.
+```
 
 ### CFITSIO copyright and license notice
 
@@ -219,8 +259,9 @@ For a CPU-only development environment, replace `gpu` with `torch`.
 `make build` creates a source distribution containing cuPhoton's extension
 sources and the pinned native build recipe. `make wheels` builds the native
 Linux wheels from that archive. Each wheel includes the xDR extension and a
-privately renamed CFITSIO shared library, with the license notice above. The
-source archive and wheels include `LICENSE` and this notice file.
+privately renamed CFITSIO shared library, plus compiled pybind11 binding code.
+The source archive and wheels include `LICENSE` and this notice file, including
+the CFITSIO and pybind11 notices above.
 
 DragonHPC, `mpi4py`, MPI, and CUDA runtime libraries are installed separately.
 A development source build links against the available CFITSIO and CUDA

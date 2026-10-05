@@ -72,10 +72,12 @@ def include_bundled_license(wheel: Path) -> None:
         original = b"License-Expression: Apache-2.0"
         if content.partition(b"\n\n")[0].splitlines().count(original) != 1:
             raise RuntimeError(
-                "Expected Apache-2.0 license before bundling CFITSIO"
+                "Expected Apache-2.0 license before adding native licenses"
             )
         metadata.write_bytes(
-            content.replace(original, original + b" AND CFITSIO", 1)
+            content.replace(
+                original, original + b" AND CFITSIO AND BSD-3-Clause", 1
+            )
         )
         subprocess.run(
             [
