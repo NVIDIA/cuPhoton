@@ -1,9 +1,11 @@
 # Native packages
 
-The 0.1.3 release distributes Python wheels and its source archive as GitHub
-release assets. PyPI publication is not part of this release.
+Version 0.1.3 is a source-only release. It does not include binary wheels or
+PyPI packages. Follow the [source checkout instructions](getting-started.md#clone-and-select-a-profile)
+to install it. The procedures below describe local package build and
+qualification tooling.
 
-The release build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
+The wheel build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
 x86-64 and ARM64) plus one source archive. Wheels target glibc 2.28 or later.
 The runtime dependencies may impose a newer glibc floor; the installed-wheel
 CI tests use Debian 12. Local native Conda builds cover the same six Python

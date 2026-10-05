@@ -2,8 +2,8 @@
 
 ## 0.1.3
 
-These changes are relative to 0.1.2. Python wheels for 0.1.3 will be available
-as GitHub release assets. Until the release is published, install from the checkout.
+These changes are relative to 0.1.2. Version 0.1.3 is a source-only release;
+follow the [checkout instructions](docs/getting-started.md#clone-and-select-a-profile).
 
 ### Breaking changes
 
@@ -18,10 +18,10 @@ as GitHub release assets. Until the release is published, install from the check
 
 ### Installation and development
 
-- Native Linux x86-64 and ARM64 wheels include the xDR extension and a
-  private, thread-safe CFITSIO library for CPython 3.12, 3.13, and 3.14.
-  Release wheels are distributed as GitHub release assets.
-  Source and editable installs still require an explicit native build.
+- Local native package build tooling covers Linux x86-64 and ARM64 for
+  CPython 3.12, 3.13, and 3.14. The wheel recipe includes the xDR extension
+  and a private, thread-safe CFITSIO library. Source and editable installs
+  require an explicit native xDR build.
 - The `io`, `gpu`, `cutile`, `mpi`, and `dragon` extras separate GPU I/O,
   numerical backends, and distributed runtimes. This release supports CUDA
   13; cuTile needs a compatible TileIR compiler. Dragon requires Python

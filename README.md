@@ -31,12 +31,11 @@ Changes in 0.1.3 include:
   manifests for xFit and direct FITS inference through xScan's Python API.
 - A reusable GPU context connecting xPois, xFit, and xScan, with persistent
   Dragon or MPI workers for supported batch workflows.
-- Native Linux wheels, spatially varying image matching,
-  optional cuTile fitting, and expanded xRay fitting and diagnostics.
+- Spatially varying image matching, optional cuTile fitting, and expanded
+  xRay fitting and diagnostics.
 
-See the [changelog](CHANGELOG.md) for migration details. Python wheels for
-0.1.3 will be available as GitHub release assets. Until the release is
-published, use the source checkout instructions below.
+Version 0.1.3 is a source-only release. Install from the checkout as shown
+below; see the [changelog](CHANGELOG.md) for migration details.
 
 ## Start here
 
@@ -44,11 +43,13 @@ published, use the source checkout instructions below.
 environments and lock file. On a Linux system with a CUDA 13-capable driver:
 
 ```bash
-git clone https://github.com/NVIDIA/cuPhoton.git
+git clone --branch v0.1.3 https://github.com/NVIDIA/cuPhoton.git
 cd cuPhoton
 uv sync --locked --extra dev --extra gpu --extra viz
 uv run python examples/run_quickstarts.py
 ```
+
+Omit `--branch v0.1.3` to work with the current development sources.
 
 The quickstart creates synthetic inputs for xRep, xPois, xFit, xScan, and
 xRay, then writes results to `quickstart-output/`. xDataReader has a separate
@@ -83,8 +84,9 @@ instructions and require a CUDA 13-capable NVIDIA GPU and xDR's native extension
 xDataReader (`cuphoton.xdr`) reads selected images from local FITS files,
 decodes supported compression, and applies byte-order and scaling rules to
 produce CuPy arrays. Use it to feed a GPU workflow while retaining the headers
-and scientific metadata in your application. Linux release wheels include its
-native FITS extension; select the `io` extra for the GPU runtime dependencies.
+and scientific metadata in your application. Select the `io` extra for GPU
+runtime dependencies and [build the native FITS extension](docs/components/xdr.md#install)
+from the checkout.
 Whether reads use native GPUDirect Storage depends on the storage and driver
 configuration.
 
@@ -172,24 +174,12 @@ upstream release has no Python 3.14 wheel.
 | `dragon` | DragonHPC runtime on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |
 
-Linux x86-64 and ARM64 wheels include the native xDR extension and a private,
-thread-safe CFITSIO library. Once the [0.1.3 GitHub release](https://github.com/NVIDIA/cuPhoton/releases/tag/v0.1.3)
-is published, download the wheel matching your CPython version and architecture,
-then install the local file with the extras you need:
-
-```bash
-python -m pip install './cuphoton-0.1.3-<tags>.whl[gpu,viz]'
-```
-
-Replace `<tags>` with the downloaded wheel's tags. Use `io` for GPU FITS
-loading, `gpu,mpi` or `gpu,dragon` for distributed GPU workflows, or omit
-the extras for CPU data workflows. See the table above for each profile.
-
-The `io` profile needs a CUDA 13-compatible NVIDIA driver, but no compiler,
-system CFITSIO, or locally installed CUDA toolkit. On ARM64, Photutils currently
-builds from source; `photometry` and `gpu` therefore need a C compiler and
-Python development headers.
-Free-threaded Python, Windows, and macOS wheels are not provided.
+Select extras with `uv sync` from the checkout. The `io` and `gpu` profiles
+install GPU runtime dependencies; xDR's native FITS extension requires a
+separate [source build](docs/components/xdr.md#install). GPU execution needs
+a CUDA 13-compatible NVIDIA driver. On ARM64, Photutils currently builds
+from source; `photometry` and `gpu` therefore need a C compiler and Python
+development headers.
 
 Typical editable installs are:
 
@@ -210,9 +200,8 @@ uv sync --locked --extra dev --extra gpu --extra cutile
 
 Only CUDA 13 dependency variants are supported by this release.
 
-Source checkouts require an explicit native xDR build. See the
-[xDR installation guide](docs/components/xdr.md) and
-[native wheel build and release procedure](docs/packaging.md).
+See the [xDR installation guide](docs/components/xdr.md) for native build
+prerequisites and [Packaging](docs/packaging.md) for local package builds.
 
 ## Python and command-line interfaces
 
