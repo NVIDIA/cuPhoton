@@ -748,7 +748,7 @@ selection remains a launcher option; `--executor dragon` cannot change the
 transport of an already running Dragon session. The worker wall-time limit
 covers the entire invocation, including warmups and all measured rounds.
 
-See [Dragon transport and coordination](../dragon.md) for native HSTA TCP
+See [Dragon transport and performance](../dragon-performance.md) for native HSTA TCP
 launch options, consumer-local queues in the persistent executors,
 and measurement boundaries.
 

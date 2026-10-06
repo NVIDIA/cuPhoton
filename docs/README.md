@@ -44,10 +44,15 @@ requirements.
 ## Adapting and validating
 
 - [Architecture](architecture.md): package boundaries and execution model.
-- [Distributed execution](distributed-execution.md): prepare a pipeline
+- [Distributed architecture](distributed.md): work assignment, GPU ownership,
+  data movement and completion.
+- [Dragon architecture](dragon.md): process placement, GPU sharing with MPS,
+  queues and worker lifecycle.
+- [MPI architecture](mpi.md): rank binding, collective coordination and file mode.
+- [Distributed launch guide](distributed-execution.md): prepare a pipeline
   manifest and launch MPI or Dragon workers using Slurm or SSH host files.
-- [Dragon transport and coordination](dragon.md): execution models,
-  consumer-local queues, transport selection, and timing boundaries.
+- [Dragon transport and performance](dragon-performance.md): transport selection,
+  queue placement experiments and timing boundaries.
 - [Pipeline stage benchmark](components/pipeline-stage-benchmark.md): compare
   a persistent GPU pipeline with separate stages and inspect transfer costs.
 - [Adapting the workflows](adapting-workflows.md): a practical extension

@@ -3,7 +3,9 @@
 The xPois, xFit and xScan pipeline assigns complete image pairs to GPU
 workers. Each worker loads its model once and processes its assigned pairs
 through subtraction, dipole fitting and classification. MPI and Dragon
-provide alternative launchers for the same workload.
+provide alternative launchers for the same workload. The
+[distributed architecture](distributed.md) explains work assignment, process
+ownership and data movement.
 
 Three inputs determine a run:
 
@@ -16,8 +18,8 @@ Three inputs determine a run:
 `mpiexec -n 8` requests eight processes. The host file or scheduler allocation
 determines where they run. With Dragon, `--nodes 2` selects two nodes and
 cuPhoton's `--max-workers 8` caps the total GPU workers. The examples below
-use two nodes with four GPUs each, one worker per GPU, and at least eight
-image-pair items.
+use two nodes with four GPUs each and at least eight image-pair items.
+They use the default placement of one worker per GPU.
 
 ## Prepare the environment and workload
 
@@ -145,10 +147,16 @@ allocated nodes, and cuPhoton discovers their GPUs and places its workers:
   --max-workers 8 --warmup-rounds 1 --measure-rounds 3
 ```
 
-`--max-workers` is a cap: Dragon also limits workers by available GPUs and
-item count. This example selects TCP for both Dragon transports. Use the
+`--max-workers` caps the total process count. With the default
+`--workers-per-gpu 1`, Dragon also limits workers by available GPUs and item
+count. This example selects TCP for both Dragon transports. Use the
 site's routable interface selection when needed; see
-[Dragon transport and coordination](dragon.md).
+[Dragon transport and performance](dragon-performance.md).
+
+For multiple workers per GPU, see [Dragon GPU sharing and MPS](dragon.md#share-a-gpu-between-workers)
+and the [GPU sharing commands](components/xscan.md#share-a-gpu-between-image-pairs).
+An explicit MPS connection requires an existing service on each worker host.
+The launcher or administrator manages that service separately.
 
 ## Launch on named hosts through SSH
 
@@ -227,7 +235,8 @@ Each command creates `runs/<name>/summary.json` and retains warmup and
 measured outputs under `rounds/warmup-*` and `rounds/measure-*`. Inspect the
 summary and worker records for actual host/GPU placement, successful item
 completion and cleanup. MPI rejects more ranks than image-pair items;
-duplicate physical GPU assignments also fail validation.
+unexpected sharing or a physical GPU identity that disagrees with the
+requested placement also fails validation.
 
 Choose a new `--name` for another attempt. Readiness, batch execution,
 validation and cleanup have separate timing fields. Batch timing includes
