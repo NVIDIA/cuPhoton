@@ -20,8 +20,9 @@ follow the [checkout instructions](docs/getting-started.md#clone-and-select-a-pr
 
 - Local native package build tooling covers Linux x86-64 and ARM64 for
   CPython 3.12, 3.13, and 3.14. The wheel recipe includes the xDR extension
-  and a private, thread-safe CFITSIO library. Source and editable installs
-  require an explicit native xDR build.
+  and a private, thread-safe CFITSIO library. Native FITS loading from
+  source or editable installs requires an explicit native xDR build;
+  Astropy provides the Python-only FITS reader.
 - The `io`, `gpu`, `cutile`, `mpi`, and `dragon` extras separate GPU I/O,
   numerical backends, and distributed runtimes. This release supports CUDA
   13; cuTile needs a compatible TileIR compiler. Dragon requires Python
