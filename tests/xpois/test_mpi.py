@@ -1934,7 +1934,7 @@ def test_mpi_import_failure_explains_installation(
     with pytest.raises(RuntimeError) as error:
         mpi._load_mpi_api()
 
-    assert "pip install 'cuphoton[mpi]'" in str(error.value)
+    assert "install cuPhoton with the mpi extra" in str(error.value)
     assert "MPI runtime" in str(error.value)
     assert "mpiexec/mpirun" in str(error.value)
     assert error.value.__cause__ is import_error

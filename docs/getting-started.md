@@ -14,30 +14,24 @@ also available for integration into an existing environment.
 
 ## Install a release
 
-After the first PyPI release is published, install it with the commands below.
-Until then, use the [checkout instructions](#clone-and-select-a-profile).
+Version 0.1.3 is a source-only release. Use the
+[checkout instructions](#clone-and-select-a-profile) below, then select the
+extras needed for your workflow. Native FITS loading requires an explicit
+[xDR source build](components/xdr.md#install).
 
-```bash
-python -m pip install cuphoton
-python -m pip install 'cuphoton[io]'  # Native GPU FITS loading
-```
-
-The Linux x86-64 and ARM64 wheels include the xDR extension and private
-CFITSIO. `io` installs the CUDA 13 runtime dependencies; no compiler or local
-CUDA toolkit is needed. GPU execution still requires a compatible NVIDIA
-driver. See [xDR](components/xdr.md) for GPUDirect Storage requirements.
-
-Install `cuphoton[photometry]` for source detection, background estimation,
+Select the `photometry` extra for source detection, background estimation,
 and aperture photometry. It uses Photutils, which currently requires a C
-compiler on ARM64. The broader `gpu` profile includes `io` and `photometry`.
-Free-threaded Python and Windows/macOS wheels are not provided.
+compiler and Python development headers on ARM64. The broader `gpu` profile
+includes `io` and `photometry`.
 
 ## Clone and select a profile
 
 ```bash
-git clone https://github.com/NVIDIA/cuPhoton.git
+git clone --branch v0.1.3 https://github.com/NVIDIA/cuPhoton.git
 cd cuPhoton
 ```
+
+Omit `--branch v0.1.3` to work with the current development sources.
 
 For CUDA 13 development and visualization:
 
@@ -104,7 +98,7 @@ uv sync --locked --python 3.13 --extra gpu --extra dragon
 The `mpi` extra installs mpi4py, not an MPI implementation. Load the site's
 MPI module or install a compatible MPI runtime and launcher, then verify
 `.venv/bin/python -c 'from mpi4py import MPI; print(MPI.Get_library_version())'`
-from a checkout, or use the activated environment's Python for a wheel install.
+from the checkout.
 Use the same runtime with `mpiexec` on every node. Follow
 [mpi4py's installation guide](https://mpi4py.readthedocs.io/en/stable/install.html)
 for site-specific builds. xPois's `--aggregation-mode files` does not import

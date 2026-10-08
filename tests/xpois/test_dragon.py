@@ -134,7 +134,7 @@ def test_dragon_import_failure_explains_installation(
         dragon_module._load_dragon_api()
 
     message = str(error.value)
-    assert "pip install 'cuphoton[dragon]'" in message
+    assert "install cuPhoton with the dragon extra" in message
     assert "Python 3.12 or 3.13" in message
     assert "every node" in message
     assert "launch with dragon" in message

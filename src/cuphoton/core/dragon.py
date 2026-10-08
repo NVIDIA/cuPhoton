@@ -169,7 +169,7 @@ def _load_dragon_api() -> _DragonAPI:
     except (ImportError, OSError) as exc:
         raise RuntimeError(
             "The Dragon executor requires the dragonhpc runtime; "
-            "install it with pip install 'cuphoton[dragon]' in a Python "
+            "install cuPhoton with the dragon extra in a Python "
             "3.12 or 3.13 environment on every node and launch with dragon. "
             "The supported Dragon release has no Python 3.14 wheels"
         ) from exc

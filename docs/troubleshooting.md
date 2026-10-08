@@ -59,10 +59,8 @@ uv run --no-sync python -c \
   'from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())'
 ```
 
-For a checkout, follow the [native build instructions](components/xdr.md#native-extension-availability).
-For a release wheel, install its `io` extra and confirm that the imported
-package comes from that wheel. `xray doctor` checks xRay dependencies; it
-does not check the xDR extension.
+Follow the [native build instructions](components/xdr.md#native-extension-availability).
+`xray doctor` checks xRay dependencies; it does not check the xDR extension.
 
 Once a FITS payload read starts, errors propagate instead of retrying through
 another reader. Check file accessibility, the selected HDU, and the native

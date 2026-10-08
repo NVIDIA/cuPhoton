@@ -435,7 +435,6 @@ installs the runtime and keeps it in the project lock:
 uv sync --locked --python 3.13 --extra gpu --extra dragon
 ```
 
-For a published wheel, use `python -m pip install 'cuphoton[gpu,dragon]'`.
 The [DragonHPC 0.14.2 wheels](https://pypi.org/project/dragonhpc/0.14.2/#files)
 support cuPhoton's Python 3.12 and 3.13 environments on Linux x86-64 and
 AArch64 with glibc 2.28 or newer. Dragon has no Python 3.14 wheel yet;
@@ -453,8 +452,6 @@ aggregation (`--aggregation-mode mpi`) also requires the `mpi` extra:
 
 ```bash
 uv sync --locked --extra gpu --extra mpi
-# Or, for a published wheel:
-python -m pip install 'cuphoton[gpu,mpi]'
 ```
 
 The extra installs mpi4py, while the MPI implementation and matching launcher

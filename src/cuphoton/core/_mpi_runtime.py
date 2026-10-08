@@ -314,8 +314,8 @@ def _load_mpi_api() -> _MPIAPI:
     except (ImportError, OSError, RuntimeError) as exc:
         raise RuntimeError(
             "MPI collective aggregation requires mpi4py and a compatible "
-            "MPI runtime; install the Python bindings with "
-            "pip install 'cuphoton[mpi]', provide the allocation's MPI "
+            "MPI runtime; install cuPhoton with the mpi extra, "
+            "provide the allocation's MPI "
             "runtime, and launch with its matching mpiexec/mpirun or "
             "scheduler launcher"
         ) from exc
