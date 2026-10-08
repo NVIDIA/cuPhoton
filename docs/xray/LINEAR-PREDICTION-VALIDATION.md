@@ -43,15 +43,19 @@ SNR levels must be finite and produce finite, positive noise scales;
 
 ## Bounds
 
-`cramer_rao_bounds` forms the Fisher information `J^T J / sigma^2` from the
-numerical Jacobian of the model at the true parameters (all parameters free,
-including the constant) and returns the square root of the diagonal of its
-inverse per parameter. These are standard-deviation bounds; the summary
+`cramer_rao_bounds` uses the analytic Jacobian of the model at the true
+parameters (all parameters free, including the constant). A column-scaled
+singular-value decomposition computes the bounds associated with the Fisher
+information `J^T J / sigma^2` without forming or inverting that matrix.
+Numerically rank-deficient models, including modes with identical frequency
+and decay but different phases, raise `ValueError`: the individual parameters
+cannot be identified. These are standard-deviation bounds; the summary
 also carries the squared value as `crlb_variance`. For the single undamped
 sinusoid test fixture, the angular-frequency bound matches the square root
 of the closed-form variance `24 sigma^2 / (A^2 dt^2 N (N^2 - 1))`
-(Kay, Estimation Theory, 1993) to within 3 percent. The numerical calculation
-also frees the decay and constant.
+(Kay, Estimation Theory, 1993) to within 3 percent. The calculation also frees
+the decay and constant. The legacy `step` argument remains accepted for
+compatibility; analytic derivatives do not use a finite-difference step.
 
 ## Mode matching and statistics
 
@@ -68,8 +72,9 @@ the error count so estimator failures can be distinguished from mode loss.
 For each mode and parameter (`amplitude`, `decay`, `angular_frequency`,
 `phase`) the summary gives `bias`, `std` (ddof 1) and `rmse` computed over
 the recovered trials only, the bound (`crlb_std`, `crlb_variance`) and
-`std_over_crlb_std`. Truth and fitted modes use nonnegative amplitudes,
-folding a negative amplitude into the phase. Both phases and phase errors
+`std_over_crlb_std`. Truth and fitted modes use nonnegative amplitudes and
+frequencies. A negative frequency is reflected along with its phase; a
+negative amplitude is folded into the phase. Both phases and phase errors
 are wrapped to `[-pi, pi)`; the summary records truth in this convention.
 Undefined statistics are written as JSON `null`: standard deviation requires
 at least two recovered trials, and bias and RMSE require at least one.
