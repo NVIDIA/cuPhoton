@@ -1,17 +1,24 @@
 # Native packages
 
-The release build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
+Version 0.1.3 is a source-only release. It does not include binary wheels or
+PyPI packages. Follow the [source checkout instructions](getting-started.md#clone-and-select-a-profile)
+to install it. The procedures below describe local package build and
+qualification tooling.
+
+The wheel build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
 x86-64 and ARM64) plus one source archive. Wheels target glibc 2.28 or later.
 The runtime dependencies may impose a newer glibc floor; the installed-wheel
-CI tests use Debian 12. Native conda builds cover the same six Python and
-architecture combinations, as described below. Free-threaded Python, Windows,
-and macOS are outside both matrices.
+CI tests use Debian 12. Local native Conda builds cover the same six Python
+and architecture combinations, as described below. Conda channel publication
+is not configured.
+Free-threaded Python, Windows, and macOS are outside both matrices.
 
 Each wheel contains `cuphoton.xdr._nvcomp_batch_ext` and a privately renamed,
 reentrant CFITSIO 4.7.0 shared library. CUDA, cuFile, KvikIO, and nvCOMP remain
 in their upstream wheels, installed through `cuphoton[io]`. `cuphoton[gpu]`
 also includes the photometry, PyTorch, and Numba backends. Installing Photutils
-from PyPI currently requires a source build and C compiler on ARM64;
+from PyPI currently requires a source build, C compiler, and Python
+development headers on ARM64;
 `cuphoton` and `cuphoton[io]` do not install it. Conda provides ARM64 Photutils
 binaries.
 
@@ -42,16 +49,8 @@ when an RC tag and a final tag refer to the same commit. A final release needs
 a new build and qualification because its version and metadata change; do not
 rename RC wheels.
 
-Once a candidate is published to PyPI, an exact RC pin works without `--pre`:
-
-```bash
-python -m pip install 'cuphoton[gpu]==0.1.3rc0'
-```
-
-`gpu` includes `io` and `photometry`. Add `dev` for development tools and
-`viz` for visualization dependencies. Use `--pre` when selecting the newest
-available prerelease instead of pinning one. Each changed candidate needs a
-new RC number: PyPI does not allow replacing an uploaded filename.
+Each changed candidate needs a new RC number. Keep its artifacts associated
+with the exact source tag and build provenance.
 
 ## Build wheels
 
@@ -187,7 +186,8 @@ conda run --prefix ./conda-xdr python -I scripts/wheels/test_installed.py \
 The check runs outside the source tree internally and exercises the same
 decoding, ordering, concurrency, and buffer-lifetime cases as wheels. Retain
 its JSON receipt and the tested artifact hash. Conda channel publication is
-not configured; release-tag publishing below applies to PyPI artifacts.
+not configured; see the future-release PyPI publication procedure below for
+package-index uploads.
 
 ## Wheel GPU qualification
 
@@ -265,7 +265,10 @@ MPI/Dragon batch paths and verify saved numerical outputs. Missing selected
 runtimes, GPU support, worker results, or compiler tools fail instead of skipping.
 Retain these JSON receipts with the wheel hashes and native xDR receipts.
 
-## Publish the qualified artifacts
+## PyPI publication for future releases
+
+This procedure describes the available publication workflow for a future
+release that includes PyPI packages. It does not apply to 0.1.3.
 
 Configure these Trusted Publishers in the respective package-index accounts:
 
@@ -286,7 +289,7 @@ configuration alone does not grant upload access.
 No stored API token is needed. See the [PyPI Trusted Publisher setup
 instructions](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
 
-Pushing `v0.1.3rc0` or `v0.1.3` starts `publish.yml`. It validates the tag and
+Pushing a `vX.Y.ZrcN` or `vX.Y.Z` tag starts `publish.yml`. It validates the tag and
 requires its commit to belong to `main` or `0.1.x`, builds the six native wheels
 from one versioned source archive, and tests their clean installation. It then
 waits at the `testpypi` environment for approval. PyPI publication requires an

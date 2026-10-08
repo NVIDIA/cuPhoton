@@ -146,12 +146,12 @@ cuPhoton wheels.
 
 | Package | Version or version range | License identifier | Upstream | Use in cuPhoton | Distribution |
 | --- | --- | --- | --- | --- | --- |
-| `CFITSIO` | Release wheels bundle `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
+| `CFITSIO` | The local wheel recipe bundles `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
 
 ### CFITSIO copyright and license notice
 
 The following notice is reproduced from `licenses/License.txt` in the
-CFITSIO 4.7.0 distribution bundled in release wheels:
+CFITSIO 4.7.0 distribution bundled by the local wheel recipe:
 
 ```text
 Copyright (Unpublished--all rights reserved under the copyright laws of

@@ -87,27 +87,19 @@ reader by default.
 
 ## Install
 
-After the first PyPI release is published, install the I/O profile for GPU
-FITS loading. Until then, use the source checkout instructions below:
-
-```bash
-python -m pip install 'cuphoton[io]'
-```
-
-Linux x86-64 and ARM64 wheels for CPython 3.12–3.14 include the native
-extension and a private, reentrant CFITSIO 4.7.0 library. The extra installs
-CuPy, KvikIO, cuFile, and nvCOMP; `gpu` also includes these dependencies.
-The base package remains importable without GPU dependencies. No compiler,
-local CUDA toolkit, or system CFITSIO is needed for a wheel installation.
+Version 0.1.3 is a source-only release. Start with a
+[source checkout](../getting-started.md#clone-and-select-a-profile) and build
+the native extension as shown below. The `io` extra installs CuPy, KvikIO,
+cuFile, and nvCOMP; `gpu` also includes these dependencies.
+The base package remains importable without GPU dependencies.
 Only CUDA 13 dependency variants are supported. A compatible NVIDIA driver
 is required for GPU execution.
 
 GPUDirect Storage also needs a supported host driver, filesystem, and storage
-configuration. KvikIO compatibility mode supports ordinary local file I/O;
-installing a wheel does not configure GDS. Use `KVIKIO_COMPAT_MODE=ON` to
-select compatibility mode explicitly.
+configuration. KvikIO compatibility mode supports ordinary local file I/O.
+Use `KVIKIO_COMPAT_MODE=ON` to select compatibility mode explicitly.
 
-For development from a source checkout:
+From the checkout:
 
 ```bash
 uv sync --locked --extra dev --extra io
@@ -118,8 +110,8 @@ Source and editable builds default to a Python-only installation without
 probing native prerequisites. Building the extension requires
 `CUPHOTON_XDR_BUILD_EXT=1`, as performed by `build.sh` above. The source build
 requires a C++17 compiler, CUDA and cuFile headers, and a reentrant CFITSIO
-development installation. See [the wheel build procedure](../packaging.md)
-for the pinned release recipe.
+development installation. See [native extension availability](#native-extension-availability)
+below for prerequisites and [Packaging](../packaging.md) for local package builds.
 
 ### Native extension availability
 
