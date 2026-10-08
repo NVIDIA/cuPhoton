@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import numpy as np
 import pytest
 
@@ -27,6 +29,21 @@ def test_batched_model_and_jacobian_match_the_serial_ones():
         m, j = _model_and_jacobian(batch[i], fx.time, 2)
         np.testing.assert_allclose(model[i], m, rtol=0, atol=1e-12)
         np.testing.assert_allclose(jac[i], j, rtol=0, atol=1e-12)
+
+
+def test_batched_large_phase_matches_wrapped_scalar_model():
+    time = np.linspace(0, 10, 50)
+    start = np.array([[1.0, 0.2, 2.0, 1e16, 0.1]])
+    wrapped = start.copy()
+    wrapped[0, 3] = (start[0, 3] + np.pi) % (2 * np.pi) - np.pi
+    trace, expected_jac = _model_and_jacobian(wrapped[0], time, 1)
+    model, jac = model_and_jacobian_batched(np, start, time, 1)
+    np.testing.assert_allclose(model[0], trace, atol=1e-14)
+    np.testing.assert_allclose(jac[0], expected_jac, atol=1e-14)
+    result = refine_modes_batched(np, time, trace[None, :], start, 1)
+    assert result.converged.tolist() == [True]
+    assert result.residual_rms[0] < 1e-14
+    np.testing.assert_allclose(result.theta, wrapped, atol=1e-14)
 
 
 def test_batched_refinement_matches_scipy_per_trace():
@@ -55,6 +72,51 @@ def test_batched_refinement_rejects_bad_shapes():
     with pytest.raises(ValueError):
         refine_modes_batched(
             np, fx.time, fx.trace[None, :], np.zeros((1, 7)), 2
+        )
+
+
+@pytest.mark.parametrize("time_size,trace_size", [(1, 96), (96, 1), (0, 0)])
+def test_batched_refinement_rejects_broadcast_or_empty_samples(
+    time_size, trace_size
+):
+    with pytest.raises(ValueError, match="time|sample"):
+        refine_modes_batched(
+            np,
+            np.arange(time_size),
+            np.zeros((1, trace_size)),
+            np.zeros((1, 9)),
+            2,
+        )
+
+
+@pytest.mark.parametrize("input_name", ["time", "traces", "theta0"])
+@pytest.mark.parametrize("invalid_value", [np.nan, 1j])
+def test_batched_refinement_rejects_invalid_input(input_name, invalid_value):
+    fx = synthetic_modes_trace(96)
+    inputs = {
+        "time": fx.time.copy(),
+        "traces": fx.trace[None, :].copy(),
+        "theta0": modes_to_theta(fx.modes, fx.constant)[None, :],
+    }
+    inputs[input_name] = inputs[input_name].astype(type(invalid_value))
+    inputs[input_name].flat[0] = invalid_value
+    with pytest.raises(ValueError, match=input_name):
+        refine_modes_batched(np, **inputs, n_modes=2)
+
+
+@pytest.mark.parametrize(
+    "options", [{"tol": np.inf}, {"tol": 0}, {"max_iter": -1}, {"n_modes": 0}]
+)
+def test_batched_refinement_rejects_invalid_stopping_options(options):
+    fx = synthetic_modes_trace(96)
+    arguments = {"n_modes": 2, **options}
+    with pytest.raises(ValueError, match=next(iter(options))):
+        refine_modes_batched(
+            np,
+            fx.time,
+            fx.trace[None, :],
+            modes_to_theta(fx.modes, fx.constant)[None, :],
+            **arguments,
         )
 
 
@@ -138,6 +200,35 @@ def test_benchmark_runs_on_cpu_and_reports_agreement():
     assert r.traces == 8
     assert r.max_abs_theta_diff_numpy < 1e-6
     assert r.cupy_batched_s is None and r.gpu_error is None
+
+
+def test_benchmark_reports_unconverged_fits_and_residuals(monkeypatch):
+    from cuphoton.xray import mode_refinement_batched
+
+    def one_iteration(*args, **kwargs):
+        return refine_modes_batched(*args, **kwargs, max_iter=1)
+
+    monkeypatch.setattr(
+        mode_refinement_batched, "refine_modes_batched", one_iteration
+    )
+    result = benchmark_refinement(traces=2, repeat=1, run_gpu=False)
+    payload = result.to_dict()
+    assert payload["cpu_serial_converged"] == 2
+    assert payload["numpy_batched_converged"] == 0
+    assert payload["cupy_batched_converged"] is None
+    assert (
+        payload["numpy_batched_max_residual_rms"]
+        > payload["cpu_serial_max_residual_rms"]
+    )
+    json.dumps(payload, allow_nan=False)
+    assert "numpy_batched_converged=0/2" in str(result)
+    assert "gpu_status=skipped" in str(result)
+
+
+@pytest.mark.parametrize("options", [{"traces": 0}, {"n_modes": 3}])
+def test_benchmark_rejects_empty_or_unavailable_fixtures(options):
+    with pytest.raises(ValueError, match=next(iter(options))):
+        benchmark_refinement(**options, run_gpu=False)
 
 
 @pytest.mark.parametrize("time_scale", [1e-9, 1.0, 1e9])

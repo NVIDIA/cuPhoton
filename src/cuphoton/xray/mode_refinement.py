@@ -21,6 +21,7 @@ NumPy only.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from numbers import Integral
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -58,6 +59,35 @@ class RefinedModes:
     seeded_mode_count: int
 
 
+def _fit_inputs(time, trace) -> tuple[np.ndarray, np.ndarray]:
+    time, trace = np.asarray(time), np.asarray(trace)
+    if np.iscomplexobj(time) or np.iscomplexobj(trace):
+        raise ValueError("time and trace must be real")
+    time = np.asarray(time, dtype=np.float64)
+    trace = np.asarray(trace, dtype=np.float64)
+    if (
+        time.ndim != 1
+        or trace.ndim != 1
+        or time.shape != trace.shape
+        or time.size < 2
+        or not np.all(np.isfinite(time))
+        or not np.all(np.isfinite(trace))
+    ):
+        raise ValueError(
+            "time and trace must be matching finite one-dimensional arrays "
+            "with at least two samples"
+        )
+    return time, trace
+
+
+def _wrap_phase(phase):
+    return np.where(
+        (phase >= -np.pi) & (phase < np.pi),
+        phase,
+        (phase + np.pi) % (2.0 * np.pi) - np.pi,
+    )
+
+
 def _model_and_jacobian(theta: np.ndarray, time: np.ndarray, n: int):
     model = np.full(time.shape, float(theta[4 * n]))
     jac = np.empty((time.size, 4 * n + 1))
@@ -65,7 +95,7 @@ def _model_and_jacobian(theta: np.ndarray, time: np.ndarray, n: int):
     for k in range(n):
         a, d, w, p = theta[4 * k : 4 * k + 4]
         env = np.exp(-d * time)
-        arg = w * time + p
+        arg = w * time + _wrap_phase(p)
         cos = np.cos(arg)
         sin = np.sin(arg)
         model += a * env * cos
@@ -81,8 +111,10 @@ def seed_from_residual(
 ) -> tuple[float, float, float, float]:
     """Seed one damped mode from the strongest peak of the residual
     spectrum: amplitude from the peak height, zero decay, zero phase."""
+    time, residual = _fit_inputs(time, residual)
     dt = float(time[1] - time[0])
     r = residual - residual.mean()
+    pad = max(pad, time.size)
     spec = np.abs(np.fft.rfft(r, pad))
     freq = 2.0 * np.pi * np.fft.rfftfreq(pad, d=dt)
     k = int(np.argmax(spec[1:])) + 1
@@ -100,15 +132,16 @@ def refine_modes(
     seeded_mode_count: int = 0,
 ) -> RefinedModes:
     """Refine ``initial_modes`` (amplitude, decay, angular frequency, phase)
-    and the constant by nonlinear least squares."""
-    time = np.asarray(time, dtype=np.float64)
-    trace = np.asarray(trace, dtype=np.float64)
+    and the constant by nonlinear least squares. Initial and trial phases
+    are reduced to ``[-pi, pi)`` before evaluating the model."""
+    time, trace = _fit_inputs(time, trace)
     n = len(initial_modes)
     if n == 0:
         raise ValueError("at least one initial mode is required")
     theta0 = np.array(
         [v for m in initial_modes for v in m] + [constant], dtype=np.float64
     )
+    theta0[3 : 4 * n : 4] = _wrap_phase(theta0[3 : 4 * n : 4])
 
     def residual(theta):
         return _model_and_jacobian(theta, time, n)[0] - trace
@@ -146,7 +179,7 @@ def refine_modes(
     amp = theta[0 : 4 * n : 4].copy()
     dec = theta[1 : 4 * n : 4].copy()
     freq = theta[2 : 4 * n : 4].copy()
-    ph = theta[3 : 4 * n : 4].copy()
+    ph = _wrap_phase(theta[3 : 4 * n : 4])
     # a negative amplitude or frequency is the same mode with a shifted phase
     neg = amp < 0
     amp[neg] = -amp[neg]
@@ -154,7 +187,7 @@ def refine_modes(
     negf = freq < 0
     freq[negf] = -freq[negf]
     ph[negf] = -ph[negf]
-    ph = (ph + np.pi) % (2.0 * np.pi) - np.pi
+    ph = _wrap_phase(ph)
     order = np.argsort(-amp)
     sig = sigma.reshape(-1)
     return RefinedModes(
@@ -194,8 +227,13 @@ def linear_prediction_refined(
     Amplitudes and phases use the first input sample as the time origin,
     matching linear prediction; the returned time retains the input axis.
     """
-    time = np.asarray(time, dtype=np.float64)
-    trace = np.asarray(trace, dtype=np.float64)
+    if (
+        isinstance(n_modes, bool)
+        or not isinstance(n_modes, Integral)
+        or n_modes < 1
+    ):
+        raise ValueError("n_modes must be a positive integer")
+    time, trace = _fit_inputs(time, trace)
     lp = linear_prediction_numpy(
         time, trace, n_components, roots_backend=roots_backend
     )
