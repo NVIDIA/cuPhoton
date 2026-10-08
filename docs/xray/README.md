@@ -105,7 +105,7 @@ every acquisition.
 | Input inspection | `data-probe`, `roi-candidates` |
 | Trace work | `extract-trace`, `trace-smoke` |
 | Linear prediction | `linear-prediction-*`, `prediction-roots-benchmark`, `model-order-sweep` |
-| Synthetic validation | `linear-prediction-validate` (`lpv`), `linear-prediction-refine-benchmark` (`lprb`) |
+| Synthetic validation | `linear-prediction-validate` (`lpv`), `linear-prediction-refine-benchmark` (`lprb`), `linear-prediction-modes-review` (`lpmr`) |
 | Detector products | `detector-mask`, `detector-artifacts`, `detector-artifact-normalize`, `detector-artifact-compare` |
 | Distributed detector work | `detector-artifact-distributed`, `detector-artifact-merge` |
 | Review | `report`, `validation-viz`, `workflow-viz`, `phonon-viz` |
