@@ -18,8 +18,8 @@ requirements.
 
 - [Getting started](getting-started.md): prerequisites and installation
   profiles.
-- [Packaging](packaging.md): native wheels, Conda packages, source builds,
-  and release procedures.
+- [Packaging](packaging.md): local wheel and Conda builds, source builds,
+  and package qualification procedures.
 - [Quickstarts](quickstarts.md): data-independent CPU and GPU smoke runs.
 - Imaging walkthrough:
   [notebook](../examples/imaging-pipeline/run_imaging_pipeline.ipynb) and

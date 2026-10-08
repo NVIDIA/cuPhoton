@@ -5,7 +5,7 @@ record the exact commit in the methods or software-availability section.
 For a development checkout, include the full version reported by
 `cuphoton --version` and the output of `git rev-parse HEAD`.
 
-Suggested citation for the upcoming 0.1.3 release:
+Suggested citation for the 0.1.3 release:
 
 > NVIDIA Corporation. *cuPhoton: GPU-accelerated astronomy and imaging
 > reference workflows*. Version 0.1.3, 2026.

@@ -2,14 +2,14 @@
 
 ## 0.1.3
 
-These changes are relative to 0.1.2. Install from the checkout until 0.1.3
-packages are published.
+These changes are relative to 0.1.2. Version 0.1.3 is a source-only release;
+follow the [checkout instructions](docs/getting-started.md#clone-and-select-a-profile).
 
 ### Breaking changes
 
 - Python 3.11 is no longer supported. Use Python 3.12, 3.13, or 3.14.
-- Photutils is now optional and is no longer installed by `pip install cuphoton`.
-  Install `cuphoton[photometry]` for CPU photometry or `cuphoton[gpu]` for the
+- Photutils is now optional and is no longer part of the base installation.
+  Select the `photometry` extra for CPU photometry or `gpu` for the
   combined GPU and photometry dependencies.
 - xDR's Legate-backed HDF5 loader has been removed. Use `h5py` for local HDF5
   reads and explicitly transfer arrays to a GPU when needed. xRay continues
@@ -18,10 +18,11 @@ packages are published.
 
 ### Installation and development
 
-- Native Linux x86-64 and ARM64 wheels include the xDR extension and a
-  private, thread-safe CFITSIO library for CPython 3.12, 3.13, and 3.14.
-  Native Conda packages cover the same Python and architecture matrix.
-  Source and editable installs still require an explicit native build.
+- Local native package build tooling covers Linux x86-64 and ARM64 for
+  CPython 3.12, 3.13, and 3.14. The wheel recipe includes the xDR extension
+  and a private, thread-safe CFITSIO library. Native FITS loading from
+  source or editable installs requires an explicit native xDR build;
+  Astropy provides the Python-only FITS reader.
 - The `io`, `gpu`, `cutile`, `mpi`, and `dragon` extras separate GPU I/O,
   numerical backends, and distributed runtimes. This release supports CUDA
   13; cuTile needs a compatible TileIR compiler. Dragon requires Python
