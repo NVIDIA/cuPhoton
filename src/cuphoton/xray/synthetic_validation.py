@@ -92,6 +92,24 @@ def modes_to_theta(
     )
 
 
+def _modes_jacobian(
+    theta: np.ndarray, time: np.ndarray, n_modes: int
+) -> np.ndarray:
+    """Analytic model derivatives in the order used by ``modes_to_theta``."""
+    jac = np.ones((time.size, theta.size))
+    for k in range(n_modes):
+        amplitude, decay, frequency, phase = theta[4 * k : 4 * k + 4]
+        envelope = np.exp(-decay * time)
+        angle = frequency * time + phase
+        cosine = envelope * np.cos(angle)
+        sine = envelope * np.sin(angle)
+        jac[:, 4 * k] = cosine
+        jac[:, 4 * k + 1] = -amplitude * time * cosine
+        jac[:, 4 * k + 2] = -amplitude * time * sine
+        jac[:, 4 * k + 3] = -amplitude * sine
+    return jac
+
+
 def synthetic_modes_trace(
     samples: int = 96,
     *,
@@ -195,10 +213,13 @@ def cramer_rao_bounds(
     """Cramer-Rao lower bound (standard deviation) per parameter for white
     Gaussian noise of ``noise_sigma``.
 
-    The Fisher information is J^T J / sigma^2 with J the numerical Jacobian
-    of :func:`modes_model`; the bound is the square root of the diagonal of
-    its inverse. Returned per mode as arrays ``amplitude``, ``decay``,
-    ``angular_frequency``, ``phase`` plus the scalar ``constant``.
+    The Fisher information is J^T J / sigma^2 with J the analytic Jacobian
+    of :func:`modes_model`. A column-scaled SVD gives the bounds without
+    forming or inverting the normal matrix. Models with numerically
+    unidentifiable parameters raise ``ValueError``. Returned per mode as
+    arrays ``amplitude``, ``decay``, ``angular_frequency``, ``phase`` plus
+    the scalar ``constant``. ``step`` remains accepted for compatibility
+    but is unused by the analytic calculation.
     """
     if not np.isfinite(noise_sigma) or noise_sigma <= 0:
         raise ValueError("noise_sigma must be finite and positive")
@@ -209,27 +230,39 @@ def cramer_rao_bounds(
     if not np.isfinite(step) or step <= 0:
         raise ValueError("step must be finite and positive")
     theta = modes_to_theta(modes, constant)
+    time = np.asarray(time, dtype=np.float64)
+    if time.ndim != 1 or not np.all(np.isfinite(time)):
+        raise ValueError("time must be a finite one-dimensional array")
+    if not np.all(np.isfinite(theta)):
+        raise ValueError("modes and constant must be finite")
     n = len(modes)
-    jac = np.empty((time.size, theta.size))
-    for k in range(theta.size):
-        tp = theta.copy()
-        tm = theta.copy()
-        tp[k] += step
-        tm[k] -= step
-        jac[:, k] = (modes_model(tp, time, n) - modes_model(tm, time, n)) / (
-            2 * step
-        )
     try:
         with np.errstate(over="raise", divide="raise", invalid="raise"):
-            fisher = jac.T @ jac / noise_variance
-            sd = np.sqrt(np.diag(np.linalg.inv(fisher)))
+            jac = _modes_jacobian(theta, time, n)
+            scales = np.linalg.norm(jac, axis=0)
+            if time.size < theta.size or np.any(scales == 0):
+                raise ValueError(
+                    "Cramer-Rao bounds require identifiable modes"
+                )
+            _, singular, vh = np.linalg.svd(jac / scales, full_matrices=False)
+            cutoff = np.finfo(float).eps * max(jac.shape) * singular[0]
+            if singular[-1] <= cutoff:
+                raise ValueError(
+                    "Cramer-Rao bounds require identifiable modes"
+                )
+            sd = noise_sigma * np.linalg.norm(vh / singular[:, None], axis=0)
+            sd /= scales
     except (FloatingPointError, np.linalg.LinAlgError) as exc:
         raise ValueError(
             "noise_sigma or modes produce singular or nonfinite "
             "Cramer-Rao bounds"
         ) from exc
-    if not np.all(np.isfinite(sd)) or np.any(sd <= 0):
-        raise ValueError("Cramer-Rao bounds must be finite and positive")
+    with np.errstate(over="ignore", under="ignore"):
+        variance = np.square(sd)
+    if not np.all(np.isfinite(variance)) or np.any(variance <= 0):
+        raise ValueError(
+            "noise_sigma or modes produce nonfinite or zero Cramer-Rao bounds"
+        )
     return {
         "amplitude": sd[0 : 4 * n : 4],
         "decay": sd[1 : 4 * n : 4],
@@ -263,8 +296,8 @@ def match_modes(
     if not modes or angular_frequency.size == 0:
         return out
     err = np.abs(
-        np.array([m.angular_frequency for m in modes])[:, None]
-        - angular_frequency[None, :]
+        np.abs([m.angular_frequency for m in modes])[:, None]
+        - np.abs(angular_frequency)[None, :]
     )
     # A missing match costs more than every valid distance combined:
     # maximize recovered modes first, then minimize total frequency error.
@@ -419,14 +452,20 @@ def _wrap_phase(values: np.ndarray) -> np.ndarray:
     return (values + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def _canonical(amplitude: np.ndarray, phase: np.ndarray):
-    """A negative amplitude is the same mode with the phase shifted by pi."""
+def _canonical(
+    amplitude: np.ndarray, angular_frequency: np.ndarray, phase: np.ndarray
+):
+    """Normalize amplitude/frequency signs and wrap equivalent phases."""
     amplitude = np.array(amplitude, dtype=float, copy=True)
+    angular_frequency = np.array(angular_frequency, dtype=float, copy=True)
     phase = np.array(phase, dtype=float, copy=True)
+    negative_frequency = angular_frequency < 0
+    angular_frequency[negative_frequency] *= -1
+    phase[negative_frequency] *= -1
     neg = amplitude < 0
     amplitude[neg] = -amplitude[neg]
     phase[neg] = phase[neg] + np.pi
-    return amplitude, _wrap_phase(phase)
+    return amplitude, angular_frequency, _wrap_phase(phase)
 
 
 def _stats(
@@ -486,9 +525,9 @@ def validation_sweep(
     trial in which the estimator raises is counted in ``estimator_errors``
     and as a loss of every mode.
 
-    Truth and fitted modes use nonnegative amplitudes and phases in
-    ``[-pi, pi)``. The returned truth uses the same convention as the
-    parameter statistics.
+    Truth and fitted modes use nonnegative amplitudes and frequencies,
+    with equivalent phases in ``[-pi, pi)``. The returned truth uses the
+    same convention as the parameter statistics.
 
     ``distortion`` = (kind, amount) replaces the clean trace with one from
     :func:`distort_trace`, outside the model class; ``residual_ratio`` is
@@ -506,13 +545,18 @@ def validation_sweep(
         raise ValueError("snr_db must contain at least one level")
     if not np.all(np.isfinite(snr_db)):
         raise ValueError("snr_db levels must be finite")
-    amplitudes, phases = _canonical(
+    amplitudes, frequencies, phases = _canonical(
         np.array([m.amplitude for m in modes]),
+        np.array([m.angular_frequency for m in modes]),
         np.array([m.phase for m in modes]),
     )
     modes = tuple(
-        replace(m, amplitude=float(a), phase=float(p))
-        for m, a, p in zip(modes, amplitudes, phases, strict=True)
+        replace(
+            m, amplitude=float(a), angular_frequency=float(w), phase=float(p)
+        )
+        for m, a, w, p in zip(
+            modes, amplitudes, frequencies, phases, strict=True
+        )
     )
     est = estimator or linear_prediction_numpy
     base = synthetic_modes_trace(
@@ -553,9 +597,12 @@ def validation_sweep(
                 any_lost += 1
                 lost += 1
                 continue
-            w = _to_host(r.angular_frequency)
             d = _to_host(r.decay)
-            a, p = _canonical(_to_host(r.amplitude), _to_host(r.phase))
+            a, w, p = _canonical(
+                _to_host(r.amplitude),
+                _to_host(r.angular_frequency),
+                _to_host(r.phase),
+            )
             rec = _to_host(r.reconstruction)
             ratios.append(float(np.sqrt(np.mean((y - rec) ** 2)) / sigma))
             hit = match_modes(modes, w, d, tolerance=match_tolerance)
@@ -781,7 +828,7 @@ def build_summary(
             "bias, std (ddof 1) and rmse are computed over the recovered "
             "trials of each mode; crlb_std and crlb_variance are the "
             "unconditional Cramer-Rao bounds from the model's Fisher "
-            "information using a numerical Jacobian at the true "
+            "information using an analytic Jacobian at the true "
             "parameters; the phase "
             "error is wrapped to [-pi, pi)"
         ),
