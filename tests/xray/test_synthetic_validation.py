@@ -16,10 +16,13 @@ from cuphoton.xray.linear_prediction import (
 from cuphoton.xray.synthetic_validation import (
     PARAMETERS,
     DampedMode,
+    _modes_jacobian,
     build_summary,
     cramer_rao_bounds,
     distort_trace,
     match_modes,
+    modes_model,
+    modes_to_theta,
     synthetic_modes_trace,
     validate_linear_prediction,
     validation_sweep,
@@ -58,15 +61,21 @@ def test_estimator_recovers_known_modes_exactly_at_zero_noise():
         assert abs(float(r.decay[h]) - m.decay) < 1e-6
 
 
-def test_cramer_rao_bound_scales_with_noise_and_shrinks_with_trace_length():
+@pytest.mark.parametrize("sigma", [0.01, 1e-160])
+def test_cramer_rao_bound_scales_with_noise_and_shrinks_with_trace_length(
+    sigma,
+):
     fx = synthetic_modes_trace(96)
-    b1 = cramer_rao_bounds(fx.modes, fx.constant, fx.time, 0.01)
-    b2 = cramer_rao_bounds(fx.modes, fx.constant, fx.time, 0.02)
+    b1 = cramer_rao_bounds(fx.modes, fx.constant, fx.time, sigma)
+    b2 = cramer_rao_bounds(fx.modes, fx.constant, fx.time, 2 * sigma)
     np.testing.assert_allclose(
-        b2["angular_frequency"], 2 * b1["angular_frequency"], rtol=1e-6
+        b2["angular_frequency"],
+        2 * b1["angular_frequency"],
+        rtol=1e-6,
+        atol=0,
     )
     longer = synthetic_modes_trace(192, duration=19.0)
-    b3 = cramer_rao_bounds(longer.modes, longer.constant, longer.time, 0.01)
+    b3 = cramer_rao_bounds(longer.modes, longer.constant, longer.time, sigma)
     assert np.all(b3["angular_frequency"] < b1["angular_frequency"])
 
 
@@ -102,17 +111,85 @@ def test_integer_mode_parameters_have_the_same_bounds_as_floats():
         assert np.all(np.isfinite(actual[name]))
 
 
+def test_analytic_jacobian_and_bounds_match_finite_differences():
+    fixture = synthetic_modes_trace()
+    theta = modes_to_theta(fixture.modes, fixture.constant)
+    n_modes = len(fixture.modes)
+    step = 1e-6
+    numerical = np.column_stack(
+        [
+            (
+                modes_model(theta + delta, fixture.time, n_modes)
+                - modes_model(theta - delta, fixture.time, n_modes)
+            )
+            / (2 * step)
+            for delta in step * np.eye(theta.size)
+        ]
+    )
+    np.testing.assert_allclose(
+        _modes_jacobian(theta, fixture.time, n_modes),
+        numerical,
+        rtol=1e-7,
+        atol=3e-10,
+    )
+    expected = 0.01 * np.sqrt(np.diag(np.linalg.inv(numerical.T @ numerical)))
+    actual = cramer_rao_bounds(
+        fixture.modes, fixture.constant, fixture.time, 0.01
+    )
+    for index, name in enumerate(PARAMETERS):
+        np.testing.assert_allclose(
+            actual[name], expected[index:-1:4], rtol=1e-8
+        )
+    np.testing.assert_allclose(actual["constant"], expected[-1], rtol=1e-8)
+
+
+@pytest.mark.parametrize("time_scale", [1e-9, 1.0, 1e9])
+def test_bounds_resolve_nearby_modes_in_different_time_units(time_scale):
+    modes = (DampedMode(1, 0.01, 2, 0.3), DampedMode(0.5, 0.01, 2.02, 1.5))
+    time = np.linspace(0, 100, 512)
+    expected = cramer_rao_bounds(modes, 0.15, time, 0.01)
+    scaled = tuple(
+        replace(
+            m,
+            decay=m.decay / time_scale,
+            angular_frequency=m.angular_frequency / time_scale,
+        )
+        for m in modes
+    )
+    actual = cramer_rao_bounds(scaled, 0.15, time * time_scale, 0.01)
+    for name in (*PARAMETERS, "constant"):
+        factor = time_scale if name in ("decay", "angular_frequency") else 1
+        np.testing.assert_allclose(
+            actual[name] * factor, expected[name], rtol=1e-8
+        )
+        assert np.all(np.isfinite(actual[name]))
+        assert np.all(actual[name] > 0)
+
+
 @pytest.mark.parametrize(
     "modes",
     [
         (DampedMode(0.0, 0.1, 2.0, 0.3),),
         (DampedMode(1.0, 0.1, 2.0, 0.3),) * 2,
+        (DampedMode(1.0, 0.1, 2.0, 0.3), DampedMode(0.5, 0.1, 2.0, 1.5)),
     ],
-    ids=["zero-amplitude", "duplicate-modes"],
+    ids=[
+        "zero-amplitude",
+        "duplicate-modes",
+        "coincident-phase-distinct-modes",
+    ],
 )
 def test_bounds_reject_unidentifiable_modes(modes):
     with pytest.raises(ValueError, match="Cramer-Rao bounds"):
         cramer_rao_bounds(modes, 0.0, np.linspace(0.0, 9.5, 96), 0.01)
+
+
+def test_bounds_reject_more_parameters_than_samples():
+    fixture = synthetic_modes_trace()
+    with pytest.raises(ValueError, match="Cramer-Rao bounds"):
+        cramer_rao_bounds(
+            fixture.modes, fixture.constant, fixture.time[:8], 0.01
+        )
 
 
 @pytest.mark.parametrize("start", [0.0, 3.0])
@@ -134,9 +211,12 @@ def test_gaussian_envelope_starts_at_the_first_sample(start):
     np.testing.assert_allclose(actual, expected)
 
 
-def test_matching_recovers_close_modes_independent_of_truth_order():
-    modes = (DampedMode(1, 0, 1.0), DampedMode(1, 0, 1.15))
-    fitted = np.array([1.05, 0.85])
+@pytest.mark.parametrize("frequency_sign", [1, -1])
+def test_matching_recovers_close_modes_independent_of_truth_order(
+    frequency_sign,
+):
+    modes = (DampedMode(1, 0, frequency_sign * 1.0), DampedMode(1, 0, 1.15))
+    fitted = np.array([1.05, frequency_sign * 0.85])
     decay = np.zeros(2)
     assert match_modes(modes, fitted, decay, tolerance=0.2) == [1, 0]
     assert match_modes(modes[::-1], fitted, decay, tolerance=0.2) == [0, 1]
@@ -189,18 +269,21 @@ def test_estimator_errors_count_as_failed_trials():
 
 @pytest.mark.parametrize("amplitude", [-1.0, 1.0])
 @pytest.mark.parametrize("phase", [0.3, 0.3 + 4 * np.pi])
+@pytest.mark.parametrize("frequency_sign", [1, -1])
 def test_sweep_uses_the_same_amplitude_phase_convention_for_truth_and_fit(
-    amplitude, phase
+    amplitude, phase, frequency_sign
 ):
-    mode = DampedMode(amplitude, 0.1, 2.0, phase)
+    mode = DampedMode(
+        amplitude, 0.1, frequency_sign * 2.0, frequency_sign * phase
+    )
     fixture = synthetic_modes_trace(modes=(mode,))
 
     def exact_estimator(t, y, k):
         return SimpleNamespace(
             amplitude=np.array([mode.amplitude]),
             decay=np.array([mode.decay]),
-            angular_frequency=np.array([mode.angular_frequency]),
-            phase=np.array([mode.phase]),
+            angular_frequency=np.array([-mode.angular_frequency]),
+            phase=np.array([-mode.phase]),
             reconstruction=fixture.clean,
         )
 
@@ -224,10 +307,25 @@ def test_sweep_uses_the_same_amplitude_phase_convention_for_truth_and_fit(
     summary = build_summary([sweep])
     truth = summary["config"]["truth"]["modes"][0]
     assert truth["amplitude"] == 1.0
+    assert truth["angular_frequency"] == 2.0
     expected_phase = 0.3 - np.pi if amplitude < 0 else 0.3
     assert truth["phase"] == pytest.approx(expected_phase)
     for name in PARAMETERS:
         assert summary["results"][0]["modes"][0][name]["truth"] == truth[name]
+
+
+def test_equivalent_frequency_signs_have_the_same_mode_recovery():
+    positive = DampedMode(1, 0.1, 2, 0.3)
+    negative = replace(positive, angular_frequency=-2, phase=-0.3)
+    sweeps = [
+        validation_sweep(
+            modes=(mode,), snr_db=(80,), trials=2, n_components=4
+        )
+        for mode in (positive, negative)
+    ]
+    assert sweeps[0].levels == sweeps[1].levels
+    assert sweeps[0].modes == sweeps[1].modes
+    assert sweeps[0].levels[0].modes[0].recovered_trials == 2
 
 
 def test_summary_schema_and_run_artifacts(tmp_path):
@@ -364,9 +462,7 @@ def test_fixture_rejects_invalid_noise_sigma(sigma):
         synthetic_modes_trace(noise_sigma=sigma)
 
 
-@pytest.mark.parametrize(
-    "sigma", [np.nan, np.inf, -0.1, 1e-200, 1e-160, 1e200]
-)
+@pytest.mark.parametrize("sigma", [np.nan, np.inf, -0.1, 1e-200, 1e200])
 def test_bounds_reject_invalid_noise_scales_without_runtime_warnings(sigma):
     fx = synthetic_modes_trace()
     with (
