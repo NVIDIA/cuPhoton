@@ -73,6 +73,62 @@ def test_seed_from_residual_finds_the_missing_mode():
     assert dec == 0.0 and amp > 0
 
 
+def test_seed_from_residual_uses_samples_beyond_the_default_fft_length():
+    time = np.arange(8192) * 0.1
+    frequency = 2 * np.pi * 64 / (4096 * 0.1)
+    residual = np.cos(frequency * time)
+    amplitude, _, actual_frequency, _ = seed_from_residual(time, residual)
+    assert actual_frequency == pytest.approx(frequency)
+    assert amplitude == pytest.approx(1.0)
+
+    residual[:4096] = 0.0
+    amplitude, _, actual_frequency, _ = seed_from_residual(time, residual)
+    assert actual_frequency == pytest.approx(frequency)
+    assert amplitude == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("phase", [1e10, 1e16])
+def test_large_initial_phase_is_reduced_before_evaluation(phase):
+    time = np.linspace(0, 10, 50)
+    wrapped = (phase + np.pi) % (2 * np.pi) - np.pi
+    trace = np.exp(-0.2 * time) * np.cos(2 * time + wrapped) + 0.1
+    result = refine_modes(time, trace, [(1.0, 0.2, 2.0, phase)], 0.1)
+    assert result.converged
+    assert result.residual_rms < 1e-12
+    reconstructed = result.constant + np.sum(
+        result.amplitude[:, None]
+        * np.exp(-result.decay[:, None] * time)
+        * np.cos(
+            result.angular_frequency[:, None] * time + result.phase[:, None]
+        ),
+        axis=0,
+    )
+    np.testing.assert_allclose(
+        reconstructed, result.reconstruction, atol=1e-14
+    )
+    np.testing.assert_allclose(reconstructed, trace, atol=1e-12)
+
+
+@pytest.mark.parametrize("invalid", [0.15, [0.15], np.ones((96, 1))])
+def test_refinement_rejects_trace_broadcasting(invalid):
+    time = np.linspace(0, 9.5, 96)
+    with pytest.raises(ValueError, match="matching finite one-dimensional"):
+        refine_modes(time, invalid, [(1.0, 0.1, 2.0, 0.0)], 0.0)
+
+
+@pytest.mark.parametrize("field", ["time", "trace"])
+def test_refinement_rejects_complex_inputs_before_discarding_values(field):
+    fixture = synthetic_modes_trace(96)
+    inputs = {"time": fixture.time, "trace": fixture.trace}
+    inputs[field] = inputs[field].astype(complex) + 1j
+    with pytest.raises(ValueError, match="must be real"):
+        refine_modes(
+            **inputs, initial_modes=[(1.0, 0.1, 2.0, 0.0)], constant=0
+        )
+    with pytest.raises(ValueError, match="must be real"):
+        linear_prediction_refined(**inputs, n_components=6, n_modes=2)
+
+
 def test_refined_estimator_keeps_the_weak_mode_under_noise():
     fx = synthetic_modes_trace(96)
     sigma = float(np.std(fx.clean - fx.clean.mean())) / 100
@@ -105,6 +161,15 @@ def test_refinement_rejects_empty_initial_modes():
     fx = synthetic_modes_trace(96)
     with pytest.raises(ValueError):
         refine_modes(fx.time, fx.trace, [], 0.0)
+
+
+@pytest.mark.parametrize("n_modes", [0, -1, 1.5, True])
+def test_lp_refinement_rejects_invalid_mode_counts(n_modes):
+    fixture = synthetic_modes_trace(96)
+    with pytest.raises(
+        ValueError, match="n_modes must be a positive integer"
+    ):
+        linear_prediction_refined(fixture.time, fixture.trace, 6, n_modes)
 
 
 def test_bounds_are_the_reference_for_the_refined_uncertainties():
