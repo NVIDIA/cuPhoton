@@ -17,7 +17,8 @@ they found the same optimum.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from numbers import Integral, Real
 from time import perf_counter
 from typing import Any
 
@@ -28,6 +29,14 @@ def _sync(xp) -> None:
     dev = getattr(getattr(xp, "cuda", None), "Device", None)
     if dev is not None:
         dev().synchronize()
+
+
+def _wrap_phase(xp, phase):
+    return xp.where(
+        (phase >= -xp.pi) & (phase < xp.pi),
+        phase,
+        (phase + xp.pi) % (2.0 * xp.pi) - xp.pi,
+    )
 
 
 def model_and_jacobian_batched(xp, theta, time, n_modes: int):
@@ -43,7 +52,7 @@ def model_and_jacobian_batched(xp, theta, time, n_modes: int):
         a = theta[:, 4 * k][:, None]
         d = theta[:, 4 * k + 1][:, None]
         w = theta[:, 4 * k + 2][:, None]
-        ph = theta[:, 4 * k + 3][:, None]
+        ph = _wrap_phase(xp, theta[:, 4 * k + 3][:, None])
         env = xp.exp(-d * t)
         arg = w * t + ph
         cos = xp.cos(arg)
@@ -92,6 +101,28 @@ def refine_modes_batched(
     parameter units. Positive damping also handles zero Jacobian columns
     from an initial zero-amplitude mode.
     """
+    for name, count in (("n_modes", n_modes), ("max_iter", max_iter)):
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, Integral)
+            or count < 1
+        ):
+            raise ValueError(f"{name} must be a positive integer")
+    for name, value in (("tol", tol), ("lambda0", lambda0)):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not np.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be finite and positive")
+    for name, values in (
+        ("time", time),
+        ("traces", traces),
+        ("theta0", theta0),
+    ):
+        if xp.iscomplexobj(values):
+            raise ValueError(f"{name} must contain only real values")
     t = xp.asarray(time, dtype=xp.float64)
     y = xp.asarray(traces, dtype=xp.float64)
     theta = xp.asarray(theta0, dtype=xp.float64).copy()
@@ -99,8 +130,16 @@ def refine_modes_batched(
         raise ValueError("traces must be (B, N) and theta0 (B, 4K+1)")
     if theta.shape[1] != 4 * n_modes + 1:
         raise ValueError("theta0 must have 4 * n_modes + 1 columns")
-    if not np.isfinite(lambda0) or lambda0 <= 0:
-        raise ValueError("lambda0 must be finite and positive")
+    if t.ndim != 1 or t.shape[0] != y.shape[1]:
+        raise ValueError("time must be (N,) matching traces (B, N)")
+    if y.shape[0] == 0 or y.shape[1] == 0:
+        raise ValueError("traces must contain at least one trace and sample")
+    for name, values in (("time", t), ("traces", y), ("theta0", theta)):
+        if not bool(xp.all(xp.isfinite(values))):
+            raise ValueError(f"{name} must contain only finite values")
+    theta[:, 3 : 4 * n_modes : 4] = _wrap_phase(
+        xp, theta[:, 3 : 4 * n_modes : 4]
+    )
     _sync(xp)
     start = perf_counter()
     b = y.shape[0]
@@ -153,6 +192,12 @@ def refine_modes_batched(
 
 @dataclass(frozen=True)
 class RefinementBenchmark:
+    """Timings and fit quality from each path's fastest repetition.
+
+    Convergence counts and worst residual RMS accompany parameter agreement;
+    a fast or matching result does not establish that every fit converged.
+    """
+
     traces: int
     samples: int
     n_modes: int
@@ -163,6 +208,44 @@ class RefinementBenchmark:
     max_abs_theta_diff_numpy: float
     max_abs_theta_diff_cupy: float | None
     gpu_error: str | None
+    cpu_serial_converged: int
+    numpy_batched_converged: int
+    cupy_batched_converged: int | None
+    cpu_serial_max_residual_rms: float
+    numpy_batched_max_residual_rms: float
+    cupy_batched_max_residual_rms: float | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def __str__(self) -> str:
+        lines = [
+            f"traces={self.traces} samples={self.samples} "
+            f"repeat={self.repeat}",
+            f"cpu_serial_scipy_s={self.cpu_serial_scipy_s:.6g}",
+            f"numpy_batched_s={self.numpy_batched_s:.6g}",
+            f"max_abs_theta_diff_numpy={self.max_abs_theta_diff_numpy:.3g}",
+            f"cpu_serial_converged={self.cpu_serial_converged}/{self.traces}",
+            f"numpy_batched_converged={self.numpy_batched_converged}/{self.traces}",
+            f"cpu_serial_max_residual_rms={self.cpu_serial_max_residual_rms:.6g}",
+            f"numpy_batched_max_residual_rms={self.numpy_batched_max_residual_rms:.6g}",
+        ]
+        if self.gpu_error:
+            lines.extend(
+                ("gpu_status=unavailable", f"gpu_error={self.gpu_error}")
+            )
+        elif self.cupy_batched_s is None:
+            lines.append("gpu_status=skipped")
+        else:
+            lines.extend(
+                (
+                    f"cupy_batched_s={self.cupy_batched_s:.6g}",
+                    f"max_abs_theta_diff_cupy={self.max_abs_theta_diff_cupy:.3g}",
+                    f"cupy_batched_converged={self.cupy_batched_converged}/{self.traces}",
+                    f"cupy_batched_max_residual_rms={self.cupy_batched_max_residual_rms:.6g}",
+                )
+            )
+        return "\n".join(lines)
 
 
 def benchmark_refinement(
@@ -183,8 +266,20 @@ def benchmark_refinement(
     The batched timings cover the solver only: the arrays are on the
     device before the clock starts and the device is synchronised before
     and after. The SciPy timing covers the Python loop over traces."""
-    if repeat < 1:
-        raise ValueError("repeat must be positive")
+    for name, value in (
+        ("samples", samples),
+        ("traces", traces),
+        ("n_modes", n_modes),
+        ("repeat", repeat),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or value < 1
+        ):
+            raise ValueError(f"{name} must be a positive integer")
+    if not np.isfinite(noise_sigma) or noise_sigma < 0:
+        raise ValueError("noise_sigma must be finite and nonnegative")
     from .mode_refinement import refine_modes
     from .synthetic_validation import (
         DEFAULT_MODES,
@@ -192,6 +287,8 @@ def benchmark_refinement(
         synthetic_modes_trace,
     )
 
+    if n_modes > len(DEFAULT_MODES):
+        raise ValueError(f"n_modes must be at most {len(DEFAULT_MODES)}")
     modes = DEFAULT_MODES[:n_modes]
     fx = synthetic_modes_trace(samples, modes=modes)
     rng = np.random.default_rng(seed)
@@ -212,11 +309,15 @@ def benchmark_refinement(
 
     def serial_scipy():
         out = np.empty_like(theta0)
+        converged = 0
+        max_residual_rms = 0.0
         for i in range(traces):
             init = [
                 tuple(theta0[i, 4 * k : 4 * k + 4]) for k in range(n_modes)
             ]
             r = refine_modes(fx.time, y[i], init, float(theta0[i, -1]))
+            converged += int(r.converged)
+            max_residual_rms = max(max_residual_rms, r.residual_rms)
             # refine_modes normalises signs and orders by amplitude; undo
             # the ordering by matching frequencies to the start
             for k in range(n_modes):
@@ -232,13 +333,16 @@ def benchmark_refinement(
                     r.phase[j],
                 )
             out[i, -1] = r.constant
-        return out
+        return out, converged, max_residual_rms
 
     cpu_serial_s = float("inf")
     for _ in range(repeat):
         start = perf_counter()
-        serial = serial_scipy()
-        cpu_serial_s = min(cpu_serial_s, perf_counter() - start)
+        candidate = serial_scipy()
+        elapsed = perf_counter() - start
+        if elapsed < cpu_serial_s:
+            cpu_serial_s = elapsed
+            serial, serial_converged, serial_max_residual_rms = candidate
 
     res_np = min(
         (
@@ -254,6 +358,8 @@ def benchmark_refinement(
     cupy_s = None
     diff_cp = None
     gpu_error = None
+    cp_converged = None
+    cp_max_residual_rms = None
     if run_gpu:
         try:
             import cupy as cp
@@ -270,6 +376,8 @@ def benchmark_refinement(
             diff_cp = float(
                 np.max(np.abs(_canonical(theta_cp, n_modes) - serial))
             )
+            cp_converged = int(cp.count_nonzero(res_cp.converged))
+            cp_max_residual_rms = float(cp.max(res_cp.residual_rms))
         except Exception as exc:  # pragma: no cover - depends on hardware
             gpu_error = f"{type(exc).__name__}: {exc}"
     return RefinementBenchmark(
@@ -283,6 +391,12 @@ def benchmark_refinement(
         max_abs_theta_diff_numpy=diff_np,
         max_abs_theta_diff_cupy=diff_cp,
         gpu_error=gpu_error,
+        cpu_serial_converged=serial_converged,
+        numpy_batched_converged=int(np.count_nonzero(res_np.converged)),
+        cupy_batched_converged=cp_converged,
+        cpu_serial_max_residual_rms=serial_max_residual_rms,
+        numpy_batched_max_residual_rms=float(np.max(res_np.residual_rms)),
+        cupy_batched_max_residual_rms=cp_max_residual_rms,
     )
 
 

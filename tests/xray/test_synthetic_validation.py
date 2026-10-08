@@ -537,3 +537,40 @@ def test_distort_trace_kinds_and_rejection():
         assert not np.allclose(y, fx.clean), kind
     with pytest.raises(ValueError):
         distort_trace(fx.time, fx.modes, fx.constant, "square", 1.0)
+
+
+def test_validation_reports_solver_failure_separately_from_mode_recovery():
+    def unconverged(time, trace, components):
+        fixture = synthetic_modes_trace(time.size)
+        return SimpleNamespace(
+            amplitude=np.array([m.amplitude for m in fixture.modes]),
+            decay=np.array([m.decay for m in fixture.modes]),
+            angular_frequency=np.array(
+                [m.angular_frequency for m in fixture.modes]
+            ),
+            phase=np.array([m.phase for m in fixture.modes]),
+            reconstruction=fixture.clean,
+            converged=False,
+        )
+
+    sweep = validation_sweep(snr_db=(30,), trials=2, estimator=unconverged)
+    level = sweep.levels[0]
+    assert level.trials_successful == 2
+    assert level.any_mode_lost_rate == 0
+    result = build_summary([sweep])["results"][0]
+    assert result["solver_convergence"] == {"converged": 0, "unconverged": 2}
+    assert "solver_unconverged=2" in str(sweep)
+
+
+def test_refined_validation_is_available_without_the_cli(tmp_path):
+    report = validate_linear_prediction(
+        snr_db=(30,), trials=2, refine=True, output_dir=tmp_path
+    )
+    assert [s.backend for s in report.sweeps] == ["cpu", "cpu-refined"]
+    result = report.to_dict()["results"][1]
+    status = result["solver_convergence"]
+    assert status["converged"] + status["unconverged"] == 2
+    assert (
+        json.loads((tmp_path / "summary.json").read_text())
+        == report.to_dict()
+    )

@@ -44,6 +44,8 @@ def test_cli_help(capsys):
     [
         ("DataProbeCommand", "on"),
         ("LinearPredictionValidateCommand", "samples"),
+        ("LinearPredictionRefineBenchmarkCommand", "traces"),
+        ("LinearPredictionModesReviewCommand", "html"),
         ("ModelOrderSweepCommand", "trace_count"),
         ("SubspaceBenchmarkCommand", "trace_count"),
     ],
@@ -61,6 +63,11 @@ def test_report_commands_use_injected_output(
         options.update(h5dir=tmp_path, fon="cube.h5", foff="cube.h5")
     elif command_name == "LinearPredictionValidateCommand":
         options.update(samples=48, snr_db="30", trials=2)
+    elif command_name == "LinearPredictionRefineBenchmarkCommand":
+        options.update(traces=2, repeat=1, no_gpu=True)
+    elif command_name == "LinearPredictionModesReviewCommand":
+        pytest.importorskip("bokeh")
+        options.update(output_path=tmp_path / "review.html", snr_db="30")
     else:
         time, rows = synthetic_trace_batch(samples=48, traces=2)
         paths = [tmp_path / f"trace-{index}.npz" for index in range(2)]
@@ -113,6 +120,7 @@ def test_core_command_registry_loads_xray_commands():
         "linear-prediction-benchmark": "lpb",
         "linear-prediction-validate": "lpv",
         "linear-prediction-refine-benchmark": "lprb",
+        "linear-prediction-modes-review": "lpmr",
         "linear-prediction-fixed-stages-benchmark": "lpfsb",
         "linear-prediction-p2-benchmark": "lppb",
         "linear-prediction-profile-summary": "lpps",
@@ -2384,3 +2392,28 @@ def test_subspace_acceptance_rejects_with_text_status(tmp_path, capsys):
     assert "status=rejected" in output
     assert "trace_count=1" in output
     assert "accepted=False" in output
+
+
+def test_modes_review_cli_writes_an_offline_artifact(tmp_path, capsys):
+    pytest.importorskip("bokeh")
+    path = tmp_path / "review.html"
+    assert (
+        main(["lpmr", "--output", str(path), "--snr-db", "30", "--json"]) == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["html_path"] == str(path)
+    assert report["trace_count"] == 1
+    assert "cdn.bokeh.org" not in path.read_text()
+
+
+@pytest.mark.parametrize(
+    "args", [["--snr-db", "nan"], ["--distortion", "chirp"]]
+)
+def test_modes_review_cli_rejects_invalid_inputs(tmp_path, capsys, args):
+    path = tmp_path / "review.html"
+    _assert_cli_error(
+        capsys,
+        ["lpmr", "--output", str(path), *args],
+        "snr_db" if args[0] == "--snr-db" else "--distortion",
+    )
+    assert not path.exists()
