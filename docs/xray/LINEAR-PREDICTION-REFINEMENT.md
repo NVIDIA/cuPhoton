@@ -43,20 +43,32 @@ interpreting fitted parameters or uncertainties.
 `linear-prediction-validate --refine` runs the validation sweep a second time
 with this estimator (`estimator: cpu-refined` in the summary). Compare mode
 loss, bias, scatter, and residuals across noise levels and distortions.
+The summary records solver convergence separately from mode recovery:
+matching the true frequencies does not establish that optimization converged.
+The Python entry point is
+`synthetic_validation.validate_linear_prediction(refine=True)`, which returns
+a report with the same text and JSON data as the command.
+
 Results depend on the fixture, initialization, and noise realization;
 refinement does not guarantee recovery of every mode or attainment of the
-Cramer-Rao bound.
+Cramer-Rao bound. The comparison supplies the fixture's known mode count to
+refinement; it does not test automatic model-order selection or establish
+recovery on detector data with an unknown number of modes.
 
 ```bash
 uv run cuphoton xray lpv --refine --snr-db 40,20,10,5 --trials 200 --output-dir /tmp/lpv-refined
 uv run cuphoton xray lpv --refine --distortion chirp:0.05 --snr-db 30
-uv run python examples/xray_lp_modes_review.py --output /tmp/review.html
+uv run --extra viz cuphoton xray lpmr --output /tmp/review.html
 ```
 
-The example writes a Bokeh review page (requires the `viz` extra) with the
-trace, the true model, the linear-prediction and refined reconstructions,
-and the recovered modes against the true ones, for several noise levels and
-an optional distortion.
+`linear-prediction-modes-review` (`lpmr`) writes an offline Bokeh page with
+the noisy trace, noise-free input, linear-prediction and refined
+reconstructions, and individual modes. The page shows refinement convergence;
+with a distortion, the individual true modes are labeled as reference modes.
+Use `--snr-db`, `--distortion`, `--seed`, and `--samples` to configure the
+comparison, or `--json` to report its artifact path and convergence count.
+The reusable Python API is `mode_refinement_viz.write_modes_review(...)`.
+The existing example script forwards its options to this command.
 
 ## Batched refinement
 
@@ -94,7 +106,9 @@ the device is synchronised before and after, so host-to-device transfer and
 the copy of the result back are not included. One untimed CuPy call on up to
 16 traces runs first to warm the device path. The command also
 reports the largest parameter difference between each batched result and
-the SciPy result.
+the SciPy result, the number of converged traces, and the largest residual
+RMS for each path. Diagnostics belong to that path's fastest repetition.
+Parameter agreement alone does not establish convergence.
 
 ```bash
 uv run cuphoton xray lprb --traces 256 --repeat 3 --json

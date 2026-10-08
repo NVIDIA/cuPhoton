@@ -685,6 +685,61 @@ class LinearPredictionValidateCommand(_XRayCommand):
         _required = False
 
 
+class LinearPredictionModesReviewCommand(_XRayCommand):
+    _description_ = (
+        "Write a visual comparison of synthetic modes and refinements."
+    )
+    _shortname_ = "lpmr"
+    _handler_name_ = "_linear_prediction_modes_review"
+
+    output_path = "xray_lp_modes_review.html"
+
+    class OutputPathArg(PathValueInvariant):
+        _arg = "--output"
+        _help = "Output HTML path (requires the viz extra)."
+        _required = False
+        _default = "xray_lp_modes_review.html"
+
+    snr_db = "40,20,10,5"
+
+    class SnrDbArg(StringInvariant):
+        _arg = "--snr-db"
+        _help = "Comma-separated signal-to-noise levels in dB."
+        _required = False
+        _default = "40,20,10,5"
+
+    distortion = None
+
+    class DistortionArg(StringInvariant):
+        _arg = "--distortion"
+        _help = "Model mismatch as kind:amount, for example chirp:0.05."
+        _required = False
+        _default = None
+
+    seed = 11
+
+    class SeedArg(IntegerInvariant):
+        _arg = "--seed"
+        _help = "Random seed for reproducible noise."
+        _required = False
+        _default = 11
+
+    samples = 96
+
+    class SamplesArg(PositiveIntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable artifact information."
+        _required = False
+
+
 class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
     _description_ = (
         "Benchmark per-trace SciPy refinement against the batched "
@@ -695,7 +750,7 @@ class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
 
     samples = 96
 
-    class SamplesArg(IntegerInvariant):
+    class SamplesArg(PositiveIntegerInvariant):
         _arg = "--samples"
         _help = "Number of synthetic trace samples."
         _required = False
@@ -703,7 +758,7 @@ class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
 
     traces = 256
 
-    class TracesArg(IntegerInvariant):
+    class TracesArg(PositiveIntegerInvariant):
         _arg = "--traces"
         _help = "Number of traces in the batch."
         _required = False
@@ -711,7 +766,7 @@ class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
 
     repeat = 3
 
-    class RepeatArg(IntegerInvariant):
+    class RepeatArg(PositiveIntegerInvariant):
         _arg = "--repeat"
         _help = "Timed repetitions per path; the best time is reported."
         _required = False
@@ -4499,6 +4554,27 @@ def _linear_prediction_validate(args):
     return 0
 
 
+def _linear_prediction_modes_review(args):
+    from .mode_refinement_viz import write_modes_review
+
+    report = write_modes_review(
+        args.output_path,
+        snr_db=tuple(
+            float(x) for x in str(args.snr_db).split(",") if x.strip()
+        ),
+        distortion=_parse_validation_distortion(args.distortion),
+        seed=args.seed,
+        samples=args.samples,
+    )
+    args._out(
+        json.dumps(
+            report.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else report
+    )
+    return 0
+
 
 def _linear_prediction_refine_benchmark(args):
     from .mode_refinement_batched import benchmark_refinement
@@ -4509,25 +4585,13 @@ def _linear_prediction_refine_benchmark(args):
         run_gpu=not args.no_gpu,
         repeat=args.repeat,
     )
-    payload = dataclass_asdict(result)
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
-    print(
-        f"traces={result.traces} samples={result.samples} "
-        f"repeat={result.repeat}"
+    args._out(
+        json.dumps(
+            result.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else result
     )
-    print(f"cpu_serial_scipy_s={result.cpu_serial_scipy_s:.6g}")
-    print(f"numpy_batched_s={result.numpy_batched_s:.6g}")
-    print(f"max_abs_theta_diff_numpy={result.max_abs_theta_diff_numpy:.3g}")
-    if result.gpu_error:
-        print("gpu_status=unavailable")
-        print(f"gpu_error={result.gpu_error}")
-    elif result.cupy_batched_s is None:
-        print("gpu_status=skipped")
-    else:
-        print(f"cupy_batched_s={result.cupy_batched_s:.6g}")
-        print(f"max_abs_theta_diff_cupy={result.max_abs_theta_diff_cupy:.3g}")
     return 0
 
 
