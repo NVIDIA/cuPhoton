@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "native_api.h"
+#include "native_jacobian.h"
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -284,7 +285,20 @@ __global__ void compact_rows(
     Work<T> w,
     int* count,
     bool accepted_only,
-    bool enforce_budget) {
+    bool enforce_budget,
+    int finite_count) {
+    // Fused outputs use the original selected-row order. Consume all flags
+    // before the stable selection below overwrites that row list. factor_info
+    // is scratch here; cuBLAS writes its integer results later in the iteration.
+    const bool* finite_row = reinterpret_cast<const bool*>(w.factor_info);
+    for (int slot = 0; slot < finite_count; ++slot) {
+        int row = w.indices[slot];
+        if (finite_row[slot]) {
+            b.diagnostic_current[row] = true;
+        } else {
+            b.status[row] = invalid_residual;
+        }
+    }
     int size = 0;
     for (int row = 0; row < b.count; ++row) {
         if (enforce_budget && b.status[row] == active
@@ -536,6 +550,7 @@ __global__ void multiply_single_observation(
 
 struct Workspace::Impl {
     int device = 0;
+    bool fused_jacobian = false;
     cudaStream_t stream = nullptr;
     cublasHandle_t handle = nullptr;
     double cube_exponent = 3.0;
@@ -694,9 +709,16 @@ struct Workspace::Impl {
         Work<T> w,
         Timings& timings,
         bool accepted_only = false,
-        bool enforce_budget = false) {
+        bool enforce_budget = false,
+        int finite_count = 0) {
         compact_rows<<<1, 1, 0, stream>>>(
-            b, s, w, device_active, accepted_only, enforce_budget);
+            b,
+            s,
+            w,
+            device_active,
+            accepted_only,
+            enforce_budget,
+            finite_count);
         check(cudaGetLastError());
         read_active(timings);
         return *host_active;
@@ -819,14 +841,46 @@ struct Workspace::Impl {
             return;
         }
 
-        evaluate_jacobian<<<count, threads, 0, stream>>>(
-            b, w, T(cube_exponent));
-        count = select_rows(b, s, w, timings);
-        if (!count) {
-            return;
+        bool packed = false;
+        if constexpr (sizeof(T) == sizeof(double)) {
+            if (fused_jacobian) {
+                int selected = count;
+                check(
+                    detail::launch_jacobian_pack_fp64(
+                        static_cast<const double*>(b.x),
+                        static_cast<const double*>(b.weights),
+                        w.indices,
+                        static_cast<const double*>(b.residuals),
+                        w.packed_jacobian,
+                        w.transposed,
+                        w.compact_residual,
+                        reinterpret_cast<bool*>(w.factor_info),
+                        b.count,
+                        selected,
+                        b.planes,
+                        b.height,
+                        b.width,
+                        device,
+                        stream));
+                count = select_rows(b, s, w, timings, false, false, selected);
+                if (!count) {
+                    return;
+                }
+                packed = count == selected;
+            }
         }
-        pack_equations<<<count, threads, 0, stream>>>(b, w);
-        check(cudaGetLastError());
+        if (!packed) {
+            // Mixed-invalid fused batches changed the selected-row order.
+            // Rebuild the survivor layouts with the original native path.
+            evaluate_jacobian<<<count, threads, 0, stream>>>(
+                b, w, T(cube_exponent));
+            count = select_rows(b, s, w, timings);
+            if (!count) {
+                return;
+            }
+            pack_equations<<<count, threads, 0, stream>>>(b, w);
+            check(cudaGetLastError());
+        }
         // Reversed binary einsum operands: r[batch,1,m] @ JT[batch,m,8].
         matmul(
             w.compact_residual,
@@ -918,6 +972,16 @@ Workspace::Workspace(int device)
     DeviceGuard guard(device);
     auto state = std::make_unique<Impl>();
     state->device = device;
+    int major = 0, minor = 0, clusters = 0;
+    check(cudaDeviceGetAttribute(
+        &major, cudaDevAttrComputeCapabilityMajor, device));
+    check(cudaDeviceGetAttribute(
+        &minor, cudaDevAttrComputeCapabilityMinor, device));
+    if (major == 10 && minor == 0) {
+        check(cudaDeviceGetAttribute(
+            &clusters, cudaDevAttrClusterLaunch, device));
+    }
+    state->fused_jacobian = major == 10 && minor == 0 && clusters != 0;
     check(cudaStreamCreateWithFlags(&state->stream, cudaStreamNonBlocking));
     check(cublasCreate(&state->handle));
     check(cublasSetStream(state->handle, state->stream));

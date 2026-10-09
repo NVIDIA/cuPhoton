@@ -49,6 +49,9 @@ class CUDAExtension(Extension):
                 str(_SOURCE / "native_api.h"),
                 str(_SOURCE / "native.cu"),
                 str(_SOURCE / "native_norm.cu"),
+                str(_SOURCE / "native_jacobian.h"),
+                str(_SOURCE / "native_jacobian.cu"),
+                str(_SOURCE / "native_jacobian_lean.cu"),
             ],
             language="c++",
             include_dirs=[
@@ -91,25 +94,31 @@ class CUDABuildExt(build_ext):
         ]
         for include in extension.include_dirs:
             command.extend(("-I", include))
-        for architecture in extension.architectures:
-            command.append(
+        objects = []
+        for name, fmad, ftz, architectures in (
+            ("native", _MAIN_FMAD, _MAIN_FTZ, extension.architectures),
+            ("native_norm", _NORM_FMAD, True, extension.architectures),
+            # Match native transcendental contraction; explicit RN intrinsics
+            # preserve the Jacobian's individual arithmetic boundaries.
+            ("native_jacobian", True, False, (100,)),
+            ("native_jacobian_lean", True, False, (100,)),
+        ):
+            architecture_flags = [
                 f"--generate-code=arch=compute_{architecture},"
                 f"code=sm_{architecture}"
+                for architecture in architectures
+            ]
+            # Keep PTX for each unit's highest target, including the SM 75
+            # default used by the portable native and norm kernels.
+            architecture = architectures[-1]
+            architecture_flags.append(
+                f"--generate-code=arch=compute_{architecture},"
+                f"code=compute_{architecture}"
             )
-        # Retain PTX so the default SM 75 build can run on later CUDA 13 GPUs.
-        architecture = extension.architectures[-1]
-        command.append(
-            f"--generate-code=arch=compute_{architecture},"
-            f"code=compute_{architecture}"
-        )
-        objects = []
-        for name, fmad, ftz in (
-            ("native", _MAIN_FMAD, _MAIN_FTZ),
-            ("native_norm", _NORM_FMAD, True),
-        ):
             object_path = object_directory / f"{name}.o"
             compile_command = [
                 *command,
+                *architecture_flags,
                 "-c",
                 str(_SOURCE / f"{name}.cu"),
                 "-o",
@@ -125,7 +134,7 @@ class CUDABuildExt(build_ext):
         previous_depends = extension.depends
         extension.extra_objects = [*(previous or ()), *objects]
         # setuptools checks sources/depends before considering extra_objects.
-        # Relink both freshly compiled CUDA objects even when only SDK or
+        # Relink all freshly compiled CUDA objects even when only SDK or
         # architecture settings changed since the previous extension build.
         extension.depends = [*(previous_depends or ()), *objects]
         try:
