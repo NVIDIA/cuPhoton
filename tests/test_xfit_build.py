@@ -10,6 +10,7 @@ import importlib.util
 import runpy
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import setuptools
@@ -128,6 +129,39 @@ def test_native_build_is_enabled_independently(
     ]
     assert "src/cuphoton/xfit/src/native_norm.cu" in extension.depends
     assert "build_ext" in captured["cmdclass"]
+
+
+def test_native_and_xdr_builds_can_be_enabled_together(monkeypatch):
+    captured = {}
+    xdr_extension = setuptools.Extension("cuphoton.xdr._native_ext", [])
+    xfit_extension = setuptools.Extension("cuphoton.xfit._native_ext", [])
+    build_command = object()
+    helpers = {
+        "_cuphoton_xdr_setup_package": SimpleNamespace(
+            get_extensions=lambda: [xdr_extension]
+        ),
+        "_cuphoton_xfit_setup_package": SimpleNamespace(
+            get_extensions=lambda: [xfit_extension],
+            CUDABuildExt=build_command,
+        ),
+    }
+    loader = SimpleNamespace(
+        create_module=lambda spec: helpers[spec.name],
+        exec_module=lambda module: None,
+    )
+    monkeypatch.setenv("CUPHOTON_XDR_BUILD_EXT", "1")
+    monkeypatch.setenv("CUPHOTON_XFIT_BUILD_EXT", "1")
+    monkeypatch.setattr(setuptools, "setup", lambda **kw: captured.update(kw))
+    monkeypatch.setattr(
+        importlib.util,
+        "spec_from_file_location",
+        lambda name, path: importlib.machinery.ModuleSpec(name, loader),
+    )
+
+    runpy.run_path(str(_ROOT / "setup.py"))
+
+    assert captured["ext_modules"] == [xdr_extension, xfit_extension]
+    assert captured["cmdclass"] == {"build_ext": build_command}
 
 
 def test_native_build_requires_versioned_runtime(monkeypatch, tmp_path):
