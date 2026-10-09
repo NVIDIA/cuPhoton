@@ -17,8 +17,10 @@ one entry from the allocation's `CUDA_VISIBLE_DEVICES` list using the rank's
 position on its node. It preserves the original list in
 `CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES`, then executes the application.
 
-The shared executor requires one visible GPU before it imports mpi4py.
-This protects against MPI installations that initialize CUDA during import.
+The launcher wrapper or scheduler must restrict each rank to one visible GPU
+before Python starts. This protects against MPI installations that initialize
+CUDA during import. The shared executor checks GPU visibility, then imports
+mpi4py even if that check failed so all ranks can agree on startup errors.
 The numerical code uses device 0 within each rank's restricted visibility.
 
 The wrapper expects the full per-node GPU list in local-rank order. It
