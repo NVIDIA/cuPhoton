@@ -112,6 +112,8 @@ Core's public CLI facade.
 Core also supplies FITS metadata inspection and reader selection, plus the
 shared Dragon/MPI execution machinery. Components retain their scientific
 input validation and choose how to divide work among those executors.
+See the [distributed architecture](distributed.md) for process ownership,
+data movement and the Dragon/MPI worker lifecycles.
 
 xDataReader, xFit, xPois, and xRep expose a curated Python surface
 for embedding numerical operations. xScan and xRay are primarily

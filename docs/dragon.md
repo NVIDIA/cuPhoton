@@ -1,254 +1,306 @@
-# Dragon transport and coordination
+# How cuPhoton uses Dragon
 
-Dragon places and manages cuPhoton workers; the selected numerical backend
-runs each image pair inside its worker. Transport selection belongs to the
-Dragon launcher. It does not change cuPhoton's numerical backend or fit options.
+cuPhoton uses Dragon to place Python workers on GPU nodes and collect their
+completion messages. Each worker is bound to one GPU and runs complete work
+items. By default, cuPhoton places one worker on each GPU. Optional sharing
+lets several independent workers use the same GPU. The coordinator assigns
+work, checks results and stops the workers.
 
-Start with [distributed execution](distributed-execution.md) for environment
-setup, a pipeline manifest, Slurm allocations and representative host files.
+Dragon carries control messages and result metadata. In the combined imaging
+pipeline, each worker runs xPois, xFit and xScan on its assigned image pairs.
+Intermediate image arrays stay on that worker's GPU.
 
-## Execution models
+The [distributed architecture](distributed.md) describes the common work and
+data model. The [launch guide](distributed-execution.md) provides runnable
+examples. [Transport and performance](dragon-performance.md) covers TCP,
+HSTA, queue placement experiments and timing limits.
 
-The [xPois batch executor](components/xpois.md#launch-with-dragon)
-assigns a complete shard to each worker at launch. Workers process their
-assigned items and send one terminal result to the coordinator in single-pass
-mode. Repeated rounds and component commands retain workers as follows:
+## Processes and queues
 
-| Path | Coordination and retained state |
-|---|---|
-| Single-pass xPois | One assigned shard and one terminal result per worker; no per-round command queue. |
-| [Repeated xPois rounds](components/xpois.md#repeat-a-batch-in-persistent-workers) | `--warmup-rounds` and `--measure-rounds` reuse workers and CUDA contexts. Each worker has a command queue on its own host and repeats its assigned shard. |
-| [Shared executors](../src/cuphoton/core/executors.py) and [component commands](components/xscan.md#distributed-inference) | xFit, xScan and `xscan run-pipeline` use the shared Dragon/MPI lifecycle. Dragon uses consumer-local command queues for both a single pass and repeated rounds; component workers retain their input/model context. |
+The Dragon launcher starts the cuPhoton coordinator within the Dragon
+runtime. The coordinator uses Dragon's native API to discover nodes, select
+GPUs and create workers. It creates one `ProcessGroup` containing one
+`ProcessTemplate` per worker.
 
-### Persistent behavior
+The shared executor uses one command queue per worker and one common result
+queue. The coordinator creates each command queue with a placement policy
+for that worker's host. The result queue resides with the coordinator.
 
-Persistence does not remove all per-item work. xPois still reads, transfers and
-writes ordinary scientific artifacts each round. Standalone xFit retains its
-loaded host input; xScan retains metadata, its model and loader across tasks.
-Distributed xScan defaults to `--num-workers 0`. Explicitly requested loader
-processes start before READY and persist across tasks and rounds. The combined
-pipeline keeps intermediate arrays inside each GPU worker while it
-processes an image pair. Each GPU handles complete items; these paths do not
-split one image across GPUs.
-
-The shared executor accepts `--workers-per-gpu` to place several independent
-workers on each GPU; its default is one. `--max-workers` remains a total
-process cap. See [GPU sharing](components/xscan.md#share-a-gpu-between-image-pairs)
-for CLI and Python examples, local process/thread modes, and external MPS
-connection checks. These sharing and MPS options apply to `xfit fit-dipoles`,
-`xscan infer-real-bogus`, and `xscan run-pipeline` with `--executor dragon`.
-The standalone XPOIS batch API retains its existing placement behavior.
-
-### Launch descriptors
-
-Dragon workers load immutable, hash-checked launch descriptors from the shared
-filesystem. Launch arguments carry descriptor references rather than the full
-manifest, with a 96 KiB size guard. This bounds process-launch payloads; queue
-placement addresses a separate coordination cost.
-
-## Select the application and overlay transports
-
-Dragon has separate application and infrastructure overlay transports.
-`-t tcp -o tcp` selects its Python TCP transport for both. With a Dragon 0.14.2
-installation that includes native HSTA, select native HSTA for application
-traffic and retain Python TCP for the overlay:
-
-```bash
-DRAGON_HSTA_FORCE_BACKEND=tcp \
-  .venv/bin/dragon -m -N 2 -w slurm -t hsta -o tcp \
-  examples/xpois/dragon_batch.py \
-  --backend cupy \
-  --manifest /shared/manifests/fixed-32.yaml \
-  --output-dir /shared/results/xpois-hsta \
-  --name fixed-32-hsta16 \
-  --max-workers 16 \
-  --worker-timeout-sec 3600
+```mermaid
+flowchart TB
+    L["Dragon launcher"] --> C
+    subgraph A["Node A"]
+        C["cuPhoton coordinator"]
+        Q["Common result queue"]
+        QA["Command queue A"]
+        WA["Python worker A: GPU 0"]
+        QA -->|"Local receive"| WA
+        Q -->|"Local receive"| C
+    end
+    subgraph B["Node B"]
+        QB["Command queue B"]
+        WB["Python worker B: GPU 0"]
+        QB -->|"Local receive"| WB
+    end
+    C --> QA
+    C -->|"Remote send"| QB
+    WA --> Q
+    WB -->|"Remote send"| Q
 ```
 
-As in the xPois launch example, these paths must be accessible to the allocated
-nodes. The manifest needs enough image pairs for the selected workers. Adapt
-the node and worker counts to the allocation.
+This example shows the default arrangement, with one worker per GPU. The coordinator is a separate process
+and needs no assigned GPU. Dragon's own runtime services are omitted from
+the diagram. Each node can host several workers. Each worker has its own
+command queue and one assigned GPU.
 
-`DRAGON_HSTA_FORCE_BACKEND=tcp` selects HSTA's native TCP implementation. This
-configuration uses TCP rather than UCX or RDMA. Inspect the launcher and
-transport logs to confirm HSTA started on each node and exited successfully;
-record the Dragon version, arguments and environment with the run. INFO logs
-can confirm native HSTA startup without providing network byte counters.
+The queues contain Python metadata. They do not contain image pixels, model
+weights or CUDA buffers. Workers read input and model files directly from
+shared storage, then write their outputs there. A result message includes
+status, item identities, placement and timing. Its size can grow with the
+number of assigned items.
 
-HSTA TCP is a useful candidate for workloads with frequent small messages.
-Qualify it on the target installation with representative numerical work,
-output validation and cleanup checks. The Python TCP launch in the xPois guide
-remains an explicit alternative. Transport availability and the fastest queue
-layout depend on the Dragon build and workload.
+## Select hosts and bind GPUs
 
-## Place command queues with their consumers
+cuPhoton reads the node list through `System` and each node's GPU IDs through
+`Node.gpus`. It uses the reported IDs, including nonconsecutive IDs. Selection
+rotates across hosts before taking a second GPU from each host. It uses
+distinct GPUs before assigning another worker to a GPU.
 
-The repeated xPois and shared Dragon executors use a READY/command/result
-protocol. Each worker sends READY after initialization, then waits on its own
-command queue. The coordinator waits for all READY messages before releasing
-a round. Custom coordinators with the same protocol need to consider queue
-placement.
+The shared executor limits workers to the item count and the available GPU
+count multiplied by `--workers-per-gpu`. The default is one worker per GPU.
+`--max-workers` caps the total process count. cuPhoton assigns each worker
+a fixed shard of items. A Dragon `Policy` specifies the hostname and one GPU affinity
+for that process.
 
-In Dragon 0.14.2's Python TCP transport, remote receives, sends and polls share
-an executor. A receive waiting on an empty remote queue can occupy a thread
-until a message arrives or its timeout expires. If command queues are all on
-the coordinator's node, enough idle remote workers can consume the threads
-needed to deliver the remaining READY messages. Both sides then wait.
+Before creating the component worker, cuPhoton checks the actual hostname and
+`CUDA_VISIBLE_DEVICES`. The worker must see exactly the requested GPU.
+The check rejects prior imports of CuPy, Numba CUDA or cuTile, or an
+initialized Torch CUDA runtime. The component then initializes its numerical libraries and uses local device 0.
+The worker reports its physical GPU identity. Workers assigned to the same
+GPU must agree on that identity. Workers assigned to different GPUs must
+report different identities.
 
-For this pattern with Python TCP, place each command queue on its consumer's
-host. Keep the result queue on its consumer, the coordinator:
+This ordering matters because a CUDA library can retain the device selection
+from its first initialization. Changing the visibility environment afterward
+does not move an existing CUDA context.
 
-```python
-from dragon.infrastructure.policy import Policy
-from dragon.native.machine import Node
-from dragon.native.queue import Queue
+## Share a GPU between workers
 
-# worker_node_id comes from the allocation's discovered Dragon node IDs.
-worker_host = Node(worker_node_id).hostname
-worker_policy = Policy(
-    placement=Policy.Placement.HOST_NAME,
-    host_name=worker_host,
-)
-command_queue = Queue(maxsize=1, policy=worker_policy)
+`--workers-per-gpu N` permits up to N worker processes on each GPU. For
+example, four GPUs with two workers per GPU provide eight worker slots.
+Item count and `--max-workers` can reduce the actual worker count.
+
+Each worker processes complete items and retains its own component state. The combined pipeline therefore
+loads a separate model for each worker. More workers can increase memory
+use and contention. Measure batch time and memory use for the intended inputs
+before choosing a worker count.
+
+Each process still has a command queue and sends results to the common
+result queue. More workers mean more queues, launch descriptors and completion
+messages. The shared lifecycle below applies to every worker.
+
+### Connect workers to MPS
+
+The worker count and MPS connection are separate choices. Multiple processes
+can share a GPU under ordinary CUDA scheduling. An MPS service allows CUDA
+work from different processes to overlap on the device.
+
+`--mps-pipe-directory PATH` requires every worker to connect to an existing
+MPS v2 service. The launcher or administrator starts that service and owns
+its resource limits and shutdown. cuPhoton does not start or stop MPS or
+change GPU compute mode.
+
+```mermaid
+flowchart TB
+    subgraph N["One GPU host"]
+        M["External MPS service"]
+        W0["Dragon worker 0<br/>Own model and item shard"]
+        W1["Dragon worker 1<br/>Own model and item shard"]
+        G["One physical GPU"]
+        M -.-|"Client PID check"| W0
+        M -.-|"Client PID check"| W1
+        W0 -->|"CUDA work"| G
+        W1 -->|"CUDA work"| G
+    end
 ```
 
-Use the hostname reported by Dragon's node discovery for both the queue and
-worker placement. This makes the worker's idle receive local and the
-coordinator's command send remote. It removes the central population of idle
-receive waits while retaining command traffic and result collection.
+The diagram shows two workers sharing a GPU with MPS. Each retains the
+Dragon queues shown in the earlier diagram. MPS connection checks are
+separate from Dragon's round commands and results.
 
-`DRAGON_TRANSPORT_TCP_MAX_THREADS` can increase the Python TCP executor ceiling.
-It allowed the centralized layout to make progress in testing, but preserved
-its idle remote receives and higher control latency. Native HSTA has a different
-progress implementation; the Python TCP thread setting still applies to a
-Python TCP overlay. Consumer-local queues are not universally faster under HSTA.
+Before creating the component worker, cuPhoton checks Dragon's initial GPU
+binding. It then sets `CUDA_MPS_PIPE_DIRECTORY`, resolves the device's UUID
+with `nvidia-smi`, and replaces `CUDA_VISIBLE_DEVICES` with that UUID. All
+three steps happen before CUDA initialization. UUID binding avoids changes
+in device numbering under MPS. Each process still uses local device 0.
 
-The repeated-round and shared executors use consumer-local
-command queues. The [single-pass xPois path](../src/cuphoton/xpois/dragon.py)
-uses only a result queue and needs no command-queue relocation. Neither path
-automatically changes the transport or raises the Python TCP thread ceiling;
-those remain launcher settings.
+After CUDA initialization, cuPhoton queries the MPS control daemon for its
+servers and their clients. The queries have a shared 10-second deadline.
+The worker PID must appear in a returned client list.
 
-The shared Dragon executor publishes terminal success only after worker
-shutdown and lifecycle audits. Per-round success does not establish a
-successful complete run. Silent worker exits and shutdown failures fail the
-run. After a reported round failure, healthy peers can finish and retain their
-artifacts. Check the root terminal summary before consuming a benchmark result.
+The worker reports readiness only after that check succeeds. Its startup record includes the GPU UUID and the MPS
+client and server PIDs. A missing service or failed connection check fails
+startup.
 
-## Evidence and timing boundaries
+On multiple hosts, use the same absolute, node-local pipe path on every
+worker host. The MPS service and its clients must use the same PID namespace
+for the connection check. Without the explicit pipe option, cuPhoton leaves
+inherited MPS settings in effect and does not verify an MPS connection.
+Omitting the option does not prove that MPS is disabled.
 
-A Dragon 0.14.2 control experiment used two nodes, with the coordinator on one
-and 64 CPU worker processes on the other. Each worker returned a 1024-byte
-payload per round; no GPU work or timed receipt-file writes occurred. Each
-successful invocation had 12 rounds. Two invocations per configuration reversed
-the queue-layout order. The table gives the median of rounds 2–12 for each
-invocation; the first round was retained separately.
+Sharing and MPS options apply to `xfit fit-dipoles`, `xscan infer-real-bogus`
+and `xscan run-pipeline` with `--executor dragon`. Standalone xPois and the
+Python `run_dragon_device_pipeline()` API retain one worker per GPU. MPI
+also retains one rank per physical GPU and rejects these sharing options.
+The [GPU sharing guide](components/xscan.md#share-a-gpu-between-image-pairs)
+contains commands and describes the separate local process and thread modes.
 
-| Application transport | Command queue host | Python TCP ceiling | Later-round medians |
-|---|---|---:|---:|
-| Python TCP | Coordinator | 1024 | 47.235 / 45.307 ms |
-| Python TCP | Consumer | 1024 | 33.604 / 28.123 ms |
-| Native HSTA TCP | Coordinator | 32 for overlay | 2.371 / 2.545 ms |
-| Native HSTA TCP | Consumer | 32 for overlay | 3.027 / 3.093 ms |
+## Load launch descriptors from shared files
 
-A separate invocation with coordinator queues and a 32-thread Python TCP
-ceiling stalled after 32 of 64 READY messages. Consumer queues completed all
-12 rounds at the same ceiling. HSTA's first rounds took 5.6–6.3 ms, compared
-with the 2.4–3.1 ms later medians above. These are whole control-round timings,
-not network-only measurements or predicted application speedups.
+Here, a *launch descriptor* is a JSON file with a worker's assigned items,
+options and placement. It is not an operating-system file descriptor.
 
-A separate persistent-worker imaging harness compared MPI and both queue
-layouts under Python TCP and HSTA TCP on eight GB200 GPUs. It processed
-16 image-pair occurrences per round from two base pairs, for three rounds per
-configuration. All 240 measured scientific outputs agreed. Batch medians
-ranged from 7.515 to 7.719 seconds: the large control-only improvement did not
-produce a comparable whole-pipeline gain. These results do not qualify a
-512-GPU speedup or establish the best layout at larger node counts. This was
-a separate harness experiment, with one invocation per configuration.
+The coordinator writes one descriptor per worker under the run's `launch/`
+directory. It passes the path, expected SHA-256, small validation context and
+queue handles as process arguments. The worker checks the descriptor before
+it imports and creates the component worker.
 
-Later two-node/eight-GPU product checks covered xPois, standalone xFit and
-xScan, and the combined pipeline under Dragon and MPI. They established
-numerical parity, persistent identities and cleanup for the tested revisions.
-They predate later lifecycle, loader and input-ownership fixes and describe
-the tested revisions. Revalidate the installed release before using those
-measurements to characterize current executor behavior.
+This keeps a large manifest out of each process-launch request.
+cuPhoton rejects serialized launch arguments larger than 96 KiB. That guard
+applies to the arguments, not to all queue messages or the descriptor file.
+The shared filesystem must remain accessible during worker startup.
 
-### 256-GPU follow-up
+## Shared worker lifecycle
 
-A later instrumented harness compared MPI and Dragon on 256 GPUs across
-64 nodes. Fixed batches contained 512 image-pair occurrences (two per GPU);
-weak batches contained 4,096 (16 per GPU). All Dragon treatments used the
-1024-thread Python TCP ceiling for the applicable application or overlay
-transport. The table shows the range of
-batch duration minus longest worker duration across all three rounds of each
-accepted Dragon invocation, including the first command round:
+xFit, xScan inference and the `xscan run-pipeline` command use the shared
+executor in `cuphoton.core.dragon`. They use this protocol for one round as
+well as repeated rounds:
 
-| Dragon treatment | Fixed batch remainder | Weak batch remainder |
-|---|---:|---:|
-| Python TCP, coordinator queues | 209.590–357.407 ms | 361.694–462.434 ms |
-| Python TCP, consumer queues | 24.325–32.729 ms | 39.762–45.234 ms |
-| Native HSTA TCP, coordinator queues | 8.126–8.629 ms | 7.863–9.451 ms |
+```mermaid
+sequenceDiagram
+    participant C as Coordinator
+    participant W as Each GPU worker
+    participant F as Shared filesystem
+    C->>F: Write launch descriptors
+    C->>W: Start native process with descriptor reference
+    W->>F: Read and validate descriptor
+    W->>W: Check GPU binding<br/>set MPS pipe and UUID if requested<br/>create component worker
+    opt Explicit MPS pipe selected
+        W->>W: Verify MPS client connection
+    end
+    W-->>C: ready: identity and startup status
+    C->>C: Validate all workers
+    loop Each requested round
+        C->>W: Round identity on worker command queue
+        W->>W: Run all items in assigned shard
+        W->>F: Write outputs and completion records
+        W-->>C: round: completion metadata
+        C->>F: Read and validate records<br/>merge outputs
+    end
+    C->>W: close
+    W->>W: Close component resources
+    W-->>C: closed: cleanup status
+    C->>C: Join workers<br/>check exits<br/>close group and queues
+    C->>F: Publish final summary.json
+```
 
-The fixed-batch consumer results combine two accepted launches; each other
-table cell comes from one. The complete MPI/Dragon campaign retained 10 accepted
-launches, with 30 measured rounds and 58,368 validated image-pair outputs,
-alongside two startup failures and four unrun launches. Consumer-local queues
-and HSTA reduced the observed coordination remainder, which also includes
-dispatch, serialization and collection. It is not a network-only timer.
+The diagram shows a successful run. The coordinator waits for every `ready`
+message before it releases the first round. Each round command identifies
+the run and round; it does not send a new shard. The same component object
+processes every requested round.
 
-The coordinator-queue control also lacked the historical multi-second spike.
-Allocation, scheduler segmentation and logging differed from the earlier
-campaign, so the spike's cause remains unresolved. There was no 512-GPU
-retest. These measurements exercised the retained harness, not the latest
-product PR revisions; they do not establish large-scale performance or launch
-reliability for those revisions.
+Each command queue has capacity one. The result queue has capacity
+for twice the worker count. After the final round, workers wait for `close`
+before they send `closed`. This lets the coordinator finish collecting and
+checking round results before normal shutdown starts.
 
-### Compare timing boundaries
+## Why queue placement matters
 
-For a new comparison, hold the corpus, item count, numerical configuration,
-worker CPU budget and runtime versions constant. Rotate run order and retain
-the first command round as well as subsequent rounds. Record separately:
+An idle worker blocks in a receive on its own command queue. Placing
+that queue on the worker's host keeps the wait local. The coordinator sends
+a small message to that host when a round can start.
 
-- Launcher-to-exit wall time, including startup, warmup and shutdown.
-- Time from harness or executor entry until all workers report READY.
-- Whole-batch time from release through collection of worker completions.
-- Worker execution time, with the treatment of output and receipt writes.
-- Coordinator artifact audits, scientific finalization and shutdown.
+With Dragon 0.14.2's Python TCP transport, many idle receives on remote queues
+can consume transport executor threads. If every command queue resides on
+the coordinator's node, those waits can delay other control messages.
+cuPhoton's repeated-round and shared paths place command queues with their
+consumers to avoid that layout.
 
-### Executor timing fields
+The Dragon launcher selects application and overlay transports. cuPhoton does
+not select a transport or change its thread limits. Native HSTA uses a
+different progress implementation. The
+[transport guide](dragon-performance.md#place-command-queues-with-their-consumers)
+explains the observed behavior and the measurements behind this choice.
 
-In persistent-round reports, `batch_wall_sec` stops at completion collection;
-coordinator artifact audits and scientific finalization follow it. The shared
-executor records component merging separately as `finalization_sec`. Keep
-readiness and shutdown outside this batch interval, and measure external
-launcher-to-exit time independently. MPI finalization and process exit are
-outside the executor's reported coordinator time.
+## xPois uses a separate executor
 
-Requested warmup rounds exercise real dispatch, work and collection. Their
-outputs and timings remain in the report. Only measured rounds enter timing
-statistics; failed warmup rounds, measured rounds or cleanup invalidate the
-aggregate. A numerical warmup performed before READY in a separate harness
-does not necessarily warm the first command round. Match these policies before
-comparing results.
+The xPois batch command predates the shared executor and retains a different
+protocol:
 
-### Interpreting comparisons
+| Entry point | Worker protocol |
+| --- | --- |
+| `xpois fit-batch`, ordinary run | Process one assigned shard, send one result and exit. No command queue or readiness handshake. |
+| `xpois fit-batch`, repeated rounds | Report readiness, wait for round commands and repeat the same shard. Exit after the final round, without the shared `close`/`closed` handshake. |
+| `xscan run-pipeline` command | Use the shared lifecycle shown above. |
+| Python `run_dragon_device_pipeline()` | Use the single-pass xPois coordinator. Retain one device context across the items in a shard. |
 
-Subtracting the longest worker duration from the whole-batch duration combines
-start skew, synchronization, receipt writes, serialization and collection. It
-cannot isolate network time. Validate complete output identities and scientific
-results, worker exits and runtime cleanup alongside timings. The control probe
-also observed an external Dragon launcher exit of zero after an application
-failure; inspect the application's terminal result as well as the launcher.
+Ordinary xPois gives its result queue one slot per worker. The coordinator
+joins the workers before draining those results. Repeated xPois adds command
+queues on the workers' hosts. Both paths use native Dragon processes and
+fixed assignments.
 
-[The pipeline/stage benchmark](components/pipeline-stage-benchmark.md)
-compares a resident device pipeline with fresh processes and intermediate
-files on one GPU. It measures workflow reuse and process/file costs, retaining
-raw timings and separately reporting the cost of additional hash verification.
-It does not compare Dragon transports or reproduce the stock component CLI
-chain.
+The word *persistent* depends on the entry point. In a single-pass path,
+a context persists across the items of one shard. In repeated rounds, it
+persists across complete rounds.
 
-Free-threaded Python does not free an executor thread blocked in a native
-receive: that receive already releases the GIL. A separate serialization or
-dispatch profile is needed to establish whether Python execution is a remaining
-bottleneck. The experiments above used conventional CPython 3.12; they do not
-qualify a free-threaded Dragon runtime.
+## Local xScan loader processes
+
+Distributed xScan inference defaults to `--num-workers 0`, so the GPU worker
+also loads its batches. A positive value requests local data-loader child
+processes for each GPU worker. They prepare batches; the parent runs the
+model on its GPU.
+
+The shared Dragon executor sets `DRAGON_PATCH_MP=""` in each native worker's
+environment. Python's multiprocessing module then stays unpatched in that
+worker. Spawned loader children receive ordinary multiprocessing queues.
+The xScan CUDA loader defaults to the `spawn` start method.
+
+The outer GPU workers still use native Dragon processes and queues. Loader
+children start before the GPU worker reports `ready`, persist across tasks
+and rounds, and stop when the component worker closes.
+
+## Failures and shutdown
+
+cuPhoton creates the process group with restart disabled. cuPhoton does not move failed
+items to healthy workers. An item exception produces a failed record, and
+the shared worker continues through its remaining items. A failed round
+prevents the next round from starting.
+
+The coordinator checks received messages against the run, worker and round
+identities. It also checks files on disk, physical GPU assignments and process
+exit status. Missing results, unexpected exits and failed cleanup make the
+run fail.
+
+On failure, the coordinator attempts to stop the group and close its queues.
+A forced process termination can prevent Python cleanup or a final `closed`
+message. Retained records describe completed work and observed errors. They do not
+show that every worker completed cleanup.
+
+For a successful shared run, the coordinator publishes terminal success only
+after worker shutdown and lifecycle checks. Inspect the root `summary.json`
+as well as the launcher exit status. Use the timeout and cleanup guidance in
+[the launch guide](distributed-execution.md#inspect-the-run).
+
+## Source map
+
+| Source | Responsibility |
+| --- | --- |
+| [`core/dragon.py`](../src/cuphoton/core/dragon.py) | Discovery, placement, queues, shared worker protocol and shutdown |
+| [`core/execution.py`](../src/cuphoton/core/execution.py) | Component construction contract, item records and validation |
+| [`core/mps.py`](../src/cuphoton/core/mps.py) | Verify client connections to an externally managed MPS v2 service |
+| [`xpois/dragon.py`](../src/cuphoton/xpois/dragon.py) | xPois single-pass and repeated-round protocols |
+| [`xscan/dragon_pipeline.py`](../src/cuphoton/xscan/dragon_pipeline.py) | Python device-pipeline API using the single-pass coordinator |
+| [`xscan/executor.py`](../src/cuphoton/xscan/executor.py) | xScan model and local loader lifetime |
+
+The upstream [Dragon native API reference](https://dragonhpc.github.io/dragon/doc/_build/html/ref/native/index.html)
+describes the process, queue and placement primitives used here.
