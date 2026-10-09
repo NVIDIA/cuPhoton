@@ -607,15 +607,17 @@ def prepare_xfit_workload(
 
     settings = {**_DEFAULTS, **fit_options}
     backend = settings["backend"]
-    if backend not in {"cupy", "cutile"}:
-        raise ValueError("distributed xFit requires backend cupy or cutile")
-    if backend == "cutile" and settings["model"] == "stamp":
+    if backend not in {"cupy", "cutile", "native"}:
         raise ValueError(
-            "backend='cutile' currently supports only the Gaussian model"
+            "distributed xFit requires backend cupy, cutile, or native"
         )
-    if backend == "cutile" and settings["use_finite_difference"]:
+    if backend in {"cutile", "native"} and settings["model"] == "stamp":
         raise ValueError(
-            "backend='cutile' does not support finite-difference fitting"
+            f"backend={backend!r} currently supports only the Gaussian model"
+        )
+    if backend in {"cutile", "native"} and settings["use_finite_difference"]:
+        raise ValueError(
+            f"backend={backend!r} does not support finite-difference fitting"
         )
     items, options, dataset = _plan_xfit_chunks(
         input_path, chunk_size=chunk_size, fit_options=fit_options

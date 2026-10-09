@@ -179,7 +179,9 @@ def _scatter_tiles_2d_kernel(itemsize: int):
                 out + (long long)(r0 + r) * out_row_stride_bytes
                 + (long long)(c0 + c) * ITEMSIZE;
             #pragma unroll
-            for (int b = 0; b < ITEMSIZE; ++b) dst_pix[b] = src_pix[b];
+            for (int b = 0; b < ITEMSIZE; ++b) {{
+                dst_pix[b] = src_pix[b];
+            }}
         }}
     }}
     """

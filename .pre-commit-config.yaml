@@ -39,6 +39,7 @@ repos:
     rev: v22.1.8
     hooks:
       - id: clang-format
+        # identify classifies both .cu and .cuh as cuda.
         types_or: [c++, c, cuda]
 
   - repo: https://github.com/shellcheck-py/shellcheck-py

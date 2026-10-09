@@ -342,6 +342,7 @@ def _run_item(
                 model=config.xfit.model,
                 mode=config.xfit.mode,
                 config=LMConfig(**config.xfit.solver_payload()),
+                **config.xfit.execution_payload(),
             )
             features = transform_xfit_result_features_device(
                 result,

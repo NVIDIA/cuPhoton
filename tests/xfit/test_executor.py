@@ -85,7 +85,9 @@ def test_preflight_rejects_unsupported_cutile_settings(
 
 @pytest.mark.parametrize("backend", ["auto", "numpy"])
 def test_preflight_rejects_cpu_backend_before_input_reads(tmp_path, backend):
-    with pytest.raises(ValueError, match="requires backend cupy or cutile"):
+    with pytest.raises(
+        ValueError, match="requires backend cupy, cutile, or native"
+    ):
         executor.prepare_xfit_workload(
             input_path=tmp_path / "missing.npz",
             fit_options={"backend": backend},

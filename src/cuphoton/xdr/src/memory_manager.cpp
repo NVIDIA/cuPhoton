@@ -59,7 +59,8 @@ PinnedHostBufferPool& native_pinned_pool();
 
 class PinnedHostBufferPool {
 public:
-    std::shared_ptr<PinnedHostBuffer> acquire(int device_id, std::size_t nbytes) {
+    std::shared_ptr<PinnedHostBuffer> acquire(
+        int device_id, std::size_t nbytes) {
         if (nbytes == 0) {
             auto* empty = new PinnedHostBuffer(device_id, 0);
             return std::shared_ptr<PinnedHostBuffer>(
@@ -115,7 +116,8 @@ public:
                 ++cache.frees;
                 to_free.push_back(std::move(buffer));
             } else {
-                while (cache.idle_bytes + buffer->capacity > max_idle && !cache.idle.empty()) {
+                while (cache.idle_bytes + buffer->capacity > max_idle
+                    && !cache.idle.empty()) {
                     auto it = cache.idle.begin();
                     cache.idle_bytes -= it->second->capacity;
                     ++cache.frees;
@@ -196,7 +198,8 @@ private:
         return caches_[device_id];
     }
 
-    std::unique_ptr<PinnedHostBuffer> take_idle_locked(int device_id, std::size_t nbytes) {
+    std::unique_ptr<PinnedHostBuffer> take_idle_locked(
+        int device_id, std::size_t nbytes) {
         auto& cache = device_cache_locked(device_id);
         auto it = cache.idle.lower_bound(nbytes);
         if (it == cache.idle.end()) {
@@ -215,9 +218,11 @@ private:
         std::unique_ptr<PinnedHostBuffer> buffer, std::size_t logical_size) {
         buffer->size = logical_size;
         PinnedHostBuffer* raw = buffer.release();
-        return std::shared_ptr<PinnedHostBuffer>(raw, [](PinnedHostBuffer* ptr) {
-            native_pinned_pool().release(std::unique_ptr<PinnedHostBuffer>(ptr));
-        });
+        return std::shared_ptr<PinnedHostBuffer>(
+            raw, [](PinnedHostBuffer* ptr) {
+                native_pinned_pool().release(
+                    std::unique_ptr<PinnedHostBuffer>(ptr));
+            });
     }
 
     py::dict stats_for_locked(int device_id) {
@@ -236,7 +241,8 @@ private:
         return stats_dict(stats, max_idle_bytes_);
     }
 
-    static py::dict stats_dict(const PoolStats& stats, std::size_t max_idle_bytes) {
+    static py::dict stats_dict(
+        const PoolStats& stats, std::size_t max_idle_bytes) {
         py::dict out;
         out["allocations"] = stats.allocations;
         out["reuses"] = stats.reuses;
@@ -249,7 +255,9 @@ private:
         return out;
     }
 
-    void clear_locked(int device_id, std::vector<std::unique_ptr<PinnedHostBuffer>>& to_free) {
+    void clear_locked(
+        int device_id,
+        std::vector<std::unique_ptr<PinnedHostBuffer>>& to_free) {
         auto it = caches_.find(device_id);
         if (it == caches_.end()) {
             return;
@@ -263,7 +271,8 @@ private:
         cache.idle_bytes = 0;
     }
 
-    static void free_buffers(std::vector<std::unique_ptr<PinnedHostBuffer>> buffers) {
+    static void free_buffers(
+        std::vector<std::unique_ptr<PinnedHostBuffer>> buffers) {
         if (buffers.empty()) {
             return;
         }
@@ -272,13 +281,14 @@ private:
     }
 
     static std::size_t default_max_idle_bytes() {
-        constexpr std::size_t gib = static_cast<std::size_t>(1024) * 1024 * 1024;
+        constexpr std::size_t gib =
+            static_cast<std::size_t>(1024) * 1024 * 1024;
         std::size_t default_cap = 8 * gib;
         const long pages = ::sysconf(_SC_PHYS_PAGES);
         const long page_size = ::sysconf(_SC_PAGE_SIZE);
         if (pages > 0 && page_size > 0) {
-            const auto ram_bytes =
-                static_cast<unsigned long long>(pages) * static_cast<unsigned long long>(page_size);
+            const auto ram_bytes = static_cast<unsigned long long>(pages)
+                * static_cast<unsigned long long>(page_size);
             const auto quarter = ram_bytes / 4;
             if (quarter < static_cast<unsigned long long>(default_cap)) {
                 default_cap = static_cast<std::size_t>(quarter);
@@ -299,7 +309,8 @@ private:
         if (errno != 0 || end == env || *end != '\0') {
             return default_max_idle_bytes();
         }
-        if (value > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+        if (value > static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max())) {
             return std::numeric_limits<std::size_t>::max();
         }
         return static_cast<std::size_t>(value);
@@ -333,10 +344,13 @@ struct DeviceBuffer {
             return;
         }
         if (device_id >= 0) {
-            check_cuda(cudaSetDevice(device_id), "cudaSetDevice native device buffer");
+            check_cuda(
+                cudaSetDevice(device_id), "cudaSetDevice native device buffer");
         }
         void* ptr = nullptr;
-        check_cuda(cudaMalloc(&ptr, capacity), "cudaMalloc native batch device buffer");
+        check_cuda(
+            cudaMalloc(&ptr, capacity),
+            "cudaMalloc native batch device buffer");
         data = static_cast<std::uint8_t*>(ptr);
     }
 
@@ -362,7 +376,8 @@ public:
     std::shared_ptr<DeviceBuffer> acquire(int device_id, std::size_t nbytes) {
         if (nbytes == 0) {
             auto* empty = new DeviceBuffer(device_id, 0);
-            return std::shared_ptr<DeviceBuffer>(empty, [](DeviceBuffer* ptr) { delete ptr; });
+            return std::shared_ptr<DeviceBuffer>(
+                empty, [](DeviceBuffer* ptr) { delete ptr; });
         }
 
         {
@@ -411,7 +426,8 @@ public:
                 ++cache.frees;
                 to_free.push_back(std::move(buffer));
             } else {
-                while (cache.idle_bytes + buffer->capacity > max_idle && !cache.idle.empty()) {
+                while (cache.idle_bytes + buffer->capacity > max_idle
+                    && !cache.idle.empty()) {
                     auto it = cache.idle.begin();
                     cache.idle_bytes -= it->second->capacity;
                     ++cache.frees;
@@ -492,7 +508,8 @@ private:
         return caches_[device_id];
     }
 
-    std::unique_ptr<DeviceBuffer> take_idle_locked(int device_id, std::size_t nbytes) {
+    std::unique_ptr<DeviceBuffer> take_idle_locked(
+        int device_id, std::size_t nbytes) {
         auto& cache = device_cache_locked(device_id);
         auto it = cache.idle.lower_bound(nbytes);
         if (it == cache.idle.end()) {
@@ -532,7 +549,8 @@ private:
         return stats_dict(stats, max_idle_bytes_);
     }
 
-    static py::dict stats_dict(const PoolStats& stats, std::size_t max_idle_bytes) {
+    static py::dict stats_dict(
+        const PoolStats& stats, std::size_t max_idle_bytes) {
         py::dict out;
         out["allocations"] = stats.allocations;
         out["reuses"] = stats.reuses;
@@ -545,7 +563,8 @@ private:
         return out;
     }
 
-    void clear_locked(int device_id, std::vector<std::unique_ptr<DeviceBuffer>>& to_free) {
+    void clear_locked(
+        int device_id, std::vector<std::unique_ptr<DeviceBuffer>>& to_free) {
         auto it = caches_.find(device_id);
         if (it == caches_.end()) {
             return;
@@ -559,7 +578,8 @@ private:
         cache.idle_bytes = 0;
     }
 
-    static void free_buffers(std::vector<std::unique_ptr<DeviceBuffer>> buffers) {
+    static void free_buffers(
+        std::vector<std::unique_ptr<DeviceBuffer>> buffers) {
         if (buffers.empty()) {
             return;
         }
@@ -568,7 +588,8 @@ private:
     }
 
     static std::size_t default_max_idle_bytes() {
-        constexpr std::size_t gib = static_cast<std::size_t>(1024) * 1024 * 1024;
+        constexpr std::size_t gib =
+            static_cast<std::size_t>(1024) * 1024 * 1024;
         return 8 * gib;
     }
 
@@ -584,7 +605,8 @@ private:
         if (errno != 0 || end == env || *end != '\0') {
             return default_max_idle_bytes();
         }
-        if (value > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+        if (value > static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max())) {
             return std::numeric_limits<std::size_t>::max();
         }
         return static_cast<std::size_t>(value);
@@ -604,7 +626,8 @@ DeviceBufferPool& native_device_pool() {
     return *pool;
 }
 
-NativeDeviceAllocation acquire_native_device_allocation(int device_id, std::size_t nbytes) {
+NativeDeviceAllocation acquire_native_device_allocation(
+    int device_id, std::size_t nbytes) {
     auto buffer = native_device_pool().acquire(device_id, nbytes);
     NativeDeviceAllocation allocation;
     allocation.data = buffer->data;
@@ -631,7 +654,9 @@ void clear_native_device_pool_impl(int device_id) {
 
 py::tuple acquire_native_device_buffer(std::size_t nbytes, int device_id) {
     if (device_id < 0) {
-        check_cuda(cudaGetDevice(&device_id), "cudaGetDevice native device buffer acquire");
+        check_cuda(
+            cudaGetDevice(&device_id),
+            "cudaGetDevice native device buffer acquire");
     }
     NativeDeviceAllocation allocation;
     {
@@ -639,9 +664,13 @@ py::tuple acquire_native_device_buffer(std::size_t nbytes, int device_id) {
         allocation = acquire_native_device_allocation(device_id, nbytes);
     }
     auto holder = new std::shared_ptr<void>(std::move(allocation.owner));
-    py::capsule owner(holder, [](void* p) { delete reinterpret_cast<std::shared_ptr<void>*>(p); });
+    py::capsule owner(holder, [](void* p) {
+        delete reinterpret_cast<std::shared_ptr<void>*>(p);
+    });
     return py::make_tuple(
-        owner, reinterpret_cast<std::uintptr_t>(allocation.data), allocation.size);
+        owner,
+        reinterpret_cast<std::uintptr_t>(allocation.data),
+        allocation.size);
 }
 
 void bind_memory_manager(py::module_& m) {
