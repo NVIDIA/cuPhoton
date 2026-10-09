@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,63 @@ from cuphoton.xpois.data import (
     load_mask_with_planes,
     load_variance_with_wcs,
 )
+
+
+def test_public_npy_loaders_do_not_import_astropy(tmp_path: Path) -> None:
+    image = np.arange(20, dtype=np.float32).reshape(4, 5) / 2
+    mask = np.zeros(image.shape, dtype=np.int64)
+    mask[1, 3] = 1 << 40
+    for name, values in (
+        ("image", image),
+        ("variance", np.full_like(image, 2.5)),
+        ("mask", mask),
+    ):
+        np.save(tmp_path / f"{name}.npy", values, allow_pickle=False)
+    code = """
+import importlib.abc
+import sys
+from pathlib import Path
+
+class BlockImageDependencies(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {
+            'astropy', 'cupy', 'cuda', 'numba', 'numba_cuda_mlir'
+        }:
+            raise ModuleNotFoundError(
+                'blocked image dependency', name=fullname
+            )
+        return None
+
+sys.meta_path.insert(0, BlockImageDependencies())
+import numpy as np
+import cuphoton.xpois as xpois
+from cuphoton.xpois.batch import _probe_array_shape
+from cuphoton.xpois.data import load_mask_with_planes, load_variance_with_wcs
+
+root = Path(sys.argv[1])
+image = xpois.load_image_array(root / 'image.npy')
+variance, wcs, variance_hdu = load_variance_with_wcs(root / 'variance.npy')
+mask, mask_hdu, planes = load_mask_with_planes(root / 'mask.npy')
+assert wcs is variance_hdu is mask_hdu is planes is None
+assert image.dtype == variance.dtype == np.dtype('float64')
+assert mask.dtype == np.dtype('int64')
+loaded = (('image', image), ('variance', variance), ('mask', mask))
+for name, actual in loaded:
+    shape = _probe_array_shape(root / (name + '.npy'), None, kind=name)
+    assert shape == (4, 5)
+    np.testing.assert_array_equal(
+        actual, np.load(root / (name + '.npy'), allow_pickle=False)
+    )
+assert not any(name.split('.')[0] == 'astropy' for name in sys.modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_load_fit_positions_preserves_duplicate_yx_rows(tmp_path) -> None:
