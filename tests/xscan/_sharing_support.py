@@ -10,11 +10,13 @@ import os
 import sys
 import threading
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 from cuphoton.core.bulk import atomic_write_json
+
+_allocator_state = threading.local()
 
 
 class Worker:
@@ -23,6 +25,7 @@ class Worker:
         self.owner = threading.get_ident()
         self.identifier = f"{os.getpid()}-{threading.get_native_id()}"
         self.trace = Path(options["trace"]) / f"{self.identifier}.txt"
+        self.pool = getattr(_allocator_state, "pool", None)
         self.record("initialize")
         if options.get("failure") == "initialize":
             raise ValueError("initialization failed")
@@ -35,6 +38,10 @@ class Worker:
 
     def record(self, message):
         assert self.owner == threading.get_ident()
+        if self.options.get("pool_trace"):
+            assert self.pool is not None
+            assert _allocator_state.pool is self.pool
+            self.pool.record(message)
         with self.trace.open("a") as stream:
             stream.write(message + "\n")
 
@@ -89,15 +96,46 @@ def process_entry(connections, payload, worker_ids, threaded):
 
     sharing._worker_loop = run_worker
     count = payload["options"].get("device_count", 1)
-    pool = SimpleNamespace(
-        malloc=lambda size: None, free_all_blocks=lambda: None
-    )
+
+    class RecordingPool:
+        def __init__(self):
+            self.owner = threading.get_ident()
+            self.trace = payload["options"].get("pool_trace")
+            self.record("create")
+
+        def record(self, message):
+            assert self.owner == threading.get_ident()
+            if self.trace:
+                path = Path(self.trace) / f"{id(self)}.txt"
+                with path.open("a") as stream:
+                    stream.write(message + "\n")
+
+        def malloc(self, size):
+            assert _allocator_state.pool is self
+
+        def free_all_blocks(self):
+            assert _allocator_state.pool is self
+            self.record("release")
+
+    @contextmanager
+    def using_allocator(allocator):
+        assert getattr(_allocator_state, "pool", None) is None
+        pool = allocator.__self__
+        _allocator_state.pool = pool
+        pool.record("enter")
+        try:
+            yield
+        finally:
+            assert _allocator_state.pool is pool
+            del _allocator_state.pool
+            pool.record("exit")
+
     cp = SimpleNamespace(
         cuda=SimpleNamespace(
             runtime=SimpleNamespace(getDeviceCount=lambda: count),
             Device=lambda index: SimpleNamespace(use=lambda: None),
-            MemoryPool=lambda: pool,
-            using_allocator=lambda allocator: nullcontext(),
+            MemoryPool=RecordingPool,
+            using_allocator=using_allocator,
         )
     )
     torch = SimpleNamespace(

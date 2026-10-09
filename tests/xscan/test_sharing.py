@@ -79,6 +79,28 @@ def test_spawn_reuses_workers_and_audits_every_round(
     assert not multiprocessing.active_children()
 
 
+def test_threads_own_pools_through_close_and_release(tmp_path, cpu_runtime):
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    spec = workload(tmp_path, cpu_runtime, pool_trace=str(pools))
+    result = sharing.run_shared_pipeline(
+        prepare_workload=lambda rank: spec,
+        output_root=tmp_path,
+        executor="threads",
+        workers_per_gpu=2,
+        worker_timeout_sec=10,
+    )
+    assert result.status == "success", result.summary
+    traces = [path.read_text().splitlines() for path in pools.iterdir()]
+    assert len(traces) == 2
+    for trace in traces:
+        assert trace[:3] == ["create", "enter", "initialize"]
+        assert len(trace[3:-3]) == 2
+        assert all(event.startswith("item:") for event in trace[3:-3])
+        assert trace[-3:] == ["close", "release", "exit"]
+    assert not multiprocessing.active_children()
+
+
 @pytest.mark.parametrize("executor", ["processes", "threads"])
 @pytest.mark.parametrize(
     "failure", ["initialize", "item", "close", "hang", "exit"]
