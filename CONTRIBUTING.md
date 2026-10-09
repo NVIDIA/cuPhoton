@@ -126,8 +126,9 @@ that revision. The initial `ci-pr-checks` result does not satisfy the merge
 gate. Pushes to `main` and `0.1.x` also run the GPU checks.
 
 The GPU job uses one L40G with Python 3.12 and the locked CUDA 13 dependencies.
-It checks CuPy/PyTorch execution, runs six xFit GPU parity cases, and runs
-all five synthetic quickstarts with `--require-gpu`. Missing CUDA support or
+It checks CuPy/PyTorch execution, runs six xFit GPU parity cases and three
+xRay refinement cases with different time units, and runs all five synthetic
+quickstarts with `--require-gpu`. Missing CUDA support or
 skipped parity cases fail the job. JUnit results and quickstart summaries are
 uploaded with the tested commit SHA. GPU jobs run one at a time; a new
 revision cancels the previous workflow for the same branch.

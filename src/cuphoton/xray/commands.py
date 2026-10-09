@@ -21,6 +21,7 @@ from cuphoton.core.cli import (
     NonNegativeIntegerInvariant,
     PairInvariant,
     PathValueInvariant,
+    PositiveIntegerInvariant,
     SequenceInvariant,
     SetInvariant,
     StringInvariant,
@@ -586,6 +587,196 @@ class LinearPredictionSmokeCommand(_XRayCommand):
     class NoGpuArg(BoolInvariant):
         _arg = "--no-gpu"
         _help = "Skip the GPU comparison."
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable JSON."
+        _required = False
+
+
+class LinearPredictionValidateCommand(_XRayCommand):
+    _description_ = (
+        "Validate linear prediction on synthetic damped modes against "
+        "the Cramer-Rao bound."
+    )
+    _shortname_ = "lpv"
+    _handler_name_ = "_linear_prediction_validate"
+
+    samples = 96
+
+    class SamplesArg(IntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    components = 6
+
+    class ComponentsArg(PositiveIntegerInvariant):
+        _arg = "--components"
+        _help = "Number of SVD components to fit."
+        _required = False
+        _default = 6
+
+    trials = 200
+
+    class TrialsArg(PositiveIntegerInvariant):
+        _arg = "--trials"
+        _help = "Monte Carlo trials per signal-to-noise level."
+        _required = False
+        _default = 200
+
+    snr_db = "40,30,20,10"
+
+    class SnrDbArg(StringInvariant):
+        _arg = "--snr-db"
+        _help = "Comma-separated signal-to-noise levels in dB."
+        _required = False
+        _default = "40,30,20,10"
+
+    seed = 20260914
+
+    class SeedArg(IntegerInvariant):
+        _arg = "--seed"
+        _help = "Random seed for the noise draws."
+        _required = False
+        _default = 20260914
+
+    distortion = None
+
+    class DistortionArg(StringInvariant):
+        _arg = "--distortion"
+        _help = (
+            "Optional model mismatch as kind:amount, one of chirp, "
+            "gaussian_envelope, baseline_drift, clip, glitch "
+            "(for example chirp:0.05)."
+        )
+        _required = False
+        _default = None
+
+    refine = False
+
+    class RefineArg(BoolInvariant):
+        _arg = "--refine"
+        _help = (
+            "Also run the sweep with nonlinear least-squares refinement "
+            "of the linear-prediction modes."
+        )
+        _required = False
+
+    output_dir = None
+
+    class OutputDirArg(PathValueInvariant):
+        _arg = "--output-dir"
+        _help = (
+            "Directory for summary.json and the validation figure "
+            "(created if needed; keep it outside the checkout)."
+        )
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Print the summary as JSON instead of the text report."
+        _required = False
+
+
+class LinearPredictionModesReviewCommand(_XRayCommand):
+    _description_ = (
+        "Write a visual comparison of synthetic modes and refinements."
+    )
+    _shortname_ = "lpmr"
+    _handler_name_ = "_linear_prediction_modes_review"
+
+    output_path = "xray_lp_modes_review.html"
+
+    class OutputPathArg(PathValueInvariant):
+        _arg = "--output"
+        _help = "Output HTML path (requires the viz extra)."
+        _required = False
+        _default = "xray_lp_modes_review.html"
+
+    snr_db = "40,20,10,5"
+
+    class SnrDbArg(StringInvariant):
+        _arg = "--snr-db"
+        _help = "Comma-separated signal-to-noise levels in dB."
+        _required = False
+        _default = "40,20,10,5"
+
+    distortion = None
+
+    class DistortionArg(StringInvariant):
+        _arg = "--distortion"
+        _help = "Model mismatch as kind:amount, for example chirp:0.05."
+        _required = False
+        _default = None
+
+    seed = 11
+
+    class SeedArg(IntegerInvariant):
+        _arg = "--seed"
+        _help = "Random seed for reproducible noise."
+        _required = False
+        _default = 11
+
+    samples = 96
+
+    class SamplesArg(PositiveIntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable artifact information."
+        _required = False
+
+
+class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
+    _description_ = (
+        "Benchmark per-trace SciPy refinement against the batched "
+        "Levenberg-Marquardt solver on NumPy and CuPy."
+    )
+    _shortname_ = "lprb"
+    _handler_name_ = "_linear_prediction_refine_benchmark"
+
+    samples = 96
+
+    class SamplesArg(PositiveIntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    traces = 256
+
+    class TracesArg(PositiveIntegerInvariant):
+        _arg = "--traces"
+        _help = "Number of traces in the batch."
+        _required = False
+        _default = 256
+
+    repeat = 3
+
+    class RepeatArg(PositiveIntegerInvariant):
+        _arg = "--repeat"
+        _help = "Timed repetitions per path; the best time is reported."
+        _required = False
+        _default = 3
+
+    no_gpu = False
+
+    class NoGpuArg(BoolInvariant):
+        _arg = "--no-gpu"
+        _help = "Skip the CuPy comparison."
         _required = False
 
     json = False
@@ -3686,10 +3877,9 @@ def _data_probe(args):
     result = probe_hdf5_pair(h5dir=args.h5dir, fon=args.fon, foff=args.foff)
     payload = result.to_dict()
     if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        args._out(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        _print_file_probe("on", result.on)
-        _print_file_probe("off", result.off)
+        args._out(result)
     return 0
 
 
@@ -4241,25 +4431,6 @@ def _detector_mask(args):
     return 0
 
 
-def _print_file_probe(label, probe):
-    print(f"{label}_path={probe.path}")
-    print(f"{label}_size_bytes={probe.size_bytes}")
-    print(f"{label}_schema={probe.schema}")
-    print(f"{label}_ipm_pairs={','.join(probe.ipm_pairs) or '-'}")
-    print(f"{label}_keys={','.join(probe.keys)}")
-    for dataset in probe.datasets:
-        shape = "x".join(str(dim) for dim in dataset.shape)
-        chunks = (
-            "-"
-            if dataset.chunks is None
-            else "x".join(str(dim) for dim in dataset.chunks)
-        )
-        print(
-            f"{label}_dataset={dataset.name} "
-            f"shape={shape} dtype={dataset.dtype} chunks={chunks}"
-        )
-
-
 def _linear_prediction_smoke(args):
     from .linear_prediction import (
         LinearPredictionComparison,
@@ -4339,6 +4510,88 @@ def _linear_prediction_smoke(args):
                 "rms_reconstruction_diff="
                 f"{payload['rms_reconstruction_diff']:.6g}"
             )
+    return 0
+
+
+def _parse_validation_distortion(value):
+    distortion = None
+    if value:
+        try:
+            kind, amount = str(value).split(":", maxsplit=1)
+            if not kind.strip():
+                raise ValueError("missing distortion kind")
+            distortion = (kind.strip(), float(amount))
+        except ValueError as exc:
+            raise ValueError(
+                "--distortion must be kind:amount with a numeric amount "
+                "(for example chirp:0.05)"
+            ) from exc
+    return distortion
+
+
+def _linear_prediction_validate(args):
+    from .synthetic_validation import validate_linear_prediction
+
+    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+    distortion = _parse_validation_distortion(args.distortion)
+    report = validate_linear_prediction(
+        samples=args.samples,
+        snr_db=snr,
+        trials=args.trials,
+        n_components=args.components,
+        seed=args.seed,
+        distortion=distortion,
+        output_dir=args.output_dir,
+        refine=args.refine,
+    )
+    args._out(
+        json.dumps(
+            report.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else report
+    )
+    return 0
+
+
+def _linear_prediction_modes_review(args):
+    from .mode_refinement_viz import write_modes_review
+
+    report = write_modes_review(
+        args.output_path,
+        snr_db=tuple(
+            float(x) for x in str(args.snr_db).split(",") if x.strip()
+        ),
+        distortion=_parse_validation_distortion(args.distortion),
+        seed=args.seed,
+        samples=args.samples,
+    )
+    args._out(
+        json.dumps(
+            report.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else report
+    )
+    return 0
+
+
+def _linear_prediction_refine_benchmark(args):
+    from .mode_refinement_batched import benchmark_refinement
+
+    result = benchmark_refinement(
+        samples=args.samples,
+        traces=args.traces,
+        run_gpu=not args.no_gpu,
+        repeat=args.repeat,
+    )
+    args._out(
+        json.dumps(
+            result.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else result
+    )
     return 0
 
 
@@ -5325,188 +5578,54 @@ def _prediction_roots_benchmark(args):
 
 
 def _model_order_sweep(args):
-    from .linear_prediction import model_order_sweep
+    from .linear_prediction import model_order_sweep, model_order_sweep_batch
 
     components = _component_sweep_values(args)
     trace_paths = _trace_npz_batch_paths_from_args(args, required=False)
+    source = None
     if trace_paths:
         _reject_trace_npz_hdf5_options(args)
-        if len(trace_paths) == 1:
-            time, trace, source = _load_trace_npz(trace_paths[0])
-            payload = _single_model_order_sweep_payload(
-                model_order_sweep(
-                    time,
-                    trace,
-                    components,
-                    roots_backend=args.roots_backend,
-                    relative_tolerance=args.relative_tolerance,
-                ),
-                source=source,
-            )
-        else:
-            time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
-            payload = _model_order_sweep_batch_payload(
-                time,
-                trace_rows,
-                sources,
-                components=components,
-                roots_backend=args.roots_backend,
-                relative_tolerance=args.relative_tolerance,
-            )
-    else:
-        time, trace, source = _trace_for_workbench(args)
-        payload = _single_model_order_sweep_payload(
-            model_order_sweep(
-                time,
-                trace,
-                components,
-                roots_backend=args.roots_backend,
-                relative_tolerance=args.relative_tolerance,
-            ),
-            source=source,
+    if len(trace_paths) > 1:
+        time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
+        result = model_order_sweep_batch(
+            time,
+            trace_rows,
+            sources,
+            components=components,
+            roots_backend=args.roots_backend,
+            relative_tolerance=args.relative_tolerance,
         )
-
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    elif payload["source"]["kind"] == "trace-npz-batch":
-        _print_model_order_sweep_batch(payload)
     else:
-        _print_model_order_sweep_payload(payload)
-    return 0
-
-
-def _single_model_order_sweep_payload(result, *, source):
-    payload = dataclass_asdict(result)
-    payload["source"] = source
-    return payload
-
-
-def _model_order_sweep_batch_payload(
-    time,
-    trace_rows,
-    sources,
-    *,
-    components,
-    roots_backend: str,
-    relative_tolerance: float,
-):
-    from .linear_prediction import model_order_sweep
-
-    trace_payloads = []
-    best_components = []
-    best_selected_model_orders = []
-    best_rms_residuals = []
-    best_reconstruction_errors = []
-    for trace_index, (trace, source) in enumerate(
-        zip(trace_rows, sources, strict=True)
-    ):
+        time, trace, source = (
+            _load_trace_npz(trace_paths[0])
+            if trace_paths
+            else _trace_for_workbench(args)
+        )
         result = model_order_sweep(
             time,
             trace,
             components,
-            roots_backend=roots_backend,
-            relative_tolerance=relative_tolerance,
-        )
-        trace_payload = _single_model_order_sweep_payload(
-            result,
-            source=source,
-        )
-        trace_payload["trace_index"] = trace_index
-        trace_payloads.append(trace_payload)
-        best_components.append(int(result.best_components))
-        best_selected_model_orders.append(
-            int(result.best_selected_model_order)
-        )
-        best_rms_residuals.append(float(result.best_rms_residual))
-        best_reconstruction_errors.append(
-            float(result.best_reconstruction_rms_error)
+            roots_backend=args.roots_backend,
+            relative_tolerance=args.relative_tolerance,
         )
 
-    return {
-        "source": {
-            "kind": "trace-npz-batch",
-            "trace_count": len(sources),
-            "traces": sources,
-        },
-        "trace_count": len(sources),
-        "samples": int(time.shape[0]),
-        "roots_backend": roots_backend,
-        "relative_tolerance": float(relative_tolerance),
-        "component_counts": tuple(int(item) for item in components),
-        "best_components_by_trace": tuple(best_components),
-        "best_components_unique": tuple(sorted(set(best_components))),
-        "best_selected_model_orders_by_trace": tuple(
-            best_selected_model_orders
-        ),
-        "best_selected_model_orders_unique": tuple(
-            sorted(set(best_selected_model_orders))
-        ),
-        "best_rms_residual_min": min(best_rms_residuals),
-        "best_rms_residual_max": max(best_rms_residuals),
-        "best_reconstruction_rms_error_min": min(best_reconstruction_errors),
-        "best_reconstruction_rms_error_max": max(best_reconstruction_errors),
-        "traces": tuple(trace_payloads),
-    }
-
-
-def _print_model_order_sweep_payload(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"samples={payload['samples']}")
-    print(f"roots_backend={payload['roots_backend']}")
-    print(f"best_components={payload['best_components']}")
-    print(f"best_selected_model_order={payload['best_selected_model_order']}")
-    print(f"best_rms_residual={payload['best_rms_residual']:.6g}")
-    print(
-        "best_reconstruction_rms_error="
-        f"{payload['best_reconstruction_rms_error']:.6g}"
-    )
-    for entry in payload["entries"]:
-        print(
-            f"components={entry['components']} "
-            f"selected_model_order={entry['selected_model_order']} "
-            f"rms_residual={entry['rms_residual']:.6g} "
-            "reconstruction_rms_error="
-            f"{entry['reconstruction_rms_error']:.6g} "
-            f"chi2={entry['chi2']:.6g} "
-            f"selected_roots={entry['selected_root_count']} "
-            f"decaying_roots={entry['decaying_root_count']}"
-        )
-
-
-def _print_model_order_sweep_batch(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"trace_count={payload['trace_count']}")
-    print(f"samples={payload['samples']}")
-    print(f"roots_backend={payload['roots_backend']}")
-    component_counts = ",".join(
-        str(item) for item in payload["component_counts"]
-    )
-    print(f"component_counts={component_counts}")
-    print(
-        "best_components_unique="
-        + ",".join(str(item) for item in payload["best_components_unique"])
-    )
-    print(
-        "best_selected_model_orders_unique="
-        + ",".join(
-            str(item) for item in payload["best_selected_model_orders_unique"]
-        )
-    )
-    for trace_payload in payload["traces"]:
-        print(f"trace_index={trace_payload['trace_index']}")
-        print(f"  best_components={trace_payload['best_components']}")
-        print(
-            "  best_selected_model_order="
-            f"{trace_payload['best_selected_model_order']}"
-        )
-        print(
-            "  best_reconstruction_rms_error="
-            f"{trace_payload['best_reconstruction_rms_error']:.6g}"
-        )
+    if args.json:
+        payload = result.to_dict()
+        if source is not None:
+            payload["source"] = source
+        args._out(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if source is not None:
+            args._out(f"source={source['kind']}")
+        args._out(result)
+    return 0
 
 
 def _subspace_benchmark(args):
-    from .subspace import compare_subspace_methods
+    from .subspace import (
+        compare_subspace_methods,
+        compare_subspace_methods_batch,
+    )
 
     trace_paths = _trace_npz_batch_paths_from_args(args, required=False)
     svd_backends = _subspace_svd_backends(args)
@@ -5515,217 +5634,54 @@ def _subspace_benchmark(args):
         if args.method is None
         else tuple(args.method)
     )
+    source = None
     if trace_paths:
         _reject_trace_npz_hdf5_options(args)
-        if len(trace_paths) == 1:
-            time, trace, source = _load_trace_npz(trace_paths[0])
-            payload = _single_subspace_benchmark_payload(
-                compare_subspace_methods(
-                    time,
-                    trace,
-                    model_order=args.model_order,
-                    components=args.components,
-                    methods=methods,
-                    svd_backends=svd_backends,
-                    pencil_rows=args.pencil_rows,
-                    randomized_oversamples=args.randomized_oversamples,
-                    power_iterations=args.power_iterations,
-                    random_seed=args.random_seed,
-                ),
-                source=source,
-                svd_backends=svd_backends,
-            )
-        else:
-            time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
-            payload = _subspace_benchmark_batch_payload(
-                time,
-                trace_rows,
-                sources,
-                model_order=args.model_order,
-                components=args.components,
-                methods=methods,
-                svd_backends=svd_backends,
-                pencil_rows=args.pencil_rows,
-                randomized_oversamples=args.randomized_oversamples,
-                power_iterations=args.power_iterations,
-                random_seed=args.random_seed,
-            )
-    else:
-        time, trace, source = _trace_for_workbench(args)
-        payload = _single_subspace_benchmark_payload(
-            compare_subspace_methods(
-                time,
-                trace,
-                model_order=args.model_order,
-                components=args.components,
-                methods=methods,
-                svd_backends=svd_backends,
-                pencil_rows=args.pencil_rows,
-                randomized_oversamples=args.randomized_oversamples,
-                power_iterations=args.power_iterations,
-                random_seed=args.random_seed,
-            ),
-            source=source,
+    if len(trace_paths) > 1:
+        time, trace_rows, sources = _load_trace_npz_batch(trace_paths)
+        result = compare_subspace_methods_batch(
+            time,
+            trace_rows,
+            sources,
+            model_order=args.model_order,
+            components=args.components,
+            methods=methods,
             svd_backends=svd_backends,
+            pencil_rows=args.pencil_rows,
+            randomized_oversamples=args.randomized_oversamples,
+            power_iterations=args.power_iterations,
+            random_seed=args.random_seed,
         )
-
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    elif payload["source"]["kind"] == "trace-npz-batch":
-        _print_subspace_benchmark_batch(payload)
     else:
-        print(f"source={payload['source']['kind']}")
-        print(f"samples={payload['samples']}")
-        print(f"model_order={payload['model_order']}")
-        print(f"components={payload['components']}")
-        print(f"baseline_chi2={payload['baseline_chi2']:.6g}")
-        print(f"baseline_rms_residual={payload['baseline_rms_residual']:.6g}")
-        for method in payload["methods"]:
-            print(f"method={method['method']}")
-            print(f"  svd_backend={method['svd_backend']}")
-            print(f"  svd_rank={method['svd_rank']}")
-            print(f"  rms_residual={method['rms_residual']:.6g}")
-            print(
-                "  max_abs_reconstruction_diff="
-                f"{method['max_abs_reconstruction_diff']:.6g}"
-            )
-            print(f"  elapsed_s={method['elapsed_s']:.6g}")
-    return 0
-
-
-def _single_subspace_benchmark_payload(result, *, source, svd_backends):
-    payload = dataclass_asdict(result)
-    payload["source"] = source
-    payload["svd_backends"] = svd_backends
-    return payload
-
-
-def _subspace_benchmark_batch_payload(
-    time,
-    trace_rows,
-    sources,
-    *,
-    model_order: int,
-    components: int,
-    methods,
-    svd_backends,
-    pencil_rows: int | None,
-    randomized_oversamples: int,
-    power_iterations: int,
-    random_seed: int,
-):
-    from .subspace import compare_subspace_methods
-
-    method_summary = {
-        (method, svd_backend): {
-            "method": method,
-            "svd_backend": svd_backend,
-            "trace_count": 0,
-            "rms_residual_min": float("inf"),
-            "rms_residual_max": 0.0,
-            "max_abs_reconstruction_diff_max": 0.0,
-            "elapsed_s_total": 0.0,
-        }
-        for method in methods
-        for svd_backend in svd_backends
-    }
-    trace_payloads = []
-    baseline_chi2_values = []
-    baseline_rms_values = []
-
-    for trace_index, (trace, source) in enumerate(
-        zip(trace_rows, sources, strict=True)
-    ):
+        time, trace, source = (
+            _load_trace_npz(trace_paths[0])
+            if trace_paths
+            else _trace_for_workbench(args)
+        )
         result = compare_subspace_methods(
             time,
             trace,
-            model_order=model_order,
-            components=components,
+            model_order=args.model_order,
+            components=args.components,
             methods=methods,
             svd_backends=svd_backends,
-            pencil_rows=pencil_rows,
-            randomized_oversamples=randomized_oversamples,
-            power_iterations=power_iterations,
-            random_seed=random_seed,
+            pencil_rows=args.pencil_rows,
+            randomized_oversamples=args.randomized_oversamples,
+            power_iterations=args.power_iterations,
+            random_seed=args.random_seed,
         )
-        trace_payload = _single_subspace_benchmark_payload(
-            result,
-            source=source,
-            svd_backends=svd_backends,
-        )
-        trace_payload["trace_index"] = trace_index
-        trace_payloads.append(trace_payload)
-        baseline_chi2_values.append(float(result.baseline_chi2))
-        baseline_rms_values.append(float(result.baseline_rms_residual))
 
-        for method_result in result.methods:
-            summary = method_summary[
-                (method_result.method, method_result.svd_backend)
-            ]
-            summary["trace_count"] += 1
-            summary["rms_residual_min"] = min(
-                float(summary["rms_residual_min"]),
-                float(method_result.rms_residual),
-            )
-            summary["rms_residual_max"] = max(
-                float(summary["rms_residual_max"]),
-                float(method_result.rms_residual),
-            )
-            summary["max_abs_reconstruction_diff_max"] = max(
-                float(summary["max_abs_reconstruction_diff_max"]),
-                float(method_result.max_abs_reconstruction_diff),
-            )
-            summary["elapsed_s_total"] += float(method_result.elapsed_s)
-
-    summaries = tuple(
-        method_summary[(method, svd_backend)]
-        for method in methods
-        for svd_backend in svd_backends
-    )
-    return {
-        "source": {
-            "kind": "trace-npz-batch",
-            "trace_count": len(sources),
-            "traces": sources,
-        },
-        "trace_count": len(sources),
-        "samples": int(time.shape[0]),
-        "model_order": int(model_order),
-        "components": int(components),
-        "svd_backends": svd_backends,
-        "baseline_chi2_min": min(baseline_chi2_values),
-        "baseline_chi2_max": max(baseline_chi2_values),
-        "baseline_rms_residual_min": min(baseline_rms_values),
-        "baseline_rms_residual_max": max(baseline_rms_values),
-        "method_summary": summaries,
-        "traces": tuple(trace_payloads),
-    }
-
-
-def _print_subspace_benchmark_batch(payload):
-    print(f"source={payload['source']['kind']}")
-    print(f"trace_count={payload['trace_count']}")
-    print(f"samples={payload['samples']}")
-    print(f"model_order={payload['model_order']}")
-    print(f"components={payload['components']}")
-    print(
-        "baseline_rms_residual_range="
-        f"{payload['baseline_rms_residual_min']:.6g}:"
-        f"{payload['baseline_rms_residual_max']:.6g}"
-    )
-    for summary in payload["method_summary"]:
-        print(f"method={summary['method']}")
-        print(f"  svd_backend={summary['svd_backend']}")
-        print(f"  trace_count={summary['trace_count']}")
-        print(
-            "  rms_residual_range="
-            f"{summary['rms_residual_min']:.6g}:"
-            f"{summary['rms_residual_max']:.6g}"
-        )
-        print(
-            "  max_abs_reconstruction_diff_max="
-            f"{summary['max_abs_reconstruction_diff_max']:.6g}"
-        )
+    if args.json:
+        payload = result.to_dict()
+        if source is not None:
+            payload["source"] = source
+            payload["svd_backends"] = svd_backends
+        args._out(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if source is not None:
+            args._out(f"source={source['kind']}")
+        args._out(result)
+    return 0
 
 
 def _subspace_acceptance(args):

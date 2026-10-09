@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from time import perf_counter
 
 import numpy as np
@@ -27,6 +27,22 @@ class SubspaceMethodBenchmark:
     roots_real: tuple[float, ...]
     roots_imag: tuple[float, ...]
 
+    def __str__(self) -> str:
+        return "\n".join(
+            (
+                f"method={self.method}",
+                f"  svd_backend={self.svd_backend}",
+                f"  svd_rank={self.svd_rank}",
+                f"  rms_residual={self.rms_residual:.6g}",
+                "  max_abs_reconstruction_diff="
+                f"{self.max_abs_reconstruction_diff:.6g}",
+                f"  elapsed_s={self.elapsed_s:.6g}",
+            )
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
 
 @dataclass(frozen=True)
 class SubspaceBenchmark:
@@ -36,6 +52,159 @@ class SubspaceBenchmark:
     baseline_chi2: float
     baseline_rms_residual: float
     methods: tuple[SubspaceMethodBenchmark, ...]
+
+    def __str__(self) -> str:
+        return "\n".join(
+            (
+                f"samples={self.samples}",
+                f"model_order={self.model_order}",
+                f"components={self.components}",
+                f"baseline_chi2={self.baseline_chi2:.6g}",
+                f"baseline_rms_residual={self.baseline_rms_residual:.6g}",
+                *(str(method) for method in self.methods),
+            )
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class _SubspaceMethodSummary:
+    method: str
+    svd_backend: str
+    trace_count: int
+    rms_residual_min: float
+    rms_residual_max: float
+    max_abs_reconstruction_diff_max: float
+    elapsed_s_total: float
+
+    def __str__(self) -> str:
+        return "\n".join(
+            (
+                f"method={self.method}",
+                f"  svd_backend={self.svd_backend}",
+                f"  trace_count={self.trace_count}",
+                "  rms_residual_range="
+                f"{self.rms_residual_min:.6g}:{self.rms_residual_max:.6g}",
+                "  max_abs_reconstruction_diff_max="
+                f"{self.max_abs_reconstruction_diff_max:.6g}",
+            )
+        )
+
+
+@dataclass(frozen=True)
+class SubspaceBenchmarkBatch:
+    samples: int
+    model_order: int
+    components: int
+    methods: tuple[str, ...]
+    svd_backends: tuple[str, ...]
+    sources: tuple[dict[str, object], ...]
+    traces: tuple[SubspaceBenchmark, ...]
+
+    @property
+    def method_summary(self) -> tuple[_SubspaceMethodSummary, ...]:
+        summaries = []
+        for method in self.methods:
+            for svd_backend in self.svd_backends:
+                results = tuple(
+                    result
+                    for trace in self.traces
+                    for result in trace.methods
+                    if (result.method, result.svd_backend)
+                    == (method, svd_backend)
+                )
+                summaries.append(
+                    _SubspaceMethodSummary(
+                        method=method,
+                        svd_backend=svd_backend,
+                        trace_count=len(results),
+                        rms_residual_min=min(
+                            [
+                                float("inf"),
+                                *(result.rms_residual for result in results),
+                            ]
+                        ),
+                        rms_residual_max=max(
+                            [
+                                0.0,
+                                *(result.rms_residual for result in results),
+                            ]
+                        ),
+                        max_abs_reconstruction_diff_max=max(
+                            [
+                                0.0,
+                                *(
+                                    result.max_abs_reconstruction_diff
+                                    for result in results
+                                ),
+                            ]
+                        ),
+                        elapsed_s_total=sum(
+                            (result.elapsed_s for result in results), 0.0
+                        ),
+                    )
+                )
+        return tuple(summaries)
+
+    def __str__(self) -> str:
+        baseline_rms = tuple(
+            trace.baseline_rms_residual for trace in self.traces
+        )
+        return "\n".join(
+            (
+                "source=trace-npz-batch",
+                f"trace_count={len(self.traces)}",
+                f"samples={self.samples}",
+                f"model_order={self.model_order}",
+                f"components={self.components}",
+                "baseline_rms_residual_range="
+                f"{min(baseline_rms):.6g}:{max(baseline_rms):.6g}",
+                *(str(summary) for summary in self.method_summary),
+            )
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        traces = tuple(
+            {
+                **trace.to_dict(),
+                "source": source,
+                "svd_backends": self.svd_backends,
+                "trace_index": index,
+            }
+            for index, (trace, source) in enumerate(
+                zip(self.traces, self.sources, strict=True)
+            )
+        )
+        return {
+            "source": {
+                "kind": "trace-npz-batch",
+                "trace_count": len(self.sources),
+                "traces": self.sources,
+            },
+            "trace_count": len(self.sources),
+            "samples": self.samples,
+            "model_order": self.model_order,
+            "components": self.components,
+            "svd_backends": self.svd_backends,
+            "baseline_chi2_min": min(
+                trace.baseline_chi2 for trace in self.traces
+            ),
+            "baseline_chi2_max": max(
+                trace.baseline_chi2 for trace in self.traces
+            ),
+            "baseline_rms_residual_min": min(
+                trace.baseline_rms_residual for trace in self.traces
+            ),
+            "baseline_rms_residual_max": max(
+                trace.baseline_rms_residual for trace in self.traces
+            ),
+            "method_summary": tuple(
+                asdict(summary) for summary in self.method_summary
+            ),
+            "traces": traces,
+        }
 
 
 @dataclass(frozen=True)
@@ -134,6 +303,53 @@ def compare_subspace_methods(
         baseline_chi2=float(baseline.chi2),
         baseline_rms_residual=baseline_rms,
         methods=tuple(results),
+    )
+
+
+def compare_subspace_methods_batch(
+    time,
+    trace_rows,
+    sources,
+    *,
+    model_order: int,
+    components: int,
+    methods: tuple[str, ...] = ("matrix-pencil", "esprit"),
+    svd_backends: tuple[str, ...] = ("full",),
+    pencil_rows: int | None = None,
+    randomized_oversamples: int = 8,
+    power_iterations: int = 1,
+    random_seed: int = 0,
+) -> SubspaceBenchmarkBatch:
+    """Compare trace rows while retaining their individual source metadata."""
+
+    results = []
+    trace_sources = []
+    for trace, source in zip(trace_rows, sources, strict=True):
+        results.append(
+            compare_subspace_methods(
+                time,
+                trace,
+                model_order=model_order,
+                components=components,
+                methods=methods,
+                svd_backends=svd_backends,
+                pencil_rows=pencil_rows,
+                randomized_oversamples=randomized_oversamples,
+                power_iterations=power_iterations,
+                random_seed=random_seed,
+            )
+        )
+        trace_sources.append(source)
+    if not results:
+        raise ValueError("at least one trace is required")
+    return SubspaceBenchmarkBatch(
+        samples=int(np.asarray(time).shape[0]),
+        model_order=int(model_order),
+        components=int(components),
+        methods=tuple(methods),
+        svd_backends=tuple(svd_backends),
+        sources=tuple(trace_sources),
+        traces=tuple(results),
     )
 
 
@@ -458,8 +674,10 @@ def _sort_roots(roots: np.ndarray):
 
 __all__ = [
     "SubspaceBenchmark",
+    "SubspaceBenchmarkBatch",
     "SubspaceMethodBenchmark",
     "compare_subspace_methods",
+    "compare_subspace_methods_batch",
     "esprit_roots",
     "matrix_pencil_roots",
     "synthetic_subspace_benchmark",
