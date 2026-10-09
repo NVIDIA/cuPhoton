@@ -76,7 +76,7 @@ def _no_cuda(*args, **kwargs):
     pytest.fail("unsupported fusion settings reached CUDA/backend discovery")
 
 
-@pytest.mark.parametrize("backend", ["numpy", "auto", "cutile"])
+@pytest.mark.parametrize("backend", ["numpy", "auto", "cutile", "native"])
 def test_fusion_rejects_unsupported_backend_before_cuda(monkeypatch, backend):
     monkeypatch.setattr(xfit_api, "resolve_backend", _no_cuda)
     with pytest.raises(ValueError, match="fusion requires backend='cupy'"):

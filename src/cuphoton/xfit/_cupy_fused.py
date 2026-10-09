@@ -85,7 +85,9 @@ extern "C" __global__ void residual(
     long long batch, long long height, long long width,
     long long observations) {
     const long long offset = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (offset >= batch * observations) return;
+    if (offset >= batch * observations) {
+        return;
+    }
     const long long fit = offset / observations;
     const long long observation = offset % observations;
     const long long pixels = height * width;
@@ -113,7 +115,9 @@ extern "C" __global__ void materialized_jacobian(
     long long batch, long long height, long long width,
     long long observations) {
     const long long offset = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (offset >= batch * observations) return;
+    if (offset >= batch * observations) {
+        return;
+    }
     const long long fit = offset / observations;
     const long long observation = offset % observations;
     const long long pixels = height * width;
@@ -127,10 +131,11 @@ extern "C" __global__ void materialized_jacobian(
     model.star<true>(rn_sub(x, p[4]), rn_sub(y, p[5]), positive);
     model.star<true>(rn_sub(x, p[6]), rn_sub(y, p[7]), negative);
     #pragma unroll
-    for (int parameter = 0; parameter < 4; ++parameter)
+    for (int parameter = 0; parameter < 4; ++parameter) {
         derivative[parameter] = plane == 0
             ? rn_sub(positive[parameter], negative[parameter])
             : (plane == 1 ? positive[parameter] : negative[parameter]);
+    }
     derivative[4] = plane < 2 ? positive[4] : T(0);
     derivative[5] = plane < 2 ? positive[5] : T(0);
     derivative[6] = plane == 0 ? -negative[4]
