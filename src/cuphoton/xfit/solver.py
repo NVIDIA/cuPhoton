@@ -523,13 +523,16 @@ def batched_levenberg_marquardt(
                     valid_normal_equations[recovered_positions] = True
                     jacobians[recovered_indices] = fallback_jacobian
                     jacobian_current[recovered_indices] = True
-            active_indices = active_indices[valid_normal_equations]
+            # Reuse row indices so each array does not repeat Boolean-mask
+            # compaction and its device-to-host count synchronization.
+            valid_rows = ap.flatnonzero(valid_normal_equations)
+            active_indices = active_indices[valid_rows]
             if active_indices.shape[0] == 0:
                 continue
-            x_active = x_active[valid_normal_equations]
-            residual_active = residual_active[valid_normal_equations]
-            gradient = gradient[valid_normal_equations]
-            hessian = hessian[valid_normal_equations]
+            x_active = x_active[valid_rows]
+            residual_active = residual_active[valid_rows]
+            gradient = gradient[valid_rows]
+            hessian = hessian[valid_rows]
             diagnostics_current[active_indices] = True
         else:
             if (
@@ -558,12 +561,13 @@ def batched_levenberg_marquardt(
             status[active_indices[~valid_jacobian]] = int(
                 LMStatus.INVALID_RESIDUAL
             )
-            active_indices = active_indices[valid_jacobian]
+            valid_rows = ap.flatnonzero(valid_jacobian)
+            active_indices = active_indices[valid_rows]
             if active_indices.shape[0] == 0:
                 continue
-            x_active = x_active[valid_jacobian]
-            residual_active = residual_active[valid_jacobian]
-            jacobian = jacobian[valid_jacobian]
+            x_active = x_active[valid_rows]
+            residual_active = residual_active[valid_rows]
+            jacobian = jacobian[valid_rows]
             jacobians[active_indices] = jacobian
             jacobian_current[active_indices] = True
             gradient = ap.einsum("knm,km->kn", jacobian, residual_active)
@@ -577,14 +581,15 @@ def batched_levenberg_marquardt(
         status[active_indices[gradient_converged]] = int(
             LMStatus.CONVERGED_G_TOL
         )
-        active_indices = active_indices[~gradient_converged]
+        unconverged_rows = ap.flatnonzero(~gradient_converged)
+        active_indices = active_indices[unconverged_rows]
         if active_indices.shape[0] == 0:
             continue
-        x_active = x_active[~gradient_converged]
-        residual_active = residual_active[~gradient_converged]
-        gradient = gradient[~gradient_converged]
-        hessian = hessian[~gradient_converged]
-        diagonal = diagonal[~gradient_converged]
+        x_active = x_active[unconverged_rows]
+        residual_active = residual_active[unconverged_rows]
+        gradient = gradient[unconverged_rows]
+        hessian = hessian[unconverged_rows]
+        diagonal = diagonal[unconverged_rows]
 
         system = hessian + (
             damping[active_indices, None, None]
@@ -598,21 +603,23 @@ def batched_levenberg_marquardt(
             continue
         valid_step = finite_rows(step)
         status[active_indices[~valid_step]] = int(LMStatus.SINGULAR)
-        active_indices = active_indices[valid_step]
+        valid_rows = ap.flatnonzero(valid_step)
+        active_indices = active_indices[valid_rows]
         if active_indices.shape[0] == 0:
             continue
-        x_active = x_active[valid_step]
-        residual_active = residual_active[valid_step]
-        step = step[valid_step]
+        x_active = x_active[valid_rows]
+        residual_active = residual_active[valid_rows]
+        step = step[valid_rows]
 
         can_evaluate = evaluations[active_indices] < settings.max_evaluations
         status[active_indices[~can_evaluate]] = int(LMStatus.MAX_EVALUATIONS)
-        active_indices = active_indices[can_evaluate]
+        evaluable_rows = ap.flatnonzero(can_evaluate)
+        active_indices = active_indices[evaluable_rows]
         if active_indices.shape[0] == 0:
             continue
-        x_active = x_active[can_evaluate]
-        residual_active = residual_active[can_evaluate]
-        step = step[can_evaluate]
+        x_active = x_active[evaluable_rows]
+        residual_active = residual_active[evaluable_rows]
+        step = step[evaluable_rows]
 
         trial_x = x_active + step
         trial_residual = _call_residual(problem, trial_x, active_indices)
@@ -625,11 +632,12 @@ def batched_levenberg_marquardt(
         reduction = cost - trial_cost
         accepted = trial_valid & (reduction > 0)
 
-        accepted_indices = active_indices[accepted]
+        accepted_rows = ap.flatnonzero(accepted)
+        accepted_indices = active_indices[accepted_rows]
         if accepted_indices.shape[0] > 0:
-            accepted_step = step[accepted]
-            x[accepted_indices] = trial_x[accepted]
-            residuals[accepted_indices] = trial_residual[accepted]
+            accepted_step = step[accepted_rows]
+            x[accepted_indices] = trial_x[accepted_rows]
+            residuals[accepted_indices] = trial_residual[accepted_rows]
             jacobians[accepted_indices] = ap.nan
             jacobian_current[accepted_indices] = False
             diagnostics_current[accepted_indices] = False
@@ -638,8 +646,8 @@ def batched_levenberg_marquardt(
                 damping[accepted_indices] * settings.damping_decrease,
             )
             rejected_steps[accepted_indices] = 0
-            f_converged = reduction[accepted] <= (
-                settings.f_tol * ap.maximum(1.0, cost[accepted])
+            f_converged = reduction[accepted_rows] <= (
+                settings.f_tol * ap.maximum(1.0, cost[accepted_rows])
             )
             x_converged = ap.linalg.norm(accepted_step, axis=1) <= (
                 settings.x_tol * (settings.x_tol + 1.0)
