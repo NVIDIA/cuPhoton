@@ -42,6 +42,7 @@ def test_default_execution_preserves_legacy_payload_and_hash(tmp_path):
     legacy = config.to_payload()
     legacy_xfit = asdict(config.xfit)
     del legacy_xfit["backend"]
+    del legacy_xfit["fusion"]
     legacy["xfit"] = legacy_xfit
 
     restored = DevicePipelineConfig.from_payload(legacy)
