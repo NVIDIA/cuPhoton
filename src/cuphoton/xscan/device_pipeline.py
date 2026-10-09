@@ -2420,16 +2420,16 @@ def _scientific_evidence_receipt(
     if int(host_values.size) != expected_count:
         raise RuntimeError("terminal scientific evidence size changed")
     canonical = np.ascontiguousarray(host_values, dtype=np.dtype("<f8"))
-    packed_bytes = canonical.tobytes(order="C")
+    packed_buffer = memoryview(canonical).cast("B")
     return DevicePipelineScientificEvidence(
         candidate_count=evidence.candidate_count,
         parameter_names=evidence.parameter_names,
         feature_names=evidence.feature_names,
         layout=layout,
         packed_element_count=int(canonical.size),
-        packed_byte_count=len(packed_bytes),
-        packed_sha256=hashlib.sha256(packed_bytes).hexdigest(),
-        packed_base64=base64.b64encode(packed_bytes).decode("ascii"),
+        packed_byte_count=len(packed_buffer),
+        packed_sha256=hashlib.sha256(packed_buffer).hexdigest(),
+        packed_base64=base64.b64encode(packed_buffer).decode("ascii"),
         xfit_schema=evidence.xfit_schema,
         xfit_backend=evidence.xfit_backend,
         xfit_solver=evidence.xfit_solver,
