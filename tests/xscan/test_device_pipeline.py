@@ -1368,7 +1368,7 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
             "model": "gaussian",
             "mode": "difference",
             "config": context.solver_config,
-            "fusion": context.config.xfit.fusion,
+            **({"fusion": True} if context.config.xfit.fusion else {}),
         }
         stage_calls.append("xfit")
         return _fake_xfit_result(cp, 2)
@@ -1794,9 +1794,14 @@ def test_xfit_fusion_validation_and_solver_settings_are_independent() -> None:
     assert LMConfig(**config.solver_payload()).max_evaluations == 9
 
 
-@pytest.mark.parametrize("fusion", [False, True])
+@pytest.mark.parametrize(
+    "backend,fusion", [("cupy", False), ("cupy", True), ("native", False)]
+)
 def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fusion: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    fusion: bool,
 ) -> None:
     import cuphoton.xscan.device_pipeline as pipeline
     from cuphoton.xfit import LMConfig
@@ -1805,7 +1810,9 @@ def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
     checkpoint_dir.mkdir()
     (checkpoint_dir / "checkpoint.pt").write_bytes(b"checkpoint")
     ordinary = _config(checkpoint_dir)
-    config = replace(ordinary, xfit=replace(ordinary.xfit, fusion=fusion))
+    config = replace(
+        ordinary, xfit=replace(ordinary.xfit, backend=backend, fusion=fusion)
+    )
     path = tmp_path / "image.npy"
     np.save(path, np.ones((31, 31), dtype=np.float64))
     item = _item(path, path)
@@ -1863,7 +1870,8 @@ def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
             "model": "gaussian",
             "mode": "difference",
             "config": context.solver_config,
-            "fusion": fusion,
+            **({"backend": backend} if backend != "cupy" else {}),
+            **({"fusion": True} if fusion else {}),
         }
     ]
 
