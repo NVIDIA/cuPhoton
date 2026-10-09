@@ -139,7 +139,7 @@ class DeviceDipoleFitResult:
 
     def __post_init__(self) -> None:
         if self.backend not in {"cupy", "native", "numba-cuda-mlir"}:
-            raise ValueError("device fit backend must be cupy or native")
+            raise ValueError("unsupported device xFit backend")
         if isinstance(self.device_id, bool) or not isinstance(
             self.device_id, (int, np.integer)
         ):
