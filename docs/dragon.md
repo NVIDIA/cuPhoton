@@ -31,6 +31,14 @@ pipeline keeps intermediate arrays inside each GPU worker while it
 processes an image pair. Each GPU handles complete items; these paths do not
 split one image across GPUs.
 
+The shared executor accepts `--workers-per-gpu` to place several independent
+workers on each GPU; its default is one. `--max-workers` remains a total
+process cap. See [GPU sharing](components/xscan.md#share-a-gpu-between-image-pairs)
+for CLI and Python examples, local process/thread modes, and external MPS
+connection checks. These sharing and MPS options apply to `xfit fit-dipoles`,
+`xscan infer-real-bogus`, and `xscan run-pipeline` with `--executor dragon`.
+The standalone XPOIS batch API retains its existing placement behavior.
+
 ### Launch descriptors
 
 Dragon workers load immutable, hash-checked launch descriptors from the shared

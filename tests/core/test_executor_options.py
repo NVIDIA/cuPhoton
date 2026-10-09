@@ -21,6 +21,13 @@ from cuphoton.core.cli.executor import ExecutorOptions
         ("mpi", "worker_timeout_sec"),
         ("mpi", "result_timeout_sec"),
         ("dragon", "rank_setup_timeout_sec"),
+        ("local", "workers_per_gpu"),
+        ("local", "mps_pipe_directory"),
+        ("mpi", "workers_per_gpu"),
+        ("mpi", "mps_pipe_directory"),
+        ("processes", "max_workers"),
+        ("threads", "result_timeout_sec"),
+        ("threads", "mps_pipe_directory"),
     ],
 )
 def test_rejects_flags_which_selected_executor_cannot_honor(executor, option):
@@ -37,7 +44,9 @@ def test_local_default_does_not_enable_distributed_execution():
     assert command.executor_options() == {}
 
 
-@pytest.mark.parametrize("executor", ["dragon", "mpi"])
+@pytest.mark.parametrize(
+    "executor", ["dragon", "mpi", "processes", "threads"]
+)
 def test_round_controls_are_opt_in(executor):
     command = ExecutorOptions()
     command.executor = executor

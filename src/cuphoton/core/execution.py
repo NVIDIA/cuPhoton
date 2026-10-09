@@ -346,8 +346,30 @@ def audit_worker_provenance(
     *,
     backend: str,
     expected_worker_count: int,
+    gpu_groups: Sequence[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Require one usable, non-overlapping physical GPU per placed worker."""
+    """Check physical devices against the coordinator's worker placement.
+
+    Workers in the same requested group must share a physical GPU; different
+    groups must have distinct devices. Omitted groups require one GPU per
+    worker, preserving the default distributed-execution contract.
+    """
+
+    if gpu_groups is None:
+        groups = tuple(range(expected_worker_count))
+    else:
+        if (
+            not isinstance(gpu_groups, Sequence)
+            or isinstance(gpu_groups, (str, bytes))
+            or len(gpu_groups) != expected_worker_count
+            or any(
+                type(group) is not int or group < 0 for group in gpu_groups
+            )
+        ):
+            raise ValueError(
+                "gpu_groups must contain one non-negative integer per worker"
+            )
+        groups = tuple(gpu_groups)
 
     errors: list[dict[str, Any]] = []
     identities: list[tuple[int, str, frozenset[tuple[str, str]]]] = []
@@ -377,6 +399,11 @@ def audit_worker_provenance(
         gpu = value.get("gpu")
         host = value.get("hostname")
         visibility = value.get("cuda_visible_devices")
+        if (
+            type(value.get("worker_id")) is not int
+            or not 0 <= value["worker_id"] < expected_worker_count
+        ):
+            invalid.append("worker_id")
         if type(value.get("pid")) is not int or value["pid"] <= 0:
             invalid.append("pid")
         if not isinstance(host, str) or not host:
@@ -428,12 +455,20 @@ def audit_worker_provenance(
             relation = classify_physical_gpu_pair(
                 dict(ids), dict(other_ids), same_host=same_host
             )
-            if relation != "distinct":
+            expected = (
+                "duplicate"
+                if groups[worker_id] == groups[other_id]
+                else "distinct"
+            )
+            if relation != expected:
                 errors.append(
                     {
                         "phase": "provenance",
                         "worker_ids": [other_id, worker_id],
-                        "message": f"{relation} physical GPU identities",
+                        "message": (
+                            f"{relation} physical GPU identities; "
+                            f"expected {expected} for requested GPU groups"
+                        ),
                     }
                 )
     return errors
@@ -447,6 +482,7 @@ def finalize_round(
     worker_results: Sequence[Mapping[str, Any]],
     *,
     artifact_timeout_sec: float,
+    gpu_groups: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Audit evidence, merge outputs, and return an unpublished summary.
 
@@ -529,6 +565,7 @@ def finalize_round(
             ],
             backend=spec.backend,
             expected_worker_count=len(shards),
+            gpu_groups=gpu_groups,
         )
     )
     scientific_result = None

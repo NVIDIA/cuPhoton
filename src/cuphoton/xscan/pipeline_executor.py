@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Any
 
 from cuphoton.core.bulk import WorkItem, collect_gpu_identity, json_mapping
 
-from .device_pipeline import DevicePipelineConfig, DevicePipelineItem
+from .device_pipeline import (
+    DevicePipelineConfig,
+    DevicePipelineItem,
+    NpyArrayDescriptor,
+)
 from .dragon_pipeline import (
     DRAGON_DEVICE_PIPELINE_OPTIONS_SCHEMA,
     _failed_record_problems,
@@ -223,7 +227,33 @@ def run_pipeline_manifest(
         config, items = load_pipeline_manifest(
             manifest_path, fits_reader=fits_reader, xdr_options=xdr_options
         )
+        if executor == "threads" and any(
+            descriptor is not None
+            and not isinstance(descriptor, NpyArrayDescriptor)
+            for item in items
+            for descriptor in (
+                item.reference,
+                item.target,
+                item.variance,
+                item.fit_mask,
+            )
+        ):
+            raise ValueError(
+                "threads requires prepared NPY inputs; use processes, "
+                "Dragon or MPI for FITS inputs"
+            )
         return prepare_pipeline_workload(items, config, rank=rank)
+
+    if executor in {"processes", "threads"}:
+        from .sharing import run_shared_pipeline
+
+        return run_shared_pipeline(
+            executor=executor,
+            prepare_workload=prepare,
+            output_root=output_root,
+            run_id=run_id,
+            **options,
+        )
 
     return run_workload(
         executor=executor,

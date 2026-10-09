@@ -12,6 +12,7 @@ import math
 import os
 import queue
 import socket
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from cuphoton.core.benchmark import (
     BenchmarkOptions,
@@ -103,31 +105,40 @@ def discover_gpu_placements(
 
 
 def _select_gpu_placements(
-    placements: Sequence[Placement], worker_count: int
+    placements: Sequence[Placement],
+    worker_count: int,
+    *,
+    workers_per_gpu: int = 1,
 ) -> tuple[Placement, ...]:
-    """Select GPUs round-robin across hosts, then assign dense worker IDs."""
+    """Spread workers across hosts and GPUs before reusing GPU slots."""
 
     if isinstance(worker_count, bool) or not isinstance(worker_count, int):
         raise TypeError("worker_count must be an integer")
-    if worker_count <= 0 or worker_count > len(placements):
+    if type(workers_per_gpu) is not int or workers_per_gpu <= 0:
+        raise ValueError("workers_per_gpu must be a positive integer")
+    if worker_count <= 0 or worker_count > len(placements) * workers_per_gpu:
         raise ValueError("worker_count exceeds available Dragon placements")
     by_host: dict[str, list[Placement]] = {}
     for placement in placements:
         by_host.setdefault(placement.host, []).append(placement)
     selected: list[Placement] = []
     offset = 0
-    while len(selected) < worker_count:
+    unique_count = min(worker_count, len(placements))
+    while len(selected) < unique_count:
         progressed = False
         for host_placements in by_host.values():
             if offset >= len(host_placements):
                 continue
             selected.append(host_placements[offset])
             progressed = True
-            if len(selected) == worker_count:
+            if len(selected) == unique_count:
                 break
         if not progressed:
             raise RuntimeError("could not select requested Dragon placements")
         offset += 1
+    selected = [
+        selected[index % unique_count] for index in range(worker_count)
+    ]
     return tuple(
         Placement(
             worker_id=worker_id,
@@ -208,12 +219,58 @@ def _stable_gpu_physical_ids(
     return identities or None
 
 
+def _normalized_gpu_uuid(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return UUID(value.removeprefix("GPU-")).hex
+    except ValueError:
+        return None
+
+
+def _mps_gpu_uuid(gpu_id: int) -> str:
+    """Resolve one Dragon/NVML ordinal without initializing CUDA.
+
+    Dragon's NVIDIA discovery reports nvidia-smi device indices. MPS may
+    remap these ordinals, so bind the corresponding UUID in the client.
+    """
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--id={gpu_id}",
+                "--query-gpu=index,uuid",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("cannot resolve Dragon GPU UUID for MPS") from exc
+    fields = [field.strip() for field in result.stdout.strip().split(",")]
+    if (
+        result.returncode != 0
+        or len(fields) != 2
+        or fields[0] != str(gpu_id)
+        or not fields[1].startswith("GPU-")
+        or _normalized_gpu_uuid(fields[1]) is None
+    ):
+        raise RuntimeError(
+            "nvidia-smi did not identify the requested Dragon GPU for MPS"
+        )
+    return fields[1]
+
+
 def _valid_shard_provenance(
     value: Any,
     *,
     placement: Placement,
     allow_loopback_alias: bool,
     backend: str,
+    mps_pipe_directory: str | None = None,
 ) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -223,6 +280,25 @@ def _valid_shard_provenance(
     requested_host = value.get("requested_host")
     hostname = value.get("hostname")
     visibility = value.get("cuda_visible_devices")
+    expected_visibility = str(placement.gpu_id)
+    requested_uuid = None
+    if mps_pipe_directory is not None:
+        raw_uuid = value.get("requested_gpu_uuid")
+        if not isinstance(raw_uuid, str):
+            return False
+        expected_visibility = raw_uuid
+        requested_uuid = _normalized_gpu_uuid(expected_visibility)
+        if requested_uuid is None:
+            return False
+        mps = value.get("mps")
+        if (
+            not isinstance(mps, Mapping)
+            or mps.get("pipe_directory") != mps_pipe_directory
+            or _strict_integer(mps.get("client_pid")) != pid
+            or (server_pid := _strict_integer(mps.get("server_pid"))) is None
+            or server_pid <= 0
+        ):
+            return False
     if (
         worker_id != placement.worker_id
         or requested_host != placement.host
@@ -238,11 +314,19 @@ def _valid_shard_provenance(
         )
         or not isinstance(visibility, str)
         or [token.strip() for token in visibility.split(",") if token.strip()]
-        != [str(placement.gpu_id)]
+        != [expected_visibility]
+        or (
+            mps_pipe_directory is not None
+            and value.get("mps_pipe_directory") != mps_pipe_directory
+        )
     ):
         return False
     gpu = value.get("gpu")
     if not isinstance(gpu, Mapping) or not gpu:
+        return False
+    if requested_uuid is not None and (
+        _normalized_gpu_uuid(gpu.get("uuid")) != requested_uuid
+    ):
         return False
     gpu_backend = gpu.get("backend")
     expected_identity_backend = (
@@ -268,6 +352,8 @@ def run_dragon_work_items(
     output_root: Path,
     run_id: str | None = None,
     max_workers: int | None = None,
+    workers_per_gpu: int = 1,
+    mps_pipe_directory: str | None = None,
     result_timeout_sec: float = 60.0,
     worker_timeout_sec: float = 3600.0,
     benchmark: BenchmarkOptions | None = None,
@@ -278,6 +364,11 @@ def run_dragon_work_items(
     Complete item descriptors live in hashed shared-filesystem launch files;
     control queues carry bounded round commands and completion receipts.
 
+    ``workers_per_gpu`` permits that many independent worker processes on
+    each allocated GPU; ``max_workers`` caps the total process count. An
+    explicit MPS pipe requires every worker to connect to an externally
+    managed MPS server. This executor never starts or stops that server.
+
     Successful runs explicitly close every worker before joining. On failure,
     the coordinator stops the process group; a survivor blocked on its command
     queue only runs ``worker.close()`` if Dragon's stop signal unwinds Python.
@@ -287,6 +378,13 @@ def run_dragon_work_items(
     """
 
     invocation_start = time.perf_counter()
+    if type(workers_per_gpu) is not int or workers_per_gpu <= 0:
+        raise ValueError("workers_per_gpu must be a positive integer")
+    if mps_pipe_directory is not None and (
+        not isinstance(mps_pipe_directory, str)
+        or not Path(mps_pipe_directory).is_absolute()
+    ):
+        raise ValueError("mps_pipe_directory must be an absolute path")
     for name, value in (
         ("result_timeout_sec", result_timeout_sec),
         ("worker_timeout_sec", worker_timeout_sec),
@@ -319,11 +417,22 @@ def run_dragon_work_items(
         api.System, api.Node, node_ids=node_ids
     )
     worker_count = min(
-        max_workers or len(available), len(available), len(spec.items)
+        max_workers or len(available) * workers_per_gpu,
+        len(available) * workers_per_gpu,
+        len(spec.items),
     )
     if not worker_count:
         raise RuntimeError("Dragon allocation exposes no usable GPUs")
-    placements = _select_gpu_placements(available, worker_count)
+    placements = _select_gpu_placements(
+        available, worker_count, workers_per_gpu=workers_per_gpu
+    )
+    group_ids: dict[tuple[str, int], int] = {}
+    gpu_groups = tuple(
+        group_ids.setdefault(
+            (placement.host, placement.gpu_id), len(group_ids)
+        )
+        for placement in placements
+    )
     shards = partition_byte_balanced(spec.items, worker_count)
     timings["dragon_discovery_sec"] = time.perf_counter() - phase_start
     effective_run_id = run_id or new_run_id("dragon-workload")
@@ -377,6 +486,7 @@ def run_dragon_work_items(
                 "allow_loopback_alias": len(node_ids) == 1,
                 "worker_timeout_sec": worker_timeout_sec,
                 "result_timeout_sec": result_timeout_sec,
+                "mps_pipe_directory": mps_pipe_directory,
             }
             descriptor_path = (
                 run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
@@ -444,6 +554,7 @@ def run_dragon_work_items(
                 provenances,
                 backend=spec.backend,
                 expected_worker_count=worker_count,
+                gpu_groups=gpu_groups,
             )
             if ready_errors:
                 raise ValueError(
@@ -455,6 +566,7 @@ def run_dragon_work_items(
                     placement=placements[message["worker_id"]],
                     allow_loopback_alias=len(node_ids) == 1,
                     backend=spec.backend,
+                    mps_pipe_directory=mps_pipe_directory,
                 ):
                     raise ValueError(
                         "Dragon READY differs from requested placement"
@@ -554,6 +666,7 @@ def run_dragon_work_items(
                 artifact_timeout_sec=min(result_timeout_sec, 0.01)
                 if round_errors
                 else result_timeout_sec,
+                gpu_groups=gpu_groups,
             )
             round_timings["artifact_audit_sec"] = max(
                 0.0,
@@ -712,6 +825,9 @@ def run_dragon_work_items(
         "worker_timeout_sec": worker_timeout_sec,
         "result_timeout_sec": result_timeout_sec,
         "worker_count": worker_count,
+        "workers_per_gpu": workers_per_gpu,
+        "gpu_count": len(group_ids),
+        "mps_pipe_directory": mps_pipe_directory,
         "allocation_node_count": len(node_ids),
         "distinct_host_count": len(
             {placement.host for placement in placements}
@@ -969,8 +1085,20 @@ def _workload_worker(
                 placement,
                 allow_loopback_alias=descriptor["allow_loopback_alias"],
             )
+            mps_pipe_directory = descriptor.get("mps_pipe_directory")
+            requested_gpu_uuid = None
+            if mps_pipe_directory is not None:
+                os.environ["CUDA_MPS_PIPE_DIRECTORY"] = mps_pipe_directory
+                requested_gpu_uuid = _mps_gpu_uuid(placement.gpu_id)
+                os.environ["CUDA_VISIBLE_DEVICES"] = requested_gpu_uuid
+                visibility = requested_gpu_uuid
             factory = resolve_worker_factory(descriptor["worker_factory"])
             worker = factory(descriptor["options"])
+            mps_receipt = None
+            if mps_pipe_directory is not None:
+                from .mps import require_mps_client
+
+                mps_receipt = require_mps_client(os.getpid())
             provenance = {
                 "worker_id": worker_id,
                 "requested_host": placement.host,
@@ -982,6 +1110,10 @@ def _workload_worker(
                     worker.gpu_identity, field="worker GPU identity"
                 ),
             }
+            if mps_pipe_directory is not None:
+                provenance["mps_pipe_directory"] = mps_pipe_directory
+                provenance["requested_gpu_uuid"] = requested_gpu_uuid
+                provenance["mps"] = mps_receipt
             ready["provenance"] = provenance
         except Exception as exc:
             ready.update(status="failed", error=error_payload(exc))

@@ -561,8 +561,8 @@ scientific evidence; Dragon saves each result in
 `items/<item_id>/summary.json` and checks it again in the coordinator.
 The evidence decoder returns the 22 named arrays for comparison.
 
-The `run-pipeline` command accepts the same descriptors with either Dragon or
-MPI. Save the configuration and items above as a manifest:
+The `run-pipeline` command accepts the same descriptors with Dragon, MPI,
+or local GPU workers. Save the configuration and items above as a manifest:
 
 ```python
 import json
@@ -615,6 +615,111 @@ xDR alone does not prove native GDS use. `input_read` includes FITS reading,
 decoding and reader stream completion; `input_h2d` measures NPY upload calls.
 Timings are host elapsed times, so distinguish model initialization,
 first-item compilation and warmed context reuse when comparing runs.
+
+### Share a GPU between image pairs
+
+`--workers-per-gpu N` allows independent image pairs to use the same GPU.
+The default is one worker per GPU. Each worker retains its own model and
+pipeline context, so additional workers consume additional device and host
+memory. Start with a small count and measure throughput and memory on the
+intended images; increasing the count can also slow a saturated GPU.
+
+For a local run, expose exactly one GPU before starting Python and select
+`--executor processes` or `--executor threads`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 cuphoton xscan run-pipeline \
+  --executor processes --workers-per-gpu 4 \
+  --manifest pipeline.json --output-dir runs --name processes-4 \
+  --worker-timeout-sec 600 --warmup-rounds 1 --measure-rounds 3
+
+CUDA_VISIBLE_DEVICES=0 cuphoton xscan run-pipeline \
+  --executor threads --workers-per-gpu 4 \
+  --manifest pipeline.json --output-dir runs --name threads-4 \
+  --worker-timeout-sec 600 --warmup-rounds 1 --measure-rounds 3
+```
+
+These options call the same Python entry point:
+
+```python
+from pathlib import Path
+from cuphoton.xscan.pipeline_executor import run_pipeline_manifest
+
+result = run_pipeline_manifest(
+    executor="processes",
+    manifest_path=Path("pipeline.json"),
+    output_root=Path("runs"),
+    workers_per_gpu=4,
+    worker_timeout_sec=600,
+)
+```
+
+Process mode creates persistent spawned processes. Thread mode keeps workers
+in one supervised process, with a separate model, CuPy memory pool and pair
+of CUDA streams per thread. Initialization and first use are serialized;
+use a warmup round to exclude that cost from measured rounds. Outputs from
+every planned round are retained. The worker count is capped by the number
+of items. A timeout or worker failure fails the run and stops its owned
+processes; consult the terminal `summary.json` before using timing results.
+
+Thread mode accepts prepared NPY inputs. It works with ordinary Python and
+can also use a compatible free-threaded interpreter. To require the GIL to
+remain disabled, add `--require-free-threaded` (Python:
+`require_free_threaded=True`) to the threads command. This checks the running
+interpreter; it does not disable the GIL. Extensions may re-enable it on
+import, and forcing it off does not establish extension thread safety. See
+[Python's free-threading guide](https://docs.python.org/3/howto/free-threading-python.html).
+Use process mode for FITS inputs. Free-threaded execution requires validation
+of the installed scientific libraries; it is not a general compatibility
+claim for native extensions.
+
+With the shared Dragon executor, the same count applies to every discovered
+GPU. `--max-workers` caps the total number of processes. Dragon uses distinct
+GPUs before assigning additional workers to each one:
+
+```bash
+dragon cuphoton xscan run-pipeline --executor dragon \
+  --workers-per-gpu 4 --max-workers 16 \
+  --manifest pipeline.json --output-dir runs --name dragon-shared
+```
+
+The shared Dragon Python API accepts `workers_per_gpu` as well. Physical GPU
+checks require workers assigned to the same GPU to agree on its identity,
+and still reject collisions between different requested GPUs. MPI retains
+one rank per physical GPU and rejects the sharing options.
+
+### Select an existing MPS service
+
+Process workers can run under CUDA's ordinary process scheduling or an
+externally managed Multi-Process Service (MPS). MPS allows CUDA work from
+different processes to overlap on the GPU. To require a connection to an
+existing MPS v2 service, add an absolute pipe directory:
+
+```bash
+CUDA_VISIBLE_DEVICES=GPU-your-allocated-device-uuid \
+  cuphoton xscan run-pipeline --executor processes --workers-per-gpu 4 \
+  --mps-pipe-directory /tmp/my-job-mps \
+  --manifest pipeline.json --output-dir runs --name mps-4
+```
+
+The Python keyword is `mps_pipe_directory`. It is also accepted by the shared
+Dragon executor. Every worker must appear in that service's client list
+after CUDA initialization, or startup fails. The service and clients must
+use a common PID namespace for this check. On multiple hosts use the same
+absolute node-local directory on each host, such as a job-specific `/tmp`
+path. Dragon resolves its assigned physical device to a UUID before CUDA
+initialization and checks the reported UUID, avoiding MPS ordinal remapping.
+This requires `nvidia-smi` on each worker host. Record the runtime's
+configuration when comparing runs. Without this option, process workers
+inherit the environment's CUDA
+and MPS settings without asserting an MPS connection.
+
+cuPhoton leaves service lifetime, device visibility and resource limits to
+the launcher or administrator. It does not start or stop MPS or change GPU
+compute mode. The explicit connection check uses the
+[MPS v2 control interface](https://docs.nvidia.com/deploy/mps/latest/mpsv2-interface.html).
+Thread mode rejects `--mps-pipe-directory`; its threads share a process and
+CUDA context without needing an interprocess service.
 
 ## Review workflow
 
