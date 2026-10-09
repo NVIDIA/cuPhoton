@@ -34,7 +34,7 @@ class _Worker:
         _STATE.factories.append(self.placement.worker_id)
         _STATE.instances.append(self)
         self.gpu_identity = {
-            "backend": options["backend"],
+            "backend": "cupy",
             "device_index": 0,
             "name": "fake-gpu",
             "uuid": (
@@ -256,6 +256,7 @@ def _run(
     workers_per_gpu=1,
     items=None,
     mps_pipe_directory=None,
+    backend="cupy",
 ):
     spec = WorkloadSpec(
         items=items
@@ -263,11 +264,11 @@ def _run(
             WorkItem("one", {"value": "x" * 300_000 if large else 1}, 12),
             WorkItem("two", {"value": 2}, 6),
         ),
-        options_payload={"backend": "cupy"},
+        options_payload={"backend": backend},
         manifest_payload={"schema": "example"},
         input_identity_payload={"schema": "example-identity"},
         manifest_sha256="0" * 64,
-        backend="cupy",
+        backend=backend,
         worker_factory=_factory,
         success_record_validator=validator,
         finalize_round=finalizer,
@@ -591,9 +592,12 @@ def test_native_workers_keep_spawn_children_on_standard_multiprocessing(
     assert completed.returncode == 0, completed.stderr
 
 
-def test_ordinary_workload_retains_root_artifacts(monkeypatch, tmp_path):
+@pytest.mark.parametrize("backend", ["cupy", "cutile", "numba-cuda-mlir"])
+def test_ordinary_workload_retains_root_artifacts(
+    monkeypatch, tmp_path, backend
+):
     state = _install_runtime(monkeypatch)
-    result = _run(tmp_path)
+    result = _run(tmp_path, backend=backend)
     assert result.status == "success", result.summary
     assert "benchmark" not in result.summary
     assert (result.run_dir / "records/one.json").is_file()

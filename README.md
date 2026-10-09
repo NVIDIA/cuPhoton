@@ -173,6 +173,7 @@ upstream release has no Python 3.14 wheel.
 | `torch` | PyTorch workflows that can be forced to CPU execution |
 | `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch and Numba-CUDA |
 | `cutile` | Experimental `cuda.tile` backend and CuPy |
+| `numba-cuda-mlir` | Gaussian xFit kernels compiled with Numba-CUDA-MLIR and CuPy |
 | `mpi` | mpi4py bindings for an existing MPI runtime |
 | `dragon` | DragonHPC runtime on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |

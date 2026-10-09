@@ -60,6 +60,8 @@ more than one license.
 | `gpu` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
 | `cutile` | `cuda-tile>=1.6,<2` | `1.6.0` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI` |
 | `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
+| `numba-cuda-mlir` | `numba-cuda-mlir[cu13]>=0.5.4,<0.6` | `0.5.4` | `Apache-2.0` with bundled third-party notices; the `cu13` extra installs separately licensed NVIDIA CUDA component wheels | [Numba-CUDA-MLIR](https://github.com/NVIDIA/numba-cuda-mlir) | `uv / PyPI` |
+| `numba-cuda-mlir` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
 | `dev` | `setuptools>=83.0.0` | `83.0.0` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
 | `dev` | `virtualenv>=21.7.12` | `21.7.12` | `MIT` | [virtualenv](https://github.com/pypa/virtualenv) | `uv / PyPI; pre-commit environment creation` |
