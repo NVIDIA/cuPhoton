@@ -449,27 +449,34 @@ class GaussianWorkspace:
             # can alter the trajectory of an ill-conditioned fit.
             self._cp.exp(parameters[:, 1:3], out=width_cubes)
             self._cp.power(width_cubes, 3, out=width_cubes)
-        self._ct.launch(
-            self._stream,
-            (
-                parameters.shape[0],
-                math.ceil(self._observations / _EVALUATION_TILE),
-                1,
-            ),
-            self._kernel,
-            (
-                parameters,
-                width_cubes,
-                self._images,
-                self._weights,
-                indices,
-                output,
-                self._height,
-                self._width,
-                self._planes,
-                compute_jacobian,
-            ),
-        )
+        try:
+            self._ct.launch(
+                self._stream,
+                (
+                    parameters.shape[0],
+                    math.ceil(self._observations / _EVALUATION_TILE),
+                    1,
+                ),
+                self._kernel,
+                (
+                    parameters,
+                    width_cubes,
+                    self._images,
+                    self._weights,
+                    indices,
+                    output,
+                    self._height,
+                    self._width,
+                    self._planes,
+                    compute_jacobian,
+                ),
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "the xFit fused cuda.tile evaluation kernel failed to "
+                "compile or launch; check that cuda-tile matches the CUDA "
+                "runtime"
+            ) from exc
 
     def residual(
         self, parameters: BackendArray, *, indices: BackendArray
