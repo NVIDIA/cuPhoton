@@ -59,7 +59,9 @@ def _fixture(
     return images, initial
 
 
-def _initialize(images, initial, mode, workers, counter, barrier, gpu):
+def _initialize(
+    images, initial, mode, workers, counter, barrier, gpu, fusion
+):
     with counter.get_lock():
         index = counter.value
         counter.value += 1
@@ -72,6 +74,7 @@ def _initialize(images, initial, mode, workers, counter, barrier, gpu):
     _worker.initial = initial[start:stop].copy()
     _worker.variance = np.ones_like(_worker.images)
     _worker.mode = mode
+    _worker.fusion = fusion
     _worker.barrier = barrier
     _worker.stream = None
     _worker.pool = None
@@ -113,6 +116,7 @@ def _run(treatment):
             variance=_worker.variance,
             mode=_worker.mode,
             backend=backend,
+            fusion=_worker.fusion,
         )
         seconds = time.perf_counter() - start
     if result.backend != backend:
@@ -198,6 +202,7 @@ def main() -> None:
         help="Restrict all workers together to this many inherited CPUs.",
     )
     parser.add_argument("--batch", type=int, action="append")
+    parser.add_argument("--fusion", action="store_true")
     parser.add_argument(
         "--dtype", choices=("float32", "float64"), default="float64"
     )
@@ -227,7 +232,13 @@ def main() -> None:
         parser.error("workers and image dimensions must be positive")
     if args.compare_native and args.backend:
         parser.error("--compare-native cannot be combined with --backend")
-    backends = args.backend or ["cupy", "cutile"]
+    backends = args.backend or (
+        ["cupy"] if args.fusion else ["cupy", "cutile"]
+    )
+    if args.fusion and (
+        args.compare_native or any(backend != "cupy" for backend in backends)
+    ):
+        parser.error("--fusion requires --backend cupy")
     batches = args.batch or [1, 16, 256, 4096]
     if any(batch < args.workers for batch in batches):
         parser.error("every batch must contain at least --workers candidates")
@@ -274,17 +285,33 @@ def main() -> None:
                 context.Value("i", 0),
                 context.Barrier(args.workers),
                 any(backend != "numpy" for backend in treatments),
+                args.fusion,
             ),
             **executor_options,
         ) as pool:
             _round(pool, None, args.workers, args.timeout_seconds)
             startup = time.perf_counter() - start
             warmups, samples, last = {}, {t: [] for t in treatments}, {}
+            cold = {}
             try:
                 expected, reference_seconds = _round(
                     pool, reference, args.workers, args.timeout_seconds
                 )
                 for treatment in treatments:
+                    if treatment == reference:
+                        cold[treatment] = 1e3 * reference_seconds
+                    else:
+                        results, seconds = _round(
+                            pool,
+                            treatment,
+                            args.workers,
+                            args.timeout_seconds,
+                        )
+                        cold[treatment] = 1e3 * seconds
+                        for actual, baseline in zip(
+                            results, expected, strict=True
+                        ):
+                            _validate(actual[1], baseline[1], dtype)
                     start = time.perf_counter()
                     for _ in range(args.warmup):
                         results, _ = _round(
@@ -345,6 +372,9 @@ def main() -> None:
                 json.dumps(
                     {
                         "backend": treatment,
+                        "fusion": args.fusion,
+                        "cold_milliseconds": cold[treatment],
+                        "milliseconds_samples": wall_ms,
                         "execution": args.execution,
                         "workers": args.workers,
                         "batch": batch,
