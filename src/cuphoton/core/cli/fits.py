@@ -27,6 +27,17 @@ class XdrOptionsMixin:
         _set = XDR_OPTION_CHOICES["postprocess"]
         _default = None
 
+    xdr_gzip_decoder = None
+
+    class XdrGzipDecoderArg(SetInvariant):
+        _arg = "--xdr-gzip-decoder"
+        _help = (
+            "xDR gzip decoder: auto, gzip, or deflate. Omitted preserves "
+            "manifest choices; applies when the FITS reader uses xDR."
+        )
+        _set = XDR_OPTION_CHOICES["gzip_decoder"]
+        _default = None
+
 
 def xdr_options_from_cli(command) -> dict[str, str]:
     """Collect explicit flags without replacing omitted manifest choices."""

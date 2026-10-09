@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-in / device-out nvCOMP batched DEFLATE decompression.
+"""Device-in / device-out nvCOMP batched gzip/DEFLATE decompression.
 
 Accepts a single contiguous device buffer holding N concatenated
 gzip-compressed tile payloads plus per-tile (offset, length) tables, and
@@ -22,13 +22,14 @@ import os
 import platform
 import struct
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 
+_DEFLATE_CODEC_CACHE = threading.local()
 _REPACK_DEFLATE_KERNEL = None
-_DEFLATE_CODEC = None
 _CPP_EXT = None
 _CPP_EXT_PROBED = False
 _CPP_EXT_IMPORT_ERROR: str | None = None
@@ -225,18 +226,39 @@ def _preload_cpp_ext_libraries() -> None:
     _CPP_EXT_LIBS_PRELOADED = True
 
 
-def _get_codec():
-    """Return a cached nvcomp deflate+RAW codec. Creating a codec allocates a
-    CUDA stream (~3-4 ms); cache it."""
-    global _DEFLATE_CODEC
-    if _DEFLATE_CODEC is None:
+class _StreamBoundCodec:
+    """Destroy the codec before releasing its CuPy stream owner."""
+
+    def __init__(self, stream, device_id):
         import nvidia.nvcomp as nvcomp
 
-        _DEFLATE_CODEC = nvcomp.Codec(
+        self.stream = stream
+        self.device_id = device_id
+        self.codec = nvcomp.Codec(
             algorithm="deflate",
             bitstream_kind=nvcomp.BitstreamKind.RAW,
+            cuda_stream=int(stream.ptr),
         )
-    return _DEFLATE_CODEC
+
+    def __del__(self):
+        self.codec = None
+
+
+def _get_codec():
+    """Reuse one codec per thread, bound to its current device and stream."""
+    import cupy as cp
+
+    stream = cp.cuda.get_current_stream()
+    device_id = cp.cuda.runtime.getDevice()
+    cached = getattr(_DEFLATE_CODEC_CACHE, "entry", None)
+    if (
+        cached is None
+        or cached.device_id != device_id
+        or cached.stream.ptr != stream.ptr
+    ):
+        cached = _StreamBoundCodec(stream, device_id)
+        _DEFLATE_CODEC_CACHE.entry = cached
+    return cached.codec
 
 
 def _try_get_cpp_ext():
@@ -651,12 +673,19 @@ def _compute_header_sizes_from_device(
     for group in bounded_groups(fixed_lengths):
         group_indices = all_indices[group]
         peeks = gather_prefixes(group_indices, fixed_lengths[group])
-        for cursor, index in enumerate(group_indices):
-            head = peeks[cursor * peek_len : (cursor + 1) * peek_len]
-            try:
-                header_sizes[index] = _parse_gzip_header_len(head)
-            except _TruncatedGzipHeader:
-                pending.append(int(index))
+        fixed = np.frombuffer(peeks, dtype=np.uint8).reshape(-1, peek_len)
+        invalid = (
+            (fixed[:, 0] != 0x1F)
+            | (fixed[:, 1] != 0x8B)
+            | (fixed[:, 2] != 0x08)
+            | ((fixed[:, 3] & 0xE0) != 0)
+        )
+        if np.any(invalid):
+            # Preserve the parser's specific error for the first bad prefix.
+            first = int(np.flatnonzero(invalid)[0])
+            _parse_gzip_header_len(fixed[first].tobytes())
+        header_sizes[group_indices] = peek_len
+        pending.extend(group_indices[(fixed[:, 3] & 0x1E) != 0].tolist())
 
     # Neither the trailer nor a valid two-byte DEFLATE stream can contain
     # header bytes. Re-gather still-truncated tiles in bounded groups per
@@ -749,6 +778,8 @@ def _checked_output_offsets(
 
 def _align_deflate_inputs(d_concat, offsets, lengths):
     """Pack raw DEFLATE payloads at nvCOMP's required four-byte alignment."""
+    offsets = np.asarray(offsets, dtype=np.int64)
+    lengths = np.asarray(lengths, dtype=np.int64)
     if not np.any((int(d_concat.data.ptr) + offsets) % 4):
         return d_concat, offsets, ()
 
@@ -813,6 +844,7 @@ def gpu_gzip_decompress_batch(
     uncompressed_sizes: Sequence[int],
     *,
     gzip_wrapped: bool = True,
+    gzip_decoder: str = "auto",
     use_cpp_helper: str | bool = "auto",
     use_native_pool: bool = False,
     keepalive: list | None = None,
@@ -825,10 +857,16 @@ def gpu_gzip_decompress_batch(
     d_concat : cupy.ndarray (uint8)
         Contiguous device buffer with concatenated compressed tile bytes.
     rel_offsets, lengths, uncompressed_sizes
-        Per-tile metadata arrays.
+        Per-tile metadata arrays. Decoded sizes must match the stream
+        contents.
     gzip_wrapped : bool
         If True (default), each tile is an RFC 1952 gzip stream; the
-        variable header + 8-byte trailer are stripped before nvcomp.
+        native gzip decoder consumes its header and trailer directly. Older
+        extensions and the Python fallback strip the framing for DEFLATE.
+    gzip_decoder : "auto" | "gzip" | "deflate"
+        "auto" uses native Gzip when available, otherwise raw DEFLATE.
+        "gzip" requires the native Gzip helper and gzip-wrapped inputs.
+        "deflate" strips gzip framing and aligns payloads before decoding.
     use_cpp_helper : "auto" | True | False
         "auto" (default) → use the C++ pybind11 helper when importable, else
         fall back to the Python loop. True forces the C++ path (raises if
@@ -842,7 +880,8 @@ def gpu_gzip_decompress_batch(
     header_sizes : array-like of int64 or None
         Optional precomputed per-tile gzip header lengths. When provided,
         the blocking device-to-host header probe is skipped. Only valid when
-        ``gzip_wrapped=True``.
+        ``gzip_wrapped=True``. These lengths locate raw DEFLATE payloads;
+        the native Gzip decoder parses the intact headers itself.
 
     Returns
     -------
@@ -850,7 +889,19 @@ def gpu_gzip_decompress_batch(
         Contiguous device buffer with decompressed tile bytes concatenated.
     out_offsets : numpy.ndarray (int64)
         Start offset of each decompressed tile inside ``d_out``.
+
+    Notes
+    -----
+    Inputs must contain valid compressed tiles and matching size metadata.
+    Header checks do not validate the compressed body or its checksum.
+    The Python fallback uses the current CuPy stream. Callers using an
+    externally owned stream must keep its underlying CUDA stream alive.
     """
+    if gzip_decoder not in ("auto", "gzip", "deflate"):
+        raise ValueError("gzip_decoder must be 'auto', 'gzip', or 'deflate'")
+    if gzip_decoder == "gzip" and not gzip_wrapped:
+        raise ValueError("gzip_decoder='gzip' requires gzip_wrapped=True")
+
     import cupy as cp
 
     concat_size = int(d_concat.size)
@@ -908,24 +959,36 @@ def gpu_gzip_decompress_batch(
                 "`bash src/cuphoton/xdr/src/build.sh` from source. "
                 f"Import error: {_CPP_EXT_IMPORT_ERROR}"
             )
-    elif n == 0:
+    elif n == 0 and gzip_decoder != "gzip":
         # No backend work is needed, so an automatic fallback is not useful.
         ext = None
     elif use_cpp_helper is False:
         ext = None
     else:
         ext = _try_get_cpp_ext()
-        if ext is None:
+        if ext is None and gzip_decoder != "gzip":
             _warn_python_fallback_once()
+
+    gzip_fn = getattr(ext, "batch_gzip_decompress", None)
+    if gzip_decoder == "gzip" and gzip_fn is None:
+        raise RuntimeError(
+            "gzip_decoder='gzip' requires a native extension with Gzip "
+            "support and use_cpp_helper enabled"
+        )
+    use_gzip = (
+        gzip_wrapped and gzip_decoder != "deflate" and gzip_fn is not None
+    )
 
     if n == 0:
         return cp.empty(0, dtype=cp.uint8), out_offsets
 
-    d_concat, deflate_offsets, aligned_owners = _align_deflate_inputs(
-        d_concat, deflate_offsets, deflate_lengths
-    )
-    if keepalive is not None:
-        keepalive.extend(aligned_owners)
+    aligned_owners = ()
+    if not use_gzip:
+        d_concat, deflate_offsets, aligned_owners = _align_deflate_inputs(
+            d_concat, deflate_offsets, deflate_lengths
+        )
+        if keepalive is not None:
+            keepalive.extend(aligned_owners)
 
     try:
         # Allocate one concatenated output buffer and slice it per tile.
@@ -944,6 +1007,21 @@ def gpu_gzip_decompress_batch(
             stream_ptr = int(cp.cuda.get_current_stream().ptr)
             d_concat_ptr = int(d_concat.data.ptr)
             d_out_ptr = int(d_out.data.ptr)
+            if use_gzip:
+                assert gzip_fn is not None
+                scratch_owner = gzip_fn(
+                    d_concat_ptr,
+                    offset_array,
+                    length_array,
+                    d_out_ptr,
+                    out_offsets,
+                    size_array,
+                    stream_ptr,
+                    use_native_pool and keepalive is not None,
+                )
+                if keepalive is not None and scratch_owner is not None:
+                    keepalive.append(scratch_owner)
+                return d_out, out_offsets
             pooled_fn = getattr(ext, "batch_deflate_decompress_pooled", None)
             if (
                 use_native_pool
@@ -956,7 +1034,7 @@ def gpu_gzip_decompress_batch(
                     deflate_lengths,
                     d_out_ptr,
                     out_offsets,
-                    uncompressed_sizes,
+                    size_array,
                     stream_ptr,
                 )
                 keepalive.append(scratch_owner)

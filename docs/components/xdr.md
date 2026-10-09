@@ -37,6 +37,14 @@ CLI flag is `--xdr-postprocess {auto,fused,separate}`, including on
 `cuphoton xdr benchmark-fits`. Explicit CLI values override matching descriptor
 fields; omitted flags preserve the descriptor's choices.
 
+Gzip decoding defaults to `gzip_decoder="auto"`: use the native Gzip helper
+when available, or aligned raw DEFLATE with an older extension or the Python
+fallback. Select `gzip_decoder="gzip"` to require native Gzip support, or
+`gzip_decoder="deflate"` to strip the wrapper and decode aligned raw payloads.
+The same choice is available as `xdr_options={"gzip_decoder": "deflate"}` in
+workflow APIs and descriptors, or `--xdr-gzip-decoder {auto,gzip,deflate}` on
+the CLI. Both decoders preserve the FITS pixel values.
+
 These controls apply when the existing reader policy selects xDR. Reader
 selection and CPU fallback remain controlled by `--fits-reader`. Invalid options
 fail during validation; decode, I/O, and CUDA failures propagate to the caller.

@@ -437,6 +437,7 @@ class GpuCompImageReader:
         stream=None,
         keepalive=None,
         header_sizes=None,
+        gzip_decoder: str = "auto",
     ):
         """Run batched nvCOMP inflate for gzip tiles resident on the device.
 
@@ -446,6 +447,7 @@ class GpuCompImageReader:
         byte counts. Returns concatenated decompressed bytes plus per-tile
         offsets into that output buffer.
         """
+        normalize_xdr_options({"gzip_decoder": gzip_decoder})
         import cupy as cp
 
         with stream or cp.cuda.Stream.null:
@@ -455,6 +457,7 @@ class GpuCompImageReader:
                 lengths,
                 out_bytes,
                 gzip_wrapped=True,
+                gzip_decoder=gzip_decoder,
                 use_native_pool=keepalive is not None,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
@@ -589,6 +592,7 @@ class GpuCompImageReader:
         stream=None,
         keepalive=None,
         postprocess: str = "auto",
+        gzip_decoder: str = "auto",
     ):
         """Run the decode pipeline on a pre-loaded compressed heap buffer.
 
@@ -597,7 +601,9 @@ class GpuCompImageReader:
         start offset of tile i inside `d_concat`. This is what the prefetch
         consumer calls after staging its pinned host heap to device.
         """
-        normalize_xdr_options({"postprocess": postprocess})
+        normalize_xdr_options(
+            {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+        )
         if keepalive is not None:
             keepalive.append(d_concat)
         d_pixels, tile_byte_offsets_np = (
@@ -607,6 +613,7 @@ class GpuCompImageReader:
                 lengths=plan["sel_lengths"],
                 out_bytes=plan["out_bytes"],
                 stream=stream,
+                gzip_decoder=gzip_decoder,
                 keepalive=keepalive,
             )
         )
@@ -630,6 +637,7 @@ class GpuCompImageReader:
         section=None,
         loader=None,
         postprocess: str = "auto",
+        gzip_decoder: str = "auto",
     ):
         """Read and decode this HDU into a `cupy.ndarray`.
 
@@ -649,7 +657,9 @@ class GpuCompImageReader:
         Failure before an I/O handle is returned leaves completion unknown and
         requires a process restart before further GPU submissions.
         """
-        normalize_xdr_options({"postprocess": postprocess})
+        normalize_xdr_options(
+            {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+        )
         import cupy as cp
 
         plan = self.prepare_plan(section=section)
@@ -724,6 +734,7 @@ class GpuCompImageReader:
                             out=out,
                             stream=None,
                             postprocess=postprocess,
+                            gzip_decoder=gzip_decoder,
                         )
                     except BaseException as error:
                         abandon(error)
@@ -766,6 +777,7 @@ class GpuCompImageReader:
                                 stream=stream,
                                 keepalive=keepalive,
                                 postprocess=postprocess,
+                                gzip_decoder=gzip_decoder,
                             )
                     except (KeyboardInterrupt, SystemExit) as error:
                         abandon(error)

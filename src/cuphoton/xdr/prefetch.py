@@ -602,6 +602,7 @@ def _consume_comp_batch(
     keepalive=None,
     *,
     postprocess="auto",
+    gzip_decoder: str = "auto",
 ):
     """Decode many compressed HDUs with one batched nvCOMP call.
 
@@ -717,6 +718,7 @@ def _consume_comp_batch(
                 lengths=lengths,
                 out_bytes=out_bytes,
                 stream=stream,
+                gzip_decoder=gzip_decoder,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
             )
@@ -801,6 +803,7 @@ def _consume_prefetched_group(
     keepalive=None,
     *,
     postprocess="auto",
+    gzip_decoder: str = "auto",
 ):
     """Consume prefetched files, batching compressed HDUs together."""
     comp_entries: list[_CompBatchEntry] = []
@@ -833,7 +836,11 @@ def _consume_prefetched_group(
                 raise AssertionError(f"unknown kind {plan_item.kind!r}")
 
     _consume_comp_batch(
-        comp_entries, stream, keepalive=keepalive, postprocess=postprocess
+        comp_entries,
+        stream,
+        keepalive=keepalive,
+        postprocess=postprocess,
+        gzip_decoder=gzip_decoder,
     )
 
 
@@ -1066,6 +1073,7 @@ def _submit_prefetched_group(
     owner,
     in_flight: deque[_GpuBatchHandle],
     postprocess="auto",
+    gzip_decoder: str = "auto",
 ) -> None:
     """Queue GPU work and register its lifetime handle."""
     import cupy as cp
@@ -1091,6 +1099,7 @@ def _submit_prefetched_group(
                     stream,
                     keepalive=keepalive,
                     postprocess=postprocess,
+                    gzip_decoder=gzip_decoder,
                 )
                 candidate_event = cp.cuda.Event()
                 candidate_event.record(use_stream)
@@ -1417,6 +1426,7 @@ def _consume_native_batches(
     NativeBatchBuilder,
     native_plan_files,
     postprocess="auto",
+    gzip_decoder: str = "auto",
 ):
     """Consume device batches built by the C++ KvikIO worker pool."""
     import cupy as cp
@@ -1493,6 +1503,7 @@ def _consume_native_batches(
                         owner=native_batch,
                         in_flight=in_flight,
                         postprocess=postprocess,
+                        gzip_decoder=gzip_decoder,
                     )
             planner.join()
             if planner.error is not None:
@@ -1533,6 +1544,7 @@ def _consume_python_batches(
     section,
     stream,
     postprocess="auto",
+    gzip_decoder: str = "auto",
 ) -> None:
     """Consume pinned-host batches with bounded event-owned lifetimes."""
     n_files = len(paths)
@@ -1554,6 +1566,7 @@ def _consume_python_batches(
             owner=group,
             in_flight=in_flight,
             postprocess=postprocess,
+            gzip_decoder=gzip_decoder,
         )
 
     prefetcher.start()
@@ -1622,6 +1635,7 @@ def batch_to_device_stream(
     native_plan_threads: int | None = None,
     native_batcher: str | bool = "auto",
     postprocess: str = "auto",
+    gzip_decoder: str = "auto",
     section=None,
     stream=None,
 ):
@@ -1668,6 +1682,9 @@ def batch_to_device_stream(
     postprocess
         "auto" (default) and "fused" restore FITS pixel order in one kernel.
         "separate" uses individual unshuffle, byteswap and scatter kernels.
+    gzip_decoder
+        "auto" uses native Gzip when available, otherwise aligned DEFLATE.
+        "gzip" requires native Gzip support; "deflate" selects raw DEFLATE.
     section
         Optional 2D ROI applied uniformly to CompImageHDUs.
     stream
@@ -1688,7 +1705,9 @@ def batch_to_device_stream(
     length ``len(paths)``.
     """
 
-    normalize_xdr_options({"postprocess": postprocess})
+    normalize_xdr_options(
+        {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+    )
     hdu_indices = tuple(int(i) for i in hdu_indices)
     resolved_paths = [Path(p) for p in paths]
     n_files = len(resolved_paths)
@@ -1739,6 +1758,7 @@ def batch_to_device_stream(
             NativeBatchBuilder=NativeBatchBuilder,
             native_plan_files=native_plan_files,
             postprocess=postprocess,
+            gzip_decoder=gzip_decoder,
         )
         return tuple(outs)
 
@@ -1752,6 +1772,7 @@ def batch_to_device_stream(
         section=section,
         stream=stream,
         postprocess=postprocess,
+        gzip_decoder=gzip_decoder,
     )
 
     return tuple(outs)

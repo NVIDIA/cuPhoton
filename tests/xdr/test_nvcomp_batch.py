@@ -5,12 +5,123 @@
 from __future__ import annotations
 
 import sys
+import threading
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from cuphoton.xdr import nvcomp_batch
+
+
+def test_python_codec_cache_tracks_stream_device_and_thread(monkeypatch):
+    events, created = [], []
+    state = SimpleNamespace(device=0)
+
+    class Stream:
+        def __init__(self, ptr):
+            self.ptr = ptr
+
+        def __del__(self):
+            events.append(("stream", self.ptr))
+
+    class Codec:
+        def __init__(self, *, algorithm, bitstream_kind, cuda_stream):
+            assert algorithm == "deflate" and bitstream_kind == "raw"
+            self.stream = weakref.ref(state.stream)
+            self.ptr = cuda_stream
+            created.append((cuda_stream, state.device))
+
+        def __del__(self):
+            events.append(("codec", self.ptr, self.stream() is not None))
+
+    fake_nvcomp = SimpleNamespace(
+        Codec=Codec, BitstreamKind=SimpleNamespace(RAW="raw")
+    )
+    monkeypatch.setitem(
+        sys.modules, "nvidia", SimpleNamespace(nvcomp=fake_nvcomp)
+    )
+    monkeypatch.setitem(sys.modules, "nvidia.nvcomp", fake_nvcomp)
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            cuda=SimpleNamespace(
+                get_current_stream=lambda: state.stream,
+                runtime=SimpleNamespace(getDevice=lambda: state.device),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        nvcomp_batch, "_DEFLATE_CODEC_CACHE", threading.local()
+    )
+    state.stream = Stream(11)
+    assert nvcomp_batch._get_codec() is nvcomp_batch._get_codec()
+    old_stream = weakref.ref(state.stream)
+    state.stream = Stream(22)
+    assert old_stream() is not None
+    nvcomp_batch._get_codec()
+    assert events[:2] == [("codec", 11, True), ("stream", 11)]
+    state.device = 1
+    nvcomp_batch._get_codec()
+    thread = threading.Thread(target=nvcomp_batch._get_codec)
+    thread.start()
+    thread.join()
+    assert created == [(11, 0), (22, 0), (22, 1), (22, 1)]
+    assert all(event[2] for event in events if event[0] == "codec")
+
+
+@pytest.mark.parametrize("aligned", [False, True])
+def test_deflate_repack_uses_int64_tables_and_retains_inputs(
+    monkeypatch, aligned
+):
+    data = SimpleNamespace(data=SimpleNamespace(ptr=100))
+    packed = SimpleNamespace()
+    calls = []
+    offsets = np.array(
+        [0, 8, 8, 24] if aligned else [1, 7, 7, 30],
+        dtype=np.int64 if aligned else np.int32,
+    )
+    lengths = np.array([5, 0, 13, 3], dtype=np.int32)
+
+    def allocate(size, dtype):
+        assert size == 28 and dtype == np.uint8
+        return packed
+
+    monkeypatch.setattr(nvcomp_batch, "_REPACK_DEFLATE_KERNEL", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            RawKernel=lambda *a: lambda *args: calls.append(args),
+            empty=allocate,
+            asarray=np.asarray,
+            uint8=np.uint8,
+        ),
+    )
+    result, out_offsets, owners = nvcomp_batch._align_deflate_inputs(
+        data, offsets, lengths
+    )
+    if aligned:
+        assert result is data and out_offsets is offsets and owners == ()
+        assert not calls
+    else:
+        assert result is packed
+        np.testing.assert_array_equal(out_offsets, [0, 8, 8, 24])
+        grid, block, args = calls[0]
+        assert grid == (4,) and block == (256,)
+        assert args[0] is data and args[-1] is packed
+        for actual, expected in zip(
+            args[1:-1], (offsets, lengths, out_offsets), strict=True
+        ):
+            assert actual.dtype == np.int64
+            np.testing.assert_array_equal(actual, expected)
+        assert len(owners) == 5
+        assert owners[0] is data and owners[1] is packed
+        assert all(
+            a is b for a, b in zip(owners[2:], args[1:-1], strict=True)
+        )
 
 
 @pytest.mark.parametrize("flag", [0x08, 0x10])
@@ -544,6 +655,84 @@ def test_gpu_batch_retains_output_before_native_launch(monkeypatch):
     assert keepalive == [output]
 
 
+@pytest.mark.parametrize(
+    "decoder,gzip_available,native_pool,retain,expected_codec",
+    [
+        ("auto", True, False, True, "gzip"),
+        ("gzip", True, True, True, "gzip"),
+        ("auto", True, True, False, "gzip"),
+        ("deflate", True, True, True, "deflate"),
+        ("auto", False, False, True, "deflate"),
+    ],
+)
+def test_native_decoder_receives_framing_and_retains_scratch(
+    monkeypatch, decoder, gzip_available, native_pool, retain, expected_codec
+):
+    output = SimpleNamespace(data=SimpleNamespace(ptr=200))
+    scratch = object()
+    keepalive = [] if retain else None
+    calls = []
+
+    def record(codec, args, pooled):
+        if keepalive is not None:
+            assert keepalive == [output]
+        calls.append((codec, args, pooled))
+        return scratch if pooled else None
+
+    extension = SimpleNamespace(
+        batch_deflate_decompress=lambda *args: record("deflate", args, False),
+        batch_deflate_decompress_pooled=lambda *args: record(
+            "deflate", args, True
+        ),
+    )
+    if gzip_available:
+        extension.batch_gzip_decompress = lambda *args: record(
+            "gzip", args[:7], args[7]
+        )
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setattr(
+        nvcomp_batch, "_native_device_empty_uint8", lambda *a, **kw: output
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            empty=lambda *a, **kw: output,
+            uint8=np.uint8,
+            cuda=SimpleNamespace(
+                get_current_stream=lambda: SimpleNamespace(ptr=300)
+            ),
+        ),
+    )
+
+    result, offsets = nvcomp_batch.gpu_gzip_decompress_batch(
+        SimpleNamespace(size=60, data=SimpleNamespace(ptr=102)),
+        [0, 20, 40],
+        [20, 20, 20],
+        [1, 2, 3],
+        header_sizes=[10, 10, 10],
+        gzip_decoder=decoder,
+        use_native_pool=native_pool,
+        keepalive=keepalive,
+    )
+
+    assert result is output
+    np.testing.assert_array_equal(offsets, [0, 1, 3])
+    assert len(calls) == 1
+    codec, args, pooled = calls[0]
+    assert codec == expected_codec
+    assert pooled is (native_pool and retain)
+    assert (args[0], args[3], args[6]) == (102, 200, 300)
+    expected_offsets = [0, 20, 40] if codec == "gzip" else [10, 30, 50]
+    expected_lengths = [20, 20, 20] if codec == "gzip" else [2, 2, 2]
+    np.testing.assert_array_equal(args[1], expected_offsets)
+    np.testing.assert_array_equal(args[2], expected_lengths)
+    np.testing.assert_array_equal(args[4], offsets)
+    np.testing.assert_array_equal(args[5], [1, 2, 3])
+    if keepalive is not None:
+        assert keepalive == ([output, scratch] if pooled else [output])
+
+
 def test_precomputed_header_sizes_skip_device_probe(monkeypatch):
     class StopAfterHeaderValidation(Exception):
         pass
@@ -671,3 +860,76 @@ def test_gpu_library_preload_orders_kvikio_dependency_first(
         "librapids_logger.so",
         "libkvikio.so",
     ]
+
+
+@pytest.mark.parametrize("decoder", ["invalid", "", True])
+def test_gpu_batch_rejects_invalid_decoder_before_import(decoder):
+    with pytest.raises(ValueError, match="gzip_decoder must be"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            None, [], [], [], gzip_decoder=decoder
+        )
+
+
+def test_gpu_batch_rejects_gzip_decoder_for_raw_input():
+    with pytest.raises(ValueError, match="requires gzip_wrapped=True"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            None, [], [], [], gzip_wrapped=False, gzip_decoder="gzip"
+        )
+
+
+@pytest.mark.parametrize("extension", [None, SimpleNamespace()])
+def test_forced_gzip_rejects_missing_native_capability(
+    monkeypatch, extension
+):
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace())
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setattr(
+        nvcomp_batch,
+        "_warn_python_fallback_once",
+        lambda: pytest.fail("a forced decoder must not warn about fallback"),
+    )
+    with pytest.raises(
+        RuntimeError, match="requires a native extension with Gzip"
+    ):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            SimpleNamespace(size=20),
+            [0],
+            [20],
+            [1],
+            header_sizes=[10],
+            gzip_decoder="gzip",
+        )
+
+
+def test_auto_decoder_propagates_native_gzip_error(monkeypatch):
+    def fail_decode(*args):
+        raise RuntimeError("native gzip decode failed")
+
+    extension = SimpleNamespace(
+        batch_gzip_decompress=fail_decode,
+        batch_deflate_decompress=lambda *args: pytest.fail(
+            "must not retry decode"
+        ),
+    )
+    monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            empty=lambda *args, **kwargs: SimpleNamespace(
+                data=SimpleNamespace(ptr=200)
+            ),
+            uint8=np.uint8,
+            cuda=SimpleNamespace(
+                get_current_stream=lambda: SimpleNamespace(ptr=0)
+            ),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="native gzip decode failed"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            SimpleNamespace(size=20, data=SimpleNamespace(ptr=100)),
+            [0],
+            [20],
+            [1],
+            header_sizes=[10],
+        )
