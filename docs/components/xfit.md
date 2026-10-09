@@ -66,13 +66,23 @@ applies one mask or variance plane to every channel of each candidate. If the
 batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
-An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
-form its weighted 8-by-8 normal equations directly. Select this backend
+With the default `fusion=False`, an explicit `backend="cutile"` uses one
+`cuda.tile` CTA per Gaussian fit to form its weighted 8-by-8 normal equations
+directly. Select this backend
 explicitly and install the `cuphoton[cutile]` extra on Linux with Python
 3.12 through 3.14. Final rank and covariance diagnostics use the analytic
 Jacobian and a singular-value factorization. Sampled-stamp fits stay on the
 NumPy or CuPy backends. The Tile backend requires analytic derivatives and
 rejects finite-difference fitting.
+
+Pass `fusion=True` to `fit_dipoles`, or add `--fusion` to
+`cuphoton xfit fit-dipoles --backend cutile`, to fuse Gaussian residual and
+analytic-Jacobian evaluation, including weighting. Width powers and
+normal-equation contractions use CuPy to preserve the reference arithmetic.
+Each fit owns its workspace and uses the caller's current
+CuPy stream. The default remains
+`fusion=False`; CLI artifacts record the selected option in the effective
+configuration.
 
 The `cutile` extra installs cuda-tile 1.6 or newer and CuPy. Kernel compilation
 also requires a compatible CUDA toolkit. Follow the shared

@@ -177,6 +177,86 @@ def test_synchronized_timer_waits_for_completion(monkeypatch) -> None:
     assert timings == {"compute": 3.0}
 
 
+@pytest.mark.parametrize(
+    "backend,fusion",
+    [("cupy", False), ("cutile", False), ("cutile", True), ("native", False)],
+)
+def test_xfit_stage_forwards_backend_and_fusion(
+    tmp_path, monkeypatch, backend, fusion
+) -> None:
+    from cuphoton import xfit
+
+    config = SimpleNamespace(
+        stamp_shape=(17, 17),
+        xfit=stages.pipeline.DeviceXFitPipelineConfig(
+            backend=backend, fusion=fusion, max_evaluations=13, g_tol=1.0e-7
+        ),
+    )
+    difference = np.zeros((1, 17, 17), dtype=np.float64)
+    monkeypatch.setattr(stages, "_read_array", lambda *args: difference)
+    result = SimpleNamespace(
+        **{name: np.ones(1) for name in stages.XFIT_FIELDS},
+        parameter_names=("amplitude",),
+        model="gaussian",
+        mode="difference",
+        backend=backend,
+        solver="lm",
+        dtype="float64",
+    )
+    fit_calls = []
+
+    def fit(images, **kwargs):
+        fit_calls.append((images, kwargs))
+        return result
+
+    monkeypatch.setattr(xfit, "fit_dipoles_device", fit)
+    feature_values = np.zeros((1, 2), dtype=np.float32)
+
+    def features(actual, **kwargs):
+        assert actual is result
+        assert kwargs == {
+            "image_shape": config.stamp_shape,
+            "variance_present": False,
+        }
+        return SimpleNamespace(
+            values=feature_values, feature_names=("first", "second")
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cuphoton.xscan.xfit_features",
+        SimpleNamespace(transform_xfit_result_features_device=features),
+    )
+    fake_cupy = SimpleNamespace(
+        asarray=np.asarray,
+        asnumpy=np.asarray,
+        cuda=SimpleNamespace(
+            Device=lambda: SimpleNamespace(synchronize=lambda: None)
+        ),
+    )
+    arrays, metadata, _ = stages._run_item(
+        "xfit",
+        SimpleNamespace(),
+        config,
+        {"cp": fake_cupy, "torch": None},
+        tmp_path,
+        {"xpois": {"items": [{"artifacts": {"difference": {}}}]}},
+        0,
+    )
+
+    ((images, kwargs),) = fit_calls
+    assert images is difference
+    assert kwargs == {
+        "model": "gaussian",
+        "mode": "difference",
+        **({"backend": backend} if backend != "cupy" else {}),
+        **({"fusion": True} if fusion else {}),
+        "config": xfit.LMConfig(max_evaluations=13, g_tol=1.0e-7),
+    }
+    assert metadata["backend"] == backend
+    assert arrays["xfit.features"] is feature_values
+
+
 @pytest.mark.parametrize("stage", stages.STAGES)
 def test_setup_imports_only_its_numerical_runtime(
     tmp_path, monkeypatch, stage

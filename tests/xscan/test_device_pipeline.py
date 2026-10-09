@@ -795,6 +795,20 @@ def test_scientific_evidence_config_binds_xpois_metadata_and_layout(
         )
 
 
+@pytest.mark.parametrize("backend", ["cupy", "cutile", "native"])
+def test_scientific_evidence_binds_selected_xfit_backend(
+    tmp_path: Path, backend: str
+) -> None:
+    config = _evidence_config(tmp_path)
+    config = replace(config, xfit=replace(config.xfit, backend=backend))
+    evidence = _scientific_evidence_payload()
+    evidence["xfit"]["backend"] = backend
+    decode_device_pipeline_evidence(evidence, config=config)
+    evidence["xfit"]["backend"] = "cutile" if backend == "cupy" else "cupy"
+    with pytest.raises(ValueError, match="xFit backend does not match"):
+        decode_device_pipeline_evidence(evidence, config=config)
+
+
 def test_scientific_evidence_config_binds_flux_basis_order_and_reference(
     tmp_path: Path,
 ) -> None:
@@ -1366,7 +1380,9 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
         assert kwargs == {
             "model": "gaussian",
             "mode": "difference",
+            "backend": "cupy",
             "config": context.solver_config,
+            "fusion": False,
         }
         stage_calls.append("xfit")
         return _fake_xfit_result(cp, 2)
@@ -1746,6 +1762,50 @@ def test_changed_input_fails_before_device_ingress(
     )
     with pytest.raises(RuntimeError, match="changed before execution"):
         _read_item_inputs(item)
+
+
+def test_xfit_backend_defaults_preserve_legacy_payload_and_hash(
+    tmp_path: Path,
+) -> None:
+    positional = DeviceXFitPipelineConfig("gaussian", "difference", 1e-6)
+    assert positional.f_tol == 1e-6
+    assert positional.backend == "cupy"
+    assert positional.fusion is False
+    config = _evidence_config(tmp_path)
+    legacy = config.to_payload()
+    assert "backend" not in legacy["xfit"]
+    assert "fusion" not in legacy["xfit"]
+    explicit = config.to_payload()
+    explicit["xfit"].update(backend="cupy", fusion=False)
+    restored = DevicePipelineConfig.from_payload(explicit)
+    assert restored.to_payload() == legacy
+    assert restored.configuration_sha256 == config.configuration_sha256
+
+    fused = replace(
+        config, xfit=replace(config.xfit, backend="cutile", fusion=True)
+    )
+    assert DevicePipelineConfig.from_payload(fused.to_payload()) == fused
+    assert fused.configuration_sha256 != config.configuration_sha256
+    assert fused.xfit.solver_payload() == config.xfit.solver_payload()
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"backend": "numpy"}, "xfit backend"),
+        ({"fusion": 1}, "fusion must be boolean"),
+        ({"fusion": True}, "fusion requires backend='cutile'"),
+        (
+            {"backend": "cutile", "use_finite_difference": True},
+            "does not support finite differences",
+        ),
+    ],
+)
+def test_xfit_config_rejects_unsupported_backend_options(
+    options: dict[str, Any], message: str
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        DeviceXFitPipelineConfig(**options)
 
 
 def test_xfit_config_rejects_values_the_solver_cannot_use() -> None:
