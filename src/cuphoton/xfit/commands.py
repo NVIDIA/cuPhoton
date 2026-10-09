@@ -25,6 +25,7 @@ from cuphoton.core.cli import (
     StringInvariant,
 )
 from cuphoton.core.cli.executor import ExecutorOptions
+from cuphoton.core.cli.fits import XdrOptionsMixin, xdr_options_from_cli
 
 from ._types import (
     BACKEND_REQUESTS,
@@ -138,7 +139,7 @@ class XFitCommand(InvariantAwareCommand):
         )
 
 
-class DataInspectCommand(XFitCommand):
+class DataInspectCommand(XdrOptionsMixin, XFitCommand):
     """Inspect an NPZ candidate batch or FITS candidate manifest."""
 
     # This CLI path intentionally replaces the base command input stream.
@@ -151,11 +152,15 @@ class DataInspectCommand(XFitCommand):
 
     def run(self) -> None:
         assert self.input is not None
-        dataset = self._call(load_xfit_dataset, self.input)
+        dataset = self._call(
+            load_xfit_dataset,
+            self.input,
+            xdr_options=xdr_options_from_cli(self),
+        )
         self._emit_json(inspect_xfit_dataset(dataset))
 
 
-class _ValidatedDatasetCommand(XFitCommand):
+class _ValidatedDatasetCommand(XdrOptionsMixin, XFitCommand):
     # This CLI path intentionally replaces the base command input stream.
     input: str | None = None  # type: ignore[assignment]
     model: ModelName | None = None
@@ -199,6 +204,7 @@ class _ValidatedDatasetCommand(XFitCommand):
             mode=self.mode,
             reader=reader,
             device=device,
+            xdr_options=xdr_options_from_cli(self),
         )
 
 
@@ -359,6 +365,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                     "fits_reader",
                 )
             }
+            fit_options["xdr_options"] = xdr_options_from_cli(self)
             execution_result = self._call(
                 run_workload,
                 executor=self.executor,

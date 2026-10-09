@@ -45,6 +45,7 @@ def test_batch_api_keeps_existing_keyword_surface():
         "native_read_threads",
         "native_plan_threads",
         "native_batcher",
+        "postprocess",
     )
     actual = tuple(inspect.signature(xdr.batch_to_device).parameters)
 
@@ -75,6 +76,7 @@ def test_parallel_batch_delegates_to_stream_frontend(monkeypatch):
         native_read_threads=6,
         native_plan_threads=7,
         native_batcher=True,
+        postprocess="separate",
     )
 
     assert result == ("ok",)
@@ -90,6 +92,7 @@ def test_parallel_batch_delegates_to_stream_frontend(monkeypatch):
                 "native_read_threads": 6,
                 "native_plan_threads": 7,
                 "native_batcher": True,
+                "postprocess": "separate",
                 "section": (slice(0, 1), slice(0, 1)),
                 "stream": "stream",
             },

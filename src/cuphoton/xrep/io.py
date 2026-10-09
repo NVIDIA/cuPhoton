@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -31,13 +32,18 @@ def load_fits_image_with_wcs(
     *,
     hdu: int | None = None,
     fits_reader: str = "astropy",
+    xdr_options: Mapping[str, str] | None = None,
     device: bool = False,
     read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, WCS, fits.Header, int]:
     """Load a FITS plane on the host or device, with its unchanged WCS."""
     info = inspect_fits_image(path, hdu=hdu)
     result = read_fits_images(
-        path, [info.hdu], reader=fits_reader, device=device
+        path,
+        [info.hdu],
+        reader=fits_reader,
+        device=device,
+        xdr_options=xdr_options,
     )
     if read_metadata is not None:
         read_metadata.append(result.metadata())
@@ -49,13 +55,18 @@ def load_fits_mask(
     *,
     hdu: int | None = None,
     fits_reader: str = "astropy",
+    xdr_options: Mapping[str, str] | None = None,
     device: bool = False,
     read_metadata: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, fits.Header, int]:
     """Load a FITS mask without narrowing its integer bit representation."""
     info = inspect_fits_image(path, hdu=hdu)
     result = read_fits_images(
-        path, [info.hdu], reader=fits_reader, device=device
+        path,
+        [info.hdu],
+        reader=fits_reader,
+        device=device,
+        xdr_options=xdr_options,
     )
     if read_metadata is not None:
         read_metadata.append(result.metadata())

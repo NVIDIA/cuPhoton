@@ -26,7 +26,7 @@ from cuphoton.core.cli import (
     StringInvariant,
 )
 from cuphoton.core.cli.executor import ExecutorOptions
-from cuphoton.core.cli.fits import FitsReaderOptions
+from cuphoton.core.cli.fits import FitsReaderOptions, xdr_options_from_cli
 
 T = TypeVar("T")
 _DEFAULT_REVIEW_DIR = os.environ.get("CUPHOTON_XSCAN_REVIEW_DIR")
@@ -501,6 +501,7 @@ class DataBuildAutoscanRawCommand(
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
         )
         self._emit_json(result.summary)
 
@@ -533,6 +534,7 @@ class DataBuildNodiffRawCommand(
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
         )
         self._emit_json(result.summary)
 
@@ -580,6 +582,7 @@ class DataBuildLsstcomcamSmokeCommand(
             manifest_path=Path(self.manifest).expanduser(),
             output_dir=Path(self.output_dir).expanduser(),
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
         )
         self._emit_json(result.summary)
 
@@ -981,6 +984,7 @@ class RunPipelineCommand(FitsReaderOptions, ExecutorOptions, XScanCommand):
             output_root=Path(self.output_dir),
             run_id=self.run_name,
             fits_reader=self.fits_reader,
+            xdr_options=xdr_options_from_cli(self),
             **options,
         )
         if result is not None:
@@ -2368,6 +2372,7 @@ class BenchmarkPipelineCommand(FitsReaderOptions, XScanCommand):
                 config=self._path(self.config),
                 items=self._path(self.items),
                 fits_reader=self.fits_reader,
+                xdr_options=xdr_options_from_cli(self),
                 images=self.images,
                 image_size=self.image_size,
                 candidates=self.candidates,

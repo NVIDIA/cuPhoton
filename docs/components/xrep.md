@@ -32,6 +32,12 @@ decoded device arrays directly. Output images retain the usual host-array and
 FITS contracts. Summaries record the selected reader and any fallback under
 `fits_reads`.
 
+FITS-consuming commands also accept `--xdr-postprocess auto|fused|separate`
+for xDR's pixel conversion path. Python FITS APIs and workflow helpers accept
+`xdr_options={"postprocess": "separate"}` (or `auto`/`fused`) and carry that
+choice through image, mask, and stack reads. Omitted options use xDR defaults;
+CPU Astropy reads retain their existing behavior.
+
 WCS mapping and target-grid setup read headers and dimensions without
 decompressing image pixels. Reading with xDR does not by itself imply native
 GPUDirect Storage; it can also decode images using KvikIO compatibility I/O.

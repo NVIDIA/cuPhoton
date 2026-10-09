@@ -24,6 +24,7 @@ from cuphoton.core.cli import (
     SetInvariant,
     StringInvariant,
 )
+from cuphoton.core.cli.fits import XdrOptionsMixin, xdr_options_from_cli
 
 from .batch import BatchFitOptions
 from .data import inspect_hsc_data_tree
@@ -317,7 +318,9 @@ class _KernelSolveOptionsCommand(XPOISCommand):
         return self.context.runs_dir
 
 
-class _SpatialSolverOptionsCommand(_KernelSolveOptionsCommand):
+class _SpatialSolverOptionsCommand(
+    XdrOptionsMixin, _KernelSolveOptionsCommand
+):
     fits_reader = None
 
     class FitsReaderArg(SetInvariant):
@@ -563,6 +566,7 @@ class FitKernelCommand(_FitCommand):
             als_regularization=self.als_regularization,
             workflow_name="fit_kernel",
             run_prefix="fit-kernel",
+            xdr_options=xdr_options_from_cli(self),
         )
         self._warn_if_not_converged(result.summary)
         self._emit_json(result.summary)
@@ -618,6 +622,7 @@ class SubtractCommand(_FitCommand):
             als_regularization=self.als_regularization,
             workflow_name="subtract",
             run_prefix="subtract",
+            xdr_options=xdr_options_from_cli(self),
         )
         self._warn_if_not_converged(result.summary)
         self._emit_json(result.summary)
@@ -768,6 +773,7 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
             als_iterations=self.als_iterations,
             als_tolerance=self.als_tolerance,
             als_regularization=self.als_regularization,
+            xdr_options=xdr_options_from_cli(self),
         )
         common = {
             "manifest_path": Path(self.manifest).expanduser(),
@@ -992,6 +998,7 @@ class BenchmarkBackendsCommand(_KernelSolveCommand):
             als_iterations=self.als_iterations,
             als_tolerance=self.als_tolerance,
             als_regularization=self.als_regularization,
+            xdr_options=xdr_options_from_cli(self),
         )
         self._emit_json(result.summary)
 

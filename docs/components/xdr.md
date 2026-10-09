@@ -12,6 +12,35 @@ Current scope:
 - pipelined loading with `batch_to_device_stream`
 - explicit `NotImplementedError` for unsupported compression formats
 
+
+## Runtime choices
+
+The default `postprocess="auto"` uses fused unshuffle, byte-order conversion,
+and scatter for supported GZIP FITS tiles. `"fused"` selects that path explicitly;
+`"separate"` runs those steps with individual kernels for comparison.
+Both preserve FITS values, including integer masks and floating-point bits.
+Both leave the decoded input buffer unchanged. The separate path allocates
+another buffer the size of the decoded tiles and copies GZIP_1 input before
+byte-order conversion. Its timings therefore include that copy and are not
+an exact baseline for the former in-place GZIP_1 implementation.
+
+```python
+from cuphoton.xdr import batch_to_device
+
+(images,) = batch_to_device(paths, postprocess="auto")
+```
+
+Workflow FITS APIs accept `xdr_options={"postprocess": "separate"}` alongside
+`fits_reader="xdr"` (or `reader="xdr"` for `read_fits_images`). FITS input
+descriptors can persist the same `xdr_options` mapping. The corresponding
+CLI flag is `--xdr-postprocess {auto,fused,separate}`, including on
+`cuphoton xdr benchmark-fits`. Explicit CLI values override matching descriptor
+fields; omitted flags preserve the descriptor's choices.
+
+These controls apply when the existing reader policy selects xDR. Reader
+selection and CPU fallback remain controlled by `--fits-reader`. Invalid options
+fail during validation; decode, I/O, and CUDA failures propagate to the caller.
+
 ## Read FITS images in a workflow
 
 The shared FITS reader selects explicit image HDUs and returns NumPy or CuPy

@@ -94,6 +94,116 @@ def scatter_tiles_2d(
     d_tiles_concat,
     d_out,
     tile_byte_offsets,
+    tile_byte_lengths,
+    tile_origins_row,
+    tile_origins_col,
+    tile_heights,
+    tile_widths,
+    tile_src_off_row,
+    tile_src_off_col,
+    tile_full_widths,
+    itemsize: int,
+    *,
+    shuffled: bool,
+) -> None:
+    """Unshuffle and byteswap decoded FITS tiles into a 2D output image.
+
+    Supports partial-tile copies for section (ROI) reads: each tile copies the
+    sub-region ``(src_off_row..src_off_row+h, src_off_col..src_off_col+w)``
+    from its decompressed block (laid out as ``tile_full_width`` pixels per
+    row) into ``(orig_row..orig_row+h, orig_col..orig_col+w)`` in the output.
+
+    For a full-image read pass ``src_off_*`` zeros and ``tile_full_widths``
+    equal to the crop widths. ``shuffled`` selects the GZIP_2 byte-plane
+    layout; both layouts contain big-endian pixels on input. The decoded
+    bytes are read without modification.
+    """
+
+    pix_stride_out = d_out.strides[0]  # row stride in bytes
+    if d_out.strides[1] != itemsize:
+        raise ValueError("output pixels must be contiguous")
+    n_tiles = tile_byte_offsets.size
+
+    kern = _scatter_tiles_2d_kernel(itemsize, shuffled)
+    threads_per_block = 256
+    kern(
+        (n_tiles,),
+        (threads_per_block,),
+        (
+            d_tiles_concat,
+            d_out,
+            tile_byte_offsets,
+            tile_byte_lengths,
+            tile_origins_row,
+            tile_origins_col,
+            tile_heights,
+            tile_widths,
+            tile_src_off_row,
+            tile_src_off_col,
+            tile_full_widths,
+            np.int64(pix_stride_out),
+        ),
+    )
+
+
+@functools.cache
+def _scatter_tiles_2d_kernel(itemsize: int, shuffled: bool):
+    import cupy as cp
+
+    name = f"scatter_fits_tiles_{itemsize}_{int(shuffled)}"
+    src = rf"""
+    extern "C" __global__
+    void {name}(
+        const unsigned char* __restrict__ tiles,
+        unsigned char* __restrict__ out,
+        const long long* __restrict__ tile_byte_offsets,
+        const long long* __restrict__ tile_byte_lengths,
+        const int* __restrict__ origins_row,
+        const int* __restrict__ origins_col,
+        const int* __restrict__ tile_h,
+        const int* __restrict__ tile_w,
+        const int* __restrict__ src_off_row,
+        const int* __restrict__ src_off_col,
+        const int* __restrict__ tile_full_w,
+        long long out_row_stride_bytes
+    ) {{
+        const int t = blockIdx.x;
+        const int ITEMSIZE = {itemsize};
+        const long long src_off = tile_byte_offsets[t];
+        const long long n_pixels = tile_byte_lengths[t] / ITEMSIZE;
+        const int r0 = origins_row[t];
+        const int c0 = origins_col[t];
+        const int h  = tile_h[t];
+        const int w  = tile_w[t];
+        const int sr = src_off_row[t];
+        const int sc = src_off_col[t];
+        const int fw = tile_full_w[t];
+        const int total = h * w;
+        for (int i = threadIdx.x; i < total; i += blockDim.x) {{
+            int r = i / w;
+            int c = i - r * w;
+            int src_linear = (sr + r) * fw + (sc + c);
+            unsigned char* dst_pix =
+                out + (long long)(r0 + r) * out_row_stride_bytes
+                + (long long)(c0 + c) * ITEMSIZE;
+            #pragma unroll
+            for (int b = 0; b < ITEMSIZE; ++b) {{
+                const int source_byte = ITEMSIZE - 1 - b;
+                const long long byte_offset = {int(shuffled)}
+                    ? (long long)source_byte * n_pixels + src_linear
+                    : (long long)src_linear * ITEMSIZE + source_byte;
+                dst_pix[b] = tiles[src_off + byte_offset];
+            }}
+        }}
+    }}
+    """
+    return cp.RawKernel(src, name)
+
+
+def scatter_native_tiles_2d(
+    d_tiles_concat,
+    d_out,
+    tile_byte_offsets,
     tile_origins_row,
     tile_origins_col,
     tile_heights,
@@ -115,10 +225,11 @@ def scatter_tiles_2d(
     """
 
     pix_stride_out = d_out.strides[0]  # row stride in bytes
-    assert d_out.strides[1] == itemsize, "d_out must be C-contiguous"
+    if d_out.strides[1] != itemsize:
+        raise ValueError("output pixels must be contiguous")
     n_tiles = tile_byte_offsets.size
 
-    kern = _scatter_tiles_2d_kernel(itemsize)
+    kern = _scatter_native_tiles_2d_kernel(itemsize)
     threads_per_block = 256
     kern(
         (n_tiles,),
@@ -140,7 +251,7 @@ def scatter_tiles_2d(
 
 
 @functools.cache
-def _scatter_tiles_2d_kernel(itemsize: int):
+def _scatter_native_tiles_2d_kernel(itemsize: int):
     import cupy as cp
 
     src = rf"""
