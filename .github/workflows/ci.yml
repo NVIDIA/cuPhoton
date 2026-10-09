@@ -208,6 +208,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  coverage:
+    name: coverage
+    uses: ./.github/workflows/coverage.yml
+
   package:
     name: native distributions
     uses: ./.github/workflows/wheels.yml
@@ -219,7 +223,7 @@ jobs:
   ci-required:
     # PR checks do not satisfy the merge gate before GPU qualification.
     name: ${{ github.event_name == 'pull_request' && 'ci-pr-checks' || 'ci-required' }}
-    needs: [lint, test-cpu, test-gpu, package, conda]
+    needs: [lint, test-cpu, test-gpu, coverage, package, conda]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -229,11 +233,12 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
           GPU_RESULT: ${{ needs.test-gpu.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
           REQUIRE_GPU: ${{ github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton' }}
           PACKAGE_RESULT: ${{ needs.package.result }}
           CONDA_RESULT: ${{ needs.conda.result }}
         run: |
-          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
+          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${COVERAGE_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done
           if [ "${REQUIRE_GPU}" = true ]; then

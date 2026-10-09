@@ -9,6 +9,9 @@ GPU_EXTRAS = --extra dev --extra gpu --extra viz
 CORE_EXTRAS = --extra dev --extra photometry
 VIZ_EXTRAS = --extra dev --extra viz --extra photometry
 UV_RUN = uv run --locked
+PYTEST = pytest
+
+.PHONY: test-cpu-coverage test-xdr-coverage coverage-report
 
 sync:
 	uv sync --locked $(CPU_EXTRAS)
@@ -40,7 +43,20 @@ test:
 	$(UV_RUN) $(CPU_EXTRAS) pytest
 
 test-cpu:
-	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) pytest -rs
+	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) $(PYTEST) -rs
+
+test-cpu-coverage:
+	$(UV_RUN) --extra dev coverage erase
+	$(MAKE) test-cpu PYTEST="coverage run -m pytest"
+	$(MAKE) coverage-report
+
+coverage-report:
+	$(UV_RUN) --extra dev coverage combine
+	$(UV_RUN) --extra dev coverage xml
+	$(UV_RUN) --extra dev coverage report
+
+test-xdr-coverage:
+	$(UV_RUN) --extra dev --extra io bash scripts/coverage/xdr.sh
 
 test-core:
 	$(UV_RUN) $(CORE_EXTRAS) pytest tests/core
