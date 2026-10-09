@@ -55,7 +55,7 @@ def test_pipeline_backend_payload_preserves_legacy_default(tmp_path):
     assert xfit.LMConfig(**selected.xfit.solver_payload()) == xfit.LMConfig()
     with pytest.raises(ValueError, match="xfit backend"):
         pipeline.DeviceXFitPipelineConfig(backend="numba-cuda")
-    with pytest.raises(ValueError, match="finite-difference"):
+    with pytest.raises(ValueError, match="finite differences"):
         pipeline.DeviceXFitPipelineConfig(
             backend="numba-cuda-mlir", use_finite_difference=True
         )
@@ -191,7 +191,7 @@ def test_pipeline_evidence_rejects_backend_different_from_config(
             xfit_backend=requested,
         )
     with pytest.raises(
-        ValueError, match="xfit.backend does not match config"
+        ValueError, match="xFit backend does not match config"
     ):
         pipeline._validate_device_pipeline_evidence_config(
             {"xfit": {"backend": actual}},

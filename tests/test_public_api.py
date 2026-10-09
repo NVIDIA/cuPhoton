@@ -131,7 +131,6 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mask",
         "variance",
         "mode",
-        "backend",
         "config",
         "backend",
     ]
