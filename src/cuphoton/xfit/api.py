@@ -165,7 +165,7 @@ class DeviceDipoleFitResult:
             "native",
             "numba-cuda-mlir",
         }:
-            raise ValueError("device fit backend must be cupy or native")
+            raise ValueError("unsupported device xFit backend")
         if self.backend == "cutile" and self.model != "gaussian":
             raise ValueError("backend='cutile' supports only Gaussian fits")
         if isinstance(self.device_id, bool) or not isinstance(
