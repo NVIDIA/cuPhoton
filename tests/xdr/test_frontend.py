@@ -47,6 +47,7 @@ def test_batch_api_keeps_existing_keyword_surface():
         "native_batcher",
         "postprocess",
         "gzip_decoder",
+        "decompression_backend",
     )
     actual = tuple(inspect.signature(xdr.batch_to_device).parameters)
 
@@ -79,6 +80,7 @@ def test_parallel_batch_delegates_to_stream_frontend(monkeypatch):
         native_batcher=True,
         postprocess="separate",
         gzip_decoder="deflate",
+        decompression_backend="cuda",
     )
 
     assert result == ("ok",)
@@ -96,6 +98,7 @@ def test_parallel_batch_delegates_to_stream_frontend(monkeypatch):
                 "native_batcher": True,
                 "postprocess": "separate",
                 "gzip_decoder": "deflate",
+                "decompression_backend": "cuda",
                 "section": (slice(0, 1), slice(0, 1)),
                 "stream": "stream",
             },

@@ -152,6 +152,9 @@ path and xDR supplies eligible GPU reads. Reader selection is separate from
 the numerical backend. Read receipts record the requested and actual reader,
 selected HDUs, and any fallback reason; see
 [FITS reading in a workflow](docs/components/xdr.md#read-fits-images-in-a-workflow).
+The [xDR runtime controls](docs/components/xdr.md#runtime-choices) select
+postprocessing, Gzip decoding and decompression backends through the CLI,
+Python APIs or input manifests.
 
 ## Installation profiles
 

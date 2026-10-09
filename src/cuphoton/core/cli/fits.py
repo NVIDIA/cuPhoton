@@ -20,9 +20,10 @@ class XdrOptionsMixin:
     class XdrPostprocessArg(SetInvariant):
         _arg = "--xdr-postprocess"
         _help = (
-            "xDR postprocessing: auto, fused, or separate. Omitted preserves "
-            "input choices or uses xDR defaults; applies when the FITS "
-            "reader uses xDR."
+            "xDR postprocessing: auto/fused combine restoration kernels; "
+            "separate runs individual kernels. Omitted preserves input "
+            "choices or uses xDR defaults; applies when the FITS reader "
+            "uses xDR."
         )
         _set = XDR_OPTION_CHOICES["postprocess"]
         _default = None
@@ -32,10 +33,25 @@ class XdrOptionsMixin:
     class XdrGzipDecoderArg(SetInvariant):
         _arg = "--xdr-gzip-decoder"
         _help = (
-            "xDR gzip decoder: auto, gzip, or deflate. Omitted preserves "
-            "manifest choices; applies when the FITS reader uses xDR."
+            "xDR gzip decoder: auto prefers native Gzip with raw DEFLATE "
+            "fallback; gzip or deflate selects explicitly. Omitted preserves "
+            "input choices or uses xDR defaults; applies when the FITS "
+            "reader uses xDR."
         )
         _set = XDR_OPTION_CHOICES["gzip_decoder"]
+        _default = None
+
+    xdr_decompression_backend = None
+
+    class XdrDecompressionBackendArg(SetInvariant):
+        _arg = "--xdr-decompression-backend"
+        _help = (
+            "xDR decompression backend: auto permits compatible Gzip "
+            "hardware with CUDA fallback; cuda requires explicit CUDA "
+            "selection support. Omitted preserves input choices or uses "
+            "xDR defaults; applies when the FITS reader uses xDR."
+        )
+        _set = XDR_OPTION_CHOICES["decompression_backend"]
         _default = None
 
 

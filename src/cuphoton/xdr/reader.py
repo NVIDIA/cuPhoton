@@ -438,6 +438,7 @@ class GpuCompImageReader:
         keepalive=None,
         header_sizes=None,
         gzip_decoder: str = "auto",
+        decompression_backend: str = "auto",
     ):
         """Run batched nvCOMP inflate for gzip tiles resident on the device.
 
@@ -445,9 +446,16 @@ class GpuCompImageReader:
         and `rel_offsets[i]` is the start offset of tile i inside `d_concat`.
         `lengths` and `out_bytes` are per-tile compressed and decompressed
         byte counts. Returns concatenated decompressed bytes plus per-tile
-        offsets into that output buffer.
+        offsets into that output buffer. ``gzip_decoder`` and
+        ``decompression_backend`` use the choices documented by
+        :func:`cuphoton.xdr.batch_to_device_stream`.
         """
-        normalize_xdr_options({"gzip_decoder": gzip_decoder})
+        normalize_xdr_options(
+            {
+                "gzip_decoder": gzip_decoder,
+                "decompression_backend": decompression_backend,
+            }
+        )
         import cupy as cp
 
         with stream or cp.cuda.Stream.null:
@@ -458,6 +466,7 @@ class GpuCompImageReader:
                 out_bytes,
                 gzip_wrapped=True,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 use_native_pool=keepalive is not None,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
@@ -593,6 +602,7 @@ class GpuCompImageReader:
         keepalive=None,
         postprocess: str = "auto",
         gzip_decoder: str = "auto",
+        decompression_backend: str = "auto",
     ):
         """Run the decode pipeline on a pre-loaded compressed heap buffer.
 
@@ -600,9 +610,15 @@ class GpuCompImageReader:
         of the tiles referenced in `plan["sel_*"]`; `rel_offsets[i]` is the
         start offset of tile i inside `d_concat`. This is what the prefetch
         consumer calls after staging its pinned host heap to device.
+        ``postprocess``, ``gzip_decoder`` and ``decompression_backend`` use
+        the choices documented by :func:`cuphoton.xdr.batch_to_device_stream`.
         """
         normalize_xdr_options(
-            {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+            {
+                "postprocess": postprocess,
+                "gzip_decoder": gzip_decoder,
+                "decompression_backend": decompression_backend,
+            }
         )
         if keepalive is not None:
             keepalive.append(d_concat)
@@ -614,6 +630,7 @@ class GpuCompImageReader:
                 out_bytes=plan["out_bytes"],
                 stream=stream,
                 gzip_decoder=gzip_decoder,
+                decompression_backend=decompression_backend,
                 keepalive=keepalive,
             )
         )
@@ -638,6 +655,7 @@ class GpuCompImageReader:
         loader=None,
         postprocess: str = "auto",
         gzip_decoder: str = "auto",
+        decompression_backend: str = "auto",
     ):
         """Read and decode this HDU into a `cupy.ndarray`.
 
@@ -648,7 +666,20 @@ class GpuCompImageReader:
             kvikio `CompatModeManager` setup per HDU). If `None`, a fresh
             loader is created for this call. Closure is deferred if
             failure leaves its I/O completion unknown.
+        postprocess : {"auto", "fused", "separate"}
+            ``auto`` (default) and ``fused`` restore FITS pixels in one
+            kernel; ``separate`` uses individual restoration kernels.
+        gzip_decoder : {"auto", "gzip", "deflate"}
+            ``auto`` prefers native Gzip with aligned DEFLATE fallback.
+            ``gzip`` requires native Gzip support; ``deflate`` selects
+            aligned raw DEFLATE decoding.
+        decompression_backend : {"auto", "cuda"}
+            ``auto`` lets native Gzip select compatible hardware with CUDA
+            fallback. ``cuda`` requires a native helper with backend
+            selection. Native raw DEFLATE uses CUDA in either mode.
 
+        Notes
+        -----
         With an explicit stream, independent reads can submit while this call
         waits for GDS I/O. Reads without a stream retain the submission lock.
 
@@ -658,7 +689,11 @@ class GpuCompImageReader:
         requires a process restart before further GPU submissions.
         """
         normalize_xdr_options(
-            {"postprocess": postprocess, "gzip_decoder": gzip_decoder}
+            {
+                "postprocess": postprocess,
+                "gzip_decoder": gzip_decoder,
+                "decompression_backend": decompression_backend,
+            }
         )
         import cupy as cp
 
@@ -735,6 +770,7 @@ class GpuCompImageReader:
                             stream=None,
                             postprocess=postprocess,
                             gzip_decoder=gzip_decoder,
+                            decompression_backend=decompression_backend,
                         )
                     except BaseException as error:
                         abandon(error)
@@ -778,6 +814,7 @@ class GpuCompImageReader:
                                 keepalive=keepalive,
                                 postprocess=postprocess,
                                 gzip_decoder=gzip_decoder,
+                                decompression_backend=decompression_backend,
                             )
                     except (KeyboardInterrupt, SystemExit) as error:
                         abandon(error)

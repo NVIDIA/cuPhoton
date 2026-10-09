@@ -61,6 +61,10 @@ See [Getting started](docs/getting-started.md) and
   Benchmark rounds preserve separate warmup and measurement artifacts.
 - xDR retains buffers until GPU work completes, permits independent reads
   during GDS waits, and exports benchmark results as JSON.
+- xDR defaults to fused FITS pixel restoration and prefers native Gzip decoding, with
+  automatic selection of compatible decompression hardware. CLI flags and
+  Python options select separate restoration kernels, aligned raw DEFLATE,
+  or CUDA decompression explicitly; see [runtime choices](docs/components/xdr.md#runtime-choices).
 
 See the [component guides](docs/README.md#workflow-guides),
 [data contracts](docs/data-artifacts.md), and

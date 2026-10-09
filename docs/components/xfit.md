@@ -304,12 +304,20 @@ Selecting xDR does not assert native GPUDirect Storage use. Run artifacts
 record the manifest and source-file hashes, selected reader and any automatic
 fallback. Existing NPZ loading is unaffected by this option.
 
-`--xdr-postprocess auto|fused|separate` selects xDR postprocessing for FITS
-reads. Python `load_xfit_dataset` accepts the equivalent
-`xdr_options={"postprocess": "separate"}`. FITS manifests may specify
-`xdr_options` at the top level and on individual image or `stamp_basis`
-descriptors. Per-image choices override the manifest default; explicit
-Python/CLI choices override only supplied keys and survive worker dispatch.
+FITS commands also accept `--xdr-postprocess`, `--xdr-gzip-decoder`, and
+`--xdr-decompression-backend`. These control xDR's pixel conversion, Gzip
+decoder, and decompression backend when xDR is the selected reader. See
+[xDR runtime choices](xdr.md#runtime-choices) for values, automatic defaults,
+and capability fallback.
+
+Python `load_xfit_dataset` accepts the corresponding `xdr_options` keys
+`postprocess`, `gzip_decoder`, and `decompression_backend`. For example,
+`xdr_options={"gzip_decoder": "deflate", "decompression_backend": "cuda"}`
+selects raw Deflate decoding on CUDA. In a FITS manifest, `xdr_options` may
+appear at the top level and on each entry in `images` or the `stamp_basis`
+descriptor. Descriptor choices override top-level defaults; explicit Python
+options or CLI flags override only their matching keys. Omitted flags preserve
+the manifest's choices, including when dispatching work to MPI or Dragon.
 
 Input archives contain candidate identifiers and exact image pixels. Fit
 artifacts contain identifiers, hashes, parameters, uncertainties, covariance,

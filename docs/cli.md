@@ -27,6 +27,13 @@ Check command help for the applicable default and the
 [FITS reader guide](components/xdr.md#read-fits-images-in-a-workflow) for
 scaling, compression, and section-read rules.
 
+Applicable FITS commands and `xdr benchmark-fits` also expose
+`--xdr-postprocess`, `--xdr-gzip-decoder` and `--xdr-decompression-backend`.
+Omitted flags preserve manifest choices; otherwise the xDR runtime defaults
+are `auto`. These settings apply when xDR is the selected FITS reader. See
+[runtime choices](components/xdr.md#runtime-choices) for values, Python
+keywords and capability fallback.
+
 ## xDataReader: `cuphoton xdr`
 
 `benchmark-fits` runs the GPU-native FITS loading benchmark for individual

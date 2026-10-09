@@ -251,9 +251,14 @@ def read_fits_images(
     rejects unsupported semantics or unavailable dependencies before reading
     pixels. All returned device arrays are ready on return.
 
-    ``xdr_options`` carries explicit xDR runtime choices, such as
-    ``{"postprocess": "separate"}``. Omitted choices use xDR defaults.
-    These choices do not change the reader or its Astropy fallback policy.
+    ``xdr_options`` accepts ``postprocess`` (auto/fused/separate),
+    ``gzip_decoder`` (auto/gzip/deflate), and ``decompression_backend``
+    (auto/cuda). Omitted choices use xDR's ``auto`` defaults. For example,
+    ``xdr_options={"decompression_backend": "cuda"}`` requests CUDA kernels
+    when xDR decodes a compressed HDU; it requires a native helper with
+    backend selection. These choices do not change the reader or its Astropy
+    fallback policy. Metadata records explicit choices as requested settings,
+    including when Astropy is selected; it does not identify an nvCOMP engine.
     """
     validate_fits_reader(reader)
     xdr_options = normalize_xdr_options(xdr_options)
