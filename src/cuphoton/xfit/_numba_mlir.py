@@ -238,12 +238,13 @@ class GaussianWorkspace:
     ) -> None:
         try:
             import cupy as cp
-            from numba_cuda_mlir import cuda
+            from numba_cuda_mlir import cuda as cuda_module
         except ImportError as exc:
             raise ImportError(
                 "Numba-CUDA-MLIR Gaussian kernels require CuPy and "
                 "numba-cuda-mlir"
             ) from exc
+        cuda: Any = cuda_module
         if mode not in {"difference", "split"}:
             raise ValueError("mode must be 'difference' or 'split'")
         height, width = image_shape
