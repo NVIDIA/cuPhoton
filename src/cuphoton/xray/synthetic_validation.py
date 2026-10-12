@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment
 
 from cuphoton.core.runtime import runtime_metadata
 
@@ -280,6 +279,75 @@ def _to_host(values) -> np.ndarray:
     return np.asarray(values, dtype=float)
 
 
+def _integer_errors(errors: np.ndarray, n_modes: int) -> list[int]:
+    """Scale binary floats exactly, ranking nonfinite errors last."""
+    ratios = [
+        float(error).as_integer_ratio() if np.isfinite(error) else None
+        for error in errors
+    ]
+    denominator = max((r[1] for r in ratios if r is not None), default=1)
+    scaled = [
+        r[0] * (denominator // r[1]) if r is not None else None
+        for r in ratios
+    ]
+    unavailable = (
+        n_modes * max((x for x in scaled if x is not None), default=0) + 1
+    )
+    return [unavailable if x is None else x for x in scaled]
+
+
+def _minimum_mode_assignment(cost: list[list[int]]) -> list[int]:
+    """Rectangular Hungarian assignment without rounding the integer costs."""
+    n_rows, n_columns = len(cost), len(cost[0])
+    row_price = [0] * (n_rows + 1)
+    column_price = [0] * (n_columns + 1)
+    owner = [0] * (n_columns + 1)
+    previous = [0] * (n_columns + 1)
+    for row in range(1, n_rows + 1):
+        owner[0] = row
+        column = 0
+        slack: list[int | None] = [None] * (n_columns + 1)
+        visited = [False] * (n_columns + 1)
+        while True:
+            visited[column] = True
+            current_row = owner[column]
+            step = None
+            next_column = 0
+            for candidate in range(1, n_columns + 1):
+                if visited[candidate]:
+                    continue
+                reduced = (
+                    cost[current_row - 1][candidate - 1]
+                    - row_price[current_row]
+                    - column_price[candidate]
+                )
+                best = slack[candidate]
+                if best is None or reduced < best:
+                    best = slack[candidate] = reduced
+                    previous[candidate] = column
+                if step is None or best < step:
+                    step, next_column = best, candidate
+            assert step is not None
+            for candidate, best in enumerate(slack):
+                if visited[candidate]:
+                    row_price[owner[candidate]] += step
+                    column_price[candidate] -= step
+                elif best is not None:
+                    slack[candidate] = best - step
+            column = next_column
+            if owner[column] == 0:
+                break
+        while column:
+            predecessor = previous[column]
+            owner[column] = owner[predecessor]
+            column = predecessor
+    assignment = [0] * n_rows
+    for column, row in enumerate(owner[1:]):
+        if row:
+            assignment[row - 1] = column
+    return assignment
+
+
 def match_modes(
     modes: Sequence[DampedMode],
     angular_frequency: np.ndarray,
@@ -287,8 +355,11 @@ def match_modes(
     *,
     tolerance: float,
 ) -> list[int | None]:
-    """For each true mode, the index of the fitted mode within ``tolerance``
-    (rad per time unit) or ``None``.
+    """Match within the frequency ``tolerance`` (rad per time unit).
+
+    Maximize recovered modes, then minimize total frequency error, then
+    total decay error. Return fitted indices or ``None`` for missing modes.
+    Nonfinite decay errors rank last without preventing frequency recovery.
     """
     if not np.isfinite(tolerance) or tolerance < 0:
         raise ValueError("tolerance must be finite and nonnegative")
@@ -299,19 +370,35 @@ def match_modes(
         np.abs([m.angular_frequency for m in modes])[:, None]
         - np.abs(angular_frequency)[None, :]
     )
-    # A missing match costs more than every valid distance combined:
-    # maximize recovered modes first, then minimize total frequency error.
-    missing_cost = len(modes) + 1
-    cost = np.full(
-        (len(modes), angular_frequency.size + len(modes)), float(missing_cost)
-    )
-    cost[:, : angular_frequency.size] = np.where(
-        err <= tolerance, err / (tolerance or 1.0), np.inf
-    )
-    rows, columns = linear_sum_assignment(cost)
-    for row, column in zip(rows, columns, strict=True):
+    valid = err <= tolerance
+    if not np.any(valid):
+        return out
+    with np.errstate(over="ignore", invalid="ignore"):
+        decay_err = np.abs(
+            np.array([m.decay for m in modes])[:, None] - decay[None, :]
+        )
+    frequency_cost = _integer_errors(err[valid], len(modes))
+    decay_cost = _integer_errors(decay_err[valid], len(modes))
+    # Integer bounds make each priority dominate every possible total of
+    # the lower priorities. No epsilon lets decay outweigh frequency.
+    frequency_scale = len(modes) * max(decay_cost) + 1
+    real_cost = [
+        frequency * frequency_scale + damping
+        for frequency, damping in zip(frequency_cost, decay_cost, strict=True)
+    ]
+    missing_cost = len(modes) * max(real_cost) + 1
+    invalid_cost = (len(modes) + 1) * missing_cost
+    cost = [
+        [invalid_cost] * angular_frequency.size + [missing_cost] * len(modes)
+        for _ in modes
+    ]
+    for (row, column), value in zip(
+        np.argwhere(valid), real_cost, strict=True
+    ):
+        cost[row][column] = value
+    for row, column in enumerate(_minimum_mode_assignment(cost)):
         if column < angular_frequency.size:
-            out[int(row)] = int(column)
+            out[row] = column
     return out
 
 
@@ -820,7 +907,7 @@ def build_summary(
                 "a true mode is recovered when a fitted mode lies within "
                 "the tolerance of its angular frequency; fitted modes are "
                 "assigned to maximize matches, then minimize total frequency "
-                "error, and each is used at most once"
+                "error, then total decay error, and each is used at most once"
             ),
             "tolerance_rad_per_time": first.match_tolerance,
         },
