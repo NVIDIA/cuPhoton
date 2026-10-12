@@ -62,7 +62,8 @@ compatibility; analytic derivatives do not use a finite-difference step.
 A true mode is recovered in a trial when a fitted mode has an angular
 frequency within `match_tolerance` (default 0.3 rad per time unit) of it;
 the assignment first maximizes the number of recovered modes, then minimizes
-their total frequency error. Each fitted mode is used at most once. The
+their total frequency error, using total decay error to break ties.
+Each fitted mode is used at most once. The
 per-mode `loss_rate` is the fraction of trials in which the mode was not
 recovered. A trial is successful when the estimator returned and every true
 mode was recovered; a trial in which the estimator raised counts in
