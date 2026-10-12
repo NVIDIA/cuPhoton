@@ -24,6 +24,7 @@ from .api import (
     fit_dipoles,
     fit_dipoles_device,
 )
+from .derived import DerivedDipoleQuantities, derived_dipole_quantities
 from .models import GaussianDipoleModel, StampDipoleModel
 from .photometry import ForcedPhotometryResult, forced_psf_photometry
 from .solver import (
@@ -44,6 +45,7 @@ __all__ = [
     "BackendRequest",
     "BatchedLeastSquaresProblem",
     "ComputeDType",
+    "DerivedDipoleQuantities",
     "DeviceDipoleFitResult",
     "DipoleFitResult",
     "DipoleFitUncertaintyReason",
@@ -62,6 +64,7 @@ __all__ = [
     "StampEvaluation",
     "StampDipoleModel",
     "batched_levenberg_marquardt",
+    "derived_dipole_quantities",
     "fit_dipoles",
     "fit_dipoles_device",
     "forced_psf_photometry",
