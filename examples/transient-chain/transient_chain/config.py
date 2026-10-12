@@ -162,6 +162,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "mode": ("difference", _choice("difference")),
         "compute_dtype": ("float64", _choice("float32", "float64")),
         "solver": ({}, _mapping),
+        "psf_sigma_px": (None, _opt(_num(0.0))),
     },
     "classify": {
         "inference_policy": ("strict", _choice(*INFERENCE_POLICIES)),

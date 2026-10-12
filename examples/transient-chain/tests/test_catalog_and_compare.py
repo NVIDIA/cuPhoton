@@ -44,7 +44,11 @@ def _full_table(n, rng):
         uncertainty_valid=np.ones(n, bool),
         evaluations=rng.integers(1, 200, n),
         valid_pixel_count=np.full(n, 2601),
+        quality_flags=rng.integers(0, 128, n),
     )
+    for name in catalog.UNCERTAINTY_COLUMNS:
+        if name not in ("quality_flags", "psf_flux", "psf_flux_err"):
+            t[name] = rng.normal(size=n)
     t["ra"] = rng.uniform(size=n)
     t["dec"] = rng.uniform(size=n)
     return t
@@ -82,6 +86,8 @@ def test_empty_and_full_items_share_one_schema_and_merge_without_promotion():
         full["x"].dtype == np.int64
         and full["decision"].dtype == bool
         and np.isnan(full["probability"]).all()
+        and full["quality_flags"].dtype == np.int64
+        and np.isnan(full["psf_flux"]).all()
     )
     merged = pd.concat([empty, full], ignore_index=True)
     assert (

@@ -187,7 +187,13 @@ class ChainWorker:
         size = int(cfg["stamps"]["stamp_size"])
         half = size // 2
 
-        from cuphoton.xfit import fit_dipoles_device
+        from cuphoton.xfit import (
+            DipoleQualityFlag,
+            derived_dipole_quantities,
+            dipole_quality_flags,
+            fit_dipoles_device,
+            forced_psf_photometry,
+        )
         from cuphoton.xpois import (
             GaussianBasisComponent,
             solve_constant_kernel_device,
@@ -486,6 +492,54 @@ class ChainWorker:
                     else fit_variance.astype(self.compute_dtype, copy=False),
                     config=self.lm_config,
                 )
+                # quality flags, catalog quantities with uncertainties
+                # propagated through the full covariance, and forced PSF
+                # photometry at the source of single-source candidates
+                psf_sigma = cfg["xfit"]["psf_sigma_px"]
+                qflags = dipole_quality_flags(
+                    xres,
+                    difference,
+                    variance=fit_variance,
+                    mask=fit_valid,
+                    **(
+                        {}
+                        if psf_sigma is None
+                        else {
+                            "width_range": (0.5 * psf_sigma, 2.5 * psf_sigma)
+                        }
+                    ),
+                )
+                derived = derived_dipole_quantities(xres)
+                photometry = None
+                if fit_variance is not None:
+                    positive = int(
+                        DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED
+                    )
+                    negative = int(
+                        DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED
+                    )
+                    fading = ((qflags & positive) != 0) & (
+                        (qflags & negative) == 0
+                    )
+                    source = cp.stack(
+                        [
+                            cp.where(fading, 2.0 * c - p, p)
+                            for c, p in (
+                                (derived.center_x, derived.positive_x),
+                                (derived.center_y, derived.positive_y),
+                            )
+                        ],
+                        axis=1,
+                    )
+                    photometry = forced_psf_photometry(
+                        difference,
+                        fit_variance,
+                        source,
+                        cp.sqrt(xres.parameters[:, 1] * xres.parameters[:, 2])
+                        if psf_sigma is None
+                        else psf_sigma,
+                        mask=fit_valid,
+                    )
             # 9. XScan through DLPack: the scaled stamps never leave the
             # device
             logits_t = probs_t = view = scaled = None
@@ -548,6 +602,26 @@ class ChainWorker:
                     "valid_pixel_count",
                 ):
                     table[name] = ops.to_host(getattr(xres, name))
+                table["quality_flags"] = ops.to_host(qflags)
+                for name in ("center", "positive"):
+                    for axis in ("x", "y"):
+                        table[f"{name}_{axis}"] = ops.to_host(
+                            getattr(derived, f"{name}_{axis}")
+                        )
+                        table[f"{name}_{axis}_err"] = ops.to_host(
+                            getattr(derived, f"{name}_{axis}_error")
+                        )
+                    table[f"{name}_xy_cov"] = ops.to_host(
+                        getattr(derived, f"{name}_xy_covariance")
+                    )
+                for name in ("separation", "lobe_flux"):
+                    table[name] = ops.to_host(getattr(derived, name))
+                    table[f"{name}_err"] = ops.to_host(
+                        getattr(derived, f"{name}_error")
+                    )
+                if photometry is not None:
+                    table["psf_flux"] = ops.to_host(photometry.flux)
+                    table["psf_flux_err"] = ops.to_host(photometry.flux_error)
                 if self.model is not None:
                     table["logit"] = logits_t.detach().cpu().numpy()
                     table["probability"] = probs_t.detach().cpu().numpy()
@@ -562,7 +636,7 @@ class ChainWorker:
                 xfer["terminal_bytes"] += sum(
                     int(np.asarray(v).nbytes) for v in table.values()
                 )
-                del xres, stamps, difference, scaled
+                del xres, stamps, difference, scaled, derived, photometry
         else:
             for k in ("stamps", "xfit", "xscan", "terminal_d2h"):
                 timings[k] = 0.0
