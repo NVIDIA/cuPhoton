@@ -127,9 +127,18 @@ def test_stamps_and_noise_factor():
     search = rng.normal(10, 5, (200, 200))
     resid = rng.normal(0, 2, (200, 200))
     resid[50, 50] = np.nan
-    stamps, diff = ops.extract_stamps(
-        search, resid, np.array([50, 120]), np.array([50, 130]), 51
+    var = np.full((200, 200), 4.0)
+    var[60, 52] = 0.0
+    stamps, diff, valid, vstamps = ops.extract_stamps(
+        search, resid, np.array([50, 120]), np.array([50, 130]), 51, var
     )
+    assert valid.dtype == bool and vstamps.dtype == np.float64
+    assert not valid[0, 25, 25] and not valid[0, 35, 27]
+    assert valid.sum() == 2 * 51 * 51 - 2
+    _, _, valid_only, none = ops.extract_stamps(
+        search, resid, np.array([50]), np.array([50]), 51
+    )
+    assert none is None and valid_only.sum() == 51 * 51 - 1
     assert (
         stamps.shape == (2, 3, 51, 51)
         and stamps.dtype == np.float32

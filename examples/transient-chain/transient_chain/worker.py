@@ -460,8 +460,10 @@ class ChainWorker:
             # 7. stamps: search, search minus difference, difference; plus the
             # noise-match factor
             with timer("stamps"):
-                stamps, difference = ops.extract_stamps(
-                    vimg, residual, cand_x, cand_y, size
+                stamps, difference, fit_valid, fit_variance = (
+                    ops.extract_stamps(
+                        vimg, residual, cand_x, cand_y, size, variance
+                    )
                 )
                 if c_cfg["apply_noise_match"]:
                     factor, n_replaced = ops.noise_match_factors(
@@ -470,12 +472,18 @@ class ChainWorker:
                 else:
                     factor, n_replaced = cp.ones(n_cand, cp.float32), 0
                 diag["stamps"] = {"noise_factors_replaced": int(n_replaced)}
-            # 8. xFit Gaussian dipoles on the float64 difference stamps
+            # 8. xFit Gaussian dipoles on the float64 difference stamps,
+            # weighted by the target variance; masked and nonfinite pixels
+            # are excluded
             with timer("xfit"):
                 xres = fit_dipoles_device(
                     difference.astype(self.compute_dtype, copy=False),
                     model=self.dipole_model,
                     mode=cfg["xfit"]["mode"],
+                    mask=fit_valid,
+                    variance=None
+                    if fit_variance is None
+                    else fit_variance.astype(self.compute_dtype, copy=False),
                     config=self.lm_config,
                 )
             # 9. XScan through DLPack: the scaled stamps never leave the
