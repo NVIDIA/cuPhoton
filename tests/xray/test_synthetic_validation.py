@@ -229,6 +229,104 @@ def test_matching_recovers_close_modes_independent_of_truth_order(
     ) == [None, None]
 
 
+@pytest.mark.parametrize(
+    "truth_frequency,truth_decay,fitted_frequency,fitted_decay,tolerance,expected",
+    [
+        # Different frequencies can also have equal total frequency error.
+        ([1, 2], [0.1, 0.8], [3, 4], [0.8, 0.1], 3, [1, 0]),
+        # Include fitted modes left unused by the primary assignment.
+        ([2], [0.1], [1, 3], [0.8, 0.1], 1, [1]),
+        # A partial recovery goes to the true mode with the matching decay.
+        ([2, 2], [0.1, 0.8], [2], [0.8], 0, [None, 0]),
+        # Better decay must not sacrifice an otherwise recoverable mode.
+        ([1, 1.15], [0, 100], [1.05, 0.85], [0, 100], 0.2, [1, 0]),
+        # Nor may it outweigh even one representable step in frequency error.
+        ([1], [0], [np.nextafter(1.0, 2.0), 1], [0, 1e100], 1, [1]),
+        # Rounded floating-point totals hide this genuine frequency advantage.
+        (
+            [1, 2, 10],
+            [0, 1, 2],
+            [1.5, np.nextafter(1.5, 2.0), 1000],
+            [1, 0, 2],
+            1000,
+            [0, 1, 2],
+        ),
+    ],
+)
+def test_matching_uses_decay_only_after_recovery_and_frequency(
+    truth_frequency,
+    truth_decay,
+    fitted_frequency,
+    fitted_decay,
+    tolerance,
+    expected,
+):
+    modes = tuple(
+        DampedMode(1, d, w)
+        for w, d in zip(truth_frequency, truth_decay, strict=True)
+    )
+    for reverse in (False, True):
+        order = slice(None, None, -1 if reverse else 1)
+        actual = match_modes(
+            modes,
+            np.array(fitted_frequency)[order],
+            np.array(fitted_decay)[order],
+            tolerance=tolerance,
+        )
+        assert actual == [
+            len(fitted_frequency) - 1 - h if reverse and h is not None else h
+            for h in expected
+        ]
+
+
+@pytest.mark.parametrize("unavailable_decay", [np.nan, np.inf, -np.inf])
+def test_matching_nonfinite_decay_does_not_prevent_frequency_recovery(
+    unavailable_decay,
+):
+    modes = (DampedMode(1, 0.1, 2),)
+    assert match_modes(
+        modes, np.array([2]), np.array([unavailable_decay]), tolerance=0
+    ) == [0]
+    assert match_modes(
+        modes,
+        np.array([2, 2]),
+        np.array([unavailable_decay, 0.1]),
+        tolerance=0,
+    ) == [1]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_sweep_matches_exact_modes_with_shared_frequency_by_decay(reverse):
+    modes = (DampedMode(1, 0.05, 2, 0.3), DampedMode(0.4, 0.5, 2, 1))
+    fitted_modes = modes[::-1] if reverse else modes
+    fixture = synthetic_modes_trace(modes=modes)
+
+    def exact_estimator(t, y, k):
+        return SimpleNamespace(
+            **{
+                name: np.array([getattr(m, name) for m in fitted_modes])
+                for name in PARAMETERS
+            },
+            reconstruction=fixture.clean,
+        )
+
+    level = validation_sweep(
+        modes=modes,
+        snr_db=(80,),
+        trials=4,
+        seed=314,
+        estimator=exact_estimator,
+    ).levels[0]
+    assert level.trials_successful == 4
+    for mode in level.modes:
+        assert mode.recovered_trials == 4
+        assert mode.loss_rate == 0
+        for name in PARAMETERS:
+            stats = getattr(mode, name)
+            assert stats.bias == pytest.approx(0, abs=1e-14)
+            assert stats.rmse == pytest.approx(0, abs=1e-14)
+
+
 def test_validation_sweep_reports_bound_ratios_and_loss_rates():
     sweep = validation_sweep(snr_db=(40.0, 20.0), trials=40, seed=1)
     assert len(sweep.levels) == 2
