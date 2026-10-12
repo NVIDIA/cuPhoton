@@ -428,7 +428,7 @@ def compact_source_stamp_mask(
     }
 
 
-def extract_stamps(search, residual, cx, cy, size: int):
+def extract_stamps(search, residual, cx, cy, size: int, variance=None):
     """Cut (K, 3, size, size) float32 stamps: search, template = search minus
     difference, difference.
 
@@ -438,8 +438,11 @@ def extract_stamps(search, residual, cx, cy, size: int):
     are rounded to
     float32 first, matching a builder that read float32 FITS planes. Also
     returns the float64
-    difference stamps for xFit, rounded through float32 the same way. ``size``
-    must be odd.
+    difference stamps for xFit, rounded through float32 the same way, the
+    boolean mask of the pixels xFit may fit (finite residual, and finite
+    positive ``variance`` when given) and the float64 variance stamps (None
+    without ``variance``). Zeroed pixels stay out of the fit through that
+    mask. ``size`` must be odd.
     """
     if size % 2 == 0:
         raise ValueError(f"stamp size must be odd, got {size}")
@@ -456,15 +459,19 @@ def extract_stamps(search, residual, cx, cy, size: int):
     s = xp.nan_to_num(
         search[cy, cx].astype(xp.float32), nan=0.0, posinf=0.0, neginf=0.0
     )
-    d = xp.nan_to_num(
-        residual[cy, cx].astype(xp.float32), nan=0.0, posinf=0.0, neginf=0.0
-    )
+    raw = residual[cy, cx].astype(xp.float32)
+    valid = xp.isfinite(raw)
+    d = xp.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
     stamps = xp.empty((len(cy), 3, size, size), dtype=xp.float32)
     stamps[:, 0] = s
     stamps[:, 1] = s - d
     stamps[:, 2] = d
     difference = d.astype(xp.float64)
-    return stamps, difference
+    var = None
+    if variance is not None:
+        var = variance[cy, cx].astype(xp.float64)
+        valid &= xp.isfinite(var) & (var > 0)
+    return stamps, difference, valid, var
 
 
 def noise_match_factors(search_stamps, reference_sigma: float):

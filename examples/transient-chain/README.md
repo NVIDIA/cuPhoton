@@ -49,7 +49,7 @@ the request.
 | XPOIS | `solve_constant_kernel_device`, residual | chi2, dof, condition number |
 | Detect | hotspot rule (threshold, 4-connected label, per-component peak and centroid) | the hotspot table |
 | Stamps | search, template = search minus difference, difference; per-stamp noise-match factor | none |
-| xFit | `fit_dipoles_device` on float64 difference stamps | none |
+| xFit | `fit_dipoles_device` on float64 difference stamps, weighted by the target variance, with masked and nonfinite pixels excluded | none |
 | XScan | DLPack handoff of the scaled stamps to Torch, `predict_tensors` | none |
 | End | one packed download: positions, fit parameters, uncertainties, logits, probabilities | `catalog.parquet` and `summary.json` per item |
 
@@ -264,6 +264,11 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `astrometry` | object | identity | how `ra`/`dec` were derived (`header-wcs-approx` for Rubin: the header WCS, unrefined) |
 
 `transient_chain.catalog.markdown_table()` prints this table from the schema.
+
+The xFit standard errors come from the target's variance plane. The template's noise, carried
+through the subtraction kernel, is not in that variance, so the standard errors understate the
+difference image's noise by that amount. Without a variance plane, xFit scales each covariance by
+the fit's reduced chi-square, which estimates the noise from the stamp's residuals.
 
 ## Compare with a reference catalog
 
