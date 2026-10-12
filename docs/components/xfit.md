@@ -343,6 +343,33 @@ acceptable.
 See [Data and artifact contracts](../data-artifacts.md#xfit-dipole-batches)
 for the stable shapes and output fields.
 
+## Forced PSF photometry
+
+A difference stamp that holds a single new or variable source has no second
+lobe, and a dipole fit's lobe flux does not describe it.
+`forced_psf_photometry` fits the flux of a circular Gaussian point-spread
+function at a fixed position instead, for example the fitted lobe position.
+The model is linear in the flux, so the flux and its standard error are
+exact for the supplied variance:
+
+```python
+from cuphoton.xfit import forced_psf_photometry
+
+photometry = forced_psf_photometry(
+    images, variance, positions, psf_sigma=1.8, mask=mask
+)
+photometry.flux, photometry.flux_error, photometry.valid
+```
+
+`positions` holds one `(x, y)` per stamp in the same centered pixel
+coordinates as the dipole parameters. `psf_sigma` is the PSF standard
+deviation in pixels, one value or one per stamp. The PSF integrates to one,
+so `flux` is comparable with a Gaussian lobe's `2 pi |amplitude| sigma_x
+sigma_y`. Masked pixels and pixels with a nonfinite image or a nonpositive
+variance do not contribute. Correlated noise between pixels, as in a
+resampled difference image, makes `flux_error` too small unless the variance
+accounts for it. The computation stays on the backend of `images`.
+
 ## Distributed fitting
 
 `fit-dipoles --executor dragon|mpi` distributes independent candidate chunks
