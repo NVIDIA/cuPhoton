@@ -59,6 +59,9 @@ xfit:                         # cuphoton.xfit.fit_dipoles_device with the Gaussi
   compute_dtype: float64
   solver: {}                  # LMConfig fields: f_tol, x_tol, g_tol, max_evaluations, initial_damping,
                               # damping_increase, damping_decrease; empty = library defaults
+  psf_sigma_px: null          # PSF standard deviation of the target image in pixels. Sets the quality flags' width
+                              # range (0.5 to 2.5 times it) and the forced-photometry PSF; null = flags use xFit's
+                              # default range and forced photometry uses each fit's own width
 
 classify:                     # XScan inference through DLPack (step 9); checkpoint_dir comes from --checkpoint-dir
   inference_policy: strict    # strict: float32, no autocast, no TF32; checkpoint: the policy saved with the checkpoint

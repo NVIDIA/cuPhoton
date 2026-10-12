@@ -186,7 +186,7 @@ named, odd sizes and enumerations are checked, and every default lives in
 | `subtract` | XPOIS and the fit mask | `kernel_height`, `kernel_width`, `basis_sigmas`, `basis_degrees`, `background_degree`, `flux_conserve`, `template_bad_dilation_px`, `auto_stamp_*` (mask selection), `auto_background_filter_size`, `auto_peak_filter_size`, `auto_compact_core_size` |
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
 | `stamps` | stamp cutting | `stamp_size` (odd; equals the checkpoint's `image_size`) |
-| `xfit` | dipole fits | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`) |
+| `xfit` | dipole fits, quality flags, forced photometry | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`), `psf_sigma_px` |
 | `classify` | XScan | `inference_policy: strict\|checkpoint`, `apply_noise_match`, `noise_reference_sigma`, `decision_threshold`, `batch_size` |
 
 `classify.noise_reference_sigma` is a property of the checkpoint, not of the survey: it is the
@@ -261,6 +261,10 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `converged`, `uncertainty_valid` | bool | xfit | solver status |
 | `chi_square`, `reduced_chi_square` | float64 | xfit | fit quality on the difference stamp |
 | `evaluations`, `valid_pixel_count` | int64 | xfit | solver bookkeeping |
+| `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
+| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`), standard uncertainties and x-y covariances from the full fit covariance |
+| `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
+| `psf_flux`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source (NaN without a variance plane) |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -273,6 +277,16 @@ The xFit standard errors come from the target's variance plane. The template's n
 through the subtraction kernel, is not in that variance, so the standard errors understate the
 difference image's noise by that amount. Without a variance plane, xFit scales each covariance by
 the fit's reduced chi-square, which estimates the noise from the stamp's residuals.
+
+`quality_flags` marks fits that a valid covariance does not exclude: widths outside 0.5 to 2.5 times
+`xfit.psf_sigma_px` (or xFit's default range when it is null), lobes outside the stamp, no lobe at the
+candidate, overlapping lobes, and an unsupported lobe. A candidate with only
+`NEGATIVE_LOBE_UNSUPPORTED` is a brightening single source and one with only
+`POSITIVE_LOBE_UNSUPPORTED` a fading one; for them `psf_flux` is measured at the supported lobe and is
+the quantity to use, and the dipole columns describe a lobe that is not there. Every other candidate's
+`psf_flux` is measured at the positive-flux lobe. Overlapping lobes measure the center, not the
+separation or the lobe flux. The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, or of
+each fit's geometric-mean width when it is null.
 
 ## Compare with a reference catalog
 
