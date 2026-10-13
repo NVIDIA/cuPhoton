@@ -54,6 +54,7 @@ STAGES = (
     "detect",
     "stamps",
     "xfit",
+    "uncertainty",
     "xscan",
     "terminal_d2h",
     "write",
@@ -492,9 +493,10 @@ class ChainWorker:
                     else fit_variance.astype(self.compute_dtype, copy=False),
                     config=self.lm_config,
                 )
-                # quality flags, catalog quantities with uncertainties
-                # propagated through the full covariance, and forced PSF
-                # photometry at the source of single-source candidates
+            # 8b. quality flags, catalog quantities with uncertainties
+            # propagated through the full covariance, and forced PSF
+            # photometry at the source when the PSF width is configured
+            with timer("uncertainty"):
                 psf_sigma = cfg["xfit"]["psf_sigma_px"]
                 qflags = dipole_quality_flags(
                     xres,
@@ -511,7 +513,9 @@ class ChainWorker:
                 )
                 derived = derived_dipole_quantities(xres)
                 photometry = None
-                if fit_variance is not None:
+                # only with an independent PSF width: the fitted dipole
+                # width would make psf_flux_err far too small
+                if fit_variance is not None and psf_sigma is not None:
                     positive = int(
                         DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED
                     )
@@ -535,9 +539,7 @@ class ChainWorker:
                         difference,
                         fit_variance,
                         source,
-                        cp.sqrt(xres.parameters[:, 1] * xres.parameters[:, 2])
-                        if psf_sigma is None
-                        else psf_sigma,
+                        psf_sigma,
                         mask=fit_valid,
                     )
             # 9. XScan through DLPack: the scaled stamps never leave the
@@ -638,7 +640,13 @@ class ChainWorker:
                 )
                 del xres, stamps, difference, scaled, derived, photometry
         else:
-            for k in ("stamps", "xfit", "xscan", "terminal_d2h"):
+            for k in (
+                "stamps",
+                "xfit",
+                "uncertainty",
+                "xscan",
+                "terminal_d2h",
+            ):
                 timings[k] = 0.0
 
         # 11. write: the catalog and the summary are the only files this item

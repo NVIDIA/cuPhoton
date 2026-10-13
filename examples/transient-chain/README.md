@@ -260,7 +260,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
 | `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`), standard uncertainties and x-y covariances from the full fit covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source (NaN without a variance plane) |
+| `psf_flux`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source and its conditional uncertainty (NaN without `xfit.psf_sigma_px` or a variance plane) |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -281,8 +281,11 @@ candidate, overlapping lobes, and an unsupported lobe. A candidate with only
 `POSITIVE_LOBE_UNSUPPORTED` a fading one; for them `psf_flux` is measured at the supported lobe and is
 the quantity to use, and the dipole columns describe a lobe that is not there. Every other candidate's
 `psf_flux` is measured at the positive-flux lobe. Overlapping lobes measure the center, not the
-separation or the lobe flux. The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, or of
-each fit's geometric-mean width when it is null.
+separation or the lobe flux. The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, which
+must come from a measurement independent of the candidate fits, such as the image's stars; without
+it the `psf_flux` columns are NaN. `psf_flux_err` assumes the position and the PSF are fixed and
+correct. The position is the fit's, measured on the same stamp, so the uncertainty is conditional on
+it; a fitted dipole width used as the PSF would make it far too small.
 
 ## Compare with a reference catalog
 
@@ -307,5 +310,6 @@ that alignment.
   setting a bad bit. `subtract.template_bad_dilation_px: 3` is the stopgap until the library
   passes the interpolation through; the shipped config keeps 0 to match the reference chain.
 - Stage timings in `summary.json` use the names `read, template, refine, mask, xpois, detect,
-  stamps, xfit, xscan, terminal_d2h, write`; data captured before this version used `headers`,
+  stamps, xfit, uncertainty, xscan, terminal_d2h, write`. `xfit` is the fit alone and
+  `uncertainty` the quality flags, propagated uncertainties and forced photometry after it; data captured before this version used `headers`,
   `xdr_read` and `mosaic`.
