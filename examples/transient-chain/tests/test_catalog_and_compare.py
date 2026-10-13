@@ -144,3 +144,25 @@ def test_compare_tolerates_blank_reference_ids_and_all_nan_columns():
     import json
 
     json.dumps(row, allow_nan=False)
+
+
+def test_compare_reports_reference_exposures_we_lost_entirely():
+    ref = pd.DataFrame(
+        {
+            "detector": ["D", "D", "E"],
+            "visit": [7, 7, 8],
+            "x": [1.0, 5.0, 3.0],
+            "y": [1.0, 5.0, 3.0],
+        }
+    )
+    ours = pd.DataFrame(
+        {"ccd_id": ["D"], "exposure_id": ["7"], "x": [1.0], "y": [1.0]}
+    )
+    rows = {
+        (r["ccd_id"], r["exposure_id"]): r
+        for r in compare_catalogs.compare(ours, ref, 1.5)
+    }
+    assert set(rows) == {("D", "7"), ("E", "8")}
+    lost = rows[("E", "8")]
+    assert lost["n_ours"] == 0 and lost["n_reference"] == 1
+    assert lost["matched"] == 0 and lost["matched_fraction_reference"] == 0.0

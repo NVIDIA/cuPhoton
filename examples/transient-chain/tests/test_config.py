@@ -104,3 +104,8 @@ def test_config_revalidates_after_checkpoint_path_injection(tmp_path):
     cfg["classify"]["checkpoint_dir"] = 5
     with pytest.raises(ValueError, match="checkpoint_dir must be str"):
         config.validate_config(cfg)
+
+
+def test_fit_mode_is_difference_only():
+    with pytest.raises(ValueError, match="mode"):
+        config.load_config(HERE / "config.yaml", ["xfit.mode=search"])

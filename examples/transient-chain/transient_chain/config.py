@@ -150,7 +150,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "stamp_size": (_REQUIRED, _odd_int),
     },
     "xfit": {
-        "mode": ("difference", _choice("difference", "search")),
+        "mode": ("difference", _choice("difference")),
         "compute_dtype": ("float64", _choice("float32", "float64")),
         "solver": ({}, _mapping),
     },
