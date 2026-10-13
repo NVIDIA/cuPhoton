@@ -512,8 +512,10 @@ center, but their amplitude and separation trade against each other.
 Difference images carry noise correlated between neighboring pixels, which
 inflates a lobe's significance; with `calibrate_noise=True` (the default)
 each stamp's significance is rescaled by the spread of the same statistic
-at empty positions of that stamp. The flags follow the backend of `images`
-and accept `DeviceDipoleFitResult`.
+at empty positions of that stamp, on a 6-pixel grid along each axis. Stamps
+smaller than about 33 pixels on a side hold too few positions; the flags then
+warn and leave the significance uncalibrated. The flags follow the backend of
+`images` without host copies and accept `DeviceDipoleFitResult`.
 
 ## Opt-in observational-data checks
 

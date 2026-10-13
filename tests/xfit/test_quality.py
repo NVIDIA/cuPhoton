@@ -226,3 +226,73 @@ def test_cupy_matches_numpy():
     )
     assert isinstance(device, cp.ndarray)
     assert cp.asnumpy(device).tolist() == host.tolist()
+
+
+def test_small_stamps_skip_calibration_with_a_warning():
+    images = np.random.default_rng(8).normal(0.0, 1.0, (2, 7, 7))
+    fit = _result([[5.0, 1.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0]] * 2)
+    with pytest.warns(UserWarning, match="not calibrated"):
+        flags = dipole_quality_flags(
+            fit, images, variance=np.ones_like(images)
+        )
+    assert flags.shape == (2,)
+    uncalibrated = dipole_quality_flags(
+        fit, images, variance=np.ones_like(images), calibrate_noise=False
+    )
+    assert flags.tolist() == uncalibrated.tolist()
+
+
+@pytest.mark.parametrize("seed", [3, 10])
+def test_transposed_rectangular_stamps_get_the_same_flags(seed):
+    # A single source in correlated noise with a spurious lobe on the most
+    # significant dip: the calibration grid decides the flag, so it must
+    # span each axis of a rectangular stamp.
+    height, width = 41, 61
+    model = GaussianDipoleModel((height, width))
+
+    def lobe(x, y):
+        params = [[1.0, 2.5, 2.5, 0.0, x, y, 1e6, 1e6]]
+        return np.asarray(model.evaluate(np.array(params)))[0]
+
+    rng = np.random.default_rng(seed)
+    white = rng.normal(0.0, 1.0, (height + 4, width + 4))
+    kernel = np.ones(5) / 5.0
+    smooth = np.apply_along_axis(np.convolve, 1, white, kernel, "valid")
+    smooth = np.apply_along_axis(np.convolve, 0, smooth, kernel, "valid")
+    image = 60.0 * lobe(0.0, 0.0) + smooth / smooth.std()
+    candidates = [
+        (x, y)
+        for x in range(-26, 27, 2)
+        for y in range(-16, 17, 2)
+        if np.hypot(x, y) >= 10
+    ]
+    snr = [
+        -_joint_snr(image, np.ones(image.shape), lobe(0, 0), lobe(*c))
+        for c in candidates
+    ]
+    x, y = candidates[int(np.argmax(snr))]
+    fit = [60.0, 2.5, 2.5, 0.0, 0.0, 0.0, x, y]
+    swapped = [fit[i] for i in (0, 2, 1, 3, 5, 4, 7, 6)]
+    flags = dipole_quality_flags(
+        _result(fit), image[None], variance=np.ones((1, height, width))
+    )
+    flipped = dipole_quality_flags(
+        _result(swapped),
+        image.T[None].copy(),
+        variance=np.ones((1, width, height)),
+    )
+    assert flags.tolist() == flipped.tolist()
+
+
+def test_flags_do_not_use_the_checked_model_evaluation(monkeypatch):
+    truth = [[60.0, 2.0, 1.8, 0.3, 3.0, 1.0, -3.0, -1.0]]
+    images = _stamps(truth)
+
+    def checked(*args, **kwargs):
+        raise AssertionError("checked evaluation copies to the host")
+
+    monkeypatch.setattr(GaussianDipoleModel, "evaluate", checked)
+    flags = dipole_quality_flags(
+        _result(truth), images, variance=np.ones_like(images)
+    )
+    assert flags.shape == (1,)
