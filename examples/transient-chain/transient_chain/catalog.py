@@ -109,12 +109,13 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "psf_flux": (
         "float64",
         "xfit",
-        "forced PSF flux at the source (NaN without a variance plane)",
+        "forced PSF flux at the source (NaN without xfit.psf_sigma_px or a "
+        "variance plane)",
     ),
     "psf_flux_err": (
         "float64",
         "xfit",
-        "standard uncertainty of psf_flux",
+        "standard uncertainty of psf_flux, given the position and the PSF",
     ),
 }
 CLASSIFY_COLUMNS: dict[str, tuple[str, str, str]] = {
