@@ -86,6 +86,10 @@ def dipole_quality_flags(
     With ``calibrate_noise``, each stamp's lobe significances are
     divided by the spread of the same statistic at a grid of empty
     positions in that stamp, at least three lobe widths from either lobe.
+    The grid has a 6-pixel step along each axis. A stamp whose grid keeps
+    fewer than 12 such positions is left uncalibrated; when the stamp size
+    alone rules calibration out (below about 33 pixels on a side), a
+    warning is issued.
 
     Without ``variance``, each stamp's noise is its median absolute deviation
     times 1.4826 over the unmasked pixels.
@@ -172,16 +176,27 @@ def dipole_quality_flags(
                 axis=-1,
             )
             q = xp.where(xp.isfinite(q), q, _FAR).reshape(-1, 8)
-            return model.evaluate(q).reshape(*shape, height, width)
+            # unchecked: the checked path copies parameters to the host
+            return model._evaluate_positive_unchecked(q).reshape(
+                *shape, height, width
+            )
 
         g1 = lobes((batch,), sx, sy, theta, *source.T)
         g2 = lobes((batch,), sx, sy, theta, *other.T)
         snr1 = _joint_snr(image, weight, g2, g1)
         snr2 = -_joint_snr(image, weight, g1, g2)
-        if calibrate_noise:
-            grid = xp.arange(-half_x + 4, half_x - 3, _GRID_STEP)
-            gx, gy = (a.ravel() for a in xp.meshgrid(grid, grid))
-            count = len(gx)
+        grid_x = xp.arange(-half_x + 4, half_x - 3, _GRID_STEP)
+        grid_y = xp.arange(-half_y + 4, half_y - 3, _GRID_STEP)
+        count = len(grid_x) * len(grid_y)
+        if calibrate_noise and count < _MIN_NULL_POSITIONS:
+            warnings.warn(
+                f"{height}x{width} stamps hold fewer than "
+                f"{_MIN_NULL_POSITIONS} calibration positions; lobe "
+                "significance is not calibrated for correlated noise",
+                stacklevel=2,
+            )
+        elif calibrate_noise:
+            gx, gy = (a.ravel() for a in xp.meshgrid(grid_x, grid_y))
             chunk = max(1, _CHUNK_ELEMENTS // (count * height * width))
             scale = xp.ones(batch)
             for s in range(0, batch, chunk):
