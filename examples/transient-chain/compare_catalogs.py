@@ -10,7 +10,8 @@ Reference: a CSV with pixel positions and identity columns, or another
 run's catalog.parquet.
 Candidates are matched by pixel position within --radius, one reference row
 per candidate and
-each reference row counted once. Reports counts, position agreement, and
+each reference row counted once. Reference detector-exposures with no rows in
+ours are reported with n_ours = 0. Reports counts, position agreement, and
 relative differences
 of the xFit parameters on converged matched rows.
 
@@ -105,9 +106,17 @@ def compare(
     ref = ref.copy()
     ref[r_exp] = ref[r_exp].map(_id_str)
     ref[r_ccd] = ref[r_ccd].map(_id_str)
+    groups = {
+        (_id_str(ccd), _id_str(exp)): o
+        for (ccd, exp), o in ours.groupby([o_ccd, o_exp])
+    }
+    # reference detector-exposures where we kept nothing are reported too
+    keys = set(groups) | {
+        k for k in zip(ref[r_ccd], ref[r_exp], strict=True) if all(k)
+    }
     rows = []
-    for (ccd, exp), o in ours.groupby([o_ccd, o_exp]):
-        ccd, exp = _id_str(ccd), _id_str(exp)
+    for ccd, exp in sorted(keys):
+        o = groups.get((ccd, exp), ours.iloc[:0])
         r = ref[(ref[r_ccd] == ccd) & (ref[r_exp] == exp)]
         row: dict = {
             "ccd_id": ccd,
@@ -115,6 +124,9 @@ def compare(
             "n_ours": int(len(o)),
             "n_reference": int(len(r)),
         }
+        if len(r) and not len(o):
+            row["matched"] = 0
+            row["matched_fraction_reference"] = 0.0
         if len(r) and len(o):
             keep, j, d, dup = match(o, r, radius)
             row["matched"] = int(keep.sum())
