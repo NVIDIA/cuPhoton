@@ -44,9 +44,13 @@ def forced_psf_photometry(
     ``flux_error = 1 / sqrt(sum(w P^2))``, with ``w`` the inverse variance on
     usable pixels, ``P`` the PSF and ``D`` the image. A pixel is usable when
     ``mask`` (if given) is true and the image and a positive variance are
-    finite there. ``flux_error`` is calibrated only when ``variance``
-    describes the image noise; correlated noise between pixels makes it too
-    small.
+    finite there.
+
+    ``flux_error`` is the uncertainty conditional on ``positions`` and
+    ``psf_sigma`` being fixed and correct and on ``variance`` describing the
+    image noise. A position or width measured on the same noisy image adds
+    uncertainty that it does not include, and a wrong width biases the flux;
+    correlated noise between pixels also makes it too small.
 
     Computation follows the backend of ``images``: CuPy images return CuPy
     arrays, NumPy images NumPy arrays.

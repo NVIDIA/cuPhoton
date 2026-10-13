@@ -350,7 +350,7 @@ lobe, and a dipole fit's lobe flux does not describe it.
 `forced_psf_photometry` fits the flux of a circular Gaussian point-spread
 function at a fixed position instead, for example the fitted lobe position.
 The model is linear in the flux, so the flux and its standard error are
-exact for the supplied variance:
+exact for the supplied variance, given the position and the PSF:
 
 ```python
 from cuphoton.xfit import forced_psf_photometry
@@ -366,9 +366,16 @@ coordinates as the dipole parameters. `psf_sigma` is the PSF standard
 deviation in pixels, one value or one per stamp. The PSF integrates to one,
 so `flux` is comparable with a Gaussian lobe's `2 pi |amplitude| sigma_x
 sigma_y`. Masked pixels and pixels with a nonfinite image or a nonpositive
-variance do not contribute. Correlated noise between pixels, as in a
-resampled difference image, makes `flux_error` too small unless the variance
-accounts for it. The computation stays on the backend of `images`.
+variance do not contribute.
+
+`flux_error` is conditional: it assumes the position and the PSF width are
+fixed and correct and that the variance describes the noise. A position or a
+width fitted on the same noisy image adds uncertainty that `flux_error` leaves
+out, and a wrong width biases the flux, so take the PSF width from an
+independent measurement, such as the image's stars. Correlated noise between
+pixels, as in a resampled difference image, also makes `flux_error` too small
+unless the variance accounts for it. The computation stays on the backend of
+`images`.
 
 ## Distributed fitting
 
