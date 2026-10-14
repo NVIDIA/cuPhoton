@@ -52,6 +52,13 @@ def _int(lo=None, hi=None):
     return _num(lo, hi, kind=(int,))
 
 
+def _positive_finite_num(v, name):
+    _num()(v, name)
+    if not math.isfinite(v) or v <= 0:
+        raise ValueError(f"{name} must be finite and > 0, got {v}")
+    return v
+
+
 def _bool(v, name):
     if not isinstance(v, bool):
         raise ValueError(f"{name} must be true or false, got {v!r}")
@@ -162,7 +169,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "mode": ("difference", _choice("difference")),
         "compute_dtype": ("float64", _choice("float32", "float64")),
         "solver": ({}, _mapping),
-        "psf_sigma_px": (None, _opt(_num(0.0))),
+        "psf_sigma_px": (None, _opt(_positive_finite_num)),
     },
     "classify": {
         "inference_policy": ("strict", _choice(*INFERENCE_POLICIES)),
