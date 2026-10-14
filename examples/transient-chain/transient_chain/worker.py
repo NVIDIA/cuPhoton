@@ -593,36 +593,36 @@ class ChainWorker:
                 provider,
             )
             cp.get_default_memory_pool().free_all_blocks()
-            wall = time.perf_counter() - t_item
-            summary = {
-                "schema": RESULT_SCHEMA,
-                "item_id": item.item_id,
-                "identity": identity.columns(),
-                "survey": self.adapter.name,
-                "reader_policy": self.io.reader,
-                "candidates": n_cand,
-                "catalog": str(catalog_path),
-                "diagnostics": diag,
-                "timings_sec": {
-                    k: float(timings.get(k, 0.0)) for k in STAGES
-                },
-                "wall_sec": wall,
-                "timings_detail_sec": {
-                    k: float(v) for k, v in timings.items() if k not in STAGES
-                },
-                "transfers": {
-                    **{k: int(v) for k, v in xfer.items()},
-                    "intermediate_files": 0,
-                },
-                "config_sha256": self.config_sha256,
-                "checkpoint_sha256": self.checkpoint_sha256,
-                "inference_policy": self.inference_policy,
-                "gpu": self.gpu_identity,
-                "hostname": socket.gethostname(),
-                "pid": os.getpid(),
-            }
-            summary_path = output_dir / "summary.json"
-            _write_json(summary_path, summary)
+        # Snapshot the completed catalog write; the summary cannot time its
+        # own serialization.
+        wall = time.perf_counter() - t_item
+        summary = {
+            "schema": RESULT_SCHEMA,
+            "item_id": item.item_id,
+            "identity": identity.columns(),
+            "survey": self.adapter.name,
+            "reader_policy": self.io.reader,
+            "candidates": n_cand,
+            "catalog": str(catalog_path),
+            "diagnostics": diag,
+            "timings_sec": {k: float(timings.get(k, 0.0)) for k in STAGES},
+            "wall_sec": wall,
+            "timings_detail_sec": {
+                k: float(v) for k, v in timings.items() if k not in STAGES
+            },
+            "transfers": {
+                **{k: int(v) for k, v in xfer.items()},
+                "intermediate_files": 0,
+            },
+            "config_sha256": self.config_sha256,
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "inference_policy": self.inference_policy,
+            "gpu": self.gpu_identity,
+            "hostname": socket.gethostname(),
+            "pid": os.getpid(),
+        }
+        summary_path = output_dir / "summary.json"
+        _write_json(summary_path, summary)
         self.items_done += 1
         return {
             "run_dir": str(output_dir),
