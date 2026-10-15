@@ -106,10 +106,11 @@ Use `make format` for Python fixes and `make ci-lint` for the complete checks.
 Validation logs should be clean. If warnings are expected, describe them in the
 pull request.
 
-### GPU CI
+### Package and GPU CI
 
-Pull requests first run CPU and package checks on GitHub-hosted runners.
-GPU CI starts when `copy-pr-bot` copies a vetted revision to
+Pull requests first run lint, CPU, and conda checks on GitHub-hosted runners.
+Native wheel builds, installed-wheel/runtime checks, and GPU CI start when
+`copy-pr-bot` copies a vetted revision to
 `pull-request/<number>` in this repository. Ready PRs from verified NVIDIA
 contributors with signed commits sync automatically. Draft PRs need an
 explicit maintainer trigger; each new external contribution revision needs
@@ -123,7 +124,12 @@ not qualify new changes.
 
 The required `ci-required` check combines CPU, package, and GPU results for
 that revision. The initial `ci-pr-checks` result does not satisfy the merge
-gate. Pushes to `main` and `0.1.x` also run the GPU checks.
+gate. Pushes to `main` and `0.1.x` also run the full package and GPU checks.
+
+Installed-wheel and runtime checks cover Python 3.12–3.14 on x86-64 and
+arm64. Each matrix job pulls its pinned Python image once and runs both
+checks in separate fresh containers. Image pulls have bounded retries;
+installation and test failures fail the job without retrying.
 
 The GPU job uses one L40G with Python 3.12 and the locked CUDA 13 dependencies.
 It checks CuPy/PyTorch execution, runs six xFit GPU parity cases, and runs
