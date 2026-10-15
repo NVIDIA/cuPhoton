@@ -96,11 +96,11 @@ jobs:
       matrix:
         python:
           - version: "3.12"
-            image: python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+            image: public.ecr.aws/docker/library/python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
           - version: "3.13"
-            image: python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
+            image: public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
           - version: "3.14"
-            image: python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
+            image: public.ecr.aws/docker/library/python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
         platform:
           - {runner: ubuntu-24.04, arch: x86_64}
           - {runner: ubuntu-24.04-arm, arch: aarch64}
@@ -144,14 +144,14 @@ jobs:
         python:
           - version: "3.12"
             dragon: true
-            image: python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+            image: public.ecr.aws/docker/library/python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
           - version: "3.13"
             dragon: true
-            image: python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
+            image: public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
           # Dragon 0.14.2 has no Python 3.14 wheel or source distribution.
           - version: "3.14"
             dragon: false
-            image: python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
+            image: public.ecr.aws/docker/library/python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
         platform:
           - {runner: ubuntu-24.04, arch: x86_64}
           - {runner: ubuntu-24.04-arm, arch: aarch64}
