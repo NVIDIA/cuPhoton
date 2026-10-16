@@ -564,6 +564,83 @@ def test_device_pipeline_import_keeps_cuda_dependencies_lazy() -> None:
     assert result.returncode == 0
 
 
+@pytest.mark.parametrize("strided", [False, True])
+def test_scientific_evidence_receipt_preserves_packed_bytes(
+    strided: bool,
+) -> None:
+    import cuphoton.xscan.device_pipeline as pipeline
+
+    expected = _scientific_evidence_payload()
+    raw = bytearray(base64.b64decode(expected["packed_base64"]))
+    # Encoding must retain signed zeros, infinities and distinct NaN payloads.
+    bits = (
+        0x0000000000000000,
+        0x8000000000000000,
+        0x7FF0000000000000,
+        0xFFF0000000000000,
+        0x7FF8000000000001,
+        0xFFF8000000000002,
+    )
+    raw[: 8 * len(bits)] = b"".join(
+        value.to_bytes(8, "little") for value in bits
+    )
+    expected_bytes = bytes(raw)
+    values = np.frombuffer(expected_bytes, dtype="<f8").astype(np.float64)
+    backing = np.full(values.size * (2 if strided else 1), 12345.0)
+    host_values = backing[::2] if strided else backing
+    host_values[:] = values
+    before = backing.tobytes()
+    host_values.flags.writeable = False
+
+    layout = tuple(
+        pipeline.DevicePipelineEvidenceSegment(
+            **{**segment, "shape": tuple(segment["shape"])}
+        )
+        for segment in expected["layout"]
+    )
+    metadata = {
+        f"{component}_{name}": value
+        for component in ("xfit", "xpois")
+        for name, value in expected[component].items()
+    }
+    for name in ("status_code_names", "uncertainty_reason_code_names"):
+        metadata[f"xfit_{name}"] = tuple(
+            (int(code), label)
+            for code, label in expected["xfit"][name].items()
+        )
+    metadata["xpois_kernel_shape"] = tuple(expected["xpois"]["kernel_shape"])
+    metadata["xpois_basis_terms"] = tuple(
+        (
+            term["component_index"],
+            term["sigma"],
+            term["poly_u_degree"],
+            term["poly_v_degree"],
+            term["zero_sum"],
+        )
+        for term in expected["xpois"]["basis_terms"]
+    )
+    evidence = pipeline._PackedScientificEvidence(
+        values=None,
+        layout=layout,
+        candidate_count=expected["candidate_count"],
+        parameter_names=tuple(expected["parameter_names"]),
+        feature_names=tuple(expected["feature_names"]),
+        **metadata,
+    )
+    actual = pipeline._scientific_evidence_receipt(
+        evidence, layout=layout, host_values=host_values
+    ).to_payload()
+
+    expected["packed_sha256"] = hashlib.sha256(expected_bytes).hexdigest()
+    expected["packed_base64"] = base64.b64encode(expected_bytes).decode(
+        "ascii"
+    )
+    assert actual == expected
+    assert base64.b64decode(actual["packed_base64"]) == expected_bytes
+    assert backing.tobytes() == before
+    assert not host_values.flags.writeable
+
+
 def test_scientific_evidence_v1_roundtrip_preserves_expected_nans() -> None:
     payload = _scientific_evidence_payload()
 
