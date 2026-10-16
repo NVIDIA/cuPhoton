@@ -210,6 +210,8 @@ jobs:
 
   package:
     name: native distributions
+    # Qualify packages once, on the same vetted source as the GPU checks.
+    if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     uses: ./.github/workflows/wheels.yml
 
   conda:
@@ -217,7 +219,7 @@ jobs:
     uses: ./.github/workflows/conda.yml
 
   ci-required:
-    # PR checks do not satisfy the merge gate before GPU qualification.
+    # PR checks do not satisfy the merge gate before package and GPU qualification.
     name: ${{ github.event_name == 'pull_request' && 'ci-pr-checks' || 'ci-required' }}
     needs: [lint, test-cpu, test-gpu, package, conda]
     if: ${{ always() }}
@@ -229,15 +231,17 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
           GPU_RESULT: ${{ needs.test-gpu.result }}
-          REQUIRE_GPU: ${{ github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton' }}
+          REQUIRE_FULL_CI: ${{ github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton' }}
           PACKAGE_RESULT: ${{ needs.package.result }}
           CONDA_RESULT: ${{ needs.conda.result }}
         run: |
-          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
+          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done
-          if [ "${REQUIRE_GPU}" = true ]; then
+          if [ "${REQUIRE_FULL_CI}" = true ]; then
             test "${GPU_RESULT}" = success || exit 1
+            test "${PACKAGE_RESULT}" = success || exit 1
           else
             test "${GPU_RESULT}" = skipped || exit 1
+            test "${PACKAGE_RESULT}" = skipped || exit 1
           fi
