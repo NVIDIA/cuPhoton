@@ -67,6 +67,10 @@ cutile = [
   "cuda-tile>=1.6,<2; platform_system == 'Linux'",
   "cupy-cuda13x[ctk]>=14,<15; platform_system == 'Linux'",
 ]
+numba-cuda-mlir = [
+  "numba-cuda-mlir[cu13]>=0.5.4,<0.6; platform_system == 'Linux'",
+  "cupy-cuda13x[ctk]>=14,<15; platform_system == 'Linux'",
+]
 mpi = [
   "mpi4py>=4.1.2,<5",
 ]
@@ -163,7 +167,7 @@ show_error_codes = true
 module = [
   "astropy.*", "bokeh.*", "cuda.*", "cupy.*", "cupyx.*", "dragon.*",
   "h5py.*", "kvikio.*", "mpi4py.*", "numba.*", "nvidia.*", "nvtx.*",
-  "pandas.*", "photutils.*", "PIL.*", "pyarrow.*", "pybind11.*",
+  "numba_cuda_mlir.*", "pandas.*", "photutils.*", "PIL.*", "pyarrow.*", "pybind11.*",
   "scipy.*", "setuptools.*", "torch.*",
 ]
 follow_imports = "skip"

@@ -427,6 +427,7 @@ def provenance() -> dict[str, Any]:
         "xfit/api.py",
         "xfit/backend.py",
         "xfit/_native.py",
+        "xfit/_numba_mlir.py",
         "xfit/models.py",
         "xfit/solver.py",
         "xscan/xfit_features.py",
@@ -437,7 +438,13 @@ def provenance() -> dict[str, Any]:
     cupy_packages = importlib.metadata.packages_distributions().get(
         "cupy", []
     )
-    for name in ("cuphoton", "numpy", "torch", *cupy_packages):
+    for name in (
+        "cuphoton",
+        "numpy",
+        "torch",
+        "numba-cuda-mlir",
+        *cupy_packages,
+    ):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
