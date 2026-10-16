@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import numpy as np
 import pytest
 from scipy.optimize import least_squares
@@ -101,6 +103,129 @@ def test_active_batch_is_compacted_after_independent_termination() -> None:
     assert result.status[0] == LMStatus.CONVERGED_G_TOL
     assert np.all(result.status[1:] == LMStatus.MAX_EVALUATIONS)
     assert result.evaluations.tolist() == [1, 3, 3]
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("use_normal_equations", [False, True])
+def test_mixed_batch_matches_independent_rows(
+    dtype, use_normal_equations: bool
+) -> None:
+    # Interleave successful fits, initially invalid rows, an already solved
+    # row, an invalid derivative, a wrong-signed derivative, and a residual
+    # that becomes invalid at every trial. Each callback uses original row
+    # identities even after the active batch shrinks.
+    target = np.asarray([3.0, 1.0, 4.0, 2.0, -1.0, -2.0, 1.0], dtype=dtype)
+    initial = np.asarray([0.0, 0.0, 4.0, 0.0, 0.0, 5.0, 0.0], dtype=dtype)
+    slopes = np.arange(1, 8, dtype=dtype)
+
+    def solve(rows):
+        evaluated = np.zeros(rows.size, dtype=np.int32)
+
+        def residual(x, *, indices):
+            assert np.all(np.diff(indices) > 0)
+            original = rows[indices]
+            evaluated[indices] += 1
+            value = (x - target[original, None]) * slopes[original, None]
+            value[original == 1] = np.nan
+            value[(original == 6) & (x[:, 0] != 0.0)] = np.nan
+            return value
+
+        def jacobian(x, *, indices):
+            del x
+            assert np.all(np.diff(indices) > 0)
+            original = rows[indices]
+            value = slopes[original, None, None].copy()
+            value[original == 3] = np.nan
+            value[original == 4] *= -1.0
+            return value
+
+        def normal_equations(x, residuals, *, indices):
+            jac = jacobian(x, indices=indices)
+            return (
+                np.einsum("knm,km->kn", jac, residuals),
+                np.einsum("knm,kpm->knp", jac, jac),
+            )
+
+        result = batched_levenberg_marquardt(
+            BatchedLeastSquaresProblem(
+                residual,
+                jacobian,
+                normal_equations=(
+                    normal_equations if use_normal_equations else None
+                ),
+            ),
+            initial[rows, None],
+            config=LMConfig(max_evaluations=6),
+        )
+        np.testing.assert_array_equal(result.evaluations, evaluated)
+        return result
+
+    batched = solve(np.arange(initial.size))
+    independent = [solve(np.asarray([row])) for row in range(initial.size)]
+    for field in fields(batched):
+        expected = np.concatenate(
+            [getattr(result, field.name) for result in independent]
+        )
+        np.testing.assert_array_equal(getattr(batched, field.name), expected)
+
+    assert batched.converged.tolist() == [
+        True,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+    ]
+    assert batched.status[[1, 2, 3, 4, 6]].tolist() == [
+        LMStatus.INVALID_RESIDUAL,
+        LMStatus.CONVERGED_G_TOL,
+        LMStatus.INVALID_RESIDUAL,
+        LMStatus.MAX_EVALUATIONS,
+        LMStatus.MAX_EVALUATIONS,
+    ]
+    assert batched.evaluations[[1, 2, 3, 4, 6]].tolist() == [1, 1, 1, 6, 6]
+
+
+def test_nonfinite_step_does_not_displace_other_active_rows(
+    monkeypatch,
+) -> None:
+    original_solve = np.linalg.solve
+
+    def solve_with_one_failed_row(system, rhs):
+        step = original_solve(system, rhs)
+        step[rhs[:, 0, 0] == -2.0] = np.nan
+        return step
+
+    monkeypatch.setattr(np.linalg, "solve", solve_with_one_failed_row)
+
+    def residual(x, *, indices):
+        del indices
+        return x.copy()
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.ones((x.shape[0], 1, 1))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.asarray([[1.0], [2.0], [3.0]]),
+        config=LMConfig(f_tol=1.0, max_evaluations=2),
+    )
+
+    assert result.status.tolist() == [
+        LMStatus.CONVERGED_F_TOL,
+        LMStatus.SINGULAR,
+        LMStatus.CONVERGED_F_TOL,
+    ]
+    assert result.evaluations.tolist() == [2, 1, 2]
+    np.testing.assert_array_equal(
+        result.parameters[:, 0],
+        np.asarray([1.0, 2.0, 3.0]) - np.asarray([1.0, 0.0, 3.0]) / 1.001,
+    )
+    assert result.rank.tolist() == [1, 1, 1]
+    np.testing.assert_array_equal(result.residuals, result.parameters)
+    np.testing.assert_array_equal(result.gradient, result.parameters)
 
 
 def test_finite_difference_jacobian_converges_and_counts_evaluations() -> (
