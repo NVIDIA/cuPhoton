@@ -1,0 +1,278 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: coverage
+
+on:
+  workflow_call:
+    inputs:
+      gpu:
+        description: Include GPU tests and quickstarts
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      gpu:
+        description: Include GPU tests and quickstarts
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CUPHOTON_XDR_BUILD_EXT: "0"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  UV_HTTP_TIMEOUT: "300"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+
+jobs:
+  test-cpu:
+    name: CPU coverage / py3.12
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CUPHOTON_XREP_TORCH_DEVICE: cpu
+      CUDA_VISIBLE_DEVICES: ""
+      PYTHON_VERSION: "3.12"
+    steps:
+      - name: Check GPU runner access
+        if: inputs.gpu && github.repository != 'NVIDIA/cuPhoton'
+        run: |
+          echo "GPU coverage requires the NVIDIA/cuPhoton GPU runner." >&2
+          exit 1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - run: uv python install "${PYTHON_VERSION}"
+      - run: >-
+          uv sync --locked --python "${PYTHON_VERSION}"
+          --extra dev --extra torch --extra viz --extra photometry
+      - run: uv run --no-sync coverage erase
+      - run: make ci-test-cpu PYTEST="coverage run -m pytest"
+      - name: Run synthetic CPU quickstarts
+        run: >-
+          uv run --locked --extra dev --extra torch --extra viz --extra photometry
+          coverage run examples/run_quickstarts.py --profile cpu
+          --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - name: Upload CPU coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-cpu-py3.12-${{ github.sha }}
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  test-gpu:
+    name: GPU coverage / L40G / py3.12
+    # Maintainers must select a trusted revision when enabling GPU coverage.
+    if: inputs.gpu && github.repository == 'NVIDIA/cuPhoton'
+    runs-on: linux-amd64-gpu-l40g-latest-1
+    timeout-minutes: 20
+    concurrency:
+      group: cuphoton-gpu
+      queue: max
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Record source and GPU
+        run: |
+          git rev-parse HEAD
+          nvidia-smi
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - run: uv python install 3.12
+      - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+      - name: Require working CUDA 13 and GPU kernels
+        run: |
+          uv run --no-sync python - <<'PY'
+          import cupy as cp
+          import torch
+
+          cp.show_config()
+          assert cp.cuda.runtime.getDeviceCount() >= 1
+          assert 13000 <= cp.cuda.runtime.runtimeGetVersion() < 14000
+          values = cp.arange(16, dtype=cp.float64)
+          assert float(cp.sum(values * values).item()) == 1240.0
+          assert torch.cuda.is_available()
+          tensor = torch.from_dlpack(values)
+          assert tensor.is_cuda
+          assert float((tensor * tensor).sum().item()) == 1240.0
+          print("CuPy and PyTorch CUDA kernels and DLPack passed")
+          PY
+      - run: uv run --no-sync coverage erase
+      - name: Run xFit GPU parity tests
+        run: >-
+          uv run --no-sync coverage run -m pytest -q -rs
+          --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
+          tests/xfit/test_models.py::test_cupy_fit_matches_numpy_when_cuda_is_available
+          tests/xfit/test_models.py::test_cupy_finite_difference_theta_fix_matches_numpy
+          tests/xfit/test_models.py::test_fit_dipoles_device_matches_portable_result_without_bulk_d2h
+          tests/xfit/test_solver.py::test_cupy_tall_jacobian_diagnostics_match_numpy
+      - name: Require all selected tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert len(cases) == 6, len(cases)
+          assert not report.findall(".//skipped"), "GPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print("All 6 selected tests passed without skips")
+          PY
+      - name: Run synthetic GPU quickstarts
+        run: >-
+          uv run --no-sync coverage run examples/run_quickstarts.py
+          --require-gpu --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - name: Upload GPU coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-gpu-l40g-py3.12-${{ github.sha }}
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-l40g-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/xfit-gpu.xml
+            ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  test-xdr:
+    name: Native xDR coverage / L40G / py3.12
+    # Native coverage needs a GPU and runs only on vetted revisions.
+    if: >-
+      ${{ github.repository == 'NVIDIA/cuPhoton' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' && inputs.gpu)) }}
+    runs-on: linux-amd64-gpu-l40g-latest-1
+    timeout-minutes: 30
+    concurrency:
+      group: cuphoton-gpu
+      queue: max
+    env:
+      CC: gcc
+      CXX: g++
+      GCOV: gcov
+      KVIKIO_COMPAT_MODE: "ON"
+      CUDA_HOME: ""
+      CUDA_PATH: ""
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Record source and GPU
+        run: |
+          git rev-parse HEAD
+          nvidia-smi
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config zlib1g-dev
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - run: uv python install 3.12
+      - run: uv sync --locked --python 3.12 --extra dev --extra io
+      - name: Build reentrant CFITSIO
+        env:
+          CUPHOTON_XDR_CFITSIO_ROOT: ${{ runner.temp }}/cfitsio
+        run: bash scripts/wheels/prepare_cfitsio.sh
+      - name: Measure native xDR coverage
+        env:
+          CUPHOTON_XDR_CFITSIO_ROOT: ${{ runner.temp }}/cfitsio
+        run: make test-xdr-coverage
+      - name: Upload native xDR coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xdr-coverage-${{ github.sha }}
+          path: |
+            build/xdr-coverage/coverage-native.xml
+            build/xdr-coverage/coverage-native.json
+            build/xdr-coverage/junit.xml
+            build/xdr-coverage/coverage-revision.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  coverage:
+    name: Coverage report
+    needs: [test-cpu, test-gpu, test-xdr]
+    if: >-
+      ${{ !cancelled() && needs.test-cpu.result == 'success' &&
+          (needs.test-gpu.result == 'success' ||
+           (needs.test-gpu.result == 'skipped' && !inputs.gpu)) &&
+          (needs.test-xdr.result == 'success' ||
+           (needs.test-xdr.result == 'skipped' &&
+            !(github.repository == 'NVIDIA/cuPhoton' &&
+              (github.event_name == 'push' ||
+               (github.event_name == 'workflow_dispatch' && inputs.gpu))))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --locked --extra dev --python 3.12
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*-${{ github.sha }}
+          path: coverage-data
+          merge-multiple: true
+      - name: Download native xDR coverage
+        if: needs.test-xdr.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xdr-coverage-${{ github.sha }}
+          path: native-coverage
+      - name: Combine coverage and export Cobertura XML
+        run: |
+          uv run --no-sync coverage combine coverage-data
+          uv run --no-sync coverage xml
+          uv run --no-sync coverage report
+          git rev-parse HEAD > coverage-revision.txt
+          echo "Python GPU coverage requested: ${{ inputs.gpu }}" > coverage-profile.txt
+          echo "Native xDR coverage: ${{ needs.test-xdr.result }}" >> coverage-profile.txt
+      - name: Upload coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            coverage.xml
+            coverage-revision.txt
+            coverage-profile.txt
+            .coverage
+            native-coverage/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
