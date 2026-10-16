@@ -14,6 +14,7 @@ import pickle
 import subprocess
 import sys
 import weakref
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1367,6 +1368,7 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
             "model": "gaussian",
             "mode": "difference",
             "config": context.solver_config,
+            **({"fusion": True} if context.config.xfit.fusion else {}),
         }
         stage_calls.append("xfit")
         return _fake_xfit_result(cp, 2)
@@ -1759,6 +1761,119 @@ def test_xfit_config_rejects_values_the_solver_cannot_use() -> None:
         DeviceXFitPipelineConfig(damping_decrease=1.0)
     with pytest.raises(ValueError, match="finite_difference_step"):
         DeviceXFitPipelineConfig(finite_difference_step=0.0)
+
+
+def test_xfit_fusion_configuration_roundtrips_and_defaults_old_payloads(
+    tmp_path: Path,
+) -> None:
+    checkpoint_dir = tmp_path / "checkpoint"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "checkpoint.pt").write_bytes(b"checkpoint")
+    ordinary = _config(checkpoint_dir)
+    fused = replace(ordinary, xfit=replace(ordinary.xfit, fusion=True))
+    assert ordinary.xfit.fusion is False
+    assert fused.configuration_sha256 != ordinary.configuration_sha256
+    assert DevicePipelineConfig.from_payload(fused.to_payload()) == fused
+
+    legacy = ordinary.to_payload()
+    assert "fusion" not in legacy["xfit"]
+    restored = DevicePipelineConfig.from_payload(legacy)
+    assert restored == ordinary
+    assert restored.xfit.fusion is False
+
+
+def test_xfit_fusion_validation_and_solver_settings_are_independent() -> None:
+    from cuphoton.xfit import LMConfig
+
+    with pytest.raises(TypeError, match="fusion must be boolean"):
+        DeviceXFitPipelineConfig(fusion=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="analytic derivatives"):
+        DeviceXFitPipelineConfig(fusion=True, use_finite_difference=True)
+    config = DeviceXFitPipelineConfig(fusion=True, max_evaluations=9)
+    assert "fusion" not in config.solver_payload()
+    assert LMConfig(**config.solver_payload()).max_evaluations == 9
+
+
+@pytest.mark.parametrize(
+    "backend,fusion", [("cupy", False), ("cupy", True), ("native", False)]
+)
+def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    fusion: bool,
+) -> None:
+    import cuphoton.xscan.device_pipeline as pipeline
+    from cuphoton.xfit import LMConfig
+
+    checkpoint_dir = tmp_path / "checkpoint"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "checkpoint.pt").write_bytes(b"checkpoint")
+    ordinary = _config(checkpoint_dir)
+    config = replace(
+        ordinary, xfit=replace(ordinary.xfit, backend=backend, fusion=fusion)
+    )
+    path = tmp_path / "image.npy"
+    np.save(path, np.ones((31, 31), dtype=np.float64))
+    item = _item(path, path)
+
+    class Stream(nullcontext):
+        def synchronize(self) -> None:
+            pass
+
+    cp = SimpleNamespace(
+        asarray=np.asarray,
+        empty=np.empty,
+        float32=np.float32,
+        float64=np.float64,
+        cuda=SimpleNamespace(runtime=SimpleNamespace(getDevice=lambda: 0)),
+    )
+    context = DeviceWorkerContext(
+        config=config,
+        cp=cp,
+        torch=SimpleNamespace(cuda=SimpleNamespace(current_device=lambda: 0)),
+        model=None,
+        performance=None,
+        feature_variance_present=False,
+        device="cuda:0",
+        producer_stream=Stream(),
+        consumer_stream=Stream(),
+        solver_config=LMConfig(**config.xfit.solver_payload()),
+        load_seconds=0.0,
+    )
+    calls = []
+
+    def fit(images: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        np.testing.assert_array_equal(images, np.zeros((2, 11, 11)))
+        raise RuntimeError("reached xFit callback")
+
+    functions = _PipelineFunctions(
+        gaussian_basis_component=lambda **values: values,
+        solve_constant_kernel_device=lambda reference, target, *_a, **_k: (
+            SimpleNamespace(residual=target - reference)
+        ),
+        fit_dipoles_device=fit,
+        transform_xfit_result_features_device=lambda *_a, **_k: pytest.fail(
+            "unexpected feature stage"
+        ),
+        cupy_to_torch=lambda *_a, **_k: pytest.fail("unexpected bridge"),
+        predict_tensors=lambda *_a, **_k: pytest.fail("unexpected inference"),
+    )
+    monkeypatch.setattr(
+        pipeline, "_load_pipeline_functions", lambda: functions
+    )
+    with pytest.raises(RuntimeError, match="reached xFit callback"):
+        run_device_pipeline_item(item, context)
+    assert calls == [
+        {
+            "model": "gaussian",
+            "mode": "difference",
+            "config": context.solver_config,
+            **({"backend": backend} if backend != "cupy" else {}),
+            **({"fusion": True} if fusion else {}),
+        }
+    ]
 
 
 def test_loaded_model_contract_matches_checkpoint_contract() -> None:
