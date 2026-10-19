@@ -191,6 +191,9 @@ class DeviceReprojectionResult:
         Resolved execution backend and interpolation kernel.
     metadata
         Additional workflow metadata.
+    variance
+        Optional backend-native ``(height, width)`` float64 diagonal variance,
+        present only when a source variance was supplied.
     """
 
     image: Any
@@ -199,6 +202,7 @@ class DeviceReprojectionResult:
     backend: str
     interpolation: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    variance: Any | None = None
 
 
 @dataclass(slots=True)
