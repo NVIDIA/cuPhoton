@@ -11,8 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from .geometry import MappingFn
-from .interpolation import _lanczos_weight
+from .geometry import MappingFn, ReprojectionSpec
+from .interpolation import _lanczos_weight, lanczos_offsets
 from .mapping import PreparedReprojection
 
 __all__ = ["ResamplingWeights", "resampling_weights_at"]
@@ -29,8 +29,10 @@ class ResamplingWeights:
         along source x. Entry ``[n, j, i]`` multiplies the source pixel in
         row ``floor(source[n, 1]) + offsets[j]`` and column
         ``floor(source[n, 0]) + offsets[i]``.
-        All-zero rows mark positions the reprojection filled instead of
-        resampling (no valid source tap).
+        All-zero rows mark positions the reprojection fills instead of
+        resampling: the source coordinate is not finite or lies outside the
+        source array (known only when ``source_shape`` or a prepared mapping
+        is given).
     phase
         ``(N, 2)`` sub-pixel fractions ``(x, y)`` of the source coordinate,
         ``source - floor(source)``, NaN where the mapping is not finite.
@@ -39,6 +41,10 @@ class ResamplingWeights:
         within ``translation_tolerance``: the phase is the same at every pixel
         of a window around the position and the weights describe the whole
         window. False where the mapping rotates or scales the grid.
+    jacobian
+        ``(N, 2, 2)`` local Jacobian ``d(source) / d(destination)`` of the
+        mapping; ``[n, i, j]`` is the derivative of source axis ``i`` (x then
+        y) along destination axis ``j``.
     interpolation
         Interpolation kernel name, ``"lanczos3"`` or ``"bilinear"``.
     offsets
@@ -55,6 +61,7 @@ class ResamplingWeights:
     weights: Any
     phase: Any
     is_translation: Any
+    jacobian: Any
     interpolation: str
     offsets: Any
     source: Any
@@ -62,15 +69,16 @@ class ResamplingWeights:
 
 
 def resampling_weights_at(
-    mapping: MappingFn | PreparedReprojection,
+    mapping: ReprojectionSpec | PreparedReprojection | MappingFn,
     x: Any,
     y: Any,
     *,
-    interpolation: str,
-    lanczos_a: int = 3,
-    two_a_footprint: bool = True,
-    source_origin: tuple[int, int] = (0, 0),
+    interpolation: str | None = None,
+    lanczos_a: int | None = None,
+    two_a_footprint: bool | None = None,
+    source_origin: tuple[int, int] | None = None,
     source_shape: tuple[int, int] | None = None,
+    prepared: PreparedReprojection | None = None,
     translation_tolerance: float = 1e-3,
     seam_tolerance: float = 0.5,
 ) -> ResamplingWeights:
@@ -86,29 +94,44 @@ def resampling_weights_at(
     Parameters
     ----------
     mapping
-        Either the destination-to-source callable of a ``ReprojectionSpec``,
-        or the ``PreparedReprojection`` used for the reprojection. With a
-        prepared mapping, ``x`` and ``y`` are pixels of its output grid.
+        One of three forms. A ``ReprojectionSpec``: its mapping is evaluated
+        at the positions and ``interpolation``, ``lanczos_a``,
+        ``two_a_footprint`` and ``source_origin`` are read from it (passing
+        them as well is an error). A ``PreparedReprojection``: the dense
+        source coordinates the reprojection used, read at the positions. A
+        destination-to-source callable, as ``ReprojectionSpec.mapping``.
+        In every form, ``x`` and ``y`` are pixels of the output grid.
     x, y
-        Destination positions, NumPy or CuPy arrays of the same shape. They
-        are rounded to the nearest destination pixel.
+        Destination positions, NumPy or CuPy arrays of the same shape, all
+        finite. They are rounded to the nearest destination pixel with
+        round-half-to-even, as ``numpy.rint`` does.
     interpolation
-        ``"lanczos3"`` or ``"bilinear"``.
+        ``"lanczos3"`` or ``"bilinear"``. Required unless ``mapping`` is a
+        ``ReprojectionSpec``.
     lanczos_a, two_a_footprint
         Lanczos kernel radius and footprint convention, as in
-        ``ReprojectionSpec``.
+        ``ReprojectionSpec``; ``3`` and ``True`` by default.
     source_origin
         Zero-based ``(x, y)`` origin subtracted from mapped source pixels, as
-        in ``ReprojectionSpec``. Ignored for a prepared mapping, whose
-        coordinates are already local.
+        in ``ReprojectionSpec``; ``(0, 0)`` by default. Ignored for a
+        prepared mapping, whose coordinates are already local.
     source_shape
         Optional source ``(height, width)``. When given, taps outside the
         source get zero weight and the rest are renormalized, as the
-        reprojection does at the source edges. Without it the weights are
-        the interior weights.
+        reprojection does at the source edges, and positions whose source
+        coordinate falls outside ``[0, width - 1] x [0, height - 1]`` get
+        all-zero weights, as the reprojection fills them. A prepared
+        mapping applies the second rule through its ``valid`` array even
+        without ``source_shape``. Without either, the weights are the
+        interior weights.
+    prepared
+        With a ``ReprojectionSpec``, the ``PreparedReprojection`` built from
+        it: the source coordinates are then read from it instead of
+        evaluating the mapping. Not accepted with the other forms.
     translation_tolerance
         Largest ``max|J - I|`` of the local Jacobian ``J`` still reported as
-        a translation.
+        a translation. With the default ``1e-3`` the phase drifts by less
+        than 0.03 source pixels across a 51 pixel window.
     seam_tolerance
         Where the forward and backward one-pixel differences of the mapping
         disagree by more than this many source pixels, the Jacobian uses the
@@ -118,36 +141,80 @@ def resampling_weights_at(
     Returns
     -------
     ResamplingWeights
-        Weights, phase, translation flag, and tap layout per position, in
-        the array namespace of ``x``.
+        Weights, phase, Jacobian, translation flag, and tap layout per
+        position, in the array namespace of the prepared mapping when one is
+        given and of ``x`` otherwise.
+
+    Notes
+    -----
+    A prepared mapping gives exactly the coordinates the reprojection used.
+    A spec or callable mapping is evaluated at the destination pixels, which
+    matches the reprojection exactly only when the spec's
+    ``mapping_grid_step`` is 1 or the mapping is affine; with the default
+    coarse grid and a non-affine mapping the reprojection interpolates the
+    mapping bilinearly between grid nodes, and the phase differs. Pass the
+    prepared mapping in that case.
     """
 
+    spec = mapping if isinstance(mapping, ReprojectionSpec) else None
+    if spec is not None:
+        if any(
+            option is not None
+            for option in (
+                interpolation,
+                lanczos_a,
+                two_a_footprint,
+                source_origin,
+            )
+        ):
+            raise ValueError(
+                "interpolation, lanczos_a, two_a_footprint and source_origin "
+                "come from the ReprojectionSpec; do not pass them as well"
+            )
+        interpolation = spec.interpolation
+        lanczos_a = spec.lanczos_a
+        two_a_footprint = spec.two_a_footprint
+        source_origin = spec.source_origin
+        mapping = prepared if prepared is not None else spec.mapping
+    elif prepared is not None:
+        raise ValueError("prepared is accepted only with a ReprojectionSpec")
     if interpolation not in {"bilinear", "lanczos3"}:
         raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
-    xp = _array_module(x)
-    x_arr = xp.asarray(x, dtype=xp.float64).ravel()
-    y_arr = xp.asarray(y, dtype=xp.float64).ravel()
+    lanczos_a = 3 if lanczos_a is None else lanczos_a
+    two_a_footprint = True if two_a_footprint is None else two_a_footprint
+    source_origin = (0, 0) if source_origin is None else source_origin
+
+    if isinstance(mapping, PreparedReprojection):
+        xp = _array_module(mapping.x_local)
+    elif callable(mapping):
+        xp = _array_module(x)
+    else:
+        raise TypeError(
+            "mapping must be a ReprojectionSpec, a PreparedReprojection, "
+            "or callable"
+        )
+    x_arr = _as_namespace(xp, x).ravel()
+    y_arr = _as_namespace(xp, y).ravel()
     if x_arr.shape != y_arr.shape:
         raise ValueError("x and y must have the same shape")
+    if not bool(xp.isfinite(x_arr).all() and xp.isfinite(y_arr).all()):
+        raise ValueError("x and y must be finite")
     destination = xp.stack([xp.rint(x_arr), xp.rint(y_arr)], axis=1)
 
     if isinstance(mapping, PreparedReprojection):
-        source, jacobian = _local_mapping_prepared(
+        source, jacobian, inside = _local_mapping_prepared(
             mapping, destination, xp, seam_tolerance
         )
-    elif callable(mapping):
+    else:
         source, jacobian = _local_mapping_callable(
             mapping, destination, xp, source_origin, seam_tolerance
         )
-    else:
-        raise TypeError("mapping must be callable or a PreparedReprojection")
+        inside = None
 
     if interpolation == "bilinear":
         offsets = np.array([0, 1])
     else:
-        start = -(lanczos_a - 1) if two_a_footprint else -lanczos_a
-        window = 2 * lanczos_a if two_a_footprint else 2 * lanczos_a + 1
-        offsets = np.arange(start, start + window)
+        offsets = lanczos_offsets(lanczos_a, two_a_footprint)
 
     finite = xp.isfinite(source).all(axis=1)
     safe = xp.where(finite[:, None], source, 0.0)
@@ -163,6 +230,11 @@ def resampling_weights_at(
     weights = weights_y[:, :, None] * weights_x[:, None, :]
     norm = weights.sum(axis=(1, 2))
     valid = finite & (norm > 1e-12)
+    if inside is not None:
+        valid = valid & inside
+    if source_shape is not None:
+        extent = xp.asarray(np.array(limits, dtype=np.float64) - 1.0)
+        valid = valid & ((safe >= 0.0) & (safe <= extent)).all(axis=1)
     weights = xp.where(
         valid[:, None, None],
         weights / xp.where(valid, norm, 1.0)[:, None, None],
@@ -177,6 +249,7 @@ def resampling_weights_at(
         weights=weights,
         phase=phase,
         is_translation=is_translation,
+        jacobian=jacobian,
         interpolation=interpolation,
         offsets=xp.asarray(offsets),
         source=source,
@@ -230,7 +303,7 @@ def _local_mapping_callable(mapping, destination, xp, source_origin, seam):
 
 
 def _local_mapping_prepared(prepared, destination, xp, seam):
-    """Source coordinates and Jacobian of a prepared mapping at pixels."""
+    """Source coordinates, Jacobian, and validity of a prepared mapping."""
 
     height, width = prepared.output_shape
     column = destination[:, 0].astype(xp.int64)
@@ -258,7 +331,8 @@ def _local_mapping_prepared(prepared, destination, xp, seam):
         ],
         axis=-1,
     )
-    return center, jacobian
+    valid = xp.asarray(prepared.valid)[row, column]
+    return center, jacobian, valid
 
 
 def _derivative(center, plus, minus, seam):
@@ -291,6 +365,14 @@ def _array_module(array):
 
         return cupy
     return np
+
+
+def _as_namespace(xp, array):
+    """Return ``array`` as a float64 array of the ``xp`` namespace."""
+
+    if xp is np:
+        return _to_numpy(array)
+    return xp.asarray(array, dtype=xp.float64)
 
 
 def _to_numpy(array) -> np.ndarray:

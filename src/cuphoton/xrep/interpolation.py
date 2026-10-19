@@ -9,6 +9,19 @@ from __future__ import annotations
 import numpy as np
 
 
+def lanczos_offsets(a: int, two_a_footprint: bool = True) -> np.ndarray:
+    """Return the integer tap offsets of a Lanczos kernel of radius ``a``.
+
+    The offsets are relative to the floor of the sample coordinate: the
+    two-radius footprint spans ``-(a - 1) .. a`` (``2a`` taps) and the
+    symmetric footprint spans ``-a .. a`` (``2a + 1`` taps).
+    """
+
+    start = -(a - 1) if two_a_footprint else -a
+    window = 2 * a if two_a_footprint else 2 * a + 1
+    return np.arange(start, start + window)
+
+
 def sample_bilinear_array(
     source: np.ndarray,
     x: np.ndarray,
