@@ -441,19 +441,34 @@ added = kernel_fit_variance(
 The plain form is `(A^T W A)^-1` over the fit pixels, `A` the design matrix
 of the reference convolved with each basis kernel plus the background terms
 and `W = 1 / target_variance`, the weights the fit used; no reduced
-chi-square scaling is applied. The resampled reference also carries noise,
-which the residual contains but the fit's weights omit. Passing
-`reference_source_variance` (the reference variance divided by the
-resampling gain `sum(resampling_weights**2)`) together with one `(k, k)`
-stamp of `resampling_weights` selects the sandwich form
-`H^-1 (H + M) H^-1`, which adds that noise through the fit. The sandwich
-uses one resampling stamp for every fit pixel, so on a grid that rotates or
-scales against the reference's it is an approximation. The result records
-`form` and `covariance_represented: True`. The added variance at a position
-is `gamma^T C gamma`, `gamma` the residual's response to each coefficient,
-and `NaN` where a stamp and its kernel footprint leave the image. Host and
-device fit results are accepted; the computation follows the array
-namespace of `reference` (NumPy or CuPy).
+chi-square scaling is applied. `H = A^T W A` is accumulated in chunks as in
+the solve, so the plain form holds no full-size array beyond its inputs.
+
+The resampled reference also carries noise, which the residual contains but
+the fit's weights omit. Passing `reference_variance` (the resampled
+reference variance in squared reference units, the plane
+`standardize_constant_kernel_residual` takes; the division by the
+resampling gain `sum(resampling_weights**2)` happens inside) together with
+one `(k, k)` stamp of `resampling_weights` selects the sandwich form
+`H^-1 (H + M) H^-1`, `M = U diag(V) U^T` with row `j` of `U` the footprint
+of the weighted design column `W A_j` on the reference's source pixels
+through the kernel and the resampling weights, and `V` the source-pixel
+variance. The stamp is the weights as applied to the source neighbors,
+`resampled[p] = sum_q weights[q] source[p + q - c]`; a stamp symmetric
+under point reflection gives the same result in either orientation. The
+sandwich uses one resampling stamp for every fit pixel, so on a grid that
+rotates or scales against the reference's it is an approximation, and it
+holds `U` as one full-size image per coefficient in memory.
+
+The result records `form` and `covariance_represented: True`. The added
+variance at a position is `gamma^T C gamma`, `gamma` the residual's
+response to each coefficient, and `NaN` where a stamp and its kernel
+footprint leave the image. Host and device fit results are accepted; the
+computation runs in CuPy when the fit's arrays or `reference` are CuPy
+arrays and in NumPy otherwise. `window_stamps(plane, positions, size)` cuts
+the `(N, s, s)` windows of any plane around `(x, y)` positions, `NaN` (or
+`fill`) outside the image; it is the window convention of
+`kernel_fit_variance`.
 
 ## Distributed image-pair batches
 
