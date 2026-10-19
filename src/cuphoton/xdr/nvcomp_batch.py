@@ -901,6 +901,10 @@ def gpu_gzip_decompress_batch(
     Header checks do not validate the compressed body or its checksum.
     The Python fallback uses the current CuPy stream. Callers using an
     externally owned stream must keep its underlying CUDA stream alive.
+    The native helper waits for its CUDA stream to check per-tile decode
+    status and sizes before returning. The GIL is released during that wait
+    so I/O prefetch threads can progress. nvCOMP requires valid compressed
+    input; completion checks do not validate an untrusted compressed stream.
     """
     if decompression_backend not in ("auto", "cuda"):
         raise ValueError("decompression_backend must be 'auto' or 'cuda'")
@@ -1093,7 +1097,21 @@ def gpu_gzip_decompress_batch(
             for i in range(n)
         ]
         codec = _get_codec()
-        codec.decode(src_arrays, out=out_arrays)
+        # nvCOMP 5.2 returns views sized to the decoded bytes even with out=.
+        decoded = codec.decode(src_arrays, out=out_arrays)
+        if len(decoded) != n:
+            raise RuntimeError(
+                "nvcomp returned different decoded tile coverage"
+            )
+        for index, (array, expected) in enumerate(
+            zip(decoded, size_array, strict=True)
+        ):
+            actual = array.buffer_size
+            if actual != expected:
+                raise RuntimeError(
+                    f"nvcomp decoded size differs for tile {index}: "
+                    f"expected {expected}, got {actual}"
+                )
         return d_out, out_offsets
     except Exception:
         # A failed decode cannot return an output to retain its input owners.

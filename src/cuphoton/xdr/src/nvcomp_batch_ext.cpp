@@ -7,8 +7,8 @@
 // per-tile Python `nvcomp.as_array` loop.
 //
 // Takes device pointers + offset/length arrays and calls
-// the corresponding nvCOMP batched API directly. The decode launch releases the
-// GIL so a Python prefetch thread can run during decode.
+// the corresponding nvCOMP batched API directly. Decode completion is checked
+// with the GIL released so a Python prefetch thread can progress meanwhile.
 
 #include "nvcomp_batch_ext.h"
 
@@ -74,7 +74,8 @@ py::object batch_decompress_impl(
 //   decompression_backend : string
 //       Validated as "auto" or "cuda". Raw DEFLATE always uses CUDA.
 //
-// Raises on nvCOMP / CUDA launch failure. Returns None; execution is asynchronous.
+// Waits for the decode stream and checks each tile's status and actual size.
+// Raises on nvcomp / CUDA failure or a decoded-size mismatch. Returns None.
 void batch_deflate_decompress(
     std::uintptr_t d_concat_ptr,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
@@ -199,6 +200,8 @@ py::object batch_decompress_impl(
     std::vector<void*> h_out_ptrs(n);
     std::vector<std::size_t> h_comp_sizes(n);
     std::vector<std::size_t> h_out_sizes(n);
+    std::vector<nvcompStatus_t> h_statuses(n);
+    std::vector<std::size_t> h_actual_sizes(n);
 
     auto ro = rel_offsets.unchecked<1>();
     auto ln = lengths.unchecked<1>();
@@ -368,8 +371,10 @@ py::object batch_decompress_impl(
                 stream),
             "copy out_sizes");
 
-        // Release the GIL around the nvcomp call so Python threads (prefetcher)
-        // can progress while the async kernel launches + returns.
+        // The API return reports submission, not per-tile success. Wait for
+        // this stream before accepting pixels, while allowing Python I/O
+        // prefetch threads to progress. nvCOMP still requires valid input;
+        // these completion checks are not validation of compressed payloads.
         {
             py::gil_scoped_release release;
             // Pass actual-size and status buffers together: nvCOMP 5.2
@@ -402,6 +407,39 @@ py::object batch_decompress_impl(
                           stream),
                 gzip_wrapped ? "batched gzip decompression"
                              : "batched deflate decompression");
+            check_cuda(
+                cudaMemcpyAsync(
+                    h_statuses.data(),
+                    d_statuses,
+                    n * sizeof(nvcompStatus_t),
+                    cudaMemcpyDeviceToHost,
+                    stream),
+                "copy decode statuses");
+            check_cuda(
+                cudaMemcpyAsync(
+                    h_actual_sizes.data(),
+                    d_actual_sizes,
+                    n * sizeof(std::size_t),
+                    cudaMemcpyDeviceToHost,
+                    stream),
+                "copy actual decoded sizes");
+            check_cuda(
+                cudaStreamSynchronize(stream), "wait for decode completion");
+            for (std::size_t i = 0; i < n; ++i) {
+                if (h_statuses[i] != nvcompSuccess) {
+                    throw std::runtime_error(
+                        "nvcomp decompression failed for tile "
+                        + std::to_string(i) + ": status="
+                        + std::to_string(static_cast<int>(h_statuses[i])));
+                }
+                if (h_actual_sizes[i] != h_out_sizes[i]) {
+                    throw std::runtime_error(
+                        "nvcomp decoded size differs for tile "
+                        + std::to_string(i) + ": expected "
+                        + std::to_string(h_out_sizes[i]) + ", got "
+                        + std::to_string(h_actual_sizes[i]));
+                }
+            }
         }
 
         if (use_native_pool) {
@@ -415,16 +453,19 @@ py::object batch_decompress_impl(
             return owner;
         }
     } catch (...) {
-        if (use_native_pool) {
+        {
+            // Keep host copy destinations and pooled owners alive until
+            // outstanding stream work has finished, including copy failures.
+            py::gil_scoped_release release;
             cudaStreamSynchronize(stream);
-        } else {
+        }
+        if (!use_native_pool) {
             release_async_scratch();
         }
         throw;
     }
 
-    // Stream-ordered frees — nvcomp consumes its inputs asynchronously and
-    // these frees will be sequenced after the kernel completes.
+    // Decode has completed; preserve stream ordering for scratch releases.
     release_async_scratch();
     return py::none();
 }
@@ -452,6 +493,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("stream_ptr") = 0,
         py::arg("decompression_backend") = "auto",
         "Batched DEFLATE decompress across N tiles packed in one device buffer.\n"
+        "Waits for decode completion and validates per-tile status and size.\n"
         "Caller must have already stripped the RFC-1952 gzip wrapper from each\n"
         "tile (advance rel_offsets past the header, shorten lengths by header+8).\n"
         "decompression_backend accepts auto/cuda; raw DEFLATE always uses CUDA.");
@@ -467,7 +509,8 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("stream_ptr") = 0,
         py::arg("decompression_backend") = "auto",
         "Batched DEFLATE decompress using native pooled scratch buffers.\n"
-        "Returns an owner capsule that must stay alive until stream work completes.\n"
+        "Waits for decode completion and validates per-tile status and size.\n"
+        "Returns an owner capsule for pooled scratch buffers.\n"
         "decompression_backend accepts auto/cuda; raw DEFLATE always uses CUDA.");
     m.def(
         "batch_gzip_decompress",
@@ -482,7 +525,8 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         py::arg("use_native_pool") = false,
         py::arg("decompression_backend") = "auto",
         "Batched Gzip decompress including RFC-1952 headers and trailers.\n"
-        "Pooled calls return an owner capsule retained until stream completion.\n"
+        "Waits for decode completion and validates per-tile status and size.\n"
+        "Pooled calls return an owner capsule for scratch buffers.\n"
         "decompression_backend=auto permits compatible hardware with CUDA fallback;\n"
         "cuda selects CUDA explicitly.");
 }
