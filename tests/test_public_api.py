@@ -30,6 +30,7 @@ from cuphoton.xpois.statistics import (
 from cuphoton.xray.linear_prediction import LinearPredictionResult
 from cuphoton.xrep.geometry import MaskedReprojectionResult, ReprojectionSpec
 from cuphoton.xrep.mapping import PreparedReprojection
+from cuphoton.xrep.resampling import ResamplingWeights
 from cuphoton.xscan.dataset import StampDataset
 
 
@@ -38,6 +39,8 @@ def test_curated_root_exports_are_real_objects() -> None:
     assert xrep.MaskedReprojectionResult is MaskedReprojectionResult
     assert callable(xrep.reproject_masked_array)
     assert callable(xrep.build_stack_spec_from_fits)
+    assert xrep.ResamplingWeights is ResamplingWeights
+    assert callable(xrep.resampling_weights_at)
     assert callable(xpois.inspect_hsc_data_tree)
     assert callable(xpois.load_image_array)
     assert callable(xpois.solve_spatial_als)
