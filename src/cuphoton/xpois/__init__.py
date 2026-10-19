@@ -6,6 +6,13 @@
 
 from cuphoton import __version__
 
+from .correlation import (
+    CorrelationFactorResult,
+    correlation_factor,
+    empirical_correlation_factor,
+    psf_weights,
+    resampling_variance_factor,
+)
 from .data import inspect_hsc_data_tree, load_image_array
 from .kernel_uncertainty import (
     KernelFitCovariance,
@@ -56,6 +63,7 @@ __all__ = [
     "BasisTerm",
     "ConstantKernelFitResult",
     "ConstantKernelNoiseResult",
+    "CorrelationFactorResult",
     "DeviceConstantKernelFitResult",
     "GaussianBasisComponent",
     "KernelFitCovariance",
@@ -67,6 +75,8 @@ __all__ = [
     "background_design",
     "build_compact_source_stamp_mask",
     "build_gaussian_polynomial_basis",
+    "correlation_factor",
+    "empirical_correlation_factor",
     "evaluate_background_model",
     "extract_centered_stamp",
     "inspect_hsc_data_tree",
@@ -74,6 +84,8 @@ __all__ = [
     "kernel_fit_variance",
     "load_image_array",
     "make_stamp_mask",
+    "psf_weights",
+    "resampling_variance_factor",
     "resolve_backend",
     "simple_difference_stamp",
     "solve_constant_kernel",
