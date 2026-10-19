@@ -641,8 +641,10 @@ __device__ __forceinline__ double xrep_pair_lanczos_w(double t, int a) {
 }
 
 // Normalized Lanczos sample of src and squared-weight sample of var with
-// one set of weights. The weight-sum fallback keeps the device image
-// behavior (nearest source value) and the host variance behavior (fill).
+// one set of weights. The weight-sum fallback is defensive: the callers
+// only reach this function at valid positions, where the central tap is in
+// bounds and the weight sum is positive. It keeps the device image behavior
+// (nearest source value) and the host variance behavior (fill).
 __device__ __forceinline__ void xrep_lanczos_pair(
     const double* __restrict__ src,
     const double* __restrict__ var,
@@ -664,11 +666,12 @@ __device__ __forceinline__ void xrep_lanczos_pair(
     int start = two_a ? -(a - 1) : -a;
     int win = two_a ? 2 * a : 2 * a + 1;
 
-    const int MAXWIN = 16;
+    const int MAXWIN = 16;  // kept in step with _MAX_LANCZOS_WINDOW
     double wx[MAXWIN];
     double wy[MAXWIN];
     double sum_wx = 0.0;
     double sum_wy = 0.0;
+    #pragma unroll
     for (int k = 0; k < win; ++k) {
         long long xx = i0 + (long long)(start + k);
         double w = 0.0;
@@ -678,6 +681,7 @@ __device__ __forceinline__ void xrep_lanczos_pair(
         }
         wx[k] = w;
     }
+    #pragma unroll
     for (int k = 0; k < win; ++k) {
         long long yy = j0 + (long long)(start + k);
         double w = 0.0;
@@ -691,12 +695,14 @@ __device__ __forceinline__ void xrep_lanczos_pair(
     double ksum = sum_wx * sum_wy;
     double num = 0.0;
     double num_var = 0.0;
+    #pragma unroll
     for (int iy = 0; iy < win; ++iy) {
         double wyv = wy[iy];
         if (wyv == 0.0) continue;
         long long yy = j0 + (long long)(start + iy);
         if (yy < 0 || yy >= H) continue;
         long long base = yy * W;
+        #pragma unroll
         for (int ix = 0; ix < win; ++ix) {
             double wxv = wx[ix];
             if (wxv == 0.0) continue;
@@ -721,6 +727,10 @@ __device__ __forceinline__ void xrep_lanczos_pair(
     }
 }
 """
+
+# Register window of the fused Lanczos kernel; the 2a footprint reaches it
+# at lanczos_a=8 and the 2a+1 footprint at lanczos_a=7.
+_MAX_LANCZOS_WINDOW = 16
 
 _PAIR_PARAMS = r"""
     raw float64 src,
@@ -770,6 +780,7 @@ _bilinear_pair_elem = cp.ElementwiseKernel(
             long long xs[4] = {x0, x1, x0, x1};
             long long ys[4] = {y0, y0, y1, y1};
             double norm = 0.0;
+            #pragma unroll
             for (int k = 0; k < 4; ++k) {
                 if (xs[k] < 0 || xs[k] >= W || ys[k] < 0 || ys[k] >= H) {
                     w[k] = 0.0;
@@ -778,6 +789,7 @@ _bilinear_pair_elem = cp.ElementwiseKernel(
             }
             double num = 0.0;
             double num_var = 0.0;
+            #pragma unroll
             for (int k = 0; k < 4; ++k) {
                 if (w[k] == 0.0) continue;
                 long long idx = ys[k] * W + xs[k];
@@ -860,6 +872,16 @@ def reproject_with_variance_cupy(
 
     if source.ndim != 2 or source_variance.shape != source.shape:
         raise ValueError("source and variance must be matching 2D arrays")
+    if interpolation not in {"bilinear", "lanczos3"}:
+        raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
+    if interpolation == "lanczos3":
+        largest_a = (_MAX_LANCZOS_WINDOW - (0 if two_a_footprint else 1)) // 2
+        if not 1 <= lanczos_a <= largest_a:
+            raise ValueError(
+                f"lanczos_a must be between 1 and {largest_a} for "
+                f"two_a_footprint={two_a_footprint} (fused kernel window of "
+                f"{_MAX_LANCZOS_WINDOW} taps), got {lanczos_a}"
+            )
     height, width = (int(source.shape[0]), int(source.shape[1]))
     args = (
         cp.ascontiguousarray(source, dtype=cp.float64).ravel(),
@@ -877,8 +899,6 @@ def reproject_with_variance_cupy(
     )
     if interpolation == "bilinear":
         return _bilinear_pair_elem(*args)
-    if interpolation != "lanczos3":
-        raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
     if lanczos3_specialized:
         return _lanczos3_pair_elem(*args)
     return _lanczos_pair_elem(*args, lanczos_a, int(two_a_footprint))

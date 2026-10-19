@@ -98,13 +98,7 @@ class CupyBackend:
         valid = cp.asarray(prepared.valid)
         area = cp.asarray(prepared.relative_area, dtype=cp.float64)
 
-        lanczos_kernel = None
-        if spec.interpolation == "lanczos3":
-            lanczos_kernel = _lanczos_kernel_variant()
-            if lanczos_kernel == "raw" and not (
-                spec.lanczos_a == 3 and spec.two_a_footprint
-            ):
-                lanczos_kernel = "elementwise"
+        lanczos_kernel = _resolve_lanczos_kernel(spec)
 
         variance = None
         if source_variance is not None:
@@ -229,6 +223,8 @@ class CupyBackend:
         if getattr(source_variance, "ndim", None) != 2:
             raise ValueError("variance must be a 2D array")
 
+        # The image half of the fused kernel is discarded; it takes the
+        # image fill so a swapped return would not pass as a variance.
         variance = cp.asarray(source_variance, dtype=cp.float64)
         _, sampled = reproject_with_variance_cupy(
             variance,
@@ -240,8 +236,9 @@ class CupyBackend:
             interpolation=spec.interpolation,
             lanczos_a=spec.lanczos_a,
             two_a_footprint=spec.two_a_footprint,
+            lanczos3_specialized=_resolve_lanczos_kernel(spec) == "raw",
             area_scaling=spec.area_scaling,
-            fill_value=variance_fill_value,
+            fill_value=spec.fill_value,
             variance_fill_value=variance_fill_value,
         )
         return cp.asnumpy(sampled)
@@ -253,6 +250,22 @@ def _device_name(device_id: int) -> str:
 
     properties = cp.cuda.runtime.getDeviceProperties(device_id)
     return properties["name"].decode()
+
+
+def _resolve_lanczos_kernel(spec: ReprojectionSpec) -> str | None:
+    """Return the Lanczos kernel variant for ``spec``, ``None`` for bilinear.
+
+    The compile-time ``raw`` variant covers only ``lanczos_a=3`` with the
+    two-radius footprint; other kernels fall back to ``elementwise``.
+    """
+
+    if spec.interpolation != "lanczos3":
+        return None
+    variant = _lanczos_kernel_variant()
+    specialized = spec.lanczos_a == 3 and spec.two_a_footprint
+    if variant == "raw" and not specialized:
+        return "elementwise"
+    return variant
 
 
 def _lanczos_kernel_variant() -> str:
