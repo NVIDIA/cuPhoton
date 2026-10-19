@@ -24,6 +24,7 @@ transient_chain/uq.py          the error budget per candidate: the terms behind 
 transient_chain/catalog.py     the catalog column contract (same columns and dtypes for every item)
 transient_chain/workload.py    selections -> WorkItems -> WorkloadSpec; run_local, run_distributed
 compare_catalogs.py         match two catalogs by position and report differences
+repeat_catalogs.py          link one detector's detections across repeated exposures and test the error bars
 tests/                      host tests: ops against cuPhoton's reference code, config, adapters on synthetic FITS, catalog schema
 ```
 
@@ -409,6 +410,43 @@ reference row counted once (duplicates are reported, not counted). Exact agreeme
 DAOStarFinder-aligned chain is not expected under the `gpu` star finder: the alignment differs
 at the sub-pixel level and the residual with it; `--set align.star_finder=daofind` matches
 that alignment.
+
+## Repeat test across repeated exposures
+
+```bash
+python examples/transient-chain/repeat_catalogs.py out/items/*/catalog.parquet --out repeat.json
+```
+
+Without a reference catalog, a source that does not move should land at the same place in every
+exposure of a detector, so its scatter divided by its error bars gives a chi-square per degree of
+freedom near 1 when the bars are right (survey pipelines call this repeatability). The script
+reads the catalogs the chain wrote for a detector's repeated exposures (several detectors are
+linked separately and pooled), reads the refine affine from the `summary.json` beside each
+per-item catalog when present, moves each sub-pixel position into the reference frame and onto the
+sky through the catalog's own `ra`/`dec` at the integer candidate pixel (an affine pixel-to-sky
+map is fitted per exposure to those anchors, so dithers and rotations between exposures do not
+count as scatter), links detections across exposures within `--link-px` (default 2) and drops
+duplicates within an exposure within `--duplicate-px` (default 1, keeping the highest
+`peak_abs_sigma`). A group with two detections from one exposure is ambiguous and dropped.
+
+Two quantities are linked separately: the dipole center (`center_*`, classes resolved and
+overlapping) and the source position (`positive_*`, classes resolved and single), the classes
+derived from `quality_flags`, `converged` and `uncertainty_valid` as the "Catalog columns" section
+describes. For each, overall and per class, the report gives the pooled chi-square per degree of
+freedom and the median per-group ratio (the median over groups of chi-square over the chi-square
+median for the group's degrees of freedom, 1 for correct bars at any group size) for `<q>_err`,
+for `<q>_err_fit` alone, and for `<q>_err` with each of the corr, kfit, kmatch and mis terms
+removed in quadrature, all on the same rows (those whose `<q>_err` is defined on both axes). The
+per-axis variances are along the pixel axes and are paired with the tangent-plane offsets without
+rotation, which matters only where the two axes' variances differ. The JSON holds every number;
+the printed table shows quantity, class, groups, arm, chi-square per degree of freedom and the
+median ratio.
+
+What the test cannot see, stated in its output: the reference's noise is the same in every
+exposure of a detector and never scatters between them, so every arm keeps a term the test does
+not measure and a chi-square below 1 by that share is still consistent; and a bias common to all
+exposures (a reference position error, a systematic of the fit) moves every detection alike and
+passes unseen.
 
 ## Known issues
 
