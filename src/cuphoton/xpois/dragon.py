@@ -548,7 +548,7 @@ def run_dragon_work_items(
             descriptor_path = (
                 run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
             )
-            atomic_write_json(
+            encoded = atomic_write_json(
                 descriptor_path,
                 {
                     "schema": _DRAGON_LAUNCH_SCHEMA,
@@ -562,7 +562,6 @@ def run_dragon_work_items(
                 },
                 overwrite=False,
             )
-            encoded = descriptor_path.read_bytes()
             descriptor_sha256 = hashlib.sha256(encoded).hexdigest()
             context = {
                 "run_dir": str(run_dir),
@@ -894,7 +893,7 @@ def _run_dragon_rounds(
             descriptor_path = (
                 run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
             )
-            atomic_write_json(
+            encoded = atomic_write_json(
                 descriptor_path,
                 {
                     "schema": _DRAGON_LAUNCH_SCHEMA,
@@ -913,7 +912,6 @@ def _run_dragon_rounds(
                 },
                 overwrite=False,
             )
-            encoded = descriptor_path.read_bytes()
             context = {
                 "run_dir": str(run_dir),
                 "worker_id": placement.worker_id,

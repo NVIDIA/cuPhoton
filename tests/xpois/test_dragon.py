@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
 import json
 import os
 import queue
@@ -3273,7 +3274,7 @@ def test_benchmark_notifies_startup_artifact_failure(monkeypatch, tmp_path):
     def fail_startup(path, payload, **kwargs):
         if path.parent.name == "startup":
             raise OSError("synthetic startup write failure")
-        original_write(path, payload, **kwargs)
+        return original_write(path, payload, **kwargs)
 
     monkeypatch.setattr(dragon_module, "atomic_write_json", fail_startup)
     result = _run_round_test(tmp_path, worker_count=1)
@@ -3283,6 +3284,61 @@ def test_benchmark_notifies_startup_artifact_failure(monkeypatch, tmp_path):
     assert "artifact_error" in result.summary["ready_messages"][0]
     assert not state.calls
     assert state.groups[0].stopped
+
+
+@pytest.mark.parametrize("rounds", [False, True])
+def test_descriptor_digest_uses_bytes_before_publication_mutation(
+    monkeypatch, tmp_path, rounds
+):
+    if rounds:
+        state = _install_round_runtime(monkeypatch)
+    else:
+        _generic_api(monkeypatch)
+    original_link = os.link
+    published = []
+    resolved = []
+    original_resolve = dragon_module._resolve_worker_target
+
+    def resolve_worker_target(reference):
+        if published:
+            resolved.append(reference)
+        return original_resolve(reference)
+
+    def mutate_published_descriptor(source, destination):
+        original_link(source, destination)
+        if (
+            destination.parent.name == "launch"
+            and destination.name == "worker-0000.json"
+        ):
+            encoded = destination.read_bytes()
+            published.append(encoded)
+            changed = encoded.replace(
+                b'"allow_loopback_alias": true',
+                b'"allow_loopback_alias": null',
+            )
+            assert changed != encoded and len(changed) == len(encoded)
+            destination.write_bytes(changed)
+
+    monkeypatch.setattr(os, "link", mutate_published_descriptor)
+    monkeypatch.setattr(
+        dragon_module, "_resolve_worker_target", resolve_worker_target
+    )
+    if rounds:
+        result = _run_round_test(tmp_path, worker_count=1)
+        template = state.groups[0].templates[0]
+    else:
+        result = run_dragon_work_items(**_generic_kwargs(tmp_path))
+        template = _FakeGroup.last_templates[0]
+
+    assert len(published) == 1
+    assert template.args[2] == hashlib.sha256(published[0]).hexdigest()
+    assert template.args[3]["descriptor_bytes"] == len(published[0])
+    assert result.status == "failed"
+    assert not resolved
+    failure = json.loads(
+        (result.run_dir / "launch/worker-0000-failure.json").read_text()
+    )
+    assert "SHA-256" in failure["error"]["message"]
 
 
 @pytest.mark.parametrize("exit_code", [0, -9])
