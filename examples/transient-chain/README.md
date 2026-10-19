@@ -46,7 +46,7 @@ the request.
 |---|---|---|
 | Read | target image, mask, variance and every template plane; GZIP tiles inflated by nvCOMP under xDR | FITS headers (WCS, mask-plane cards); under `astropy` the decoded planes cross once |
 | Template | Lanczos-3 reprojection of each source onto the target grid, mean over sources, bad bits OR-ed | the WCS mapping on a coarse grid (Astropy is CPU-only; xRep expands it on the device) |
-| Refine | star finding on both images, rebuilt template, per-star centroid errors and widths | two star lists of at most `align.max_stars` rows; affine least squares, misalignment model, PSF width |
+| Refine | each image median-subtracted and smoothed once; star finding on both images and the rebuilt template; per-star centroid errors and widths | two star lists of at most `align.max_stars` rows and two low-threshold peak lists (counted in `control_bytes`); affine least squares, misalignment model, PSF width |
 | Mask | bad pixels to NaN; compact-source fit mask | ranking of a few hundred peaks |
 | XPOIS | `solve_constant_kernel_device`, residual | chi2, dof, condition number |
 | Detect | hotspot rule (threshold, 4-connected label, per-component peak and centroid) | the hotspot table |
@@ -59,20 +59,30 @@ the request.
 `control_bytes` (star lists, hotspot table, candidate filter) and `diagnostic_bytes`
 (cross-correlation windows), and records `intermediate_files: 0`.
 
-After the affine fit the refine stage measures the stars matched on the refined template: each
-centroid's standard error propagated from the pixel variance through the windowed centroid, and
-its second-moment width. Stars with another peak within one centroid window (`align.star_box_px`)
-in either image are dropped, since a neighbor moves the two centroids by different amounts and
-inflates a chip-wide rms. The remaining pairs feed a misalignment model (`ops.fit_misalignment`):
-the affine fit with its covariance from the centroid noise, the excess residual as a quadratic
-field across the image (one constant per axis with fewer than 30 stars), outliers clipped at 3
-sigma, and `variance(x, y)` per axis at any position. The worker keeps the model for the later
-stages and writes its summary under `diagnostics.align.refine.misalignment` (mode, stars used,
-residual rms, excess and image-center sigma in pixels). When `xfit.psf_sigma_px` is null the same
-stars give the PSF width (`ops.psf_width`: clipped median of the widths with its standard error),
-and `summary.json` records the value used as `psf_sigma_px` with `psf_sigma_source: "stars"`
-(`"config"` when the configuration set it, `null` when neither was available and the `psf_flux`
-columns are NaN). The template has no variance plane, so its centroid noise is counted as excess.
+After the affine fit, the refine stage measures the stars matched on the rebuilt template
+(`ops.measure_matched_stars`). A star with another peak above 5 sigma within one box width
+(`align.star_box_px` pixels) in either image is dropped: a neighbor moves the two centroids by
+different amounts and inflates a chip-wide rms. For each remaining pair it measures the standard
+error of both centroids, propagated from the pixel variance through the windowed centroid, and
+the target star's second-moment width; a pair whose centroid error is not finite is dropped and
+counted (`stars_nonfinite_dropped`).
+
+The misalignment model (`ops.fit_misalignment`) is fitted only in affine mode and only with the
+`gpu` star finder, whose centroids the error model describes (`daofind` centroids are skipped with
+`reason: "daofind centroids"`). It is the affine fit with its covariance from the centroid noise,
+the excess residual as a quadratic field across the image (one constant per axis with fewer than
+30 stars) and outliers clipped at 5 sigma, a limit that keeps every Gaussian residual while a
+blend, tens of sigma out, still goes. `variance(x, y)` gives the misalignment variance per axis
+at any position, and the worker keeps the model for the later stages. The summary under
+`diagnostics.align.refine.misalignment` records `model` (`"polynomial"`, `"rms"`, or `null` with
+a `reason`), the star counts, the residual rms and the excess and image-center sigma in pixels.
+The template has no variance plane, so its centroid noise is counted as excess.
+
+The kept target stars always give the PSF width (`ops.psf_width`: clipped median of the widths
+with its standard error), written under the same diagnostics key as `psf_width`. When
+`xfit.psf_sigma_px` is null that width is the one the uncertainty stage uses, and `summary.json`
+records it as `psf_sigma_px` with `psf_sigma_source: "stars"` (`"config"` when the configuration
+set it, `null` when neither was available and the `psf_flux` columns are NaN).
 
 ## Prerequisites
 

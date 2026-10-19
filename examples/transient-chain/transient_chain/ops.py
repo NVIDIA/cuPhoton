@@ -87,6 +87,59 @@ def xcorr_offset(a, b) -> tuple[float, float]:
     return float(ix - cx + dx), float(iy - cy + dy)
 
 
+@dataclass(frozen=True)
+class SmoothedImage:
+    """One image prepared for the star finder, arrays of the image's array
+    module: ``finite`` mask and its count, ``median`` and robust ``sigma`` of
+    the finite pixels (scalars of the array module), ``work`` the image minus
+    the median with non-finite pixels zero, ``smooth`` its Gaussian-smoothed
+    copy with FWHM ``fwhm``.
+
+    ``find_stars`` and ``star_measurements`` take one through ``smoothed`` so
+    an image is smoothed once per item, not once per call.
+    """
+
+    fwhm: float
+    finite: Any
+    n_finite: int
+    median: Any
+    sigma: Any
+    work: Any
+    smooth: Any
+
+
+def smooth_image(img, fwhm: float) -> SmoothedImage:
+    """Median-subtract ``img`` and smooth it with a Gaussian of FWHM ``fwhm``
+    (one filter, one count sync).
+    """
+    xp = array_module(img)
+    finite = xp.isfinite(img)
+    n_finite = int(finite.sum())
+    if n_finite == 0:
+        zero = xp.zeros(img.shape, dtype=xp.float64)
+        return SmoothedImage(float(fwhm), finite, 0, 0.0, 0.0, zero, zero)
+    vals = img[finite]
+    med = xp.median(vals)
+    sigma = 1.4826 * xp.median(xp.abs(vals - med))
+    work = xp.where(finite, img - med, 0.0).astype(xp.float64)
+    smooth = ndimage_for(xp).gaussian_filter(
+        work, sigma=fwhm / 2.3548, mode="nearest"
+    )
+    return SmoothedImage(
+        float(fwhm), finite, n_finite, med, sigma, work, smooth
+    )
+
+
+def _smoothed(img, fwhm: float, smoothed: SmoothedImage | None):
+    if smoothed is None:
+        return smooth_image(img, fwhm)
+    if smoothed.fwhm != float(fwhm):
+        raise ValueError(
+            f"smoothed image has fwhm {smoothed.fwhm}, the call asks {fwhm}"
+        )
+    return smoothed
+
+
 def find_stars(
     img,
     *,
@@ -95,6 +148,7 @@ def find_stars(
     max_n: int = 600,
     box: int = 15,
     iterations: int = 4,
+    smoothed: SmoothedImage | None = None,
 ) -> np.ndarray:
     """Bright, isolated peaks of a Gaussian-smoothed image with windowed
     centroids.
@@ -107,25 +161,23 @@ def find_stars(
     a Gaussian-windowed
     flux-weighted mean (window sigma = fwhm, the SExtractor XWIN estimator) on
     the
-    background-subtracted image inside a fixed box around the peak. Returns
+    background-subtracted image inside a fixed box around the peak
+    (``iterations=0`` returns the peak pixels). Returns
     (N, 2) host x, y
     sorted by box flux, brightest first (when more than ``2*max_n`` peaks
     exist, the pre-cut uses
     the same box flux, so the final list is the true top ``max_n``). Only the
     star list crosses
-    to the host.
+    to the host. ``smoothed`` is ``smooth_image(img, fwhm)`` when the caller
+    already has it.
     """
     xp = array_module(img)
     nd = ndimage_for(xp)
-    finite = xp.isfinite(img)
-    if int(finite.sum()) < 1000:
+    sm = _smoothed(img, fwhm, smoothed)
+    if sm.n_finite < 1000:
         return np.empty((0, 2))
-    vals = img[finite]
-    med = xp.median(vals)
-    std = 1.4826 * xp.median(xp.abs(vals - med))
-    work = xp.where(finite, img - med, 0.0).astype(xp.float64)
-    smooth = nd.gaussian_filter(work, sigma=fwhm / 2.3548, mode="nearest")
-    thr = nsigma * std
+    finite, work, smooth = sm.finite, sm.work, sm.smooth
+    thr = nsigma * sm.sigma
     half = box // 2
     peaks = (
         (
@@ -521,23 +573,21 @@ def _patches(image, x, y, half):
     return xp.where(inside, v.astype(xp.float64), xp.nan)
 
 
-def _star_boxes(image, variance, xy, box, fwhm):
+def _star_boxes(image, variance, xy, box, fwhm, smoothed=None):
     """Background-subtracted pixels, variances and offsets from the centroid
     in the box ``find_stars`` used: centered on the brightest pixel of the
     smoothed image within the box around the centroid, with the global median
     as background. Pixels off the image or not finite count as zero signal
-    and zero variance, as ``find_stars`` counts them.
+    and zero variance, as ``find_stars`` counts them. ``smoothed`` is
+    ``smooth_image(image, fwhm)`` when the caller already has it.
     """
     xp = array_module(image)
-    finite = xp.isfinite(image)
-    work = xp.where(finite, image - xp.median(image[finite]), 0.0)
+    sm = _smoothed(image, fwhm, smoothed)
+    work, smooth = sm.work, sm.smooth
     if variance is None:
         v = xp.zeros(image.shape, dtype=xp.float64)
     else:
-        v = xp.where(finite & xp.isfinite(variance), variance, 0.0)
-    smooth = ndimage_for(xp).gaussian_filter(
-        work, sigma=fwhm / 2.3548, mode="nearest"
-    )
+        v = xp.where(sm.finite & xp.isfinite(variance), variance, 0.0)
     half = box // 2
     c = xp.asarray(xy, dtype=xp.float64).reshape(-1, 2)
     s = xp.nan_to_num(
@@ -575,10 +625,11 @@ def windowed_centroid_error(d, v, ux, uy, window_sigma: float):
     W = xp.exp(-(ux**2 + uy**2) / (2.0 * window_sigma**2))
     on = d > 0
     out = xp.empty((d.shape[0], 2), dtype=xp.float64)
-    for a, u in enumerate((ux, uy)):
-        num = (W**2 * u**2 * v * on).sum(axis=(1, 2))
-        den = (W * w * (1.0 - u**2 / window_sigma**2)).sum(axis=(1, 2))
-        out[:, a] = xp.sqrt(num) / xp.abs(den)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for a, u in enumerate((ux, uy)):
+            num = (W**2 * u**2 * v * on).sum(axis=(1, 2))
+            den = (W * w * (1.0 - u**2 / window_sigma**2)).sum(axis=(1, 2))
+            out[:, a] = xp.sqrt(num) / xp.abs(den)  # NaN without flux
     return out
 
 
@@ -592,19 +643,23 @@ def second_moment_width(
     m = 1 / (1/s^2 + 1/s_w^2), so s^2 = 1 / (1/m - 1/s_w^2), and the weight
     follows s. The width is the pixel-level one (the PSF convolved with the
     pixel), the width a point-sampled Gaussian PSF model needs; the optical
-    width is sqrt(s^2 - 1/12).
+    width is sqrt(s^2 - 1/12). NaN where the iteration fails (no positive
+    flux, or a moment wider than the weight): ``psf_width`` drops those.
     """
     xp = array_module(d)
     s = xp.full(d.shape[0], float(start))
     r2 = 0.5 * (ux**2 + uy**2)
-    for _ in range(iterations):
-        W = xp.exp(-(ux**2 + uy**2) / (2.0 * s[:, None, None] ** 2)) * d
-        m = (W * r2).sum(axis=(1, 2)) / W.sum(axis=(1, 2))
-        inv = 1.0 / m - 1.0 / s**2
-        s = xp.where(
-            inv > 0, 1.0 / xp.sqrt(xp.where(inv > 0, inv, 1.0)), xp.nan
-        )
-        s = xp.where(xp.isfinite(s), xp.clip(s, 0.3, 20.0), start)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for _ in range(iterations):
+            W = xp.exp(-(ux**2 + uy**2) / (2.0 * s[:, None, None] ** 2)) * d
+            m = (W * r2).sum(axis=(1, 2)) / W.sum(axis=(1, 2))
+            inv = 1.0 / m - 1.0 / s**2
+            ok = inv > 0
+            s = xp.where(
+                ok,
+                xp.clip(1.0 / xp.sqrt(xp.where(ok, inv, 1.0)), 0.3, 20.0),
+                xp.nan,
+            )
     return s
 
 
@@ -633,6 +688,7 @@ def star_measurements(
     box: int,
     psf_sigma: float | None = None,
     fwhm: float = 4.0,
+    smoothed: SmoothedImage | None = None,
 ) -> StarMeasurements:
     """Centroid standard error, box flux, width and PSF-weighted
     signal-to-noise of the stars at ``xy`` (N, 2).
@@ -642,8 +698,12 @@ def star_measurements(
     is a matched filter with a circular Gaussian of width ``psf_sigma``, the
     star's own width when None. ``variance`` None counts every pixel as
     noiseless: the centroid errors are zero and the signal-to-noise NaN.
+    ``smoothed`` is ``smooth_image(image, fwhm)`` when the caller already has
+    it.
     """
-    d, v, ux, uy = _star_boxes(image, variance, xy, int(box), float(fwhm))
+    d, v, ux, uy = _star_boxes(
+        image, variance, xy, int(box), float(fwhm), smoothed
+    )
     xp = array_module(d)
     centroid_error = windowed_centroid_error(d, v, ux, uy, float(fwhm))
     width = second_moment_width(d, ux, uy)
@@ -663,18 +723,22 @@ def star_measurements(
     )
 
 
-def neighbor_free(
-    image, xy, radius: float, *, fwhm: float = 4.0, nsigma: float = 5.0
-) -> np.ndarray:
-    """True where no other peak of ``find_stars`` at the low threshold
-    ``nsigma`` lies within ``radius`` pixels of the host positions ``xy``: a
-    neighbor's light moves a windowed centroid, and by different amounts in
-    two images with different PSFs.
+NEIGHBOR_PEAKS = dict(nsigma=5.0, max_n=10**6, box=9, iterations=0)
+"""``find_stars`` settings of the low-threshold peak list ``neighbor_free``
+compares against: every peak above 5 robust sigma, at its pixel."""
+
+
+def neighbor_free(peaks, xy, radius: float) -> np.ndarray:
+    """True where no other peak of ``peaks`` (M, 2), the host list
+    ``find_stars(image, fwhm=fwhm, **NEIGHBOR_PEAKS)`` returns, lies within
+    ``radius`` pixels of the host positions ``xy`` (N, 2): a neighbor's light
+    moves a windowed centroid, and by different amounts in two images with
+    different PSFs. The one peak allowed within ``radius`` is the star's own.
     """
     from scipy.spatial import cKDTree
 
     xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
-    peaks = find_stars(image, fwhm=fwhm, nsigma=nsigma, max_n=10**6, box=9)
+    peaks = np.asarray(peaks, dtype=np.float64).reshape(-1, 2)
     if len(peaks) == 0 or len(xy) == 0:
         return np.ones(len(xy), bool)
     return (
@@ -873,7 +937,7 @@ def fit_misalignment(
     noise_var,
     *,
     shape,
-    clip: float | None = 3.0,
+    clip: float | None = 5.0,
     min_poly: int = 30,
     max_rounds: int = 5,
 ) -> Misalignment:
@@ -885,9 +949,12 @@ def fit_misalignment(
     model (blended or mismatched stars, whose centroid errors the noise model
     does not describe) are rejected and the model refitted until the kept set
     is stable or ``max_rounds`` fits are done; the result is always the last
-    fit and the stars it used. ``clip=None`` keeps every pair, as
-    ``fit_affine`` does. With fewer than ``min_poly`` stars the excess is one
-    constant per axis instead of a quadratic field.
+    fit and the stars it used. The default 5 keeps every Gaussian residual
+    (3 drops the tail of a thousand good stars and biases the excess low by
+    a few percent) while a blend, which sits tens of sigma out, still goes.
+    ``clip=None`` keeps every pair, as ``fit_affine`` does. With fewer than
+    ``min_poly`` stars the excess is one constant per axis instead of a
+    quadratic field.
     """
     src_xy, dst_xy, noise_var = (
         np.asarray(a, dtype=np.float64) for a in (src_xy, dst_xy, noise_var)
@@ -962,3 +1029,115 @@ def psf_width(widths, *, clip: float = 3.0, iterations: int = 5) -> PsfWidth:
         int(keep.sum()),
         int(len(w)),
     )
+
+
+@dataclass(frozen=True)
+class MatchedStars:
+    """What ``measure_matched_stars`` found: ``diagnostics`` (host scalars for
+    the run summary), the ``misalignment`` model or None, the target's PSF
+    width from the kept stars or None when no width was finite, and the host
+    bytes of the two low-threshold peak lists (``control_bytes``).
+    """
+
+    diagnostics: dict[str, Any]
+    misalignment: Misalignment | None
+    psf: PsfWidth | None
+    control_bytes: int
+
+
+def measure_matched_stars(
+    target,
+    template,
+    variance,
+    target_xy,
+    template_xy,
+    *,
+    box: int,
+    fwhm: float,
+    min_stars: int,
+    skip_model: str | None = None,
+    target_smoothed: SmoothedImage | None = None,
+    template_smoothed: SmoothedImage | None = None,
+) -> MatchedStars:
+    """Measure the star pairs ``target_xy``, ``template_xy`` (N, 2, host, on
+    the target grid) that the refinement matched and model what they show.
+
+    Pairs with another peak within ``box`` pixels in either image are dropped
+    (``neighbor_free``), both centroids are measured
+    (``star_measurements``: the template has no variance plane, so its
+    centroid noise lands in the excess), pairs with a non-finite centroid
+    error are dropped and counted, and the misalignment model is fitted
+    (``fit_misalignment``) unless ``skip_model`` gives the reason not to or
+    fewer than ``min_stars`` pairs remain. The PSF width (``psf_width``) comes
+    from the kept target stars: the model's used set when it was fitted,
+    every neighbor-free pair otherwise. ``diagnostics["model"]`` is the
+    model's mode and ``diagnostics["reason"]`` why there is none.
+    """
+    target_xy = np.asarray(target_xy, dtype=np.float64).reshape(-1, 2)
+    template_xy = np.asarray(template_xy, dtype=np.float64).reshape(-1, 2)
+    diag: dict[str, Any] = {
+        "stars_matched": int(len(target_xy)),
+        "model": None,
+        "reason": None,
+    }
+    if len(target_xy) < 3:
+        diag["reason"] = "fewer than 3 matched stars"
+        return MatchedStars(diag, None, None, 0)
+    peaks_t = find_stars(
+        target, fwhm=fwhm, smoothed=target_smoothed, **NEIGHBOR_PEAKS
+    )
+    peaks_r = find_stars(
+        template, fwhm=fwhm, smoothed=template_smoothed, **NEIGHBOR_PEAKS
+    )
+    control_bytes = int(peaks_t.nbytes + peaks_r.nbytes)
+    ok = neighbor_free(peaks_t, target_xy, float(box))
+    ok &= neighbor_free(peaks_r, template_xy, float(box))
+    mv, mt = target_xy[ok], template_xy[ok]
+    diag["stars_neighbor_free"] = int(len(mv))
+    if len(mv) < 3:
+        diag["reason"] = "fewer than 3 neighbor-free stars"
+        return MatchedStars(diag, None, None, control_bytes)
+    tm = star_measurements(
+        target, variance, mv, box=box, fwhm=fwhm, smoothed=target_smoothed
+    )
+    rm = star_measurements(
+        template, None, mt, box=box, fwhm=fwhm, smoothed=template_smoothed
+    )
+    noise = to_host(tm.centroid_error) ** 2 + to_host(rm.centroid_error) ** 2
+    widths = to_host(tm.width)
+    finite = np.isfinite(noise).all(axis=1)
+    diag["stars_nonfinite_dropped"] = int((~finite).sum())
+    mv, mt, noise, widths = (
+        mv[finite],
+        mt[finite],
+        noise[finite],
+        widths[finite],
+    )
+    model = None
+    if skip_model is not None:
+        diag["reason"] = skip_model
+    elif len(mv) < min_stars:
+        diag["reason"] = f"fewer than {min_stars} stars"
+    else:
+        model = fit_misalignment(mv, mt, noise, shape=target.shape)
+        ny, nx = target.shape
+        center = model.variance([(nx - 1) / 2.0], [(ny - 1) / 2.0])[0]
+        diag.update(
+            model=model.mode,
+            stars_used=int(model.used.sum()),
+            residual_rms_px=model.residual_rms,
+            excess_sigma_px=np.sqrt(model.excess_variance).tolist(),
+            center_sigma_px=np.sqrt(center).tolist(),
+        )
+        widths = widths[model.used]
+    psf = None
+    if np.isfinite(widths).any():
+        psf = psf_width(widths)
+        diag["psf_width"] = {
+            "sigma_px": psf.sigma_px,
+            "standard_error_px": psf.standard_error_px,
+            "scatter_px": psf.scatter_px,
+            "n_used": psf.n_used,
+            "n": psf.n,
+        }
+    return MatchedStars(diag, model, psf, control_bytes)
