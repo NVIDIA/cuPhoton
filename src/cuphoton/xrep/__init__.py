@@ -36,6 +36,7 @@ from .reproject import (
     reproject_masked_array,
     reproject_stack,
 )
+from .resampling import ResamplingWeights, resampling_weights_at
 
 __all__ = [
     "__version__",
@@ -46,6 +47,7 @@ __all__ = [
     "PreparedReprojection",
     "ReprojectionResult",
     "ReprojectionSpec",
+    "ResamplingWeights",
     "StackReprojectionResult",
     "StackReprojectionSpec",
     "bbox_union",
@@ -63,4 +65,5 @@ __all__ = [
     "reproject_fits",
     "reproject_masked_array",
     "reproject_stack",
+    "resampling_weights_at",
 ]

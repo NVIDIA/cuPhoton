@@ -189,6 +189,38 @@ Unlike `reproject_masked_array`, the device path does not check variance
 values, since that would need a device-to-host transfer: negative input
 variance gives negative output variance.
 
+`resampling_weights_at` returns the interpolation weights the reprojection
+applies at the destination pixels nearest the given positions, together with
+the sub-pixel phase of the source coordinate and a per-position
+`is_translation` flag. It takes the destination-to-source callable of a
+`ReprojectionSpec` or the `PreparedReprojection` the reprojection used, NumPy
+or CuPy, and the same kernel options:
+
+```python
+from cuphoton.xrep import resampling_weights_at
+
+taps = resampling_weights_at(
+    prepared,
+    x,
+    y,
+    interpolation=spec.interpolation,
+    source_shape=image.shape,
+)
+taps.weights         # (N, k, k), rows along source y, columns along source x
+taps.phase           # (N, 2) sub-pixel fractions of the source coordinate
+taps.is_translation  # (N,) false where the local mapping rotates or scales
+taps.offsets         # (k,) tap offsets from the floor of the source coordinate
+```
+
+Each `(k, k)` block sums to one, or is all zero where the reprojection filled
+the pixel instead of resampling it. Pass `source_shape` to zero and
+renormalize the taps outside the source as the reprojection does at its
+edges. `is_translation` compares the local Jacobian of the mapping with the
+identity (`translation_tolerance`, `1e-3` by default); where it is true the
+phase is the same across a window and one set of weights describes it. Noise
+models that need the weights take the `weights` array; they do not depend on
+xRep.
+
 The `reproject_array` API ORs the nonzero bilinear mask neighborhood even when
 the image interpolation is Lanczos-3. Use `reproject_masked_array` when the
 mask must cover every nonzero contributor in the selected image kernel.
