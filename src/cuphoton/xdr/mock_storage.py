@@ -50,6 +50,9 @@ class _ImmediateFuture:
     def get(self) -> int:
         return self._nbytes
 
+    def done(self) -> bool:
+        return True
+
 
 class StorageCache:
     """In-memory cache of FITS file bytes.

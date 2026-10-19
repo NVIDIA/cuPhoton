@@ -141,6 +141,26 @@ def test_heap_reads_check_each_completion(
     assert handle.done
 
 
+def test_mock_heap_read_reports_completion_before_wait(monkeypatch):
+    from cuphoton.xdr.mock_storage import storage_cache
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(empty=np.empty, uint8=np.uint8, asarray=np.asarray),
+    )
+    contents = np.arange(16, dtype=np.uint8)
+    monkeypatch.setattr(storage_cache, "active", lambda: True)
+    monkeypatch.setattr(storage_cache, "get_buffer", lambda path: contents)
+    with gds.GdsHeapLoader("cached.fits") as loader:
+        handle = loader.load_tiles_async([2, 4], [2, 3])
+        assert handle.done
+        output, offsets = handle.wait()
+        np.testing.assert_array_equal(output, contents[2:7])
+        np.testing.assert_array_equal(offsets, [0, 2])
+        assert handle.done
+
+
 def test_failed_submission_blocks_reads_before_releasing_guard(monkeypatch):
     monkeypatch.setattr(prefetch, "_UNRESOLVED_GPU_BATCHES", [])
     original_guard = prefetch._gpu_submission_guard
