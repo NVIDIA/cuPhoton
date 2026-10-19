@@ -9,27 +9,36 @@ of a detector, without a reference catalog.
 A source that does not move lands at the same place in every exposure, so
 the scatter of its linked detections divided by their error bars gives a
 chi-square per degree of freedom near 1 when the bars are right. The test
-links the chain's detections across the exposures of each detector in the
-reference frame, drops duplicates within an exposure, and reports the
-pooled chi-square per degree of freedom and the median per-group ratio for
-two quantities (the dipole center from ``center_*``, the source position
-from ``positive_*``), per class derived from ``quality_flags``, for the
-full error bar ``<q>_err``, for ``<q>_err_fit`` alone, and with each of the
-corr, kfit, kmatch and mis terms dropped in turn.
+links the chain's detections across the exposures of each detector, drops
+duplicates within an exposure, and scores two quantities: the dipole center
+(``center_*``) and the source position (``positive_*``). Each is scored
+overall and per class, for the full error bar ``<q>_err``, for
+``<q>_err_fit`` alone, and with each of the corr, kfit, kmatch and mis
+terms dropped in turn (``ARMS``).
 
-Positions go to the sky through the catalog's own ``ra``/``dec`` at the
-integer candidate pixel: per exposure an affine pixel-to-tangent-plane map
-is fitted to those anchors and applied to the sub-pixel position, after the
-refine stage's affine from the item's ``summary.json`` (read when it sits
-beside the catalog) has moved the position into the reference frame.
+Classes come from ``quality_flags``, ``converged`` and ``uncertainty_valid``
+(``classify``): ``resolved`` (two supported lobes), ``overlapping``,
+``single`` (a brightening source, only the positive lobe supported),
+``fading`` (only the negative lobe supported, so neither quantity's columns
+describe the source), ``failed`` (width out of range or no lobe at the
+candidate) and ``invalid`` (no usable covariance). The center is scored on
+resolved and overlapping candidates, the source position on resolved and
+single ones.
+
+Positions reach the sky in two steps. The refine stage's affine from the
+item's ``summary.json`` (read by ``load`` when it sits beside the catalog)
+moves the sub-pixel position into the reference frame. The catalog's own
+``ra``/``dec`` at the integer candidate pixel then anchors it: per exposure
+an affine pixel-to-tangent-plane map is fitted to those anchors, and a
+detection's sky position is its anchor's plus the linear part of that map
+applied to the offset from the integer pixel. The header WCS's distortion
+stays in the anchors, and dithers and rotations between exposures are not
+scatter.
 
 What the test cannot see: the reference's noise is the same in every
 exposure of a detector and never scatters between them, so every arm keeps a
 term the test does not measure; and a bias common to all exposures (a
 reference position error, a systematic of the fit) passes unseen.
-
-Usage: repeat_catalogs.py CATALOG [CATALOG ...] [--out report.json]
-[--link-px 2.0] [--duplicate-px 1.0]
 """
 
 from __future__ import annotations
@@ -37,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -47,19 +57,17 @@ from scipy.spatial import cKDTree
 from scipy.stats import chi2 as chi2_dist
 
 TERMS = ("corr", "kfit", "kmatch", "mis")
-ARMS = (
-    "full",
-    "fit only",
-    "without corr",
-    "without kfit",
-    "without kmatch",
-    "without mis",
-)
+# arm -> the terms whose squares, with the fit term's, make its variance
+ARMS: dict[str, tuple[str, ...]] = {
+    "full": TERMS,
+    "fit only": (),
+    **{f"without {t}": tuple(u for u in TERMS if u != t) for t in TERMS},
+}
 QUANTITIES = {
     "dipole center": ("center", ("resolved", "overlapping")),
     "source position": ("positive", ("resolved", "single")),
 }
-CLASSES = ("invalid", "failed", "overlapping", "single", "resolved")
+CLASSES = ("invalid", "failed", "overlapping", "fading", "single", "resolved")
 BLIND_SPOTS = (
     "The reference's noise is shared by every exposure of a detector and "
     "does not scatter between them: each arm keeps a term the test cannot "
@@ -67,17 +75,17 @@ BLIND_SPOTS = (
     "A bias common to all exposures (a reference position error, a "
     "systematic of the fit) moves every detection alike and passes unseen.",
 )
-MIN_ANCHORS = 3
+MIN_ANCHORS = 10
+# of the anchor design on centered, unit-scaled pixel coordinates
+MAX_ANCHOR_CONDITION = 1e3
 
 
 # --- classes from the quality flags ----------------------------------------
 
 
 def classify(df: pd.DataFrame) -> np.ndarray:
-    """One class per row from ``quality_flags``, ``converged`` and
-    ``uncertainty_valid``: ``invalid`` (no usable covariance), ``failed``
-    (width out of range or no lobe at the candidate), ``overlapping``,
-    ``single`` (exactly one unsupported lobe) or ``resolved``.
+    """One class per row (``CLASSES``) from ``quality_flags``, ``converged``
+    and ``uncertainty_valid``.
     """
     from cuphoton.xfit import DipoleQualityFlag as F
 
@@ -85,7 +93,8 @@ def classify(df: pd.DataFrame) -> np.ndarray:
     neg = (flags & int(F.NEGATIVE_LOBE_UNSUPPORTED)) != 0
     pos = (flags & int(F.POSITIVE_LOBE_UNSUPPORTED)) != 0
     kind = np.full(len(df), "resolved", dtype=object)
-    kind[neg != pos] = "single"
+    kind[neg & ~pos] = "single"
+    kind[pos & ~neg] = "fading"
     kind[(flags & int(F.LOBES_OVERLAP)) != 0] = "overlapping"
     kind[
         (flags & int(F.WIDTH_OUT_OF_RANGE | F.NO_LOBE_AT_CANDIDATE)) != 0
@@ -101,26 +110,55 @@ def classify(df: pd.DataFrame) -> np.ndarray:
 
 
 def tangent_plane(ra, dec, ra0, dec0):
-    """Offsets in arcsec on the tangent plane at ``(ra0, dec0)``."""
+    """Offsets in arcsec on the tangent plane at ``(ra0, dec0)``; the right
+    ascension difference is wrapped into (-180, 180] degrees.
+    """
+    d = ((np.asarray(ra, float) - ra0 + 180.0) % 360.0) - 180.0
     return (
-        (np.asarray(ra) - ra0) * np.cos(np.radians(dec0)) * 3600.0,
-        (np.asarray(dec) - dec0) * 3600.0,
+        d * np.cos(np.radians(dec0)) * 3600.0,
+        (np.asarray(dec, float) - dec0) * 3600.0,
     )
 
 
-def fit_anchor_affine(x, y, ex, ey):
-    """Affine pixel-to-tangent-plane map ``(M, c)`` with ``[ex, ey] = M
-    [x, y] + c`` from the integer-pixel anchors of one exposure; None with
-    fewer than three anchors or a degenerate layout.
+@dataclass(frozen=True)
+class AnchorFit:
+    """Affine pixel-to-tangent-plane map ``[ex, ey] = matrix [x, y] +
+    offset`` of one exposure, with the anchors used and the rms of their
+    residuals in arcsec.
+    """
+
+    matrix: np.ndarray
+    offset: np.ndarray
+    anchors: int
+    residual_arcsec: float
+
+    @property
+    def pixel_arcsec(self) -> np.ndarray:
+        """Arcsec per pixel along the x and y pixel axes."""
+        return np.sqrt((self.matrix**2).sum(axis=0))
+
+
+def fit_anchor_affine(x, y, ex, ey) -> AnchorFit | None:
+    """The affine map from the integer-pixel anchors of one exposure; None
+    with fewer than ``MIN_ANCHORS`` anchors or a layout whose design on
+    centered, unit-scaled coordinates is conditioned worse than
+    ``MAX_ANCHOR_CONDITION`` (anchors along a line cannot fix the map).
     """
     x, y = np.asarray(x, float), np.asarray(y, float)
     if len(x) < MIN_ANCHORS:
         return None
-    g = np.column_stack([x, y, np.ones(len(x))])
-    if np.linalg.matrix_rank(g) < 3:
+    centered = np.column_stack([x - x.mean(), y - y.mean()])
+    spread = centered.std(axis=0).max()
+    if not spread > 0:
         return None
-    coef, *_ = np.linalg.lstsq(g, np.column_stack([ex, ey]), rcond=None)
-    return coef[:2].T, coef[2]
+    probe = np.column_stack([centered / spread, np.ones(len(x))])
+    if np.linalg.cond(probe) > MAX_ANCHOR_CONDITION:
+        return None
+    g = np.column_stack([x, y, np.ones(len(x))])
+    target = np.column_stack([ex, ey])
+    coef, *_ = np.linalg.lstsq(g, target, rcond=None)
+    residual = float(np.sqrt(((g @ coef - target) ** 2).sum(axis=1).mean()))
+    return AnchorFit(coef[:2].T, coef[2], int(len(x)), residual)
 
 
 def read_affine(summary_path: Path | None):
@@ -138,30 +176,31 @@ def read_affine(summary_path: Path | None):
     return np.asarray(aff["A"], float), np.asarray(aff["b"], float)
 
 
+def transform_kind(affine) -> str:
+    """``"identity"``, ``"shift"`` or ``"affine"`` for a refine ``(A, b)``."""
+    a, b = affine
+    if np.allclose(a, np.eye(2)):
+        return "identity" if np.allclose(b, 0.0) else "shift"
+    return "affine"
+
+
 def sky_positions(
-    df: pd.DataFrame, prefix: str, affine, ra0: float, dec0: float
+    df: pd.DataFrame, prefix: str, affine, fit: AnchorFit, ra0, dec0
 ):
     """Tangent-plane offsets (arcsec) of ``x + <prefix>_x, y + <prefix>_y``
-    for one exposure, moved to the reference frame by ``affine`` and to the
-    sky by the anchor fit, plus the arcsec per pixel along each pixel axis
-    (None when the anchors cannot fix the map).
+    for one exposure: the anchor's own offsets at the integer pixel plus the
+    linear part of ``fit`` applied to the sub-pixel position, after
+    ``affine`` has moved that position into the reference frame.
     """
     ex0, ey0 = tangent_plane(df["ra"].values, df["dec"].values, ra0, dec0)
-    fit = fit_anchor_affine(df["x"].values, df["y"].values, ex0, ey0)
-    if fit is None:
-        return None
-    m, c = fit
-    a, b = affine
-    p = np.column_stack(
-        [
-            df["x"].values + df[f"{prefix}_x"].values,
-            df["y"].values + df[f"{prefix}_y"].values,
-        ]
+    pixel = np.column_stack([df["x"].values, df["y"].values]).astype(float)
+    p = pixel + np.column_stack(
+        [df[f"{prefix}_x"].values, df[f"{prefix}_y"].values]
     )
+    a, b = affine
     p = p @ a.T + b
-    e = p @ m.T + c
-    scale = np.sqrt((m**2).sum(axis=0))  # arcsec per pixel along x, y
-    return e[:, 0], e[:, 1], scale
+    e = np.column_stack([ex0, ey0]) + (p - pixel) @ fit.matrix.T
+    return e[:, 0], e[:, 1]
 
 
 # --- linking ---------------------------------------------------------------
@@ -185,14 +224,13 @@ def link_by_position(x, y, radius):
 
 
 def link(
-    df: pd.DataFrame, prefix: str, link_px: float, duplicate_px: float
+    df: pd.DataFrame, link_px: float, duplicate_px: float
 ) -> pd.DataFrame:
-    """Detections of one quantity linked across exposures: within an
-    exposure the highest ``peak_abs_sigma`` within ``duplicate_px`` stays;
-    across exposures detections within ``link_px`` form a group; groups
-    seen in at least two exposures and at most once per exposure remain.
-    ``df`` holds one detector with ``ex``, ``ey`` (arcsec) and
-    ``pixel_arcsec`` columns.
+    """Detections linked across exposures: within an exposure the highest
+    ``peak_abs_sigma`` within ``duplicate_px`` stays; across exposures
+    detections within ``link_px`` form a group; groups seen in at least two
+    exposures and at most once per exposure remain. ``df`` holds one
+    detector with ``ex``, ``ey`` (arcsec) and ``pixel_arcsec`` columns.
     """
     d = df[np.isfinite(df.ex) & np.isfinite(df.ey)].copy()
     if len(d) < 2:
@@ -225,21 +263,15 @@ def link(
 
 
 def arm_variance(df: pd.DataFrame, q: str, arm: str) -> np.ndarray:
-    """Variance (squared catalog units) of quantity ``q`` under ``arm``:
-    the full bar, the fit term alone, or the full bar with one term
-    removed in quadrature.
+    """Variance (squared catalog units) of quantity ``q`` under ``arm``: the
+    fit term's square plus the squares of the terms ``ARMS[arm]`` keeps.
     """
-    full = df[f"{q}_err"].to_numpy(float) ** 2
-    if arm == "full":
-        return full
-    if arm == "fit only":
-        return df[f"{q}_err_fit"].to_numpy(float) ** 2
-    if arm.startswith("without "):
-        term = arm.removeprefix("without ")
-        if term not in TERMS:
-            raise ValueError(f"unknown term {term!r}")
-        return full - df[f"{q}_err_{term}"].to_numpy(float) ** 2
-    raise ValueError(f"unknown arm {arm!r}")
+    if arm not in ARMS:
+        raise ValueError(f"unknown arm {arm!r}; one of {list(ARMS)}")
+    var = df[f"{q}_err_fit"].to_numpy(float) ** 2
+    for t in ARMS[arm]:
+        var = var + df[f"{q}_err_{t}"].to_numpy(float) ** 2
+    return var
 
 
 def repeat_chi2(group, x, y, var_x, var_y) -> dict:
@@ -278,12 +310,12 @@ def repeat_chi2(group, x, y, var_x, var_y) -> dict:
 
 def score(linked: pd.DataFrame, prefix: str) -> dict:
     """Every arm on the linked detections whose full error bar is defined
-    on both axes, in groups that keep at least two of them, so the arms are
-    compared on the same sources.
+    and positive on both axes, in groups that keep at least two of them, so
+    the arms are compared on the same sources.
     """
     ok = np.ones(len(linked), bool)
     for a in ("x", "y"):
-        v = arm_variance(linked, f"{prefix}_{a}", "full")
+        v = linked[f"{prefix}_{a}_err"].to_numpy(float)
         ok &= np.isfinite(v) & (v > 0)
     s = linked[ok]
     s = s[s.group.map(s.group.value_counts()) >= 2]
@@ -340,10 +372,71 @@ def load(paths) -> pd.DataFrame:
     return df
 
 
+def place(df: pd.DataFrame, detectors: dict) -> pd.DataFrame:
+    """Sky positions of both quantities for every row, the anchors fitted
+    once per detector and exposure. Fills ``detectors`` with each
+    exposure's anchor count, transform and fit (or lists it under
+    ``exposures_without_anchor_fit``); returns the rows that were placed,
+    with ``<prefix>_ex``, ``<prefix>_ey``, ``scale_x``, ``scale_y`` and
+    ``pixel_arcsec``.
+    """
+    placed = []
+    for det, d in df.groupby("ccd_id"):
+        ra0, dec0 = float(np.median(d.ra)), float(np.median(d.dec))
+        info = {
+            "exposures": sorted(d.exposure_id.unique().tolist()),
+            "exposures_without_anchor_fit": [],
+            "anchors": {},
+        }
+        for exp, e in d.groupby("exposure_id"):
+            affine = (
+                np.asarray(e.affine_A.iloc[0], float),
+                np.asarray(e.affine_b.iloc[0], float),
+            )
+            ex0, ey0 = tangent_plane(e.ra.values, e.dec.values, ra0, dec0)
+            fit = fit_anchor_affine(e.x.values, e.y.values, ex0, ey0)
+            rec = {
+                "detections": int(len(e)),
+                "transform": transform_kind(affine),
+                "fit": None,
+            }
+            info["anchors"][str(exp)] = rec
+            if fit is None:
+                info["exposures_without_anchor_fit"].append(str(exp))
+                continue
+            scale = fit.pixel_arcsec
+            rec["fit"] = {
+                "anchors": fit.anchors,
+                "residual_arcsec": fit.residual_arcsec,
+                "pixel_arcsec": scale.tolist(),
+            }
+            cols = {}
+            for prefix, _ in QUANTITIES.values():
+                ex, ey = sky_positions(e, prefix, affine, fit, ra0, dec0)
+                cols[f"{prefix}_ex"], cols[f"{prefix}_ey"] = ex, ey
+            placed.append(
+                e.assign(
+                    **cols,
+                    scale_x=scale[0],
+                    scale_y=scale[1],
+                    pixel_arcsec=float(scale.mean()),
+                )
+            )
+        detectors[str(det)] = info
+    return pd.concat(placed) if placed else df.iloc[:0]
+
+
 def repeat(
     df: pd.DataFrame, *, link_px: float = 2.0, duplicate_px: float = 1.0
 ) -> dict:
-    """The repeat test on the chain's rows of one or more detectors."""
+    """The repeat test on the chain's rows of one or more detectors, as
+    :func:`load` returns them.
+    """
+    if not {"affine_A", "affine_b"} <= set(df.columns):
+        raise ValueError(
+            "rows carry no affine_A and affine_b columns: read the catalogs "
+            "with load(), which adds each item's refine affine"
+        )
     df = df.copy()
     df["class"] = classify(df)
     out: dict = {
@@ -354,45 +447,17 @@ def repeat(
         "blind_spots": list(BLIND_SPOTS),
         "quantities": {},
     }
-    for det, d in df.groupby("ccd_id"):
-        out["detectors"][str(det)] = {
-            "exposures": sorted(d.exposure_id.unique().tolist()),
-            "exposures_without_anchor_fit": [],
-        }
+    placed = place(df, out["detectors"])
     for name, (prefix, classes) in QUANTITIES.items():
-        rows = []
-        for det, d in df[df["class"].isin(classes)].groupby("ccd_id"):
-            ra0, dec0 = float(np.median(d.ra)), float(np.median(d.dec))
-            for exp, e in d.groupby("exposure_id"):
-                anchors = df[(df.ccd_id == det) & (df.exposure_id == exp)]
-                a = (
-                    np.asarray(e.affine_A.iloc[0]),
-                    np.asarray(e.affine_b.iloc[0]),
-                )
-                sky = sky_positions(anchors, prefix, a, ra0, dec0)
-                if sky is None:
-                    out["detectors"][str(det)][
-                        "exposures_without_anchor_fit"
-                    ].append(str(exp))
-                    continue
-                ex, ey, scale = sky
-                sel = anchors.index.get_indexer(e.index)
-                rows.append(
-                    e.assign(
-                        ex=ex[sel],
-                        ey=ey[sel],
-                        scale_x=scale[0],
-                        scale_y=scale[1],
-                        pixel_arcsec=float(scale.mean()),
-                    )
-                )
-        if not rows:
+        rows = placed[placed["class"].isin(classes)]
+        if rows.empty:
             out["quantities"][name] = None
             continue
+        rows = rows.assign(ex=rows[f"{prefix}_ex"], ey=rows[f"{prefix}_ey"])
         linked = pd.concat(
             [
-                link(d, prefix, link_px, duplicate_px)
-                for _, d in pd.concat(rows).groupby("ccd_id")
+                link(d, link_px, duplicate_px)
+                for _, d in rows.groupby("ccd_id")
             ]
         )
         out["quantities"][name] = (
