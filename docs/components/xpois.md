@@ -477,10 +477,13 @@ The interpolation that put the reference on the target grid correlates
 neighbors, and the kernel correlates them further, so a PSF flux, a position
 or an aperture (all weighted sums of residual pixels) has a variance the
 diagonal plane under-predicts. `correlation_factor` gives the ratio in closed
-form for any weights; every input is a stack of stamps on the same windows,
-centered on the positions the caller chose:
+form for any weights. The variance inputs are the full planes, cut here
+around `positions` with `window_stamps`, or stamps already cut on the same
+windows:
 
 ```python
+import numpy as np
+
 from cuphoton.xpois import (
     correlation_factor,
     empirical_correlation_factor,
@@ -488,13 +491,15 @@ from cuphoton.xpois import (
     resampling_variance_factor,
 )
 
-flux_weights = psf_weights(psf_sigma, 21)  # or derivative="x" for a position
+offset = positions - np.rint(positions)  # (N, 2) sub-pixel (dx, dy)
+flux_weights = psf_weights(psf_sigma, 21, offset=offset)  # (N, 21, 21)
 result = correlation_factor(
-    np.broadcast_to(flux_weights, (len(positions), 21, 21)),
+    flux_weights,  # or derivative="x" weights for a position
     kernel=fit.kernel,
-    target_variance=target_variance_stamps,  # (N, 21, 21)
-    reference_source_variance=source_variance_stamps,  # (N, 21, 21)
+    target_variance=target_variance,  # full plane
+    reference_variance=reference_variance,  # full plane, resampled units
     resampling_weights=resampling_weights,  # (N, k, k) at the positions
+    positions=positions,  # (N, 2) x, y target pixels
 )
 flux_error = flux_error * np.sqrt(result.factor)
 ```
@@ -503,24 +508,30 @@ For weights `w` the factor is
 `(sum(w**2 V_target) + Var(sum_p w_p (K * R)_p)) / sum(w**2 V_D)`, with
 `V_D` the diagonal residual variance (`marginal_residual_variance` of
 `standardize_constant_kernel_residual` when passed as `residual_variance`,
-otherwise the same plane under a flat source variance). The reference part
-is the source variance, the `w**2`-weighted mean of
-`reference_source_variance` (the reference variance divided by the
-resampling gain `sum(resampling_weights**2)`), times the squared footprint
-of `w` on the source pixels through the kernel and the resampling weights.
-Target pixels are taken as independent. The result records
-`covariance_scope: "reference_resampling_and_kernel"` and
-`target_pixels_independent: True`; `factor` and `pixel_ratio` are `NaN`
-where any stamp of a window is not finite. `resampling_variance_factor`
-is the same ratio for one residual pixel's reference term, 1 for
-independent reference pixels. The closed form holds where the mapping
-between the grids is locally a translation; pass `is_translation` from the
-resampling weights' provider and positions flagged false raise
-`NotImplementedError`.
+otherwise `target_variance + reference_variance * sum(kernel**2)`, the same
+plane under a flat reference variance). `reference_variance` is the
+resampled reference variance in squared reference units, the plane
+`standardize_constant_kernel_residual` takes; its division by the resampling
+gain `sum(resampling_weights**2)` happens inside. The reference part of the
+factor is the source-pixel variance, the `w**2`-weighted mean of that
+quotient over the window, times the squared footprint of `w` on the source
+pixels through the kernel and the resampling weights. Target pixels are
+taken as independent.
+
+The result records `covariance_scope: "reference_resampling_and_kernel"`,
+`target_pixels_independent: True` and `n_rotated`. `factor` and
+`pixel_ratio` (the same ratio for one residual pixel, mixed with the target
+term) are `NaN` where any stamp of a window is not finite, where the
+resampling stamp is all zero, or where the position's `is_translation` flag
+is false: the closed form holds where the mapping between the grids is
+locally a translation, and the flag is the one the resampling weights'
+provider returns. `resampling_variance_factor` is the reference-term ratio
+for one residual pixel alone, 1 for independent reference pixels.
 
 `empirical_correlation_factor` measures the same factor on an image: the
 squared robust spread of the weighted sums at empty positions over their
-diagonal prediction. It checks the closed form on any image, and tells
+diagonal prediction, returned with the number of positions used and the
+plain variance ratio. It checks the closed form on any image, and tells
 whether a survey's variance plane already carries the correlation.
 
 ## Distributed image-pair batches

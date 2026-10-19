@@ -8,6 +8,7 @@ from cuphoton import __version__
 
 from .correlation import (
     CorrelationFactorResult,
+    EmpiricalCorrelationFactor,
     correlation_factor,
     empirical_correlation_factor,
     psf_weights,
@@ -65,6 +66,7 @@ __all__ = [
     "ConstantKernelNoiseResult",
     "CorrelationFactorResult",
     "DeviceConstantKernelFitResult",
+    "EmpiricalCorrelationFactor",
     "GaussianBasisComponent",
     "KernelFitCovariance",
     "SeparableKernelFitResult",
