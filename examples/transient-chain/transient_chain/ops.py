@@ -557,7 +557,7 @@ def noise_match_factors(search_stamps, reference_sigma: float):
 # --- star measurements, misalignment and PSF width --------------------------
 
 
-def _patches(image, x, y, half):
+def patches(image, x, y, half):
     """(N, 2 half + 1, 2 half + 1) float64 windows of ``image`` centered on
     the pixels rint(x), rint(y); NaN where a window leaves the image.
     """
@@ -591,7 +591,7 @@ def _star_boxes(image, variance, xy, box, fwhm, smoothed=None):
     half = box // 2
     c = xp.asarray(xy, dtype=xp.float64).reshape(-1, 2)
     s = xp.nan_to_num(
-        _patches(smooth, c[:, 0], c[:, 1], half), nan=-xp.inf
+        patches(smooth, c[:, 0], c[:, 1], half), nan=-xp.inf
     ).reshape(len(c), -1)
     k = xp.argmax(s, axis=1)
     width = 2 * half + 1
@@ -601,8 +601,8 @@ def _star_boxes(image, variance, xy, box, fwhm, smoothed=None):
     wy = py[:, None, None] + off[None, :, None]
     wx = px[:, None, None] + off[None, None, :]
     return (
-        xp.nan_to_num(_patches(work, px, py, half)),
-        xp.nan_to_num(_patches(v, px, py, half)),
+        xp.nan_to_num(patches(work, px, py, half)),
+        xp.nan_to_num(patches(v, px, py, half)),
         wx - c[:, 0, None, None],
         wy - c[:, 1, None, None],
     )
@@ -919,7 +919,7 @@ def _misalignment_model(
     return Misalignment(A, b, cov(tau2), "rms", tau2, used, e, tuple(shape))
 
 
-def _chi2_median_scale(num, base, scale) -> float:
+def chi2_median_scale(num, base, scale) -> float:
     """t >= 0 with median(num / (base + t scale)) at the chi-square(1) median,
     0 when the median is already at or below it: the extra variance a sample
     of squared deviations asks for, which a few outliers do not set.
@@ -983,7 +983,7 @@ def fit_misalignment(
         # cannot hide itself
         t2 = np.array(
             [
-                _chi2_median_scale((e - p)[used, a] ** 2, base[used, a], 1.0)
+                chi2_median_scale((e - p)[used, a] ** 2, base[used, a], 1.0)
                 for a in (0, 1)
             ]
         )

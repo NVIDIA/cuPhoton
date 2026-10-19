@@ -128,9 +128,10 @@ class Scene:
         return dict(
             cand_x=self.cand[:, 0],
             cand_y=self.cand[:, 1],
+            # a resolved dipole: lobes 2.5 px either side of the center
             offsets={
                 "center": (np.full(n, 0.3), np.full(n, -0.2)),
-                "positive": (np.full(n, 0.3), np.full(n, -0.2)),
+                "positive": (np.full(n, 2.8), np.full(n, -0.2)),
             },
             err_fit=err_fit,
             lobe_flux=self.flux,
@@ -316,3 +317,228 @@ def test_forced_flux_matches_the_planted_flux(scene):
     )
     np.testing.assert_allclose(flux, scene.flux[:3], rtol=0.05)
     assert np.all(err > 0) and np.all(np.abs(flux - scene.flux[:3]) < 4 * err)
+
+
+def _known_covariance(scene, c):
+    """A kernel-fit covariance with variance ``c`` on the one kernel
+    coefficient and none on the background, so the kernel-fit term of a
+    weighted sum is ``c`` times the squared sum of the weights over the
+    kernel-matched reference.
+    """
+    from cuphoton.xpois import KernelFitCovariance
+
+    return KernelFitCovariance(
+        covariance=np.diag([c, 0.0]),
+        basis_kernels=scene.kernel[None],
+        basis_count=1,
+        background_degree=0,
+        form="plain",
+    )
+
+
+def _hand_sum(scene, stamp, x, y):
+    """``sum(w (R * K))`` over the window at ``rint(x, y)`` with the
+    normalized weights ``w = stamp / (V sum(stamp^2 / V))``, by hand.
+    """
+    h = stamp.shape[-1] // 2
+    cx, cy = int(np.rint(x)), int(np.rint(y))
+    conv = scene.matched[cy - h : cy + h + 1, cx - h : cx + h + 1]
+    var = scene.variance[cy - h : cy + h + 1, cx - h : cx + h + 1]
+    w = stamp / var
+    w /= (w * stamp).sum()
+    return (w * conv).sum()
+
+
+def test_kernel_fit_terms_match_a_known_covariance_by_hand(scene):
+    import dataclasses
+
+    from cuphoton.xpois import psf_weights
+
+    c = 1e-6
+    ctx = dataclasses.replace(
+        scene.context(star_xy=None),
+        kernel_covariance=_known_covariance(scene, c),
+    )
+    inp = scene.inputs()
+    res = uq.budget(ctx, **inp)
+    cols = res.columns
+    size = ctx.window
+    for i in range(3):
+        cx, cy = scene.cand[i]
+        # the flux: the PSF matched filter at the photometry position
+        fx, fy = cx + 0.3, cy - 0.2
+        off = np.array([[fx - np.rint(fx), fy - np.rint(fy)]])
+        psf = psf_weights(PSF, size, offset=off)[0]
+        expect = c * _hand_sum(scene, psf, fx, fy) ** 2
+        assert cols["psf_flux_err_kfit"][i] ** 2 == pytest.approx(
+            expect, rel=1e-9
+        )
+        # a lobe: the derivative matched filter, divided by the lobe flux
+        px, py = cx + 2.8, cy - 0.2
+        off = np.array([[px - np.rint(px), py - np.rint(py)]])
+        dg = psf_weights(PSF, size, offset=off, derivative="x")[0]
+        s_pos = _hand_sum(scene, dg, px, py)
+        expect = c * (s_pos / scene.flux[i]) ** 2
+        assert cols["positive_x_err_kfit"][i] ** 2 == pytest.approx(
+            expect, rel=1e-9
+        )
+        # the center: the mean of the two lobes' shifts, cross term kept
+        nx, ny = cx - 2.2, cy - 0.2
+        off = np.array([[nx - np.rint(nx), ny - np.rint(ny)]])
+        dg = psf_weights(PSF, size, offset=off, derivative="x")[0]
+        s_neg = _hand_sum(scene, dg, nx, ny)
+        expect = c * (0.5 * (s_pos - s_neg) / scene.flux[i]) ** 2
+        assert cols["center_x_err_kfit"][i] ** 2 == pytest.approx(
+            expect, rel=1e-5
+        )
+    assert res.diagnostics["center_window_px"] == size + 2 * 3
+
+
+def test_lobe_kernel_fit_term_follows_the_sub_pixel_position():
+    """A lobe centered on a reference star has no kernel-fit position term
+    (the derivative weights are antisymmetric about the star); pixel-centered
+    weights would give it the term of a lobe 0.4 px off the star.
+    """
+    s = Scene(seed=4, cand=[[80, 80], [140, 50], [100, 150], [40, 160]])
+    star = _gaussians([80.4], [80.0], [5.0e4])
+    s.reference = s.reference + star
+    s.matched = fftconvolve(s.reference, s.kernel, mode="same")
+    ctx = s.context(star_xy=None, misalignment=None)
+    n = len(s.cand)
+    on, off = [], []
+    for dx, out in ((0.4, on), (1.4, off)):
+        inp = s.inputs()
+        inp["offsets"] = {
+            "center": (np.full(n, dx), np.zeros(n)),
+            "positive": (np.full(n, dx), np.zeros(n)),
+        }
+        inp["photometry_xy"] = np.column_stack([np.full(n, dx), np.zeros(n)])
+        out.append(uq.budget(ctx, **inp).columns["positive_x_err_kfit"][0])
+    assert off[0] > 0
+    assert on[0] < 1e-3 * off[0]
+
+
+def test_kernel_mismatch_term_is_eta_times_the_reference_flux(scene):
+    import dataclasses
+
+    ctx = dataclasses.replace(
+        scene.context(),
+        kernel_mismatch={"eta": 0.1, "n": 24},
+        terms=("kfit", "kmatch", "mis"),
+    )
+    inp = scene.inputs()
+    cols = uq.budget(ctx, **inp).columns
+    half = ctx.window // 2
+    # T is the matched reference at the lobe plus the modeled offset
+    t, _ = uq.forced_flux(
+        scene.matched,
+        scene.variance,
+        scene.cand[:, 0] + 0.3 + FIELD[0],
+        scene.cand[:, 1] - 0.2 + FIELD[1],
+        PSF,
+        half,
+        background="median",
+    )
+    np.testing.assert_allclose(
+        cols["psf_flux_err_kmatch"], 0.1 * np.abs(t), rtol=1e-12
+    )
+    np.testing.assert_array_equal(cols["center_x_err_kmatch"], 0.0)
+
+
+def test_validity_is_per_quantity_and_independent_of_terms():
+    """The masked block sits in the first candidate's flux and negative-lobe
+    windows but not in its positive-lobe window: psf_flux and the center are
+    invalid, the positive lobe stays valid, whatever terms are on.
+    """
+    s = Scene(cand=[[44, 160], [140, 50], [100, 150], [60, 70]])
+    for kw in (
+        {},
+        {"fit": None, "star_xy": None},
+        {"fit": None, "star_xy": None, "misalignment": None},
+    ):
+        res = uq.budget(s.context(**kw), **s.inputs())
+        c = res.columns
+        assert c["uq_valid"].tolist() == [False, True, True, True]
+        assert res.diagnostics["invalid_window"] == 1
+        assert np.isnan(c["psf_flux_err"][0])
+        assert np.isnan(c["center_x_err"][0])
+        assert np.isnan(c["center_y_err"][0])
+        assert np.isfinite(c["positive_x_err"][0])
+        assert np.isfinite(c["positive_y_err"][0])
+        # the term columns keep their values on the invalid row
+        for q in QUANTITIES:
+            for t in uq.TERMS:
+                assert np.isfinite(c[f"{q}_err_{t}"][0])
+        assert np.isfinite(c["positive_x_err"]).all()
+
+
+def test_correlation_factor_is_not_evaluated_when_excluded(
+    scene, monkeypatch
+):
+    def boom(*a, **k):
+        raise AssertionError("correlation_factor called")
+
+    monkeypatch.setattr(uq, "correlation_factor", boom)
+    ctx = scene.context()
+    assert "corr" not in ctx.terms
+    res = uq.budget(ctx, **scene.inputs())
+    assert res.columns["uq_valid"].tolist() == [True, True, True, False]
+    np.testing.assert_array_equal(res.columns["psf_flux_err_corr"], 0.0)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_error_budget_runs_step_8c(scene, enabled):
+    from transient_chain import catalog
+
+    n = len(scene.cand)
+    err = np.full(n, 0.05)
+    derived = SimpleNamespace(
+        center_x=np.full(n, 0.3),
+        center_y=np.full(n, -0.2),
+        positive_x=np.full(n, 2.8),
+        positive_y=np.full(n, -0.2),
+        center_x_error=err,
+        center_y_error=err,
+        positive_x_error=err,
+        positive_y_error=err,
+        lobe_flux=scene.flux,
+    )
+    u_cfg = {"enabled": enabled, "kernel_fit": True}
+    res, summary = uq.error_budget(
+        u_cfg,
+        cand_x=scene.cand[:, 0],
+        cand_y=scene.cand[:, 1],
+        derived=derived,
+        single=np.zeros(n, bool),
+        psf_flux_error=np.full(n, 40.0),
+        photometry_xy=np.column_stack([np.full(n, 0.3), np.full(n, -0.2)]),
+        fit=scene.fit,
+        kernel=scene.kernel,
+        reference=scene.reference,
+        matched=scene.matched,
+        residual=scene.residual,
+        variance=scene.variance,
+        psf_sigma=PSF,
+        misalignment=scene.misalignment,
+        star_xy=scene.star_xy,
+    )
+    cols = res.host_columns()
+    budget_columns = {
+        k for k in catalog.BUDGET_COLUMNS if not k.startswith("sky_err")
+    }
+    assert set(cols) == budget_columns | {f"{q}_err" for q in QUANTITIES}
+    assert all(v.shape == (n,) for v in cols.values())
+    assert cols["uq_valid"].dtype == bool
+    if enabled:
+        assert summary["terms"] == ["fit", "kfit", "kmatch", "mis"]
+        assert summary["excluded"] == {"corr": "no reference variance plane"}
+        assert summary["kernel_fit_form"] == "plain"
+        assert summary["invalid_window"] == 1
+        assert res.control_bytes == 3 * n * 2 * 8 + 4 * n
+        assert np.all(cols["center_x_err"][:3] > 0.05)
+    else:
+        assert summary == {"terms": ["fit"], "excluded": {}, "disabled": True}
+        assert res.control_bytes == 0
+        np.testing.assert_array_equal(cols["center_x_err"], 0.05)
+        np.testing.assert_array_equal(cols["psf_flux_err"], 40.0)
+        assert cols["uq_valid"].all()

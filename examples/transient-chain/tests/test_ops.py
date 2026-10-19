@@ -513,6 +513,9 @@ def test_measure_matched_stars_models_a_synthetic_field():
         np.sqrt(sigma**2 + 1 / 12), rel=0.02
     )
     assert d["psf_width"]["n_used"] == ms.psf.n_used <= d["stars_used"]
+    # the kept stars are the model's used set, as target positions
+    assert ms.star_xy.shape == (d["stars_used"], 2)
+    assert all(tuple(p) in {tuple(q) for q in mv} for p in ms.star_xy)
     # the same call with the smoothed images prepared once
     again = ops.measure_matched_stars(
         target,
@@ -552,6 +555,7 @@ def test_measure_matched_stars_skips_the_model_but_measures_the_width():
         np.sqrt(sigma**2 + 1 / 12), rel=0.02
     )
     assert skipped.psf.n == skipped.diagnostics["stars_neighbor_free"]
+    assert len(skipped.star_xy) == skipped.diagnostics["stars_neighbor_free"]
     few = ops.measure_matched_stars(
         target, template, var, mv, mt, box=15, fwhm=4.0, min_stars=10**6
     )
@@ -563,6 +567,7 @@ def test_measure_matched_stars_skips_the_model_but_measures_the_width():
         target, template, var, mv[:2], mt[:2], box=15, fwhm=4.0, min_stars=15
     )
     assert none.psf is None and none.control_bytes == 0
+    assert none.star_xy.shape == (2, 2)
     assert none.diagnostics == {
         "stars_matched": 2,
         "model": None,

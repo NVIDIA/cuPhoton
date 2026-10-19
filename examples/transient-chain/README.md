@@ -290,11 +290,11 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `chi_square`, `reduced_chi_square` | float64 | xfit | fit quality on the difference stamp |
 | `evaluations`, `valid_pixel_count` | int64 | xfit | solver bookkeeping |
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
-| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit, uq | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`); `*_err_fit` is the standard uncertainty from the full fit covariance, `*_err` the error bar to quote (every term in quadrature, NaN where `uq_valid` is false), and the x-y covariances come from the fit covariance |
+| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit, uq | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`). `<q>_err_fit`: standard uncertainty from xFit's covariance alone. `<q>_err`: the error bar to quote, every term in quadrature, NaN where the quantity's window is not valid (see below). `*_xy_cov`: x-y covariance from xFit's covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source, its conditional uncertainty from the fit, and the error bar to quote (NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars) |
-| `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item |
-| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where a correlation window holds a masked pixel (then the row's `<q>_err` are NaN and the term columns stand alone) |
+| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote, NaN where its window is not valid. All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
+| `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item; `<q>_err_corr` NaN where the factor is undefined |
+| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where any quantity's window holds a masked pixel or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
@@ -312,41 +312,62 @@ so a user can rebuild the bar with any term left out (step 8c, `transient_chain/
 term is a standard uncertainty in the quantity's units, pixels for a position and image units for
 the flux.
 
+The terms that depend on the reference's noise (`corr`, `kfit`) are computed for a weighted sum of
+residual pixels that stands in for xFit's estimator: the PSF-weighted sum at the photometry
+position for the flux (the forced-photometry estimator), the PSF-derivative-weighted sum at a lobe
+divided by the lobe flux for the lobe's position (a shift in pixels), and the mean of the two
+lobes' shifts for the center, built as one weight stamp over both lobes so the covariance between
+them is kept. Each stamp is centered on the sub-pixel position it measures; a window covers
+`2 ceil(5 psf_sigma) + 1` px (`uq.window_px` in `summary.json`, `uq.center_window_px` for the
+center's stamp over both lobes).
+
 - `fit` (`<q>_err_fit`): xFit's covariance, weighted by the target variance plane; the template's
   noise is not in that plane (below).
-- `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of
-  `cuphoton.xpois.correlation_factor` for a PSF-weighted sum (flux) or a PSF-derivative-weighted sum
-  (position) on a window of `2 ceil(5 psf_sigma) + 1` px around the position: the resampling and
+- `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of the
+  quantity's weighted sum (`cuphoton.xpois.correlation_factor`, floored at 1): the resampling and
   the kernel correlate the reference's pixels, so a weighted sum is noisier than the diagonal
   variance plane says. It needs the reference's variance plane on the target grid and the resampling
-  weights (`cuphoton.xrep.resampling_weights_at`); this version's template providers carry no
-  variance plane, so the term is 0 and `summary.json` lists it under `uq.excluded`.
+  weights (`cuphoton.xrep.resampling_weights_at` with the template's `ReprojectionSpec`); this
+  version's template providers carry no variance plane, so the term is 0 and `summary.json` lists
+  it under `uq.excluded`. Where the grid mapping is not locally a translation the factor is
+  undefined (`uq.rotated_grid` counts those rows).
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
-  reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate; for
-  a position the derivative weights are divided by the lobe flux so the sum is a shift in pixels.
-  Largest where a candidate sits on a bright reference source. `uq.kernel_fit: false` skips it.
-- `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux at the
-  candidate, `eta` the fraction of a static star's reference flux the subtraction leaves in the
-  residual beyond noise, solved at the stars the refine stage kept so that the median of their
-  squared residual fluxes over their predicted variance sits at the chi-square(1) median (a variable
-  star or two does not set it). Positions get 0: a kernel-mismatch term for the position of a
-  residual on a bright reference source is a planned addition.
-- `mis` (`<q>_err_mis`, positions only): the misalignment model's `variance(x, y)` at the position,
-  times 1/4 for the center of a dipole (each lobe moves with its own image) and, for the positive
-  lobe, times the squared sensitivity `lambda = (D + T) / D` of a single source (one supported lobe;
-  `D` the residual's forced flux and `T` the matched reference's at the lobe, `|lambda|` capped at
-  10, 1 for a resolved dipole). 0 without a misalignment model (refinement off, or a shift-only
-  refinement).
+  reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
+  Largest where a candidate sits on a bright reference source, and 0 where the lobe flux is not
+  usable. `uq.kernel_fit: false` skips it.
+- `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux `T` at the
+  photometry position. `eta` is the fraction of a static star's reference flux that the subtraction
+  leaves in the residual beyond noise: at the stars the refine stage kept, the residual's forced
+  flux `D` has predicted variance `uD^2 f + kfit` when the kernel is right, and `eta^2` is the
+  extra variance, in units of `T^2`, that puts the median of `D^2` over that prediction at the
+  chi-square(1) median (a variable star or two does not move a median). Positions get 0: a
+  kernel-mismatch term for the position of a residual on a bright reference source is a planned
+  addition.
+- `mis` (`<q>_err_mis`, positions only): the misalignment model's `variance(x, y)` at the position.
+  The center of a resolved dipole gets 1/4 of it: each lobe moves with its own image, and the
+  center is their mean. The positive lobe of a candidate with one supported lobe gets `lambda^2`
+  times it, `lambda = (D + T) / D` with `D` the residual's forced flux and `T` the matched
+  reference's at the lobe (a faint change on a bright source moves with the source, not with the
+  residual); `|lambda|` is capped at 10 and `uq.sensitivity_capped` counts the rows it capped. A
+  resolved dipole's positive lobe gets `lambda = 1`. For a fading single source the positive lobe is
+  the unsupported one, so `lambda^2` scales columns that describe a lobe that is not there; use
+  `psf_flux` for it. 0 without a misalignment model (refinement off, a shift-only refinement, or the
+  `daofind` star finder).
 - `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
   reported with its provenance and kept out of the pixel-frame columns.
 
-`uq_valid` is false where a quantity's correlation window holds a masked pixel (a rule for such
-candidates is a planned addition); its `<q>_err` are then NaN while the term columns keep their
-values. A term the item could not compute is written as 0 and `summary.json` records the terms
-that went into the bars (`uq_terms`) with the reason for each one left out (`uq.excluded`), the
-kernel-fit form, the kernel-mismatch fit at the stars, the window size and the counts of invalid
-windows and capped sensitivities. `uq.enabled: false` writes `<q>_err = <q>_err_fit` and zero terms.
+Validity is per quantity: `<q>_err` is NaN where the quantity's window (both lobes' windows for a
+center) holds a masked or non-finite pixel, or where its correlation factor is undefined; the term
+columns keep their values (`<q>_err_corr` is NaN with the factor). `uq_valid` is true where every
+quantity of the row is valid, so a candidate near a masked block can carry a valid `positive_x_err`
+and a NaN `psf_flux_err` in the same row with `uq_valid` false. A rule for windows with masked
+pixels is a planned addition. A term the item could not compute is written as 0 and `summary.json`
+records the terms that went into the bars (`uq_terms`) with the reason for each one left out
+(`uq.excluded`), the kernel-fit form, the kernel-mismatch fit at the stars (`eta`, the stars used
+and the median residual-to-reference flux ratio), the window sizes and the counts of rows with an
+invalid window, an undefined factor and a capped sensitivity. `uq.enabled: false` writes
+`<q>_err = <q>_err_fit`, zero terms and `uq_valid` true.
 
 The xFit standard errors come from the target's variance plane. The template's noise, carried
 through the subtraction kernel, is not in that variance, so the standard errors understate the

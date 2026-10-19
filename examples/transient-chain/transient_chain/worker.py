@@ -583,62 +583,35 @@ class ChainWorker:
             # 8c. the error budget: the terms beyond xFit's covariance per
             # candidate, combined into <q>_err (transient_chain.uq)
             with timer("uq"):
-                err_fit = {
-                    f"{name}_{axis}": getattr(derived, f"{name}_{axis}_error")
-                    for name in ("center", "positive")
-                    for axis in ("x", "y")
-                }
-                if photometry is not None:
-                    err_fit["psf_flux"] = photometry.flux_error
-                if u_cfg["enabled"]:
-                    ctx = uq.build_context(
-                        kernel=fit.kernel,
-                        reference=reference,
-                        matched=fit.matched,
-                        residual=residual,
-                        variance=variance,
-                        psf_sigma=psf_sigma,
-                        misalignment=self.misalignment,
-                        star_xy=self.star_xy,
-                        fit=fit if u_cfg["kernel_fit"] else None,
-                        # the template providers carry no variance plane
-                        # yet, so the reference's correlated noise (the corr
-                        # term) is not in this version's budget
-                        reference_variance=None,
-                        resampling=None,
-                    )
-                    unsupported = ((qflags & positive) != 0) ^ (
-                        (qflags & negative) != 0
-                    )
-                    budget = uq.budget(
-                        ctx,
-                        cand_x=cp.asarray(cand_x),
-                        cand_y=cp.asarray(cand_y),
-                        offsets={
-                            name: (
-                                getattr(derived, f"{name}_x"),
-                                getattr(derived, f"{name}_y"),
-                            )
-                            for name in ("center", "positive")
-                        },
-                        err_fit=err_fit,
-                        lobe_flux=derived.lobe_flux,
-                        single=unsupported,
-                        photometry_xy=None if photometry is None else source,
-                    )
-                    uq_diag = {
-                        "terms": ["fit", *budget.terms],
-                        "excluded": ctx.excluded,
-                        **budget.diagnostics,
-                    }
-                else:
-                    budget = uq.fit_only(err_fit)
-                    uq_diag = {
-                        "terms": ["fit"],
-                        "excluded": {},
-                        **budget.diagnostics,
-                    }
-                xfer["control_bytes"] += 2 * 8 * 3 * n_cand  # positions
+                unsupported = ((qflags & positive) != 0) ^ (
+                    (qflags & negative) != 0
+                )
+                budget, uq_diag = uq.error_budget(
+                    u_cfg,
+                    cand_x=cand_x,
+                    cand_y=cand_y,
+                    derived=derived,
+                    single=unsupported,
+                    psf_flux_error=None
+                    if photometry is None
+                    else photometry.flux_error,
+                    photometry_xy=None if photometry is None else source,
+                    fit=fit,
+                    kernel=fit.kernel,
+                    reference=reference,
+                    matched=fit.matched,
+                    residual=residual,
+                    variance=variance,
+                    psf_sigma=psf_sigma,
+                    misalignment=self.misalignment,
+                    star_xy=self.star_xy,
+                    # the template providers carry no variance plane yet, so
+                    # the reference's correlated noise (the corr term) is not
+                    # in this version's budget
+                    reference_variance=None,
+                    resampling=None,
+                )
+                xfer["control_bytes"] += budget.control_bytes
             # 9. XScan through DLPack: the scaled stamps never leave the
             # device
             logits_t = probs_t = view = scaled = None
@@ -726,8 +699,7 @@ class ChainWorker:
                     table["psf_flux_err_fit"] = err_fit
                     table["psf_flux_err"] = err_fit
                 # the budget columns; <q>_err becomes the full error bar
-                for name, values in budget.columns.items():
-                    table[name] = ops.to_host(values)
+                table.update(budget.host_columns())
                 table["sky_err_arcsec"] = np.full(
                     n_cand,
                     np.nan

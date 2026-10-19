@@ -200,3 +200,7 @@ def test_uq_block_defaults_and_sky_term_rule():
     bad["uq"] = {"enabled": "yes"}
     with pytest.raises(ValueError, match="true or false"):
         config.validate_config(bad)
+    bad = copy.deepcopy(raw)
+    bad["uq"] = {"sky_astrometry_arcsec": 0.01, "sky_astrometry_source": " "}
+    with pytest.raises(ValueError, match="non-empty string"):
+        config.validate_config(bad)

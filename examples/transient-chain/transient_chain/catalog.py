@@ -82,7 +82,7 @@ def _position_columns(
             "float64",
             "uq",
             f"error bar of {name}_{axis} to quote: every term in quadrature "
-            "(NaN where uq_valid is false)",
+            "(NaN where this quantity's window is not valid)",
         )
     cols[f"{name}_xy_cov"] = (
         "float64",
@@ -127,7 +127,7 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
         "float64",
         "uq",
         "error bar of psf_flux to quote: every term in quadrature (NaN "
-        "where uq_valid is false)",
+        "where its window is not valid)",
     ),
 }
 BUDGET_QUANTITIES = (
@@ -147,15 +147,21 @@ BUDGET_TERMS: dict[str, str] = {
 }
 BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
     **{
-        f"{q}_err_{t}": ("float64", "uq", f"{q}_err term: {what}")
+        f"{q}_err_{t}": (
+            "float64",
+            "uq",
+            f"{q}_err term: {what}"
+            + ("; NaN where the factor is undefined" if t == "corr" else ""),
+        )
         for q in BUDGET_QUANTITIES
         for t, what in BUDGET_TERMS.items()
     },
     "uq_valid": (
         "bool",
         "uq",
-        "every <q>_err of the row is defined (false when a correlation "
-        "window holds a masked pixel)",
+        "every <q>_err of the row is defined (false when a quantity's "
+        "window holds a masked pixel or its correlation factor is "
+        "undefined; the other quantities' <q>_err stay defined)",
     ),
     "sky_err_arcsec": (
         "float64",
