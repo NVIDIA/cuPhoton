@@ -7,6 +7,11 @@
 from cuphoton import __version__
 
 from .data import inspect_hsc_data_tree, load_image_array
+from .kernel_uncertainty import (
+    KernelFitCovariance,
+    kernel_fit_covariance,
+    kernel_fit_variance,
+)
 from .noise import (
     ConstantKernelNoiseResult,
     standardize_constant_kernel_residual,
@@ -49,6 +54,7 @@ __all__ = [
     "ConstantKernelNoiseResult",
     "DeviceConstantKernelFitResult",
     "GaussianBasisComponent",
+    "KernelFitCovariance",
     "SeparableKernelFitResult",
     "SpatialALSConfig",
     "SpatialALSFitResult",
@@ -60,6 +66,8 @@ __all__ = [
     "evaluate_background_model",
     "extract_centered_stamp",
     "inspect_hsc_data_tree",
+    "kernel_fit_covariance",
+    "kernel_fit_variance",
     "load_image_array",
     "make_stamp_mask",
     "resolve_backend",

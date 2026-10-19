@@ -413,6 +413,48 @@ as well as pair counts, using a matching white-noise baseline. These
 diagnostics do not whiten the residual, estimate a covariance model, set
 acceptance thresholds, or calibrate statistical significance.
 
+## Kernel-fit covariance and the variance it adds
+
+`standardize_constant_kernel_residual` treats the fitted kernel as fixed.
+Near a bright reference source the uncertainty of the fitted kernel and
+background adds variance to every residual pixel. `kernel_fit_covariance`
+returns the covariance of the fit coefficients and `kernel_fit_variance`
+carries it to a residual pixel, or to a weighted sum of residual pixels such
+as a PSF-weighted flux:
+
+```python
+from cuphoton.xpois import kernel_fit_covariance, kernel_fit_variance
+
+cov = kernel_fit_covariance(
+    fit,
+    reference=reference,
+    target_variance=target_variance,
+)
+added = kernel_fit_variance(
+    cov,
+    reference=reference,
+    positions=positions,  # (N, 2) x, y target pixels
+    weights=psf_weights,  # optional (N, s, s) stamps
+)
+```
+
+The plain form is `(A^T W A)^-1` over the fit pixels, `A` the design matrix
+of the reference convolved with each basis kernel plus the background terms
+and `W = 1 / target_variance`, the weights the fit used; no reduced
+chi-square scaling is applied. The resampled reference also carries noise,
+which the residual contains but the fit's weights omit. Passing
+`reference_source_variance` (the reference variance divided by the
+resampling gain `sum(resampling_weights**2)`) together with one `(k, k)`
+stamp of `resampling_weights` selects the sandwich form
+`H^-1 (H + M) H^-1`, which adds that noise through the fit. The sandwich
+uses one resampling stamp for every fit pixel, so on a grid that rotates or
+scales against the reference's it is an approximation. The result records
+`form` and `covariance_represented: True`. The added variance at a position
+is `gamma^T C gamma`, `gamma` the residual's response to each coefficient,
+and `NaN` where a stamp and its kernel footprint leave the image. Host and
+device fit results are accepted; the computation follows the array
+namespace of `reference` (NumPy or CuPy).
+
 ## Distributed image-pair batches
 
 `fit-batch` assigns complete, independent reference/target pairs to GPU
