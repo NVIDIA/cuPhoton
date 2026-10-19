@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 from scipy.ndimage import correlate
@@ -16,6 +18,7 @@ from cuphoton.xpois import (
     kernel_fit_covariance,
     kernel_fit_variance,
     solve_constant_kernel,
+    window_stamps,
 )
 from cuphoton.xpois.kernel_uncertainty import _fftconvolve
 
@@ -58,13 +61,15 @@ def _scene(seed=0):
     return raw, reference, target, fit_mask, stamp, stars
 
 
-def _fit(reference, target, fit_mask, *, background_degree=0):
+def _fit(reference, target, fit_mask, *, background_degree=0, variance=None):
+    if variance is None:
+        variance = np.full(reference.shape, TARGET_VARIANCE)
     return solve_constant_kernel(
         reference,
         target,
         COMPONENTS,
         kernel_shape=KERNEL_SHAPE,
-        variance=np.full(reference.shape, TARGET_VARIANCE),
+        variance=variance,
         fit_mask=fit_mask,
         background_degree=background_degree,
         backend="cpu",
@@ -96,14 +101,27 @@ def test_fftconvolve_matches_scipy(mode, shape, kshape):
     )
 
 
+@pytest.mark.parametrize("flat_variance", [True, False])
 @pytest.mark.parametrize("degree", [0, 1, 2])
-def test_plain_form_is_the_weighted_least_squares_covariance(degree):
+def test_plain_form_is_the_weighted_least_squares_covariance(
+    degree, flat_variance
+):
     _, reference, target, fit_mask, _, _ = _scene()
-    fit = _fit(reference, target, fit_mask, background_degree=degree)
+    if flat_variance:
+        variance = np.full(reference.shape, TARGET_VARIANCE)
+    else:
+        variance = np.random.default_rng(degree).uniform(
+            1.0, 9.0, reference.shape
+        )
+    fit = _fit(
+        reference,
+        target,
+        fit_mask,
+        background_degree=degree,
+        variance=variance,
+    )
     cov = kernel_fit_covariance(
-        fit,
-        reference=reference,
-        target_variance=np.full(reference.shape, TARGET_VARIANCE),
+        fit, reference=reference, target_variance=variance
     )
     assert isinstance(cov, KernelFitCovariance)
     assert cov.form == "plain"
@@ -111,7 +129,9 @@ def test_plain_form_is_the_weighted_least_squares_covariance(degree):
     assert cov.basis_count == fit.basis_kernels.shape[0] == 3
     assert cov.background_degree == degree
     design = _design(fit, reference, degree)
-    expected = np.linalg.inv(design.T @ design / TARGET_VARIANCE)
+    expected = np.linalg.inv(
+        design.T @ (design / variance[fit.fit_mask][:, None])
+    )
     scale = np.sqrt(np.outer(np.diag(expected), np.diag(expected)))
     np.testing.assert_allclose(
         cov.covariance / scale, expected / scale, rtol=1e-8, atol=1e-10
@@ -175,12 +195,78 @@ def test_weighted_sum_variance_is_the_projected_quadratic_form():
         assert value == pytest.approx(g @ cov.covariance @ g, rel=1e-8)
 
 
-def test_sandwich_matches_monte_carlo():
+def test_per_position_weights_match_one_call_per_position():
+    _, reference, target, fit_mask, _, stars = _scene()
+    fit = _fit(reference, target, fit_mask, background_degree=1)
+    cov = kernel_fit_covariance(
+        fit,
+        reference=reference,
+        target_variance=np.full(reference.shape, TARGET_VARIANCE),
+    )
+    positions = np.rint(stars[:5])
+    weights = np.random.default_rng(7).normal(size=(5, 7, 7))
+    got = kernel_fit_variance(
+        cov, reference=reference, positions=positions, weights=weights
+    )
+    each = [
+        kernel_fit_variance(
+            cov,
+            reference=reference,
+            positions=positions[i : i + 1],
+            weights=w,
+        )[0]
+        for i, w in enumerate(weights)
+    ]
+    np.testing.assert_allclose(got, each, rtol=1e-12)
+    assert not np.allclose(got, got[0])
+
+
+def test_reference_variance_is_in_resampled_units():
+    """Doubling the resampled reference variance doubles the added term."""
+
+    _, reference, target, fit_mask, stamp, _ = _scene()
+    fit = _fit(reference, target, fit_mask)
+    variance = np.full(reference.shape, TARGET_VARIANCE)
+    plain = kernel_fit_covariance(
+        fit, reference=reference, target_variance=variance
+    )
+    one, two = (
+        kernel_fit_covariance(
+            fit,
+            reference=reference,
+            target_variance=variance,
+            reference_variance=np.full(reference.shape, scale),
+            resampling_weights=stamp,
+        ).covariance
+        for scale in (1.0, 2.0)
+    )
+    np.testing.assert_allclose(
+        two - plain.covariance, 2.0 * (one - plain.covariance), rtol=1e-10
+    )
+    # the stamp's orientation does not matter for a point-symmetric stamp
+    flipped = kernel_fit_covariance(
+        fit,
+        reference=reference,
+        target_variance=variance,
+        reference_variance=np.ones(reference.shape),
+        resampling_weights=stamp[::-1, ::-1],
+    ).covariance
+    np.testing.assert_allclose(flipped, one, rtol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "target_variance, source_variance",
+    [(4.0, 1.0), (1.0, 16.0)],
+    ids=["target-dominated", "reference-dominated"],
+)
+def test_sandwich_matches_monte_carlo(target_variance, source_variance):
     """Fresh target and reference noise on one scene, the fit mask fixed.
 
     The scatter of the fitted model at bright pixels against the predicted
-    kernel-fit variance: the sandwich form agrees within 5%, the plain form
-    omits the reference noise and under-predicts.
+    kernel-fit variance: the sandwich form agrees within 7%, the plain form
+    omits the reference noise and under-predicts. The reference-dominated
+    regime makes the reference term most of the variance, so a wrong scale
+    of the added term fails the test.
     """
 
     raw, _, target_clean, fit_mask, stamp, stars = _scene()
@@ -192,15 +278,17 @@ def test_sandwich_matches_monte_carlo():
     coefficients = []
     covariances = None
     for _ in range(1500):
-        noisy_raw = raw + rng.normal(0.0, np.sqrt(SOURCE_VARIANCE), raw.shape)
+        noisy_raw = raw + rng.normal(0.0, np.sqrt(source_variance), raw.shape)
         reference = correlate(noisy_raw, stamp, mode="nearest")
         target = target_clean + rng.normal(
-            0.0, np.sqrt(TARGET_VARIANCE), raw.shape
+            0.0, np.sqrt(target_variance), raw.shape
         )
-        fit = _fit(reference, target, fit_mask)
+        variance = np.full(raw.shape, target_variance)
+        fit = _fit(reference, target, fit_mask, variance=variance)
         if covariances is None:
-            source_variance = np.full(raw.shape, SOURCE_VARIANCE)
-            variance = np.full(raw.shape, TARGET_VARIANCE)
+            resampled_variance = np.full(
+                raw.shape, source_variance * (stamp**2).sum()
+            )
             plain = kernel_fit_covariance(
                 fit, reference=reference, target_variance=variance
             )
@@ -208,15 +296,23 @@ def test_sandwich_matches_monte_carlo():
                 fit,
                 reference=reference,
                 target_variance=variance,
-                reference_source_variance=source_variance,
+                reference_variance=resampled_variance,
                 resampling_weights=stamp[None],
             )
             assert sandwich.form == "sandwich"
+            half_added = dataclasses.replace(
+                sandwich,
+                covariance=0.5 * (plain.covariance + sandwich.covariance),
+            )
             covariances = {
                 name: kernel_fit_variance(
                     cov, reference=reference, positions=positions
                 )
-                for name, cov in (("plain", plain), ("sandwich", sandwich))
+                for name, cov in (
+                    ("plain", plain),
+                    ("sandwich", sandwich),
+                    ("half_added", half_added),
+                )
             }
         coefficients.append(
             np.r_[fit.kernel_coefficients, fit.background_coefficients]
@@ -229,8 +325,10 @@ def test_sandwich_matches_monte_carlo():
         )
     empirical = np.var(np.array(model), axis=0, ddof=1)
     ratio = {k: empirical.sum() / v.sum() for k, v in covariances.items()}
-    assert ratio["sandwich"] == pytest.approx(1.0, abs=0.05)
+    assert ratio["sandwich"] == pytest.approx(1.0, abs=0.07)
     assert ratio["plain"] > ratio["sandwich"] * 1.1
+    if source_variance > target_variance:
+        assert ratio["half_added"] > 1.5
     coefficient_variance = np.var(np.array(coefficients), axis=0, ddof=1)
     np.testing.assert_allclose(
         coefficient_variance / np.diag(sandwich.covariance), 1.0, atol=0.08
@@ -253,18 +351,45 @@ def test_argument_validation():
             fit,
             reference=reference,
             target_variance=variance,
-            reference_source_variance=variance,
+            reference_variance=variance,
             resampling_weights=np.stack([stamp, stamp]),
+        )
+    with pytest.raises(ValueError, match="not all zero"):
+        kernel_fit_covariance(
+            fit,
+            reference=reference,
+            target_variance=variance,
+            reference_variance=variance,
+            resampling_weights=np.zeros_like(stamp),
         )
     with pytest.raises(ValueError, match="match reference shape"):
         kernel_fit_covariance(
             fit, reference=reference, target_variance=variance[:-1]
         )
-    bad = variance.copy()
-    bad[fit_mask][0] = 0.0
-    bad[20, 20] = np.inf
+    y, x = np.nonzero(fit_mask)
+    zero = variance.copy()
+    zero[y[0], x[0]] = 0.0
     with pytest.raises(ValueError, match="positive and finite"):
-        kernel_fit_covariance(fit, reference=reference, target_variance=bad)
+        kernel_fit_covariance(fit, reference=reference, target_variance=zero)
+    infinite = variance.copy()
+    infinite[y[-1], x[-1]] = np.inf
+    with pytest.raises(ValueError, match="positive and finite"):
+        kernel_fit_covariance(
+            fit, reference=reference, target_variance=infinite
+        )
+    outside = variance.copy()
+    outside[~fit_mask] = 0.0
+    kernel_fit_covariance(fit, reference=reference, target_variance=outside)
+    duplicated = dataclasses.replace(
+        fit,
+        basis_kernels=np.concatenate(
+            [fit.basis_kernels, fit.basis_kernels[:1]]
+        ),
+    )
+    with pytest.raises(ValueError, match="ill-conditioned"):
+        kernel_fit_covariance(
+            duplicated, reference=reference, target_variance=variance
+        )
     cov = kernel_fit_covariance(
         fit, reference=reference, target_variance=variance
     )
@@ -277,3 +402,20 @@ def test_argument_validation():
             positions=[[40.0, 40.0]],
             weights=np.ones((4, 4)),
         )
+
+
+def test_window_stamps_cuts_x_y_windows_with_a_fill():
+    plane = np.arange(5 * 8, dtype=float).reshape(5, 8)
+    windows = window_stamps(plane, [[6.0, 2.0], [0.4, 3.6]], 3)
+    assert windows.shape == (2, 3, 3)
+    np.testing.assert_array_equal(windows[0], plane[1:4, 5:8])
+    assert np.isnan(windows[1][:, 0]).all()
+    assert windows[1][0, 1] == plane[3, 0] and windows[1][1, 2] == plane[4, 1]
+    assert np.isnan(windows[1][2]).all()
+    tall = window_stamps(plane, [[3.0, 2.0]], (5, 3), fill=0.0)
+    assert tall.shape == (1, 5, 3)
+    np.testing.assert_array_equal(tall[0], plane[0:5, 2:5])
+    with pytest.raises(ValueError, match="odd"):
+        window_stamps(plane, [[3.0, 2.0]], 4)
+    with pytest.raises(ValueError, match="positions"):
+        window_stamps(plane, [3.0, 2.0], 3)

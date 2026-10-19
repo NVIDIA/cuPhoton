@@ -18,13 +18,23 @@ from typing import Any, Literal
 
 import numpy as np
 
-from .ois import triangular_degree_pairs
+from .ois import (
+    _accumulate_normal_equations,
+    _accumulate_normal_equations_cupy_device,
+    _background_design_cupy,
+    _default_fit_mask_impl,
+    background_design,
+    triangular_degree_pairs,
+)
+from .stamps import _array_module, window_stamps
 
 __all__ = [
     "KernelFitCovariance",
     "kernel_fit_covariance",
     "kernel_fit_variance",
 ]
+
+_MAX_CONDITION_NUMBER = 1e12
 
 
 @dataclass(frozen=True)
@@ -37,7 +47,7 @@ class KernelFitCovariance:
         Square covariance matrix over the fit coefficients, the kernel
         basis coefficients first and the background coefficients last, in
         the order of :func:`triangular_degree_pairs`. NumPy or CuPy,
-        following the reference image the covariance was built from.
+        following the arrays the covariance was built from.
     basis_kernels
         The fit's concrete basis kernels, ``(basis_count, ky, kx)``.
     basis_count
@@ -67,7 +77,7 @@ def kernel_fit_covariance(
     *,
     reference: Any,
     target_variance: Any,
-    reference_source_variance: Any | None = None,
+    reference_variance: Any | None = None,
     resampling_weights: Any | None = None,
 ) -> KernelFitCovariance:
     """Covariance of the coefficients of a constant-kernel fit.
@@ -76,16 +86,23 @@ def kernel_fit_covariance(
     by weighted least squares with ``W = 1 / target_variance`` over the
     fit pixels. The plain covariance is ``(A^T W A)^-1``, ``A`` the design
     matrix over those pixels; no reduced chi-square scaling is applied.
+    ``H = A^T W A`` is accumulated in chunks as in the solve, without
+    materializing ``A``.
 
     The resampled reference also carries noise, which the fit's residual
-    contains but its weights omit. With ``reference_source_variance`` and
+    contains but its weights omit. With ``reference_variance`` and
     ``resampling_weights`` the sandwich form ``H^-1 (H + M) H^-1`` adds it,
-    ``H = A^T W A`` and ``M = U^T diag(V_src) U`` where ``U`` is the
-    footprint of each weighted design column on the reference's source
-    pixels, through the fitted kernel and the resampling weights. The
-    footprint uses one resampling stamp for every fit pixel, so on a grid
-    that rotates or scales against the reference's this form is an
-    approximation.
+    ``M = U diag(V) U^T`` where row ``j`` of ``U`` is the footprint of the
+    weighted design column ``W A_j`` on the reference's source pixels,
+    through the fitted kernel and the resampling weights, and ``V`` the
+    source-pixel variance. The footprint uses one resampling stamp for
+    every fit pixel, so on a grid that rotates or scales against the
+    reference's this form is an approximation.
+
+    The sandwich holds ``U`` as one full-size image per coefficient
+    (``basis_count + background terms``) in memory, so its cost grows with
+    the image area times the coefficient count. The plain form holds no
+    full-size array beyond the inputs.
 
     Parameters
     ----------
@@ -95,37 +112,46 @@ def kernel_fit_covariance(
         ``background_coefficients``, ``fit_mask`` and ``kernel`` are read.
     reference
         Two-dimensional reference image on the target grid, the one the fit
-        convolved. Non-finite pixels count as zero, as in the solve. Its
-        array namespace (NumPy or CuPy) sets the computation's.
+        convolved. Non-finite pixels count as zero, as in the solve.
     target_variance
         Target variance image; its inverse is the fit's weight. It must be
         positive and finite on the fit pixels.
-    reference_source_variance
-        Variance of the reference's source pixels as an image on the target
-        grid: the resampled reference variance divided by the resampling
-        gain ``sum(resampling_weights**2)``. Non-finite pixels count as
+    reference_variance
+        Variance of the resampled reference on the target grid, in squared
+        reference units, the plane
+        :func:`standardize_constant_kernel_residual` takes. The division
+        by the resampling gain ``sum(resampling_weights**2)`` that gives
+        the source-pixel variance happens here. Non-finite pixels count as
         zero. Given together with ``resampling_weights``.
     resampling_weights
         One ``(k, k)`` stamp (or ``(1, k, k)``) of the interpolation weights
         that produced a resampled reference pixel from its source
-        neighbors, taken at a representative position such as the image
-        center. The stamp's orientation does not change the result.
+        neighbors, ``resampled[p] = sum_q weights[q] source[p + q - c]``
+        with ``c`` the stamp center, taken at a representative position
+        such as the image center. A stamp symmetric under point reflection
+        gives the same result in either orientation.
 
     Returns
     -------
     KernelFitCovariance
         The covariance with its form and the coefficient layout.
+
+    Notes
+    -----
+    The computation runs in CuPy when the fit's arrays or ``reference`` are
+    CuPy arrays, and in NumPy otherwise; NumPy inputs are moved to the
+    device in the first case.
     """
 
-    xp = _array_module(reference)
+    xp = _array_module(fit.basis_kernels, fit.fit_mask, reference)
     reference_arr = _real_2d_array(xp, "reference", reference)
     variance_arr = _real_2d_array(xp, "target_variance", target_variance)
     if variance_arr.shape != reference_arr.shape:
         raise ValueError("target_variance must match reference shape")
-    if (reference_source_variance is None) != (resampling_weights is None):
+    if (reference_variance is None) != (resampling_weights is None):
         raise ValueError(
-            "reference_source_variance and resampling_weights are given "
-            "together for the sandwich form"
+            "reference_variance and resampling_weights are given together "
+            "for the sandwich form"
         )
 
     basis = xp.asarray(fit.basis_kernels, dtype=xp.float64)
@@ -134,41 +160,54 @@ def kernel_fit_covariance(
     mask = xp.asarray(fit.fit_mask, dtype=bool)
     if mask.shape != reference_arr.shape:
         raise ValueError("fit.fit_mask must match reference shape")
+    mask = mask & _default_fit_mask_impl(xp, mask.shape, basis.shape[1:])
     degree = _background_degree(int(np.size(fit.background_coefficients)))
 
-    reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
-    columns = [
-        _fftconvolve(reference_model, kernel, mode="same")[mask]
-        for kernel in basis
-    ]
-    columns += [
-        term[mask]
-        for term in _background_images(xp, reference_arr.shape, degree)
-    ]
-    design = xp.stack(columns, axis=1)
-    weights = 1.0 / variance_arr[mask]
-    if not bool(xp.isfinite(weights).all()) or bool((weights <= 0).any()):
+    fit_variance = variance_arr[mask]
+    if not bool(xp.isfinite(fit_variance).all()) or bool(
+        (fit_variance <= 0).any()
+    ):
         raise ValueError(
             "target_variance must be positive and finite on the fit pixels"
         )
-    if design.shape[0] < design.shape[1]:
+    weights = 1.0 / fit_variance
+    reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
+    if xp is np:
+        background = background_design(reference_arr.shape, degree)
+        hessian, _, row_count = _accumulate_normal_equations(
+            reference_model,
+            xp.zeros_like(reference_model),
+            variance_arr,
+            mask,
+            basis,
+            background,
+        )
+    else:
+        background = _background_design_cupy(
+            reference_arr.shape, degree, cp=xp
+        )
+        hessian, _, row_count = _accumulate_normal_equations_cupy_device(
+            reference_model,
+            xp.zeros_like(reference_model),
+            variance_arr,
+            mask,
+            basis,
+            background,
+            cp=xp,
+        )
+    n_coefficients = int(hessian.shape[0])
+    if row_count < n_coefficients:
         raise ValueError("fewer fit pixels than coefficients")
-    hessian = design.T @ (design * weights[:, None])
-    try:
-        covariance = xp.linalg.inv(hessian)
-    except Exception as exc:
-        raise ValueError("fit normal equations are singular") from exc
+    covariance = _inverse(xp, hessian)
     form: Literal["plain", "sandwich"] = "plain"
 
     if resampling_weights is not None:
         form = "sandwich"
-        source_arr = _real_2d_array(
-            xp, "reference_source_variance", reference_source_variance
+        resampled_arr = _real_2d_array(
+            xp, "reference_variance", reference_variance
         )
-        if source_arr.shape != reference_arr.shape:
-            raise ValueError(
-                "reference_source_variance must match reference shape"
-            )
+        if resampled_arr.shape != reference_arr.shape:
+            raise ValueError("reference_variance must match reference shape")
         stamp = xp.asarray(resampling_weights, dtype=xp.float64)
         if stamp.ndim == 3 and stamp.shape[0] == 1:
             stamp = stamp[0]
@@ -177,16 +216,27 @@ def kernel_fit_covariance(
                 "resampling_weights must be one (k, k) stamp for the "
                 "kernel-fit covariance"
             )
+        gain = float((stamp**2).sum())
+        if not np.isfinite(gain) or gain <= 0:
+            raise ValueError(
+                "resampling_weights must be finite and not all zero"
+            )
         kernel = xp.asarray(fit.kernel, dtype=xp.float64)[::-1, ::-1]
-        source_flat = xp.where(
-            xp.isfinite(source_arr), source_arr, 0.0
+        source_flat = (
+            xp.where(xp.isfinite(resampled_arr), resampled_arr, 0.0) / gain
         ).ravel()
-        footprint = xp.empty((design.shape[1], source_flat.size))
-        image = xp.zeros(reference_arr.shape, dtype=xp.float64)
-        for j in range(design.shape[1]):
-            image[mask] = design[:, j] * weights
+        weight_image = xp.zeros(reference_arr.shape, dtype=xp.float64)
+        weight_image[mask] = weights
+        footprint = xp.empty((n_coefficients, source_flat.size))
+        for j in range(n_coefficients):
+            if j < basis.shape[0]:
+                column = _fftconvolve(reference_model, basis[j], mode="same")
+            else:
+                column = background[j - basis.shape[0]]
             footprint[j] = _fftconvolve(
-                _fftconvolve(image, kernel, mode="same"), stamp, mode="same"
+                _fftconvolve(column * weight_image, kernel, mode="same"),
+                stamp,
+                mode="same",
             ).ravel()
         resampled = (footprint * source_flat) @ footprint.T
         covariance = covariance + covariance @ resampled @ covariance
@@ -233,10 +283,11 @@ def kernel_fit_variance(
     -------
     ndarray
         ``(N,)`` variances in squared target units; ``NaN`` where a stamp
-        and its kernel footprint leave the image.
+        and its kernel footprint leave the image. CuPy when ``cov`` or
+        ``reference`` holds CuPy arrays, NumPy otherwise.
     """
 
-    xp = _array_module(reference)
+    xp = _array_module(cov.covariance, cov.basis_kernels, reference)
     reference_arr = _real_2d_array(xp, "reference", reference)
     basis = xp.asarray(cov.basis_kernels, dtype=xp.float64)
     xy = xp.asarray(positions, dtype=xp.float64)
@@ -263,42 +314,52 @@ def kernel_fit_variance(
     if covariance.shape != (cov.basis_count + n_terms,) * 2:
         raise ValueError("covariance does not match basis_count and degree")
 
-    half = int(stamps.shape[-1]) // 2
-    kernel_half_y = int(basis.shape[1]) // 2
-    kernel_half_x = int(basis.shape[2]) // 2
-    height, width = reference_arr.shape
-    center_x = xp.rint(xy[:, 0]).astype(xp.int64)
-    center_y = xp.rint(xy[:, 1]).astype(xp.int64)
-    inside = (
-        (center_x >= half + kernel_half_x)
-        & (center_x < width - half - kernel_half_x)
-        & (center_y >= half + kernel_half_y)
-        & (center_y < height - half - kernel_half_y)
-    )
-    safe_x = xp.where(inside, center_x, half + kernel_half_x)
-    safe_y = xp.where(inside, center_y, half + kernel_half_y)
+    side = int(stamps.shape[-1])
     reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
-    patch_y = xp.arange(-half - kernel_half_y, half + kernel_half_y + 1)
-    patch_x = xp.arange(-half - kernel_half_x, half + kernel_half_x + 1)
-    patches = reference_model[
-        safe_y[:, None, None] + patch_y[None, :, None],
-        safe_x[:, None, None] + patch_x[None, None, :],
-    ]
-    response = _fftconvolve(
-        patches[:, None], basis[None], mode="valid", axes=(2, 3)
+    patches = window_stamps(
+        reference_model,
+        xy,
+        (side + int(basis.shape[1]) - 1, side + int(basis.shape[2]) - 1),
     )
+    inside = xp.isfinite(patches).all(axis=(1, 2))
+    response = _fftconvolve(
+        xp.where(inside[:, None, None], patches, 0.0)[:, None],
+        basis[None],
+        mode="valid",
+        axes=(2, 3),
+    )
+    half = side // 2
     offsets = xp.arange(-half, half + 1)
+    center = xp.rint(xy).astype(xp.int64)
     background = _background_terms(
         xp,
-        (height, width),
+        reference_arr.shape,
         cov.background_degree,
-        safe_y[:, None, None] + offsets[None, :, None],
-        safe_x[:, None, None] + offsets[None, None, :],
+        center[:, 1][:, None, None] + offsets[None, :, None],
+        center[:, 0][:, None, None] + offsets[None, None, :],
     )
     gamma = xp.concatenate([response, background], axis=1)
     projected = xp.einsum("ncyx,nyx->nc", gamma, stamps)
     variance = xp.einsum("nc,cd,nd->n", projected, covariance, projected)
     return xp.where(inside, variance, xp.nan)
+
+
+def _inverse(xp: Any, hessian: Any) -> Any:
+    """Inverse of the normal equations with the solve's conditioning guard."""
+
+    try:
+        condition_number = float(xp.linalg.cond(hessian))
+    except xp.linalg.LinAlgError as exc:
+        raise ValueError("fit normal equations are singular") from exc
+    if (
+        not np.isfinite(condition_number)
+        or condition_number > _MAX_CONDITION_NUMBER
+    ):
+        raise ValueError("fit normal equations are ill-conditioned")
+    try:
+        return xp.linalg.inv(hessian)
+    except xp.linalg.LinAlgError as exc:
+        raise ValueError("fit normal equations are singular") from exc
 
 
 def _background_degree(n_terms: int) -> int:
@@ -310,15 +371,6 @@ def _background_degree(n_terms: int) -> int:
             "background_coefficients do not fill a triangular degree"
         )
     return degree
-
-
-def _background_images(xp: Any, shape: tuple[int, int], degree: int) -> Any:
-    """Background design terms over the image, ``(terms, height, width)``."""
-
-    height, width = shape
-    rows = xp.arange(height, dtype=xp.float64)[:, None]
-    columns = xp.arange(width, dtype=xp.float64)[None, :]
-    return _background_terms(xp, shape, degree, rows, columns)
 
 
 def _background_terms(
@@ -365,14 +417,6 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     for i, n, m in zip(axes, full, keep, strict=True):
         crop[i] = slice((n - m) // 2, (n - m) // 2 + m)
     return out[tuple(crop)]
-
-
-def _array_module(array: Any) -> Any:
-    if type(array).__module__.split(".", maxsplit=1)[0] == "cupy":
-        import cupy
-
-        return cupy
-    return np
 
 
 def _real_2d_array(xp: Any, name: str, value: Any) -> Any:

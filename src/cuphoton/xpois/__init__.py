@@ -39,7 +39,11 @@ from .spatial_als import (
     SpatialALSFitResult,
     solve_spatial_als,
 )
-from .stamps import extract_centered_stamp, simple_difference_stamp
+from .stamps import (
+    extract_centered_stamp,
+    simple_difference_stamp,
+    window_stamps,
+)
 from .statistics import (
     StandardizedResidualStatistics,
     StandardizedResidualSummary,
@@ -79,4 +83,5 @@ __all__ = [
     "standardize_constant_kernel_residual",
     "summarize_standardized_residuals",
     "triangular_degree_pairs",
+    "window_stamps",
 ]
