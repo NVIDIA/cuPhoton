@@ -11,11 +11,13 @@ from scipy.signal import fftconvolve
 
 from cuphoton.xpois import (
     CorrelationFactorResult,
+    EmpiricalCorrelationFactor,
     correlation_factor,
     empirical_correlation_factor,
     psf_weights,
     resampling_variance_factor,
     standardize_constant_kernel_residual,
+    window_stamps,
 )
 
 
@@ -38,8 +40,8 @@ def _lanczos_stamp(frac_x, frac_y, a=3):
     return weights(frac_y)[:, None] * weights(frac_x)[None, :]
 
 
-DELTA = np.zeros((1, 1, 1))
-DELTA[0, 0, 0] = 1.0
+def _gain(stamp):
+    return (stamp**2).sum()
 
 
 def test_toy_strip_sum_variance_is_the_exact_filtered_power():
@@ -53,12 +55,13 @@ def test_toy_strip_sum_variance_is_the_exact_filtered_power():
         box,
         kernel=kernel,
         target_variance=0.0,
-        reference_source_variance=1.0,
+        reference_variance=_gain(taps),
         resampling_weights=taps,
     )
     assert isinstance(result, CorrelationFactorResult)
     assert result.covariance_scope == "reference_resampling_and_kernel"
     assert result.target_pixels_independent is True
+    assert result.n_rotated == 0
     assert result.factor[0] == pytest.approx(4.25 / 1.875)
     assert result.pixel_ratio[0] == pytest.approx(1.0)
     rng = np.random.default_rng(0)
@@ -74,13 +77,14 @@ def test_identity_resampling_gives_one():
     kernel = _gaussian(15, 1.2)
     factor = resampling_variance_factor(kernel, np.ones((3, 1, 1)))
     np.testing.assert_allclose(factor, 1.0, rtol=1e-12)
+    assert resampling_variance_factor(kernel, np.ones((1, 1))).shape == ()
     delta = np.zeros((15, 15))
     delta[7, 7] = 1.0
     result = correlation_factor(
         np.broadcast_to(psf_weights(2.0, 21), (2, 21, 21)),
         kernel=delta,
         target_variance=4.0,
-        reference_source_variance=9.0,
+        reference_variance=9.0,
         resampling_weights=np.ones((1, 1)),
     )
     np.testing.assert_allclose(result.factor, 1.0, rtol=1e-10)
@@ -92,7 +96,7 @@ def test_white_target_only_is_one():
         psf_weights(2.0, 21)[None],
         kernel=_gaussian(15, 1.2),
         target_variance=4.0,
-        reference_source_variance=0.0,
+        reference_variance=0.0,
         resampling_weights=_lanczos_stamp(0.5, 0.25),
     )
     np.testing.assert_allclose(result.factor, 1.0, rtol=1e-10)
@@ -119,7 +123,7 @@ def test_factor_equals_the_direct_quadratic_form():
         w[None],
         kernel=kernel,
         target_variance=var_t,
-        reference_source_variance=s_t2,
+        reference_variance=s_t2 * _gain(stamp),
         resampling_weights=stamp,
     )
     h = fftconvolve(kernel, stamp, mode="full")
@@ -173,11 +177,12 @@ def test_translation_matches_monte_carlo():
             )
         if len(kept) < 20:
             kept.append(residual)
+    reference_variance = np.full((n, n), var_s * _gain(stamp))
     noise = standardize_constant_kernel_residual(
         residual,
         kernel=kernel,
         target_variance=np.full((n, n), var_t),
-        reference_variance=np.full((n, n), var_s * (stamp**2).sum()),
+        reference_variance=reference_variance,
     )
     diagonal = noise.marginal_residual_variance
     x0, y0 = positions[0]
@@ -187,7 +192,7 @@ def test_translation_matches_monte_carlo():
         w[None],
         kernel=kernel,
         target_variance=var_t,
-        reference_source_variance=var_s,
+        reference_variance=var_s * _gain(stamp),
         resampling_weights=stamp,
         residual_variance=window[None],
     )
@@ -195,7 +200,7 @@ def test_translation_matches_monte_carlo():
         w[None],
         kernel=kernel,
         target_variance=var_t,
-        reference_source_variance=var_s,
+        reference_variance=var_s * _gain(stamp),
         resampling_weights=stamp,
     )
     assert result.factor[0] == pytest.approx(default.factor[0], rel=1e-10)
@@ -209,8 +214,181 @@ def test_translation_matches_monte_carlo():
     empirical = empirical_correlation_factor(
         tall, np.tile(diagonal, (len(kept), 1)), w, tall_positions
     )
-    assert empirical.shape == ()
-    assert empirical == pytest.approx(result.factor[0], rel=0.15)
+    assert isinstance(empirical, EmpiricalCorrelationFactor)
+    assert empirical.factor.shape == ()
+    assert empirical.positions_used == len(tall_positions)
+    assert empirical.factor == pytest.approx(result.factor[0], rel=0.15)
+    assert empirical.plain_ratio == pytest.approx(result.factor[0], rel=0.15)
+
+
+def test_planes_with_positions_match_the_stamps_form():
+    """Full planes cut at positions give the stamps result, with the window
+    on the nearest pixel in (x, y) order on a non-square image."""
+
+    rng = np.random.default_rng(5)
+    height, width, size = 40, 70, 9
+    kernel = _gaussian(7, 1.0)
+    stamp = _lanczos_stamp(0.3, 0.7)
+    target_plane = rng.uniform(1.0, 4.0, (height, width))
+    reference_plane = rng.uniform(1.0, 4.0, (height, width))
+    residual_plane = rng.uniform(5.0, 9.0, (height, width))
+    positions = np.array([[50.4, 10.6], [12.0, 30.0], [66.0, 20.0]])
+    w = psf_weights(1.5, size, offset=positions - np.rint(positions))
+    planes = correlation_factor(
+        w,
+        kernel=kernel,
+        target_variance=target_plane,
+        reference_variance=reference_plane,
+        resampling_weights=stamp,
+        positions=positions,
+        residual_variance=residual_plane,
+    )
+    windows = [
+        window_stamps(plane, positions, size)
+        for plane in (target_plane, reference_plane, residual_plane)
+    ]
+    y, x = 11, 50
+    np.testing.assert_array_equal(
+        windows[0][0], target_plane[y - 4 : y + 5, x - 4 : x + 5]
+    )
+    stamps = correlation_factor(
+        w,
+        kernel=kernel,
+        target_variance=windows[0],
+        reference_variance=windows[1],
+        resampling_weights=stamp,
+        residual_variance=windows[2],
+    )
+    np.testing.assert_allclose(planes.factor, stamps.factor, rtol=1e-12)
+    np.testing.assert_allclose(
+        planes.pixel_ratio, stamps.pixel_ratio, rtol=1e-12
+    )
+    assert np.isfinite(planes.factor[:2]).all()
+    assert np.isnan(planes.factor[2])  # the window leaves the image
+    transposed = correlation_factor(
+        w[:1],
+        kernel=kernel,
+        target_variance=target_plane.T,
+        reference_variance=reference_plane.T,
+        resampling_weights=stamp,
+        positions=positions[:1, ::-1],
+        residual_variance=residual_plane.T,
+    )
+    assert transposed.factor[0] != pytest.approx(planes.factor[0])
+    shared = correlation_factor(
+        psf_weights(1.5, size),
+        kernel=kernel,
+        target_variance=target_plane,
+        reference_variance=reference_plane,
+        resampling_weights=stamp,
+        positions=positions,
+    )
+    assert shared.factor.shape == (3,)
+
+
+def test_per_position_stamps_match_one_call_per_position():
+    rng = np.random.default_rng(6)
+    n, size = 7, 11
+    kernel = _gaussian(9, 1.1)
+    w = rng.normal(size=(n, size, size))
+    target = rng.uniform(1.0, 2.0, (n, size, size))
+    reference = rng.uniform(1.0, 2.0, (n, size, size))
+    stamps = np.stack(
+        [_lanczos_stamp(fx, fy) for fx, fy in rng.uniform(0, 1, (n, 2))]
+    )
+    batch = correlation_factor(
+        w,
+        kernel=kernel,
+        target_variance=target,
+        reference_variance=reference,
+        resampling_weights=stamps,
+    )
+    each = [
+        correlation_factor(
+            w[i : i + 1],
+            kernel=kernel,
+            target_variance=target[i : i + 1],
+            reference_variance=reference[i : i + 1],
+            resampling_weights=stamps[i : i + 1],
+        ).factor[0]
+        for i in range(n)
+    ]
+    np.testing.assert_allclose(batch.factor, each, rtol=1e-12)
+    assert np.std(batch.factor) > 1e-3
+    np.testing.assert_allclose(
+        resampling_variance_factor(kernel, stamps),
+        [resampling_variance_factor(kernel, s) for s in stamps],
+        rtol=1e-12,
+    )
+
+
+def test_chunk_boundary_is_seamless():
+    n = 600
+    kernel = _gaussian(7, 1.0)
+    w = np.broadcast_to(psf_weights(1.5, 9), (n, 9, 9))
+    stamps = np.stack([_lanczos_stamp(0.5, 0.5)] * (n - 1) + [np.eye(6)])
+    result = correlation_factor(
+        w,
+        kernel=kernel,
+        target_variance=1.0,
+        reference_variance=2.0,
+        resampling_weights=stamps,
+    )
+    assert result.factor.shape == (n,)
+    np.testing.assert_allclose(result.factor[:-1], result.factor[0])
+    assert result.factor[-1] != pytest.approx(result.factor[0])
+
+
+def test_residual_variance_plane_scales_the_factor():
+    kernel = _gaussian(15, 1.2)
+    stamp = _lanczos_stamp(0.5, 0.25)
+    w = psf_weights(2.0, 21)[None]
+    kwargs = dict(
+        kernel=kernel,
+        target_variance=4.0,
+        reference_variance=9.0,
+        resampling_weights=stamp,
+    )
+    default = correlation_factor(w, **kwargs)
+    explicit = correlation_factor(
+        w, residual_variance=4.0 + 9.0 * (kernel**2).sum(), **kwargs
+    )
+    doubled = correlation_factor(
+        w, residual_variance=2.0 * (4.0 + 9.0 * (kernel**2).sum()), **kwargs
+    )
+    assert explicit.factor[0] == pytest.approx(default.factor[0], rel=1e-12)
+    assert doubled.factor[0] == pytest.approx(
+        default.factor[0] / 2.0, rel=1e-12
+    )
+    assert doubled.pixel_ratio[0] == pytest.approx(
+        default.pixel_ratio[0] / 2.0, rel=1e-12
+    )
+
+
+def test_zero_resampling_stamps_give_nan():
+    kernel = _gaussian(7, 1.0)
+    stamps = np.stack([_lanczos_stamp(0.5, 0.5), np.zeros((6, 6))])
+    with np.errstate(all="raise"):
+        factor = resampling_variance_factor(kernel, stamps)
+        result = correlation_factor(
+            np.ones((2, 5, 5)),
+            kernel=kernel,
+            target_variance=1.0,
+            reference_variance=1.0,
+            resampling_weights=stamps,
+        )
+    assert np.isfinite(factor[0]) and np.isnan(factor[1])
+    assert np.isfinite(result.factor[0]) and np.isnan(result.factor[1])
+    assert np.isnan(result.pixel_ratio[1])
+    with np.errstate(all="raise"):
+        empty = correlation_factor(
+            np.zeros((1, 5, 5)),
+            kernel=kernel,
+            target_variance=1.0,
+            reference_variance=1.0,
+            resampling_weights=stamps[:1],
+        )
+    assert np.isnan(empty.factor[0])
 
 
 def test_empirical_factor_of_white_noise_is_one():
@@ -222,15 +400,17 @@ def test_empirical_factor_of_white_noise_is_one():
     weights = np.stack(
         [psf_weights(2.0, 21), psf_weights(2.0, 21, derivative="x")]
     )
-    factor = empirical_correlation_factor(
+    result = empirical_correlation_factor(
         residual, np.ones_like(residual), weights, positions
     )
-    assert factor.shape == (2,)
-    np.testing.assert_allclose(factor, 1.0, atol=0.15)
+    assert result.factor.shape == result.plain_ratio.shape == (2,)
+    assert result.positions_used == len(positions)
+    np.testing.assert_allclose(result.factor, 1.0, atol=0.15)
+    np.testing.assert_allclose(result.plain_ratio, 1.0, atol=0.15)
     scaled = empirical_correlation_factor(
         4.0 * residual, np.ones_like(residual), weights, positions
     )
-    np.testing.assert_allclose(scaled, 16.0 * factor)
+    np.testing.assert_allclose(scaled.factor, 16.0 * result.factor)
 
 
 def test_empirical_factor_drops_unusable_windows():
@@ -242,13 +422,14 @@ def test_empirical_factor_drops_unusable_windows():
     one = empirical_correlation_factor(
         residual, variance, psf_weights(1.5, 11), positions
     )
-    assert np.isnan(one)
+    assert one.positions_used == 1
+    assert np.isnan(one.factor) and np.isnan(one.plain_ratio)
     positions = np.array([[20.0, 20.0], [40.0, 40.0], [50.0, 20.0]])
-    assert np.isfinite(
-        empirical_correlation_factor(
-            residual, variance, psf_weights(1.5, 11), positions
-        )
+    three = empirical_correlation_factor(
+        residual, variance, psf_weights(1.5, 11), positions
     )
+    assert three.positions_used == 3
+    assert np.isfinite(three.factor)
 
 
 def test_partially_invalid_window_gives_nan():
@@ -261,7 +442,7 @@ def test_partially_invalid_window_gives_nan():
         w,
         kernel=kernel,
         target_variance=target,
-        reference_source_variance=9.0,
+        reference_variance=9.0,
         resampling_weights=stamp,
     )
     assert np.isnan(result.factor[0]) and np.isnan(result.pixel_ratio[0])
@@ -273,13 +454,13 @@ def test_partially_invalid_window_gives_nan():
 def test_pixel_ratio_mixes_the_resampling_factor_with_the_target_term():
     kernel = _gaussian(15, 1.2)
     stamp = _lanczos_stamp(0.3, 0.6)
-    resampling = resampling_variance_factor(kernel, stamp[None])[0]
+    resampling = resampling_variance_factor(kernel, stamp)
     var_t, s_t2 = 4.0, 9.0
     result = correlation_factor(
         np.ones((1, 1, 1)),
         kernel=kernel,
         target_variance=var_t,
-        reference_source_variance=s_t2,
+        reference_variance=s_t2 * _gain(stamp),
         resampling_weights=stamp,
     )
     diag = s_t2 * (stamp**2).sum() * (kernel**2).sum()
@@ -288,7 +469,7 @@ def test_pixel_ratio_mixes_the_resampling_factor_with_the_target_term():
     assert result.factor[0] == pytest.approx(expected, rel=1e-10)
 
 
-def test_position_weights_are_derivatives_along_their_own_axis():
+def test_psf_weights_are_unit_flux_gaussians_with_offsets():
     g = psf_weights(1.5, 13)
     dx = psf_weights(1.5, 13, derivative="x")
     dy = psf_weights(1.5, 13, derivative="y")
@@ -296,31 +477,104 @@ def test_position_weights_are_derivatives_along_their_own_axis():
     assert g.sum() == pytest.approx(1.0, abs=1e-4)
     assert dx[6, 6] == 0.0 and dx[6, 7] > 0 and dx[6, 5] < 0
     assert dy[7, 6] > 0 and dy[5, 6] < 0
+    shifted = psf_weights(1.5, 13, offset=[[0.0, 0.0], [0.4, -0.3]])
+    assert shifted.shape == (2, 13, 13)
+    np.testing.assert_allclose(shifted[0], g)
+    u = np.arange(13) - 6
+    expected = np.exp(
+        -0.5 * ((u[:, None] + 0.3) ** 2 + (u[None, :] - 0.4) ** 2) / 1.5**2
+    ) / (2.0 * np.pi * 1.5**2)
+    np.testing.assert_allclose(shifted[1], expected, rtol=1e-12)
+    # the x derivative of a shifted PSF is the finite difference in x
+    eps = 1e-6
+    numeric = (
+        psf_weights(1.5, 13, offset=[[0.4 + eps, -0.3]])[0]
+        - psf_weights(1.5, 13, offset=[[0.4 - eps, -0.3]])[0]
+    ) / (2 * eps)
+    analytic = psf_weights(1.5, 13, offset=[[0.4, -0.3]], derivative="x")[0]
+    np.testing.assert_allclose(analytic, numeric, atol=1e-8)
     with pytest.raises(ValueError):
         psf_weights(1.5, 12)
+    with pytest.raises(ValueError, match="offset"):
+        psf_weights(1.5, 13, offset=[0.4, -0.3])
+    with pytest.raises(ValueError, match="derivative"):
+        psf_weights(1.5, 13, derivative="z")
 
 
-def test_rotated_positions_are_not_implemented():
+def test_rotated_positions_are_nan_and_counted():
     kernel = _gaussian(15, 1.2)
     stamps = np.stack([_lanczos_stamp(0.5, 0.25)] * 2)
-    with pytest.raises(NotImplementedError, match="translat"):
-        resampling_variance_factor(
-            kernel, stamps, is_translation=[True, False]
-        )
-    with pytest.raises(NotImplementedError, match="translat"):
+    factor = resampling_variance_factor(
+        kernel, stamps, is_translation=[True, False]
+    )
+    assert np.isfinite(factor[0]) and np.isnan(factor[1])
+    result = correlation_factor(
+        np.ones((2, 5, 5)),
+        kernel=kernel,
+        target_variance=1.0,
+        reference_variance=1.0,
+        resampling_weights=stamps,
+        is_translation=[False, True],
+    )
+    assert np.isnan(result.factor[0]) and np.isfinite(result.factor[1])
+    assert np.isnan(result.pixel_ratio[0])
+    assert result.n_rotated == 1
+    with pytest.raises(ValueError, match="is_translation"):
         correlation_factor(
             np.ones((2, 5, 5)),
             kernel=kernel,
             target_variance=1.0,
-            reference_source_variance=1.0,
+            reference_variance=1.0,
             resampling_weights=stamps,
-            is_translation=[False, True],
+            is_translation=[False],
         )
+
+
+def test_argument_validation():
+    kernel = _gaussian(15, 1.2)
+    stamps = np.stack([_lanczos_stamp(0.5, 0.25)] * 2)
+    kwargs = dict(target_variance=1.0, reference_variance=1.0)
     with pytest.raises(ValueError, match="resampling_weights"):
         correlation_factor(
             np.ones((2, 5, 5)),
             kernel=kernel,
-            target_variance=1.0,
-            reference_source_variance=1.0,
             resampling_weights=stamps[:1],
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="odd"):
+        correlation_factor(
+            np.ones((2, 5, 5)),
+            kernel=kernel[:-1],
+            resampling_weights=stamps,
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="finite"):
+        correlation_factor(
+            np.ones((2, 5, 5)),
+            kernel=kernel * np.nan,
+            resampling_weights=stamps,
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="odd-sized"):
+        correlation_factor(
+            np.ones((2, 4, 4)),
+            kernel=kernel,
+            resampling_weights=stamps,
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="broadcast"):
+        correlation_factor(
+            np.ones((2, 5, 5)),
+            kernel=kernel,
+            resampling_weights=stamps,
+            target_variance=np.ones((3, 5, 5)),
+            reference_variance=1.0,
+        )
+    with pytest.raises(ValueError, match="positions"):
+        correlation_factor(
+            np.ones((2, 5, 5)),
+            kernel=kernel,
+            resampling_weights=stamps,
+            positions=np.zeros((3, 2)),
+            **kwargs,
         )
