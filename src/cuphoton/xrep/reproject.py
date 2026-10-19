@@ -249,11 +249,12 @@ def reproject_array_device(
         It is propagated with the same mapping and kernel as the image,
         using squared normalized weights and squared relative-area scaling,
         as in :func:`reproject_masked_array`. Values must be nonnegative;
-        NaN and positive infinity are accepted as no-data values. Values
-        are not checked here, which would need a device-to-host transfer;
-        negative input gives negative output variance. The result is a
-        diagonal approximation: interpolation-induced covariance between
-        destination pixels is not represented.
+        NaN and positive infinity are accepted as no-data values. The
+        values are not checked, because checking them would need a
+        device-to-host transfer: negative input gives negative output
+        variance. The result is a diagonal approximation:
+        interpolation-induced covariance between destination pixels is
+        not represented.
     variance_fill_value
         Variance value assigned outside the valid source footprint,
         independent of ``spec.fill_value``.

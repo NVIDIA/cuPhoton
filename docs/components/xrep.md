@@ -177,10 +177,12 @@ NaN. Finite variance values must be nonnegative; NaN and positive infinity
 remain available as no-data representations.
 
 On the CuPy backend, `reproject_array_device` keeps results on the GPU. Pass
-`source_variance=` to propagate a variance plane there with the same prepared
-mapping, interpolation kernel, and squared relative-area scaling as the image;
-the result's `variance` field holds the device array and is `None` when no
-variance is given. As in `reproject_masked_array`, the variance is diagonal
+`source_variance=` to propagate a variance plane there. The variance uses the
+same prepared mapping and interpolation kernel as the image, with the
+interpolation weights squared and the relative-area factor squared, where the
+image uses the weights and the factor to the first power. The result's
+`variance` field holds the device array and is `None` when no variance is
+given. As in `reproject_masked_array`, the variance is diagonal
 (interpolation-induced covariance is not represented) and
 `variance_fill_value` sets the out-of-footprint value, NaN by default.
 Unlike `reproject_masked_array`, the device path does not check variance
