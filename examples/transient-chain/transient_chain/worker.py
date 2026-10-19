@@ -25,7 +25,6 @@ summary.
 from __future__ import annotations
 
 import contextlib
-import functools
 import hashlib
 import importlib
 import os
@@ -274,15 +273,28 @@ class ChainWorker:
                     max_n=int(a_cfg["max_stars"]),
                 )
                 finder_name = a_cfg["star_finder"]
-                if finder_name == "daofind":
-                    finder = ops.find_stars_daofind
-                else:
-                    finder = functools.partial(
-                        ops.find_stars,
-                        box=int(a_cfg["star_box_px"]),
-                        iterations=int(a_cfg["centroid_iterations"]),
-                    )
-                sv, st = finder(vimg, **stars), finder(timg, **stars)
+                gpu_finder = finder_name != "daofind"
+
+                def finder(img, smoothed=None):
+                    if gpu_finder:
+                        return ops.find_stars(
+                            img,
+                            box=int(a_cfg["star_box_px"]),
+                            iterations=int(a_cfg["centroid_iterations"]),
+                            smoothed=smoothed,
+                            **stars,
+                        )
+                    return ops.find_stars_daofind(img, **stars)
+
+                # the gpu finder smooths each image once per item; step 3b
+                # reuses the smoothed target and rebuilt template
+                vs = (
+                    ops.smooth_image(vimg, stars["fwhm"])
+                    if gpu_finder
+                    else None
+                )
+                ts = None
+                sv, st = finder(vimg, vs), finder(timg)
                 xfer["control_bytes"] += sv.nbytes + st.nbytes
                 if finder_name == "daofind":
                     # DAOStarFinder ran on host copies of both images (and
@@ -311,15 +323,26 @@ class ChainWorker:
                     }
                 else:
                     timg, tbad_raw, tcnt = provider.build((A, b))
+                    if gpu_finder:
+                        ts = ops.smooth_image(timg, stars["fwhm"])
                     mv1, mt1 = ops.match_stars(
-                        sv,
-                        finder(timg, **stars),
-                        float(a_cfg["verify_radius_px"]),
+                        sv, finder(timg, ts), float(a_cfg["verify_radius_px"])
                     )
                     before, after = mv - mt, mv1 - mt1
                     misalignment_diag = self._measure_stars(
-                        vimg, timg, target.variance, mv1, mt1, a_cfg, mode
+                        vimg,
+                        timg,
+                        target.variance,
+                        mv1,
+                        mt1,
+                        a_cfg,
+                        mode,
+                        finder_name,
+                        vs,
+                        ts,
+                        xfer,
                     )
+                    del vs, ts
                     ref_diag = {
                         "mode": mode,
                         "matches_before": int(len(mv)),
@@ -739,58 +762,49 @@ class ChainWorker:
         }
 
     def _measure_stars(
-        self, vimg, timg, variance, mv, mt, a_cfg, mode
+        self,
+        vimg,
+        timg,
+        variance,
+        mv,
+        mt,
+        a_cfg,
+        mode,
+        finder_name,
+        vs,
+        ts,
+        xfer,
     ) -> dict[str, Any]:
-        """Step 3b on the stars matched after refinement: per-star
-        measurements on both images, the neighbor cut, the misalignment model
-        (kept on ``self.misalignment``; affine mode only) and, when the
-        configuration leaves ``xfit.psf_sigma_px`` null, the PSF width of the
-        target's stars (``self.psf_sigma_px``). Only the star lists cross to
-        the host.
+        """Step 3b: ``ops.measure_matched_stars`` on the pairs matched after
+        refinement, keeping the misalignment model on ``self.misalignment``
+        and, when the configuration left ``xfit.psf_sigma_px`` null, the
+        stars' PSF width on ``self.psf_sigma_px``.
         """
-        box, fwhm = int(a_cfg["star_box_px"]), float(a_cfg["star_fwhm_px"])
-        out: dict[str, Any] = {"stars_matched": int(len(mv)), "mode": None}
-        if len(mv) < 3:
-            return out
-        # a neighbor closer than one centroid window moves the windowed
-        # centroid, and by different amounts in two images with different
-        # PSFs: those stars inflate a chip-wide rms
-        ok = ops.neighbor_free(vimg, mv, float(box), fwhm=fwhm)
-        ok &= ops.neighbor_free(timg, mt, float(box), fwhm=fwhm)
-        mv, mt = mv[ok], mt[ok]
-        out["stars_neighbor_free"] = int(len(mv))
-        if len(mv) < 3:
-            return out
-        tm = ops.star_measurements(vimg, variance, mv, box=box, fwhm=fwhm)
-        rm = ops.star_measurements(timg, None, mt, box=box, fwhm=fwhm)
-        noise = ops.to_host(tm.centroid_error) ** 2
-        noise += ops.to_host(rm.centroid_error) ** 2
-        widths = ops.to_host(tm.width)
-        if mode == "affine" and len(mv) >= int(a_cfg["min_affine_matches"]):
-            m = ops.fit_misalignment(mv, mt, noise, shape=vimg.shape)
-            self.misalignment = m
-            ny, nx = vimg.shape
-            center = m.variance([(nx - 1) / 2.0], [(ny - 1) / 2.0])[0]
-            out.update(
-                mode=m.mode,
-                stars_used=int(m.used.sum()),
-                residual_rms_px=m.residual_rms,
-                excess_sigma_px=np.sqrt(m.excess_variance).tolist(),
-                center_sigma_px=np.sqrt(center).tolist(),
-            )
-            widths = widths[m.used]
-        if self.psf_sigma_source != "config":
-            pw = ops.psf_width(widths)
-            self.psf_sigma_px = pw.sigma_px
+        if finder_name == "daofind":
+            # the centroid-error model describes the windowed centroid, not
+            # DAOStarFinder's
+            skip = "daofind centroids"
+        else:
+            skip = None if mode == "affine" else f"{mode} mode"
+        ms = ops.measure_matched_stars(
+            vimg,
+            timg,
+            variance,
+            mv,
+            mt,
+            box=int(a_cfg["star_box_px"]),
+            fwhm=float(a_cfg["star_fwhm_px"]),
+            min_stars=int(a_cfg["min_affine_matches"]),
+            skip_model=skip,
+            target_smoothed=vs,
+            template_smoothed=ts,
+        )
+        xfer["control_bytes"] += ms.control_bytes
+        self.misalignment = ms.misalignment
+        if ms.psf is not None and self.psf_sigma_source != "config":
+            self.psf_sigma_px = ms.psf.sigma_px
             self.psf_sigma_source = "stars"
-            out["psf_width"] = {
-                "sigma_px": pw.sigma_px,
-                "standard_error_px": pw.standard_error_px,
-                "scatter_px": pw.scatter_px,
-                "n_used": pw.n_used,
-                "n": pw.n,
-            }
-        return out
+        return ms.diagnostics
 
     def close(self) -> None:
         self.closed = True
