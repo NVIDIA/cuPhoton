@@ -146,7 +146,6 @@ _lanczos_elem = cp.ElementwiseKernel(
         float64 yf,
         int32 a,
         int32 two_a_footprint,
-        int32 squared_weights,
         float64 eps
     """,
     out_params="float64 out",
@@ -217,16 +216,12 @@ _lanczos_elem = cp.ElementwiseKernel(
 
                 double weight = wyv * wxv;
                 double v = src[base + xx];
-                num += squared_weights
-                    ? weight * weight * v
-                    : weight * v;
+                num += weight * v;
             }
         }
 
         if (ksum > eps) {
-            out = squared_weights
-                ? num / (ksum * ksum)
-                : num / ksum;
+            out = num / ksum;
         } else {
             long long nnx = llround(x);
             long long nny = llround(y);
@@ -471,46 +466,9 @@ def sample_lanczos_cupy(
         yf,
         a,
         1 if two_a_footprint else 0,
-        0,
         eps,
     )
     return out64.reshape(hout, wout)
-
-
-def sample_lanczos_variance_cupy(
-    source_variance: cp.ndarray,
-    x: cp.ndarray,
-    y: cp.ndarray,
-    *,
-    a: int = 3,
-    two_a_footprint: bool = True,
-    eps: float = 1e-12,
-) -> cp.ndarray:
-    """Propagate diagonal variance with squared normalized Lanczos weights."""
-
-    if source_variance.ndim != 2:
-        raise ValueError("source_variance must be 2D")
-    height, width = (
-        int(source_variance.shape[0]),
-        int(source_variance.shape[1]),
-    )
-    output_height, output_width = x.shape
-
-    variance64 = source_variance.astype(cp.float64, copy=False).ravel()
-    x64 = x.astype(cp.float64, copy=False)
-    y64 = y.astype(cp.float64, copy=False)
-    output = _lanczos_elem(
-        variance64,
-        height,
-        width,
-        x64,
-        y64,
-        a,
-        1 if two_a_footprint else 0,
-        1,
-        eps,
-    )
-    return output.reshape(output_height, output_width)
 
 
 def sample_lanczos3_cupy_raw(
@@ -664,64 +622,266 @@ def sample_bilinear_cupy(
     return out
 
 
-def sample_bilinear_variance_cupy(
+# ------------------------------------------------------------------------- #
+# Image plus diagonal variance (mirrors xrep.reproject_masked_array)
+# ------------------------------------------------------------------------- #
+_PAIR_PREAMBLE = r"""
+__device__ __forceinline__ double xrep_pair_sincpi(double t) {
+    const double PI = 3.14159265358979323846;
+    if (fabs(t) < 1e-18) return 1.0;
+    if (t == trunc(t)) return 0.0;
+    return sin(PI * t) / (PI * t);
+}
+
+__device__ __forceinline__ double xrep_pair_lanczos_w(double t, int a) {
+    if (fabs(t) <= (double)a) {
+        return xrep_pair_sincpi(t) * xrep_pair_sincpi(t / (double)a);
+    }
+    return 0.0;
+}
+
+// Normalized Lanczos sample of src and squared-weight sample of var with
+// one set of weights. The weight-sum fallback keeps the device image
+// behavior (nearest source value) and the host variance behavior (fill).
+__device__ __forceinline__ void xrep_lanczos_pair(
+    const double* __restrict__ src,
+    const double* __restrict__ var,
+    long long H,
+    long long W,
+    double x,
+    double y,
+    int a,
+    bool two_a,
+    double var_fill,
+    double eps,
+    double* value,
+    double* variance
+) {
+    long long i0 = (long long)floor(x);
+    long long j0 = (long long)floor(y);
+    double fx = x - (double)i0;
+    double fy = y - (double)j0;
+    int start = two_a ? -(a - 1) : -a;
+    int win = two_a ? 2 * a : 2 * a + 1;
+
+    const int MAXWIN = 16;
+    double wx[MAXWIN];
+    double wy[MAXWIN];
+    double sum_wx = 0.0;
+    double sum_wy = 0.0;
+    for (int k = 0; k < win; ++k) {
+        long long xx = i0 + (long long)(start + k);
+        double w = 0.0;
+        if (xx >= 0 && xx < W) {
+            w = xrep_pair_lanczos_w((double)(start + k) - fx, a);
+            sum_wx += w;
+        }
+        wx[k] = w;
+    }
+    for (int k = 0; k < win; ++k) {
+        long long yy = j0 + (long long)(start + k);
+        double w = 0.0;
+        if (yy >= 0 && yy < H) {
+            w = xrep_pair_lanczos_w((double)(start + k) - fy, a);
+            sum_wy += w;
+        }
+        wy[k] = w;
+    }
+
+    double ksum = sum_wx * sum_wy;
+    double num = 0.0;
+    double num_var = 0.0;
+    for (int iy = 0; iy < win; ++iy) {
+        double wyv = wy[iy];
+        if (wyv == 0.0) continue;
+        long long yy = j0 + (long long)(start + iy);
+        if (yy < 0 || yy >= H) continue;
+        long long base = yy * W;
+        for (int ix = 0; ix < win; ++ix) {
+            double wxv = wx[ix];
+            if (wxv == 0.0) continue;
+            long long xx = i0 + (long long)(start + ix);
+            if (xx < 0 || xx >= W) continue;
+            double weight = wyv * wxv;
+            num += weight * src[base + xx];
+            num_var += weight * weight * var[base + xx];
+        }
+    }
+
+    if (ksum > eps) {
+        *value = num / ksum;
+        *variance = num_var / (ksum * ksum);
+    } else {
+        long long nnx = llround(x);
+        long long nny = llround(y);
+        if (nnx < 0) nnx = 0; else if (nnx >= W) nnx = W - 1;
+        if (nny < 0) nny = 0; else if (nny >= H) nny = H - 1;
+        *value = src[nny * W + nnx];
+        *variance = var_fill;
+    }
+}
+"""
+
+_PAIR_PARAMS = r"""
+    raw float64 src,
+    raw float64 var,
+    int64 H,
+    int64 W,
+    float64 x,
+    float64 y,
+    bool valid,
+    float64 area,
+    int32 area_scaling,
+    float64 fill,
+    float64 var_fill,
+    float64 eps
+"""
+
+# Invalid pixels take the fills; valid pixels scale the image by the
+# relative area and the variance by its square.
+_PAIR_FINISH = r"""
+    if (valid && area_scaling) {
+        value *= area;
+        variance *= area * area;
+    }
+    out = value;
+    out_var = variance;
+"""
+
+_bilinear_pair_elem = cp.ElementwiseKernel(
+    in_params=_PAIR_PARAMS,
+    out_params="float64 out, float64 out_var",
+    operation=r"""
+        double value = fill;
+        double variance = var_fill;
+        if (valid) {
+            long long x0 = (long long)floor(x);
+            long long y0 = (long long)floor(y);
+            long long x1 = x0 + 1;
+            long long y1 = y0 + 1;
+            double fx = x - (double)x0;
+            double fy = y - (double)y0;
+            double w[4] = {
+                (1.0 - fx) * (1.0 - fy),
+                fx * (1.0 - fy),
+                (1.0 - fx) * fy,
+                fx * fy,
+            };
+            long long xs[4] = {x0, x1, x0, x1};
+            long long ys[4] = {y0, y0, y1, y1};
+            double norm = 0.0;
+            for (int k = 0; k < 4; ++k) {
+                if (xs[k] < 0 || xs[k] >= W || ys[k] < 0 || ys[k] >= H) {
+                    w[k] = 0.0;
+                }
+                norm += w[k];
+            }
+            double num = 0.0;
+            double num_var = 0.0;
+            for (int k = 0; k < 4; ++k) {
+                if (w[k] == 0.0) continue;
+                long long idx = ys[k] * W + xs[k];
+                num += w[k] * src[idx];
+                num_var += w[k] * w[k] * var[idx];
+            }
+            if (norm > eps) {
+                value = num / norm;
+                variance = num_var / (norm * norm);
+            }
+        }
+    """
+    + _PAIR_FINISH,
+    name="xrep_bilinear_pair_fp64",
+)
+
+_lanczos_pair_elem = cp.ElementwiseKernel(
+    in_params=_PAIR_PARAMS + ", int32 a, int32 two_a_footprint",
+    out_params="float64 out, float64 out_var",
+    operation=r"""
+        double value = fill;
+        double variance = var_fill;
+        if (valid) {
+            xrep_lanczos_pair(
+                &src[0], &var[0], H, W, x, y, a, two_a_footprint != 0,
+                var_fill, eps, &value, &variance
+            );
+        }
+    """
+    + _PAIR_FINISH,
+    name="xrep_lanczos_pair_fp64",
+    preamble=_PAIR_PREAMBLE,
+)
+
+# Compile-time a=3 with the 2a footprint, the variant selected by
+# CUPHOTON_XREP_CUPY_LANCZOS_KERNEL=raw.
+_lanczos3_pair_elem = cp.ElementwiseKernel(
+    in_params=_PAIR_PARAMS,
+    out_params="float64 out, float64 out_var",
+    operation=r"""
+        double value = fill;
+        double variance = var_fill;
+        if (valid) {
+            xrep_lanczos_pair(
+                &src[0], &var[0], H, W, x, y, 3, true,
+                var_fill, eps, &value, &variance
+            );
+        }
+    """
+    + _PAIR_FINISH,
+    name="xrep_lanczos3_pair_fp64",
+    preamble=_PAIR_PREAMBLE,
+)
+
+
+def reproject_with_variance_cupy(
+    source: cp.ndarray,
     source_variance: cp.ndarray,
     x: cp.ndarray,
     y: cp.ndarray,
+    valid: cp.ndarray,
+    area: cp.ndarray,
     *,
-    fill_value: float = float("nan"),
+    interpolation: str,
+    lanczos_a: int = 3,
+    two_a_footprint: bool = True,
+    lanczos3_specialized: bool = False,
+    area_scaling: bool,
+    fill_value: float,
+    variance_fill_value: float,
     eps: float = 1e-12,
-) -> cp.ndarray:
-    """Propagate variance with squared normalized bilinear weights."""
+) -> tuple[cp.ndarray, cp.ndarray]:
+    """Reproject an image and its diagonal variance in one launch.
 
-    height, width = source_variance.shape
-    x0 = cp.floor(x).astype(cp.int64)
-    y0 = cp.floor(y).astype(cp.int64)
-    x1 = x0 + 1
-    y1 = y0 + 1
+    Each interpolation weight is computed once and applied to the image and,
+    squared, to the variance. Validity, both fill values, and relative-area
+    scaling (squared for the variance) are applied in the same kernel, with
+    the semantics of :func:`cuphoton.xrep.reproject_masked_array`.
+    """
 
-    fx = x - x0
-    fy = y - y0
-    w00 = (1.0 - fx) * (1.0 - fy)
-    w10 = fx * (1.0 - fy)
-    w01 = (1.0 - fx) * fy
-    w11 = fx * fy
-
-    in00 = (x0 >= 0) & (x0 < width) & (y0 >= 0) & (y0 < height)
-    in10 = (x1 >= 0) & (x1 < width) & (y0 >= 0) & (y0 < height)
-    in01 = (x0 >= 0) & (x0 < width) & (y1 >= 0) & (y1 < height)
-    in11 = (x1 >= 0) & (x1 < width) & (y1 >= 0) & (y1 < height)
-
-    w00 = cp.where(in00, w00, 0.0)
-    w10 = cp.where(in10, w10, 0.0)
-    w01 = cp.where(in01, w01, 0.0)
-    w11 = cp.where(in11, w11, 0.0)
-    norm = w00 + w10 + w01 + w11
-
-    cx0 = cp.clip(x0, 0, width - 1)
-    cy0 = cp.clip(y0, 0, height - 1)
-    cx1 = cp.clip(x1, 0, width - 1)
-    cy1 = cp.clip(y1, 0, height - 1)
-
-    variance64 = source_variance.astype(cp.float64, copy=False)
-    value = cp.zeros_like(norm, dtype=cp.float64)
-    for weight, sample in (
-        (w00, variance64[cy0, cx0]),
-        (w10, variance64[cy0, cx1]),
-        (w01, variance64[cy1, cx0]),
-        (w11, variance64[cy1, cx1]),
-    ):
-        value += cp.square(weight) * cp.where(
-            weight != 0.0,
-            sample,
-            0.0,
-        )
-    safe = norm > eps
-    return cp.where(
-        safe,
-        value / cp.where(safe, cp.square(norm), 1.0),
-        cp.asarray(fill_value, dtype=cp.float64),
+    if source.ndim != 2 or source_variance.shape != source.shape:
+        raise ValueError("source and variance must be matching 2D arrays")
+    height, width = (int(source.shape[0]), int(source.shape[1]))
+    args = (
+        cp.ascontiguousarray(source, dtype=cp.float64).ravel(),
+        cp.ascontiguousarray(source_variance, dtype=cp.float64).ravel(),
+        height,
+        width,
+        x.astype(cp.float64, copy=False),
+        y.astype(cp.float64, copy=False),
+        valid.astype(cp.bool_, copy=False),
+        area.astype(cp.float64, copy=False),
+        int(area_scaling),
+        float(fill_value),
+        float(variance_fill_value),
+        float(eps),
     )
+    if interpolation == "bilinear":
+        return _bilinear_pair_elem(*args)
+    if interpolation != "lanczos3":
+        raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
+    if lanczos3_specialized:
+        return _lanczos3_pair_elem(*args)
+    return _lanczos_pair_elem(*args, lanczos_a, int(two_a_footprint))
 
 
 # ------------------------------------------------------------------------- #

@@ -226,6 +226,8 @@ def reproject_array_device(
     source_mask=None,
     backend: str | None = "cupy",
     prepared: PreparedReprojection | None = None,
+    source_variance=None,
+    variance_fill_value: float = float("nan"),
 ) -> DeviceReprojectionResult:
     """Reproject one array while keeping the result on the backend device.
 
@@ -242,12 +244,32 @@ def reproject_array_device(
     prepared
         Reusable dense mapping for repeated reprojections with identical
         geometry.
+    source_variance
+        Optional backend-native diagonal variance with the source shape.
+        It is propagated with the same mapping and kernel as the image,
+        using squared normalized weights and squared relative-area scaling,
+        as in :func:`reproject_masked_array`. Values must be nonnegative;
+        NaN and positive infinity are accepted as no-data values. Values
+        are not checked here, which would need a device-to-host transfer;
+        negative input gives negative output variance. The result is a
+        diagonal approximation: interpolation-induced covariance between
+        destination pixels is not represented.
+    variance_fill_value
+        Variance value assigned outside the valid source footprint,
+        independent of ``spec.fill_value``.
 
     Returns
     -------
     DeviceReprojectionResult
-        Device-resident image and optional mask.
+        Device-resident image, optional mask, and optional float64
+        variance (``None`` unless ``source_variance`` is given).
     """
+
+    if source_variance is not None:
+        if tuple(source_variance.shape) != tuple(source.shape):
+            raise ValueError("source_variance shape must match source shape")
+        if np.dtype(source_variance.dtype).kind not in {"f", "i", "u"}:
+            raise TypeError("source_variance must have a real numeric dtype")
 
     backend = resolve_backend(backend)
     if backend != "cupy":
@@ -272,6 +294,8 @@ def reproject_array_device(
         prepared,
         spec,
         source_mask=source_mask,
+        source_variance=source_variance,
+        variance_fill_value=variance_fill_value,
     )
 
 
