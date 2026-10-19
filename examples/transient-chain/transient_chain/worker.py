@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from . import ops
+from . import ops, uq
 from .catalog import empty_table, finish_table
 from .config import config_sha256, validate_config
 from .fitsio import PlaneReader
@@ -54,6 +54,7 @@ STAGES = (
     "stamps",
     "xfit",
     "uncertainty",
+    "uq",
     "xscan",
     "terminal_d2h",
     "write",
@@ -105,6 +106,7 @@ class ChainWorker:
         # stars (None when refinement did not fit an affine) and the PSF
         # width the xfit stage uses, with where it came from
         self.misalignment: ops.Misalignment | None = None
+        self.star_xy: np.ndarray | None = None  # the stars the model kept
         self.psf_sigma_px: float | None = None
         self.psf_sigma_source: str | None = None
 
@@ -185,15 +187,17 @@ class ChainWorker:
         }
         identity = self.adapter.identity(sel)
         self.misalignment = None
+        self.star_xy = None
         self.psf_sigma_px = cfg["xfit"]["psf_sigma_px"]
         self.psf_sigma_source = (
             None if self.psf_sigma_px is None else "config"
         )
-        a_cfg, s_cfg, d_cfg, c_cfg = (
+        a_cfg, s_cfg, d_cfg, c_cfg, u_cfg = (
             cfg["align"],
             cfg["subtract"],
             cfg["detect"],
             cfg["classify"],
+            cfg["uq"],
         )
         size = int(cfg["stamps"]["stamp_size"])
         half = size // 2
@@ -551,15 +555,11 @@ class ChainWorker:
                 )
                 derived = derived_dipole_quantities(xres)
                 photometry = None
+                positive = int(DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED)
+                negative = int(DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED)
                 # only with an independent PSF width: the fitted dipole
                 # width would make psf_flux_err far too small
                 if fit_variance is not None and psf_sigma is not None:
-                    positive = int(
-                        DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED
-                    )
-                    negative = int(
-                        DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED
-                    )
                     fading = ((qflags & positive) != 0) & (
                         (qflags & negative) == 0
                     )
@@ -580,6 +580,65 @@ class ChainWorker:
                         psf_sigma,
                         mask=fit_valid,
                     )
+            # 8c. the error budget: the terms beyond xFit's covariance per
+            # candidate, combined into <q>_err (transient_chain.uq)
+            with timer("uq"):
+                err_fit = {
+                    f"{name}_{axis}": getattr(derived, f"{name}_{axis}_error")
+                    for name in ("center", "positive")
+                    for axis in ("x", "y")
+                }
+                if photometry is not None:
+                    err_fit["psf_flux"] = photometry.flux_error
+                if u_cfg["enabled"]:
+                    ctx = uq.build_context(
+                        kernel=fit.kernel,
+                        reference=reference,
+                        matched=fit.matched,
+                        residual=residual,
+                        variance=variance,
+                        psf_sigma=psf_sigma,
+                        misalignment=self.misalignment,
+                        star_xy=self.star_xy,
+                        fit=fit if u_cfg["kernel_fit"] else None,
+                        # the template providers carry no variance plane
+                        # yet, so the reference's correlated noise (the corr
+                        # term) is not in this version's budget
+                        reference_variance=None,
+                        resampling=None,
+                    )
+                    unsupported = ((qflags & positive) != 0) ^ (
+                        (qflags & negative) != 0
+                    )
+                    budget = uq.budget(
+                        ctx,
+                        cand_x=cp.asarray(cand_x),
+                        cand_y=cp.asarray(cand_y),
+                        offsets={
+                            name: (
+                                getattr(derived, f"{name}_x"),
+                                getattr(derived, f"{name}_y"),
+                            )
+                            for name in ("center", "positive")
+                        },
+                        err_fit=err_fit,
+                        lobe_flux=derived.lobe_flux,
+                        single=unsupported,
+                        photometry_xy=None if photometry is None else source,
+                    )
+                    uq_diag = {
+                        "terms": ["fit", *budget.terms],
+                        "excluded": ctx.excluded,
+                        **budget.diagnostics,
+                    }
+                else:
+                    budget = uq.fit_only(err_fit)
+                    uq_diag = {
+                        "terms": ["fit"],
+                        "excluded": {},
+                        **budget.diagnostics,
+                    }
+                xfer["control_bytes"] += 2 * 8 * 3 * n_cand  # positions
             # 9. XScan through DLPack: the scaled stamps never leave the
             # device
             logits_t = probs_t = view = scaled = None
@@ -666,6 +725,18 @@ class ChainWorker:
                     err_fit = ops.to_host(photometry.flux_error)
                     table["psf_flux_err_fit"] = err_fit
                     table["psf_flux_err"] = err_fit
+                # the budget columns; <q>_err becomes the full error bar
+                for name, values in budget.columns.items():
+                    table[name] = ops.to_host(values)
+                table["sky_err_arcsec"] = np.full(
+                    n_cand,
+                    np.nan
+                    if u_cfg["sky_astrometry_arcsec"] is None
+                    else float(u_cfg["sky_astrometry_arcsec"]),
+                )
+                table["sky_err_source"] = np.array(
+                    [u_cfg["sky_astrometry_source"]] * n_cand, dtype=object
+                )
                 if self.model is not None:
                     table["logit"] = logits_t.detach().cpu().numpy()
                     table["probability"] = probs_t.detach().cpu().numpy()
@@ -681,11 +752,14 @@ class ChainWorker:
                     int(np.asarray(v).nbytes) for v in table.values()
                 )
                 del xres, stamps, difference, scaled, derived, photometry
+                del budget
         else:
+            uq_diag = None
             for k in (
                 "stamps",
                 "xfit",
                 "uncertainty",
+                "uq",
                 "xscan",
                 "terminal_d2h",
             ):
@@ -740,6 +814,8 @@ class ChainWorker:
             },
             "psf_sigma_px": self.psf_sigma_px,
             "psf_sigma_source": self.psf_sigma_source,
+            "uq_terms": None if uq_diag is None else uq_diag["terms"],
+            "uq": uq_diag,
             "config_sha256": self.config_sha256,
             "checkpoint_sha256": self.checkpoint_sha256,
             "inference_policy": self.inference_policy,
@@ -801,6 +877,7 @@ class ChainWorker:
         )
         xfer["control_bytes"] += ms.control_bytes
         self.misalignment = ms.misalignment
+        self.star_xy = ms.star_xy
         if ms.psf is not None and self.psf_sigma_source != "config":
             self.psf_sigma_px = ms.psf.sigma_px
             self.psf_sigma_source = "stars"

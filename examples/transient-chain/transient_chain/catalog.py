@@ -80,9 +80,9 @@ def _position_columns(
         )
         cols[f"{name}_{axis}_err"] = (
             "float64",
-            "xfit",
-            f"error bar of {name}_{axis} to quote (the terms listed in the "
-            "README)",
+            "uq",
+            f"error bar of {name}_{axis} to quote: every term in quadrature "
+            "(NaN where uq_valid is false)",
         )
     cols[f"{name}_xy_cov"] = (
         "float64",
@@ -125,8 +125,50 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
     ),
     "psf_flux_err": (
         "float64",
-        "xfit",
-        "error bar of psf_flux to quote (the terms listed in the README)",
+        "uq",
+        "error bar of psf_flux to quote: every term in quadrature (NaN "
+        "where uq_valid is false)",
+    ),
+}
+BUDGET_QUANTITIES = (
+    "center_x",
+    "center_y",
+    "positive_x",
+    "positive_y",
+    "psf_flux",
+)
+BUDGET_TERMS: dict[str, str] = {
+    "corr": "correlated reference noise through the resampling and the "
+    "kernel",
+    "kfit": "the kernel fit's own uncertainty",
+    "kmatch": "kernel mismatch times the reference flux (psf_flux only; "
+    "0 for positions)",
+    "mis": "residual misalignment (0 for psf_flux)",
+}
+BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
+    **{
+        f"{q}_err_{t}": ("float64", "uq", f"{q}_err term: {what}")
+        for q in BUDGET_QUANTITIES
+        for t, what in BUDGET_TERMS.items()
+    },
+    "uq_valid": (
+        "bool",
+        "uq",
+        "every <q>_err of the row is defined (false when a correlation "
+        "window holds a masked pixel)",
+    ),
+    "sky_err_arcsec": (
+        "float64",
+        "uq",
+        "external astrometric uncertainty per axis in arcsec "
+        "(uq.sky_astrometry_arcsec; NaN when null), not part of the "
+        "pixel-frame error bars",
+    ),
+    "sky_err_source": (
+        "object",
+        "uq",
+        "provenance of sky_err_arcsec (uq.sky_astrometry_source; None when "
+        "null)",
     ),
 }
 CLASSIFY_COLUMNS: dict[str, tuple[str, str, str]] = {
@@ -195,6 +237,7 @@ def schema(parameter_names: Sequence[str]) -> dict[str, tuple[str, str, str]]:
         **BASE_COLUMNS,
         **xfit_columns(parameter_names),
         **UNCERTAINTY_COLUMNS,
+        **BUDGET_COLUMNS,
         **CLASSIFY_COLUMNS,
         **SKY_COLUMNS,
         **IDENTITY_COLUMNS,

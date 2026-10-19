@@ -20,6 +20,7 @@ transient_chain/fitsio.py      PlaneReader: auto | xdr | astropy on top of cupho
 transient_chain/surveys/       SurveyAdapter protocol; rubin.py (DP1 layout), generic.py (any FITS pair by parameters)
 transient_chain/worker.py      the persistent worker: read -> template -> refine -> mask -> XPOIS -> detect -> stamps -> xFit -> XScan
 transient_chain/ops.py         stage operations on NumPy or CuPy arrays (star finder, affine, hotspots, fit mask, stamps)
+transient_chain/uq.py          the error budget per candidate: the terms behind <q>_err (step 8c)
 transient_chain/catalog.py     the catalog column contract (same columns and dtypes for every item)
 transient_chain/workload.py    selections -> WorkItems -> WorkloadSpec; run_local, run_distributed
 compare_catalogs.py         match two catalogs by position and report differences
@@ -52,6 +53,7 @@ the request.
 | Detect | hotspot rule (threshold, 4-connected label, per-component peak and centroid) | the hotspot table |
 | Stamps | search, template = search minus difference, difference; per-stamp noise-match factor | none |
 | xFit | `fit_dipoles_device` on float64 difference stamps, weighted by the target variance, with masked and nonfinite pixels excluded | none |
+| Budget | the kernel-fit covariance once per item, then per candidate the correlation windows, forced fluxes and kernel-fit terms | the candidate positions, for the misalignment model and the kernel-mismatch solve |
 | XScan | DLPack handoff of the scaled stamps to Torch, `predict_tensors` | none |
 | End | one packed download: positions, fit parameters, uncertainties, logits, probabilities | `catalog.parquet` and `summary.json` per item |
 
@@ -212,6 +214,7 @@ named, odd sizes and enumerations are checked, and every default lives in
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
 | `stamps` | stamp cutting | `stamp_size` (odd; equals the checkpoint's `image_size`) |
 | `xfit` | dipole fits, quality flags, forced photometry | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`), `psf_sigma_px` |
+| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
 | `classify` | XScan | `inference_policy: strict\|checkpoint`, `apply_noise_match`, `noise_reference_sigma`, `decision_threshold`, `batch_size` |
 
 `classify.noise_reference_sigma` is a property of the checkpoint, not of the survey: it is the
@@ -287,9 +290,12 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `chi_square`, `reduced_chi_square` | float64 | xfit | fit quality on the difference stamp |
 | `evaluations`, `valid_pixel_count` | int64 | xfit | solver bookkeeping |
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
-| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`). `<q>_err_fit`: standard uncertainty from xFit's covariance alone. `<q>_err`: the error bar to quote (see below). `*_xy_cov`: x-y covariance from xFit's covariance |
+| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit, uq | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`); `*_err_fit` is the standard uncertainty from the full fit covariance, `*_err` the error bar to quote (every term in quadrature, NaN where `uq_valid` is false), and the x-y covariances come from the fit covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote (see below). All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
+| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source, its conditional uncertainty from the fit, and the error bar to quote (NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars) |
+| `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item |
+| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where a correlation window holds a masked pixel (then the row's `<q>_err` are NaN and the term columns stand alone) |
+| `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -298,11 +304,49 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 
 `transient_chain.catalog.markdown_table()` prints this table from the schema.
 
+## How the error bar is built
+
 For `center_x`, `center_y`, `positive_x`, `positive_y` and `psf_flux`, `<q>_err` is the error bar
-to quote and grows as uncertainty terms are added to the chain: this version includes only the xFit
-covariance term, so `<q>_err` equals `<q>_err_fit`. The `*_err` columns of the raw dipole parameters
-(`amplitude`, `sigma_x`, `sigma_y`, `theta`, `x_pos`, `y_pos`, `x_neg`, `y_neg`), `separation` and
-`lobe_flux` are xFit's term alone and do not grow.
+to quote: the quadrature of `<q>_err_fit` and the four terms below, each written to its own column
+so a user can rebuild the bar with any term left out (step 8c, `transient_chain/uq.py`). Every
+term is a standard uncertainty in the quantity's units, pixels for a position and image units for
+the flux.
+
+- `fit` (`<q>_err_fit`): xFit's covariance, weighted by the target variance plane; the template's
+  noise is not in that plane (below).
+- `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of
+  `cuphoton.xpois.correlation_factor` for a PSF-weighted sum (flux) or a PSF-derivative-weighted sum
+  (position) on a window of `2 ceil(5 psf_sigma) + 1` px around the position: the resampling and
+  the kernel correlate the reference's pixels, so a weighted sum is noisier than the diagonal
+  variance plane says. It needs the reference's variance plane on the target grid and the resampling
+  weights (`cuphoton.xrep.resampling_weights_at`); this version's template providers carry no
+  variance plane, so the term is 0 and `summary.json` lists it under `uq.excluded`.
+- `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
+  `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
+  reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate; for
+  a position the derivative weights are divided by the lobe flux so the sum is a shift in pixels.
+  Largest where a candidate sits on a bright reference source. `uq.kernel_fit: false` skips it.
+- `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux at the
+  candidate, `eta` the fraction of a static star's reference flux the subtraction leaves in the
+  residual beyond noise, solved at the stars the refine stage kept so that the median of their
+  squared residual fluxes over their predicted variance sits at the chi-square(1) median (a variable
+  star or two does not set it). Positions get 0: a kernel-mismatch term for the position of a
+  residual on a bright reference source is a planned addition.
+- `mis` (`<q>_err_mis`, positions only): the misalignment model's `variance(x, y)` at the position,
+  times 1/4 for the center of a dipole (each lobe moves with its own image) and, for the positive
+  lobe, times the squared sensitivity `lambda = (D + T) / D` of a single source (one supported lobe;
+  `D` the residual's forced flux and `T` the matched reference's at the lobe, `|lambda|` capped at
+  10, 1 for a resolved dipole). 0 without a misalignment model (refinement off, or a shift-only
+  refinement).
+- `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
+  reported with its provenance and kept out of the pixel-frame columns.
+
+`uq_valid` is false where a quantity's correlation window holds a masked pixel (a rule for such
+candidates is a planned addition); its `<q>_err` are then NaN while the term columns keep their
+values. A term the item could not compute is written as 0 and `summary.json` records the terms
+that went into the bars (`uq_terms`) with the reason for each one left out (`uq.excluded`), the
+kernel-fit form, the kernel-mismatch fit at the stars, the window size and the counts of invalid
+windows and capped sensitivities. `uq.enabled: false` writes `<q>_err = <q>_err_fit` and zero terms.
 
 The xFit standard errors come from the target's variance plane. The template's noise, carried
 through the subtraction kernel, is not in that variance, so the standard errors understate the
@@ -349,6 +393,7 @@ that alignment.
   setting a bad bit. `subtract.template_bad_dilation_px: 3` is the stopgap until the library
   passes the interpolation through; the shipped config keeps 0 to match the reference chain.
 - Stage timings in `summary.json` use the names `read, template, refine, mask, xpois, detect,
-  stamps, xfit, uncertainty, xscan, terminal_d2h, write`. `xfit` is the fit alone and
-  `uncertainty` the quality flags, propagated uncertainties and forced photometry after it; data captured before this version used `headers`,
-  `xdr_read` and `mosaic`.
+  stamps, xfit, uncertainty, uq, xscan, terminal_d2h, write`. `xfit` is the fit alone,
+  `uncertainty` the quality flags, propagated uncertainties and forced photometry after it, and
+  `uq` the error budget; data captured before this version used `headers`, `xdr_read` and
+  `mosaic`.

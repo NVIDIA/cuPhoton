@@ -167,3 +167,36 @@ def test_psf_width_accepts_an_independent_width_or_no_photometry(
         HERE / "config.yaml", [f"xfit.psf_sigma_px={value}"]
     )
     assert cfg["xfit"]["psf_sigma_px"] == expected
+
+
+def test_uq_block_defaults_and_sky_term_rule():
+    raw = yaml.safe_load((HERE / "config.yaml").read_text())
+    cfg = config.validate_config(raw)
+    assert cfg["uq"] == {
+        "enabled": True,
+        "kernel_fit": True,
+        "sky_astrometry_arcsec": None,
+        "sky_astrometry_source": None,
+    }
+    good = copy.deepcopy(raw)
+    good["uq"] = {
+        "sky_astrometry_arcsec": 0.01,
+        "sky_astrometry_source": "survey astrometric summary",
+    }
+    assert config.validate_config(good)["uq"]["sky_astrometry_arcsec"] == 0.01
+    for block in (
+        {"sky_astrometry_arcsec": 0.01},
+        {"sky_astrometry_source": "survey"},
+    ):
+        bad = copy.deepcopy(raw)
+        bad["uq"] = block
+        with pytest.raises(ValueError, match="set together"):
+            config.validate_config(bad)
+    bad = copy.deepcopy(raw)
+    bad["uq"] = {"sky_astrometry_arcsec": -1.0, "sky_astrometry_source": "s"}
+    with pytest.raises(ValueError, match=">= 0"):
+        config.validate_config(bad)
+    bad = copy.deepcopy(raw)
+    bad["uq"] = {"enabled": "yes"}
+    with pytest.raises(ValueError, match="true or false"):
+        config.validate_config(bad)

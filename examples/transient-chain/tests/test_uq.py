@@ -1,0 +1,318 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""The error budget on a NumPy stand-in for one item: a reference with
+stars, a Gaussian kernel, a target with transients and white noise.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+from scipy.signal import fftconvolve
+from transient_chain import ops, uq
+
+SIZE = 200
+PSF = 1.8
+NOISE = 3.0
+FIELD = np.array([0.1, -0.05])  # constant reference-minus-target offset
+TAU2 = np.array([0.01, 0.0225])  # misalignment variance per axis
+QUANTITIES = uq.QUANTITIES
+
+
+def _gaussians(xs, ys, fluxes, sigma=PSF):
+    yy, xx = np.mgrid[:SIZE, :SIZE]
+    img = np.zeros((SIZE, SIZE))
+    for x, y, f in zip(xs, ys, fluxes, strict=True):
+        img += (
+            f
+            * np.exp(-0.5 * ((xx - x) ** 2 + (yy - y) ** 2) / sigma**2)
+            / (2 * np.pi * sigma**2)
+        )
+    return img
+
+
+def _kernel(sigma=1.0, size=7):
+    u = np.arange(size) - size // 2
+    g = np.exp(-0.5 * (u / sigma) ** 2)
+    k = np.outer(g, g)
+    return k / k.sum()
+
+
+class Scene:
+    """Reference stars, a kernel, transients and the arrays an item holds."""
+
+    def __init__(self, seed=0, mismatch=0.0, n_stars=24, cand=None):
+        rng = np.random.default_rng(seed)
+        self.star_xy = np.column_stack(
+            [
+                rng.uniform(25, SIZE - 25, n_stars),
+                rng.uniform(25, SIZE - 25, n_stars),
+            ]
+        )
+        flux = rng.uniform(2.0e4, 6.0e4, n_stars)
+        self.reference = 50.0 + _gaussians(
+            self.star_xy[:, 0], self.star_xy[:, 1], flux
+        )
+        self.kernel = _kernel()
+        self.matched = fftconvolve(self.reference, self.kernel, mode="same")
+        self.cand = np.array(
+            [[60, 70], [140, 50], [100, 150], [40, 160]]
+            if cand is None
+            else cand
+        )
+        self.flux = np.array([3000.0, 5000.0, 2500.0, 4000.0])
+        target = self.matched + _gaussians(
+            self.cand[:, 0] + 0.3, self.cand[:, 1] - 0.2, self.flux
+        )
+        # a mismatched kernel leaves a fraction of every star in the
+        # residual, here a different fraction per star with scatter
+        # ``mismatch`` (the budget's eta is that scatter)
+        fraction = mismatch * rng.normal(size=n_stars)
+        target += fftconvolve(
+            _gaussians(
+                self.star_xy[:, 0], self.star_xy[:, 1], flux * fraction
+            ),
+            self.kernel,
+            mode="same",
+        )
+        self.target = target + rng.normal(0.0, NOISE, target.shape)
+        self.residual = self.target - self.matched
+        self.variance = np.full((SIZE, SIZE), NOISE**2)
+        # a masked block next to the last candidate's window
+        self.variance[150:170, 30:36] = np.nan
+        self.residual[150:170, 30:36] = np.nan
+        mask = np.ones((SIZE, SIZE), bool)
+        mask[:4] = mask[-4:] = mask[:, :4] = mask[:, -4:] = False
+        mask &= np.isfinite(self.variance)
+        self.fit = SimpleNamespace(
+            basis_kernels=self.kernel[None],
+            fit_mask=mask,
+            background_coefficients=np.zeros(1),
+            kernel=self.kernel,
+        )
+        self.misalignment = ops.Misalignment(
+            np.eye(2),
+            FIELD,
+            np.zeros((2, 3, 3)),
+            "rms",
+            TAU2,
+            np.ones(5, bool),
+            np.zeros((5, 2)),
+            (SIZE, SIZE),
+        )
+
+    def context(self, **kw):
+        args = dict(
+            kernel=self.kernel,
+            reference=self.reference,
+            matched=self.matched,
+            residual=self.residual,
+            variance=self.variance,
+            psf_sigma=PSF,
+            misalignment=self.misalignment,
+            star_xy=self.star_xy,
+            fit=self.fit,
+        )
+        args.update(kw)
+        return uq.build_context(**args)
+
+    def inputs(self, single=None, err=0.05):
+        n = len(self.cand)
+        err_fit = {q: np.full(n, err) for q in QUANTITIES}
+        err_fit["psf_flux"] = np.full(n, 40.0)
+        return dict(
+            cand_x=self.cand[:, 0],
+            cand_y=self.cand[:, 1],
+            offsets={
+                "center": (np.full(n, 0.3), np.full(n, -0.2)),
+                "positive": (np.full(n, 0.3), np.full(n, -0.2)),
+            },
+            err_fit=err_fit,
+            lobe_flux=self.flux,
+            single=np.zeros(n, bool) if single is None else single,
+            photometry_xy=np.column_stack(
+                [np.full(n, 0.3), np.full(n, -0.2)]
+            ),
+        )
+
+
+@pytest.fixture(scope="module")
+def scene():
+    return Scene()
+
+
+def test_terms_and_fallbacks_are_recorded(scene):
+    ctx = scene.context()
+    assert ctx.terms == ("kfit", "kmatch", "mis")
+    assert ctx.excluded == {"corr": "no reference variance plane"}
+    assert ctx.kernel_covariance.form == "plain"
+    assert ctx.window == 2 * 9 + 1
+    bare = scene.context(fit=None, misalignment=None, star_xy=None)
+    assert bare.terms == ()
+    assert set(bare.excluded) == {"corr", "kfit", "kmatch", "mis"}
+    blind = scene.context(psf_sigma=None)
+    assert blind.terms == ("mis",) and blind.window is None
+
+
+def test_total_is_the_quadrature_and_never_below_the_fit_term(scene):
+    ctx = scene.context()
+    res = uq.budget(ctx, **scene.inputs())
+    c = res.columns
+    valid = c["uq_valid"]
+    assert valid.tolist() == [True, True, True, False]
+    for q in QUANTITIES:
+        fit = scene.inputs()["err_fit"][q]
+        total = c[f"{q}_err"]
+        assert np.all(total[valid] >= fit[valid])
+        assert np.isnan(total[~valid]).all()
+        squares = sum(c[f"{q}_err_{t}"][valid] ** 2 for t in uq.TERMS)
+        np.testing.assert_allclose(
+            total[valid] ** 2, fit[valid] ** 2 + squares, rtol=1e-12
+        )
+        np.testing.assert_array_equal(c[f"{q}_err_corr"][valid], 0.0)
+    # misalignment: 1/4 of the model for a center, the model for a lobe
+    for a, t2 in zip("xy", TAU2, strict=True):
+        np.testing.assert_allclose(c[f"center_{a}_err_mis"] ** 2, 0.25 * t2)
+        np.testing.assert_allclose(c[f"positive_{a}_err_mis"] ** 2, t2)
+        np.testing.assert_array_equal(c[f"center_{a}_err_kmatch"], 0.0)
+        np.testing.assert_array_equal(c[f"positive_{a}_err_kmatch"], 0.0)
+    assert np.all(c["psf_flux_err_mis"] == 0.0)
+    assert np.all(c["psf_flux_err_kfit"][valid] > 0)
+    assert np.all(c["center_x_err_kfit"][valid] > 0)
+    assert res.diagnostics["invalid_window"] == 1
+    assert res.diagnostics["rotated_grid"] == 0
+
+
+def test_worked_quadrature_by_hand(scene):
+    """Kernel fit off, no stars, no reference variance: only misalignment
+    adds to the fit term, so the numbers follow by hand.
+    """
+    ctx = scene.context(fit=None, star_xy=None)
+    assert ctx.terms == ("mis",)
+    c = uq.budget(ctx, **scene.inputs(err=0.05)).columns
+    assert c["center_x_err"][0] == pytest.approx(
+        np.sqrt(0.05**2 + 0.25 * 0.01), rel=1e-12
+    )
+    assert c["positive_y_err"][1] == pytest.approx(
+        np.sqrt(0.05**2 + 0.0225), rel=1e-12
+    )
+    assert c["psf_flux_err"][0] == pytest.approx(40.0, rel=1e-12)
+    assert c["center_x_err_mis"][0] == pytest.approx(0.05)
+    assert c["positive_x_err_mis"][0] == pytest.approx(0.1)
+
+
+def test_kernel_mismatch_is_recovered_from_the_stars():
+    clean = Scene(seed=3)
+    assert clean.context().kernel_mismatch["eta"] < 0.01
+    off = Scene(seed=3, mismatch=0.03)
+    km = off.context().kernel_mismatch
+    assert km["n"] >= 20
+    assert km["eta"] == pytest.approx(0.03, rel=0.3)
+    # the flux term carries eta times the reference flux at the candidate
+    c = uq.budget(off.context(), **off.inputs()).columns
+    valid = c["uq_valid"]
+    assert np.all(c["psf_flux_err_kmatch"][valid] > 0)
+
+
+@pytest.mark.parametrize("gain, capped", [(0.5, False), (200.0, True)])
+def test_single_source_sensitivity_scales_the_lobe_misalignment(
+    scene, gain, capped
+):
+    """A single source's lobe moves by lambda = (D + T) / D times the
+    misalignment; |lambda| is capped at SENSITIVITY_CAP.
+    """
+    # the first candidate sits where the scene has no star of its own
+    s = Scene(seed=1, cand=[[15, 100], [140, 50], [100, 150], [40, 160]])
+    # a static star under the first candidate, in both images: T = gain * D
+    star = _gaussians(
+        [s.cand[0, 0] + 0.3], [s.cand[0, 1] - 0.2], [gain * s.flux[0]]
+    )
+    s.reference = s.reference + star
+    s.matched = fftconvolve(s.reference, s.kernel, mode="same")
+    s.target = s.target + fftconvolve(star, s.kernel, mode="same")
+    s.residual = s.target - s.matched
+    single = np.zeros(len(s.cand), bool)
+    single[0] = True
+    res = uq.budget(s.context(), **s.inputs(single=single))
+    c = res.columns
+    lam2 = c["positive_x_err_mis"][0] ** 2 / TAU2[0]
+    if capped:
+        assert lam2 == pytest.approx(uq.SENSITIVITY_CAP**2, rel=1e-9)
+        assert res.diagnostics["sensitivity_capped"] == 1
+    else:
+        # the matched star is the PSF broadened by the kernel, so its forced
+        # flux through the PSF is gain * flux * 2 p^2 / (2 p^2 + k^2)
+        seen = gain * 2 * PSF**2 / (2 * PSF**2 + 1.0)
+        assert lam2 == pytest.approx((1 + seen) ** 2, rel=0.05)
+        assert res.diagnostics["sensitivity_capped"] == 0
+    # resolved dipoles keep lambda = 1
+    np.testing.assert_allclose(c["positive_x_err_mis"][1:] ** 2, TAU2[0])
+    np.testing.assert_allclose(c["center_x_err_mis"][0] ** 2, 0.25 * TAU2[0])
+
+
+def test_reference_variance_adds_the_correlation_term(scene):
+    from cuphoton.xrep import resampling_weights_at
+
+    def mapping(c):  # a half-pixel translation of the reference grid
+        return np.asarray(c, dtype=float) + 0.5
+
+    def resampling(x, y):
+        return resampling_weights_at(mapping, x, y, interpolation="lanczos3")
+
+    plane = np.full((SIZE, SIZE), 4.0)
+    ctx = scene.context(reference_variance=plane, resampling=resampling)
+    assert ctx.terms == ("corr", "kfit", "kmatch", "mis")
+    assert ctx.kernel_covariance.form == "sandwich"
+    res = uq.budget(ctx, **scene.inputs())
+    c = res.columns
+    valid = c["uq_valid"]
+    assert valid.tolist() == [True, True, True, False]
+    for q in QUANTITIES:
+        assert np.all(c[f"{q}_err_corr"][valid] > 0)
+        assert np.all(c[f"{q}_err"][valid] > c[f"{q}_err_corr"][valid])
+
+    def rotated(c):
+        a = np.radians(10.0)
+        r = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        return np.asarray(c, dtype=float) @ r.T
+
+    ctx = scene.context(
+        reference_variance=plane,
+        resampling=lambda x, y: resampling_weights_at(
+            rotated, x, y, interpolation="lanczos3"
+        ),
+    )
+    res = uq.budget(ctx, **scene.inputs())
+    assert not res.columns["uq_valid"].any()
+    assert res.diagnostics["rotated_grid"] == len(scene.cand)
+    with pytest.raises(ValueError, match="given together"):
+        scene.context(reference_variance=plane)
+
+
+def test_fit_only_writes_zero_terms(scene):
+    err_fit = scene.inputs()["err_fit"]
+    c = uq.fit_only(err_fit).columns
+    for q in QUANTITIES:
+        np.testing.assert_array_equal(c[f"{q}_err"], err_fit[q])
+        for t in uq.TERMS:
+            np.testing.assert_array_equal(c[f"{q}_err_{t}"], 0.0)
+    assert c["uq_valid"].all() and c["uq_valid"].dtype == bool
+
+
+def test_forced_flux_matches_the_planted_flux(scene):
+    half = scene.context().window // 2
+    flux, err = uq.forced_flux(
+        scene.residual,
+        scene.variance,
+        scene.cand[:3, 0] + 0.3,
+        scene.cand[:3, 1] - 0.2,
+        PSF,
+        half,
+    )
+    np.testing.assert_allclose(flux, scene.flux[:3], rtol=0.05)
+    assert np.all(err > 0) and np.all(np.abs(flux - scene.flux[:3]) < 4 * err)
