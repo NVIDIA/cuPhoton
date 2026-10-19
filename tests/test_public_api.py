@@ -238,6 +238,22 @@ def test_xrep_additions_do_not_expand_existing_dataclasses() -> None:
     ]
 
 
+def test_xrep_resampling_weights_signature() -> None:
+    assert list(inspect.signature(xrep.resampling_weights_at).parameters) == [
+        "mapping",
+        "x",
+        "y",
+        "interpolation",
+        "lanczos_a",
+        "two_a_footprint",
+        "source_origin",
+        "source_shape",
+        "prepared",
+        "translation_tolerance",
+        "seam_tolerance",
+    ]
+
+
 def test_xrep_existing_function_signatures_remain_stable() -> None:
     assert list(inspect.signature(xrep.reproject_array).parameters) == [
         "source",
