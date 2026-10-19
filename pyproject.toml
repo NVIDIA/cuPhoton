@@ -27,7 +27,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Astronomy",
 ]
 dependencies = [
-  "astropy>=6.1.4",
+  "astropy>=7.2.0",
   "h5py>=3.10",
   "numexpr>=2.10",
   "numpy>=2.0,<2.6",

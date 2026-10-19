@@ -38,7 +38,7 @@ requirements:
     - libnvcomp-dev >=5.2,<5.3
   run:
     - python
-    - astropy-base >=6.1.4
+    - astropy-base >=7.2.0
     - h5py >=3.10
     - hdf5 >=2.1
     - numexpr >=2.10

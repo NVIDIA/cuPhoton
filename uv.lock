@@ -436,7 +436,7 @@ viz = [
 
 [package.metadata]
 requires-dist = [
-    { name = "astropy", specifier = ">=6.1.4" },
+    { name = "astropy", specifier = ">=7.2.0" },
     { name = "bokeh", marker = "extra == 'viz'", specifier = ">=3.9" },
     { name = "cuda-tile", marker = "sys_platform == 'linux' and extra == 'cutile'", specifier = ">=1.6,<2" },
     { name = "cuda-toolkit", extras = ["cufile"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=13,<14" },
