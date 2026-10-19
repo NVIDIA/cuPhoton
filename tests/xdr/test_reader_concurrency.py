@@ -181,6 +181,8 @@ def read_runtime(monkeypatch):
             def done(self):
                 resource.done_calls += 1
                 assert not resource.get_active, "future polled during get()"
+                if resource.get_calls:
+                    raise ValueError("future no longer has shared state")
                 return resource.future_done
 
             def get(self):
@@ -195,11 +197,12 @@ def read_runtime(monkeypatch):
                     if resource.error is not None:
                         raise resource.error
                     resource.future_done = True
+                    return 4
                 finally:
                     resource.get_active = False
 
         resource.handle = HeapReadHandle(
-            resource.device_input, "relative-offsets", [Future()]
+            resource.device_input, "relative-offsets", [(Future(), 4)]
         )
 
         class Loader:
@@ -339,16 +342,17 @@ def test_abandoned_pending_future_blocks_submission_on_idle_stream(
     with pytest.raises(RuntimeError, match="previous xDR GPU work"):
         second.read()
     assert second.load_calls == 0
-    assert read_runtime.quarantine == [owner]
+    assert len(read_runtime.quarantine) == 2
     assert first.get_calls == 1
-    assert first.done_calls >= 2
+    assert first.done_calls == 0
 
-    pending_probes = first.done_calls
+    # The underlying work finishing cannot restore a consumed future.
     first.future_done = True
-    assert second.read() is second.output
+    with pytest.raises(RuntimeError, match="previous xDR GPU work"):
+        second.read()
     assert first.get_calls == 1
-    assert first.done_calls > pending_probes
-    assert read_runtime.quarantine == []
+    assert first.done_calls == 0
+    assert len(read_runtime.quarantine) == 2
 
 
 @pytest.mark.parametrize("owns_loader", [False, True])
@@ -515,8 +519,8 @@ def test_stream_none_preserves_control_signal_cleanup(
     assert caught.value is error
     assert first.loader.closed is (error_stage == "decode")
     assert first.stream.synchronize_calls == 0
-    assert len(read_runtime.quarantine) == 1
-    completion = read_runtime.quarantine[0]
+    assert len(read_runtime.quarantine) == (2 if error_stage == "wait" else 1)
+    completion = read_runtime.quarantine[-1]
     assert first.loader in completion.keepalive
     assert first.output in completion.keepalive
     assert completion.actively_awaited is False

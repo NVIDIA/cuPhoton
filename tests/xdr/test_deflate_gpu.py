@@ -177,6 +177,68 @@ def test_native_deflate_rejects_unaligned_input(cp, pooled):
         )
 
 
+@pytest.mark.parametrize("pooled", [False, True])
+@pytest.mark.parametrize("size_delta", [16, -16])
+@pytest.mark.parametrize("gzip_wrapped", [False, True])
+def test_native_decode_rejects_incorrect_expected_size(
+    cp, pooled, size_delta, gzip_wrapped
+):
+    ext = nvcomp_batch._try_get_cpp_ext()
+    if gzip_wrapped:
+
+        def decode(*args):
+            return ext.batch_gzip_decompress(
+                *args, use_native_pool=pooled, decompression_backend="cuda"
+            )
+    else:
+        decode = (
+            ext.batch_deflate_decompress_pooled
+            if pooled
+            else ext.batch_deflate_decompress
+        )
+    original = bytes(range(64)) * 4
+    # Both tiles use valid streams and full-sized backing allocations.
+    # Balance the declared capacities so the scratch-size bounds still cover
+    # the actual total and maximum sizes, including the overflow-status case.
+    wbits = 31 if gzip_wrapped else -15
+    payload = zlib.compress(original, wbits=wbits)
+    assert zlib.decompress(payload, wbits=wbits) == original
+    stream = cp.cuda.Stream(non_blocking=True)
+
+    def table(value):
+        return np.array([value, value], dtype=np.int64)
+
+    with stream:
+        data = cp.asarray(np.frombuffer(payload, dtype=np.uint8))
+        stride = len(original) + 16
+        output = cp.empty(2 * stride, dtype=cp.uint8)
+        args = (
+            int(data.data.ptr),
+            table(0),
+            table(len(payload)),
+            int(output.data.ptr),
+            np.array([0, stride], dtype=np.int64),
+        )
+        sizes = np.array(
+            [len(original) + size_delta, len(original) - size_delta],
+            dtype=np.int64,
+        )
+        message = (
+            "decoded size differs for tile 0"
+            if size_delta > 0
+            else "decompression failed for tile 0"
+        )
+        with pytest.raises(RuntimeError, match=message):
+            decode(*args, sizes, int(stream.ptr))
+        # Completed size/status rejections must leave the stream usable.
+        decode(*args, table(len(original)), int(stream.ptr))
+    for offset in (0, stride):
+        np.testing.assert_array_equal(
+            cp.asnumpy(output[offset : offset + len(original)]),
+            np.frombuffer(original, dtype=np.uint8),
+        )
+
+
 def test_aligned_deflate_input_stays_zero_copy(cp):
     data = cp.empty(32, dtype=cp.uint8)
     offsets = np.array([0, 16], dtype=np.int64)
@@ -186,3 +248,18 @@ def test_aligned_deflate_input_stays_zero_copy(cp):
     assert packed is data
     assert packed_offsets is offsets
     assert not owners
+
+
+def test_python_deflate_rejects_incorrect_expected_size(cp):
+    original = b"valid synthetic content" * 8
+    payload = zlib.compress(original, wbits=-15)
+    data = cp.asarray(np.frombuffer(payload, dtype=np.uint8))
+    with pytest.raises(RuntimeError, match="decoded size differs for tile 0"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            data,
+            [0],
+            [len(payload)],
+            [len(original) + 16],
+            gzip_wrapped=False,
+            use_cpp_helper=False,
+        )

@@ -25,13 +25,20 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
 from cuphoton.core.fits_options import normalize_xdr_options
 
-from .gds import available_cpu_cores, configure_kvikio_parallelism
+from .gds import (
+    _close_cufile,
+    _quarantine_read_failure,
+    _read_submission,
+    _wait_for_reads,
+    available_cpu_cores,
+    configure_kvikio_parallelism,
+)
 
 # Sentinel value pushed on the queue when the prefetcher has finished so the
 # consumer knows to stop waiting.
@@ -359,10 +366,11 @@ def _ensure_gpu_submissions_safe() -> None:
         )
     if unresolved:
         raise RuntimeError(
-            "previous xDR GPU work could not be synchronized; refusing "
+            "previous xDR GPU work or KvikIO read completion is "
+            "unconfirmed; refusing "
             "another submission while its source, scratch, and output "
             "buffers remain quarantined; "
-            "restart the process if the CUDA context cannot recover"
+            "restart the process if completion cannot be confirmed"
         )
 
 
@@ -543,23 +551,33 @@ class _FilePrefetcher(threading.Thread):
         import kvikio
 
         configure_kvikio_parallelism()
-        with kvikio.CuFile(planned.path, "r") as f:
-            futures = []
-            for span in planned.spans:
-                view = host_buf[
-                    span.host_offset : span.host_offset + span.nbytes
-                ]
-                futures.append(
-                    f.pread(
-                        view,
-                        size=span.nbytes,
-                        file_offset=span.file_offset,
+        f = kvikio.CuFile(planned.path, "r")
+        futures: list[tuple[Any, int]] = []
+        try:
+            with _read_submission(futures, owners=(host_buf,), file=f):
+                for span in planned.spans:
+                    view = host_buf[
+                        span.host_offset : span.host_offset + span.nbytes
+                    ]
+                    futures.append(
+                        (
+                            f.pread(
+                                view,
+                                size=span.nbytes,
+                                file_offset=span.file_offset,
+                            ),
+                            span.nbytes,
+                        )
                     )
-                )
             # Block until all reads for this file complete. This is where
             # kvikio releases the GIL and the consumer thread makes progress.
-            for fut in futures:
-                fut.get()
+            _wait_for_reads(futures, owners=(host_buf,), file=f)
+        except BaseException as error:
+            if futures:
+                _quarantine_read_failure(futures, (host_buf,), f, error)
+            raise
+        finally:
+            _close_cufile(f)
 
         hdu_header_sizes = _parse_hdu_header_sizes(planned, host_buf)
 
@@ -889,6 +907,14 @@ def _native_file_plans_with_direct_outputs(
             if hdu.kind == "image":
                 target = outs[slot][item.file_index]
                 if target.dtype == np.dtype(hdu.image_dtype_char):
+                    if (
+                        hdu.image_shape != tuple(target.shape)
+                        or hdu.heap_span_len != target.nbytes
+                    ):
+                        raise ValueError(
+                            f"{item.path}: ImageHDU {hdu.hdu_index} shape "
+                            "or byte count does not match native output slice"
+                        )
                     if not target.flags.c_contiguous:
                         raise ValueError(
                             "native direct ImageHDU output slice must be "

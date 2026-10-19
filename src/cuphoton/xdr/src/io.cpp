@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <fitsio.h>
 #include <kvikio/file_handle.hpp>
+#include <kvikio/utils.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -22,7 +23,6 @@
 #include <cstring>
 #include <deque>
 #include <exception>
-#include <future>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1143,12 +1143,27 @@ private:
     ReadyFile read_file(const ReadTask& task) {
         const auto& plan = task.plan;
         kvikio::FileHandle file_handle(plan.path, "r");
-        struct PendingRead {
-            std::future<std::size_t> future;
-            std::size_t expected = 0;
+        // Keep each read within this worker's lifetime. KvikIO's aggregate
+        // pread future can throw while sibling tasks still use its file and
+        // destination; joining our workers would not drain those tasks.
+        auto read_span = [&](void* dst,
+                             std::size_t nbytes,
+                             std::size_t file_offset) {
+            auto [base, allocation_size, device_offset] =
+                kvikio::get_alloc_info(dst);
+            if (device_offset > allocation_size
+                || nbytes > allocation_size - device_offset) {
+                throw std::invalid_argument(
+                    "native read span exceeds device allocation");
+            }
+            const auto got = file_handle.read(
+                base, nbytes, file_offset, device_offset, false);
+            if (got != nbytes) {
+                throw std::runtime_error("short KvikIO read on " + plan.path);
+            }
+            kvikio_reads_.fetch_add(1);
+            kvikio_bytes_.fetch_add(static_cast<std::uint64_t>(got));
         };
-        std::vector<PendingRead> pending_reads;
-        pending_reads.reserve(plan.spans.size() + plan.direct_spans.size());
 
         for (const auto& span : plan.spans) {
             if (span.nbytes == 0) {
@@ -1162,16 +1177,10 @@ private:
             auto dst = static_cast<void*>(
                 batch->device_buffer.data + task.batch_offset
                 + static_cast<std::size_t>(span.host_offset));
-            auto future = file_handle.pread(
+            read_span(
                 dst,
                 static_cast<std::size_t>(span.nbytes),
-                static_cast<std::size_t>(span.file_offset),
-                kvikio::defaults::task_size(),
-                kvikio::defaults::gds_threshold(),
-                false);
-            pending_reads.push_back(
-                PendingRead{
-                    std::move(future), static_cast<std::size_t>(span.nbytes)});
+                static_cast<std::size_t>(span.file_offset));
         }
 
         for (const auto& span : plan.direct_spans) {
@@ -1179,25 +1188,10 @@ private:
                 continue;
             }
             auto dst = reinterpret_cast<void*>(span.device_ptr);
-            auto future = file_handle.pread(
+            read_span(
                 dst,
                 static_cast<std::size_t>(span.nbytes),
-                static_cast<std::size_t>(span.file_offset),
-                kvikio::defaults::task_size(),
-                kvikio::defaults::gds_threshold(),
-                false);
-            pending_reads.push_back(
-                PendingRead{
-                    std::move(future), static_cast<std::size_t>(span.nbytes)});
-        }
-
-        for (auto& read : pending_reads) {
-            const auto got = read.future.get();
-            if (got != read.expected) {
-                throw std::runtime_error("short KvikIO read on " + plan.path);
-            }
-            kvikio_reads_.fetch_add(1);
-            kvikio_bytes_.fetch_add(static_cast<std::uint64_t>(got));
+                static_cast<std::size_t>(span.file_offset));
         }
 
         ReadyFile file;
