@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
+from functools import partial
 from pathlib import Path
 from typing import Any, Final, Literal, SupportsIndex
 
@@ -2632,10 +2633,17 @@ class DeviceWorkerContext:
         )
 
         device = torch.device(config.device)
-        model, checkpoint, performance = load_model_from_checkpoint(
+        model, _, performance = load_model_from_checkpoint(
             checkpoint_dir,
             device=device,
             performance_override=PerformanceConfig(**config.inference_policy),
+            checkpoint_validator=partial(
+                _validate_checkpoint_contract,
+                stamp_shape=config.stamp_shape,
+                feature_names=FEATURE_NAMES,
+                feature_schema_sha256=config.feature_schema_sha256,
+                feature_schema=feature_schema,
+            ),
         )
         if asdict(performance) != config.inference_policy:
             raise RuntimeError(
@@ -2650,13 +2658,6 @@ class DeviceWorkerContext:
             raise RuntimeError(
                 "xFit feature schema changed during worker load"
             )
-        _validate_checkpoint_contract(
-            checkpoint,
-            stamp_shape=config.stamp_shape,
-            feature_names=FEATURE_NAMES,
-            feature_schema_sha256=config.feature_schema_sha256,
-            feature_schema=feature_schema,
-        )
         _validate_loaded_model_contract(model, feature_names=FEATURE_NAMES)
         _validate_model_device(model, device=device)
         solver_config = LMConfig(**config.xfit.solver_payload())

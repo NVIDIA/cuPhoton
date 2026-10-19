@@ -11,7 +11,7 @@ import multiprocessing as mp
 import os
 import random
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
@@ -1445,6 +1445,7 @@ def load_model_from_checkpoint(
     *,
     device: torch.device | None = None,
     performance_override: PerformanceConfig | None = None,
+    checkpoint_validator: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> tuple[torch.nn.Module, dict[str, Any], PerformanceConfig]:
     """Load a checkpoint with an optional inference performance policy.
 
@@ -1452,6 +1453,9 @@ def load_model_from_checkpoint(
     validated before loading and replaces that policy without changing the
     checkpoint. The selected policy's runtime settings apply before optional
     model compilation.
+    When supplied, ``checkpoint_validator`` checks the deserialized checkpoint
+    before model construction and runtime configuration. It does not bound
+    checkpoint deserialization or the size of a valid model.
     On CUDA this updates process-wide TF32 and cuDNN settings; it does not
     enable PyTorch's deterministic-algorithm mode.
     """
@@ -1471,6 +1475,8 @@ def load_model_from_checkpoint(
         map_location=device or "cpu",
         weights_only=True,
     )
+    if checkpoint_validator is not None:
+        checkpoint_validator(checkpoint)
     model = build_model(**checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state"])
     model.to(target_device)

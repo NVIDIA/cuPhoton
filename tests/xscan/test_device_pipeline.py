@@ -14,6 +14,7 @@ import pickle
 import subprocess
 import sys
 import weakref
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1131,6 +1132,67 @@ def test_checkpoint_preflight_binds_triplet_shape_and_feature_order(
         )
 
 
+@pytest.mark.parametrize("mismatch", ["image_size", "feature_identity"])
+@pytest.mark.parametrize("consumer", ["worker", "benchmark"])
+def test_pipeline_rejects_checkpoint_contract_before_model_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mismatch: str,
+    consumer: str,
+) -> None:
+    torch = pytest.importorskip("torch")
+    import cuphoton.xscan.device_pipeline as pipeline
+    import cuphoton.xscan.training as training
+
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    config = _config(tmp_path)
+    checkpoint = {**_checkpoint_contract(config), "model_state": {}}
+    if mismatch == "image_size":
+        checkpoint["model_config"]["image_size"] = 1_000_000
+        message = "image_size does not match"
+    else:
+        checkpoint["xfit_feature_bundle"]["feature_sha256"] = "d" * 64
+        message = "feature identity does not match"
+    torch.save(checkpoint, checkpoint_path)
+    config = replace(config, checkpoint_sha256=file_sha256(checkpoint_path))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            cuda=SimpleNamespace(
+                runtime=SimpleNamespace(
+                    getDeviceCount=lambda: 1,
+                    getDevice=lambda: 0,
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda _device: None)
+    monkeypatch.setattr(torch, "set_num_threads", lambda _count: None)
+    monkeypatch.setattr(
+        pipeline,
+        "_load_feature_schema_contract",
+        lambda *_args, **_kwargs: _feature_schema(config),
+    )
+
+    def forbidden_model_construction(**_kwargs: Any) -> Any:
+        pytest.fail("checkpoint contract must be checked before construction")
+
+    monkeypatch.setattr(training, "build_model", forbidden_model_construction)
+    with pytest.raises(ValueError, match=message):
+        if consumer == "worker":
+            DeviceWorkerContext.initialize(config)
+        else:
+            from cuphoton.xscan.pipeline_benchmark import stages
+
+            stages._setup("xscan", config)
+
+
 @pytest.mark.parametrize(
     ("bundle_update", "schema_update", "message"),
     [
@@ -1304,10 +1366,12 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
         *,
         device: Any,
         performance_override: PerformanceConfig,
+        checkpoint_validator: Callable[[Mapping[str, Any]], None],
     ) -> tuple[Any, Any, Any]:
         load_calls.append((run_dir, device, performance_override))
-        model = TinyTripletModel().to(device)
         checkpoint = _checkpoint_contract(config)
+        checkpoint_validator(checkpoint)
+        model = TinyTripletModel().to(device)
         return model, checkpoint, performance_override
 
     monkeypatch.setattr(training, "load_model_from_checkpoint", load_model)
@@ -1586,11 +1650,14 @@ def test_pipeline_failure_completes_device_streams_and_releases_context(
         *,
         device: Any,
         performance_override: PerformanceConfig,
+        checkpoint_validator: Callable[[Mapping[str, Any]], None],
     ) -> tuple[Any, Any, Any]:
         del run_dir
+        checkpoint = _checkpoint_contract(config)
+        checkpoint_validator(checkpoint)
         return (
             Model().to(device),
-            _checkpoint_contract(config),
+            checkpoint,
             performance_override,
         )
 
