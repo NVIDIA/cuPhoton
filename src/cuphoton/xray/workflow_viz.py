@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from ._hdf5_input import hdf5_input_object
 from .detector_artifacts import (
     detector_artifact_origin,
     detector_artifact_x_index,
@@ -847,7 +848,7 @@ def _resolve_hdf5_roi(
     if probe.load_plan is None:
         raise ValueError(f"unsupported HDF5 schema: {path}")
     with h5py.File(path, "r") as h5:
-        shape = h5[probe.load_plan.image_dataset].shape
+        shape = hdf5_input_object(h5, probe.load_plan.image_dataset).shape
     if len(shape) != 3:
         raise ValueError("workflow-viz HDF5 input must be a 3D image cube")
     _frame_count, height, width = (
@@ -934,9 +935,9 @@ def _normalized_mean_roi_image(
         raise ValueError(f"unsupported HDF5 schema: {path}")
     plan = probe.load_plan
     with h5py.File(path, "r") as h5:
-        image = h5[plan.image_dataset]
+        image = hdf5_input_object(h5, plan.image_dataset)
         normalization = np.asarray(
-            h5[plan.ipm_pair.normalization][drop_leading:],
+            hdf5_input_object(h5, plan.ipm_pair.normalization)[drop_leading:],
             dtype=float,
         )
         frame_count = int(image.shape[0])

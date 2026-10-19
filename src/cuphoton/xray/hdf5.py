@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from ._hdf5_input import hdf5_input_object
 from .detector_mask import AxisRange
 from .detector_mask import excluded_row_mask as detector_excluded_row_mask
 
@@ -92,7 +93,7 @@ def probe_hdf5_file(path: Path | str) -> FileProbe:
         keys = tuple(sorted(h5.keys()))
         datasets = []
         for key in keys:
-            obj = h5[key]
+            obj = hdf5_input_object(h5, key)
             if hasattr(obj, "shape"):
                 chunks = None if obj.chunks is None else tuple(obj.chunks)
                 datasets.append(
@@ -456,8 +457,8 @@ def scan_roi_candidates(
 
     candidates: list[RoiCandidate] = []
     with h5py.File(on_path, "r") as on_h5, h5py.File(off_path, "r") as off_h5:
-        on_image = on_h5[plan.image_dataset]
-        off_image = off_h5[plan.image_dataset]
+        on_image = hdf5_input_object(on_h5, plan.image_dataset)
+        off_image = hdf5_input_object(off_h5, plan.image_dataset)
         if len(on_image.shape) != 3 or len(off_image.shape) != 3:
             raise ValueError("ROI candidate scan requires 3D image cubes")
         if tuple(on_image.shape) != tuple(off_image.shape):
@@ -473,11 +474,15 @@ def scan_roi_candidates(
             raise ValueError("tile dimensions exceed detector dimensions")
 
         on_norm = np.asarray(
-            on_h5[plan.ipm_pair.normalization][drop_leading:],
+            hdf5_input_object(on_h5, plan.ipm_pair.normalization)[
+                drop_leading:
+            ],
             dtype=np.float64,
         )
         off_norm = np.asarray(
-            off_h5[plan.ipm_pair.normalization][drop_leading:],
+            hdf5_input_object(off_h5, plan.ipm_pair.normalization)[
+                drop_leading:
+            ],
             dtype=np.float64,
         )
 
@@ -528,7 +533,7 @@ def load_hdf5_cube_trace(
     plan = probe.load_plan
 
     with h5py.File(h5_path, "r") as h5:
-        image = h5[plan.image_dataset]
+        image = hdf5_input_object(h5, plan.image_dataset)
         if len(image.shape) < 2:
             raise ValueError(
                 f"image dataset is not at least 2D: {image.name}"
@@ -536,9 +541,12 @@ def load_hdf5_cube_trace(
         frame_count = int(image.shape[0])
         if drop_leading >= frame_count:
             raise ValueError("drop_leading removes all frames")
-        delay = np.asarray(h5[plan.delay_dataset][drop_leading:], dtype=float)
+        delay = np.asarray(
+            hdf5_input_object(h5, plan.delay_dataset)[drop_leading:],
+            dtype=float,
+        )
         normalization = np.asarray(
-            h5[plan.ipm_pair.normalization][drop_leading:],
+            hdf5_input_object(h5, plan.ipm_pair.normalization)[drop_leading:],
             dtype=float,
         )
         expected = frame_count - drop_leading
@@ -606,7 +614,7 @@ def load_hdf5_cube_roi_trace(
     plan = probe.load_plan
 
     with h5py.File(h5_path, "r") as h5:
-        image = h5[plan.image_dataset]
+        image = hdf5_input_object(h5, plan.image_dataset)
         if len(image.shape) != 3:
             raise ValueError("ROI trace loading requires a 3D image cube")
         frame_count, detector_height, detector_width = (
@@ -620,9 +628,12 @@ def load_hdf5_cube_roi_trace(
             raise ValueError("ROI x range exceeds detector width")
         if roi_y + roi_height > detector_height:
             raise ValueError("ROI y range exceeds detector height")
-        delay = np.asarray(h5[plan.delay_dataset][drop_leading:], dtype=float)
+        delay = np.asarray(
+            hdf5_input_object(h5, plan.delay_dataset)[drop_leading:],
+            dtype=float,
+        )
         normalization = np.asarray(
-            h5[plan.ipm_pair.normalization][drop_leading:],
+            hdf5_input_object(h5, plan.ipm_pair.normalization)[drop_leading:],
             dtype=float,
         )
         expected = frame_count - drop_leading
