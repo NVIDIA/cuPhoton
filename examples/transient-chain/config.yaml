@@ -24,7 +24,7 @@ align:                        # template on the target grid, then star-based ref
   star_fwhm_px: 4.0           # (required) smoothing FWHM of the star finder
   star_threshold_sigma: 20.0  # (required) star detection threshold in robust sigmas
   max_stars: 600
-  star_box_px: 15             # gpu finder: centroid window (odd)
+  star_box_px: 15             # gpu finder: centroid window (odd); also the neighbor radius of the misalignment stars
   centroid_iterations: 4      # gpu finder: windowed-centroid passes
   match_radius_px: 8.0        # (required) visit-template star match radius before refinement
   verify_radius_px: 5.0       # (required) match radius for the residual check after refinement
@@ -60,9 +60,10 @@ xfit:                         # cuphoton.xfit.fit_dipoles_device with the Gaussi
   solver: {}                  # LMConfig fields: f_tol, x_tol, g_tol, max_evaluations, initial_damping,
                               # damping_increase, damping_decrease; empty = library defaults
   psf_sigma_px: null          # PSF standard deviation of the target image in pixels, measured independently of the
-                              # candidate fits (for example from the image's stars). Sets the quality flags' width
-                              # range (0.5 to 2.5 times it) and the forced-photometry PSF; null = flags use xFit's
-                              # default range and the psf_flux columns are NaN
+                              # candidate fits. Sets the quality flags' width range (0.5 to 2.5 times it) and the
+                              # forced-photometry PSF; null = measured from the stars the refine stage matched
+                              # (summary psf_sigma_source "stars"); without those stars the flags use xFit's default
+                              # range and the psf_flux columns are NaN
 
 classify:                     # XScan inference through DLPack (step 9); checkpoint_dir comes from --checkpoint-dir
   inference_policy: strict    # strict: float32, no autocast, no TF32; checkpoint: the policy saved with the checkpoint
