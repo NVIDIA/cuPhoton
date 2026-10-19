@@ -13,6 +13,9 @@ small host scalars where a decision needs one. Nothing here touches a file.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 
 
@@ -497,3 +500,465 @@ def noise_match_factors(search_stamps, reference_sigma: float):
     n_bad = int(bad.sum())
     fallback = float(xp.nanmedian(factor)) if n_bad < factor.size else 1.0
     return xp.where(bad, fallback, factor).astype(xp.float32), n_bad
+
+
+# --- star measurements, misalignment and PSF width --------------------------
+
+
+def _patches(image, x, y, half):
+    """(N, 2 half + 1, 2 half + 1) float64 windows of ``image`` centered on
+    the pixels rint(x), rint(y); NaN where a window leaves the image.
+    """
+    xp = array_module(image)
+    ny, nx = image.shape
+    cx = xp.rint(xp.asarray(x, dtype=xp.float64)).astype(xp.int64)
+    cy = xp.rint(xp.asarray(y, dtype=xp.float64)).astype(xp.int64)
+    i = xp.arange(-half, half + 1)
+    yy = cy[:, None, None] + i[None, :, None]
+    xx = cx[:, None, None] + i[None, None, :]
+    inside = (yy >= 0) & (yy < ny) & (xx >= 0) & (xx < nx)
+    v = image[xp.clip(yy, 0, ny - 1), xp.clip(xx, 0, nx - 1)]
+    return xp.where(inside, v.astype(xp.float64), xp.nan)
+
+
+def _star_boxes(image, variance, xy, box, fwhm):
+    """Background-subtracted pixels, variances and offsets from the centroid
+    in the box ``find_stars`` used: centered on the brightest pixel of the
+    smoothed image within the box around the centroid, with the global median
+    as background. Pixels off the image or not finite count as zero signal
+    and zero variance, as ``find_stars`` counts them.
+    """
+    xp = array_module(image)
+    finite = xp.isfinite(image)
+    work = xp.where(finite, image - xp.median(image[finite]), 0.0)
+    if variance is None:
+        v = xp.zeros(image.shape, dtype=xp.float64)
+    else:
+        v = xp.where(finite & xp.isfinite(variance), variance, 0.0)
+    smooth = ndimage_for(xp).gaussian_filter(
+        work, sigma=fwhm / 2.3548, mode="nearest"
+    )
+    half = box // 2
+    c = xp.asarray(xy, dtype=xp.float64).reshape(-1, 2)
+    s = xp.nan_to_num(
+        _patches(smooth, c[:, 0], c[:, 1], half), nan=-xp.inf
+    ).reshape(len(c), -1)
+    k = xp.argmax(s, axis=1)
+    width = 2 * half + 1
+    px = xp.rint(c[:, 0]).astype(xp.int64) + k % width - half
+    py = xp.rint(c[:, 1]).astype(xp.int64) + k // width - half
+    off = xp.arange(-half, half + 1)
+    wy = py[:, None, None] + off[None, :, None]
+    wx = px[:, None, None] + off[None, None, :]
+    return (
+        xp.nan_to_num(_patches(work, px, py, half)),
+        xp.nan_to_num(_patches(v, px, py, half)),
+        wx - c[:, 0, None, None],
+        wy - c[:, 1, None, None],
+    )
+
+
+def windowed_centroid_error(d, v, ux, uy, window_sigma: float):
+    """Standard error per axis, (N, 2), of the windowed centroid
+    ``find_stars`` returns, by linearizing its fixed point.
+
+    ``find_stars`` iterates c = sum(g x) / sum(g) with g = W(x - c) max(d, 0)
+    and W a Gaussian of width ``window_sigma``. At convergence
+    F(c) = sum W max(d, 0) (x - c) = 0, so a pixel-noise perturbation moves c
+    by dF / (-dF/dc):
+    sigma_c^2 = sum W^2 u^2 V 1[d > 0] / (sum W max(d, 0) (1 - u^2 / s_w^2))^2
+    per axis, with ``d`` the background-subtracted pixels, ``v`` their
+    variances and ``ux``, ``uy`` their offsets from the centroid.
+    """
+    xp = array_module(d)
+    w = xp.clip(d, 0.0, None)
+    W = xp.exp(-(ux**2 + uy**2) / (2.0 * window_sigma**2))
+    on = d > 0
+    out = xp.empty((d.shape[0], 2), dtype=xp.float64)
+    for a, u in enumerate((ux, uy)):
+        num = (W**2 * u**2 * v * on).sum(axis=(1, 2))
+        den = (W * w * (1.0 - u**2 / window_sigma**2)).sum(axis=(1, 2))
+        out[:, a] = xp.sqrt(num) / xp.abs(den)
+    return out
+
+
+def second_moment_width(
+    d, ux, uy, *, start: float = 2.0, iterations: int = 6
+):
+    """Adaptive Gaussian-weighted second-moment width per star, (N,), averaged
+    over the axes and corrected for the weight.
+
+    With weight width s_w, a Gaussian of width s has weighted moment
+    m = 1 / (1/s^2 + 1/s_w^2), so s^2 = 1 / (1/m - 1/s_w^2), and the weight
+    follows s. The width is the pixel-level one (the PSF convolved with the
+    pixel), the width a point-sampled Gaussian PSF model needs; the optical
+    width is sqrt(s^2 - 1/12).
+    """
+    xp = array_module(d)
+    s = xp.full(d.shape[0], float(start))
+    r2 = 0.5 * (ux**2 + uy**2)
+    for _ in range(iterations):
+        W = xp.exp(-(ux**2 + uy**2) / (2.0 * s[:, None, None] ** 2)) * d
+        m = (W * r2).sum(axis=(1, 2)) / W.sum(axis=(1, 2))
+        inv = 1.0 / m - 1.0 / s**2
+        s = xp.where(
+            inv > 0, 1.0 / xp.sqrt(xp.where(inv > 0, inv, 1.0)), xp.nan
+        )
+        s = xp.where(xp.isfinite(s), xp.clip(s, 0.3, 20.0), start)
+    return s
+
+
+@dataclass(frozen=True)
+class StarMeasurements:
+    """Per-star measurements at the centroids ``find_stars`` returned, arrays
+    of the image's array module.
+
+    ``centroid_error`` (N, 2) is the standard error per axis of the windowed
+    centroid, propagated from the pixel variance; ``flux`` (N,) the positive
+    box flux; ``width`` (N,) the pixel-level second-moment width; ``snr`` (N,)
+    the PSF-weighted signal-to-noise (NaN without a variance plane).
+    """
+
+    centroid_error: Any
+    flux: Any
+    width: Any
+    snr: Any
+
+
+def star_measurements(
+    image,
+    variance,
+    xy,
+    *,
+    box: int,
+    psf_sigma: float | None = None,
+    fwhm: float = 4.0,
+) -> StarMeasurements:
+    """Centroid standard error, box flux, width and PSF-weighted
+    signal-to-noise of the stars at ``xy`` (N, 2).
+
+    ``box`` and ``fwhm`` are the ones ``find_stars`` used: the windowed
+    estimator's window is a Gaussian of width ``fwhm``. The signal-to-noise
+    is a matched filter with a circular Gaussian of width ``psf_sigma``, the
+    star's own width when None. ``variance`` None counts every pixel as
+    noiseless: the centroid errors are zero and the signal-to-noise NaN.
+    """
+    d, v, ux, uy = _star_boxes(image, variance, xy, int(box), float(fwhm))
+    xp = array_module(d)
+    centroid_error = windowed_centroid_error(d, v, ux, uy, float(fwhm))
+    width = second_moment_width(d, ux, uy)
+    s = width if psf_sigma is None else xp.full(d.shape[0], float(psf_sigma))
+    s2 = s[:, None, None] ** 2
+    psf = xp.exp(-0.5 * (ux**2 + uy**2) / s2) / (2.0 * np.pi * s2)
+    w = xp.where(v > 0, 1.0 / xp.where(v > 0, v, 1.0), 0.0)
+    norm = (w * psf * psf).sum(axis=(1, 2))
+    snr = xp.where(
+        norm > 0,
+        (w * psf * d).sum(axis=(1, 2))
+        / xp.sqrt(xp.where(norm > 0, norm, 1.0)),
+        xp.nan,
+    )
+    return StarMeasurements(
+        centroid_error, xp.clip(d, 0.0, None).sum(axis=(1, 2)), width, snr
+    )
+
+
+def neighbor_free(
+    image, xy, radius: float, *, fwhm: float = 4.0, nsigma: float = 5.0
+) -> np.ndarray:
+    """True where no other peak of ``find_stars`` at the low threshold
+    ``nsigma`` lies within ``radius`` pixels of the host positions ``xy``: a
+    neighbor's light moves a windowed centroid, and by different amounts in
+    two images with different PSFs.
+    """
+    from scipy.spatial import cKDTree
+
+    xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+    peaks = find_stars(image, fwhm=fwhm, nsigma=nsigma, max_n=10**6, box=9)
+    if len(peaks) == 0 or len(xy) == 0:
+        return np.ones(len(xy), bool)
+    return (
+        cKDTree(peaks).query_ball_point(xy, radius, return_length=True) <= 1
+    )
+
+
+def _affine_design(xy):
+    return np.column_stack([xy, np.ones(len(xy))])
+
+
+def _quad_design(xy, shape):
+    center = ((shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0)
+    half = max(shape) / 2.0
+    X, Y = (xy[:, 0] - center[0]) / half, (xy[:, 1] - center[1]) / half
+    return np.column_stack([X * X, X * Y, Y * Y])
+
+
+def _quadratic_form(g, cov):
+    return np.stack(
+        [np.einsum("ni,ij,nj->n", g, cov[a], g) for a in (0, 1)], axis=1
+    )
+
+
+@dataclass(frozen=True)
+class Misalignment:
+    """Residual misalignment after the affine re-alignment, per axis, anywhere
+    on the target grid; host arrays.
+
+    ``variance(x, y)`` = affine-fit variance at (x, y) + p^2, the quadratic
+    field fitted to the residuals there (positions are not corrected by it),
+    + the excess variance the field leaves. The field's estimation variance
+    is not added: the estimate's square already exceeds the true field's
+    square by it on average. With fewer than ``min_poly`` stars there is no
+    field (``mode == "rms"``) and the excess is one constant per axis.
+    """
+
+    matrix: np.ndarray  # (2, 2) affine A of dst = A @ src + b
+    offset: np.ndarray  # (2,) affine b
+    affine_covariance: (
+        np.ndarray
+    )  # (2, 3, 3) per axis, parameters (a_x, a_y, b)
+    mode: str  # "polynomial" or "rms"
+    excess_variance: np.ndarray  # (2,) beyond the model, pixels squared
+    used: np.ndarray  # (N_input,) pairs the fit used
+    residual: np.ndarray  # (N_used, 2) dst minus affine prediction, pixels
+    shape: tuple[int, int]  # target grid
+    field_coefficients: np.ndarray | None = None  # (2, 3) per axis
+    field_covariance: np.ndarray | None = None  # (2, 3, 3)
+    field_projection: np.ndarray | None = (
+        None  # (3, 3) affine part of the field
+    )
+
+    @property
+    def residual_rms(self) -> float:
+        """Rms per axis of the residuals of the stars the fit used."""
+        return float(np.sqrt(np.mean(np.sum(self.residual**2, axis=1)) / 2.0))
+
+    def affine_variance(self, x, y) -> np.ndarray:
+        """Variance per axis, (N, 2), of the affine prediction at (x, y)."""
+        g = _affine_design(np.column_stack([np.ravel(x), np.ravel(y)]))
+        return _quadratic_form(g, self.affine_covariance)
+
+    def excess(self, x, y) -> tuple[np.ndarray, np.ndarray]:
+        """Modeled misalignment field (N, 2) and its estimation variance
+        (N, 2); zero field in ``rms`` mode.
+        """
+        xy = np.column_stack([np.ravel(x), np.ravel(y)])
+        if self.mode != "polynomial":
+            return np.zeros((len(xy), 2)), np.zeros((len(xy), 2))
+        q = _quad_design(xy, self.shape) - _affine_design(xy) @ (
+            self.field_projection
+        )
+        return q @ self.field_coefficients.T, _quadratic_form(
+            q, self.field_covariance
+        )
+
+    def variance(self, x, y) -> np.ndarray:
+        """Misalignment variance per axis, pixels squared, (N, 2) at the
+        positions (x, y) on the target grid.
+        """
+        return (
+            self.affine_variance(x, y)
+            + self.excess(x, y)[0] ** 2
+            + self.excess_variance[None, :]
+        )
+
+
+def _weights(var):
+    w = np.where(var > 0, 1.0 / np.where(var > 0, var, 1.0), 0.0)
+    return w if w.any() else np.ones_like(w)
+
+
+def _wls(G, y, w):
+    Gw = G * w[:, None]
+    cov = np.linalg.inv(G.T @ Gw)
+    return cov @ (Gw.T @ y), cov
+
+
+def _misalignment_model(
+    src_xy, dst_xy, noise_var, used, shape, min_poly, iterations=3
+) -> Misalignment:
+    """One fit on the star set ``used``: ``fit_affine`` (unweighted least
+    squares), its covariance by the sandwich formula with the centroid noise,
+    then the excess as a weighted quadratic field plus a constant, or as the
+    constant alone. The constant is the excess over the centroid noise with
+    leverage-corrected degrees of freedom,
+    (sum r^2 - sum V (1 - h)) / (n - p), refitted a fixed ``iterations``
+    times with the field.
+    """
+    s, t, nv = src_xy[used], dst_xy[used], noise_var[used]
+    A, b, _ = fit_affine(s, t)
+    e = t - (s @ A.T + b)
+    n = len(e)
+    G = _affine_design(s)
+    Ginv = np.linalg.pinv(G)  # (3, N): least-squares coefficients
+    # per-star scatter beyond the model moves the fit like noise does
+
+    def cov(t2):
+        return np.stack(
+            [Ginv @ ((nv[:, a] + t2[a])[:, None] * Ginv.T) for a in (0, 1)]
+        )
+
+    if n >= min_poly:
+        proj = Ginv @ _quad_design(s, shape)
+        Q = _quad_design(s, shape) - G @ proj  # what the affine leaves
+        G6 = np.column_stack([G, Q])
+        lev6 = np.einsum("ij,ji->i", G6, np.linalg.pinv(G6))
+        beta, cov_b, tau2 = np.zeros((2, 3)), np.zeros((2, 3, 3)), np.zeros(2)
+        for a in (0, 1):
+            t2 = 0.0
+            for _ in range(iterations):
+                bb, cb = _wls(Q, e[:, a], _weights(nv[:, a] + t2))
+                r = e[:, a] - Q @ bb
+                t2 = max(
+                    0.0,
+                    float(
+                        (np.sum(r**2) - np.sum(nv[:, a] * (1.0 - lev6)))
+                        / (n - 6)
+                    ),
+                )
+            beta[a], cov_b[a], tau2[a] = bb, cb, t2
+        return Misalignment(
+            A,
+            b,
+            cov(tau2),
+            "polynomial",
+            tau2,
+            used,
+            e,
+            tuple(shape),
+            beta,
+            cov_b,
+            proj,
+        )
+    lev = np.einsum("ij,ji->i", G, Ginv)
+    tau2 = np.array(
+        [
+            max(
+                0.0,
+                float(
+                    (np.sum(e[:, a] ** 2) - np.sum(nv[:, a] * (1.0 - lev)))
+                    / max(n - 3, 1)
+                ),
+            )
+            for a in (0, 1)
+        ]
+    )
+    return Misalignment(A, b, cov(tau2), "rms", tau2, used, e, tuple(shape))
+
+
+def _chi2_median_scale(num, base, scale) -> float:
+    """t >= 0 with median(num / (base + t scale)) at the chi-square(1) median,
+    0 when the median is already at or below it: the extra variance a sample
+    of squared deviations asks for, which a few outliers do not set.
+    """
+    from scipy.optimize import brentq
+    from scipy.stats import chi2
+
+    target = float(chi2.ppf(0.5, 1))
+    num, base, scale = (
+        np.asarray(a, dtype=np.float64) for a in (num, base, scale)
+    )
+
+    def med(t):
+        return float(np.median(num / (base + t * scale))) - target
+
+    if med(0.0) <= 0.0:
+        return 0.0
+    return float(brentq(med, 0.0, float(np.max(num / scale)) / target))
+
+
+def fit_misalignment(
+    src_xy,
+    dst_xy,
+    noise_var,
+    *,
+    shape,
+    clip: float | None = 3.0,
+    min_poly: int = 30,
+    max_rounds: int = 5,
+) -> Misalignment:
+    """Model the misalignment from matched stars: ``src_xy`` and ``dst_xy``
+    (N, 2) host positions on the target grid, ``noise_var`` (N, 2) the
+    centroid variance per axis of each pair (both sides added).
+
+    Pairs whose residual is more than ``clip`` standard deviations from the
+    model (blended or mismatched stars, whose centroid errors the noise model
+    does not describe) are rejected and the model refitted until the kept set
+    is stable or ``max_rounds`` fits are done; the result is always the last
+    fit and the stars it used. ``clip=None`` keeps every pair, as
+    ``fit_affine`` does. With fewer than ``min_poly`` stars the excess is one
+    constant per axis instead of a quadratic field.
+    """
+    src_xy, dst_xy, noise_var = (
+        np.asarray(a, dtype=np.float64) for a in (src_xy, dst_xy, noise_var)
+    )
+    used = np.ones(len(src_xy), bool)
+    for _ in range(max_rounds):
+        m = _misalignment_model(
+            src_xy, dst_xy, noise_var, used, shape, min_poly
+        )
+        if clip is None:
+            break
+        e = dst_xy - (src_xy @ m.matrix.T + m.offset)
+        x, y = src_xy[:, 0], src_xy[:, 1]
+        p, vp = m.excess(x, y)
+        base = noise_var + vp + m.affine_variance(x, y)
+        # the scale every residual is judged by, set robustly so one outlier
+        # cannot hide itself
+        t2 = np.array(
+            [
+                _chi2_median_scale((e - p)[used, a] ** 2, base[used, a], 1.0)
+                for a in (0, 1)
+            ]
+        )
+        new = np.all(
+            np.abs(e - p) <= clip * np.sqrt(base + t2[None, :]), axis=1
+        )
+        if new.sum() < 4 or (new == used).all():
+            break
+        used = new
+    return m
+
+
+@dataclass(frozen=True)
+class PsfWidth:
+    """PSF width of an image from its stars: ``sigma_px`` the clipped median
+    of the pixel-level second-moment widths, ``optical_sigma_px`` the same
+    with the pixel removed, sqrt(sigma^2 - 1/12), ``standard_error_px`` the
+    standard error of the median, ``scatter_px`` the robust scatter of the
+    kept widths, ``n_used`` of ``n`` finite widths kept by the clipping.
+    """
+
+    sigma_px: float
+    optical_sigma_px: float
+    standard_error_px: float
+    scatter_px: float
+    n_used: int
+    n: int
+
+
+def psf_width(widths, *, clip: float = 3.0, iterations: int = 5) -> PsfWidth:
+    """Median of the stars' pixel-level widths, clipped at ``clip`` robust
+    sigmas for at most ``iterations`` rounds, with the standard error of a
+    median, sqrt(pi / 2) sigma / sqrt(n).
+    """
+    w = np.asarray(to_host(widths), dtype=np.float64).ravel()
+    w = w[np.isfinite(w)]
+    if len(w) == 0:
+        raise ValueError("psf_width needs at least one finite width")
+    keep = np.ones(len(w), bool)
+    for _ in range(iterations):
+        med, s = np.median(w[keep]), robust_sigma(w[keep])
+        new = np.abs(w - med) <= clip * s if s > 0 else keep
+        if new.sum() < 3 or (new == keep).all():
+            break
+        keep = new
+    m, s = float(np.median(w[keep])), robust_sigma(w[keep])
+    return PsfWidth(
+        m,
+        float(np.sqrt(max(m * m - 1.0 / 12.0, 0.0))),
+        float(np.sqrt(np.pi / 2.0) * s / np.sqrt(keep.sum())),
+        s,
+        int(keep.sum()),
+        int(len(w)),
+    )

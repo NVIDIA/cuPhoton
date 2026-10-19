@@ -102,6 +102,12 @@ class ChainWorker:
         self.consumer_stream = torch.cuda.Stream(device=self.device)
         self.closed = False
         self.items_done = 0
+        # per item, set at step 3: the misalignment model of the matched
+        # stars (None when refinement did not fit an affine) and the PSF
+        # width the xfit stage uses, with where it came from
+        self.misalignment: ops.Misalignment | None = None
+        self.psf_sigma_px: float | None = None
+        self.psf_sigma_source: str | None = None
 
     def _load_model(self, checkpoint_dir: Path) -> None:
         from cuphoton.xscan.config import PerformanceConfig
@@ -179,6 +185,11 @@ class ChainWorker:
             "diagnostic_bytes": 0,
         }
         identity = self.adapter.identity(sel)
+        self.misalignment = None
+        self.psf_sigma_px = cfg["xfit"]["psf_sigma_px"]
+        self.psf_sigma_source = (
+            None if self.psf_sigma_px is None else "config"
+        )
         a_cfg, s_cfg, d_cfg, c_cfg = (
             cfg["align"],
             cfg["subtract"],
@@ -306,6 +317,9 @@ class ChainWorker:
                         float(a_cfg["verify_radius_px"]),
                     )
                     before, after = mv - mt, mv1 - mt1
+                    misalignment_diag = self._measure_stars(
+                        vimg, timg, target.variance, mv1, mt1, a_cfg, mode
+                    )
                     ref_diag = {
                         "mode": mode,
                         "matches_before": int(len(mv)),
@@ -322,6 +336,7 @@ class ChainWorker:
                         "xcorr_visit_minus_template_px_after": (
                             ops.xcorr_offset(vimg[win], timg[win])
                         ),
+                        "misalignment": misalignment_diag,
                     }
                     xfer["diagnostic_bytes"] += w * w * 8
             ref_diag["sign_convention"] = "visit minus template, pixels"
@@ -497,7 +512,7 @@ class ChainWorker:
             # propagated through the full covariance, and forced PSF
             # photometry at the source when the PSF width is configured
             with timer("uncertainty"):
-                psf_sigma = cfg["xfit"]["psf_sigma_px"]
+                psf_sigma = self.psf_sigma_px
                 qflags = dipole_quality_flags(
                     xres,
                     difference,
@@ -700,6 +715,8 @@ class ChainWorker:
                 **{k: int(v) for k, v in xfer.items()},
                 "intermediate_files": 0,
             },
+            "psf_sigma_px": self.psf_sigma_px,
+            "psf_sigma_source": self.psf_sigma_source,
             "config_sha256": self.config_sha256,
             "checkpoint_sha256": self.checkpoint_sha256,
             "inference_policy": self.inference_policy,
@@ -720,6 +737,60 @@ class ChainWorker:
             "wall_sec": {"item": wall},
             "candidates": n_cand,
         }
+
+    def _measure_stars(
+        self, vimg, timg, variance, mv, mt, a_cfg, mode
+    ) -> dict[str, Any]:
+        """Step 3b on the stars matched after refinement: per-star
+        measurements on both images, the neighbor cut, the misalignment model
+        (kept on ``self.misalignment``; affine mode only) and, when the
+        configuration leaves ``xfit.psf_sigma_px`` null, the PSF width of the
+        target's stars (``self.psf_sigma_px``). Only the star lists cross to
+        the host.
+        """
+        box, fwhm = int(a_cfg["star_box_px"]), float(a_cfg["star_fwhm_px"])
+        out: dict[str, Any] = {"stars_matched": int(len(mv)), "mode": None}
+        if len(mv) < 3:
+            return out
+        # a neighbor closer than one centroid window moves the windowed
+        # centroid, and by different amounts in two images with different
+        # PSFs: those stars inflate a chip-wide rms
+        ok = ops.neighbor_free(vimg, mv, float(box), fwhm=fwhm)
+        ok &= ops.neighbor_free(timg, mt, float(box), fwhm=fwhm)
+        mv, mt = mv[ok], mt[ok]
+        out["stars_neighbor_free"] = int(len(mv))
+        if len(mv) < 3:
+            return out
+        tm = ops.star_measurements(vimg, variance, mv, box=box, fwhm=fwhm)
+        rm = ops.star_measurements(timg, None, mt, box=box, fwhm=fwhm)
+        noise = ops.to_host(tm.centroid_error) ** 2
+        noise += ops.to_host(rm.centroid_error) ** 2
+        widths = ops.to_host(tm.width)
+        if mode == "affine" and len(mv) >= int(a_cfg["min_affine_matches"]):
+            m = ops.fit_misalignment(mv, mt, noise, shape=vimg.shape)
+            self.misalignment = m
+            ny, nx = vimg.shape
+            center = m.variance([(nx - 1) / 2.0], [(ny - 1) / 2.0])[0]
+            out.update(
+                mode=m.mode,
+                stars_used=int(m.used.sum()),
+                residual_rms_px=m.residual_rms,
+                excess_sigma_px=np.sqrt(m.excess_variance).tolist(),
+                center_sigma_px=np.sqrt(center).tolist(),
+            )
+            widths = widths[m.used]
+        if self.psf_sigma_source != "config":
+            pw = ops.psf_width(widths)
+            self.psf_sigma_px = pw.sigma_px
+            self.psf_sigma_source = "stars"
+            out["psf_width"] = {
+                "sigma_px": pw.sigma_px,
+                "standard_error_px": pw.standard_error_px,
+                "scatter_px": pw.scatter_px,
+                "n_used": pw.n_used,
+                "n": pw.n,
+            }
+        return out
 
     def close(self) -> None:
         self.closed = True
