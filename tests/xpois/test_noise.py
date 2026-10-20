@@ -657,5 +657,13 @@ def test_device_inputs_match_the_host_result() -> None:
     ):
         value = getattr(device, name)
         assert type(value).__module__ == "cupy"
-        np.testing.assert_array_equal(cp.asnumpy(value), getattr(host, name))
+        expected = getattr(host, name)
+        if name == "valid_mask":
+            np.testing.assert_array_equal(cp.asnumpy(value), expected)
+        else:
+            # The device sums the footprint in another order: equal to
+            # rounding, NaN where the host has NaN.
+            np.testing.assert_allclose(
+                cp.asnumpy(value), expected, rtol=1e-12, equal_nan=True
+            )
     assert asdict(device)["variance_scope"] == "marginal_diagonal"
