@@ -460,13 +460,19 @@ sandwich uses one resampling stamp for every fit pixel, so on a grid that
 rotates or scales against the reference's it is an approximation, and it
 holds `U` as one full-size image per coefficient in memory. The footprints
 are built in chunks of coefficients (at most `2**26` float64 values of
-coefficient images per chunk, one batched convolution each): on a
-4096 x 4096 frame with 20 coefficients a chunk is 4 images (512 MB) and the
-sandwich peaks near 5.8 GB including `U`. `kernel_fit_variance` and
+coefficient images per chunk, one batched convolution each at the next
+fast FFT length). Array memory on a 4096 x 4096 frame with 11
+coefficients: `U` is 1.5 GB, a chunk is 4 images (0.5 GB) with 0.6 GB
+spectra and transforms at the padded 4320 x 4320 size, and the sandwich
+peaks near 5.2 GB (the plain form near 1.0 GB). `kernel_fit_variance` and
 `correlation_factor` are batched over positions in chunks whose memory does
-not depend on the frame size (near 0.55 GB and under 10 MB per chunk for
-15 x 15 weights and kernel). `scripts/bench_kernel_uncertainty.py` times
-the three calls on a detector-sized frame on NumPy or CuPy.
+not depend on the frame size (near 0.6 GB and under 10 MB per chunk for
+21 x 21 weights and a 15 x 15 kernel). On CuPy the cuFFT plan work areas
+add to these figures; the fast lengths keep them small, where odd full
+lengths would take Bluestein plans with work areas of several GB.
+`scripts/bench_kernel_uncertainty.py` times the three calls on a
+detector-sized frame on NumPy or CuPy, reporting the allocation high-water
+mark and the plan cache size on CuPy.
 
 The result records `form` and `covariance_represented: True`. The added
 variance at a position is `gamma^T C gamma`, `gamma` the residual's
