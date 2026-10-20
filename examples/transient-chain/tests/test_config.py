@@ -61,6 +61,12 @@ def test_required_keys_and_value_checks():
     bad["xfit"]["solver"] = {"max_evaluations": 0}
     with pytest.raises(ValueError, match="max_evaluations"):
         config.validate_config(bad)
+    # the measurement needs at least the positions it would refuse to use
+    bad = copy.deepcopy(raw)
+    bad["uq"]["correlation_positions"] = config.MIN_MEASURE_POSITIONS - 1
+    with pytest.raises(ValueError, match="correlation_positions must be >="):
+        config.validate_config(bad)
+    assert config.MIN_MEASURE_POSITIONS == 20
 
 
 def test_overrides_parse_yaml_values_and_nest():

@@ -492,6 +492,12 @@ class ReprojectedSources(TemplateProvider):
         return rimg, (None if mask is None else rmask), rvar, spec, prepared
 
     def build(self, affine=None):
+        """The template as the mean of the pieces with a finite pixel
+        (``cnt`` counts them), its mask bits and ``cnt``; the variance
+        combines the pieces whose variance is finite there too (``vcnt``),
+        so a piece with a finite pixel and a NaN variance counts in the
+        template but not in its variance.
+        """
         xp = self.xp
         ny, nx = self.shape
         acc = xp.zeros((ny, nx), xp.float64)
@@ -574,8 +580,6 @@ class ReprojectedSources(TemplateProvider):
                 continue
             covered = (merged.weights != 0).any(axis=(1, 2))
             take = ~covered & (at.weights != 0).any(axis=(1, 2))
-            if not bool(take.any()):
-                continue
             fields = {}
             for name in (
                 "weights",

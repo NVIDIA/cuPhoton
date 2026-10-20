@@ -216,7 +216,7 @@ named, odd sizes and enumerations are checked, and every default lives in
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
 | `stamps` | stamp cutting | `stamp_size` (odd; equals the checkpoint's `image_size`) |
 | `xfit` | dipole fits, quality flags, forced photometry | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`), `psf_sigma_px` |
-| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
+| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `measure_correlation` and `correlation_positions` (the factor measured at empty positions; at least 20), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
 | `classify` | XScan | `inference_policy: strict\|checkpoint`, `apply_noise_match`, `noise_reference_sigma`, `decision_threshold`, `batch_size` |
 
 `classify.noise_reference_sigma` is a property of the checkpoint, not of the survey: it is the
@@ -252,17 +252,18 @@ survey:
     target:
       path_key: image
       image_hdu: 0              # index, EXTNAME, or null for the first 2D image
-      mask_path_key: mask       # null = same file as the image
-      mask_hdu: 0               # null = this survey has no mask plane
+      mask_path_key: mask       # a mask plane is read like the variance below: both null = no mask plane
+      mask_hdu: 0               # (path key alone = the file's first 2D image; hdu alone = that HDU of the image file)
       variance_path_key: weight
-      variance_hdu: 0           # null = no variance (XPOIS then fits unweighted)
+      variance_hdu: 0           # both null = no variance (XPOIS then fits unweighted)
       variance_kind: inverse_variance   # variance | inverse_variance | none
     template:
       path_key: template
       image_hdu: 0
       mask_hdu: null
-      variance_path_key: null   # the template's variance plane, read like the target's
-      variance_hdu: null        # null = the survey has no template variance (the corr term is then off)
+      variance_path_key: null   # the template's variance plane, read like the target's: both null = no
+      variance_hdu: null        # plane (the corr term is off); a path key alone = the first 2D image of
+                                # that file; an hdu alone = that HDU of the template file
       variance_kind: variance
       on_target_grid: false     # false: reproject the reference through its WCS onto the target grid
       pieces: correlated        # how overlapping template pieces' variances combine: correlated | independent
@@ -283,9 +284,9 @@ wcs, variance)` per piece of a reprojected or mosaicked one); the provider's `va
 returns the plane on the target grid after each build and `resampling(x, y)` the resampling
 weights of that build, and `summary.json` records `template_variance: true`. The two go together:
 a provider that declares `has_variance` must implement both, and the base adapter's `template()`
-rejects one that does not. Both are survey-free: each piece's variance is reprojected with its
-image (the same weights, squared), and where `n` pieces overlap their variances combine under
-`pieces`: `correlated` (the default) gives `(mean sigma_i)^2`, exact when the pieces' noise is
+rejects one that does not. `ReprojectedSources` implements `variance()` and `resampling()` the
+same way for every survey: each piece's variance is reprojected with its image (the same
+weights, squared), and where `n` pieces overlap their variances combine under `pieces`: `correlated` (the default) gives `(mean sigma_i)^2`, exact when the pieces' noise is
 fully correlated, as for patches cut from one coadd of the same exposures; `independent` gives
 `sum(var_i) / n^2`, exact when the pieces' noise is independent, as for separate reference
 frames. The resampling weights at a position are those of the first piece that covers it. A
@@ -368,11 +369,13 @@ center's stamp over both lobes).
     `positions_excluded_loud` counts the pixels that rule removed).
   The exposure uses the measured factor for a weighting only where it exceeds 1 and exceeds the
   median closed form at the same positions by more than two standard errors of the measurement,
-  `f * sqrt(2 / (n - 1))` over `n` positions; otherwise the closed form stands. Each quantity's `f`
+  `f * sqrt(2 / (0.3675 (n - 1)))` over `n` positions (the spread of a sample variance, widened
+  by the efficiency of the median absolute deviation the measurement uses); otherwise the closed
+  form stands. Each quantity's `f`
   is then its own closed form, or the measured factor where the exposure chose it and it exceeds
   the candidate's closed form; such rows carry `uq_corr_measured` (`uq.corr_measured` counts them)
   and the kernel-mismatch fit at the stars uses the same factor. `summary.json` writes
-  `uq.correlation` with the positions used, `closed_form`, `measured`, `measured_se` and
+  `uq.correlation` with the positions requested and used, `closed_form`, `measured`, `measured_se` and
   `plain_ratio` per weighting (`psf_flux`, `position_x`, `position_y`), and `source` (`"measured"`
   or `"closed_form"`; null without a template variance, where the measured values are reported as
   the diagonal plane's under-prediction but not applied). `uq.measure_correlation: false` skips the
@@ -405,9 +408,9 @@ center's stamp over both lobes).
   reported with its provenance and kept out of the pixel-frame columns.
 
 Masked pixels (a bad pixel of either image, a non-finite residual, target variance or template
-variance, the edge of the image) do not cost a candidate its error bar. A quantity's weighted sums run over the usable
-pixels of its window, with zero weight on the rest and the normalization taken over the usable
-ones, and its correlation factor is computed over the same pixels
+variance, the edge of the image) do not cost a candidate its error bar. A quantity's weighted
+sums run over the usable pixels of its window, with zero weight on the rest and the
+normalization taken over the usable ones, and its correlation factor is computed over the same pixels
 (`cuphoton.xpois.correlation_factor(valid=...)`); the row is flagged `uq_window_masked` so a user
 can tell a renormalized bar from a full-window one. On a 21 px window a masked column 4 px or
 more from the center moves the factor by under 10%, and one at 1 to 3 px by up to 12% to 17%.

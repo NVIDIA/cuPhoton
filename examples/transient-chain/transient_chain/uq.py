@@ -69,6 +69,7 @@ from cuphoton.xpois import (
 
 from . import ops
 from .catalog import BUDGET_QUANTITIES, BUDGET_TERMS
+from .config import MIN_MEASURE_POSITIONS
 
 QUANTITIES = tuple(BUDGET_QUANTITIES)
 POSITIONS = ("center", "positive")
@@ -84,10 +85,19 @@ MIN_USABLE_FRACTION = 0.5
 # the weightings the exposure's correlation factor is measured for, and the
 # one each budget quantity uses
 MEASURED_WEIGHTINGS = ("psf_flux", "position_x", "position_y")
-MIN_MEASURE_POSITIONS = 20
+WEIGHTING_OF = {
+    "psf_flux": "psf_flux",
+    "center_x": "position_x",
+    "center_y": "position_y",
+    "positive_x": "position_x",
+    "positive_y": "position_y",
+}
 # the measured factor replaces the closed form only beyond this many
 # standard errors of the measurement
 MEASURED_SE_MULTIPLE = 2.0
+# efficiency of the median absolute deviation against the sample standard
+# deviation on Gaussian data: its spread is 1 / sqrt(this) times larger
+MAD_EFFICIENCY = 0.3675
 # a residual pixel this many robust sigmas from the median is loud; pixels
 # within one window of it are not empty
 LOUD_SIGMA = 5.0
@@ -116,19 +126,16 @@ class BudgetContext:
     excluded: dict[str, str]
     control_bytes: int = 0
     correlation: dict[str, Any] | None = None  # measured_correlation's
+    reference_model: Any | None = None  # the reference with 0 where bad
 
     def measured_factor(self, quantity: str) -> float:
         """The exposure's measured correlation factor for ``quantity``'s
-        weighting where the exposure chose it over the closed form
-        (``source == "measured"``), NaN otherwise.
+        weighting (:data:`WEIGHTING_OF`) where the exposure chose it over
+        the closed form (``source == "measured"``), NaN otherwise.
         """
         if self.correlation is None or "corr" not in self.terms:
             return math.nan
-        name = (
-            "psf_flux"
-            if quantity == "psf_flux"
-            else f"position_{quantity[-1]}"
-        )
+        name = WEIGHTING_OF[quantity]
         if self.correlation["source"].get(name) != "measured":
             return math.nan
         return float(self.correlation["measured"][name])
@@ -298,6 +305,7 @@ def build_context(
         resampling=resampling,
         terms=tuple(t for t in TERMS if t not in excluded),
         excluded=excluded,
+        reference_model=xp.where(xp.isfinite(reference), reference, 0.0),
     )
     if measure and candidates is not None and window is not None:
         ctx = dataclasses.replace(
@@ -338,8 +346,8 @@ def measured_correlation(
     weighted sums over their diagonal prediction
     (``empirical_correlation_factor`` on the residual and the diagonal
     plane the fit used, with the reference's variance where it exists),
-    with its standard error ``measured_se``, ``factor * sqrt(2 / (n - 1))``
-    over ``n`` positions; the closed form is the median of
+    with its standard error ``measured_se`` (:func:`measured_standard_error`
+    over ``n`` positions); the closed form is the median of
     ``correlation_factor`` at the same positions, 1 when the reference has
     no variance plane. Each weighting's ``source`` says which the corr
     term uses: ``"measured"`` where the measured factor exceeds 1 and the
@@ -454,13 +462,17 @@ def measured_correlation(
 
 
 def measured_standard_error(factor: float, n_positions: int) -> float:
-    """Standard error of a variance ratio estimated from ``n_positions``
-    independent windows: ``factor * sqrt(2 / (n - 1))``, the spread of a
-    sample variance of Gaussian sums.
+    """Standard error of a variance ratio measured as the squared robust
+    spread of ``n_positions`` independent Gaussian sums: ``factor * sqrt(2
+    / (MAD_EFFICIENCY * (n - 1)))``, the spread of a sample variance
+    widened by the efficiency of the median absolute deviation (1.65 times
+    the sample-variance value).
     """
     if n_positions < 2:
         return math.inf
-    return float(factor) * math.sqrt(2.0 / (n_positions - 1))
+    return float(factor) * math.sqrt(
+        2.0 / (MAD_EFFICIENCY * (n_positions - 1))
+    )
 
 
 def _loud_pixels(xp, residual, valid):
@@ -540,10 +552,21 @@ def _matched_filter(xp, inverse_variance, stamp):
     return w / xp.where(ok, norm, 1.0)[:, None, None], ok
 
 
-def _estimator_terms(ctx: BudgetContext, weights, pos):
+def _resampling_at(ctx: BudgetContext, pos):
+    """The resampling weights at ``pos`` (N, 2) when the correlation term
+    is on, None otherwise; computed once per position set and handed to
+    :func:`_estimator_terms` for every weighting measured there.
+    """
+    if "corr" not in ctx.terms:
+        return None
+    return ctx.resampling(pos[:, 0], pos[:, 1])
+
+
+def _estimator_terms(ctx: BudgetContext, weights, pos, at=None):
     """Correlation factor, kernel-fit variance and rotated-grid flag of the
     weighted sums ``sum(weights * D)`` on the windows centered at ``pos``
-    (N, 2).
+    (N, 2); ``at`` is :func:`_resampling_at` for ``pos``, computed here
+    when not given.
 
     The factor is 1 when the correlation term is excluded, else
     ``correlation_factor`` on the planes over the usable pixels of each
@@ -557,7 +580,8 @@ def _estimator_terms(ctx: BudgetContext, weights, pos):
     n = int(pos.shape[0])
     rotated = xp.zeros(n, dtype=bool)
     if "corr" in ctx.terms:
-        at = ctx.resampling(pos[:, 0], pos[:, 1])
+        if at is None:
+            at = _resampling_at(ctx, pos)
         factor = correlation_factor(
             weights,
             kernel=ctx.kernel,
@@ -576,7 +600,7 @@ def _estimator_terms(ctx: BudgetContext, weights, pos):
     if ctx.kernel_covariance is not None:
         kfit = kernel_fit_variance(
             ctx.kernel_covariance,
-            reference=ctx.reference,
+            reference=ctx.reference_model,
             positions=pos,
             weights=weights,
         )
@@ -908,9 +932,18 @@ def budget(
     lam = ones
     capped = xp.zeros(n, dtype=bool)
     if ctx.window is not None:
+        lam, raw, t_ref, _sensitivity_position = sensitivity(
+            ctx, pos["flux"], cx, cy, single, field
+        )
+        capped = xp.abs(raw) > SENSITIVITY_CAP
+        # Keep the flux window at the published photometry position.
         usable = {
-            name: _usable_fraction(ctx, pos[name])
-            for name in ("positive", "negative", "flux")
+            name: _usable_fraction(ctx, at)
+            for name, at in (
+                ("positive", pos["positive"]),
+                ("negative", pos["negative"]),
+                ("flux", pos["flux"]),
+            )
         }
         # at least half of a window usable keeps the quantity, with the
         # sums renormalized over the usable pixels; any masked pixel flags it
@@ -932,10 +965,6 @@ def budget(
         if "psf_flux" in quantities:
             window_ok["psf_flux"] = window_ok["psf_flux"] & valid_at["flux"]
             window_masked["psf_flux"] = masked_at["flux"]
-        lam, raw, t_ref, _sensitivity_position = sensitivity(
-            ctx, pos["flux"], cx, cy, single, field
-        )
-        capped = xp.abs(raw) > SENSITIVITY_CAP
         sums = "corr" in ctx.terms or "kfit" in ctx.terms
         if sums:
             # a lobe: PSF-derivative weights at the lobe, divided by the lobe
@@ -946,10 +975,12 @@ def budget(
             )
             lobe_inv = _inverse_variance(ctx, pos["positive"], ctx.window)
             lobe_off = pos["positive"] - xp.rint(pos["positive"])
+            lobe_at = _resampling_at(ctx, pos["positive"])
             # the center: the mean of both lobes' shifts, one stamp over both
             big = ctx.window + 2 * reach
             c0 = xp.asarray(center_pixel)
             center_inv = _inverse_variance(ctx, c0, big)
+            center_at = _resampling_at(ctx, c0)
             off = {
                 "positive": pos["positive"] - c0,
                 "negative": pos["negative"] - c0,
@@ -963,7 +994,9 @@ def budget(
                     xp=xp,
                 )
                 w, ok = _matched_filter(xp, lobe_inv, dg)
-                f, kfit, rot = _estimator_terms(ctx, w, pos["positive"])
+                f, kfit, rot = _estimator_terms(
+                    ctx, w, pos["positive"], lobe_at
+                )
                 factor[f"positive_{a}"] = f
                 rotated_at[f"positive_{a}"] = rot
                 var[f"positive_{a}"]["kfit"] = kfit * gain * ok
@@ -982,7 +1015,7 @@ def budget(
                     for name in ("positive", "negative")
                 }
                 w = 0.5 * (stamps["positive"][0] - stamps["negative"][0])
-                f, kfit, rot = _estimator_terms(ctx, w, c0)
+                f, kfit, rot = _estimator_terms(ctx, w, c0, center_at)
                 factor[f"center_{a}"] = f
                 rotated_at[f"center_{a}"] = rot
                 var[f"center_{a}"]["kfit"] = (
@@ -1132,8 +1165,7 @@ def error_budget(
     ``uq.correlation_positions`` drive the measured correlation factor.
     With ``uq.enabled`` false the result is :func:`fit_only`. Returns the
     result and the ``uq`` entry of the item summary, without the
-    measurement's accounting fields (``control_bytes``,
-    ``positions_requested``).
+    measurement's ``control_bytes``.
     """
     err_fit = {
         f"{name}_{axis}": getattr(derived, f"{name}_{axis}_error")
@@ -1176,7 +1208,7 @@ def error_budget(
         diag["correlation"] = {
             k: v
             for k, v in diag["correlation"].items()
-            if k not in ("control_bytes", "positions_requested")
+            if k != "control_bytes"
         }
     return res, {
         "terms": ["fit", *res.terms],

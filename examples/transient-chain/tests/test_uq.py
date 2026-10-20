@@ -9,12 +9,15 @@ stars, a Gaussian kernel, a target with transients and white noise.
 
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from scipy.signal import fftconvolve
 from transient_chain import config, ops, uq
+
+from cuphoton.xrep import resampling_weights_at
 
 SIZE = 200
 PSF = 1.8
@@ -144,6 +147,37 @@ class Scene:
                 [np.full(n, 0.3), np.full(n, -0.2)]
             ),
         )
+
+
+def _half_pixel_resampling(x, y):
+    """Resampling weights of a half-pixel translation of the reference
+    grid, Lanczos-3.
+    """
+    return resampling_weights_at(
+        lambda c: np.asarray(c, dtype=float) + 0.5,
+        x,
+        y,
+        interpolation="lanczos3",
+    )
+
+
+def _derived(scene, err=0.05):
+    """The dipole quantities of ``scene``'s candidates as the worker hands
+    them to ``error_budget``.
+    """
+    n = len(scene.cand)
+    e = np.full(n, err)
+    return SimpleNamespace(
+        center_x=np.full(n, 0.3),
+        center_y=np.full(n, -0.2),
+        positive_x=np.full(n, 2.8),
+        positive_y=np.full(n, -0.2),
+        center_x_error=e,
+        center_y_error=e,
+        positive_x_error=e,
+        positive_y_error=e,
+        lobe_flux=scene.flux,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -375,16 +409,10 @@ def test_single_source_sensitivity_scales_the_lobe_misalignment(
 
 
 def test_reference_variance_adds_the_correlation_term(scene):
-    from cuphoton.xrep import resampling_weights_at
-
-    def mapping(c):  # a half-pixel translation of the reference grid
-        return np.asarray(c, dtype=float) + 0.5
-
-    def resampling(x, y):
-        return resampling_weights_at(mapping, x, y, interpolation="lanczos3")
-
     plane = np.full((SIZE, SIZE), 4.0)
-    ctx = scene.context(reference_variance=plane, resampling=resampling)
+    ctx = scene.context(
+        reference_variance=plane, resampling=_half_pixel_resampling
+    )
     assert ctx.terms == ("corr", "kfit", "kmatch", "mis")
     assert ctx.kernel_covariance.form == "sandwich"
     res = uq.budget(ctx, **scene.inputs())
@@ -420,20 +448,12 @@ def test_nan_reference_variance_pixel_is_a_masked_pixel(scene):
     a masked pixel: the candidate keeps every bar over the usable pixels
     and is flagged, instead of losing its factor.
     """
-    from cuphoton.xrep import resampling_weights_at
-
-    def resampling(x, y):
-        return resampling_weights_at(
-            lambda c: np.asarray(c, dtype=float) + 0.5,
-            x,
-            y,
-            interpolation="lanczos3",
-        )
-
     plane = np.full((SIZE, SIZE), 4.0)
     cx, cy = scene.cand[0]
     plane[cy - 3, cx + 2] = np.nan  # inside the flux and lobe windows
-    ctx = scene.context(reference_variance=plane, resampling=resampling)
+    ctx = scene.context(
+        reference_variance=plane, resampling=_half_pixel_resampling
+    )
     assert not ctx.valid_plane[cy - 3, cx + 2]
     res = uq.budget(ctx, **scene.inputs())
     c = res.columns
@@ -447,7 +467,7 @@ def test_nan_reference_variance_pixel_is_a_masked_pixel(scene):
     clean = uq.budget(
         scene.context(
             reference_variance=np.full((SIZE, SIZE), 4.0),
-            resampling=resampling,
+            resampling=_half_pixel_resampling,
         ),
         **scene.inputs(),
     ).columns
@@ -597,8 +617,6 @@ def _hand_sum(scene, stamp, x, y):
 
 
 def test_kernel_fit_terms_match_a_known_covariance_by_hand(scene):
-    import dataclasses
-
     from cuphoton.xpois import psf_weights
 
     c = 1e-6
@@ -666,8 +684,6 @@ def test_lobe_kernel_fit_term_follows_the_sub_pixel_position():
 
 
 def test_kernel_mismatch_term_is_eta_times_the_reference_flux(scene):
-    import dataclasses
-
     ctx = dataclasses.replace(
         scene.context(),
         kernel_mismatch={"eta": 0.1, "n": 24},
@@ -729,16 +745,6 @@ def test_masked_window_keeps_the_error_bar_and_sets_the_flag():
     flagged; the same candidate on a clean scene is not flagged and its
     bars agree within the masked share.
     """
-    from cuphoton.xrep import resampling_weights_at
-
-    def resampling(x, y):
-        return resampling_weights_at(
-            lambda c: np.asarray(c, dtype=float) + 0.5,
-            x,
-            y,
-            interpolation="lanczos3",
-        )
-
     plane = np.full((SIZE, SIZE), 4.0)
     cand = [[52, 160], [140, 50], [100, 150], [60, 70]]
     masked = Scene(cand=cand)
@@ -749,7 +755,9 @@ def test_masked_window_keeps_the_error_bar_and_sets_the_flag():
     )
     out = {}
     for name, s in (("masked", masked), ("clean", clean)):
-        ctx = s.context(reference_variance=plane, resampling=resampling)
+        ctx = s.context(
+            reference_variance=plane, resampling=_half_pixel_resampling
+        )
         assert ctx.terms == ("corr", "kfit", "kmatch", "mis")
         out[name] = uq.budget(ctx, **s.inputs())
     m, c = out["masked"].columns, out["clean"].columns
@@ -781,16 +789,6 @@ def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
     positions is near 4 for the PSF-flux weights, and the corr term uses
     it. With the measurement off the closed form alone is used.
     """
-    from cuphoton.xrep import resampling_weights_at
-
-    def resampling(x, y):
-        return resampling_weights_at(
-            lambda c: np.asarray(c, dtype=float) + 0.5,
-            x,
-            y,
-            interpolation="lanczos3",
-        )
-
     rng = np.random.default_rng(7)
     s = Scene(seed=7)
     # unit-variance noise correlated over 2x2 pixels
@@ -805,7 +803,7 @@ def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
     plane = np.full((SIZE, SIZE), 4.0)
     ctx = s.context(
         reference_variance=plane,
-        resampling=resampling,
+        resampling=_half_pixel_resampling,
         candidates=s.cand.astype(float),
         measure=measure,
     )
@@ -850,17 +848,6 @@ def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
         )
 
 
-def _half_pixel_resampling(x, y):
-    from cuphoton.xrep import resampling_weights_at
-
-    return resampling_weights_at(
-        lambda c: np.asarray(c, dtype=float) + 0.5,
-        x,
-        y,
-        interpolation="lanczos3",
-    )
-
-
 @pytest.mark.parametrize(
     "closed, measured, flagged, applied",
     [
@@ -879,12 +866,10 @@ def test_measured_flag_follows_the_choice_not_the_floor(
     before the floor at 1: a closed form below 1 floored to 1 is not a
     measured factor.
     """
-    import dataclasses
-
     original = uq._estimator_terms
 
-    def fixed(ctx, w, pos):
-        f, kfit, rot = original(ctx, w, pos)
+    def fixed(ctx, w, pos, at=None):
+        f, kfit, rot = original(ctx, w, pos, at)
         return np.where(np.isfinite(f), closed, f), kfit, rot
 
     monkeypatch.setattr(uq, "_estimator_terms", fixed)
@@ -924,8 +909,10 @@ def test_measured_factor_applies_beyond_two_standard_errors(
     scene, monkeypatch, multiple, source
 ):
     """The exposure chooses the measured factor only where it exceeds the
-    closed form by more than two standard errors ``f sqrt(2 / (n - 1))``;
-    one standard error above is noise, three is a detection.
+    closed form by more than two standard errors ``f sqrt(2 / (0.3675 (n -
+    1)))``, the sample-variance spread widened by the efficiency of the
+    median absolute deviation; one standard error above is noise, three is
+    a detection.
     """
     from cuphoton.xpois import EmpiricalCorrelationFactor
 
@@ -940,8 +927,9 @@ def test_measured_factor_applies_beyond_two_standard_errors(
     )
     n = base.correlation["positions_used"]
     assert n >= 200
-    # solve m = c + multiple * se(m) with se(m) = m sqrt(2 / (n - 1))
-    m = closed / (1.0 - multiple * np.sqrt(2.0 / (n - 1)))
+    # solve m = c + multiple * se(m) with se(m) = m * relative
+    relative = np.sqrt(2.0 / (0.3675 * (n - 1)))
+    m = closed / (1.0 - multiple * relative)
     original = uq.empirical_correlation_factor
 
     def inflated(*args, **kwargs):
@@ -963,7 +951,7 @@ def test_measured_factor_applies_beyond_two_standard_errors(
     for j, name in enumerate(uq.MEASURED_WEIGHTINGS):
         assert corr["measured"][name] > corr["closed_form"][name]
         assert corr["measured_se"][name] == pytest.approx(
-            corr["measured"][name] * np.sqrt(2.0 / (n - 1))
+            corr["measured"][name] * relative
         )
         assert corr["source"][name] == source
         f = ctx.measured_factor(
@@ -1004,6 +992,78 @@ def test_loud_pixels_are_not_empty_positions():
     assert after["positions_used"] >= 200
 
 
+def test_too_few_empty_positions_leaves_the_closed_form(scene):
+    """Candidates one window apart over the whole image leave no empty
+    position: nothing is measured, the summary says so, and every corr
+    term is the closed form.
+    """
+    size = scene.context().window
+    step = 2 * size + 1
+    grid = np.mgrid[0:SIZE:step, 0:SIZE:step].reshape(2, -1).T[:, ::-1]
+    plane = np.full((SIZE, SIZE), 4.0)
+    ctx = scene.context(
+        reference_variance=plane,
+        resampling=_half_pixel_resampling,
+        candidates=grid.astype(float),
+    )
+    corr = ctx.correlation
+    assert corr["positions_requested"] == 1000
+    assert corr["positions_used"] == 0
+    for name in uq.MEASURED_WEIGHTINGS:
+        assert corr["measured"][name] is None
+        assert corr["measured_se"][name] is None
+        assert corr["source"][name] is None
+    for q in uq.QUANTITIES:
+        assert np.isnan(ctx.measured_factor(q))
+    res = uq.budget(ctx, **scene.inputs())
+    assert not res.columns["uq_corr_measured"].any()
+    assert res.diagnostics["corr_measured"] == 0
+    assert res.columns["uq_valid"].tolist() == [True, True, True, False]
+    assert np.all(res.columns["psf_flux_err_corr"][:3] > 0)
+
+
+def test_weighting_of_covers_every_budget_quantity():
+    assert set(uq.WEIGHTING_OF) == set(uq.QUANTITIES)
+    assert set(uq.WEIGHTING_OF.values()) == set(uq.MEASURED_WEIGHTINGS)
+    assert uq.WEIGHTING_OF["center_y"] == "position_y"
+
+
+def test_flux_window_is_judged_at_the_shifted_position():
+    """A single source on a bright static star moves its flux position by
+    ``(lambda - 1)`` times the misalignment (here 0.45 px in y); a masked
+    pixel just inside the shifted window and outside the lobe windows
+    flags the row, one just outside it does not.
+    """
+    cand = [[15, 100], [140, 50], [100, 150], [40, 160]]
+    half = uq.window_side(PSF) // 2
+    out = {}
+    for name, dy in (("inside", -(half + 1)), ("outside", half + 1)):
+        s = Scene(seed=1, cand=cand)
+        star = _gaussians(
+            [s.cand[0, 0] + 0.3], [s.cand[0, 1] - 0.2], [200.0 * s.flux[0]]
+        )
+        s.reference = s.reference + star
+        s.matched = fftconvolve(s.reference, s.kernel, mode="same")
+        s.target = s.target + fftconvolve(star, s.kernel, mode="same")
+        s.residual = s.target - s.matched
+        cx, cy = s.cand[0]
+        s.residual[cy + dy, cx] = np.nan
+        single = np.zeros(len(cand), bool)
+        single[0] = True
+        res = uq.budget(s.context(), **s.inputs(single=single))
+        out[name] = res
+        assert res.diagnostics["sensitivity_capped"] == 1
+        assert res.columns["uq_valid"].tolist() == [True, True, True, False]
+    assert out["inside"].columns["uq_window_masked"].tolist() == [
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert not out["outside"].columns["uq_window_masked"][:3].any()
+    assert np.isfinite(out["inside"].columns["psf_flux_err"][0])
+
+
 def test_correlation_factor_is_not_evaluated_when_excluded(
     scene, monkeypatch
 ):
@@ -1023,18 +1083,7 @@ def test_error_budget_runs_step_8c(scene, enabled):
     from transient_chain import catalog
 
     n = len(scene.cand)
-    err = np.full(n, 0.05)
-    derived = SimpleNamespace(
-        center_x=np.full(n, 0.3),
-        center_y=np.full(n, -0.2),
-        positive_x=np.full(n, 2.8),
-        positive_y=np.full(n, -0.2),
-        center_x_error=err,
-        center_y_error=err,
-        positive_x_error=err,
-        positive_y_error=err,
-        lobe_flux=scene.flux,
-    )
+    derived = _derived(scene)
     u_cfg = {
         "enabled": enabled,
         "kernel_fit": True,
@@ -1075,9 +1124,9 @@ def test_error_budget_runs_step_8c(scene, enabled):
         assert summary["undefined_factor"] == 0
         assert summary["corr_measured"] == 0
         corr = summary["correlation"]
-        # the accounting fields stay out of the summary
+        # the accounting field stays out of the summary
         assert "control_bytes" not in corr
-        assert "positions_requested" not in corr
+        assert corr["positions_requested"] == 1000
         used = corr["positions_used"]
         assert used >= 20 and corr["positions_excluded_loud"] >= 0
         assert set(corr["measured"]) == set(uq.MEASURED_WEIGHTINGS)
@@ -1087,7 +1136,7 @@ def test_error_budget_runs_step_8c(scene, enabled):
             m = corr["measured"][name]
             assert m == pytest.approx(1.0, abs=0.2)
             assert corr["measured_se"][name] == pytest.approx(
-                m * np.sqrt(2.0 / (used - 1))
+                m * np.sqrt(2.0 / (0.3675 * (used - 1)))
             )
             assert corr["closed_form"][name] == 1.0
             assert corr["source"][name] is None

@@ -391,6 +391,28 @@ def test_mosaic_variance_follows_the_pieces_rule(rubin_visit):
     at = provider.resampling(xs[:3].astype(float), ys[:3].astype(float))
     assert at.weights.shape[1:] == (6, 6) and at.is_translation.all()
     assert np.allclose(at.weights.sum(axis=(1, 2)), 1.0)
+    # positions covered by one piece alone take that piece's weights, on
+    # either side of the overlap (the right side is covered by the second
+    # piece only, so its weights are substituted into the first piece's)
+    ys, xs = np.nonzero(one)
+    left, right = xs < xs.min() + 5, xs > xs.max() - 5
+    for side in (left, right):
+        at = provider.resampling(
+            xs[side].astype(float), ys[side].astype(float)
+        )
+        assert (at.weights != 0).any(axis=(1, 2)).all()
+        assert np.allclose(at.weights.sum(axis=(1, 2)), 1.0)
+        np.testing.assert_array_equal(at.destination[:, 0], xs[side])
+    first = provider._built[0]
+    from cuphoton.xrep import resampling_weights_at
+
+    alone = resampling_weights_at(
+        first[0],
+        xs[right].astype(float),
+        ys[right].astype(float),
+        prepared=first[1],
+    )
+    assert not (alone.weights != 0).any()
     ys, xs = np.nonzero(cnt == 0)
     if len(xs):
         at = provider.resampling(xs[:1].astype(float), ys[:1].astype(float))
@@ -470,6 +492,54 @@ def test_template_fits_override_carries_the_variance_hdu(rubin_visit):
     assert tbad is not None and tbad.sum() == 9  # the BAD block
     at = provider.resampling(np.array([3.0]), np.array([7.0]))
     assert at.weights.shape == (1, 1, 1) and at.is_translation.all()
+
+
+def test_generic_template_inverse_variance_and_shape_mismatch(
+    generic_pair, tmp_path
+):
+    """``template.variance_kind: inverse_variance`` inverts the plane (zero
+    weight is a NaN variance); a plane of another shape than the template
+    is rejected by name.
+    """
+    from astropy.io import fits
+
+    base = {
+        "identity": {
+            "exposure_id": "expnum",
+            "ccd_id": "ccdnum",
+            "band": "band",
+        },
+        "template": {
+            "on_target_grid": True,
+            "variance_path_key": "weight",
+            "variance_kind": "inverse_variance",
+        },
+    }
+    io = host_reader()
+    adapter = make_adapter({"name": "generic", "params": base})
+    t = adapter.load_target(generic_pair, io)
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    provider.build()
+    var = provider.variance()
+    assert float(var[5, 5]) == pytest.approx(25.0) and np.isnan(var[0, 0])
+
+    small = tmp_path / "small_variance.fits"
+    fits.PrimaryHDU(np.full((8, 8), 9.0, np.float32)).writeto(small)
+    sel = {**generic_pair, "small": str(small)}
+    adapter = make_adapter(
+        {
+            "name": "generic",
+            "params": {
+                **base,
+                "template": {
+                    "on_target_grid": True,
+                    "variance_path_key": "small",
+                },
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="template variance has shape"):
+        adapter.template(sel, t, io, mapping_grid_step=16)
 
 
 def test_generic_variance_hdu_reads_the_template_file(generic_pair, tmp_path):

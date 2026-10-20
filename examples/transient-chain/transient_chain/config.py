@@ -29,6 +29,8 @@ import yaml
 READERS = ("auto", "xdr", "astropy")
 INFERENCE_POLICIES = ("strict", "checkpoint")
 STAR_FINDERS = ("gpu", "daofind")
+# fewer empty positions than this and the correlation factor is not measured
+MIN_MEASURE_POSITIONS = 20
 
 _REQUIRED = object()
 
@@ -197,7 +199,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "kernel_fit": (True, _bool),
         "max_lobe_reach_px": (32, _positive_finite_num),
         "measure_correlation": (True, _bool),
-        "correlation_positions": (1000, _int(10)),
+        "correlation_positions": (1000, _int(MIN_MEASURE_POSITIONS)),
         "sky_astrometry_arcsec": (None, _opt(_nonnegative_finite_num)),
         "sky_astrometry_source": (None, _opt(_nonempty_str)),
     },
