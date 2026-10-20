@@ -1188,7 +1188,9 @@ def test_error_budget_runs_step_8c(scene, enabled):
     )
     cols = res.host_columns()
     budget_columns = {
-        k for k in catalog.BUDGET_COLUMNS if not k.startswith("sky_err")
+        k
+        for k in catalog.BUDGET_COLUMNS
+        if not k.startswith(("sky_err", "source_"))
     }
     assert set(cols) == budget_columns | {f"{q}_err" for q in QUANTITIES}
     assert all(v.shape == (n,) for v in cols.values())
@@ -1401,6 +1403,54 @@ def test_single_sources_take_the_one_lobe_fit(psf_sigma):
         np.testing.assert_array_equal(
             getattr(new, name), getattr(dipole, name)
         )
+
+
+def test_single_source_refit_switch_keeps_the_dipole_everywhere():
+    stamps, variance, mask, dipole, flags = _single_scene()
+    res = uq.single_source_fit(
+        dipole, flags, stamps, variance, mask=mask, refit=False
+    )
+    assert list(res.fit_model) == ["dipole"] * 3
+    assert not res.applied.any()
+    assert res.diagnostics["single_candidates"] == 2
+    assert res.diagnostics["single_fitted"] == 0
+    assert res.diagnostics["single_model"] is None
+    for i in range(3):
+        assert _row_bytes(res.derived, i) == _row_bytes(dipole, i)
+    np.testing.assert_array_equal(res.lobe_flux, dipole.lobe_flux)
+    assert np.isnan(res.flux).all() and np.isnan(res.flux_error).all()
+
+
+def test_source_position_columns_take_the_measured_lobe():
+    """Four rows: resolved, brightening single (refit), fading single
+    (refit), fading single whose one-lobe fit fell back."""
+    table = {
+        "center_x": np.array([0.1, 0.2, 0.3, 0.4]),
+        "center_y": np.array([-0.1, -0.2, -0.3, -0.4]),
+        "positive_x": np.array([1.0, 2.0, 3.0, 4.0]),
+        "positive_y": np.array([5.0, 6.0, 7.0, 8.0]),
+    }
+    for a in "xy":
+        table[f"positive_{a}_err_fit"] = np.array([0.1, 0.2, 0.3, 0.4])
+        table[f"positive_{a}_err"] = np.array([0.5, 0.6, 0.7, 0.8])
+    fading = np.array([False, False, True, True])
+    applied = np.array([False, True, True, False])
+    cols = uq.source_position_columns(table, fading, applied)
+    assert set(cols) == {
+        f"source_{a}{s}" for a in "xy" for s in uq.SOURCE_SUFFIXES
+    }
+    np.testing.assert_allclose(cols["source_x"], [1.0, 2.0, 3.0, -3.2])
+    np.testing.assert_allclose(cols["source_y"], [5.0, 6.0, 7.0, -8.8])
+    for a in "xy":
+        np.testing.assert_allclose(
+            cols[f"source_{a}_err_fit"][:3], [0.1, 0.2, 0.3]
+        )
+        np.testing.assert_allclose(
+            cols[f"source_{a}_err"][:3], [0.5, 0.6, 0.7]
+        )
+        assert np.isnan(cols[f"source_{a}_err_fit"][3])
+        assert np.isnan(cols[f"source_{a}_err"][3])
+        assert cols[f"source_{a}"].dtype == np.float64
 
 
 def test_single_source_fit_falls_back_to_the_dipole_when_invalid():

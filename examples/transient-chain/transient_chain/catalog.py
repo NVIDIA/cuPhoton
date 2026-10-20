@@ -154,6 +154,8 @@ BUDGET_TERMS: dict[str, str] = {
     "0 for positions)",
     "mis": "residual misalignment (0 for psf_flux)",
 }
+# Column order is part of the catalog contract: a new column is appended at
+# the end of its block, never inserted, so older catalogs stay a prefix.
 BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
     **{
         f"{q}_err_{t}": (
@@ -205,6 +207,22 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
         "provenance of sky_err_arcsec (uq.sky_astrometry_source; None when "
         "null)",
     ),
+    **{
+        f"source_{a}{suffix}": (
+            "float64",
+            "uq",
+            f"{what} of the measured lobe whichever its sign: the positive_*"
+            " value where that lobe is the source (fit_model single, or two "
+            "supported lobes), the dipole's negative lobe for a fading "
+            "source the one-lobe fit did not replace (its error bars NaN)",
+        )
+        for suffix, what in (
+            ("", "position in pixels relative to (x, y)"),
+            ("_err_fit", "fit standard uncertainty"),
+            ("_err", "error bar to quote"),
+        )
+        for a in ("x", "y")
+    },
 }
 CLASSIFY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "logit": (

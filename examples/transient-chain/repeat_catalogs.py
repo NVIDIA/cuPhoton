@@ -10,20 +10,23 @@ A source that does not move lands at the same place in every exposure, so
 the scatter of its linked detections divided by their error bars gives a
 chi-square per degree of freedom near 1 when the bars are right. The test
 links the chain's detections across the exposures of each detector, drops
-duplicates within an exposure, and scores two quantities: the dipole center
-(``center_*``) and the source position (``positive_*``). Each is scored
-overall and per class, for the full error bar ``<q>_err``, for
-``<q>_err_fit`` alone, and with each of the corr, kfit, kmatch and mis
-terms dropped in turn (``ARMS``).
+duplicates within an exposure, and scores three quantities: the dipole
+center (``center_*``), the source position (``positive_*``) and the source
+position of either lobe (``source_*``, the measured lobe whichever its
+sign). Each is scored overall and per class, for the full error bar
+``<q>_err``, for ``<q>_err_fit`` alone, and with each of the corr, kfit,
+kmatch and mis terms dropped in turn (``ARMS``).
 
 Classes come from ``quality_flags``, ``converged`` and ``uncertainty_valid``
 (``classify``): ``resolved`` (two supported lobes), ``overlapping``,
 ``single`` (a brightening source, only the positive lobe supported),
-``fading`` (only the negative lobe supported, so neither quantity's columns
-describe the source), ``failed`` (width out of range or no lobe at the
-candidate) and ``invalid`` (no usable covariance). The center is scored on
-resolved and overlapping candidates, the source position on resolved and
-single ones.
+``fading`` (only the negative lobe supported), ``failed`` (width out of
+range or no lobe at the candidate) and ``invalid`` (no usable covariance).
+The center is scored on resolved and overlapping candidates, the source
+position on resolved and single ones, and the either-lobe position on
+resolved, single and fading ones; a fading source whose one-lobe fit fell
+back to the dipole has no ``source_*`` error bar and is dropped with the
+other rows whose bar is undefined.
 
 Positions reach the sky in two steps. The refine stage's affine from the
 item's ``summary.json`` (read by ``load`` when it sits beside the catalog)
@@ -67,7 +70,14 @@ ARMS: dict[str, tuple[str, ...]] = {
 QUANTITIES = {
     "dipole center": ("center", ("resolved", "overlapping")),
     "source position": ("positive", ("resolved", "single")),
+    "source position (either lobe)": (
+        "source",
+        ("resolved", "single", "fading"),
+    ),
 }
+# the source_* columns copy the positive_* bar where it is defined, so their
+# arms read the positive_* terms
+TERM_PREFIX = {"source": "positive"}
 CLASSES = ("invalid", "failed", "overlapping", "fading", "single", "resolved")
 BLIND_SPOTS = (
     "The reference's noise is shared by every exposure of a detector and "
@@ -282,6 +292,8 @@ def arm_variance(df: pd.DataFrame, q: str, arm: str) -> np.ndarray:
     if arm not in ARMS:
         raise ValueError(f"unknown arm {arm!r}; one of {list(ARMS)}")
     var = df[f"{q}_err_fit"].to_numpy(float) ** 2
+    prefix, axis = q.rsplit("_", 1)
+    q = f"{TERM_PREFIX.get(prefix, prefix)}_{axis}"
     for t in ARMS[arm]:
         var = var + df[f"{q}_err_{t}"].to_numpy(float) ** 2
     return var

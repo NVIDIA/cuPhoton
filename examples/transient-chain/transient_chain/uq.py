@@ -713,6 +713,7 @@ def single_source_fit(
     psf_sigma: float | None = None,
     solver=None,
     compute_dtype="input",
+    refit: bool = True,
 ) -> SingleSourceResult:
     """Refit the single-source candidates with the one-lobe model.
 
@@ -732,7 +733,9 @@ def single_source_fit(
     rows, and the single rows whose one-lobe fit is invalid, keep the
     dipole values unchanged. Without a variance plane the dipole covariance
     is scaled by its reduced chi-square and the one-lobe fit would not be
-    comparable, so nothing is refit.
+    comparable, so nothing is refit. With ``refit`` false
+    (``uq.single_source_refit`` off, or ``uq.enabled`` off) the candidates
+    are counted and nothing is refit either.
     """
     xp = ops.array_module(derived.positive_x)
     n = int(derived.positive_x.shape[0])
@@ -756,7 +759,7 @@ def single_source_fit(
         fit_model,
         diag,
     )
-    if variance is None or not diag["single_candidates"]:
+    if not refit or variance is None or not diag["single_candidates"]:
         return none
     idx = xp.flatnonzero(candidates)
     sign = xp.where(brightening[idx], 1, -1).astype(np.int8)
@@ -844,6 +847,33 @@ def supported_lobe_xy(derived, fading, applied):
         ],
         axis=1,
     )
+
+
+SOURCE_SUFFIXES = ("", "_err_fit", "_err")
+
+
+def source_position_columns(
+    table: Mapping[str, Any], fading, applied
+) -> dict[str, np.ndarray]:
+    """The ``source_x``, ``source_y`` columns with ``_err_fit`` and ``_err``:
+    the measured lobe whichever its sign, filled from the host ``table``
+    after the budget so no term is recomputed. Every row takes its
+    ``positive_*`` values, which describe the measured lobe on a row with
+    two supported lobes or ``fit_model = "single"``; a ``fading`` row the
+    one-lobe fit did not replace (``applied`` false) takes the dipole's
+    negative lobe, ``2 center - positive``, with NaN error bars, since the
+    budget was built for the positive lobe only.
+    """
+    other = np.asarray(fading, dtype=bool) & ~np.asarray(applied, dtype=bool)
+    out: dict[str, np.ndarray] = {}
+    for a in ("x", "y"):
+        pos = np.asarray(table[f"positive_{a}"], dtype=np.float64)
+        cen = np.asarray(table[f"center_{a}"], dtype=np.float64)
+        out[f"source_{a}"] = np.where(other, 2.0 * cen - pos, pos)
+        for suffix in SOURCE_SUFFIXES[1:]:
+            val = np.asarray(table[f"positive_{a}{suffix}"], dtype=np.float64)
+            out[f"source_{a}{suffix}"] = np.where(other, np.nan, val)
+    return out
 
 
 @dataclass(frozen=True)

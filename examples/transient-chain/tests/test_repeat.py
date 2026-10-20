@@ -136,6 +136,9 @@ def _catalog(
                     n, bar[j] * np.sqrt(s)
                 )
         rows[f"{prefix}_xy_cov"] = np.zeros(n)
+    for suffix in ("", "_err_fit", "_err"):
+        for ax in "xy":
+            rows[f"source_{ax}{suffix}"] = rows[f"positive_{ax}{suffix}"]
     rows["uq_valid"] = np.ones(n, bool)
     rows["uq_window_masked"] = np.zeros(n, bool)
     rows["uq_corr_measured"] = np.zeros(n, bool)
@@ -456,9 +459,48 @@ def test_classes_select_the_quantity():
     assert source["class_counts"]["single"] == 60
     assert source["class_counts"]["resolved"] == 45
     assert source["n_groups"] == 35
-    # fading singles are in neither quantity
+    # fading singles are in neither of the first two quantities
     assert sum(center["class_counts"].values()) == 102
     assert sum(source["class_counts"].values()) == 105
+    # the either-lobe position adds them
+    either = rep["quantities"]["source position (either lobe)"]
+    assert set(either["by_class"]) == {"single", "resolved", "fading"}
+    assert either["class_counts"]["fading"] == 60
+    assert either["n_groups"] == 55
+    assert either["arms"]["full"]["chi2_per_dof"] == pytest.approx(
+        1.0, abs=0.2
+    )
+
+
+def test_a_fading_source_without_a_source_bar_is_dropped():
+    from cuphoton.xfit import DipoleQualityFlag as F
+
+    rng = np.random.default_rng(5)
+    sky = _sky(rng, n=40)
+    flags = np.full(40, int(F.POSITIVE_LOBE_UNSUPPORTED), np.int64)
+    df = _exposures(rng, sky, 3, flags=flags)
+    # the one-lobe fit fell back on ten sources: their bars are NaN
+    fallback = df.index[df.index % 40 < 10]
+    for ax in "xy":
+        df.loc[fallback, f"source_{ax}_err"] = np.nan
+    rep = rc.repeat(df)
+    assert rep["quantities"]["source position"] is None
+    either = rep["quantities"]["source position (either lobe)"]
+    assert either["n_groups"] == 30
+    assert either["n_dropped_undefined_error_bar"] == 30
+
+
+def test_source_arms_read_the_positive_terms():
+    rng = np.random.default_rng(6)
+    df = _exposures(rng, _sky(rng, n=10), 1, terms=(0.5, 0.0, 0.0, 0.0))
+    np.testing.assert_allclose(
+        rc.arm_variance(df, "source_x", "full"),
+        rc.arm_variance(df, "positive_x", "full"),
+    )
+    np.testing.assert_allclose(
+        rc.arm_variance(df, "source_x", "without corr"),
+        df["positive_x_err_fit"].to_numpy() ** 2,
+    )
 
 
 def test_arm_variances_by_hand():

@@ -216,7 +216,7 @@ named, odd sizes and enumerations are checked, and every default lives in
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
 | `stamps` | stamp cutting | `stamp_size` (odd; equals the checkpoint's `image_size`) |
 | `xfit` | dipole fits, quality flags, forced photometry | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`), `psf_sigma_px` |
-| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `measure_correlation` and `correlation_positions` (the factor measured at empty positions; at least 20), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
+| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `measure_correlation` and `correlation_positions` (the factor measured at empty positions; at least 20), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`), `single_source_refit` (step 8b's one-lobe refit; off with `enabled: false` too) |
 | `classify` | XScan | `inference_policy: strict\|checkpoint`, `apply_noise_match`, `noise_reference_sigma`, `decision_threshold`, `batch_size` |
 
 `classify.noise_reference_sigma` is a property of the checkpoint, not of the survey: it is the
@@ -324,6 +324,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
 | `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions instead of the quantity's closed form (`uq.correlation` in `summary.json`, next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
+| `source_x`, `source_y` and `*_err_fit`, `*_err` | float64 | uq | the measured lobe whichever its sign, in pixels relative to (`x`, `y`), filled from the columns above after the budget: the `positive_*` values on a row with two supported lobes or `fit_model = "single"` (where they describe the one measured lobe, brightening or fading); the dipole's negative lobe, `2 center - positive`, for a fading source whose one-lobe fit fell back, with NaN error bars because the budget was built for the positive lobe only. Use these to score or quote a source position without reading `fit_model` |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -459,6 +460,9 @@ keeps the dipole values and `fit_model = "dipole"`; every other row is untouched
 variance plane nothing is refit: the dipole covariance is then scaled by its reduced chi-square
 and the two fits would not be comparable. `summary.json` records `uq.single_candidates`,
 `uq.single_fitted`, `uq.single_fallback` and `uq.single_model` (`circular` or `elliptical`).
+`uq.single_source_refit: false` (or `uq.enabled: false`) skips the refit: every row keeps the
+dipole values and `fit_model = "dipole"`, and `uq.single_fitted` is 0. In either case the
+`source_*` columns name the measured lobe whichever its sign (column table above).
 
 `quality_flags` marks fits that a valid covariance does not exclude: widths outside 0.5 to 2.5 times
 the PSF width (xFit's default range when none is known), lobes outside the stamp, no lobe at the
@@ -520,15 +524,16 @@ Detections are linked across exposures within `--link-px` (default 2) after dupl
 exposure are dropped within `--duplicate-px` (default 1, keeping the highest `peak_abs_sigma`). A
 group seen in fewer than two exposures, or twice in one, is dropped.
 
-Two quantities are scored, each on the classes whose columns describe the source. The classes come
+Three quantities are scored, each on the classes whose columns describe the source. The classes come
 from `quality_flags`, `converged` and `uncertainty_valid`: `resolved` (two supported lobes),
 `overlapping`, `single` (a brightening source: only the positive lobe supported), `fading` (only
 the negative lobe supported), `failed` (both lobes unsupported, width out of range, no lobe at the
 candidate, or a lobe outside the stamp) and
 `invalid` (no usable covariance). The dipole center (`center_*`) is scored on resolved and
-overlapping candidates; the source position (`positive_*`) on resolved and single ones. A fading
-single's source is its negative lobe, which the catalog does not carry as a position, so that class
-is in neither quantity.
+overlapping candidates; the source position (`positive_*`) on resolved and single ones; the source
+position of either lobe (`source_*`, the measured lobe whichever its sign) on resolved, single and
+fading ones, so a fading single's measured negative lobe is scored where its one-lobe fit held.
+The `source_*` arms read the `positive_*` term columns, which the `source_*` bar copies.
 
 For each quantity, overall and per class, the report gives two statistics: the pooled chi-square
 per degree of freedom, and the median per-group ratio (the median over groups of chi-square over

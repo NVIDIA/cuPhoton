@@ -572,6 +572,9 @@ class ChainWorker:
                     psf_sigma=psf_sigma,
                     solver=self.lm_config,
                     compute_dtype=self.compute_dtype.name,
+                    refit=bool(
+                        u_cfg["enabled"] and u_cfg["single_source_refit"]
+                    ),
                 )
                 derived = singles.derived
                 xfer["control_bytes"] += singles.diagnostics["control_bytes"]
@@ -722,6 +725,11 @@ class ChainWorker:
                 table["psf_flux_err"] = err_fit
                 # the budget columns; <q>_err becomes the full error bar
                 table.update(budget.host_columns())
+                table.update(
+                    uq.source_position_columns(
+                        table, ops.to_host(fading), singles.applied
+                    )
+                )
                 table["sky_err_arcsec"] = np.full(
                     n_cand,
                     np.nan
