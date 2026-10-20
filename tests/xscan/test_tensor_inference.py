@@ -206,11 +206,15 @@ def test_checkpoint_performance_override_replaces_saved_policy(
 
     override = PerformanceConfig(pin_memory=True, non_blocking_transfers=True)
     original_override = asdict(override)
+    validated_checkpoints: list[Any] = []
     model, checkpoint, policy = training.load_model_from_checkpoint(
         tmp_path,
         device=torch.device("cpu"),
         performance_override=override,
+        checkpoint_validator=validated_checkpoints.append,
     )
+    assert len(validated_checkpoints) == 1
+    assert validated_checkpoints[0] is checkpoint
     assert asdict(policy) == asdict(PerformanceConfig())
     assert asdict(override) == original_override
     assert events == [

@@ -186,20 +186,20 @@ def _setup(
         torch.set_num_threads(config.inference_policy["worker_cpu_threads"])
         torch.cuda.set_device(config.device_id)
         runtime.update(torch=torch, device=torch.device(config.device))
-        model, checkpoint, performance = load_model_from_checkpoint(
+        model, _, performance = load_model_from_checkpoint(
             Path(config.checkpoint_dir),
             device=runtime["device"],
             performance_override=PerformanceConfig(**config.inference_policy),
+            checkpoint_validator=partial(
+                pipeline._validate_checkpoint_contract,
+                stamp_shape=config.stamp_shape,
+                feature_names=FEATURE_NAMES,
+                feature_schema_sha256=config.feature_schema_sha256,
+                feature_schema=schema,
+            ),
         )
         if asdict(performance) != config.inference_policy:
             raise ValueError("inference policy changed during normalization")
-        pipeline._validate_checkpoint_contract(
-            checkpoint,
-            stamp_shape=config.stamp_shape,
-            feature_names=FEATURE_NAMES,
-            feature_schema_sha256=config.feature_schema_sha256,
-            feature_schema=schema,
-        )
         pipeline._validate_loaded_model_contract(
             model, feature_names=FEATURE_NAMES
         )
