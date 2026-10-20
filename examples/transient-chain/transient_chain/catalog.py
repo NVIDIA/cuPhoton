@@ -98,6 +98,13 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
         "xfit",
         "bits of cuphoton.xfit.DipoleQualityFlag (0 when none is set)",
     ),
+    "fit_model": (
+        "object",
+        "xfit",
+        '"dipole" (two lobes) or "single" (one lobe, for a candidate with '
+        "one unsupported lobe whose one-lobe fit is valid; positive_* then "
+        "describe that lobe)",
+    ),
     **_position_columns("center", "midpoint of the two lobes"),
     **_position_columns("positive", "lobe with positive flux"),
     "separation": ("float64", "xfit", "distance between the lobes (pixels)"),
@@ -115,8 +122,10 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "psf_flux": (
         "float64",
         "xfit",
-        "forced PSF flux at the source (NaN without a variance plane or a "
-        "PSF width from xfit.psf_sigma_px or the refine stage's stars)",
+        "forced PSF flux at the source; without a PSF width from "
+        "xfit.psf_sigma_px or the refine stage's stars, the one-lobe fit's "
+        "flux where fit_model is single, NaN elsewhere and without a "
+        "variance plane",
     ),
     "psf_flux_err_fit": (
         "float64",

@@ -114,6 +114,7 @@ def _catalog(
         "evaluations": np.full(n, 10),
         "valid_pixel_count": np.full(n, 2601),
         "quality_flags": np.zeros(n, np.int64) if flags is None else flags,
+        "fit_model": np.array(["dipole"] * n, dtype=object),
     }
     for name in NAMES:
         rows[name] = np.ones(n)

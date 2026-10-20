@@ -1297,3 +1297,180 @@ def test_far_lobe_is_capped_out_of_the_center_stamp(scene):
     for q in ("positive_x", "positive_y", "psf_flux"):
         for col in [f"{q}_err_{t}" for t in uq.TERMS] + [f"{q}_err"]:
             np.testing.assert_array_equal(c[col], u[col])
+
+
+# --- single sources ---------------------------------------------------------
+
+STAMP = 51
+
+
+def _lobe(x, y, flux, sigma=PSF, shape=(STAMP, STAMP)):
+    """One Gaussian lobe at centered pixel coordinates ``(x, y)``."""
+    half = shape[0] // 2
+    yy, xx = np.mgrid[-half : half + 1, -half : half + 1]
+    return (
+        flux
+        * np.exp(-0.5 * ((xx - x) ** 2 + (yy - y) ** 2) / sigma**2)
+        / (2 * np.pi * sigma**2)
+    )
+
+
+def _single_scene(seed=1, noise=NOISE):
+    """Three difference stamps: a brightening single source, a resolved
+    dipole and a fading single source, with white noise, fitted with the
+    dipole model; the quality flags are set by hand from what each stamp
+    holds.
+    """
+    from cuphoton.xfit import (
+        DipoleQualityFlag,
+        derived_dipole_quantities,
+        fit_dipoles,
+    )
+
+    rng = np.random.default_rng(seed)
+    clean = np.stack(
+        [
+            _lobe(0.4, -0.3, 4000.0),
+            _lobe(2.6, 0.0, 4000.0) - _lobe(-2.4, 0.0, 4000.0),
+            -_lobe(-0.6, 0.2, 4000.0),
+        ]
+    )
+    stamps = clean + rng.normal(0.0, noise, clean.shape)
+    variance = np.full(stamps.shape, noise**2)
+    mask = np.ones(stamps.shape, bool)
+    fit = fit_dipoles(
+        stamps,
+        model="gaussian",
+        variance=variance,
+        mask=mask,
+        backend="numpy",
+    )
+    flags = np.array(
+        [
+            int(DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED),
+            0,
+            int(DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED),
+        ]
+    )
+    return stamps, variance, mask, derived_dipole_quantities(fit), flags
+
+
+def _row_bytes(derived, i):
+    return [
+        np.asarray(getattr(derived, f.name))[i].tobytes()
+        for f in dataclasses.fields(derived)
+    ]
+
+
+@pytest.mark.parametrize("psf_sigma", [None, PSF])
+def test_single_sources_take_the_one_lobe_fit(psf_sigma):
+    stamps, variance, mask, dipole, flags = _single_scene()
+    res = uq.single_source_fit(
+        dipole, flags, stamps, variance, mask=mask, psf_sigma=psf_sigma
+    )
+    assert list(res.fit_model) == ["single", "dipole", "single"]
+    np.testing.assert_array_equal(res.applied, [True, False, True])
+    assert res.diagnostics["single_candidates"] == 2
+    assert res.diagnostics["single_fitted"] == 2
+    assert res.diagnostics["single_fallback"] == 0
+    assert res.diagnostics["single_model"] == (
+        "elliptical" if psf_sigma is None else "circular"
+    )
+    new = res.derived
+    # the single rows: positive_* describe the one lobe, whatever its sign
+    assert new.positive_x[0] == pytest.approx(0.4, abs=0.1)
+    assert new.positive_y[0] == pytest.approx(-0.3, abs=0.1)
+    assert new.positive_x[2] == pytest.approx(-0.6, abs=0.1)
+    assert new.positive_y[2] == pytest.approx(0.2, abs=0.1)
+    for i in (0, 2):
+        assert new.positive_x_error[i] < dipole.positive_x_error[i]
+        assert new.positive_y_error[i] < dipole.positive_y_error[i]
+        assert np.isfinite(new.positive_xy_covariance[i])
+        assert (
+            new.positive_xy_covariance[i] != dipole.positive_xy_covariance[i]
+        )
+        assert res.flux[i] == pytest.approx(4000.0, rel=0.1)
+        assert res.flux_error[i] > 0
+        assert res.lobe_flux[i] == res.flux[i]
+    # the dipole row is byte-identical, in every field
+    assert _row_bytes(new, 1) == _row_bytes(dipole, 1)
+    assert res.lobe_flux[1] == dipole.lobe_flux[1]
+    assert np.isnan(res.flux[1]) and np.isnan(res.flux_error[1])
+    # the fields the one-lobe fit does not measure are untouched everywhere
+    for name in ("center_x", "center_y", "center_x_error", "separation"):
+        np.testing.assert_array_equal(
+            getattr(new, name), getattr(dipole, name)
+        )
+
+
+def test_single_source_fit_falls_back_to_the_dipole_when_invalid():
+    stamps, variance, mask, dipole, flags = _single_scene()
+    # no usable pixel for the brightening source: its one-lobe fit has no
+    # degrees of freedom and the row keeps the dipole values
+    mask = mask.copy()
+    mask[0] = False
+    res = uq.single_source_fit(
+        dipole, flags, stamps, variance, mask=mask, psf_sigma=PSF
+    )
+    assert list(res.fit_model) == ["dipole", "dipole", "single"]
+    assert res.diagnostics["single_fitted"] == 1
+    assert res.diagnostics["single_fallback"] == 1
+    for i in (0, 1):
+        assert _row_bytes(res.derived, i) == _row_bytes(dipole, i)
+        assert np.isnan(res.flux[i])
+    assert res.derived.positive_x_error[2] < dipole.positive_x_error[2]
+
+
+def test_single_source_fit_needs_a_variance_plane_and_single_flags():
+    stamps, variance, mask, dipole, flags = _single_scene()
+    for args in ((stamps, None, flags), (stamps, variance, np.zeros(3, int))):
+        res = uq.single_source_fit(dipole, args[2], args[0], args[1])
+        assert res.derived is dipole
+        assert list(res.fit_model) == ["dipole"] * 3
+        assert not res.applied.any()
+        assert res.diagnostics["single_fitted"] == 0
+        assert np.isnan(res.flux).all()
+
+
+def test_budget_uses_the_single_rows_position_and_flux(scene):
+    stamps, variance, mask, dipole, flags = _single_scene()
+    cand = scene.cand[:3]
+    res = uq.single_source_fit(
+        dipole, flags, stamps, variance, mask=mask, psf_sigma=PSF
+    )
+    u_cfg = {
+        "enabled": True,
+        "kernel_fit": True,
+        "max_lobe_reach_px": MAX_REACH,
+    }
+    common = dict(
+        cand_x=cand[:, 0],
+        cand_y=cand[:, 1],
+        single=res.applied,
+        psf_flux_error=res.flux_error,
+        photometry_xy=np.column_stack(
+            [res.derived.positive_x, res.derived.positive_y]
+        ),
+        lobe_flux=res.lobe_flux,
+        fit=scene.fit,
+        kernel=scene.kernel,
+        reference=scene.reference,
+        matched=scene.matched,
+        residual=scene.residual,
+        variance=scene.variance,
+        psf_sigma=PSF,
+        misalignment=scene.misalignment,
+        star_xy=scene.star_xy,
+    )
+    out, summary = uq.error_budget(u_cfg, derived=res.derived, **common)
+    cols = out.host_columns()
+    with_dipole, _ = uq.error_budget(u_cfg, derived=dipole, **common)
+    before = with_dipole.host_columns()
+    for a in ("x", "y"):
+        q = f"positive_{a}"
+        # the fit term is the one-lobe error: the bar shrinks with it
+        assert np.all(cols[f"{q}_err"][[0, 2]] < before[f"{q}_err"][[0, 2]])
+        assert cols[f"{q}_err"][1] == before[f"{q}_err"][1]
+        assert np.all(cols[f"{q}_err"] >= res.derived.positive_x_error.min())
+    assert np.isfinite(cols["psf_flux_err"][[0, 2]]).all()
+    assert summary["terms"] == ["fit", "kfit", "kmatch", "mis"]

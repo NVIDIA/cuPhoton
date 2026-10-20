@@ -41,6 +41,17 @@ pixel is masked, the factor from the same pixels) and the row is flagged
 ``uq_window_masked``; a quantity is invalid only where fewer than half of
 its window's pixels are usable.
 
+A candidate whose quality flags leave one lobe unsupported is a single
+source: the dipole's spare lobe sits on noise and the measured lobe's
+position inherits its freedom, so the dipole covariance overstates the
+position error. :func:`single_source_fit` (step 8b) refits those stamps
+with the one-lobe model (``cuphoton.xfit.fit_single_sources``) and, where
+that fit's covariance is valid, replaces ``positive_x``, ``positive_y``,
+their fit terms and cross term with the one-lobe values and marks the row
+``fit_model = "single"``; the terms above then use the one-lobe weights
+the budget already builds at the lobe position. Rows whose one-lobe fit is
+invalid keep the dipole values.
+
 Arrays follow one array module (NumPy or CuPy); only the misalignment model
 and the kernel-mismatch solve run on the host, on arrays with one row per
 candidate or per star. Device arrays cross to the host for the positions
@@ -58,6 +69,7 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.xfit import DipoleQualityFlag, fit_single_sources
 from cuphoton.xpois import (
     correlation_factor,
     empirical_correlation_factor,
@@ -653,6 +665,167 @@ def forced_flux(image, variance, x, y, psf_sigma, half, *, background=None):
     )
 
 
+# --- single sources ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SingleSourceResult:
+    """The dipole quantities with the single-source rows replaced by the
+    one-lobe fit; see :func:`single_source_fit`.
+
+    ``derived`` has the fields of
+    ``cuphoton.xfit.DerivedDipoleQuantities`` with ``positive_x``,
+    ``positive_y``, ``positive_x_error``, ``positive_y_error`` and
+    ``positive_xy_covariance`` replaced on the rows ``applied`` (host).
+    ``lobe_flux`` is the flux the budget divides a lobe's shift by: the
+    one-lobe flux on those rows, the dipole lobe flux elsewhere. ``flux``
+    and ``flux_error`` are the one-lobe flux and its error on those rows and
+    NaN elsewhere (the stand-in for ``psf_flux`` when forced photometry did
+    not run). ``fit_model`` is the catalog column, ``"single"`` on the
+    applied rows and ``"dipole"`` elsewhere.
+    """
+
+    derived: Any
+    lobe_flux: Any
+    flux: Any
+    flux_error: Any
+    applied: np.ndarray
+    fit_model: np.ndarray
+    diagnostics: dict[str, Any]
+
+
+def single_sources(flags):
+    """Brightening (``NEGATIVE_LOBE_UNSUPPORTED`` alone) and fading
+    (``POSITIVE_LOBE_UNSUPPORTED`` alone) rows of the quality ``flags``.
+    """
+    positive = (flags & int(DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED)) != 0
+    negative = (flags & int(DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED)) != 0
+    return negative & ~positive, positive & ~negative
+
+
+def single_source_fit(
+    derived,
+    flags,
+    stamps,
+    variance,
+    *,
+    mask=None,
+    psf_sigma: float | None = None,
+    solver=None,
+    compute_dtype="input",
+) -> SingleSourceResult:
+    """Refit the single-source candidates with the one-lobe model.
+
+    ``derived`` is ``cuphoton.xfit.derived_dipole_quantities`` of the
+    dipole fit, ``flags`` the quality flags, ``stamps`` and ``variance``
+    the ``(N, size, size)`` difference stamps and variance stamps the dipole
+    fit used (``mask`` the pixels it fitted), ``psf_sigma`` the PSF width
+    when one is known independently of the fits (the lobe is then circular
+    at that width) else None (an elliptical lobe), ``solver`` and
+    ``compute_dtype`` as ``cuphoton.xfit.fit_single_sources`` takes them.
+
+    A brightening source (``NEGATIVE_LOBE_UNSUPPORTED`` alone) is fitted
+    with sign ``+1`` from the dipole's positive lobe, a fading one
+    (``POSITIVE_LOBE_UNSUPPORTED`` alone) with sign ``-1`` from its negative
+    lobe. Where the one-lobe fit's covariance is valid, the row's
+    ``positive_*`` describe that one lobe, whatever its sign; the other
+    rows, and the single rows whose one-lobe fit is invalid, keep the
+    dipole values unchanged. Without a variance plane the dipole covariance
+    is scaled by its reduced chi-square and the one-lobe fit would not be
+    comparable, so nothing is refit.
+    """
+    xp = ops.array_module(derived.positive_x)
+    n = int(derived.positive_x.shape[0])
+    brightening, fading = single_sources(xp.asarray(flags))
+    candidates = brightening | fading
+    nan = xp.full(n, xp.nan, dtype=xp.float64)
+    diag: dict[str, Any] = {
+        "single_candidates": int(candidates.sum()),
+        "single_fitted": 0,
+        "single_fallback": 0,
+        "single_model": None,
+        "control_bytes": 0,
+    }
+    fit_model = np.array(["dipole"] * n, dtype=object)
+    none = SingleSourceResult(
+        derived,
+        derived.lobe_flux,
+        nan,
+        nan,
+        np.zeros(n, dtype=bool),
+        fit_model,
+        diag,
+    )
+    if variance is None or not diag["single_candidates"]:
+        return none
+    idx = xp.flatnonzero(candidates)
+    sign = xp.where(brightening[idx], 1, -1).astype(np.int8)
+    start = xp.stack(
+        [
+            xp.where(
+                fading[idx],
+                2.0 * getattr(derived, f"center_{a}")[idx]
+                - getattr(derived, f"positive_{a}")[idx],
+                getattr(derived, f"positive_{a}")[idx],
+            )
+            for a in ("x", "y")
+        ],
+        axis=1,
+    )
+    # a candidate whose dipole gave no finite lobe starts at the stamp center
+    start = xp.where(xp.isfinite(start), start, 0.0)
+    res = fit_single_sources(
+        xp.asarray(stamps)[idx],
+        xp.asarray(variance)[idx],
+        start,
+        psf_sigma=psf_sigma,
+        mask=None if mask is None else xp.asarray(mask)[idx],
+        sign=sign,
+        solver=solver,
+        compute_dtype=compute_dtype,
+    )
+    ok = xp.asarray(res.uncertainty_valid, dtype=bool)
+    rows = idx[ok]
+    diag.update(
+        single_fitted=int(ok.sum()),
+        single_fallback=int((~ok).sum()),
+        single_model="circular" if psf_sigma is not None else "elliptical",
+    )
+    if not diag["single_fitted"]:
+        return none
+
+    def replaced(current, values):
+        out = xp.array(current, dtype=xp.float64, copy=True)
+        out[rows] = xp.asarray(values, dtype=xp.float64)[ok]
+        return out
+
+    fields = {
+        "positive_x": res.x,
+        "positive_y": res.y,
+        "positive_x_error": res.position_error_x,
+        "positive_y_error": res.position_error_y,
+        "positive_xy_covariance": res.position_xy_covariance,
+    }
+    new = dataclasses.replace(
+        derived,
+        **{k: replaced(getattr(derived, k), v) for k, v in fields.items()},
+    )
+    applied = np.zeros(n, dtype=bool)
+    host_rows = ops.to_host(rows)
+    applied[host_rows] = True
+    fit_model[applied] = "single"
+    diag["control_bytes"] = int(host_rows.nbytes)
+    return SingleSourceResult(
+        new,
+        replaced(derived.lobe_flux, res.flux),
+        replaced(nan, res.flux),
+        replaced(nan, res.flux_error),
+        applied,
+        fit_model,
+        diag,
+    )
+
+
 # --- the misalignment model on the host -----------------------------------
 
 
@@ -1148,6 +1321,7 @@ def error_budget(
     single,
     psf_flux_error=None,
     photometry_xy=None,
+    lobe_flux=None,
     fit=None,
     **context,
 ) -> tuple[BudgetResult, dict[str, Any]]:
@@ -1155,9 +1329,12 @@ def error_budget(
 
     ``cand_x``, ``cand_y`` are the host candidate pixels; ``derived`` the
     dipole quantities (``center_x`` ... ``positive_y_error`` and
-    ``lobe_flux`` on the device); ``single`` marks candidates with one
+    ``lobe_flux`` on the device), with the single-source rows replaced by
+    :func:`single_source_fit`; ``single`` marks candidates with one
     supported lobe; ``psf_flux_error`` and ``photometry_xy`` come from
-    forced photometry (None without it); ``fit`` and ``context`` are
+    forced photometry (None without it); ``lobe_flux`` is the flux a lobe's
+    shift is divided by (``derived.lobe_flux`` when None); ``fit`` and
+    ``context`` are
     :func:`build_context`'s inputs, and ``uq.measure_correlation`` with
     ``uq.correlation_positions`` drive the measured correlation factor.
     With ``uq.enabled`` false the result is :func:`fit_only`. Returns the
@@ -1195,7 +1372,7 @@ def error_budget(
             for name in POSITIONS
         },
         err_fit=err_fit,
-        lobe_flux=derived.lobe_flux,
+        lobe_flux=derived.lobe_flux if lobe_flux is None else lobe_flux,
         single=single,
         max_lobe_reach_px=float(u_cfg["max_lobe_reach_px"]),
         photometry_xy=photometry_xy,

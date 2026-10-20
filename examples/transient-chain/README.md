@@ -315,9 +315,10 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `chi_square`, `reduced_chi_square` | float64 | xfit | fit quality on the difference stamp |
 | `evaluations`, `valid_pixel_count` | int64 | xfit | solver bookkeeping |
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
+| `fit_model` | object | xfit | `"dipole"` (two lobes) or `"single"`: a candidate with one unsupported lobe refit with the one-lobe model, whose `positive_*` columns describe that lobe (next section) |
 | `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit, uq | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`). `<q>_err_fit`: standard uncertainty from xFit's covariance alone. `<q>_err`: the error bar to quote, every term in quadrature, NaN where the quantity's window is not valid (see below). `*_xy_cov`: x-y covariance from xFit's covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote, NaN where its window is not valid. All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
+| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote, NaN where its window is not valid. Without a PSF width from `xfit.psf_sigma_px` or the refine stage's stars the one-lobe fit's flux and error on `fit_model = "single"` rows and NaN elsewhere; all three NaN without a variance plane |
 | `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item; `<q>_err_corr` NaN where the factor is undefined |
 | `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where fewer than half of a quantity's window pixels are usable or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
 | `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
@@ -349,7 +350,8 @@ them is kept. Each stamp is centered on the sub-pixel position it measures; a wi
 center's stamp over both lobes).
 
 - `fit` (`<q>_err_fit`): xFit's covariance, weighted by the target variance plane; the template's
-  noise is not in that plane (below).
+  noise is not in that plane (below). For a single source (`fit_model = "single"`, next paragraph)
+  the `positive_*` fit term is the one-lobe fit's covariance.
 - `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of the
   quantity's weighted sum, floored at 1. The resampling and the kernel correlate the reference's
   pixels. The factor is relative to the target variance used by xFit, so it includes both the
@@ -403,10 +405,11 @@ center's stamp over both lobes).
   times it, `lambda = (D + T) / D` with `D` the residual's forced flux and `T` the matched
   reference's at the lobe (a faint change on a bright source moves with the source, not with the
   residual); `|lambda|` is capped at 10 and `uq.sensitivity_capped` counts the rows it capped. A
-  resolved dipole's positive lobe gets `lambda = 1`. For a fading single source the positive lobe is
-  the unsupported one, so `lambda^2` scales columns that describe a lobe that is not there; use
-  `psf_flux` for it. 0 without a misalignment model (refinement off, a shift-only refinement, or the
-  `daofind` star finder).
+  resolved dipole's positive lobe gets `lambda = 1`. For a fading single source with
+  `fit_model = "single"` the `positive_*` columns describe the measured negative lobe, so the term
+  applies to it; with `fit_model = "dipole"` (the one-lobe fit was invalid) they describe the
+  unsupported lobe and `psf_flux` is the quantity to use. 0 without a misalignment model
+  (refinement off, a shift-only refinement, or the `daofind` star finder).
 - `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
   reported with its provenance and kept out of the pixel-frame columns.
 
@@ -438,12 +441,32 @@ through the subtraction kernel, is not in that variance, so the standard errors 
 difference image's noise by that amount. Without a variance plane, xFit scales each covariance by
 the fit's reduced chi-square, which estimates the noise from the stamp's residuals.
 
+A single source leaves one lobe in the difference image. The one-lobe model fits
+that source without a spare lobe.
+Step 8b refits every candidate whose quality flags leave exactly one lobe unsupported with the
+one-lobe model (`cuphoton.xfit.fit_single_sources`), with the same solver, weights and mask as the
+dipole fit: a brightening source (`NEGATIVE_LOBE_UNSUPPORTED` alone) with sign +1 from the dipole's
+positive lobe, a fading one (`POSITIVE_LOBE_UNSUPPORTED` alone) with sign -1 from its negative lobe;
+the lobe is circular at `xfit.psf_sigma_px` (or the stars' width) when one is known, elliptical
+otherwise. Where that fit's covariance is valid the row carries `fit_model = "single"` and its
+`positive_x`, `positive_y`, `positive_*_err_fit` and `positive_xy_cov` are the one-lobe values, so
+for a fading source they describe the measured negative lobe; the `corr`, `kfit` and `mis` terms
+are built at that position with the one-lobe weights the budget already uses for a lobe (the
+PSF-derivative-weighted sum divided by the one-lobe flux), and `psf_flux` is measured there. Where
+forced photometry did not run (no PSF width), the one-lobe fit's flux and error stand in for
+`psf_flux` and `psf_flux_err_fit` on those rows. A single source whose one-lobe fit is invalid
+keeps the dipole values and `fit_model = "dipole"`; every other row is untouched. Without a
+variance plane nothing is refit: the dipole covariance is then scaled by its reduced chi-square
+and the two fits would not be comparable. `summary.json` records `uq.single_candidates`,
+`uq.single_fitted`, `uq.single_fallback` and `uq.single_model` (`circular` or `elliptical`).
+
 `quality_flags` marks fits that a valid covariance does not exclude: widths outside 0.5 to 2.5 times
 the PSF width (xFit's default range when none is known), lobes outside the stamp, no lobe at the
 candidate, overlapping lobes, and an unsupported lobe. A candidate with only
 `NEGATIVE_LOBE_UNSUPPORTED` is a brightening single source and one with only
-`POSITIVE_LOBE_UNSUPPORTED` a fading one; for them `psf_flux` is measured at the supported lobe and is
-the quantity to use, and the dipole columns describe a lobe that is not there. Every other candidate's
+`POSITIVE_LOBE_UNSUPPORTED` a fading one; for them `psf_flux` is measured at the supported lobe (the
+one-lobe fit's position where `fit_model` is `"single"`, else the dipole's supported lobe), and the
+dipole parameter columns (`x_pos`, `x_neg`, ...) still describe both lobes of the dipole fit. Every other candidate's
 `psf_flux` is measured at the positive-flux lobe, including when the lobes overlap. For overlapping
 lobes, only the fitted center coordinates and the product of amplitude and separation are
 identifiable; neither the separation nor the individual lobe flux is measured independently.
