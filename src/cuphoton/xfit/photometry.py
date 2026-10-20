@@ -29,6 +29,7 @@ def forced_psf_photometry(
     psf_sigma: float | ArrayLike,
     *,
     mask: ArrayLike | None = None,
+    psf: ArrayLike | None = None,
 ) -> ForcedPhotometryResult:
     """Fit the flux of a circular Gaussian PSF at fixed positions.
 
@@ -37,7 +38,10 @@ def forced_psf_photometry(
     coordinates, and ``psf_sigma`` is the PSF standard deviation in pixels,
     one value or one per stamp. The PSF is normalized to unit integral, so
     ``flux`` is the source's total flux, as ``2 pi |amplitude| sigma_x
-    sigma_y`` is for a Gaussian dipole lobe.
+    sigma_y`` is for a Gaussian dipole lobe. ``psf`` replaces the Gaussian
+    with ``(batch, y, x)`` model stamps already evaluated at ``positions``
+    (such as ``cuphoton.xpois.psf_weights`` with their offsets); the
+    estimator and the validity rules are the same.
 
     The model is linear in the flux, so the weighted least-squares solution
     and its standard error are exact: ``flux = sum(w P D) / sum(w P^2)`` and
@@ -73,14 +77,19 @@ def forced_psf_photometry(
         good &= xp.asarray(mask, dtype=bool)
     weight = xp.where(good, 1.0 / xp.where(good, var, 1.0), 0.0)
 
-    x = xp.arange(width, dtype=xp.float64) - (width - 1) / 2
-    y = xp.arange(height, dtype=xp.float64) - (height - 1) / 2
     positive = xp.isfinite(sigma) & (sigma > 0)
-    s2 = xp.where(positive, sigma**2, 1.0)[:, None, None]
-    r2 = (x[None, None, :] - xy[:, 0, None, None]) ** 2 + (
-        y[None, :, None] - xy[:, 1, None, None]
-    ) ** 2
-    psf = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
+    if psf is None:
+        x = xp.arange(width, dtype=xp.float64) - (width - 1) / 2
+        y = xp.arange(height, dtype=xp.float64) - (height - 1) / 2
+        s2 = xp.where(positive, sigma**2, 1.0)[:, None, None]
+        r2 = (x[None, None, :] - xy[:, 0, None, None]) ** 2 + (
+            y[None, :, None] - xy[:, 1, None, None]
+        ) ** 2
+        psf = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
+    else:
+        psf = xp.asarray(psf, dtype=xp.float64)
+        if psf.shape != data.shape:
+            raise ValueError("psf must share the shape of images")
 
     information = (weight * psf * psf).sum(axis=(1, 2))
     valid = (

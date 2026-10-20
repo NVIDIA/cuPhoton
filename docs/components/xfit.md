@@ -398,7 +398,10 @@ coordinates as the dipole parameters. `psf_sigma` is the PSF standard
 deviation in pixels, one value or one per stamp. The PSF integrates to one,
 so `flux` is comparable with a Gaussian lobe's `2 pi |amplitude| sigma_x
 sigma_y`. Masked pixels and pixels with a nonfinite image or a nonpositive
-variance do not contribute.
+variance do not contribute. `psf` replaces the Gaussian with `(batch, y, x)`
+model stamps already evaluated at the positions (`cuphoton.xpois.psf_weights`
+with the sub-pixel offsets gives the same Gaussian); `cuphoton.xpois.forced_flux_at`
+uses it to measure positions on a full plane.
 
 `flux_error` is conditional: it assumes the position and the PSF width are
 fixed and correct and that the variance describes the noise. A position or a
