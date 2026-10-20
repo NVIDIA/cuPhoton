@@ -172,6 +172,7 @@ def fit_single_sources(
         return xp.broadcast_to(array, (batch,))
 
     fixed_width = psf_sigma is not None
+    names: tuple[str, ...]
     if fixed_width:
         fixed_sigma = per_stamp(psf_sigma, "psf_sigma").astype(
             dtype, copy=False
