@@ -28,6 +28,7 @@ from .derived import DerivedDipoleQuantities, derived_dipole_quantities
 from .models import GaussianDipoleModel, StampDipoleModel
 from .photometry import ForcedPhotometryResult, forced_psf_photometry
 from .quality import DipoleQualityFlag, dipole_quality_flags
+from .single import SingleSourceFitResult, fit_single_sources
 from .solver import (
     BatchedLeastSquaresProblem,
     JacobianFunction,
@@ -63,6 +64,7 @@ __all__ = [
     "NormalEquationsFunction",
     "ResidualFunction",
     "ResolvedBackend",
+    "SingleSourceFitResult",
     "StampEvaluation",
     "StampDipoleModel",
     "batched_levenberg_marquardt",
@@ -71,4 +73,5 @@ __all__ = [
     "fit_dipoles",
     "fit_dipoles_device",
     "forced_psf_photometry",
+    "fit_single_sources",
 ]

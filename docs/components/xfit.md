@@ -521,6 +521,49 @@ and accept `DeviceDipoleFitResult`. CuPy images keep the computation on the
 device. NumPy images copy only the parameters and uncertainty-valid mask
 of a device result to the host.
 
+## Single sources
+
+A source present in only one of the two images leaves one lobe in the
+difference image. The two-lobe dipole fit still places its second lobe
+somewhere, on noise, and the measured lobe's position inherits that
+freedom: on repeated noise realizations of one such stamp the dipole fit's
+95% position interval covers the truth about 99% of the time with a spread
+(standard deviation of error over error bar) near 0.65, and one fit in five
+does not converge. `fit_single_sources` fits the one lobe alone with the
+same Levenberg-Marquardt solver and inverse-variance weighting as
+`fit_dipoles`, and its interval covers 95% with a spread near 1. Use it for
+candidates whose quality flags mark exactly one lobe unsupported
+(`NEGATIVE_LOBE_UNSUPPORTED` for a brightening source, sign `+1`;
+`POSITIVE_LOBE_UNSUPPORTED` for a fading one, sign `-1`), starting at the
+supported lobe's position:
+
+```python
+from cuphoton.xfit import fit_single_sources
+
+result = fit_single_sources(
+    images, variance, positions, sign=sign, mask=mask
+)
+x, y = result.x, result.y
+error_x, error_y = result.position_error_x, result.position_error_y
+```
+
+`images` and `variance` have shape `(batch, y, x)`, `positions` holds one
+`(x, y)` start per stamp in centered pixel coordinates, and `sign` is `+1`,
+`-1`, one value per stamp, or omitted to take the sign of a matched filter
+at the start. Without `psf_sigma` the lobe is an elliptical Gaussian with
+`amplitude, sigma_x, sigma_y, theta, x, y` free; with `psf_sigma` (one value
+or one per stamp) it is circular at that fixed width and only
+`amplitude, x, y` are fitted. Pixels that the mask excludes, or whose image
+or variance is not finite and positive, carry zero weight. The result holds
+the parameters, covariance and standard errors, the position with its
+per-axis error and cross term, the flux `2 pi |amplitude| sigma_x sigma_y`
+with its propagated error, the solver status, chi-square statistics, and
+`uncertainty_valid` with the same reason codes as `fit_dipoles`. The
+covariance is not rescaled by the reduced chi-square, so it is right when
+`variance` describes the noise; noise correlated between pixels makes it
+too small, as for any pixel-weighted fit. Arrays follow the backend of
+`images`: CuPy in, CuPy out.
+
 ## Opt-in observational-data checks
 
 The observational checks read caller-supplied FITS files and create every
