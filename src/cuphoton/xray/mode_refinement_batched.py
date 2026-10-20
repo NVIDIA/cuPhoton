@@ -79,6 +79,20 @@ class BatchedRefinement:
     elapsed_s: float
 
 
+def _scaled_normal_equations(xp, jac, resid, cost, tol):
+    """Column scales, scaled normal matrix, scaled gradient and the
+    per-trace stationarity flag for the current iterate."""
+    scale = xp.sqrt(xp.sum(jac * jac, axis=1))
+    scale = xp.where(scale > 0, scale, 1.0)
+    scaled_jac = jac / scale[:, None, :]
+    jtj = xp.einsum("bnp,bnq->bpq", scaled_jac, scaled_jac)
+    jtr = xp.einsum("bnp,bn->bp", scaled_jac, resid)
+    stationary = xp.max(xp.abs(jtr), axis=1) <= (
+        tol * xp.maximum(xp.sqrt(cost), 1.0)
+    )
+    return scale, jtj, jtr, stationary
+
+
 def refine_modes_batched(
     xp,
     time,
@@ -152,13 +166,8 @@ def refine_modes_batched(
     iterations = 0
     for _ in range(max_iter):
         iterations += 1
-        scale = xp.sqrt(xp.sum(jac * jac, axis=1))
-        scale = xp.where(scale > 0, scale, 1.0)
-        scaled_jac = jac / scale[:, None, :]
-        jtj = xp.einsum("bnp,bnq->bpq", scaled_jac, scaled_jac)
-        jtr = xp.einsum("bnp,bn->bp", scaled_jac, resid)
-        stationary = xp.max(xp.abs(jtr), axis=1) <= (
-            tol * xp.maximum(xp.sqrt(cost), 1.0)
+        scale, jtj, jtr, stationary = _scaled_normal_equations(
+            xp, jac, resid, cost, tol
         )
         converged = converged | stationary
         if bool(xp.all(converged)):
@@ -179,6 +188,12 @@ def refine_modes_batched(
         jac = xp.where(accept[:, None, None], jac_t, jac)
         cost = xp.where(accept, cost_t, cost)
         lam = xp.where(accept, lam / 3.0, lam * 5.0)
+    else:
+        # The returned parameters include the final accepted step, so the
+        # flag must describe that iterate rather than the one before it.
+        converged = (
+            converged | _scaled_normal_equations(xp, jac, resid, cost, tol)[3]
+        )
     _sync(xp)
     rms = xp.sqrt(cost / y.shape[1])
     return BatchedRefinement(
