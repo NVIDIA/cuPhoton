@@ -69,8 +69,8 @@ uq:                           # the error budget behind <q>_err (step 8c; README
   enabled: true               # false: <q>_err equals <q>_err_fit and every other term is 0
   kernel_fit: true            # the kernel fit's own uncertainty (kfit); one covariance per item over the fit pixels
   max_lobe_reach_px: 32       # largest center-to-lobe distance with a center error bar
-  measure_correlation: true   # measure the correlation factor at empty positions of each exposure and use the larger
-  correlation_positions: 1000 # of it and the closed form (corr); the number of empty positions
+  measure_correlation: true   # measure the correlation factor at empty positions of each exposure and use it for
+  correlation_positions: 1000 # corr where it exceeds the closed form by over two standard errors; the positions
   sky_astrometry_arcsec: null # external astrometric uncertainty per axis, written to sky_err_arcsec; set with
   sky_astrometry_source: null # its provenance (e.g. the survey's astrometric summary), never added to pixel columns
 

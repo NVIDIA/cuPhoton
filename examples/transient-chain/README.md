@@ -235,9 +235,9 @@ a template provider, and an identity (`exposure_id`, `ccd_id`, `band`, extras). 
 from HDUs 1 and 2 of each coadd patch, resolves bad pixels with the LSST stack's `MP_<NAME>`
 cards under the `hsc-masklite` policy, and mosaics the patches through their WCS. Each of these
 is a parameter (`image_hdu`, `mask_hdu`, `variance_hdu`, `coadd_image_hdu`, `coadd_mask_hdu`,
-`coadd_variance_hdu`, `mask_policy`, `variance_kind`, `extra_keys`). `coadd_variance_hdu` is null
-by default: set it when the patches carry a variance plane, and the template gets one (next
-paragraph).
+`coadd_variance_hdu`, `pieces`, `mask_policy`, `variance_kind`, `extra_keys`). `coadd_variance_hdu`
+is null by default: set it when the patches carry a variance plane, and the template gets one;
+`pieces` says how the patches' variances combine where they overlap ("Other surveys" below).
 
 `generic` describes any FITS pair by parameters. A DECam-style layout with the image in the
 primary HDU, a separate inverse-variance weight file, a separate mask file, and a template on
@@ -265,6 +265,7 @@ survey:
       variance_hdu: null        # null = the survey has no template variance (the corr term is then off)
       variance_kind: variance
       on_target_grid: false     # false: reproject the reference through its WCS onto the target grid
+      pieces: correlated        # how overlapping template pieces' variances combine: correlated | independent
     mask_policy: strict         # none | strict (any nonzero bit) | hsc-masklite | {planes: [BAD, SAT]} | {bits: 5}
 ```
 
@@ -274,16 +275,22 @@ catalog has the columns `exposure_id`, `ccd_id`, `band` plus the adapter's extra
 `detector`, `date`, `tract`, `patch`, `physical_filter`).
 
 Adding a third survey is one file in `transient_chain/surveys/` implementing `required_keys`,
-`identity`, `input_paths`, `payload`, `load_target` and `template`, registered in
+`identity`, `input_paths`, `payload`, `load_target` and `build_template`, registered in
 `surveys/__init__.py`. A template provider that is not a mosaic returns `refinable = False` and
 the refine stage skips itself. A survey with a template variance plane hands it to the provider
 (`GridTemplate(..., variance=)` for a template on the target grid, `TemplateSource(image, mask,
 wcs, variance)` per piece of a reprojected or mosaicked one); the provider's `variance()` then
 returns the plane on the target grid after each build and `resampling(x, y)` the resampling
-weights of that build, and `summary.json` records `template_variance: true`. Both are survey-free:
-each piece's variance is reprojected with its image (the same weights, squared), and where pieces
-overlap the mosaic's variance is the mean of theirs, the pieces of one template being taken as
-fully correlated.
+weights of that build, and `summary.json` records `template_variance: true`. The two go together:
+a provider that declares `has_variance` must implement both, and the base adapter's `template()`
+rejects one that does not. Both are survey-free: each piece's variance is reprojected with its
+image (the same weights, squared), and where `n` pieces overlap their variances combine under
+`pieces`: `correlated` (the default) gives `(mean sigma_i)^2`, exact when the pieces' noise is
+fully correlated, as for patches cut from one coadd of the same exposures; `independent` gives
+`sum(var_i) / n^2`, exact when the pieces' noise is independent, as for separate reference
+frames. The resampling weights at a position are those of the first piece that covers it. A
+provider without a variance plane drops the reprojection's prepared mappings after each build
+(hundreds of megabytes per piece on a 4k grid); only the correlation term reads them.
 
 ## Catalog columns
 
@@ -310,7 +317,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item; `<q>_err_corr` NaN where the factor is undefined |
 | `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where fewer than half of a quantity's window pixels are usable or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
 | `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
-| `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions, which exceeded the closed form there (`uq.correlation` in `summary.json`, next section) |
+| `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions instead of the quantity's closed form (`uq.correlation` in `summary.json`, next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
@@ -340,30 +347,36 @@ center's stamp over both lobes).
 - `fit` (`<q>_err_fit`): xFit's covariance, weighted by the target variance plane; the template's
   noise is not in that plane (below).
 - `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of the
-  quantity's weighted sum (`cuphoton.xpois.correlation_factor`, floored at 1): the resampling and
-  the kernel correlate the reference's pixels. The factor is measured against the target variance
-  used by xFit, so it includes both the reference's diagonal noise and its correlations.
-  It needs the reference's variance plane on the target grid and the resampling
-  weights (`cuphoton.xrep.resampling_weights_at` with the template's `ReprojectionSpec`), both
-  from the survey adapter's template provider (`variance()` and `resampling()` after each build,
-  "Other surveys"). When the survey supplies no template variance the term is 0, `summary.json`
-  records `template_variance: false` and lists `corr` under `uq.excluded`. Where the grid mapping
-  is not locally a translation the factor is undefined (`uq.rotated_grid` counts those rows).
-  The closed form models one source of correlation, the resampling of independent reference
-  pixels through the kernel; a coadd's own pixel correlation or faint sources inside the windows
-  are not in it. So once per exposure the chain also measures the factor
-  (`cuphoton.xpois.empirical_correlation_factor`) at up to `uq.correlation_positions` empty
-  positions, usable pixels more than one window from every candidate and star, for the PSF-flux
-  weights and the two position-derivative weights: the squared robust spread of the weighted sums
-  over their diagonal prediction. `summary.json` writes `uq.correlation` with `closed_form` (the
-  median closed form at those positions), `measured` and `plain_ratio` per weighting
-  (`psf_flux`, `position_x`, `position_y`), the positions used, and `source`: `"measured"` where
-  the measured value exceeds the closed form, `"closed_form"` otherwise. Each quantity's `f` is
-  the larger of its closed form and the exposure's measured value for its weighting; rows where
-  the measured value set a term carry `uq_corr_measured` (`uq.corr_measured` counts them), and
-  the kernel-mismatch fit at the stars uses the same factor. Without a template variance the
-  measured values are still reported, as the under-prediction of the diagonal plane, but not
-  applied. `uq.measure_correlation: false` skips the measurement.
+  quantity's weighted sum, floored at 1. The resampling and the kernel correlate the reference's
+  pixels. The factor is measured against the target variance used by xFit, so it includes both
+  the reference's diagonal noise and its correlations. `f` comes from two places:
+  - The closed form (`cuphoton.xpois.correlation_factor`) at the candidate, from the reference's
+    variance plane on the target grid and the resampling weights of the template build, both from
+    the survey adapter's template provider ("Other surveys"). Without a template variance plane
+    the term is 0, `summary.json` records `template_variance: false` and lists `corr` under
+    `uq.excluded`. The factor is undefined where the window has no usable pixel or the reprojection
+    filled the reference, and where the grid mapping is not locally a translation; `uq.undefined_factor`
+    counts the rows with an undefined factor and `uq.rotated_grid` those among them on a rotated
+    grid.
+  - The measurement, once per exposure (`cuphoton.xpois.empirical_correlation_factor`): the closed
+    form models the resampling of independent reference pixels through the kernel and nothing
+    else, so a coadd's own pixel correlation or faint sources in the windows escape it. The chain
+    measures the squared robust spread of the weighted sums over their diagonal prediction at up to
+    `uq.correlation_positions` empty positions, for the PSF-flux weights and the two
+    position-derivative weights. Empty means a usable pixel more than one window from every
+    candidate, star and loud pixel (a residual more than 5 robust sigmas from the median;
+    `positions_excluded_loud` counts the pixels that rule removed).
+  The exposure uses the measured factor for a weighting only where it exceeds 1 and exceeds the
+  median closed form at the same positions by more than two standard errors of the measurement,
+  `f * sqrt(2 / (n - 1))` over `n` positions; otherwise the closed form stands. Each quantity's `f`
+  is then its own closed form, or the measured factor where the exposure chose it and it exceeds
+  the candidate's closed form; such rows carry `uq_corr_measured` (`uq.corr_measured` counts them)
+  and the kernel-mismatch fit at the stars uses the same factor. `summary.json` writes
+  `uq.correlation` with the positions used, `closed_form`, `measured`, `measured_se` and
+  `plain_ratio` per weighting (`psf_flux`, `position_x`, `position_y`), and `source` (`"measured"`
+  or `"closed_form"`; null without a template variance, where the measured values are reported as
+  the diagonal plane's under-prediction but not applied). `uq.measure_correlation: false` skips the
+  measurement.
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
@@ -391,8 +404,8 @@ center's stamp over both lobes).
 - `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
   reported with its provenance and kept out of the pixel-frame columns.
 
-Masked pixels (a bad pixel of either image, a non-finite residual or variance, the edge of the
-image) do not cost a candidate its error bar. A quantity's weighted sums run over the usable
+Masked pixels (a bad pixel of either image, a non-finite residual, target variance or template
+variance, the edge of the image) do not cost a candidate its error bar. A quantity's weighted sums run over the usable
 pixels of its window, with zero weight on the rest and the normalization taken over the usable
 ones, and its correlation factor is computed over the same pixels
 (`cuphoton.xpois.correlation_factor(valid=...)`); the row is flagged `uq_window_masked` so a user
@@ -410,8 +423,9 @@ usable. A term the item could not compute is written as 0 and `summary.json` rec
 that went into the bars (`uq_terms`) with the reason for each one left out (`uq.excluded`), the
 kernel-fit form, the kernel-mismatch fit at the stars (`eta`, the stars used and the median
 residual-to-reference flux ratio), the window sizes and the counts of rows with an invalid window
-(`uq.invalid_window`), a renormalized one (`uq.masked_window`), an undefined factor and a capped
-sensitivity. `uq.enabled: false` writes
+(`uq.invalid_window`), a renormalized one (`uq.masked_window`), an undefined factor
+(`uq.undefined_factor`, of which `uq.rotated_grid` on a rotated grid) and a capped sensitivity
+(`uq.sensitivity_capped`). `uq.enabled: false` writes
 `<q>_err = <q>_err_fit`, zero terms and `uq_valid` true.
 
 The xFit standard errors come from the target's variance plane. The template's noise, carried

@@ -175,8 +175,8 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
         "bool",
         "uq",
         "the corr term of at least one quantity of the row uses the "
-        "exposure's correlation factor measured at empty positions, which "
-        "exceeded the closed form there (summary uq.correlation)",
+        "exposure's correlation factor measured at empty positions instead "
+        "of the quantity's closed form (summary uq.correlation)",
     ),
     "sky_err_arcsec": (
         "float64",

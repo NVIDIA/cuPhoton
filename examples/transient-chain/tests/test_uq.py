@@ -242,6 +242,7 @@ def test_total_is_the_quadrature_and_never_below_the_fit_term(scene):
     assert np.all(c["psf_flux_err_kfit"][valid] > 0)
     assert np.all(c["center_x_err_kfit"][valid] > 0)
     assert res.diagnostics["invalid_window"] == 1
+    assert res.diagnostics["undefined_factor"] == 0
     assert res.diagnostics["rotated_grid"] == 0
 
 
@@ -408,8 +409,51 @@ def test_reference_variance_adds_the_correlation_term(scene):
     res = uq.budget(ctx, **scene.inputs())
     assert not res.columns["uq_valid"].any()
     assert res.diagnostics["rotated_grid"] == len(scene.cand)
+    assert res.diagnostics["undefined_factor"] == len(scene.cand)
     with pytest.raises(ValueError, match="given together"):
         scene.context(reference_variance=plane)
+
+
+def test_nan_reference_variance_pixel_is_a_masked_pixel(scene):
+    """A finite residual pixel whose reference variance is NaN (the
+    reprojection spread a bad variance pixel further than the image's) is
+    a masked pixel: the candidate keeps every bar over the usable pixels
+    and is flagged, instead of losing its factor.
+    """
+    from cuphoton.xrep import resampling_weights_at
+
+    def resampling(x, y):
+        return resampling_weights_at(
+            lambda c: np.asarray(c, dtype=float) + 0.5,
+            x,
+            y,
+            interpolation="lanczos3",
+        )
+
+    plane = np.full((SIZE, SIZE), 4.0)
+    cx, cy = scene.cand[0]
+    plane[cy - 3, cx + 2] = np.nan  # inside the flux and lobe windows
+    ctx = scene.context(reference_variance=plane, resampling=resampling)
+    assert not ctx.valid_plane[cy - 3, cx + 2]
+    res = uq.budget(ctx, **scene.inputs())
+    c = res.columns
+    assert c["uq_valid"].tolist() == [True, True, True, False]
+    assert c["uq_window_masked"].tolist() == [True, False, False, False]
+    assert res.diagnostics["undefined_factor"] == 0
+    assert res.diagnostics["rotated_grid"] == 0
+    for q in QUANTITIES:
+        assert np.isfinite(c[f"{q}_err"][:3]).all()
+        assert c[f"{q}_err_corr"][0] > 0
+    clean = uq.budget(
+        scene.context(
+            reference_variance=np.full((SIZE, SIZE), 4.0),
+            resampling=resampling,
+        ),
+        **scene.inputs(),
+    ).columns
+    assert c["psf_flux_err"][0] == pytest.approx(
+        clean["psf_flux_err"][0], rel=0.05
+    )
 
 
 def test_corr_term_follows_the_template_provider_variance(scene):
@@ -428,19 +472,48 @@ def test_corr_term_follows_the_template_provider_variance(scene):
     for q in QUANTITIES:
         np.testing.assert_array_equal(c[f"{q}_err_corr"][c["uq_valid"]], 0.0)
 
-    plane = np.full(scene.reference.shape, 4.0)
-    with_plane = GridTemplate(image, None, np, variance=plane)
-    with_plane.build()
-    ctx = scene.context(
-        reference_variance=with_plane.variance(),
-        resampling=with_plane.resampling,
-    )
-    assert "corr" in ctx.terms
-    c = uq.budget(ctx, **scene.inputs()).columns
+    # a reference far noisier than the target (variance 100 against 9), so
+    # the corr term is well above the noise of the fit term and follows
+    # the plane by hand
+    from cuphoton.xpois import correlation_factor, psf_weights
+
+    out = {}
+    for level in (4.0, 100.0):
+        plane = np.full(scene.reference.shape, level)
+        with_plane = GridTemplate(image, None, np, variance=plane)
+        with_plane.build()
+        ctx = scene.context(
+            reference_variance=with_plane.variance(),
+            resampling=with_plane.resampling,
+        )
+        assert "corr" in ctx.terms
+        out[level] = uq.budget(ctx, **scene.inputs()).columns
+    c = out[100.0]
     valid = c["uq_valid"]
     assert valid.tolist() == [True, True, True, False]
     for q in QUANTITIES:
         assert np.all(c[f"{q}_err_corr"][valid] > 0)
+        assert np.all(
+            c[f"{q}_err_corr"][valid] > 2 * out[4.0][f"{q}_err_corr"][valid]
+        )
+    size = ctx.window
+    for i in range(3):
+        fx, fy = scene.cand[i] + (0.3, -0.2)
+        off = np.array([[fx - np.rint(fx), fy - np.rint(fy)]])
+        psf = psf_weights(PSF, size, offset=off)[0]
+        w = psf / NOISE**2
+        w /= (w * psf).sum()
+        f = correlation_factor(
+            w[None],
+            kernel=scene.kernel,
+            target_variance=NOISE**2,
+            reference_variance=100.0,
+            resampling_weights=np.ones((1, 1)),
+        ).factor[0]
+        assert f > 1.5
+        assert c["psf_flux_err_corr"][i] ** 2 == pytest.approx(
+            40.0**2 * (f - 1.0), rel=1e-9
+        )
 
 
 def test_fit_only_writes_zero_terms(scene):
@@ -777,6 +850,160 @@ def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
         )
 
 
+def _half_pixel_resampling(x, y):
+    from cuphoton.xrep import resampling_weights_at
+
+    return resampling_weights_at(
+        lambda c: np.asarray(c, dtype=float) + 0.5,
+        x,
+        y,
+        interpolation="lanczos3",
+    )
+
+
+@pytest.mark.parametrize(
+    "closed, measured, flagged, applied",
+    [
+        (0.8, np.nan, False, 1.0),  # closed form below 1, nothing measured
+        (0.8, 0.9, False, 1.0),  # measured above closed but below 1
+        (1.4, 1.2, False, 1.4),  # measured below closed
+        (1.4, 1.6, True, 1.6),  # measured wins
+        (np.nan, 1.6, False, np.nan),  # undefined closed form stays NaN
+    ],
+)
+def test_measured_flag_follows_the_choice_not_the_floor(
+    scene, monkeypatch, closed, measured, flagged, applied
+):
+    """``uq_corr_measured`` and the corr term follow the choice between
+    the candidate's closed form and the exposure's measured factor, made
+    before the floor at 1: a closed form below 1 floored to 1 is not a
+    measured factor.
+    """
+    import dataclasses
+
+    original = uq._estimator_terms
+
+    def fixed(ctx, w, pos):
+        f, kfit, rot = original(ctx, w, pos)
+        return np.where(np.isfinite(f), closed, f), kfit, rot
+
+    monkeypatch.setattr(uq, "_estimator_terms", fixed)
+    plane = np.full((SIZE, SIZE), 4.0)
+    ctx = scene.context(
+        reference_variance=plane, resampling=_half_pixel_resampling
+    )
+    correlation = {
+        "measured": dict.fromkeys(uq.MEASURED_WEIGHTINGS, measured),
+        "source": dict.fromkeys(
+            uq.MEASURED_WEIGHTINGS,
+            "measured" if np.isfinite(measured) else "closed_form",
+        ),
+        "control_bytes": 0,
+    }
+    ctx = dataclasses.replace(ctx, correlation=correlation)
+    res = uq.budget(ctx, **scene.inputs())
+    c = res.columns
+    expect = [flagged, flagged, flagged, False]
+    assert c["uq_corr_measured"].tolist() == expect
+    assert res.diagnostics["corr_measured"] == 3 * flagged
+    fit = scene.inputs()["err_fit"]["psf_flux"]
+    if np.isnan(applied):
+        assert not c["uq_valid"].any()
+        assert np.isnan(c["psf_flux_err_corr"]).all()
+        assert res.diagnostics["undefined_factor"] == 4
+    else:
+        np.testing.assert_allclose(
+            c["psf_flux_err_corr"][:3] ** 2, fit[:3] ** 2 * (applied - 1.0)
+        )
+
+
+@pytest.mark.parametrize(
+    "multiple, source", [(1.0, "closed_form"), (3.0, "measured")]
+)
+def test_measured_factor_applies_beyond_two_standard_errors(
+    scene, monkeypatch, multiple, source
+):
+    """The exposure chooses the measured factor only where it exceeds the
+    closed form by more than two standard errors ``f sqrt(2 / (n - 1))``;
+    one standard error above is noise, three is a detection.
+    """
+    from cuphoton.xpois import EmpiricalCorrelationFactor
+
+    plane = np.full((SIZE, SIZE), 4.0)
+    base = scene.context(
+        reference_variance=plane,
+        resampling=_half_pixel_resampling,
+        candidates=scene.cand.astype(float),
+    )
+    closed = np.array(
+        [base.correlation["closed_form"][k] for k in uq.MEASURED_WEIGHTINGS]
+    )
+    n = base.correlation["positions_used"]
+    assert n >= 200
+    # solve m = c + multiple * se(m) with se(m) = m sqrt(2 / (n - 1))
+    m = closed / (1.0 - multiple * np.sqrt(2.0 / (n - 1)))
+    original = uq.empirical_correlation_factor
+
+    def inflated(*args, **kwargs):
+        real = original(*args, **kwargs)
+        return EmpiricalCorrelationFactor(
+            factor=m * 1.0001 if source == "measured" else m * 0.9999,
+            positions_used=real.positions_used,
+            plain_ratio=real.plain_ratio,
+        )
+
+    monkeypatch.setattr(uq, "empirical_correlation_factor", inflated)
+    ctx = scene.context(
+        reference_variance=plane,
+        resampling=_half_pixel_resampling,
+        candidates=scene.cand.astype(float),
+    )
+    corr = ctx.correlation
+    assert corr["positions_used"] == n
+    for j, name in enumerate(uq.MEASURED_WEIGHTINGS):
+        assert corr["measured"][name] > corr["closed_form"][name]
+        assert corr["measured_se"][name] == pytest.approx(
+            corr["measured"][name] * np.sqrt(2.0 / (n - 1))
+        )
+        assert corr["source"][name] == source
+        f = ctx.measured_factor(
+            "psf_flux" if j == 0 else f"positive_{name[-1]}"
+        )
+        assert np.isfinite(f) == (source == "measured")
+    res = uq.budget(ctx, **scene.inputs())
+    assert res.columns["uq_corr_measured"].tolist() == [
+        source == "measured"
+    ] * 3 + [False]
+
+
+def test_loud_pixels_are_not_empty_positions():
+    """A hot pixel far from every candidate removes the usable pixels
+    within one window of it from the empty positions (five robust sigmas,
+    one window of keepout); the count is recorded. The planted transients
+    are loud too, so their keepout reaches past the candidate pixel's own.
+    """
+    quiet = Scene(n_stars=0)
+    kw = {"fit": None}  # a flat reference has no kernel fit
+    before = quiet.context(
+        candidates=quiet.cand.astype(float), **kw
+    ).correlation
+    assert before["positions_excluded_loud"] > 0
+    loud = Scene(n_stars=0)
+    size = quiet.context(**kw).window
+    # the hot pixel's square of exclusion is more than two windows plus the
+    # transients' wings from every candidate and clear of the masked block
+    # and the edge, so the count grows by the full square
+    x, y = 105, 105
+    assert np.all(np.abs(loud.cand - (x, y)).max(axis=1) > 2 * size + 6)
+    loud.residual[y, x] = 1000.0
+    after = loud.context(candidates=loud.cand.astype(float), **kw).correlation
+    assert (
+        after["positions_excluded_loud"] - before["positions_excluded_loud"]
+        == (2 * size + 1) ** 2
+    )
+    assert after["positions_used"] >= 200
+
+
 def test_correlation_factor_is_not_evaluated_when_excluded(
     scene, monkeypatch
 ):
@@ -845,19 +1072,28 @@ def test_error_budget_runs_step_8c(scene, enabled):
         assert summary["kernel_fit_form"] == "plain"
         assert summary["invalid_window"] == 1
         assert summary["masked_window"] == 0
+        assert summary["undefined_factor"] == 0
         assert summary["corr_measured"] == 0
         corr = summary["correlation"]
-        assert corr["positions_used"] >= 20
+        # the accounting fields stay out of the summary
+        assert "control_bytes" not in corr
+        assert "positions_requested" not in corr
+        used = corr["positions_used"]
+        assert used >= 20 and corr["positions_excluded_loud"] >= 0
         assert set(corr["measured"]) == set(uq.MEASURED_WEIGHTINGS)
         # white noise: the measured factor is near 1; the term is excluded
         # (no reference variance), so nothing is applied
         for name in uq.MEASURED_WEIGHTINGS:
-            assert corr["measured"][name] == pytest.approx(1.0, abs=0.2)
+            m = corr["measured"][name]
+            assert m == pytest.approx(1.0, abs=0.2)
+            assert corr["measured_se"][name] == pytest.approx(
+                m * np.sqrt(2.0 / (used - 1))
+            )
             assert corr["closed_form"][name] == 1.0
             assert corr["source"][name] is None
         mismatch_bytes = 3 * summary["kernel_mismatch"]["n"] * 8
         assert res.control_bytes == (
-            3 * n * 2 * 8 + 6 * n + 9 * 8 + mismatch_bytes
+            3 * n * 2 * 8 + 7 * n + 9 * 8 + mismatch_bytes
         )
         assert "control_bytes" not in summary["kernel_mismatch"]
         assert np.all(cols["center_x_err"][:3] > 0.05)
