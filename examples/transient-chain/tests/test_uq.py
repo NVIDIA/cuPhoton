@@ -700,6 +700,83 @@ def test_masked_window_keeps_the_error_bar_and_sets_the_flag():
         )
 
 
+@pytest.mark.parametrize("measure", [True, False])
+def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
+    """Target noise correlated by a 2x2 box (the sum over lags of its
+    autocorrelation is 4): the closed form, which models the reference's
+    resampling alone, stays near 1.5 while the factor measured at empty
+    positions is near 4 for the PSF-flux weights, and the corr term uses
+    it. With the measurement off the closed form alone is used.
+    """
+    from cuphoton.xrep import resampling_weights_at
+
+    def resampling(x, y):
+        return resampling_weights_at(
+            lambda c: np.asarray(c, dtype=float) + 0.5,
+            x,
+            y,
+            interpolation="lanczos3",
+        )
+
+    rng = np.random.default_rng(7)
+    s = Scene(seed=7)
+    # unit-variance noise correlated over 2x2 pixels
+    h = np.full((2, 2), 0.5)
+    correlated = fftconvolve(rng.normal(size=(SIZE, SIZE)), h, mode="same")
+    assert correlated.var() == pytest.approx(1.0, rel=0.05)
+    # rebuild the target: matched reference + planted transients + noise
+    transients = _gaussians(s.cand[:, 0] + 0.3, s.cand[:, 1] - 0.2, s.flux)
+    s.target = s.matched + transients + NOISE * correlated
+    s.residual = s.target - s.matched
+    s.residual[150:170, 30:46] = np.nan
+    plane = np.full((SIZE, SIZE), 4.0)
+    ctx = s.context(
+        reference_variance=plane,
+        resampling=resampling,
+        candidates=s.cand.astype(float),
+        measure=measure,
+    )
+    assert ctx.terms == ("corr", "kfit", "kmatch", "mis")
+    res = uq.budget(ctx, **s.inputs())
+    c = res.columns
+    valid = c["uq_valid"]
+    assert valid.tolist() == [True, True, True, False]
+    if not measure:
+        assert ctx.correlation is None
+        assert not c["uq_corr_measured"].any()
+        assert res.diagnostics["correlation"] is None
+        return
+    corr = ctx.correlation
+    assert corr["positions_used"] >= 200
+    kernel_power = float((s.kernel**2).sum())
+    # the box-correlated noise against the diagonal plane 9 + 4 k^2
+    expected = (NOISE**2 * 4.0 + 4.0 * kernel_power) / (
+        NOISE**2 + 4.0 * kernel_power
+    )
+    assert corr["measured"]["psf_flux"] == pytest.approx(expected, rel=0.25)
+    # the closed form knows only the reference's resampling (variance 4
+    # against the target's 9 through a half-pixel Lanczos footprint)
+    assert corr["closed_form"]["psf_flux"] == pytest.approx(1.5, abs=0.3)
+    for name in uq.MEASURED_WEIGHTINGS:
+        assert corr["measured"][name] > 1.5 * corr["closed_form"][name]
+        assert corr["source"][name] == "measured"
+    assert c["uq_corr_measured"].tolist() == [True, True, True, False]
+    assert res.diagnostics["corr_measured"] == 3
+    # the flux term carries the measured factor: fit^2 (m - 1)
+    fit = s.inputs()["err_fit"]["psf_flux"]
+    m = corr["measured"]["psf_flux"]
+    np.testing.assert_allclose(
+        c["psf_flux_err_corr"][valid] ** 2, fit[valid] ** 2 * (m - 1.0)
+    )
+    for a in "xy":
+        m = corr["measured"][f"position_{a}"]
+        fit = s.inputs()["err_fit"][f"positive_{a}"]
+        np.testing.assert_allclose(
+            c[f"positive_{a}_err_corr"][valid] ** 2,
+            fit[valid] ** 2 * (m - 1.0),
+        )
+
+
 def test_correlation_factor_is_not_evaluated_when_excluded(
     scene, monkeypatch
 ):
@@ -768,8 +845,20 @@ def test_error_budget_runs_step_8c(scene, enabled):
         assert summary["kernel_fit_form"] == "plain"
         assert summary["invalid_window"] == 1
         assert summary["masked_window"] == 0
+        assert summary["corr_measured"] == 0
+        corr = summary["correlation"]
+        assert corr["positions_used"] >= 20
+        assert set(corr["measured"]) == set(uq.MEASURED_WEIGHTINGS)
+        # white noise: the measured factor is near 1; the term is excluded
+        # (no reference variance), so nothing is applied
+        for name in uq.MEASURED_WEIGHTINGS:
+            assert corr["measured"][name] == pytest.approx(1.0, abs=0.2)
+            assert corr["closed_form"][name] == 1.0
+            assert corr["source"][name] is None
         mismatch_bytes = 3 * summary["kernel_mismatch"]["n"] * 8
-        assert res.control_bytes == 3 * n * 2 * 8 + 5 * n + mismatch_bytes
+        assert res.control_bytes == (
+            3 * n * 2 * 8 + 6 * n + 9 * 8 + mismatch_bytes
+        )
         assert "control_bytes" not in summary["kernel_mismatch"]
         assert np.all(cols["center_x_err"][:3] > 0.05)
     else:
@@ -778,6 +867,7 @@ def test_error_budget_runs_step_8c(scene, enabled):
         np.testing.assert_array_equal(cols["center_x_err"], 0.05)
         np.testing.assert_array_equal(cols["psf_flux_err"], 40.0)
         assert cols["uq_valid"].all() and not cols["uq_window_masked"].any()
+        assert not cols["uq_corr_measured"].any()
 
 
 @pytest.mark.parametrize("stars", ["kept", "too_few", "rejected"])

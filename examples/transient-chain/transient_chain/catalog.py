@@ -171,6 +171,13 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
         "a valid quantity's window holds a masked pixel: its weighted sums "
         "and correlation factor were taken over the usable pixels",
     ),
+    "uq_corr_measured": (
+        "bool",
+        "uq",
+        "the corr term of at least one quantity of the row uses the "
+        "exposure's correlation factor measured at empty positions, which "
+        "exceeded the closed form there (summary uq.correlation)",
+    ),
     "sky_err_arcsec": (
         "float64",
         "uq",

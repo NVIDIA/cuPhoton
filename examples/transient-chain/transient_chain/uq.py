@@ -11,7 +11,11 @@ For ``center_x``, ``center_y``, ``positive_x``, ``positive_y`` and
 
 - ``corr``: the fit term times ``sqrt(f - 1)``, ``f`` the correlation factor
   of the quantity's weighted sum against the diagonal variance plane the
-  fit used (``cuphoton.xpois.correlation_factor``).
+  fit used: the larger of the closed form at the candidate
+  (``cuphoton.xpois.correlation_factor``) and the factor measured once per
+  exposure at empty positions of the residual
+  (``cuphoton.xpois.empirical_correlation_factor``), which also catches
+  correlation the closed form does not model.
 - ``kfit``: the variance the kernel fit's own uncertainty adds to the same
   weighted sum (``cuphoton.xpois.kernel_fit_variance``), in the quantity's
   units.
@@ -53,6 +57,7 @@ import numpy as np
 
 from cuphoton.xpois import (
     correlation_factor,
+    empirical_correlation_factor,
     kernel_fit_covariance,
     kernel_fit_variance,
     psf_weights,
@@ -73,6 +78,10 @@ MIN_MISMATCH_STARS = 5
 # a quantity keeps its error bar while at least this fraction of its
 # window's pixels is usable; the sums run over the usable pixels
 MIN_USABLE_FRACTION = 0.5
+# the weightings the exposure's correlation factor is measured for, and the
+# one each budget quantity uses
+MEASURED_WEIGHTINGS = ("psf_flux", "position_x", "position_y")
+MIN_MEASURE_POSITIONS = 20
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,21 @@ class BudgetContext:
     terms: tuple[str, ...]
     excluded: dict[str, str]
     control_bytes: int = 0
+    correlation: dict[str, Any] | None = None  # measured_correlation's
+
+    def measured_factor(self, quantity: str) -> float:
+        """The exposure's measured correlation factor for ``quantity``'s
+        weighting, NaN when none applies to the corr term.
+        """
+        if self.correlation is None or "corr" not in self.terms:
+            return math.nan
+        name = (
+            "psf_flux"
+            if quantity == "psf_flux"
+            else f"position_{quantity[-1]}"
+        )
+        value = self.correlation["measured"].get(name)
+        return math.nan if value is None else float(value)
 
 
 @dataclass(frozen=True)
@@ -111,12 +135,17 @@ class BudgetResult:
     values: Any
     valid: np.ndarray
     masked: np.ndarray
+    corr_measured: np.ndarray
     terms: tuple[str, ...]
     diagnostics: dict[str, Any]
     control_bytes: int = 0
 
     def _flags(self) -> dict[str, np.ndarray]:
-        return {"uq_valid": self.valid, "uq_window_masked": self.masked}
+        return {
+            "uq_valid": self.valid,
+            "uq_window_masked": self.masked,
+            "uq_corr_measured": self.corr_measured,
+        }
 
     @property
     def columns(self) -> dict[str, Any]:
@@ -151,6 +180,9 @@ def build_context(
     fit=None,
     reference_variance=None,
     resampling: Callable[[Any, Any], Any] | None = None,
+    candidates: np.ndarray | None = None,
+    measure: bool = True,
+    measure_positions: int = 1000,
 ) -> BudgetContext:
     """Compute once per item what every candidate's budget shares.
 
@@ -165,9 +197,13 @@ def build_context(
     ``cuphoton.xrep.ResamplingWeights`` at target pixels, for instance
     ``functools.partial(resampling_weights_at, spec, prepared=prepared)``
     with the template's ``ReprojectionSpec``; both None when the reference
-    has no variance plane, which leaves the correlation term at zero. A term
-    that cannot be computed is left out of ``terms`` with its reason in
-    ``excluded``.
+    has no variance plane, which leaves the correlation term at zero. With
+    ``measure`` and ``candidates`` (N, 2), the exposure's correlation factor
+    is measured at up to ``measure_positions`` empty positions, away from
+    the candidates and the stars (:func:`measured_correlation`); the corr
+    term then uses the larger of the closed form and the measured value. A
+    term that cannot be computed is left out of ``terms`` with its reason
+    in ``excluded``.
     """
     xp = ops.array_module(residual)
     excluded: dict[str, str] = {}
@@ -245,6 +281,16 @@ def build_context(
         terms=tuple(t for t in TERMS if t not in excluded),
         excluded=excluded,
     )
+    if measure and candidates is not None and window is not None:
+        ctx = dataclasses.replace(
+            ctx,
+            correlation=measured_correlation(
+                ctx,
+                np.asarray(candidates, dtype=np.float64),
+                None if star_xy is None else np.asarray(star_xy),
+                n_positions=int(measure_positions),
+            ),
+        )
     if "kmatch" in ctx.terms:
         mismatch = kernel_mismatch(ctx, np.asarray(star_xy, dtype=np.float64))
         ctx = dataclasses.replace(
@@ -253,6 +299,116 @@ def build_context(
             kernel_mismatch=mismatch,
         )
     return ctx
+
+
+def measured_correlation(
+    ctx: BudgetContext,
+    candidates: np.ndarray,
+    star_xy: np.ndarray | None,
+    *,
+    n_positions: int = 1000,
+) -> dict[str, Any]:
+    """The exposure's correlation factor measured at empty positions, for
+    the PSF-flux weights and the two position-derivative weights, beside
+    the closed form at the same positions.
+
+    Empty positions are usable pixels farther than one window from every
+    candidate and star, taken evenly over the image. The measured factor is
+    the squared robust spread of the weighted sums over their diagonal
+    prediction (``empirical_correlation_factor`` on the residual and the
+    diagonal plane the fit used, with the reference's variance where it
+    exists); the closed form is the median of ``correlation_factor`` at the
+    same positions, 1 when the reference has no variance plane. Each
+    weighting's ``source`` says which the corr term uses: ``"measured"``
+    where it exceeds the closed form, ``"closed_form"`` otherwise, None
+    when the corr term is excluded.
+    """
+    xp = ops.array_module(ctx.residual)
+    ny, nx = ctx.residual.shape
+    size = ctx.window
+    out: dict[str, Any] = {
+        "positions_requested": int(n_positions),
+        "positions_used": 0,
+        "window_px": size,
+        "closed_form": dict.fromkeys(MEASURED_WEIGHTINGS),
+        "measured": dict.fromkeys(MEASURED_WEIGHTINGS),
+        "plain_ratio": dict.fromkeys(MEASURED_WEIGHTINGS),
+        "source": dict.fromkeys(MEASURED_WEIGHTINGS),
+        "control_bytes": 0,
+    }
+    # pixels within a window of a candidate or a star are not empty
+    taken = [candidates] + ([] if star_xy is None else [star_xy])
+    xy = np.rint(np.concatenate(taken, axis=0)).astype(int)
+    inside = (
+        (xy[:, 0] >= 0) & (xy[:, 0] < nx) & (xy[:, 1] >= 0) & (xy[:, 1] < ny)
+    )
+    xy = xy[inside]
+    near = xp.zeros((ny, nx), dtype=bool)
+    if len(xy):
+        near[xp.asarray(xy[:, 1]), xp.asarray(xy[:, 0])] = True
+        near = ops.ndimage_for(xp).maximum_filter(
+            near, size=2 * size + 1, mode="constant"
+        )
+    flat = xp.flatnonzero(ctx.valid_plane & ~near)
+    count = int(flat.shape[0])
+    if count < MIN_MEASURE_POSITIONS:
+        return out
+    pick = flat[
+        xp.rint(
+            xp.linspace(0.0, count - 1.0, min(int(n_positions), count))
+        ).astype(xp.int64)
+    ]
+    pos = xp.stack([pick % nx, pick // nx], axis=1).astype(xp.float64)
+    weights = xp.stack(
+        [
+            psf_weights(ctx.psf_sigma, size, xp=xp),
+            psf_weights(ctx.psf_sigma, size, derivative="x", xp=xp),
+            psf_weights(ctx.psf_sigma, size, derivative="y", xp=xp),
+        ]
+    )
+    diagonal = ctx.weights_plane
+    if ctx.reference_variance is not None:
+        diagonal = diagonal + ctx.reference_variance * float(
+            (xp.asarray(ctx.kernel) ** 2).sum()
+        )
+    measured = empirical_correlation_factor(
+        ctx.residual, diagonal, weights, pos
+    )
+    out["positions_used"] = int(measured.positions_used)
+    if measured.positions_used < MIN_MEASURE_POSITIONS:
+        return out
+    closed = xp.ones(len(MEASURED_WEIGHTINGS), dtype=xp.float64)
+    if "corr" in ctx.terms:
+        at = ctx.resampling(pos[:, 0], pos[:, 1])
+        closed = xp.stack(
+            [
+                xp.nanmedian(
+                    correlation_factor(
+                        w,
+                        kernel=ctx.kernel,
+                        target_variance=ctx.target_variance,
+                        reference_variance=ctx.reference_variance,
+                        resampling_weights=at.weights,
+                        positions=pos,
+                        is_translation=at.is_translation,
+                        valid=ctx.valid_plane,
+                    ).factor
+                )
+                for w in weights
+            ]
+        )
+    values = ops.to_host(
+        xp.stack([closed, measured.factor, measured.plain_ratio])
+    )
+    out["control_bytes"] = int(values.nbytes)
+    for j, name in enumerate(MEASURED_WEIGHTINGS):
+        c, m, plain = (float(v) for v in values[:, j])
+        out["closed_form"][name] = c
+        out["measured"][name] = m if math.isfinite(m) else None
+        out["plain_ratio"][name] = plain if math.isfinite(plain) else None
+        if "corr" in ctx.terms and math.isfinite(m):
+            out["source"][name] = "measured" if m > c else "closed_form"
+    return out
 
 
 # --- windows and weighted sums ---------------------------------------------
@@ -354,6 +510,15 @@ def _estimator_terms(ctx: BudgetContext, weights, pos):
         )
         kfit = xp.where(xp.isfinite(kfit), kfit, 0.0)
     return factor, kfit
+
+
+def _larger_factor(xp, closed, measured: float):
+    """``max(closed, measured)`` per candidate where the closed form is
+    defined (NaN stays NaN) and a measured factor exists.
+    """
+    if not math.isfinite(measured):
+        return closed
+    return xp.where(xp.isfinite(closed), xp.maximum(closed, measured), closed)
 
 
 # --- forced fluxes ---------------------------------------------------------
@@ -459,6 +624,7 @@ def kernel_mismatch(ctx: BudgetContext, star_xy: np.ndarray) -> dict:
     )
     w, _ = _matched_filter(xp, _inverse_variance(ctx, pos, ctx.window), psf)
     f, kfit = _estimator_terms(ctx, w, pos)
+    f = _larger_factor(xp, f, ctx.measured_factor("psf_flux"))
     base = ud**2 * xp.where(f > 1.0, f, 1.0) + kfit
     ok = (
         (_usable_fraction(ctx, pos) == 1.0)
@@ -627,6 +793,8 @@ def budget(
         xp.stack([pos["center"], pos["positive"], pos["flux"]])
     )
     control_bytes = ctx.control_bytes + int(host.nbytes)
+    if ctx.correlation is not None:
+        control_bytes += int(ctx.correlation["control_bytes"])
     model = xp.asarray(
         np.concatenate(
             [
@@ -769,11 +937,12 @@ def budget(
     names: list[str] = []
     rows: list[Any] = []
     valid = windows = true
-    undefined = masked = false
+    undefined = masked = measured = false
     for q in quantities:
         fit = xp.asarray(err_fit[q], dtype=xp.float64)
-        f = factor[q]
-        defined = xp.isfinite(f)
+        closed = factor[q]
+        defined = xp.isfinite(closed)
+        f = _larger_factor(xp, closed, ctx.measured_factor(q))
         f = xp.where(defined & (f > 1.0), f, 1.0)
         windows = windows & window_ok[q]
         undefined = undefined | ~defined
@@ -784,6 +953,7 @@ def budget(
         ok = window_ok[q] & defined & xp.isfinite(total)
         valid = valid & ok
         masked = masked | (ok & window_masked[q])
+        measured = measured | (ok & (f > xp.where(defined, closed, 1.0)))
         names += [f"{q}_err_{t}" for t in TERMS] + [f"{q}_err"]
         rows += [
             xp.where(defined, xp.sqrt(corr), xp.nan),
@@ -794,7 +964,9 @@ def budget(
         ]
     values = xp.stack(rows) if rows else xp.zeros((0, n), dtype=xp.float64)
     # one transfer: the flags the summary counts
-    flags = ops.to_host(xp.stack([valid, windows, undefined, capped, masked]))
+    flags = ops.to_host(
+        xp.stack([valid, windows, undefined, capped, masked, measured])
+    )
     control_bytes += int(flags.nbytes)
     diag.update(
         max_lobe_reach_px=max_lobe_reach_px,
@@ -803,15 +975,18 @@ def budget(
         masked_window=int(flags[4].sum()),
         rotated_grid=int(flags[2].sum()),
         sensitivity_capped=int(flags[3].sum()),
+        corr_measured=int(flags[5].sum()),
         center_window_px=None
         if ctx.window is None
         else ctx.window + 2 * reach,
+        correlation=ctx.correlation,
     )
     return BudgetResult(
         tuple(names),
         values,
         flags[0],
         flags[4],
+        flags[5],
         ctx.terms,
         diag,
         control_bytes,
@@ -840,6 +1015,7 @@ def fit_only(err_fit: dict[str, Any]) -> BudgetResult:
         values,
         np.ones(n, dtype=bool),
         np.zeros(n, dtype=bool),
+        np.zeros(n, dtype=bool),
         (),
         {"disabled": True},
     )
@@ -864,9 +1040,10 @@ def error_budget(
     ``lobe_flux`` on the device); ``single`` marks candidates with one
     supported lobe; ``psf_flux_error`` and ``photometry_xy`` come from
     forced photometry (None without it); ``fit`` and ``context`` are
-    :func:`build_context`'s inputs. With ``uq.enabled`` false the result is
-    :func:`fit_only`. Returns the result and the ``uq`` entry of the item
-    summary.
+    :func:`build_context`'s inputs, and ``uq.measure_correlation`` with
+    ``uq.correlation_positions`` drive the measured correlation factor.
+    With ``uq.enabled`` false the result is :func:`fit_only`. Returns the
+    result and the ``uq`` entry of the item summary.
     """
     err_fit = {
         f"{name}_{axis}": getattr(derived, f"{name}_{axis}_error")
@@ -878,7 +1055,13 @@ def error_budget(
     if not u_cfg["enabled"]:
         res = fit_only(err_fit)
         return res, {"terms": ["fit"], "excluded": {}, **res.diagnostics}
-    ctx = build_context(fit=fit if u_cfg["kernel_fit"] else None, **context)
+    ctx = build_context(
+        fit=fit if u_cfg["kernel_fit"] else None,
+        candidates=np.column_stack([cand_x, cand_y]).astype(np.float64),
+        measure=bool(u_cfg.get("measure_correlation", True)),
+        measure_positions=int(u_cfg.get("correlation_positions", 1000)),
+        **context,
+    )
     xp = ops.array_module(derived.center_x)
     cand = xp.asarray(np.stack([cand_x, cand_y]).astype(np.float64))
     res = budget(

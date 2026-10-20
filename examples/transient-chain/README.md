@@ -310,6 +310,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item; `<q>_err_corr` NaN where the factor is undefined |
 | `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where fewer than half of a quantity's window pixels are usable or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
 | `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
+| `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions, which exceeded the closed form there (`uq.correlation` in `summary.json`, next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
@@ -348,6 +349,21 @@ center's stamp over both lobes).
   "Other surveys"). When the survey supplies no template variance the term is 0, `summary.json`
   records `template_variance: false` and lists `corr` under `uq.excluded`. Where the grid mapping
   is not locally a translation the factor is undefined (`uq.rotated_grid` counts those rows).
+  The closed form models one source of correlation, the resampling of independent reference
+  pixels through the kernel; a coadd's own pixel correlation or faint sources inside the windows
+  are not in it. So once per exposure the chain also measures the factor
+  (`cuphoton.xpois.empirical_correlation_factor`) at up to `uq.correlation_positions` empty
+  positions, usable pixels more than one window from every candidate and star, for the PSF-flux
+  weights and the two position-derivative weights: the squared robust spread of the weighted sums
+  over their diagonal prediction. `summary.json` writes `uq.correlation` with `closed_form` (the
+  median closed form at those positions), `measured` and `plain_ratio` per weighting
+  (`psf_flux`, `position_x`, `position_y`), the positions used, and `source`: `"measured"` where
+  the measured value exceeds the closed form, `"closed_form"` otherwise. Each quantity's `f` is
+  the larger of its closed form and the exposure's measured value for its weighting; rows where
+  the measured value set a term carry `uq_corr_measured` (`uq.corr_measured` counts them), and
+  the kernel-mismatch fit at the stars uses the same factor. Without a template variance the
+  measured values are still reported, as the under-prediction of the diagonal plane, but not
+  applied. `uq.measure_correlation: false` skips the measurement.
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.

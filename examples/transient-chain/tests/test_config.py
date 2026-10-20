@@ -176,6 +176,8 @@ def test_uq_block_defaults_and_sky_term_rule():
         "enabled": True,
         "kernel_fit": True,
         "max_lobe_reach_px": 32,
+        "measure_correlation": True,
+        "correlation_positions": 1000,
         "sky_astrometry_arcsec": None,
         "sky_astrometry_source": None,
     }
