@@ -156,6 +156,28 @@ def test_large_damping_does_not_make_a_nonstationary_start_converged(lambda0):
     assert result.converged.tolist() == [False]
 
 
+def test_convergence_flag_includes_the_final_step_at_the_iteration_limit():
+    fx = synthetic_modes_trace(96)
+    start = modes_to_theta(fx.modes, fx.constant)[None, :]
+    start[:, [2, 6]] *= 1.05
+    at_limit = refine_modes_batched(
+        np, fx.time, fx.clean[None, :], start, 2, max_iter=5
+    )
+    past_limit = refine_modes_batched(
+        np, fx.time, fx.clean[None, :], start, 2, max_iter=6
+    )
+    assert at_limit.iterations == 5
+    np.testing.assert_array_equal(at_limit.theta, past_limit.theta)
+    model, jac = model_and_jacobian_batched(np, at_limit.theta, fx.time, 2)
+    resid = model - fx.clean
+    scale = np.linalg.norm(jac, axis=1)
+    scaled = jac / np.where(scale > 0, scale, 1.0)[:, None, :]
+    gradient = np.max(np.abs(np.einsum("bnp,bn->bp", scaled, resid)))
+    assert gradient <= 1e-9 * max(np.linalg.norm(resid), 1.0)
+    assert at_limit.converged.tolist() == [True]
+    assert past_limit.converged.tolist() == [True]
+
+
 @pytest.mark.parametrize("time_scale", [1e-9, 1.0, 1e9])
 @pytest.mark.parametrize("backend", ["numpy", "cupy"])
 def test_batched_convergence_is_independent_of_time_units(
