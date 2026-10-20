@@ -476,6 +476,111 @@ def test_partially_invalid_window_gives_nan():
     )
 
 
+@pytest.mark.parametrize("derivative", [None, "x", "y"])
+def test_masked_window_keeps_a_factor_near_the_full_window_value(derivative):
+    """A masked column (or a masked block from the column to the edge) at
+    1 to 10 px from the center: the factor over the remaining pixels stays
+    within 10% of the full-window value from 4 px on, and within 20% from
+    1 to 3 px, where the mask cuts into the weights' core; ``n_masked``
+    counts the pixels left out."""
+
+    kernel = _gaussian(15, 1.2)
+    stamp = _lanczos_stamp(0.5, 0.25)
+    size = 21
+    weights = psf_weights(2.0, size, derivative=derivative)[None]
+    common = dict(
+        kernel=kernel,
+        target_variance=4.0,
+        reference_variance=9.0,
+        resampling_weights=stamp,
+    )
+    full = correlation_factor(weights, **common)
+    assert full.n_masked.tolist() == [0]
+    for d in range(1, 11):
+        column = np.ones((1, size, size), bool)
+        column[0, :, size // 2 + d] = False
+        block = np.ones((1, size, size), bool)
+        block[0, :, size // 2 + d :] = False
+        for valid, masked in (
+            (column, size),
+            (block, size * (size // 2 - d + 1)),
+        ):
+            result = correlation_factor(weights, valid=valid, **common)
+            assert result.n_masked.tolist() == [masked]
+            assert masked < size * size / 2
+            ratio = result.factor[0] / full.factor[0]
+            assert abs(ratio - 1.0) < (0.2 if d <= 3 else 0.1), (d, ratio)
+    # more than half masked: the caller's limit, from n_masked
+    half = np.ones((1, size, size), bool)
+    half[0, :, size // 2 :] = False
+    result = correlation_factor(weights, valid=half, **common)
+    assert result.n_masked[0] > size * size / 2
+    assert np.isfinite(result.factor[0])
+    none = correlation_factor(
+        weights, valid=np.zeros((1, size, size), bool), **common
+    )
+    assert np.isnan(none.factor[0]) and none.n_masked.tolist() == [size**2]
+
+
+def test_masked_pixels_need_no_finite_variance_and_match_zero_weights():
+    """Masked pixels with NaN variance keep the factor, which equals the
+    factor of the same weights set to zero there with finite stamps; the
+    plane form cuts the validity plane around the positions."""
+
+    kernel = _gaussian(15, 1.2)
+    stamp = _lanczos_stamp(0.5, 0.25)
+    size = 21
+    w = np.broadcast_to(psf_weights(2.0, size), (2, size, size)).copy()
+    target = np.full((2, size, size), 4.0)
+    valid = np.ones((2, size, size), bool)
+    valid[0, 3:8, 5] = False
+    target[0, 3:8, 5] = np.nan
+    masked = correlation_factor(
+        w,
+        kernel=kernel,
+        target_variance=target,
+        reference_variance=9.0,
+        resampling_weights=stamp,
+        valid=valid,
+    )
+    assert np.isfinite(masked.factor).all()
+    assert masked.n_masked.tolist() == [5, 0]
+    zeroed = correlation_factor(
+        np.where(valid, w, 0.0),
+        kernel=kernel,
+        target_variance=np.where(valid, target, 4.0),
+        reference_variance=9.0,
+        resampling_weights=stamp,
+    )
+    np.testing.assert_allclose(masked.factor, zeroed.factor, rtol=1e-12)
+    assert masked.factor[0] != pytest.approx(masked.factor[1])
+
+    plane_target = np.full((80, 80), 4.0)
+    plane_valid = np.ones((80, 80), bool)
+    plane_valid[28:33, 25] = False  # stamp rows 3 to 7, column 5
+    positions = np.array([[30.0, 35.0], [60.0, 60.0]])
+    cut = correlation_factor(
+        psf_weights(2.0, size),
+        kernel=kernel,
+        target_variance=plane_target,
+        reference_variance=np.full((80, 80), 9.0),
+        resampling_weights=stamp,
+        positions=positions,
+        valid=plane_valid,
+    )
+    assert cut.n_masked.tolist() == [5, 0]
+    np.testing.assert_allclose(cut.factor, masked.factor, rtol=1e-12)
+    with pytest.raises(ValueError, match="valid must be"):
+        correlation_factor(
+            w,
+            kernel=kernel,
+            target_variance=target,
+            reference_variance=9.0,
+            resampling_weights=stamp,
+            valid=np.ones((3, size, size), bool),
+        )
+
+
 def test_pixel_ratio_mixes_the_resampling_factor_with_the_target_term():
     kernel = _gaussian(15, 1.2)
     stamp = _lanczos_stamp(0.3, 0.6)
