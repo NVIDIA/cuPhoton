@@ -175,19 +175,24 @@ def audit_terminal_records(
 
 def atomic_write_json(
     path: Path, payload: Mapping[str, Any], *, overwrite: bool = True
-) -> None:
-    """Atomically publish JSON; optionally require a new destination."""
+) -> bytes:
+    """Atomically publish JSON and return its exact serialized bytes.
+
+    Set ``overwrite=False`` to require a new destination. The returned bytes
+    can bind a descriptor's identity without rereading the published path.
+    """
 
     normalized = json_mapping(payload, field=f"payload for {path}")
+    encoded = (
+        json.dumps(normalized, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
         f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     )
     try:
-        with temporary.open("w", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(normalized, indent=2, sort_keys=True) + "\n"
-            )
+        with temporary.open("wb") as handle:
+            handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         if overwrite:
@@ -202,6 +207,7 @@ def atomic_write_json(
             os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
+    return encoded
 
 
 def read_json_mapping(path: Path) -> dict[str, Any]:

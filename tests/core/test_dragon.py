@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -678,6 +679,42 @@ def test_descriptor_tampering_fails_before_worker_factory(
     assert "SHA-256" in startup["error"]["message"]
     assert (result.run_dir / "startup/worker-0000.json").is_file()
     assert state.groups[0].closed
+
+
+def test_descriptor_digest_uses_bytes_before_publication_mutation(
+    monkeypatch, tmp_path
+):
+    state = _install_runtime(monkeypatch)
+    original_link = os.link
+    published = []
+
+    def mutate_published_descriptor(source, destination):
+        original_link(source, destination)
+        if (
+            destination.parent.name == "launch"
+            and destination.name == "worker-0000.json"
+        ):
+            encoded = destination.read_bytes()
+            published.append(encoded)
+            changed = encoded.replace(
+                b'"allow_loopback_alias": true',
+                b'"allow_loopback_alias": null',
+            )
+            assert changed != encoded and len(changed) == len(encoded)
+            destination.write_bytes(changed)
+
+    monkeypatch.setattr(os, "link", mutate_published_descriptor)
+    result = _run(tmp_path, worker_count=1)
+
+    assert len(published) == 1
+    template = state.groups[0].templates[0]
+    assert template.args[2] == hashlib.sha256(published[0]).hexdigest()
+    assert template.args[3]["descriptor_bytes"] == len(published[0])
+    assert result.status == "failed"
+    assert not state.factories
+    assert not state.calls
+    startup_error = result.summary["ready_messages"][0]["error"]
+    assert "SHA-256" in startup_error["message"]
 
 
 def test_later_failure_keeps_successful_warmup(monkeypatch, tmp_path):

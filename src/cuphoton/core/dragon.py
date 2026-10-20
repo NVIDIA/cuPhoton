@@ -491,8 +491,9 @@ def run_dragon_work_items(
             descriptor_path = (
                 run_dir / "launch" / f"worker-{placement.worker_id:04d}.json"
             )
-            atomic_write_json(descriptor_path, descriptor, overwrite=False)
-            encoded = descriptor_path.read_bytes()
+            encoded = atomic_write_json(
+                descriptor_path, descriptor, overwrite=False
+            )
             context = {
                 "run_dir": str(run_dir),
                 "worker_id": placement.worker_id,
