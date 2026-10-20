@@ -386,7 +386,9 @@ print(statistics.pixel_pooled.cardinal_lag1_rho)
 This is a fixed-kernel marginal-diagonal calculation. The reference variance
 is convolved with `kernel**2`; a non-unit kernel sum therefore applies its own
 photometric scaling. The calculation uses the completed fit's residual and
-leaves its weights and chi-square unchanged. The standardized residual
+leaves its weights and chi-square unchanged. The computation runs in CuPy
+when the planes or the kernel are CuPy arrays (direct `cupyx.scipy.ndimage`
+sums, no host round trip) and in NumPy otherwise. The standardized residual
 describes marginal noise under a fixed-kernel, independent-pixel model.
 Whitening or calibrated significance requires additional treatment of
 neighboring-pixel covariance, reference-target covariance, resampling
@@ -567,6 +569,47 @@ squared robust spread of the weighted sums at empty positions over their
 diagonal prediction, returned with the number of positions used and the
 plain variance ratio. It checks the closed form on any image, and tells
 whether a survey's variance plane already carries the correlation.
+
+Several weightings of the same windows (a flux and the two position
+derivatives, say) share the window cuts and, in `kernel_fit_variance`, the
+basis response: pass them as `(N, q, s, s)` weights to `correlation_factor`
+or `kernel_fit_variance` and read `(N, q)` results, the same numbers as `q`
+calls with `(N, s, s)` weights.
+
+## Measurements shared by consumers
+
+Three measurements that every consumer of a subtraction needs, on NumPy or
+CuPy planes:
+
+```python
+from cuphoton.xpois import empty_positions, forced_flux_at, kernel_centroid
+
+cx, cy = kernel_centroid(fit.kernel)  # pixels; NaN for a zero-sum kernel
+positions, n_loud = empty_positions(
+    noise.valid_mask,
+    exclude_xy=candidates_and_stars,  # (M, 2) x, y to keep one window from
+    window=21,
+    count=1000,
+    loud=(fit.residual, 5.0),  # residual pixels beyond 5 robust sigmas
+)
+photometry = forced_flux_at(
+    fit.residual, positions, psf_sigma, window=21, variance=variance,
+    local_sky=False,
+)
+```
+
+`kernel_centroid` is the kernel's first moment about its center pixel, the
+shift the fitted kernel applied to the reference; one host transfer of three
+values. `empty_positions` returns up to `count` usable pixels more than one
+window (Chebyshev distance) from every excluded position and from every
+loud pixel, taken at evenly spaced ranks over the empty pixels in raster
+order (a cumulative count and a `searchsorted`, no random draw and no
+compress), with the number of usable pixels the loud rule removed; the two
+counts are the one host transfer. `forced_flux_at` cuts windows of a full
+plane with `window_stamps`, subtracts each window's median when `local_sky`
+is true (a plane with sources, such as the matched reference), builds the
+Gaussian with `psf_weights` at the sub-pixel offsets and hands the stamps to
+`cuphoton.xfit.forced_psf_photometry`, whose result it returns.
 
 ## Distributed image-pair batches
 

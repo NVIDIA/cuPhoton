@@ -20,6 +20,7 @@ from .kernel_uncertainty import (
     kernel_fit_covariance,
     kernel_fit_variance,
 )
+from .measurement import empty_positions, forced_flux_at, kernel_centroid
 from .noise import (
     ConstantKernelNoiseResult,
     standardize_constant_kernel_residual,
@@ -79,9 +80,12 @@ __all__ = [
     "build_gaussian_polynomial_basis",
     "correlation_factor",
     "empirical_correlation_factor",
+    "empty_positions",
     "evaluate_background_model",
     "extract_centered_stamp",
+    "forced_flux_at",
     "inspect_hsc_data_tree",
+    "kernel_centroid",
     "kernel_fit_covariance",
     "kernel_fit_variance",
     "load_image_array",

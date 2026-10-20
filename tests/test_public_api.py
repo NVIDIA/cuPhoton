@@ -141,6 +141,38 @@ def test_research_solver_requires_module_qualified_import() -> None:
     assert not hasattr(xpois, "SpatialKernelDomain")
 
 
+def test_xpois_measurement_signatures_are_explicit() -> None:
+    assert {"empty_positions", "forced_flux_at", "kernel_centroid"} <= set(
+        xpois.__all__
+    )
+    assert list(inspect.signature(xpois.kernel_centroid).parameters) == [
+        "kernel"
+    ]
+    assert list(inspect.signature(xpois.empty_positions).parameters) == [
+        "valid",
+        "exclude_xy",
+        "window",
+        "count",
+        "loud",
+    ]
+    assert list(inspect.signature(xpois.forced_flux_at).parameters) == [
+        "plane",
+        "positions",
+        "psf_sigma",
+        "window",
+        "variance",
+        "local_sky",
+    ]
+    assert list(inspect.signature(xfit.forced_psf_photometry).parameters) == [
+        "images",
+        "variance",
+        "positions",
+        "psf_sigma",
+        "mask",
+        "psf",
+    ]
+
+
 def test_xpois_statistics_signature_is_explicit() -> None:
     assert list(
         inspect.signature(xpois.summarize_standardized_residuals).parameters
