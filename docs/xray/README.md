@@ -66,7 +66,9 @@ CUPHOTON_XRAY_HDF5_SELF_CONTAINED=1 cuphoton xray data-probe \
 The same setting applies to all xRay HDF5 workflows, including Python API
 calls, visualization, and reads on newly opened handles. Distributed plans
 created with it enabled retain it in their worker commands, including saved
-local and Slurm scripts. Leave it unset or set it to `0` for normal h5py
+local and Slurm scripts. Set the policy before starting a read: each open
+handle and threaded block reader retains its selected policy for its lifetime.
+Leave it unset or set it to `0` for normal h5py
 behavior; other nonempty values raise `ValueError`.
 
 In this mode, accessed objects must use in-file hard links and ordinary

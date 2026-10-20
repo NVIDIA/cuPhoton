@@ -13,10 +13,13 @@ import pytest
 
 from cuphoton.xray._hdf5_input import (
     SELF_CONTAINED_ENV,
-    hdf5_input_object,
+    hdf5_input_reader,
     self_contained_hdf5_input,
 )
-from cuphoton.xray.detector_artifacts import _read_hdf5_block
+from cuphoton.xray.detector_artifacts import (
+    _read_hdf5_block,
+    _ThreadedHdf5BlockReader,
+)
 from cuphoton.xray.detector_distributed import (
     _run_shard_command,
     build_detector_artifact_distributed_plan,
@@ -72,7 +75,7 @@ def test_in_file_cube_and_hard_alias_preserve_trace(tmp_path, hard_alias):
             h5.move("imgs", "storage/pixels")
             h5["imgs"] = h5["storage/pixels"]
             np.testing.assert_array_equal(
-                hdf5_input_object(h5, "/storage/pixels")[:], h5["imgs"][:]
+                hdf5_input_reader(h5)("/storage/pixels")[:], h5["imgs"][:]
             )
         metadata = h5.create_group("metadata")
         metadata["self"] = metadata
@@ -115,7 +118,7 @@ def test_reject_links_before_target_access(tmp_path, link_kind, message):
 
     with h5py.File(path, "r") as h5:
         with pytest.raises(ValueError, match=f"HDF5 input.*{message}"):
-            hdf5_input_object(h5, "pixels")
+            hdf5_input_reader(h5)("pixels")
 
 
 @pytest.mark.parametrize("link_kind", ["external", "soft"])
@@ -132,7 +135,7 @@ def test_reject_intermediate_link_before_target_access(tmp_path, link_kind):
         with pytest.raises(
             ValueError, match=f"HDF5 input.*{link_kind} links"
         ):
-            hdf5_input_object(h5, "/outside/pixels")
+            hdf5_input_reader(h5)("/outside/pixels")
 
 
 @pytest.mark.parametrize("unlimited", [False, True])
@@ -150,7 +153,7 @@ def test_reject_same_file_virtual_dataset(tmp_path, unlimited):
 
     with h5py.File(path, "r") as h5:
         with pytest.raises(ValueError, match="HDF5 input.*virtual datasets"):
-            hdf5_input_object(h5, "pixels")
+            hdf5_input_reader(h5)("pixels")
 
 
 def test_probe_rejects_unused_root_link(tmp_path):
@@ -250,6 +253,64 @@ def test_invalid_policy_reports_setting(monkeypatch):
     monkeypatch.setenv(SELF_CONTAINED_ENV, "typo")
     with pytest.raises(ValueError, match=f"{SELF_CONTAINED_ENV} must be"):
         self_contained_hdf5_input()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_new_handle_reader_observes_current_policy(
+    tmp_path, monkeypatch, enabled
+):
+    path = tmp_path / "linked.h5"
+    with h5py.File(path, "w") as h5:
+        h5["values"] = [1.0, 2.0]
+        h5["pixels"] = h5py.SoftLink("/values")
+
+    monkeypatch.setenv(SELF_CONTAINED_ENV, str(int(enabled)))
+    with h5py.File(path, "r") as h5:
+        read_input = hdf5_input_reader(h5)
+        monkeypatch.setenv(SELF_CONTAINED_ENV, str(int(not enabled)))
+        if enabled:
+            with pytest.raises(ValueError, match="soft links"):
+                read_input("pixels")
+        else:
+            np.testing.assert_array_equal(read_input("pixels")[:], [1, 2])
+
+    with h5py.File(path, "r") as h5:
+        read_input = hdf5_input_reader(h5)
+        if enabled:
+            np.testing.assert_array_equal(read_input("pixels")[:], [1, 2])
+        else:
+            with pytest.raises(ValueError, match="soft links"):
+                read_input("pixels")
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_threaded_reader_retains_policy_and_rechecks_reopened_handles(
+    tmp_path, monkeypatch, enabled
+):
+    on_path, off_path = tmp_path / "on.h5", tmp_path / "off.h5"
+    _write_cube(on_path)
+    _write_cube(off_path)
+    monkeypatch.setenv(SELF_CONTAINED_ENV, str(int(enabled)))
+    with _ThreadedHdf5BlockReader(
+        on_path=on_path,
+        off_path=off_path,
+        image_dataset="imgs",
+        workers=2,
+    ) as reader:
+        before = reader.read_pair(np.s_[:])
+        monkeypatch.setenv(SELF_CONTAINED_ENV, str(int(not enabled)))
+        with h5py.File(on_path, "a") as h5:
+            h5.move("imgs", "values")
+            h5["imgs"] = h5py.SoftLink("/values")
+        if enabled:
+            with pytest.raises(RuntimeError, match="on HDF5") as error:
+                reader.read_pair(np.s_[:])
+            assert isinstance(error.value.__cause__, ValueError)
+            assert "soft links" in str(error.value.__cause__)
+        else:
+            after = reader.read_pair(np.s_[:])
+            for old, new in zip(before, after, strict=True):
+                np.testing.assert_array_equal(old, new)
 
 
 @pytest.mark.parametrize("launcher", ["process", "local", "slurm"])
