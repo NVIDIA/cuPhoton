@@ -782,15 +782,20 @@ def test_masked_window_keeps_the_error_bar_and_sets_the_flag():
 
 
 @pytest.mark.parametrize("measure", [True, False])
-def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
+@pytest.mark.parametrize("seed", [7, 19])
+def test_measured_factor_catches_correlation_the_closed_form_misses(
+    measure, seed
+):
     """Target noise correlated by a 2x2 box (the sum over lags of its
     autocorrelation is 4): the closed form, which models the reference's
     resampling alone, stays near 1.5 while the factor measured at empty
     positions is near 4 for the PSF-flux weights, and the corr term uses
-    it. With the measurement off the closed form alone is used.
+    it. The measured factor is checked against its expectation within
+    three of its own standard errors over the positions used, for two
+    noise draws. With the measurement off the closed form alone is used.
     """
-    rng = np.random.default_rng(7)
-    s = Scene(seed=7)
+    rng = np.random.default_rng(seed)
+    s = Scene(seed=seed)
     # unit-variance noise correlated over 2x2 pixels
     h = np.full((2, 2), 0.5)
     correlated = fftconvolve(rng.normal(size=(SIZE, SIZE)), h, mode="same")
@@ -824,7 +829,13 @@ def test_measured_factor_catches_correlation_the_closed_form_misses(measure):
     expected = (NOISE**2 * 4.0 + 4.0 * kernel_power) / (
         NOISE**2 + 4.0 * kernel_power
     )
-    assert corr["measured"]["psf_flux"] == pytest.approx(expected, rel=0.25)
+    se = uq.measured_standard_error(expected, corr["positions_used"])
+    assert corr["measured_se"]["psf_flux"] == pytest.approx(
+        uq.measured_standard_error(
+            corr["measured"]["psf_flux"], corr["positions_used"]
+        )
+    )
+    assert abs(corr["measured"]["psf_flux"] - expected) < 3.0 * se
     # the closed form knows only the reference's resampling (variance 4
     # against the target's 9 through a half-pixel Lanczos footprint)
     assert corr["closed_form"]["psf_flux"] == pytest.approx(1.5, abs=0.3)

@@ -226,12 +226,12 @@ IDENTITY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "exposure_id": (
         "object",
         "identity",
-        "survey exposure identifier (Rubin: visit)",
+        "survey exposure identifier (for example a visit number)",
     ),
     "ccd_id": (
         "object",
         "identity",
-        "survey detector identifier (Rubin: detector)",
+        "survey detector identifier (for example a detector name)",
     ),
     "band": ("object", "identity", "filter band"),
     "astrometry": (

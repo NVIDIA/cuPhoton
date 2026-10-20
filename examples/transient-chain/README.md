@@ -210,7 +210,7 @@ named, odd sizes and enumerations are checked, and every default lives in
 | Block | What it controls | Keys worth knowing |
 |---|---|---|
 | `io` | FITS reader | `reader: auto\|xdr\|astropy` |
-| `survey` | which adapter reads the files | `name: rubin\|generic`, `params` (adapter-specific; see below) |
+| `survey` | which adapter reads the files | `name: rubin\|generic` (required, no default), `params` (adapter-specific; see below) |
 | `align` | template refinement | `refine`, `star_finder`, `star_fwhm_px`, `star_threshold_sigma`, `max_stars`, `star_box_px`, `centroid_iterations`, `match_radius_px`, `verify_radius_px`, `min_affine_matches`, `min_shift_matches`, `mapping_grid_step`, `xcorr_window_px` |
 | `subtract` | XPOIS and the fit mask | `kernel_height`, `kernel_width`, `basis_sigmas`, `basis_degrees`, `background_degree`, `flux_conserve`, `template_bad_dilation_px`, `auto_stamp_*` (mask selection), `auto_background_filter_size`, `auto_peak_filter_size`, `auto_compact_core_size` |
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
@@ -241,7 +241,8 @@ is null by default: set it when the patches carry a variance plane, and the temp
 
 `generic` describes any FITS pair by parameters. A DECam-style layout with the image in the
 primary HDU, a separate inverse-variance weight file, a separate mask file, and a template on
-another pixel grid:
+another pixel grid (`config-generic.yaml` ships this block with every other block filled in,
+ready to load and edit):
 
 ```yaml
 survey:

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 from transient_chain import config
+from transient_chain.surveys import make_adapter
 
 HERE = Path(__file__).resolve().parent.parent
 
@@ -19,6 +20,28 @@ def test_shipped_config_loads_and_fills_defaults():
     assert cfg["io"]["reader"] == "auto" and cfg["survey"]["name"] == "rubin"
     assert cfg["xfit"]["solver"]["initial_damping"] == 1.0e-3
     assert cfg["align"]["star_box_px"] == 15
+
+
+def test_generic_config_loads_and_builds_the_generic_adapter():
+    cfg = config.load_config(HERE / "config-generic.yaml")
+    assert set(cfg) == set(config.SCHEMA)
+    assert cfg["survey"]["name"] == "generic"
+    adapter = make_adapter(cfg["survey"])
+    assert adapter.name == "generic"
+    assert adapter.template_p["variance_path_key"] is None
+    assert cfg["uq"]["enabled"] and cfg["uq"]["correlation_positions"] == 1000
+
+
+def test_survey_name_is_required_with_no_default():
+    raw = yaml.safe_load((HERE / "config.yaml").read_text())
+    del raw["survey"]["name"]
+    with pytest.raises(ValueError, match="survey.name' is required"):
+        config.validate_config(raw)
+    raw["survey"]["name"] = ""
+    with pytest.raises(ValueError, match="survey.name must be a non-empty"):
+        config.validate_config(raw)
+    with pytest.raises(ValueError, match="survey.name' is required"):
+        make_adapter({"params": {}})
 
 
 def test_unknown_block_and_key_are_rejected(tmp_path):

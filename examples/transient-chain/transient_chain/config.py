@@ -147,7 +147,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "reader": ("auto", _choice(*READERS)),
     },
     "survey": {
-        "name": ("rubin", str),
+        "name": (_REQUIRED, _nonempty_str),
         "params": ({}, _mapping),
     },
     "align": {
