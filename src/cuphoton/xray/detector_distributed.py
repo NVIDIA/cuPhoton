@@ -23,7 +23,7 @@ from cuphoton import __version__ as CUPHOTON_VERSION
 
 from ._hdf5_input import (
     SELF_CONTAINED_ENV,
-    hdf5_input_object,
+    hdf5_input_reader,
     self_contained_hdf5_input,
 )
 from .detector_artifacts import (
@@ -983,12 +983,10 @@ def _read_detector_input_spec(
         raise ValueError("on/off HDF5 schemas do not match")
     dataset = on_probe.load_plan.image_dataset
     with h5py.File(on_path, "r") as on_h5, h5py.File(off_path, "r") as off_h5:
-        on_shape = tuple(
-            int(value) for value in hdf5_input_object(on_h5, dataset).shape
-        )
-        off_shape = tuple(
-            int(value) for value in hdf5_input_object(off_h5, dataset).shape
-        )
+        read_on = hdf5_input_reader(on_h5)
+        read_off = hdf5_input_reader(off_h5)
+        on_shape = tuple(int(value) for value in read_on(dataset).shape)
+        off_shape = tuple(int(value) for value in read_off(dataset).shape)
     if len(on_shape) != 3 or on_shape != off_shape:
         raise ValueError("on/off image shapes do not match")
     plan = on_probe.load_plan

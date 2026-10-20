@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 SELF_CONTAINED_ENV = "CUPHOTON_XRAY_HDF5_SELF_CONTAINED"
@@ -20,19 +22,26 @@ def self_contained_hdf5_input() -> bool:
     return value == "1"
 
 
-def hdf5_input_object(h5: Any, name: str) -> Any:
-    """Resolve an object using the configured HDF5 input policy.
+def hdf5_input_reader(
+    h5: Any, *, self_contained: bool | None = None
+) -> Callable[[str], Any]:
+    """Select input access once for an open HDF5 handle.
 
-    Normal h5py lookup is the default. When self-contained input is requested,
-    check each path component before dereferencing it, including intermediate
-    groups. That mode supports hard links and ordinary datasets; soft links
-    and virtual datasets are unsupported even within the same file.
-    Call this on each newly opened read handle.
+    The default returns h5py's ordinary lookup directly. The opt-in reader
+    checks each requested object, including intermediate path components.
+    Create a new reader for each newly opened handle; dataset validation is
+    never cached across handles.
     """
-    import h5py
+    if self_contained is None:
+        self_contained = self_contained_hdf5_input()
+    if not self_contained:
+        return h5.__getitem__
+    return partial(_self_contained_hdf5_object, h5)
 
-    if not self_contained_hdf5_input():
-        return h5[name]
+
+def _self_contained_hdf5_object(h5: Any, name: str) -> Any:
+    """Resolve in-file hard links and datasets without indirection."""
+    import h5py
 
     obj = h5
     for part in name.split("/"):

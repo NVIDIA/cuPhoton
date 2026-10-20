@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from ._hdf5_input import hdf5_input_object
+from ._hdf5_input import hdf5_input_reader
 from .detector_mask import AxisRange
 from .detector_mask import excluded_row_mask as detector_excluded_row_mask
 
@@ -127,10 +127,11 @@ def probe_hdf5_file(path: Path | str) -> FileProbe:
         raise ValueError(f"not a file: {h5_path}")
 
     with h5py.File(h5_path, "r") as h5:
+        read_input = hdf5_input_reader(h5)
         keys = tuple(sorted(h5.keys()))
         datasets = []
         for key in keys:
-            obj = hdf5_input_object(h5, key)
+            obj = read_input(key)
             if hasattr(obj, "shape"):
                 chunks = None if obj.chunks is None else tuple(obj.chunks)
                 datasets.append(
@@ -494,8 +495,10 @@ def scan_roi_candidates(
 
     candidates: list[RoiCandidate] = []
     with h5py.File(on_path, "r") as on_h5, h5py.File(off_path, "r") as off_h5:
-        on_image = hdf5_input_object(on_h5, plan.image_dataset)
-        off_image = hdf5_input_object(off_h5, plan.image_dataset)
+        read_on = hdf5_input_reader(on_h5)
+        read_off = hdf5_input_reader(off_h5)
+        on_image = read_on(plan.image_dataset)
+        off_image = read_off(plan.image_dataset)
         if len(on_image.shape) != 3 or len(off_image.shape) != 3:
             raise ValueError("ROI candidate scan requires 3D image cubes")
         if tuple(on_image.shape) != tuple(off_image.shape):
@@ -511,15 +514,11 @@ def scan_roi_candidates(
             raise ValueError("tile dimensions exceed detector dimensions")
 
         on_norm = np.asarray(
-            hdf5_input_object(on_h5, plan.ipm_pair.normalization)[
-                drop_leading:
-            ],
+            read_on(plan.ipm_pair.normalization)[drop_leading:],
             dtype=np.float64,
         )
         off_norm = np.asarray(
-            hdf5_input_object(off_h5, plan.ipm_pair.normalization)[
-                drop_leading:
-            ],
+            read_off(plan.ipm_pair.normalization)[drop_leading:],
             dtype=np.float64,
         )
 
@@ -570,7 +569,8 @@ def load_hdf5_cube_trace(
     plan = probe.load_plan
 
     with h5py.File(h5_path, "r") as h5:
-        image = hdf5_input_object(h5, plan.image_dataset)
+        read_input = hdf5_input_reader(h5)
+        image = read_input(plan.image_dataset)
         if len(image.shape) < 2:
             raise ValueError(
                 f"image dataset is not at least 2D: {image.name}"
@@ -579,11 +579,11 @@ def load_hdf5_cube_trace(
         if drop_leading >= frame_count:
             raise ValueError("drop_leading removes all frames")
         delay = np.asarray(
-            hdf5_input_object(h5, plan.delay_dataset)[drop_leading:],
+            read_input(plan.delay_dataset)[drop_leading:],
             dtype=float,
         )
         normalization = np.asarray(
-            hdf5_input_object(h5, plan.ipm_pair.normalization)[drop_leading:],
+            read_input(plan.ipm_pair.normalization)[drop_leading:],
             dtype=float,
         )
         expected = frame_count - drop_leading
@@ -651,7 +651,8 @@ def load_hdf5_cube_roi_trace(
     plan = probe.load_plan
 
     with h5py.File(h5_path, "r") as h5:
-        image = hdf5_input_object(h5, plan.image_dataset)
+        read_input = hdf5_input_reader(h5)
+        image = read_input(plan.image_dataset)
         if len(image.shape) != 3:
             raise ValueError("ROI trace loading requires a 3D image cube")
         frame_count, detector_height, detector_width = (
@@ -666,11 +667,11 @@ def load_hdf5_cube_roi_trace(
         if roi_y + roi_height > detector_height:
             raise ValueError("ROI y range exceeds detector height")
         delay = np.asarray(
-            hdf5_input_object(h5, plan.delay_dataset)[drop_leading:],
+            read_input(plan.delay_dataset)[drop_leading:],
             dtype=float,
         )
         normalization = np.asarray(
-            hdf5_input_object(h5, plan.ipm_pair.normalization)[drop_leading:],
+            read_input(plan.ipm_pair.normalization)[drop_leading:],
             dtype=float,
         )
         expected = frame_count - drop_leading
