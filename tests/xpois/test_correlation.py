@@ -581,6 +581,49 @@ def test_masked_pixels_need_no_finite_variance_and_match_zero_weights():
         )
 
 
+def test_plane_valid_counts_off_image_window_pixels_as_masked():
+    """With a boolean plane, a window that leaves the image keeps a factor:
+    the off-image pixels count in ``n_masked`` and equal the stamp form
+    with those pixels set invalid; without ``valid`` the same window is
+    ``NaN``."""
+
+    kernel = _gaussian(15, 1.2)
+    stamp = _lanczos_stamp(0.5, 0.25)
+    size = 21
+    plane_target = np.full((80, 80), 4.0)
+    plane_reference = np.full((80, 80), 9.0)
+    # window of the first position spans rows -4..16: 4 rows off the image
+    positions = np.array([[30.0, 6.0], [40.0, 40.0]])
+    common = dict(
+        kernel=kernel,
+        target_variance=plane_target,
+        reference_variance=plane_reference,
+        resampling_weights=stamp,
+        positions=positions,
+    )
+    cut = correlation_factor(
+        psf_weights(2.0, size), valid=np.ones((80, 80), bool), **common
+    )
+    assert cut.n_masked.tolist() == [4 * size, 0]
+    assert np.isfinite(cut.factor).all()
+    bare = correlation_factor(psf_weights(2.0, size), **common)
+    assert np.isnan(bare.factor[0]) and np.isfinite(bare.factor[1])
+
+    valid = np.ones((2, size, size), bool)
+    valid[0, :4] = False
+    stamps = correlation_factor(
+        np.broadcast_to(psf_weights(2.0, size), (2, size, size)),
+        kernel=kernel,
+        target_variance=4.0,
+        reference_variance=9.0,
+        resampling_weights=stamp,
+        valid=valid,
+    )
+    assert stamps.n_masked.tolist() == cut.n_masked.tolist()
+    np.testing.assert_allclose(cut.factor, stamps.factor, rtol=1e-12)
+    np.testing.assert_allclose(cut.factor[1], bare.factor[1], rtol=1e-12)
+
+
 def test_pixel_ratio_mixes_the_resampling_factor_with_the_target_term():
     kernel = _gaussian(15, 1.2)
     stamp = _lanczos_stamp(0.3, 0.6)
