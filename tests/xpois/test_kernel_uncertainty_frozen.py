@@ -796,10 +796,11 @@ def digest(array):
     }
 
 
-def _assert_digest(array, expected, *, rtol=1e-12, atol_scale=0.0):
+def _assert_digest(array, expected, *, rtol=1e-12, atol_scale=1e-11):
     """``atol_scale`` sets an absolute floor as a fraction of the array's
     scale (its root mean square), for elements near zero whose relative
-    error is set by the FFT library's rounding rather than the code.
+    error is set by the FFT library's rounding (pocketfft builds and
+    cuFFT differ there at the 1e-12 level) rather than by the code.
     """
     got = digest(array)
     assert got["shape"] == tuple(expected["shape"])
@@ -812,7 +813,7 @@ def _assert_digest(array, expected, *, rtol=1e-12, atol_scale=0.0):
 
 
 def _assert_frozen(
-    name, seed, array, *, rtol=1e-12, elem_rtol=1e-10, atol_scale=0.0
+    name, seed, array, *, rtol=1e-12, elem_rtol=1e-10, atol_scale=1e-11
 ):
     reference = REFERENCES[name][seed]
     _assert_digest(array, reference, rtol=rtol, atol_scale=atol_scale)
@@ -873,7 +874,4 @@ def test_device_inputs_reproduce_the_frozen_references(seed):
         pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
     for name, array in outputs(seed, xp=cp).items():
         assert type(array).__module__ == "cupy"
-        # cuFFT and pocketfft round differently: elements near zero may
-        # differ by 1e-12 of the array's scale, so the device check adds
-        # that floor and keeps the relative tolerances.
-        _assert_frozen(name, seed, cp.asnumpy(array), atol_scale=1e-11)
+        _assert_frozen(name, seed, cp.asnumpy(array))
