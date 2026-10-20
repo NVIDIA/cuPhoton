@@ -60,6 +60,10 @@ class CorrelationFactorResult:
     n_rotated
         Number of positions whose ``is_translation`` flag was false; their
         factors are ``NaN``.
+    n_masked
+        Per position, the number of window pixels ``valid`` excluded from
+        the sum (zero without a mask). The factor at a position with masked
+        pixels describes the sum over the remaining pixels.
     covariance_scope
         The covariance modeled: correlation of the reference term through
         the resampling weights and the kernel.
@@ -71,6 +75,7 @@ class CorrelationFactorResult:
     factor: Any
     pixel_ratio: Any
     n_rotated: int = 0
+    n_masked: Any | None = None
     covariance_scope: Literal["reference_resampling_and_kernel"] = field(
         default="reference_resampling_and_kernel", init=False
     )
@@ -224,6 +229,7 @@ def correlation_factor(
     positions: Any | None = None,
     residual_variance: Any | None = None,
     is_translation: Any | None = None,
+    valid: Any | None = None,
 ) -> CorrelationFactorResult:
     """Correlation factor of weighted sums of residual pixels.
 
@@ -281,14 +287,27 @@ def correlation_factor(
         is locally a translation. The closed form holds for a translation;
         positions flagged false get ``NaN`` and are counted in
         ``n_rotated``.
+    valid
+        Optional validity of the window pixels: ``(N, s, s)`` booleans (or
+        an array that broadcasts to them), or with ``positions`` a
+        two-dimensional boolean plane cut around them, pixels outside the
+        image counting as invalid. Where false the pixel is left out of the
+        sum: its weight is set to zero and its variance is not required to
+        be finite, so a window with a masked pixel keeps a factor instead
+        of ``NaN``. The factor is a ratio of two quadratic forms in the
+        weights, so renormalizing the remaining weights (as the estimator
+        the weights stand for does over the unmasked pixels) leaves it
+        unchanged; the factor describes that renormalized sum. A window
+        with every pixel masked gets ``NaN``; ``n_masked`` counts the
+        masked pixels per position so a caller can set its own limit.
 
     Returns
     -------
     CorrelationFactorResult
-        ``factor`` and ``pixel_ratio`` per position, ``NaN`` where any stamp
-        of the window is not finite, where the resampling stamp is all
-        zero, or where ``is_translation`` is false, with the covariance
-        scope recorded.
+        ``factor`` and ``pixel_ratio`` per position, ``NaN`` where any
+        unmasked stamp pixel of the window is not finite, where the
+        resampling stamp is all zero, or where ``is_translation`` is false,
+        with ``n_masked`` and the covariance scope recorded.
     """
 
     xp = _array_module(weights, target_variance, reference_variance)
@@ -325,12 +344,42 @@ def correlation_factor(
     stamps = _resampling_stamps(xp, resampling_weights, count)
     true, diag = _pixel_terms(xp, kernel_arr, stamps)
     gain = (stamps**2).sum(axis=(1, 2))
-    valid = _stamps_valid(xp, stamps) & _translated(xp, is_translation, count)
+    usable = _stamps_valid(xp, stamps) & _translated(
+        xp, is_translation, count
+    )
     kernel_power = (kernel_arr**2).sum()
     if residual_variance is None:
         residual = target + resampled * kernel_power
     else:
         residual = stamps_of("residual_variance", residual_variance)
+
+    if valid is None:
+        n_masked = xp.zeros(count, dtype=xp.int64)
+    else:
+        keep = xp.asarray(valid)
+        if positions is not None and keep.ndim == 2:
+            keep = (
+                window_stamps(
+                    keep.astype(xp.float64),
+                    xy,
+                    (int(w.shape[1]), int(w.shape[2])),
+                    fill=0.0,
+                )
+                > 0.5
+            )
+        else:
+            try:
+                keep = xp.broadcast_to(keep.astype(bool), w.shape)
+            except ValueError as exc:
+                raise ValueError(
+                    "valid must be a plane with positions, or booleans that "
+                    "broadcast to the weights"
+                ) from exc
+        n_masked = (~keep).sum(axis=(1, 2))
+        w = xp.where(keep, w, 0.0)
+        target = xp.where(keep, target, 0.0)
+        resampled = xp.where(keep, resampled, 0.0)
+        residual = xp.where(keep, residual, 0.0)
 
     w2 = w**2
     w2_sum = w2.sum(axis=(1, 2))
@@ -350,7 +399,7 @@ def correlation_factor(
         power[start:stop] = (footprint**2).sum(axis=(1, 2))
 
     finite = (
-        valid
+        usable
         & xp.isfinite(w).all(axis=(1, 2))
         & xp.isfinite(target).all(axis=(1, 2))
         & xp.isfinite(resampled).all(axis=(1, 2))
@@ -371,6 +420,7 @@ def correlation_factor(
         factor=xp.where(finite, factor, xp.nan),
         pixel_ratio=xp.where(finite, pixel_ratio, xp.nan),
         n_rotated=count - int(_translated(xp, is_translation, count).sum()),
+        n_masked=n_masked,
     )
 
 
