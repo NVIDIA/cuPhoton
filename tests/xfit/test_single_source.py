@@ -90,22 +90,72 @@ def test_fixed_width_fits_a_circular_lobe_with_three_parameters():
     )
 
 
-def test_position_covariance_is_calibrated_on_repeated_noise():
-    """One stamp, 400 noise realizations, the one-lobe and two-lobe fits.
+def test_elliptical_widths_are_canonicalized_to_sigma_x_at_least_sigma_y():
+    """Three stamps of one lobe; the solver ends on either labeling.
 
-    The one-lobe fit's 95% interval covers the truth 95.8% of the time with
-    a spread of 0.97 at this seed. The two-lobe dipole fit on the same
-    stamps converges on 80% of them and, where it does, covers 98.9% with a
-    spread of 0.64: the spare lobe settles on noise and the source lobe's
-    position inherits its freedom.
+    Without canonicalization the second stamp at this seed returns
+    ``(sigma_x, sigma_y, theta) = (1.59, 1.98, -1.28)`` for a truth of
+    ``(2.0, 1.6, 0.3)``: the same lobe under the other labeling. A truth
+    written as ``(1.6, 2.0, 0.3)`` is the same image as ``(2.0, 1.6,
+    0.3 - pi/2)`` and must come back that way for every stamp.
     """
 
-    truth = (12.0, 2.0, 1.7, 0.4, 0.6, -0.4)
+    truth = (40.0, 2.0, 1.6, 0.3, 1.3, -0.8)
+    images, variance = _noisy(_single(*truth), 3, seed=3, noise=0.5)
+    result = fit_single_sources(images, variance, np.zeros((3, 2)), sign=1)
+    assert result.uncertainty_valid.all()
+    assert (result.parameters[:, 1] >= result.parameters[:, 2]).all()
+    np.testing.assert_allclose(result.parameters[:, 1], 2.0, atol=0.05)
+    np.testing.assert_allclose(result.parameters[:, 2], 1.6, atol=0.05)
+    np.testing.assert_allclose(result.parameters[:, 3], 0.3, atol=0.05)
+    errors = result.standard_errors
+    assert (errors[:, 1] > errors[:, 2]).all()
+    assert (np.ptp(errors, axis=0) < 0.1 * errors.min(axis=0)).all()
+    np.testing.assert_allclose(
+        result.covariance, np.swapaxes(result.covariance, 1, 2), atol=1e-12
+    )
+    np.testing.assert_allclose(
+        np.sqrt(np.diagonal(result.covariance, axis1=1, axis2=2)), errors
+    )
+
+    rotated = (40.0, 1.6, 2.0, 0.3, 1.3, -0.8)
+    images, variance = _noisy(_single(*rotated), 3, seed=0, noise=0.5)
+    result = fit_single_sources(images, variance, np.zeros((3, 2)), sign=1)
+    np.testing.assert_allclose(result.parameters[:, 1], 2.0, atol=0.05)
+    np.testing.assert_allclose(result.parameters[:, 2], 1.6, atol=0.05)
+    np.testing.assert_allclose(
+        result.parameters[:, 3], 0.3 - np.pi / 2, atol=0.1
+    )
+
+
+ELLIPTICAL_TRUTH = (12.0, 2.0, 1.7, 0.4, 0.6, -0.4)
+CIRCULAR_TRUTH = (12.0, 1.8, 1.8, 0.0, 0.6, -0.4)
+
+
+@pytest.mark.parametrize(
+    ("truth", "psf_sigma"),
+    [(ELLIPTICAL_TRUTH, None), (CIRCULAR_TRUTH, 1.8)],
+    ids=["elliptical", "fixed_width"],
+)
+def test_position_and_flux_covariance_are_calibrated_on_repeated_noise(
+    truth, psf_sigma
+):
+    """One stamp, 400 noise realizations, the one-lobe and two-lobe fits.
+
+    The one-lobe fit's 95% position interval covers the truth 95.8% of the
+    time with a spread of 0.97 at this seed (elliptical arm), and its flux
+    error bar is calibrated the same way. The two-lobe dipole fit on the
+    same stamps converges on 80% of them and, where it does, covers 98.9%
+    with a spread of 0.64: the spare lobe settles on noise and its
+    parameters, correlated with the source lobe's position, inflate the
+    position covariance.
+    """
+
     count = 400
     images, variance = _noisy(_single(*truth), count, seed=7)
     positions = np.zeros((count, 2))
 
-    single = fit_single_sources(images, variance, positions)
+    single = fit_single_sources(images, variance, positions, psf_sigma)
     assert single.uncertainty_valid.all()
     z = np.concatenate(
         [
@@ -116,6 +166,10 @@ def test_position_covariance_is_calibrated_on_repeated_noise():
     coverage = np.mean(np.abs(z) < 1.96)
     assert 0.93 <= coverage <= 0.97, coverage
     assert 0.9 <= z.std() <= 1.1, z.std()
+    z_flux = (single.flux - _flux(*truth[:3])) / single.flux_error
+    assert 0.93 <= np.mean(np.abs(z_flux) < 1.96) <= 0.975
+    assert 0.9 <= z_flux.std() <= 1.1, z_flux.std()
+    assert abs(z_flux.mean()) < 0.15, z_flux.mean()
 
     dipole = fit_dipoles(
         images, model="gaussian", variance=variance, backend="numpy"

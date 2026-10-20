@@ -6,10 +6,10 @@
 
 A source present in only one of the two images leaves one lobe in the
 difference image. Fitted with the two-lobe dipole model, the spare lobe
-settles on noise and the measured lobe's position inherits its freedom, so
-the dipole covariance overstates the position uncertainty. This module fits
-the one lobe alone, with the same solver and weighting as
-:func:`cuphoton.xfit.fit_dipoles`.
+settles on noise, and because its parameters are correlated with the
+measured lobe's position the dipole covariance overstates the position
+uncertainty. This module fits the one lobe alone, with the same solver and
+weighting as :func:`cuphoton.xfit.fit_dipoles`.
 """
 
 from __future__ import annotations
@@ -42,13 +42,17 @@ class SingleSourceFitResult:
     ``covariance`` follow ``parameter_names``; ``position_error_x`` and
     ``position_error_y`` are the square roots of the covariance's position
     diagonal and ``position_xy_covariance`` its off-diagonal term. ``flux``
-    is ``2 pi |amplitude| sigma_x sigma_y`` with its propagated error.
-    ``sign`` is ``+1`` for a brightening and ``-1`` for a fading source.
-    ``status_codes`` hold :class:`cuphoton.xfit.LMStatus` values and
-    ``uncertainty_reason_codes`` hold
-    :class:`cuphoton.xfit.DipoleFitUncertaintyReason` values. Uncertainties
-    are NaN where ``uncertainty_valid`` is false; values are returned for
-    every fit. ``residuals`` are model minus data in the stamp shape.
+    is ``2 pi |amplitude| sigma_x sigma_y`` with its propagated error. For
+    elliptical fits ``sigma_x >= sigma_y`` by construction (see
+    :func:`fit_single_sources`). ``sign`` is the sign of the starting
+    amplitude, ``+1`` for a brightening and ``-1`` for a fading source,
+    as given or taken from the matched filter; the fitted amplitude
+    ``parameters[:, 0]`` may end with the other sign. ``status_codes`` hold
+    :class:`cuphoton.xfit.LMStatus` values and ``uncertainty_reason_codes``
+    hold :class:`cuphoton.xfit.DipoleFitUncertaintyReason` values.
+    Uncertainties are NaN where ``uncertainty_valid`` is false; values are
+    returned for every fit. ``residuals`` are model minus data in the stamp
+    shape.
     """
 
     parameters: Any
@@ -89,14 +93,26 @@ def fit_single_sources(
 ) -> SingleSourceFitResult:
     """Fit one Gaussian lobe per stamp by weighted least squares.
 
+    Use this for a source present in only one of the two images, which
+    leaves one lobe in the difference stamp: the position covariance of a
+    one-lobe fit is calibrated where the two-lobe dipole fit, with its
+    spare lobe on noise, overstates it. Start each fit at the supported
+    lobe's position.
+
     ``images`` and ``variance`` have shape ``(batch, height, width)`` and
     ``positions`` has shape ``(batch, 2)`` as ``(x, y)`` starting positions
     in xFit's centered pixel coordinates. Without ``psf_sigma`` the lobe is
     an elliptical Gaussian with free ``amplitude, sigma_x, sigma_y, theta,
-    x, y``; the widths are optimized in log space and returned positive, and
-    ``theta`` is canonicalized to ``[-pi/2, pi/2)``. With ``psf_sigma`` (one
-    value or one per stamp, in pixels) the lobe is circular with that fixed
-    width and only ``amplitude, x, y`` are fitted.
+    x, y``, started at a width of 2 pixels; the widths are optimized in log
+    space and returned positive. The labeling ``(sigma_x, sigma_y, theta)``
+    and ``(sigma_y, sigma_x, theta + pi/2)`` describe the same lobe, so the
+    result is canonicalized to ``sigma_x >= sigma_y``: where the solver
+    ends with ``sigma_x < sigma_y`` the two width entries are swapped in
+    ``parameters``, ``standard_errors`` and the rows and columns of
+    ``covariance``, and ``theta`` is advanced by ``pi/2``. ``theta`` is then
+    wrapped to ``[-pi/2, pi/2)``. With ``psf_sigma`` (one value or one per
+    stamp, in pixels) the lobe is circular with that fixed width and only
+    ``amplitude, x, y`` are fitted.
 
     ``sign`` is ``+1`` for a brightening source (positive lobe) or ``-1`` for
     a fading one, one value or one per stamp; it sets the sign of the
@@ -144,8 +160,40 @@ def fit_single_sources(
     xy = xp.asarray(positions).astype(dtype, copy=False)
     if xy.shape != (batch, 2):
         raise ValueError("positions must have shape (batch, 2)")
-    if not bool(xp.isfinite(xy).all()):
-        raise ValueError("positions must contain only finite values")
+
+    fixed_width = psf_sigma is not None
+    if fixed_width:
+        fixed_sigma = xp.broadcast_to(
+            xp.asarray(psf_sigma).astype(dtype, copy=False), (batch,)
+        )
+        names = CIRCULAR_PARAMETERS
+    else:
+        fixed_sigma = xp.full(batch, 2.0, dtype=dtype)
+        names = ELLIPTICAL_PARAMETERS
+    count = len(names)
+    sign_array = None
+    if sign is not None:
+        sign_array = xp.broadcast_to(xp.asarray(sign), (batch,))
+
+    # One host transfer for every value check on the inputs.
+    checks = [
+        ("positions must contain only finite values", xp.isfinite(xy).all()),
+        (
+            "psf_sigma must be finite and positive",
+            (xp.isfinite(fixed_sigma) & (fixed_sigma > 0)).all(),
+        ),
+    ]
+    if sign_array is not None:
+        checks.append(
+            (
+                "sign values must be +1 or -1",
+                ((sign_array == 1) | (sign_array == -1)).all(),
+            )
+        )
+    passed = xp.stack([flag for _, flag in checks]).tolist()
+    for (message, _), ok in zip(checks, passed, strict=True):
+        if not ok:
+            raise ValueError(message)
 
     good = xp.isfinite(data) & xp.isfinite(var) & (var > 0)
     if mask is not None:
@@ -157,21 +205,6 @@ def fit_single_sources(
         good, 1.0 / xp.sqrt(xp.where(good, var, 1.0)), 0.0
     ).astype(dtype, copy=False)
     image = xp.where(good, data, 0.0).astype(dtype, copy=False)
-
-    fixed_width = psf_sigma is not None
-    if fixed_width:
-        fixed_sigma = xp.broadcast_to(
-            xp.asarray(psf_sigma).astype(dtype, copy=False), (batch,)
-        )
-        if not bool((xp.isfinite(fixed_sigma) & (fixed_sigma > 0)).all()):
-            raise ValueError("psf_sigma must be finite and positive")
-        names = CIRCULAR_PARAMETERS
-    else:
-        fixed_sigma = xp.full(
-            batch, max(1.0, min(height, width) / 8.0), dtype=dtype
-        )
-        names = ELLIPTICAL_PARAMETERS
-    count = len(names)
 
     model = GaussianDipoleModel(
         (height, width),
@@ -201,13 +234,9 @@ def fit_single_sources(
     matched = (squared_weights * template * image).sum(
         axis=(1, 2)
     ) / safe_information
-    if sign is None:
-        sign_array = xp.where(matched < 0, -1, 1).astype(np.int8)
-    else:
-        sign_array = xp.broadcast_to(xp.asarray(sign), (batch,))
-        if not bool(((sign_array == 1) | (sign_array == -1)).all()):
-            raise ValueError("sign values must be +1 or -1")
-        sign_array = sign_array.astype(np.int8)
+    if sign_array is None:
+        sign_array = xp.where(matched < 0, -1, 1)
+    sign_array = sign_array.astype(np.int8)
     signed = sign_array.astype(dtype)
     amplitude_floor = 1.0 / xp.sqrt(safe_information)
     amplitude0 = signed * xp.maximum(signed * matched, amplitude_floor)
@@ -283,16 +312,33 @@ def fit_single_sources(
     all_rows = xp.arange(batch)
     terms = physical(low_level.parameters, all_rows)
     amplitude, sigma_x, sigma_y, theta, x, y = terms
+    residuals = lobe(*terms, derivatives=False)[0] - image
+
+    covariance = low_level.covariance
+    if not fixed_width:
+        chain = xp.ones((batch, count), dtype=dtype)
+        chain[:, 1] = sigma_x
+        chain[:, 2] = sigma_y
+        covariance = covariance * chain[:, :, None] * chain[:, None, :]
+        # (sigma_x, sigma_y, theta) and (sigma_y, sigma_x, theta + pi/2)
+        # are the same lobe: canonicalize to sigma_x >= sigma_y.
+        swap = sigma_x < sigma_y
+        order = xp.broadcast_to(xp.arange(count), (batch, count)).copy()
+        order[swap, 1], order[swap, 2] = 2, 1
+        covariance = covariance[
+            all_rows[:, None, None], order[:, :, None], order[:, None, :]
+        ]
+        sigma_x, sigma_y = (
+            xp.where(swap, sigma_y, sigma_x),
+            xp.where(swap, sigma_x, sigma_y),
+        )
+        half_period = np.pi / 2
+        theta = theta + xp.where(swap, half_period, 0.0)
+        theta = ((theta + half_period) % (2 * half_period)) - half_period
+        terms = (amplitude, sigma_x, sigma_y, theta, x, y)
     parameters = xp.stack(
         (amplitude, x, y) if fixed_width else terms, axis=1
     ).astype(dtype, copy=False)
-    if not fixed_width:
-        half_period = np.pi / 2
-        parameters[:, 3] = (
-            (parameters[:, 3] + half_period) % (2 * half_period)
-        ) - half_period
-
-    residuals = lobe(*terms, derivatives=False)[0] - image
     weighted = residuals * weights
     chi_square = (weighted * weighted).sum(axis=(1, 2))
     null = image * weights
@@ -307,12 +353,6 @@ def fit_single_sources(
         xp.nan,
     ).astype(np.float64)
 
-    covariance = low_level.covariance
-    if not fixed_width:
-        chain = xp.ones_like(parameters)
-        chain[:, 1] = sigma_x
-        chain[:, 2] = sigma_y
-        covariance = covariance * chain[:, :, None] * chain[:, None, :]
     converged = low_level.converged.astype(bool)
     rank = low_level.rank.astype(np.int64)
     jacobian_available = xp.isfinite(low_level.jacobian).all(axis=(1, 2))
