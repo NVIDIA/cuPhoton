@@ -308,7 +308,8 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
 | `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote, NaN where its window is not valid. All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
 | `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item; `<q>_err_corr` NaN where the factor is undefined |
-| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where any quantity's window holds a masked pixel or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
+| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where fewer than half of a quantity's window pixels are usable or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
+| `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
@@ -374,17 +375,27 @@ center's stamp over both lobes).
 - `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
   reported with its provenance and kept out of the pixel-frame columns.
 
-Validity is per quantity: `<q>_err` is NaN where the quantity's window (both lobes' windows for a
-center) holds a masked or non-finite pixel, or where its correlation factor is undefined; the term
-columns keep their values (`<q>_err_corr` is NaN with the factor). Invalid original measurement positions and nonfinite total uncertainties also leave their
-quantity's error undefined. `uq_valid` is true where every
-quantity of the row has a finite total uncertainty and is valid, so a candidate near a masked block can carry a valid `positive_x_err`
-and a NaN `psf_flux_err` in the same row with `uq_valid` false. A rule for windows with masked
-pixels is a planned addition. A term the item could not compute is written as 0 and `summary.json`
-records the terms that went into the bars (`uq_terms`) with the reason for each one left out
-(`uq.excluded`), the kernel-fit form, the kernel-mismatch fit at the stars (`eta`, the stars used
-and the median residual-to-reference flux ratio), the window sizes and the counts of rows with an
-invalid window, an undefined factor and a capped sensitivity. `uq.enabled: false` writes
+Masked pixels (a bad pixel of either image, a non-finite residual or variance, the edge of the
+image) do not cost a candidate its error bar. A quantity's weighted sums run over the usable
+pixels of its window, with zero weight on the rest and the normalization taken over the usable
+ones, and its correlation factor is computed over the same pixels
+(`cuphoton.xpois.correlation_factor(valid=...)`); the row is flagged `uq_window_masked` so a user
+can tell a renormalized bar from a full-window one. On a 21 px window a masked column 4 px or
+more from the center moves the factor by under 10%, and one at 1 to 3 px by up to 12% to 17%.
+The quantity is invalid only where fewer than half of its window's pixels are usable (both
+lobes' windows for a center), or where its correlation factor is undefined: `<q>_err` is NaN
+there while the term columns keep their values (`<q>_err_corr` is NaN with the factor).
+Invalid original measurement positions and nonfinite total uncertainties also leave their
+quantity's error undefined. `uq_valid` is true where every quantity of the row has a finite
+total uncertainty and is valid, so a candidate at the edge of a
+masked block can carry a valid `positive_x_err` and a NaN `psf_flux_err` in the same row with
+`uq_valid` false. The kernel-mismatch fit at the stars keeps only stars whose window is fully
+usable. A term the item could not compute is written as 0 and `summary.json` records the terms
+that went into the bars (`uq_terms`) with the reason for each one left out (`uq.excluded`), the
+kernel-fit form, the kernel-mismatch fit at the stars (`eta`, the stars used and the median
+residual-to-reference flux ratio), the window sizes and the counts of rows with an invalid window
+(`uq.invalid_window`), a renormalized one (`uq.masked_window`), an undefined factor and a capped
+sensitivity. `uq.enabled: false` writes
 `<q>_err = <q>_err_fit`, zero terms and `uq_valid` true.
 
 The xFit standard errors come from the target's variance plane. The template's noise, carried

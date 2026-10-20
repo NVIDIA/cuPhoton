@@ -28,12 +28,17 @@ as one weight stamp over both lobes so their kernel-fit covariance is kept.
 Every weight stamp is centered on the sub-pixel position it measures.
 
 Every term is a variance in the quantity's squared units; ``<q>_err`` is
-their quadrature with the fit term. Arrays follow one array module (NumPy or
-CuPy); only the misalignment model and the kernel-mismatch solve run on the
-host, on arrays with one row per candidate or per star, and the device
-arrays cross to the host for the positions the model needs, the validity
-flags, and the stacked columns, plus the kept stars' fluxes and variances
-when the kernel-mismatch solve runs.
+their quadrature with the fit term. A window that holds masked pixels keeps
+its bar: the weights are renormalized over the usable pixels (zero weight
+where the pixel is masked, the factor from the same pixels) and the row is
+flagged ``uq_window_masked``; a quantity is invalid only where fewer than
+half of its window's pixels are usable.
+
+Arrays follow one array module (NumPy or CuPy); only the misalignment model
+and the kernel-mismatch solve run on the host, on arrays with one row per
+candidate or per star. Device arrays cross to the host for the positions
+the model needs, the validity flags, and the stacked columns, plus the
+kept stars' fluxes and variances when the kernel-mismatch solve runs.
 """
 
 from __future__ import annotations
@@ -65,6 +70,9 @@ TERMS = tuple(BUDGET_TERMS)
 # by the noise rather than by the source
 SENSITIVITY_CAP = 10.0
 MIN_MISMATCH_STARS = 5
+# a quantity keeps its error bar while at least this fraction of its
+# window's pixels is usable; the sums run over the usable pixels
+MIN_USABLE_FRACTION = 0.5
 
 
 @dataclass(frozen=True)
@@ -77,7 +85,8 @@ class BudgetContext:
     residual: Any
     weights_plane: Any  # 1 / this weights the sums; NaN where no weight
     target_variance: Any  # the same plane with 0 where no weight
-    validity_plane: Any  # NaN where a window pixel invalidates the row
+    validity_plane: Any  # NaN where a window pixel is not usable
+    valid_plane: Any  # the same as booleans
     psf_sigma: float | None
     window: int | None  # side of the window a weighted sum covers, px
     misalignment: ops.Misalignment | None
@@ -93,29 +102,34 @@ class BudgetContext:
 @dataclass(frozen=True)
 class BudgetResult:
     """The budget columns as one ``(len(names), N)`` device array ``values``
-    plus the host ``valid`` flags (``uq_valid``), the terms in the bars, the
-    per-item diagnostics and the host bytes the budget moved.
+    plus the host flags ``valid`` (``uq_valid``) and ``masked``
+    (``uq_window_masked``), the terms in the bars, the per-item diagnostics
+    and the host bytes the budget moved.
     """
 
     names: tuple[str, ...]
     values: Any
     valid: np.ndarray
+    masked: np.ndarray
     terms: tuple[str, ...]
     diagnostics: dict[str, Any]
     control_bytes: int = 0
+
+    def _flags(self) -> dict[str, np.ndarray]:
+        return {"uq_valid": self.valid, "uq_window_masked": self.masked}
 
     @property
     def columns(self) -> dict[str, Any]:
         """One array per column in the values' array module."""
         cols = {name: self.values[i] for i, name in enumerate(self.names)}
-        cols["uq_valid"] = self.valid
+        cols.update(self._flags())
         return cols
 
     def host_columns(self) -> dict[str, np.ndarray]:
         """The columns on the host, one transfer for every float column."""
         values = ops.to_host(self.values)
         cols = {name: values[i] for i, name in enumerate(self.names)}
-        cols["uq_valid"] = self.valid
+        cols.update(self._flags())
         return cols
 
 
@@ -220,6 +234,7 @@ def build_context(
         weights_plane=weights_plane,
         target_variance=target_variance,
         validity_plane=validity,
+        valid_plane=xp.isfinite(validity),
         psf_sigma=psf_sigma,
         window=window,
         misalignment=misalignment,
@@ -270,17 +285,22 @@ def _safe_positions(xp, x, y, cx, cy, shape):
     return xp.where(ok, x, cx), xp.where(ok, y, cy)
 
 
-def _valid_windows(ctx: BudgetContext, pos):
-    """True where every pixel of the window at ``pos`` (N, 2) is valid."""
+def _usable_fraction(ctx: BudgetContext, pos):
+    """Fraction of the window's pixels at ``pos`` (N, 2) that are usable
+    (finite residual and variance, inside the image).
+    """
     xp = ops.array_module(ctx.residual)
     stamps = window_stamps(ctx.validity_plane, pos, ctx.window)
-    return xp.isfinite(stamps).all(axis=(1, 2))
+    return xp.isfinite(stamps).mean(axis=(1, 2))
 
 
 def _inverse_variance(ctx: BudgetContext, pos, size: int):
-    """``1 / variance`` on the windows at ``pos``, 0 where no weight."""
+    """``1 / variance`` on the windows at ``pos``, 0 where the pixel is not
+    usable, so a weighted sum runs over the usable pixels alone and its
+    normalization is taken over them.
+    """
     xp = ops.array_module(ctx.residual)
-    plane = window_stamps(ctx.weights_plane, pos, size)
+    plane = window_stamps(ctx.validity_plane, pos, size)
     good = xp.isfinite(plane)
     return xp.where(good, 1.0 / xp.where(good, plane, 1.0), 0.0)
 
@@ -301,8 +321,9 @@ def _estimator_terms(ctx: BudgetContext, weights, pos):
     ``sum(weights * D)`` on the windows centered at ``pos`` (N, 2).
 
     The factor is 1 when the correlation term is excluded, else
-    ``correlation_factor`` on the planes: NaN where the grid mapping is not
-    locally a translation or the reprojection filled the reference there.
+    ``correlation_factor`` on the planes over the usable pixels of each
+    window: NaN where the grid mapping is not locally a translation or the
+    reprojection filled the reference there.
     The kernel-fit variance is 0 without a kernel covariance or where the
     stamp's kernel footprint leaves the image.
     """
@@ -319,6 +340,7 @@ def _estimator_terms(ctx: BudgetContext, weights, pos):
             positions=pos,
             residual_variance=ctx.target_variance,
             is_translation=at.is_translation,
+            valid=ctx.valid_plane,
         ).factor
     else:
         factor = xp.ones(n, dtype=xp.float64)
@@ -439,7 +461,7 @@ def kernel_mismatch(ctx: BudgetContext, star_xy: np.ndarray) -> dict:
     f, kfit = _estimator_terms(ctx, w, pos)
     base = ud**2 * xp.where(f > 1.0, f, 1.0) + kfit
     ok = (
-        _valid_windows(ctx, pos)
+        (_usable_fraction(ctx, pos) == 1.0)
         & xp.isfinite(d)
         & xp.isfinite(base)
         & xp.isfinite(t)
@@ -534,12 +556,15 @@ def budget(
     each lobe's distance from the center pixel; rows beyond it get no
     center error bar and cannot inflate every candidate's center stamp.
 
-    Returns the ``<q>_err_{corr,kfit,kmatch,mis}`` and ``<q>_err`` columns
-    and ``uq_valid``. A quantity is valid where every pixel of its window
-    (both lobes' windows for a center) is valid and its correlation factor
-    is defined; ``<q>_err`` is NaN elsewhere while the term columns keep
-    their values (``<q>_err_corr`` NaN with the factor). ``uq_valid`` is
-    true where every computed quantity is valid.
+    Returns the ``<q>_err_{corr,kfit,kmatch,mis}`` and ``<q>_err`` columns,
+    ``uq_valid`` and ``uq_window_masked``. A quantity is valid where at
+    least half of the pixels of its window (of both lobes' windows for a
+    center) are usable and its correlation factor is defined; ``<q>_err``
+    is NaN elsewhere while the term columns keep their values
+    (``<q>_err_corr`` NaN with the factor). ``uq_valid`` is true where every
+    computed quantity is valid; ``uq_window_masked`` where a valid
+    quantity's window holds a masked pixel, so its weighted sums ran over
+    the usable pixels.
     """
     xp = ops.array_module(ctx.residual)
     cx = xp.asarray(cand_x, dtype=xp.float64)
@@ -552,9 +577,11 @@ def budget(
     zeros = xp.zeros(n, dtype=xp.float64)
     ones = xp.ones(n, dtype=xp.float64)
     true = xp.ones(n, dtype=bool)
+    false = xp.zeros(n, dtype=bool)
     var = {q: {t: zeros for t in TERMS} for q in quantities}
     factor = {q: ones for q in quantities}
     window_ok = {q: true for q in quantities}
+    window_masked = {q: false for q in quantities}
     diag: dict[str, Any] = {
         "window_px": ctx.window,
         "kernel_fit_form": None
@@ -632,10 +659,14 @@ def budget(
     lam = ones
     capped = xp.zeros(n, dtype=bool)
     if ctx.window is not None:
-        valid_at = {
-            name: _valid_windows(ctx, pos[name])
+        usable = {
+            name: _usable_fraction(ctx, pos[name])
             for name in ("positive", "negative", "flux")
         }
+        # at least half of a window usable keeps the quantity, with the
+        # sums renormalized over the usable pixels; any masked pixel flags it
+        valid_at = {k: v >= MIN_USABLE_FRACTION for k, v in usable.items()}
+        masked_at = {k: v < 1.0 for k, v in usable.items()}
         for a in ("x", "y"):
             window_ok[f"center_{a}"] = (
                 window_ok[f"center_{a}"]
@@ -645,8 +676,13 @@ def budget(
             window_ok[f"positive_{a}"] = (
                 window_ok[f"positive_{a}"] & valid_at["positive"]
             )
+            window_masked[f"center_{a}"] = (
+                masked_at["positive"] | masked_at["negative"]
+            )
+            window_masked[f"positive_{a}"] = masked_at["positive"]
         if "psf_flux" in quantities:
             window_ok["psf_flux"] = window_ok["psf_flux"] & valid_at["flux"]
+            window_masked["psf_flux"] = masked_at["flux"]
         lam, raw, t_ref, _sensitivity_position = sensitivity(
             ctx, pos["flux"], cx, cy, single, field
         )
@@ -733,7 +769,7 @@ def budget(
     names: list[str] = []
     rows: list[Any] = []
     valid = windows = true
-    undefined = xp.zeros(n, dtype=bool)
+    undefined = masked = false
     for q in quantities:
         fit = xp.asarray(err_fit[q], dtype=xp.float64)
         f = factor[q]
@@ -747,6 +783,7 @@ def budget(
         )
         ok = window_ok[q] & defined & xp.isfinite(total)
         valid = valid & ok
+        masked = masked | (ok & window_masked[q])
         names += [f"{q}_err_{t}" for t in TERMS] + [f"{q}_err"]
         rows += [
             xp.where(defined, xp.sqrt(corr), xp.nan),
@@ -757,12 +794,13 @@ def budget(
         ]
     values = xp.stack(rows) if rows else xp.zeros((0, n), dtype=xp.float64)
     # one transfer: the flags the summary counts
-    flags = ops.to_host(xp.stack([valid, windows, undefined, capped]))
+    flags = ops.to_host(xp.stack([valid, windows, undefined, capped, masked]))
     control_bytes += int(flags.nbytes)
     diag.update(
         max_lobe_reach_px=max_lobe_reach_px,
         center_reach_exceeded=int(exceeded.sum()),
         invalid_window=int((~flags[1]).sum()),
+        masked_window=int(flags[4].sum()),
         rotated_grid=int(flags[2].sum()),
         sensitivity_capped=int(flags[3].sum()),
         center_window_px=None
@@ -770,7 +808,13 @@ def budget(
         else ctx.window + 2 * reach,
     )
     return BudgetResult(
-        tuple(names), values, flags[0], ctx.terms, diag, control_bytes
+        tuple(names),
+        values,
+        flags[0],
+        flags[4],
+        ctx.terms,
+        diag,
+        control_bytes,
     )
 
 
@@ -792,7 +836,12 @@ def fit_only(err_fit: dict[str, Any]) -> BudgetResult:
         rows += [xp.zeros(n, dtype=xp.float64)] * len(TERMS) + [fit]
     values = xp.stack(rows) if rows else np.zeros((0, 0))
     return BudgetResult(
-        tuple(names), values, np.ones(n, dtype=bool), (), {"disabled": True}
+        tuple(names),
+        values,
+        np.ones(n, dtype=bool),
+        np.zeros(n, dtype=bool),
+        (),
+        {"disabled": True},
     )
 
 

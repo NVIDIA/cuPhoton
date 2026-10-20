@@ -159,11 +159,17 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
     "uq_valid": (
         "bool",
         "uq",
-        "every computed <q>_err of the row is defined (false when a "
-        "computed quantity's window holds a masked pixel, its correlation "
-        "factor is undefined, or its total uncertainty is non-finite; other "
-        "computed quantities' <q>_err stay defined; unavailable PSF flux "
-        "is excluded when photometry does not run)",
+        "every computed <q>_err of the row is defined (false when fewer than "
+        "half of a computed quantity's window pixels are usable, its "
+        "correlation factor is undefined, or its total uncertainty is "
+        "non-finite; other computed quantities' <q>_err stay defined; "
+        "unavailable PSF flux is excluded when photometry does not run)",
+    ),
+    "uq_window_masked": (
+        "bool",
+        "uq",
+        "a valid quantity's window holds a masked pixel: its weighted sums "
+        "and correlation factor were taken over the usable pixels",
     ),
     "sky_err_arcsec": (
         "float64",

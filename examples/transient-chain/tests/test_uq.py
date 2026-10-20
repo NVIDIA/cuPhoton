@@ -85,9 +85,10 @@ class Scene:
         self.target = target + rng.normal(0.0, NOISE, target.shape)
         self.residual = self.target - self.matched
         self.variance = np.full((SIZE, SIZE), NOISE**2)
-        # a masked block next to the last candidate's window
-        self.variance[150:170, 30:36] = np.nan
-        self.residual[150:170, 30:36] = np.nan
+        # a masked block over most of the last candidate's windows (more
+        # than half of their pixels)
+        self.variance[150:170, 30:46] = np.nan
+        self.residual[150:170, 30:46] = np.nan
         mask = np.ones((SIZE, SIZE), bool)
         mask[:4] = mask[-4:] = mask[:, :4] = mask[:, -4:] = False
         mask &= np.isfinite(self.variance)
@@ -619,9 +620,10 @@ def test_kernel_mismatch_term_is_eta_times_the_reference_flux(scene):
 
 
 def test_validity_is_per_quantity_and_independent_of_terms():
-    """The masked block sits in the first candidate's flux and negative-lobe
-    windows but not in its positive-lobe window: psf_flux and the center are
-    invalid, the positive lobe stays valid, whatever terms are on.
+    """The masked block covers more than half of the first candidate's flux
+    and negative-lobe windows but under half of its positive-lobe window:
+    psf_flux and the center are invalid, the positive lobe stays valid with
+    the masked flag, whatever terms are on.
     """
     s = Scene(cand=[[44, 160], [140, 50], [100, 150], [60, 70]])
     for kw in (
@@ -632,7 +634,9 @@ def test_validity_is_per_quantity_and_independent_of_terms():
         res = uq.budget(s.context(**kw), **s.inputs())
         c = res.columns
         assert c["uq_valid"].tolist() == [False, True, True, True]
+        assert c["uq_window_masked"].tolist() == [True, False, False, False]
         assert res.diagnostics["invalid_window"] == 1
+        assert res.diagnostics["masked_window"] == 1
         assert np.isnan(c["psf_flux_err"][0])
         assert np.isnan(c["center_x_err"][0])
         assert np.isnan(c["center_y_err"][0])
@@ -643,6 +647,57 @@ def test_validity_is_per_quantity_and_independent_of_terms():
             for t in uq.TERMS:
                 assert np.isfinite(c[f"{q}_err_{t}"][0])
         assert np.isfinite(c["positive_x_err"]).all()
+
+
+def test_masked_window_keeps_the_error_bar_and_sets_the_flag():
+    """A candidate whose windows hold a few masked pixels (3 of 19 columns
+    of its flux window, 6 of the negative lobe's, none of the positive
+    lobe's) keeps every error bar, built over the usable pixels, and is
+    flagged; the same candidate on a clean scene is not flagged and its
+    bars agree within the masked share.
+    """
+    from cuphoton.xrep import resampling_weights_at
+
+    def resampling(x, y):
+        return resampling_weights_at(
+            lambda c: np.asarray(c, dtype=float) + 0.5,
+            x,
+            y,
+            interpolation="lanczos3",
+        )
+
+    plane = np.full((SIZE, SIZE), 4.0)
+    cand = [[52, 160], [140, 50], [100, 150], [60, 70]]
+    masked = Scene(cand=cand)
+    clean = Scene(cand=cand)
+    clean.variance[150:170, 30:46] = NOISE**2
+    clean.residual[150:170, 30:46] = (
+        clean.target[150:170, 30:46] - (clean.matched[150:170, 30:46])
+    )
+    out = {}
+    for name, s in (("masked", masked), ("clean", clean)):
+        ctx = s.context(reference_variance=plane, resampling=resampling)
+        assert ctx.terms == ("corr", "kfit", "kmatch", "mis")
+        out[name] = uq.budget(ctx, **s.inputs())
+    m, c = out["masked"].columns, out["clean"].columns
+    assert m["uq_valid"].all() and c["uq_valid"].all()
+    assert m["uq_window_masked"].tolist() == [True, False, False, False]
+    assert not c["uq_window_masked"].any()
+    assert out["masked"].diagnostics["masked_window"] == 1
+    assert out["masked"].diagnostics["invalid_window"] == 0
+    for q in QUANTITIES:
+        assert np.isfinite(m[f"{q}_err"]).all()
+        assert np.isfinite(m[f"{q}_err_corr"]).all()
+        assert m[f"{q}_err_corr"][0] > 0
+        # the masked row's bar stays close to the clean one (the factor
+        # moves by under 20% with a mask this far from the center)
+        assert m[f"{q}_err"][0] == pytest.approx(c[f"{q}_err"][0], rel=0.2)
+        np.testing.assert_allclose(m[f"{q}_err"][1:], c[f"{q}_err"][1:])
+    # the positive lobe's window is clean: its sums are the clean ones
+    for a in "xy":
+        assert m[f"positive_{a}_err_corr"][0] == pytest.approx(
+            c[f"positive_{a}_err_corr"][0], rel=1e-9
+        )
 
 
 def test_correlation_factor_is_not_evaluated_when_excluded(
@@ -706,13 +761,15 @@ def test_error_budget_runs_step_8c(scene, enabled):
     assert set(cols) == budget_columns | {f"{q}_err" for q in QUANTITIES}
     assert all(v.shape == (n,) for v in cols.values())
     assert cols["uq_valid"].dtype == bool
+    assert cols["uq_window_masked"].dtype == bool
     if enabled:
         assert summary["terms"] == ["fit", "kfit", "kmatch", "mis"]
         assert summary["excluded"] == {"corr": "no reference variance plane"}
         assert summary["kernel_fit_form"] == "plain"
         assert summary["invalid_window"] == 1
+        assert summary["masked_window"] == 0
         mismatch_bytes = 3 * summary["kernel_mismatch"]["n"] * 8
-        assert res.control_bytes == 3 * n * 2 * 8 + 4 * n + mismatch_bytes
+        assert res.control_bytes == 3 * n * 2 * 8 + 5 * n + mismatch_bytes
         assert "control_bytes" not in summary["kernel_mismatch"]
         assert np.all(cols["center_x_err"][:3] > 0.05)
     else:
@@ -720,7 +777,7 @@ def test_error_budget_runs_step_8c(scene, enabled):
         assert res.control_bytes == 0
         np.testing.assert_array_equal(cols["center_x_err"], 0.05)
         np.testing.assert_array_equal(cols["psf_flux_err"], 40.0)
-        assert cols["uq_valid"].all()
+        assert cols["uq_valid"].all() and not cols["uq_window_masked"].any()
 
 
 @pytest.mark.parametrize("stars", ["kept", "too_few", "rejected"])
