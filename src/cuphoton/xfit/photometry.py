@@ -85,13 +85,13 @@ def forced_psf_photometry(
         r2 = (x[None, None, :] - xy[:, 0, None, None]) ** 2 + (
             y[None, :, None] - xy[:, 1, None, None]
         ) ** 2
-        psf = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
+        kernel = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
     else:
-        psf = xp.asarray(psf, dtype=xp.float64)
-        if psf.shape != data.shape:
+        kernel = xp.asarray(psf, dtype=xp.float64)
+        if kernel.shape != data.shape:
             raise ValueError("psf must share the shape of images")
 
-    information = (weight * psf * psf).sum(axis=(1, 2))
+    information = (weight * kernel * kernel).sum(axis=(1, 2))
     valid = (
         xp.isfinite(information)
         & (information > 0)
@@ -99,7 +99,8 @@ def forced_psf_photometry(
         & xp.isfinite(xy).all(axis=1)
     )
     safe = xp.where(valid, information, 1.0)
-    flux = (weight * psf * xp.where(good, data, 0.0)).sum(axis=(1, 2)) / safe
+    weighted = weight * kernel * xp.where(good, data, 0.0)
+    flux = weighted.sum(axis=(1, 2)) / safe
     return ForcedPhotometryResult(
         flux=xp.where(valid, flux, xp.nan),
         flux_error=xp.where(valid, 1.0 / xp.sqrt(safe), xp.nan),
