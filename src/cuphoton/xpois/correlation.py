@@ -288,18 +288,16 @@ def correlation_factor(
         positions flagged false get ``NaN`` and are counted in
         ``n_rotated``.
     valid
-        Optional validity of the window pixels: ``(N, s, s)`` booleans (or
-        an array that broadcasts to them), or with ``positions`` a
-        two-dimensional boolean plane cut around them, pixels outside the
-        image counting as invalid. Where false the pixel is left out of the
-        sum: its weight is set to zero and its variance is not required to
-        be finite, so a window with a masked pixel keeps a factor instead
-        of ``NaN``. The factor is a ratio of two quadratic forms in the
-        weights, so renormalizing the remaining weights (as the estimator
-        the weights stand for does over the unmasked pixels) leaves it
-        unchanged; the factor describes that renormalized sum. A window
-        with every pixel masked gets ``NaN``; ``n_masked`` counts the
-        masked pixels per position so a caller can set its own limit.
+        Optional validity of the window pixels: ``(N, s, s)`` booleans, an
+        array that broadcasts to them, or with ``positions`` a boolean
+        plane cut around them (pixels outside the image count as invalid).
+        An invalid pixel gets zero weight and its variance need not be
+        finite, so a window with masked pixels keeps a factor. The factor
+        is a ratio of two quadratic forms in the weights, so it is the
+        same for the remaining weights renormalized, as the estimator does
+        over the unmasked pixels. A window with every pixel masked gets
+        ``NaN``; ``n_masked`` counts the masked pixels per position for
+        the caller's own limit.
 
     Returns
     -------
