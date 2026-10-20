@@ -796,18 +796,33 @@ def digest(array):
     }
 
 
-def _assert_digest(array, expected):
+def _assert_digest(array, expected, *, rtol=1e-12, atol_scale=0.0):
+    """``atol_scale`` sets an absolute floor as a fraction of the array's
+    scale (its root mean square), for elements near zero whose relative
+    error is set by the FFT library's rounding rather than the code.
+    """
     got = digest(array)
     assert got["shape"] == tuple(expected["shape"])
-    np.testing.assert_allclose(got["sum"], expected["sum"], rtol=1e-12)
-    np.testing.assert_allclose(got["sumsq"], expected["sumsq"], rtol=1e-12)
-    np.testing.assert_allclose(got["head"], expected["head"], rtol=1e-12)
+    count = max(1, int(np.prod(expected["shape"])))
+    atol = atol_scale * float(np.sqrt(expected["sumsq"] / count))
+    assert_allclose = np.testing.assert_allclose
+    assert_allclose(got["sum"], expected["sum"], rtol=rtol, atol=atol)
+    assert_allclose(got["sumsq"], expected["sumsq"], rtol=rtol)
+    assert_allclose(got["head"], expected["head"], rtol=rtol, atol=atol)
 
 
-def _assert_frozen(name, seed, array):
-    _assert_digest(array, REFERENCES[name][seed])
-    expected = np.reshape(FROZEN[name][seed], REFERENCES[name][seed]["shape"])
-    np.testing.assert_allclose(np.asarray(array), expected, rtol=1e-10)
+def _assert_frozen(
+    name, seed, array, *, rtol=1e-12, elem_rtol=1e-10, atol_scale=0.0
+):
+    reference = REFERENCES[name][seed]
+    _assert_digest(array, reference, rtol=rtol, atol_scale=atol_scale)
+    expected = np.reshape(FROZEN[name][seed], reference["shape"])
+    rms = (
+        float(np.sqrt(np.mean(np.square(expected)))) if expected.size else 0.0
+    )
+    np.testing.assert_allclose(
+        np.asarray(array), expected, rtol=elem_rtol, atol=atol_scale * rms
+    )
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -858,4 +873,7 @@ def test_device_inputs_reproduce_the_frozen_references(seed):
         pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
     for name, array in outputs(seed, xp=cp).items():
         assert type(array).__module__ == "cupy"
-        _assert_frozen(name, seed, cp.asnumpy(array))
+        # cuFFT and pocketfft round differently: elements near zero may
+        # differ by 1e-12 of the array's scale, so the device check adds
+        # that floor and keeps the relative tolerances.
+        _assert_frozen(name, seed, cp.asnumpy(array), atol_scale=1e-11)
