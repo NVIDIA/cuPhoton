@@ -826,6 +826,60 @@ def single_source_fit(
     )
 
 
+def supported_lobe_xy(derived, fading, applied):
+    """Position (N, 2) of the lobe forced photometry measures: the
+    ``positive_*`` lobe, which the one-lobe fit replaced on the ``applied``
+    rows, or the dipole's negative lobe for a ``fading`` source the one-lobe
+    fit did not replace.
+    """
+    xp = ops.array_module(derived.positive_x)
+    unfit = xp.asarray(fading, dtype=bool) & ~xp.asarray(applied, dtype=bool)
+    return xp.stack(
+        [
+            xp.where(unfit, 2.0 * c - p, p)
+            for c, p in (
+                (derived.center_x, derived.positive_x),
+                (derived.center_y, derived.positive_y),
+            )
+        ],
+        axis=1,
+    )
+
+
+@dataclass(frozen=True)
+class PsfFluxInputs:
+    """The ``psf_flux`` columns and the budget's flux inputs; see
+    :func:`psf_flux_inputs`.
+    """
+
+    flux: Any
+    flux_error: Any
+    position_xy: Any
+    budget: bool  # whether the budget gets the flux at all
+
+
+def psf_flux_inputs(
+    singles: SingleSourceResult, photometry=None, photometry_xy=None
+) -> PsfFluxInputs:
+    """Choose what ``psf_flux`` holds: forced photometry (``flux``,
+    ``flux_error``) at ``photometry_xy`` where it ran, else the one-lobe
+    fit's flux and error at its position on the rows it replaced and NaN
+    elsewhere. The budget takes the flux when photometry ran or at least
+    one row carries the one-lobe stand-in.
+    """
+    if photometry is not None:
+        return PsfFluxInputs(
+            photometry.flux, photometry.flux_error, photometry_xy, True
+        )
+    xp = ops.array_module(singles.derived.positive_x)
+    xy = xp.stack(
+        [singles.derived.positive_x, singles.derived.positive_y], axis=1
+    )
+    return PsfFluxInputs(
+        singles.flux, singles.flux_error, xy, bool(singles.applied.any())
+    )
+
+
 # --- the misalignment model on the host -----------------------------------
 
 

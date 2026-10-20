@@ -1432,6 +1432,56 @@ def test_single_source_fit_needs_a_variance_plane_and_single_flags():
         assert np.isnan(res.flux).all()
 
 
+def test_psf_flux_inputs_choose_photometry_else_the_one_lobe_flux():
+    """Forced photometry, when it ran, fills ``psf_flux`` at the supported
+    lobe; without it the one-lobe fit's flux stands in on the rows it
+    replaced (NaN elsewhere) and the budget takes the flux only when such
+    a row exists.
+    """
+    stamps, variance, mask, dipole, flags = _single_scene()
+    brightening, fading = uq.single_sources(flags)
+    np.testing.assert_array_equal(brightening, [True, False, False])
+    np.testing.assert_array_equal(fading, [False, False, True])
+    singles = uq.single_source_fit(
+        dipole, flags, stamps, variance, mask=mask, psf_sigma=PSF
+    )
+    # the supported lobe: positive_* everywhere the one-lobe fit replaced
+    # it, the dipole's negative lobe for a fading source it did not
+    xy = uq.supported_lobe_xy(singles.derived, fading, singles.applied)
+    np.testing.assert_array_equal(
+        xy,
+        np.column_stack(
+            [singles.derived.positive_x, singles.derived.positive_y]
+        ),
+    )
+    unfit = uq.supported_lobe_xy(dipole, fading, np.zeros(3, bool))
+    np.testing.assert_array_equal(unfit[:2, 0], dipole.positive_x[:2])
+    assert unfit[2, 0] == 2.0 * dipole.center_x[2] - dipole.positive_x[2]
+    assert unfit[2, 1] == 2.0 * dipole.center_y[2] - dipole.positive_y[2]
+
+    stand_in = uq.psf_flux_inputs(singles)
+    assert stand_in.budget
+    np.testing.assert_array_equal(stand_in.flux, singles.flux)
+    np.testing.assert_array_equal(stand_in.flux_error, singles.flux_error)
+    np.testing.assert_array_equal(stand_in.position_xy, xy)
+    assert (
+        np.isnan(stand_in.flux[1])
+        and np.isfinite(stand_in.flux[[0, 2]]).all()
+    )
+    nothing = uq.psf_flux_inputs(
+        uq.single_source_fit(dipole, np.zeros(3, int), stamps, variance)
+    )
+    assert not nothing.budget and np.isnan(nothing.flux).all()
+    photometry = SimpleNamespace(
+        flux=np.array([1.0, 2.0, 3.0]), flux_error=np.array([0.1, 0.2, 0.3])
+    )
+    forced = uq.psf_flux_inputs(singles, photometry, unfit)
+    assert forced.budget
+    assert forced.flux is photometry.flux
+    assert forced.flux_error is photometry.flux_error
+    assert forced.position_xy is unfit
+
+
 def test_budget_uses_the_single_rows_position_and_flux(scene):
     stamps, variance, mask, dipole, flags = _single_scene()
     cand = scene.cand[:3]

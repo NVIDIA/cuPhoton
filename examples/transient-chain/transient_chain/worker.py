@@ -575,23 +575,13 @@ class ChainWorker:
                 )
                 derived = singles.derived
                 xfer["control_bytes"] += singles.diagnostics["control_bytes"]
-                photometry = None
+                photometry = source = None
                 brightening, fading = uq.single_sources(qflags)
                 # only with an independent PSF width: the fitted dipole
                 # width would make psf_flux_err far too small
                 if fit_variance is not None and psf_sigma is not None:
-                    # the supported lobe: the one-lobe fit where applied,
-                    # else the dipole's negative lobe for a fading source
-                    unfit = fading & ~cp.asarray(singles.applied)
-                    source = cp.stack(
-                        [
-                            cp.where(unfit, 2.0 * c - p, p)
-                            for c, p in (
-                                (derived.center_x, derived.positive_x),
-                                (derived.center_y, derived.positive_y),
-                            )
-                        ],
-                        axis=1,
+                    source = uq.supported_lobe_xy(
+                        derived, fading, singles.applied
                     )
                     photometry = forced_psf_photometry(
                         difference,
@@ -605,28 +595,19 @@ class ChainWorker:
             with timer("uq"):
                 # the one-lobe flux stands in for psf_flux where forced
                 # photometry did not run
-                if photometry is None:
-                    psf_flux = singles.flux
-                    psf_flux_error = singles.flux_error
-                    photometry_xy = cp.stack(
-                        [derived.positive_x, derived.positive_y], axis=1
-                    )
-                    budget_flux = singles.applied.any()
-                else:
-                    psf_flux, psf_flux_error = (
-                        photometry.flux,
-                        photometry.flux_error,
-                    )
-                    photometry_xy = source
-                    budget_flux = True
+                flux_in = uq.psf_flux_inputs(singles, photometry, source)
                 budget, uq_diag = uq.error_budget(
                     u_cfg,
                     cand_x=cand_x,
                     cand_y=cand_y,
                     derived=derived,
                     single=brightening | fading,
-                    psf_flux_error=psf_flux_error if budget_flux else None,
-                    photometry_xy=photometry_xy if budget_flux else None,
+                    psf_flux_error=flux_in.flux_error
+                    if flux_in.budget
+                    else None,
+                    photometry_xy=flux_in.position_xy
+                    if flux_in.budget
+                    else None,
                     lobe_flux=singles.lobe_flux,
                     fit=fit,
                     kernel=fit.kernel,
@@ -735,8 +716,8 @@ class ChainWorker:
                     table[f"{name}_err"] = ops.to_host(
                         getattr(derived, f"{name}_error")
                     )
-                table["psf_flux"] = ops.to_host(psf_flux)
-                err_fit = ops.to_host(psf_flux_error)
+                table["psf_flux"] = ops.to_host(flux_in.flux)
+                err_fit = ops.to_host(flux_in.flux_error)
                 table["psf_flux_err_fit"] = err_fit
                 table["psf_flux_err"] = err_fit
                 # the budget columns; <q>_err becomes the full error bar
@@ -765,7 +746,7 @@ class ChainWorker:
                     int(np.asarray(v).nbytes) for v in table.values()
                 )
                 del xres, stamps, difference, scaled, derived, photometry
-                del dipole, singles, psf_flux, psf_flux_error
+                del dipole, singles, flux_in
                 del budget
         else:
             uq_diag = None
