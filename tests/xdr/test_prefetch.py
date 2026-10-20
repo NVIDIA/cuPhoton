@@ -2852,3 +2852,72 @@ def test_batch_stream_does_not_consume_partial_group_after_prefetch_error(
 
     assert consumed == []
     np.testing.assert_array_equal(output, np.zeros_like(output))
+
+
+@pytest.mark.parametrize("retirement", ["poll", "backpressure", "drain"])
+def test_decode_error_is_reported_at_every_batch_retirement(retirement):
+    from collections import deque
+
+    class Event:
+        done = True
+
+        def synchronize(self):
+            pass
+
+    class Decode:
+        def check(self):
+            raise RuntimeError("decoded size differs")
+
+    handle = prefetch._GpuBatchHandle(Event(), ["output"], object())
+    handle.decode_checks.append(Decode())
+    pending = deque([handle])
+    retire = {
+        "poll": prefetch._release_completed_gpu_batches,
+        "backpressure": prefetch._wait_for_oldest_gpu_batch,
+        "drain": prefetch._wait_for_all_gpu_batches,
+    }[retirement]
+    with pytest.raises(RuntimeError, match="decoded size differs"):
+        retire(pending)
+    assert handle not in prefetch._UNRESOLVED_GPU_BATCHES
+
+
+def test_decode_failure_still_drains_later_batch_owners():
+    from collections import deque
+
+    trace = []
+
+    class Event:
+        def __init__(self, index):
+            self.index = index
+
+        def synchronize(self):
+            trace.append(("complete", self.index))
+
+    class Decode:
+        def __init__(self, index):
+            self.index = index
+
+        def check(self):
+            trace.append(("check", self.index))
+            if self.index == 0:
+                raise RuntimeError("decompression failed")
+
+    handles = [
+        prefetch._GpuBatchHandle(
+            Event(i), [object()], object(), decode_checks=[Decode(i)]
+        )
+        for i in range(2)
+    ]
+    pending = deque(handles)
+    with pytest.raises(RuntimeError, match="decompression failed"):
+        prefetch._wait_for_all_gpu_batches(pending)
+    assert trace == [
+        ("complete", 0),
+        ("check", 0),
+        ("complete", 1),
+        ("check", 1),
+    ]
+    assert not pending
+    assert not any(
+        handle in prefetch._UNRESOLVED_GPU_BATCHES for handle in handles
+    )

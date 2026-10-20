@@ -23,7 +23,7 @@ from collections import deque
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -276,6 +276,7 @@ class _GpuBatchHandle:
     stream: _GpuCompletion
     device_id: int | None = None
     actively_awaited: bool = False
+    decode_checks: list = field(default_factory=list)
 
 
 _UNRESOLVED_GPU_BATCHES: list[_GpuBatchHandle] = []
@@ -397,6 +398,7 @@ def _synchronize_gpu_batch(
         with _gpu_batch_device(handle):
             target.synchronize()
         completion_confirmed = True
+        _check_decoded_batches(handle)
     finally:
         if completion_confirmed:
             _release_quarantined_gpu_batches([handle])
@@ -619,6 +621,7 @@ def _consume_comp_batch(
     stream,
     keepalive=None,
     *,
+    decode_checks=None,
     postprocess="auto",
     gzip_decoder: str = "auto",
     decompression_backend: str = "auto",
@@ -730,6 +733,12 @@ def _consume_comp_batch(
             else None
         )
 
+        checks_before = len(decode_checks) if decode_checks is not None else 0
+        decode_options = (
+            {"_decode_checks": decode_checks}
+            if decode_checks is not None and postprocess != "separate"
+            else {}
+        )
         d_pixels, tile_byte_offsets_np = (
             GpuCompImageReader.inflate_device_heap(
                 d_concat,
@@ -741,9 +750,16 @@ def _consume_comp_batch(
                 decompression_backend=decompression_backend,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
+                **decode_options,
             )
         )
 
+        decode_status = (
+            decode_checks[-1]
+            if decode_checks is not None
+            and len(decode_checks) > checks_before
+            else None
+        )
         for (
             entry,
             tile_start,
@@ -763,6 +779,14 @@ def _consume_comp_batch(
                 out=entry.out,
                 stream=stream,
                 keepalive=keepalive,
+                **(
+                    {
+                        "_decode_status": decode_status,
+                        "_decode_tile_start": tile_start,
+                    }
+                    if decode_status is not None
+                    else {}
+                ),
             )
 
 
@@ -822,6 +846,7 @@ def _consume_prefetched_group(
     stream,
     keepalive=None,
     *,
+    decode_checks=None,
     postprocess="auto",
     gzip_decoder: str = "auto",
     decompression_backend: str = "auto",
@@ -859,6 +884,7 @@ def _consume_prefetched_group(
     _consume_comp_batch(
         comp_entries,
         stream,
+        decode_checks=decode_checks,
         keepalive=keepalive,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
@@ -1129,6 +1155,7 @@ def _submit_prefetched_group(
                     outs,
                     stream,
                     keepalive=keepalive,
+                    decode_checks=guard.decode_checks,
                     postprocess=postprocess,
                     gzip_decoder=gzip_decoder,
                     decompression_backend=decompression_backend,
@@ -1172,6 +1199,12 @@ def _submit_prefetched_group(
     raise submission_error
 
 
+def _check_decoded_batches(handle: _GpuBatchHandle) -> None:
+    """Report codec errors after confirming CUDA completion."""
+    for completion in handle.decode_checks:
+        completion.check()
+
+
 def _release_completed_gpu_batches(
     in_flight: deque[_GpuBatchHandle],
 ) -> None:
@@ -1179,6 +1212,7 @@ def _release_completed_gpu_batches(
     while in_flight:
         if not _gpu_batch_completion_is_confirmed(in_flight[0]):
             break
+        _check_decoded_batches(in_flight[0])
         in_flight.popleft()
 
 
@@ -1235,7 +1269,17 @@ def _wait_for_all_gpu_batches(
                 if control_error is not None:
                     break
             else:
-                _release_quarantined_gpu_batches([handle])
+                try:
+                    _check_decoded_batches(handle)
+                except BaseException as exc:
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        control_error = exc
+                    elif first_error is None:
+                        first_error = exc
+                finally:
+                    _release_quarantined_gpu_batches([handle])
+                if control_error is not None:
+                    break
 
         if control_error is not None:
             _mark_gpu_batches_unresolved(handles)

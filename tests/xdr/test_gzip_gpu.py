@@ -227,3 +227,71 @@ def test_native_decoder_rejects_invalid_backend(cp, entrypoint):
         getattr(extension, entrypoint)(
             0, empty, empty, 0, empty, empty, decompression_backend="invalid"
         )
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("decoder", ["gzip", "deflate"])
+def test_batch_decode_failure_skips_pixels_and_raises(
+    cp, tmp_path, monkeypatch, native, decoder
+):
+    import kvikio
+    import kvikio.defaults
+    from astropy.io import fits
+
+    from cuphoton.xdr import batch_to_device_stream
+    from cuphoton.xdr.reader import GpuCompImageReader
+
+    original = np.arange(64 * 64, dtype=np.int32).reshape(64, 64)
+    path = tmp_path / "valid-tiles.fits"
+    fits.HDUList(
+        [fits.PrimaryHDU()]
+        + [
+            fits.CompImageHDU(
+                original + index,
+                compression_type="GZIP_2",
+                tile_shape=original.shape,
+            )
+            for index in range(2)
+        ]
+    ).writeto(path)
+    inflate = GpuCompImageReader.inflate_device_heap
+    checks = []
+
+    def mismatched_size(*args, out_bytes, **kwargs):
+        # Keep the compressed streams valid and overallocate the final tile.
+        # Earlier tiles/HDU offsets remain unchanged, and the final tile must
+        # be rejected using the decoder's actual-size result.
+        out_bytes = out_bytes.copy()
+        out_bytes[-1] += 4
+        result = inflate(*args, out_bytes=out_bytes, **kwargs)
+        checks.extend(kwargs["_decode_checks"])
+        return result
+
+    monkeypatch.setattr(
+        GpuCompImageReader,
+        "inflate_device_heap",
+        staticmethod(mismatched_size),
+    )
+    outputs = [cp.full((2, 64, 64), -999, dtype=cp.int32) for _ in range(2)]
+    cp.cuda.get_current_stream().synchronize()
+    stream = cp.cuda.Stream(non_blocking=True)
+    with kvikio.defaults.set("compat_mode", kvikio.CompatMode.ON):
+        with pytest.raises(
+            RuntimeError, match="decoded size differs for tile 3"
+        ):
+            batch_to_device_stream(
+                [path, path],
+                hdu_indices=[1, 2],
+                out=outputs,
+                stream=stream,
+                native_batcher=native,
+                decode_batch_files=2,
+                gzip_decoder=decoder,
+                decompression_backend="cuda",
+            )
+    assert len(checks) == 1
+    assert stream.done
+    np.testing.assert_array_equal(cp.asnumpy(outputs[0][0]), original)
+    np.testing.assert_array_equal(cp.asnumpy(outputs[0][1]), original)
+    np.testing.assert_array_equal(cp.asnumpy(outputs[1][0]), original + 1)
+    np.testing.assert_array_equal(cp.asnumpy(outputs[1][1]), -999)

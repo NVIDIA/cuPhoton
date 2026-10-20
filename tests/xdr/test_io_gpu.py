@@ -25,7 +25,14 @@ def native_io():
     ext = nvcomp_batch._try_get_cpp_ext()
     if ext is None or not hasattr(ext, "NativeBatchBuilder"):
         pytest.skip("native I/O extension unavailable")
-    with defaults.set("compat_mode", kvikio.CompatMode.ON):
+    with defaults.set(
+        {
+            "compat_mode": kvikio.CompatMode.ON,
+            "gds_threshold": 0,
+            "task_size": 64 * 1024,
+            "num_threads": 2,
+        }
+    ):
         yield cp, ext
 
 
@@ -95,11 +102,54 @@ def test_native_span_reads_complete_or_stop_on_eof(
     if past_eof:
         assert builder.io_stats()["kvikio_reads"] == 0
         if direct:
-            # Failure must prevent submission of the second span.
-            np.testing.assert_array_equal(cp.asnumpy(target[8:]), 251)
+            # Both spans were queued before the first future failed. The
+            # successful sibling must finish before the builder joins.
+            np.testing.assert_array_equal(
+                cp.asnumpy(target[8:]), original[:32]
+            )
     if direct:
         np.testing.assert_array_equal(cp.asnumpy(allocation[:17]), 251)
         np.testing.assert_array_equal(cp.asnumpy(allocation[-17:]), 251)
+
+
+def test_native_split_read_failure_drains_later_spans(tmp_path, native_io):
+    cp, ext = native_io
+    original = np.arange(4 * 1024 * 1024, dtype=np.uint8)
+    path = tmp_path / "split-input.bin"
+    path.write_bytes(original.tobytes())
+    # The first pread is split into tasks and fails in its final task. The
+    # following large span queues additional tasks using the same file and
+    # destination owners; a failed aggregate future does not drain these.
+    failed_size = 128 * 1024
+    allocation = cp.full(failed_size + original.size, 251, dtype=cp.uint8)
+    cp.cuda.Stream.null.synchronize()
+    plan = (
+        str(path),
+        0,
+        0,
+        [],
+        [
+            (
+                original.size - failed_size // 2,
+                failed_size,
+                allocation.data.ptr,
+            ),
+            (0, original.size, allocation.data.ptr + failed_size),
+        ],
+    )
+    builder = ext.NativeBatchBuilder(1, 1, 2, int(cp.cuda.Device().id))
+    try:
+        builder.submit_batch(0, [plan])
+        builder.close_input()
+        with pytest.raises(RuntimeError, match="EOF|short KvikIO read"):
+            builder.next_batch()
+        # Error publication happens after the owned pool is drained, before
+        # shutdown joins the native file workers.
+        np.testing.assert_array_equal(
+            cp.asnumpy(allocation[failed_size:]), original
+        )
+    finally:
+        builder.request_stop()
 
 
 def test_native_direct_span_checks_allocation_before_read(
@@ -122,3 +172,78 @@ def test_native_direct_span_checks_allocation_before_read(
     finally:
         builder.request_stop()
     assert builder.io_stats()["kvikio_reads"] == 0
+
+
+def test_native_readers_recover_independently_after_failure(
+    tmp_path, native_io
+):
+    cp, ext = native_io
+    defaults = pytest.importorskip("kvikio.defaults")
+    original = np.arange(1024 * 1024, dtype=np.uint8)
+    path = tmp_path / "reuse-input.bin"
+    path.write_bytes(original.tobytes())
+    outputs = [cp.empty(original.size, dtype=cp.uint8) for _ in range(3)]
+    device_id = int(cp.cuda.Device().id)
+
+    # Change the configured size between calls. Within each iteration, one
+    # failed builder stops while another remains live, then a new builder
+    # starts and both remaining builders must read successfully.
+    for threads in (2, 1, 2):
+        with defaults.set("num_threads", threads):
+            builders = [
+                ext.NativeBatchBuilder(1, 1, 1, device_id) for _ in range(2)
+            ]
+            try:
+                builders[0].submit_batch(
+                    0,
+                    [
+                        (
+                            str(path),
+                            0,
+                            0,
+                            [],
+                            [
+                                (
+                                    original.size,
+                                    original.size,
+                                    outputs[0].data.ptr,
+                                )
+                            ],
+                        )
+                    ],
+                )
+                builders[0].close_input()
+                with pytest.raises(
+                    RuntimeError, match="EOF|short KvikIO read"
+                ):
+                    builders[0].next_batch()
+                builders[0].request_stop()
+                builders[0].request_stop()
+                builders.append(ext.NativeBatchBuilder(1, 1, 1, device_id))
+                for builder, output in zip(
+                    builders[1:], outputs[1:], strict=True
+                ):
+                    builder.submit_batch(
+                        0,
+                        [
+                            (
+                                str(path),
+                                0,
+                                0,
+                                [],
+                                [(0, original.size, output.data.ptr)],
+                            )
+                        ],
+                    )
+                    builder.close_input()
+                for builder, output in zip(
+                    builders[1:], outputs[1:], strict=True
+                ):
+                    assert builder.next_batch() is not None
+                    np.testing.assert_array_equal(
+                        cp.asnumpy(output), original
+                    )
+                    assert builder.next_batch() is None
+            finally:
+                for builder in builders:
+                    builder.request_stop()

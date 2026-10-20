@@ -196,3 +196,53 @@ def _decoded_tiles(image, compression, section):
         compression_type=compression,
     )
     return np.concatenate(payloads), offsets, plan
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+@pytest.mark.parametrize("compression", ["GZIP_1", "GZIP_2"])
+def test_deferred_decode_guards_scatter_and_dequantization(
+    cp, compression, quantized
+):
+    from types import SimpleNamespace
+
+    image = np.arange(17 * 19, dtype="i4").reshape(17, 19)
+    raw, offsets, plan = _decoded_tiles(image, compression, np.s_[:, :])
+    count = len(offsets)
+    assert count > 2
+    if quantized:
+        plan.update(
+            quantized=True,
+            dtype_char="f4",
+            zbitpix=-32,
+            sel_zscale=np.full(count, 0.5),
+            sel_zzero=np.full(count, 2.0),
+        )
+    # A prefix models this HDU following another HDU in the decode batch.
+    statuses = cp.zeros(count + 1, dtype=cp.int32)
+    sizes = cp.asarray(np.r_[0, plan["out_bytes"]], dtype=cp.uint64)
+    actual = sizes.copy()
+    statuses[0] = 1
+    statuses[2] = 1
+    actual[3] += 1
+    completion = SimpleNamespace(
+        status_ptr=statuses.data.ptr,
+        actual_sizes_ptr=actual.data.ptr,
+        expected_sizes_ptr=sizes.data.ptr,
+    )
+    out = cp.full(image.shape, -999, dtype="f4" if quantized else "i4")
+    keepalive = []
+    GpuCompImageReader.postprocess_decoded_tiles(
+        cp.asarray(raw),
+        offsets,
+        plan,
+        out=out,
+        keepalive=keepalive,
+        _decode_status=completion,
+        _decode_tile_start=1,
+    )
+    expected = image.astype("f4") * 0.5 + 2 if quantized else image.copy()
+    for tile in (1, 2):
+        row, col = plan["origins_r"][tile], plan["origins_c"][tile]
+        height, width = plan["heights"][tile], plan["widths"][tile]
+        expected[row : row + height, col : col + width] = -999
+    np.testing.assert_array_equal(cp.asnumpy(out), expected)
