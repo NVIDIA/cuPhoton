@@ -36,7 +36,7 @@ more than one license.
 | --- | --- | --- | --- | --- | --- |
 | `build` | `setuptools>=83.0.0` | `not locked` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `build frontend / PyPI` |
 | `build` | `wheel` | `not locked` | `MIT` | [wheel](https://github.com/pypa/wheel) | `build frontend / PyPI` |
-| `base` | `astropy>=6.1.4` | `8.0.0` | `BSD-3-Clause` | [Astropy](https://github.com/astropy/astropy) | `uv / PyPI` |
+| `base` | `astropy>=7.2.0` | `8.0.0` | `BSD-3-Clause` | [Astropy](https://github.com/astropy/astropy) | `uv / PyPI` |
 | `base` | `h5py>=3.10` | `3.16.0` | `BSD-3-Clause`; binary wheels may include HDF5 under its HDF5 license | [h5py](https://github.com/h5py/h5py) | `uv / PyPI` |
 | `base` | `numexpr>=2.10` | `2.14.1` | `MIT` | [NumExpr](https://github.com/pydata/numexpr) | `uv / PyPI` |
 | `base` | `numpy>=2.0,<2.6` | `2.4.6` | `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0` | [NumPy](https://github.com/numpy/numpy) | `uv / PyPI` |
