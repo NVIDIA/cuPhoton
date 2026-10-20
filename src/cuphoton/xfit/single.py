@@ -51,8 +51,9 @@ class SingleSourceFitResult:
     :class:`cuphoton.xfit.LMStatus` values and ``uncertainty_reason_codes``
     hold :class:`cuphoton.xfit.DipoleFitUncertaintyReason` values.
     Uncertainties are NaN where ``uncertainty_valid`` is false; values are
-    returned for every fit. ``residuals`` are model minus data in the stamp
-    shape.
+    returned for every fit except a stamp without a usable pixel, whose
+    parameters, position, flux and residuals are NaN. ``residuals`` are
+    model minus data in the stamp shape.
     """
 
     parameters: Any
@@ -125,10 +126,13 @@ def fit_single_sources(
     :func:`cuphoton.xfit.fit_dipoles` does with a variance. A pixel is
     usable when ``mask`` (if given, same shape as ``images``) is true and
     the image and a positive variance are finite there; other pixels carry
-    zero weight. The covariance is the inverse Gauss-Newton Hessian at the
-    solution and is not rescaled by the reduced chi-square: it is right when
-    ``variance`` describes the noise. Correlated noise between pixels makes
-    it too small, as it does for every pixel-weighted fit.
+    zero weight. A stamp without a usable pixel returns NaN parameters,
+    position and flux with ``uncertainty_valid`` false and reason
+    ``INSUFFICIENT_DEGREES_OF_FREEDOM``. The covariance is the inverse
+    Gauss-Newton Hessian at the solution and is not rescaled by the reduced
+    chi-square: it is right when ``variance`` describes the noise.
+    Correlated noise between pixels makes it too small, as it does for
+    every pixel-weighted fit.
 
     ``solver`` passes :class:`cuphoton.xfit.LMConfig` controls through.
     ``compute_dtype`` is ``"input"`` (the image's float dtype, float64 for
@@ -161,10 +165,16 @@ def fit_single_sources(
     if xy.shape != (batch, 2):
         raise ValueError("positions must have shape (batch, 2)")
 
+    def per_stamp(value, name):
+        array = xp.asarray(value)
+        if array.ndim != 0 and array.shape != (batch,):
+            raise ValueError(f"{name} must be one value or one per stamp")
+        return xp.broadcast_to(array, (batch,))
+
     fixed_width = psf_sigma is not None
     if fixed_width:
-        fixed_sigma = xp.broadcast_to(
-            xp.asarray(psf_sigma).astype(dtype, copy=False), (batch,)
+        fixed_sigma = per_stamp(psf_sigma, "psf_sigma").astype(
+            dtype, copy=False
         )
         names = CIRCULAR_PARAMETERS
     else:
@@ -173,7 +183,7 @@ def fit_single_sources(
     count = len(names)
     sign_array = None
     if sign is not None:
-        sign_array = xp.broadcast_to(xp.asarray(sign), (batch,))
+        sign_array = per_stamp(sign, "sign")
 
     # One host transfer for every value check on the inputs.
     checks = [
@@ -201,6 +211,7 @@ def fit_single_sources(
         if mask_array.shape != data.shape:
             raise ValueError("mask must share the shape of images")
         good &= mask_array.astype(bool)
+    empty = ~good.any(axis=(1, 2))
     weights = xp.where(
         good, 1.0 / xp.sqrt(xp.where(good, var, 1.0)), 0.0
     ).astype(dtype, copy=False)
@@ -379,6 +390,10 @@ def fit_single_sources(
         DipoleFitUncertaintyReason.INSUFFICIENT_DEGREES_OF_FREEDOM
     )
     reasons[~converged] = int(DipoleFitUncertaintyReason.FIT_NOT_CONVERGED)
+    # A stamp without a usable pixel has nothing to fit: NaN values below.
+    reasons[empty] = int(
+        DipoleFitUncertaintyReason.INSUFFICIENT_DEGREES_OF_FREEDOM
+    )
     valid = reasons == int(DipoleFitUncertaintyReason.VALID)
     covariance = xp.where(valid[:, None, None], covariance, xp.nan)
     standard_errors = xp.where(
@@ -397,6 +412,11 @@ def fit_single_sources(
     flux_variance = xp.einsum(
         "bi,bij,bj->b", flux_gradient, covariance, flux_gradient
     )
+    parameters = xp.where(empty[:, None], xp.nan, parameters).astype(
+        dtype, copy=False
+    )
+    flux = xp.where(empty, xp.nan, flux)
+    residuals = xp.where(empty[:, None, None], xp.nan, residuals)
 
     return SingleSourceFitResult(
         parameters=parameters,

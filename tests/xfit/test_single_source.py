@@ -271,3 +271,146 @@ def test_argument_validation(kwargs, message):
     arguments.update(kwargs)
     with pytest.raises(ValueError, match=message):
         fit_single_sources(**arguments)
+
+
+def test_per_stamp_width_and_sign_are_applied_stamp_by_stamp():
+    bright = _single(20.0, 1.5, 1.5, 0.0, 0.4, -0.3)
+    faint = _single(-20.0, 2.5, 2.5, 0.0, -0.6, 0.8)
+    clean = np.concatenate([bright, faint])
+    images, variance = _noisy(clean, 2, seed=8, noise=0.5)
+    result = fit_single_sources(
+        images,
+        variance,
+        np.zeros((2, 2)),
+        np.asarray([1.5, 2.5]),
+        sign=np.asarray([1, -1]),
+    )
+    assert result.uncertainty_valid.all()
+    np.testing.assert_array_equal(result.sign, [1, -1])
+    assert result.parameters[0, 0] > 0 > result.parameters[1, 0]
+    np.testing.assert_allclose(result.x, [0.4, -0.6], atol=0.08)
+    np.testing.assert_allclose(result.y, [-0.3, 0.8], atol=0.08)
+    np.testing.assert_allclose(
+        result.flux,
+        [_flux(20.0, 1.5, 1.5), _flux(20.0, 2.5, 2.5)],
+        rtol=0.05,
+    )
+    np.testing.assert_allclose(
+        result.flux_error,
+        2.0
+        * np.pi
+        * np.asarray([1.5, 2.5]) ** 2
+        * result.standard_errors[:, 0],
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"psf_sigma": [1.0, 2.0, 3.0]}, "psf_sigma must be one value"),
+        ({"psf_sigma": [[1.0], [2.0]]}, "psf_sigma must be one value"),
+        ({"sign": [1, 1, 1]}, "sign must be one value"),
+    ],
+)
+def test_wrong_length_per_stamp_inputs_raise_named_errors(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        fit_single_sources(
+            np.zeros((2, 5, 5)),
+            np.ones((2, 5, 5)),
+            np.zeros((2, 2)),
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "psf_sigma", [None, 1.8], ids=["elliptical", "fixed"]
+)
+def test_all_masked_stamp_returns_nan_values_and_invalid_uncertainty(
+    psf_sigma,
+):
+    truth = (30.0, 1.8, 1.8, 0.0, 0.5, 0.0)
+    images, variance = _noisy(_single(*truth), 2, seed=9)
+    mask = np.ones(images.shape, dtype=bool)
+    mask[1] = False
+    result = fit_single_sources(
+        images, variance, np.zeros((2, 2)), psf_sigma, mask=mask
+    )
+    assert result.uncertainty_valid.tolist() == [True, False]
+    assert result.uncertainty_reason_codes[1] == int(
+        DipoleFitUncertaintyReason.INSUFFICIENT_DEGREES_OF_FREEDOM
+    )
+    assert np.isnan(result.parameters[1]).all()
+    assert np.isnan([result.x[1], result.y[1], result.flux[1]]).all()
+    assert np.isnan(result.flux_error[1])
+    assert np.isnan(result.residuals[1]).all()
+    assert result.degrees_of_freedom[1] == -len(result.parameter_names)
+    assert np.isfinite(result.parameters[0]).all()
+    np.testing.assert_allclose(result.x[0], truth[4], atol=0.08)
+
+
+def test_cupy_matches_numpy():
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("CUDA device is unavailable")
+    except Exception:
+        pytest.skip("CUDA runtime is unavailable")
+    bright = _single(40.0, 1.6, 2.0, 0.3, 1.3, -0.8)
+    faint = _single(-25.0, 2.0, 1.6, -0.4, -0.5, 0.7)
+    clean = np.concatenate([bright, faint, bright])
+    images, variance = _noisy(clean, 3, seed=10, noise=0.5)
+    mask = np.ones(images.shape, dtype=bool)
+    mask[:, :, 26] = False
+    mask[2] = False
+    positions = np.zeros((3, 2))
+    sign = np.asarray([1, -1, 1])
+
+    cpu = fit_single_sources(
+        images, variance, positions, sign=sign, mask=mask
+    )
+    gpu = fit_single_sources(
+        cp.asarray(images),
+        cp.asarray(variance),
+        cp.asarray(positions),
+        sign=cp.asarray(sign),
+        mask=cp.asarray(mask),
+    )
+
+    assert type(gpu.x).__module__ == "cupy"
+    assert gpu.parameter_names == cpu.parameter_names
+    assert cpu.uncertainty_valid.tolist() == [True, True, False]
+    assert (cpu.parameters[:2, 1] >= cpu.parameters[:2, 2]).all()
+    for name in (
+        "parameters",
+        "covariance",
+        "standard_errors",
+        "x",
+        "y",
+        "position_error_x",
+        "position_error_y",
+        "position_xy_covariance",
+        "flux",
+        "flux_error",
+        "chi_square",
+        "null_chi_square",
+        "reduced_chi_square",
+        "residuals",
+    ):
+        np.testing.assert_allclose(
+            cp.asnumpy(getattr(gpu, name)),
+            getattr(cpu, name),
+            rtol=1e-10,
+            atol=1e-10,
+            equal_nan=True,
+            err_msg=name,
+        )
+    for name in (
+        "sign",
+        "converged",
+        "degrees_of_freedom",
+        "uncertainty_valid",
+        "uncertainty_reason_codes",
+    ):
+        np.testing.assert_array_equal(
+            cp.asnumpy(getattr(gpu, name)), getattr(cpu, name), err_msg=name
+        )
