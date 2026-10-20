@@ -109,11 +109,14 @@ def kernel_fit_covariance(
     the image area times the coefficient count. The footprints are built
     in chunks of coefficients, each chunk's images holding at most
     ``_FOOTPRINT_CHUNK_ELEMENTS`` (2**26) float64 values, with one batched
-    convolution per chunk. On a 4096 x 4096 frame with 20 coefficients a
-    chunk is 4 coefficient images (512 MB); the chunk's convolution
-    temporaries peak near 3.3 GB on top of the 2.5 GB of ``U``, so the
-    sandwich peaks near 5.8 GB there. The plain form holds no full-size
-    array beyond the inputs.
+    convolution per chunk at the next fast FFT length. Array memory on a
+    4096 x 4096 frame with 11 coefficients: ``U`` is 1.5 GB, a chunk is 4
+    coefficient images (0.5 GB) and its spectra, products and inverse
+    transforms at the padded 4320 x 4320 size are 0.6 GB each, so the
+    sandwich peaks near 5.2 GB of arrays (the plain form near 1.0 GB). On
+    CuPy the cuFFT plan work areas add to this; the fast lengths keep them
+    small, where the odd full lengths would take Bluestein plans with work
+    areas of several GB each.
 
     Parameters
     ----------
@@ -251,16 +254,12 @@ def kernel_fit_covariance(
             columns = _design_columns(
                 xp, reference_model, basis, background, start, stop
             )
+            columns *= weight_image[None]
+            columns = xp.ascontiguousarray(
+                _fftconvolve(columns, kernel[None], mode="same", axes=(1, 2))
+            )
             footprint[start:stop] = _fftconvolve(
-                _fftconvolve(
-                    columns * weight_image[None],
-                    kernel[None],
-                    mode="same",
-                    axes=(1, 2),
-                ),
-                stamp[None],
-                mode="same",
-                axes=(1, 2),
+                columns, stamp[None], mode="same", axes=(1, 2)
             ).reshape(stop - start, n_pixels)
         footprint *= xp.sqrt(source_flat)
         resampled = xp.empty((n_coefficients, n_coefficients))
@@ -295,10 +294,10 @@ def kernel_fit_variance(
 
     The response and the quadratic form are batched over positions. The
     basis convolutions run in chunks of positions whose spectra hold at
-    most ``_RESPONSE_CHUNK_ELEMENTS`` (2**24) complex values; with 20
-    coefficients, a 15 x 15 kernel and 15 x 15 weights a chunk is 477
-    positions and its temporaries peak near 0.55 GB, independent of the
-    frame size.
+    most ``_RESPONSE_CHUNK_ELEMENTS`` (2**24) complex values; with 11
+    coefficients, a 15 x 15 kernel and 21 x 21 weights a chunk is 698
+    positions and its arrays peak near 0.6 GB, independent of the frame
+    size (FFT plan work areas add to this on CuPy).
 
     Parameters
     ----------
@@ -473,15 +472,19 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     """Linear convolution of real arrays by FFT in their own namespace.
 
     Transforms ``axes`` (every axis by default; the others broadcast) at the
-    full linear size, then crops to the full, same (centered on ``a``) or
-    valid output.
+    next fast FFT length above the full linear size (``next_fast_len`` of
+    ``scipy.fft`` or ``cupyx.scipy.fft``), so odd or prime lengths never
+    take the Bluestein plans with their large work areas, then crops the
+    full linear size to the full, same (centered on ``a``) or valid output.
     """
 
     xp = _array_module(a)
+    next_fast_len = _fft_module(xp).next_fast_len
     axes = tuple(range(a.ndim)) if axes is None else tuple(axes)
     full = [a.shape[i] + k.shape[i] - 1 for i in axes]
+    fast = [next_fast_len(n, True) for n in full]
     out = xp.fft.irfftn(
-        xp.fft.rfftn(a, full, axes) * xp.fft.rfftn(k, full, axes), full, axes
+        xp.fft.rfftn(a, fast, axes) * xp.fft.rfftn(k, fast, axes), fast, axes
     )
     keep = {
         "full": full,
@@ -492,6 +495,18 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     for i, n, m in zip(axes, full, keep, strict=True):
         crop[i] = slice((n - m) // 2, (n - m) // 2 + m)
     return out[tuple(crop)]
+
+
+def _fft_module(xp: Any) -> Any:
+    """``scipy.fft`` for NumPy, ``cupyx.scipy.fft`` for CuPy."""
+
+    if xp is np:
+        import scipy.fft
+
+        return scipy.fft
+    import cupyx.scipy.fft
+
+    return cupyx.scipy.fft
 
 
 def _real_2d_array(xp: Any, name: str, value: Any) -> Any:

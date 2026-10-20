@@ -5,20 +5,33 @@
 """Time the kernel-fit covariance and variance on a detector-sized frame.
 
 Builds a synthetic float64 frame, fits a constant kernel of three Gaussian
-bases times polynomials with a flat background, then times
-``kernel_fit_covariance`` (plain and sandwich) and ``kernel_fit_variance``
-at a set of positions, printing seconds per call and peak memory.
+bases times polynomials with a flat background (11 coefficients), then
+times ``kernel_fit_covariance`` (plain and sandwich) and
+``kernel_fit_variance`` at a set of positions, printing seconds per call
+and peak memory.
 
     python scripts/bench_kernel_uncertainty.py --backend numpy --size 1024
     python scripts/bench_kernel_uncertainty.py --backend cupy
 
-Peak memory is ``tracemalloc`` for NumPy and the default memory pool's
-``used_bytes`` for CuPy, both relative to the start of each call.
+Every call runs twice and the second run is timed, so FFT plans and pool
+blocks from the first run do not count. Peak memory is the ``tracemalloc``
+peak for NumPy. For CuPy it is the high-water mark of the default memory
+pool's allocations during the call, recorded by a ``MemoryHook``, after
+clearing the FFT plan cache and freeing the pool's blocks; the plan cache
+size after the call is printed beside it, since cuFFT work areas live
+there and not in the pool.
+
+The resampling stamp is the Lanczos-3 6 x 6 stamp at the frame center with
+a half-pixel phase, from ``cuphoton.xrep.resampling_weights_at`` when the
+tree exposes it and the outer product of the one-dimensional Lanczos-3 taps
+otherwise. The PSF weights cover 5 sigma each way, the window a
+PSF-weighted sum uses in the transient chain.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import time
 import tracemalloc
 
@@ -39,8 +52,14 @@ COMPONENTS = (
 )
 BACKGROUND_DEGREE = 0
 KERNEL_SHAPE = (15, 15)
-WINDOW = 15
 PSF_SIGMA = 2.0
+LANCZOS_A = 3
+
+
+def window_side(psf_sigma):
+    """Side of the window a PSF-weighted sum covers: 5 sigma each way."""
+
+    return 2 * int(math.ceil(5.0 * float(psf_sigma))) + 1
 
 
 def gaussian(shape, sigma):
@@ -50,9 +69,34 @@ def gaussian(shape, sigma):
     return k / k.sum()
 
 
-def resampling_stamp():
-    taps = np.array([0.1, 0.4, 0.4, 0.1])
-    return taps[:, None] * taps[None, :]
+def lanczos_taps(phase, a=LANCZOS_A):
+    """Normalized one-dimensional Lanczos taps at a sub-pixel ``phase``."""
+
+    x = phase - np.arange(1 - a, a + 1)
+    taps = np.sinc(x) * np.sinc(x / a)
+    return taps / taps.sum()
+
+
+def resampling_stamp(size):
+    """The ``(6, 6)`` Lanczos-3 stamp at the frame center and its origin."""
+
+    try:
+        from cuphoton.xrep import resampling_weights_at
+    except ImportError:
+        taps = lanczos_taps(0.5)
+        return taps[:, None] * taps[None, :], "Lanczos-3 outer product"
+    center = np.array([size // 2], dtype=np.float64)
+    weights = resampling_weights_at(
+        lambda points: points + 0.5,
+        center,
+        center,
+        interpolation="lanczos3",
+        lanczos_a=LANCZOS_A,
+    )
+    return (
+        np.asarray(weights.weights[0], dtype=np.float64),
+        "cuphoton.xrep.resampling_weights_at",
+    )
 
 
 def scene(size, n_positions, seed=0):
@@ -84,32 +128,68 @@ def scene(size, n_positions, seed=0):
     )
 
 
+def high_water_hook(cp):
+    """A ``MemoryHook`` that records the pool's peak allocated bytes."""
+
+    class HighWater(cp.cuda.MemoryHook):
+        name = "bench_high_water"
+
+        def __init__(self):
+            super().__init__()
+            self.used = 0
+            self.peak = 0
+
+        def malloc_postprocess(
+            self, device_id, size, mem_size, mem_ptr, pmem_id
+        ):
+            self.used += mem_size
+            self.peak = max(self.peak, self.used)
+
+        def free_preprocess(self, device_id, mem_size, mem_ptr, pmem_id):
+            self.used -= mem_size
+
+    return HighWater()
+
+
 class Meter:
-    """Seconds and peak bytes of one call, per backend."""
+    """Seconds and peak bytes of the second of two calls, per backend."""
 
     def __init__(self, xp):
         self.xp = xp
         self.cupy = xp.__name__ == "cupy"
 
-    def run(self, label, fn):
+    def _sync(self):
         if self.cupy:
-            pool = self.xp.get_default_memory_pool()
-            pool.free_all_blocks()
-            base = pool.used_bytes()
             self.xp.cuda.Device().synchronize()
+
+    def run(self, label, fn):
+        fn()
+        self._sync()
+        if self.cupy:
+            cache = self.xp.fft.config.get_plan_cache()
+            cache.clear()
+            self.xp.get_default_memory_pool().free_all_blocks()
+            hook = high_water_hook(self.xp)
+            with hook:
+                start = time.perf_counter()
+                out = fn()
+                self._sync()
+                seconds = time.perf_counter() - start
+            peak = hook.peak
+            plan_bytes = cache.get_curr_memsize()
+            extra = f"   plan cache {plan_bytes / 2**30:7.3f} GiB"
         else:
             tracemalloc.start()
-        start = time.perf_counter()
-        out = fn()
-        if self.cupy:
-            self.xp.cuda.Device().synchronize()
-        seconds = time.perf_counter() - start
-        if self.cupy:
-            peak = pool.used_bytes() - base
-        else:
+            start = time.perf_counter()
+            out = fn()
+            seconds = time.perf_counter() - start
             _, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
-        print(f"{label:<28s} {seconds:9.3f} s   peak {peak / 2**30:7.3f} GiB")
+            extra = ""
+        print(
+            f"{label:<28s} {seconds:9.3f} s   peak {peak / 2**30:7.3f} GiB"
+            + extra
+        )
         return out
 
 
@@ -136,17 +216,21 @@ def main():
         background_degree=BACKGROUND_DEGREE,
         backend="cpu",
     )
+    stamp_np, stamp_origin = resampling_stamp(args.size)
+    window = window_side(PSF_SIGMA)
     print(
         f"{args.backend}: {args.size} x {args.size} frame, "
         f"{fit.basis_kernels.shape[0] + 1} coefficients, "
-        f"{args.positions} positions"
+        f"{args.positions} positions, "
+        f"{stamp_np.shape[0]} x {stamp_np.shape[1]} resampling stamp "
+        f"({stamp_origin}), {window} x {window} PSF window"
     )
     reference_d = xp.asarray(reference)
     target_variance_d = xp.asarray(target_variance)
     reference_variance_d = xp.asarray(reference_variance)
-    stamp = xp.asarray(resampling_stamp())
+    stamp = xp.asarray(stamp_np)
     weights = xp.asarray(
-        psf_weights(PSF_SIGMA, WINDOW, offset=xy - np.rint(xy)),
+        psf_weights(PSF_SIGMA, window, offset=xy - np.rint(xy)),
         dtype=xp.float64,
     )
     xy_d = xp.asarray(xy)
