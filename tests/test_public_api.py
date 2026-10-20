@@ -108,6 +108,7 @@ def test_xpois_correlation_signatures_are_explicit() -> None:
         "positions",
         "residual_variance",
         "is_translation",
+        "valid",
     ]
     assert list(
         inspect.signature(xpois.resampling_variance_factor).parameters
