@@ -240,6 +240,42 @@ def test_per_position_weights_match_one_call_per_position():
     assert not np.allclose(got, got[0])
 
 
+def test_weights_axis_matches_one_call_per_weighting():
+    """``(N, q, s, s)`` weights give the ``q`` separate ``(N, s, s)``
+    results as ``(N, q)``, sharing one response per position; a stamp off
+    the image is NaN for every weighting."""
+
+    _, reference, target, fit_mask, _, stars = _scene()
+    fit = _fit(reference, target, fit_mask, background_degree=1)
+    cov = kernel_fit_covariance(
+        fit,
+        reference=reference,
+        target_variance=np.full(reference.shape, TARGET_VARIANCE),
+    )
+    positions = np.vstack([np.rint(stars[:4]), [[2.0, 40.0]]])
+    weights = np.random.default_rng(8).normal(size=(5, 3, 7, 7))
+    got = kernel_fit_variance(
+        cov, reference=reference, positions=positions, weights=weights
+    )
+    assert got.shape == (5, 3)
+    for q in range(3):
+        each = kernel_fit_variance(
+            cov,
+            reference=reference,
+            positions=positions,
+            weights=weights[:, q],
+        )
+        np.testing.assert_allclose(got[:, q], each, rtol=1e-12)
+    assert np.isnan(got[4]).all() and np.isfinite(got[:4]).all()
+    with pytest.raises(ValueError, match="odd square"):
+        kernel_fit_variance(
+            cov,
+            reference=reference,
+            positions=positions,
+            weights=np.ones((5, 3, 6, 6)),
+        )
+
+
 def test_reference_variance_is_in_resampled_units():
     """Doubling the resampled reference variance doubles the added term."""
 

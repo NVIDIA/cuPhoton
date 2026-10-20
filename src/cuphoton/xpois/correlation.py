@@ -247,10 +247,12 @@ def correlation_factor(
     The variance inputs are either full planes cut here around
     ``positions`` with :func:`window_stamps`, or stamps already cut on the
     same windows; the stamps' side ``s`` sets the window. Negative variance
-    in a window makes its factor and pixel ratio ``NaN``.
+    in a window makes its factor and pixel ratio ``NaN``. Several
+    weightings of the same windows (a flux and the two position
+    derivatives, say) share the window cuts: pass them on a weights axis.
 
     Every step is batched over positions; the footprint convolutions run
-    in chunks of ``_CHUNK`` (512) positions, the only loop. A chunk's
+    in chunks of ``_CHUNK`` (512) weight stamps, the only loop. A chunk's
     temporaries are ``(512, s + kernel + stamp - 2, ...)`` images, under
     10 MB for 15 x 15 weights, a 15 x 15 kernel and a 4 x 4 stamp, so the
     memory is set by the input planes, not the frame size.
@@ -260,7 +262,8 @@ def correlation_factor(
     weights
         ``(N, s, s)`` weights of the sum at each position, ``s`` odd: PSF
         weights for a flux, their derivative for a position, a top hat for
-        an aperture. With ``positions``, one ``(s, s)`` stamp for every
+        an aperture; or ``(N, q, s, s)`` for ``q`` weightings of the same
+        windows. With ``positions``, one ``(s, s)`` stamp for every
         position is also accepted.
     kernel
         Two-dimensional finite, odd-shaped fitted kernel.
@@ -310,10 +313,11 @@ def correlation_factor(
     Returns
     -------
     CorrelationFactorResult
-        ``factor`` and ``pixel_ratio`` per position, ``NaN`` where any
-        unmasked stamp pixel of the window is not finite, where the
-        resampling stamp is all zero, or where ``is_translation`` is false,
-        with ``n_masked`` and the covariance scope recorded.
+        ``factor`` and ``pixel_ratio`` per position (``(N,)``, or ``(N, q)``
+        for ``(N, q, s, s)`` weights), ``NaN`` where any unmasked stamp
+        pixel of the window is not finite, where the resampling stamp is
+        all zero, or where ``is_translation`` is false, with ``n_masked``
+        and the covariance scope recorded.
     """
 
     xp = _array_module(weights, target_variance, reference_variance)
@@ -325,20 +329,24 @@ def correlation_factor(
             raise ValueError("positions must have shape (N, 2)")
         if w.ndim == 2:
             w = xp.broadcast_to(w, (int(xy.shape[0]),) + w.shape)
-    if w.ndim != 3 or w.shape[1] % 2 == 0 or w.shape[2] % 2 == 0:
-        raise ValueError("weights must be odd-sized stamps (N, s, s)")
-    count = int(w.shape[0])
+    batched = w.ndim == 4
+    if not batched and w.ndim == 3:
+        w = w[:, None]
+    if w.ndim != 4 or w.shape[2] % 2 == 0 or w.shape[3] % 2 == 0:
+        raise ValueError(
+            "weights must be odd-sized stamps (N, s, s) or (N, q, s, s)"
+        )
+    count, n_weightings = int(w.shape[0]), int(w.shape[1])
+    window = (int(w.shape[2]), int(w.shape[3]))
     if positions is not None and int(xy.shape[0]) != count:
         raise ValueError("weights and positions disagree on N")
 
     def stamps_of(name: str, value: Any) -> Any:
         array = xp.asarray(value, dtype=xp.float64)
         if positions is not None and array.ndim == 2:
-            array = window_stamps(
-                array, xy, (int(w.shape[1]), int(w.shape[2]))
-            )
+            array = window_stamps(array, xy, window)
         try:
-            return xp.broadcast_to(array, w.shape)
+            return xp.broadcast_to(array, (count,) + window)
         except ValueError as exc:
             raise ValueError(
                 f"{name} must be a plane with positions, or stamps that "
@@ -365,64 +373,69 @@ def correlation_factor(
         keep = xp.asarray(valid)
         if positions is not None and keep.ndim == 2:
             # cut the boolean plane itself; only the windows become float64
-            keep = (
-                window_stamps(
-                    keep, xy, (int(w.shape[1]), int(w.shape[2])), fill=0.0
-                )
-                > 0.5
-            )
+            keep = window_stamps(keep, xy, window, fill=0.0) > 0.5
         else:
             try:
-                keep = xp.broadcast_to(keep.astype(bool), w.shape)
+                keep = xp.broadcast_to(keep.astype(bool), (count,) + window)
             except ValueError as exc:
                 raise ValueError(
                     "valid must be a plane with positions, or booleans that "
                     "broadcast to the weights"
                 ) from exc
         n_masked = (~keep).sum(axis=(1, 2))
-        w = xp.where(keep, w, 0.0)
+        w = xp.where(keep[:, None], w, 0.0)
         target = xp.where(keep, target, 0.0)
         resampled = xp.where(keep, resampled, 0.0)
         residual = xp.where(keep, residual, 0.0)
 
+    # the window cuts are shared by the q weightings; the sums and the
+    # footprints run over the (N * q) weight stamps
     w2 = w**2
-    w2_sum = w2.sum(axis=(1, 2))
-    target_sum = (w2 * target).sum(axis=(1, 2))
-    resampled_sum = (w2 * resampled).sum(axis=(1, 2))
-    diagonal_sum = (w2 * residual).sum(axis=(1, 2))
-    power = xp.empty(count, dtype=xp.float64)
+    w2_sum = w2.sum(axis=(2, 3))
+    target_sum = (w2 * target[:, None]).sum(axis=(2, 3))
+    resampled_sum = (w2 * resampled[:, None]).sum(axis=(2, 3))
+    diagonal_sum = (w2 * residual[:, None]).sum(axis=(2, 3))
+    rows = count * n_weightings
+    flat = w.reshape((rows,) + window)
+    row_stamps = xp.repeat(stamps, n_weightings, axis=0)
+    power = xp.empty(rows, dtype=xp.float64)
     flipped = kernel_arr[::-1, ::-1][None]
-    for start in range(0, count, _CHUNK):
-        stop = min(start + _CHUNK, count)
+    for start in range(0, rows, _CHUNK):
+        stop = min(start + _CHUNK, rows)
         response = _fftconvolve(
-            w[start:stop], flipped, mode="full", axes=(1, 2)
+            flat[start:stop], flipped, mode="full", axes=(1, 2)
         )
         footprint = _fftconvolve(
-            response, stamps[start:stop], mode="full", axes=(1, 2)
+            response, row_stamps[start:stop], mode="full", axes=(1, 2)
         )
         power[start:stop] = (footprint**2).sum(axis=(1, 2))
+    power = power.reshape(count, n_weightings)
 
     finite = (
-        usable
-        & xp.isfinite(w).all(axis=(1, 2))
-        & xp.isfinite(target).all(axis=(1, 2))
-        & xp.isfinite(resampled).all(axis=(1, 2))
-        & xp.isfinite(residual).all(axis=(1, 2))
-        & (target >= 0).all(axis=(1, 2))
-        & (resampled >= 0).all(axis=(1, 2))
-        & (residual >= 0).all(axis=(1, 2))
+        (
+            usable
+            & xp.isfinite(target).all(axis=(1, 2))
+            & xp.isfinite(resampled).all(axis=(1, 2))
+            & xp.isfinite(residual).all(axis=(1, 2))
+            & (target >= 0).all(axis=(1, 2))
+            & (resampled >= 0).all(axis=(1, 2))
+            & (residual >= 0).all(axis=(1, 2))
+        )[:, None]
+        & xp.isfinite(w).all(axis=(2, 3))
         & (diagonal_sum > 0)
         & (w2_sum > 0)
     )
     with np.errstate(divide="ignore", invalid="ignore"):
-        source_variance = resampled_sum / (w2_sum * gain)
+        source_variance = resampled_sum / (w2_sum * gain[:, None])
         factor = (target_sum + source_variance * power) / diagonal_sum
-        pixel_ratio = (target_sum + source_variance * true * w2_sum) / (
-            diagonal_sum
-        )
+        pixel_ratio = (
+            target_sum + source_variance * true[:, None] * w2_sum
+        ) / diagonal_sum
+    factor = xp.where(finite, factor, xp.nan)
+    pixel_ratio = xp.where(finite, pixel_ratio, xp.nan)
     return CorrelationFactorResult(
-        factor=xp.where(finite, factor, xp.nan),
-        pixel_ratio=xp.where(finite, pixel_ratio, xp.nan),
+        factor=factor if batched else factor[:, 0],
+        pixel_ratio=pixel_ratio if batched else pixel_ratio[:, 0],
         n_rotated=count - int(_translated(xp, is_translation, count).sum()),
         n_masked=n_masked,
     )

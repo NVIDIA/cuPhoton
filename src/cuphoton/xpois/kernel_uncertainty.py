@@ -309,6 +309,8 @@ def kernel_fit_variance(
     design terms. The added variance is ``gamma^T C gamma``. With
     ``weights`` it is the variance of the weighted sum of residual pixels
     around each position, ``g = sum_p w_p gamma_p`` and ``g^T C g``.
+    Several weightings of the same windows (a flux and the two position
+    derivatives, say) share one response: pass them on a weights axis.
 
     The response and the quadratic form are batched over positions. The
     basis convolutions run in chunks of positions whose spectra hold at
@@ -329,7 +331,8 @@ def kernel_fit_variance(
         ``(N, 2)`` array of ``(x, y)`` target pixel coordinates. Each stamp
         is centered on the nearest integer pixel.
     weights
-        Optional ``(N, s, s)`` or ``(s, s)`` odd-sized weight stamps. Without
+        Optional ``(N, s, s)`` or ``(s, s)`` odd-sized weight stamps, or
+        ``(N, q, s, s)`` for ``q`` weightings of the same windows. Without
         them the variance of the single residual pixel is returned.
     chunk_elements
         Element budget of one position chunk's response spectra, by default
@@ -339,9 +342,10 @@ def kernel_fit_variance(
     Returns
     -------
     ndarray
-        ``(N,)`` variances in squared target units; ``NaN`` where a stamp
-        and its kernel footprint leave the image. CuPy when ``cov`` or
-        ``reference`` holds CuPy arrays, NumPy otherwise.
+        ``(N,)`` variances in squared target units, ``(N, q)`` for
+        ``(N, q, s, s)`` weights; ``NaN`` where a stamp and its kernel
+        footprint leave the image. CuPy when ``cov`` or ``reference`` holds
+        CuPy arrays, NumPy otherwise.
     """
 
     xp = _array_module(cov.covariance, cov.basis_kernels, reference)
@@ -357,15 +361,19 @@ def kernel_fit_variance(
         stamps = xp.asarray(weights, dtype=xp.float64)
         if stamps.ndim == 2:
             stamps = xp.broadcast_to(stamps, (count,) + stamps.shape)
-        if (
-            stamps.ndim != 3
-            or stamps.shape[0] != count
-            or stamps.shape[1] != stamps.shape[2]
-            or stamps.shape[1] % 2 == 0
-        ):
-            raise ValueError(
-                "weights must be odd square stamps with shape (N, s, s)"
-            )
+    batched = stamps.ndim == 4
+    if not batched:
+        stamps = stamps[:, None]
+    if (
+        stamps.ndim != 4
+        or stamps.shape[0] != count
+        or stamps.shape[2] != stamps.shape[3]
+        or stamps.shape[2] % 2 == 0
+    ):
+        raise ValueError(
+            "weights must be odd square stamps with shape (N, s, s) or "
+            "(N, q, s, s)"
+        )
     covariance = xp.asarray(cov.covariance, dtype=xp.float64)
     n_terms = len(triangular_degree_pairs(cov.background_degree))
     if covariance.shape != (cov.basis_count + n_terms,) * 2:
@@ -392,7 +400,10 @@ def kernel_fit_variance(
         center[:, 1][:, None, None] + offsets[None, :, None],
         center[:, 0][:, None, None] + offsets[None, None, :],
     )
-    projected = xp.empty((count, int(covariance.shape[0])), dtype=xp.float64)
+    projected = xp.empty(
+        (count, int(stamps.shape[1]), int(covariance.shape[0])),
+        dtype=xp.float64,
+    )
     spectrum = (
         int(basis.shape[0])
         * (patches.shape[1] + basis.shape[1] - 1)
@@ -417,14 +428,15 @@ def kernel_fit_variance(
             mode="valid",
             axes=(2, 3),
         )
-        projected[start:stop, : basis.shape[0]] = xp.einsum(
-            "ncyx,nyx->nc", response[: stop - start], stamps[start:stop]
+        projected[start:stop, :, : basis.shape[0]] = xp.einsum(
+            "ncyx,nqyx->nqc", response[: stop - start], stamps[start:stop]
         )
-    projected[:, basis.shape[0] :] = xp.einsum(
-        "ncyx,nyx->nc", background, stamps
+    projected[:, :, basis.shape[0] :] = xp.einsum(
+        "ncyx,nqyx->nqc", background, stamps
     )
-    variance = xp.einsum("nc,cd,nd->n", projected, covariance, projected)
-    return xp.where(inside, variance, xp.nan)
+    variance = xp.einsum("nqc,cd,nqd->nq", projected, covariance, projected)
+    variance = xp.where(inside[:, None], variance, xp.nan)
+    return variance if batched else variance[:, 0]
 
 
 def _inverse(xp: Any, hessian: Any) -> Any:
