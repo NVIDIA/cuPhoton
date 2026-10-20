@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -37,6 +38,107 @@ inline void check_nvcomp(nvcompStatus_t s, const char* ctx) {
     }
 }
 
+// Own every metadata transfer until decode completion. Downstream kernels may
+// use the device status/size arrays, so callers retain this object through their
+// final stream event, not merely until check() returns.
+struct DecodeCompletion {
+    struct Resources {
+        std::vector<std::shared_ptr<void>> pooled_keepalive;
+        std::vector<void*> async_scratch;
+        NativePinnedAllocation host;
+    };
+    std::unique_ptr<Resources> resources = std::make_unique<Resources>();
+    cudaStream_t stream = nullptr;
+    cudaEvent_t event = nullptr;
+    bool submitted = false;
+    bool event_recorded = false;
+    std::size_t count = 0;
+    const void** comp_ptrs = nullptr;
+    void** out_ptrs = nullptr;
+    std::size_t* comp_sizes = nullptr;
+    std::size_t* expected_sizes = nullptr;
+    std::size_t* actual_sizes = nullptr;
+    nvcompStatus_t* statuses = nullptr;
+    void* d_statuses = nullptr;
+    void* d_actual_sizes = nullptr;
+    void* d_expected_sizes = nullptr;
+
+    DecodeCompletion(std::size_t n, cudaStream_t decode_stream)
+        : stream(decode_stream),
+          count(n) {
+        if (n == 0) {
+            return;
+        }
+        int device_id = -1;
+        check_cuda(
+            cudaGetDevice(&device_id), "cudaGetDevice decode completion");
+        resources->host = acquire_native_pinned_allocation(
+            device_id,
+            n
+                * (2 * sizeof(void*) + 3 * sizeof(std::size_t)
+                    + sizeof(nvcompStatus_t)));
+        auto* cursor = resources->host.data;
+        comp_ptrs = reinterpret_cast<const void**>(cursor);
+        cursor += n * sizeof(void*);
+        out_ptrs = reinterpret_cast<void**>(cursor);
+        cursor += n * sizeof(void*);
+        comp_sizes = reinterpret_cast<std::size_t*>(cursor);
+        cursor += n * sizeof(std::size_t);
+        expected_sizes = reinterpret_cast<std::size_t*>(cursor);
+        cursor += n * sizeof(std::size_t);
+        actual_sizes = reinterpret_cast<std::size_t*>(cursor);
+        cursor += n * sizeof(std::size_t);
+        statuses = reinterpret_cast<nvcompStatus_t*>(cursor);
+        check_cuda(
+            cudaEventCreateWithFlags(&event, cudaEventDisableTiming),
+            "create decode completion event");
+    }
+
+    ~DecodeCompletion() {
+        // Also covers submission/copy failures before an event was recorded.
+        // The host destinations must not return to their pool while DMA runs.
+        cudaError_t result = cudaSuccess;
+        if (event_recorded) {
+            result = cudaEventSynchronize(event);
+        } else if (submitted) {
+            result = cudaStreamSynchronize(stream);
+        }
+        if (result != cudaSuccess) {
+            // A fatal CUDA failure gives no safe reuse boundary. Quarantine
+            // these allocations for the remaining process lifetime.
+            (void)resources.release();
+        } else {
+            for (void* ptr : resources->async_scratch) {
+                cudaFree(ptr);
+            }
+        }
+        if (event != nullptr) {
+            cudaEventDestroy(event);
+        }
+    }
+
+    void check() const {
+        if (event_recorded) {
+            check_cuda(
+                cudaEventSynchronize(event), "wait for decode completion");
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            if (statuses[i] != nvcompSuccess) {
+                throw std::runtime_error(
+                    "nvcomp decompression failed for tile " + std::to_string(i)
+                    + ": status="
+                    + std::to_string(static_cast<int>(statuses[i])));
+            }
+            if (actual_sizes[i] != expected_sizes[i]) {
+                throw std::runtime_error(
+                    "nvcomp decoded size differs for tile " + std::to_string(i)
+                    + ": expected " + std::to_string(expected_sizes[i])
+                    + ", got " + std::to_string(actual_sizes[i]));
+            }
+        }
+    }
+};
+
 py::object batch_decompress_impl(
     std::uintptr_t d_concat_ptr,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
@@ -51,7 +153,8 @@ py::object batch_decompress_impl(
     std::uintptr_t stream_ptr,
     bool use_native_pool,
     bool gzip_wrapped,
-    const std::string& decompression_backend);
+    const std::string& decompression_backend,
+    bool deferred = false);
 
 // Batched DEFLATE decompress across N tiles packed inside one device buffer.
 //
@@ -172,7 +275,8 @@ py::object batch_decompress_impl(
     std::uintptr_t stream_ptr,
     bool use_native_pool,
     bool gzip_wrapped,
-    const std::string& decompression_backend) {
+    const std::string& decompression_backend,
+    bool deferred) {
     nvcompDecompressBackend_t backend;
     if (decompression_backend == "auto") {
         backend = NVCOMP_DECOMPRESS_BACKEND_DEFAULT;
@@ -190,10 +294,14 @@ py::object batch_decompress_impl(
             "all per-tile arrays must have the same length");
     }
     if (n == 0) {
-        return py::none();
+        return deferred
+            ? py::cast(std::make_shared<DecodeCompletion>(0, nullptr))
+            : py::none();
     }
 
     auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+    auto completion =
+        deferred ? std::make_shared<DecodeCompletion>(n, stream) : nullptr;
 
     // Build host-side pointer/size arrays.
     std::vector<const void*> h_comp_ptrs(n);
@@ -260,7 +368,13 @@ py::object batch_decompress_impl(
                            n, max_uncomp, opts, &temp_bytes, total_uncomp),
         "get temp size");
 
-    std::vector<std::shared_ptr<void>> pooled_keepalive;
+    std::vector<std::shared_ptr<void>> synchronous_keepalive;
+    auto& pooled_keepalive = deferred ? completion->resources->pooled_keepalive
+                                      : synchronous_keepalive;
+    pooled_keepalive.reserve(7);
+    if (deferred) {
+        completion->resources->async_scratch.reserve(7);
+    }
     auto release_async_scratch = [&]() {
         for (void* ptr : {d_temp,
                  d_comp_ptrs,
@@ -274,6 +388,16 @@ py::object batch_decompress_impl(
             }
         }
     };
+    auto allocate_async_scratch =
+        [&](void** ptr, std::size_t bytes, const char* context) {
+            if (deferred) {
+                completion->submitted = true;
+            }
+            check_cuda(cudaMallocAsync(ptr, bytes, stream), context);
+            if (deferred) {
+                completion->resources->async_scratch.push_back(*ptr);
+            }
+        };
 
     try {
         if (use_native_pool) {
@@ -312,36 +436,46 @@ py::object batch_decompress_impl(
                 pooled_keepalive.push_back(std::move(temp.owner));
             }
         } else {
-            check_cuda(
-                cudaMallocAsync(&d_comp_ptrs, n * sizeof(void*), stream),
-                "alloc comp_ptrs");
-            check_cuda(
-                cudaMallocAsync(&d_out_ptrs, n * sizeof(void*), stream),
-                "alloc out_ptrs");
-            check_cuda(
-                cudaMallocAsync(&d_comp_sizes, n * sizeof(std::size_t), stream),
-                "alloc comp_sizes");
-            check_cuda(
-                cudaMallocAsync(&d_out_sizes, n * sizeof(std::size_t), stream),
-                "alloc out_sizes");
-            check_cuda(
-                cudaMallocAsync(
-                    &d_statuses, n * sizeof(nvcompStatus_t), stream),
-                "alloc statuses");
-            check_cuda(
-                cudaMallocAsync(
-                    &d_actual_sizes, n * sizeof(std::size_t), stream),
-                "alloc actual sizes");
+            allocate_async_scratch(
+                &d_comp_ptrs, n * sizeof(void*), "alloc comp_ptrs");
+            allocate_async_scratch(
+                &d_out_ptrs, n * sizeof(void*), "alloc out_ptrs");
+            allocate_async_scratch(
+                &d_comp_sizes, n * sizeof(std::size_t), "alloc comp_sizes");
+            allocate_async_scratch(
+                &d_out_sizes, n * sizeof(std::size_t), "alloc out_sizes");
+            allocate_async_scratch(
+                &d_statuses, n * sizeof(nvcompStatus_t), "alloc statuses");
+            allocate_async_scratch(
+                &d_actual_sizes, n * sizeof(std::size_t), "alloc actual sizes");
             if (temp_bytes > 0) {
-                check_cuda(
-                    cudaMallocAsync(&d_temp, temp_bytes, stream), "alloc temp");
+                allocate_async_scratch(&d_temp, temp_bytes, "alloc temp");
             }
+        }
+
+        if (deferred) {
+            std::memcpy(
+                completion->comp_ptrs, h_comp_ptrs.data(), n * sizeof(void*));
+            std::memcpy(
+                completion->out_ptrs, h_out_ptrs.data(), n * sizeof(void*));
+            std::memcpy(
+                completion->comp_sizes,
+                h_comp_sizes.data(),
+                n * sizeof(std::size_t));
+            std::memcpy(
+                completion->expected_sizes,
+                h_out_sizes.data(),
+                n * sizeof(std::size_t));
+            completion->d_statuses = d_statuses;
+            completion->d_actual_sizes = d_actual_sizes;
+            completion->d_expected_sizes = d_out_sizes;
+            completion->submitted = true;
         }
 
         check_cuda(
             cudaMemcpyAsync(
                 d_comp_ptrs,
-                h_comp_ptrs.data(),
+                deferred ? completion->comp_ptrs : h_comp_ptrs.data(),
                 n * sizeof(void*),
                 cudaMemcpyHostToDevice,
                 stream),
@@ -349,7 +483,7 @@ py::object batch_decompress_impl(
         check_cuda(
             cudaMemcpyAsync(
                 d_out_ptrs,
-                h_out_ptrs.data(),
+                deferred ? completion->out_ptrs : h_out_ptrs.data(),
                 n * sizeof(void*),
                 cudaMemcpyHostToDevice,
                 stream),
@@ -357,7 +491,7 @@ py::object batch_decompress_impl(
         check_cuda(
             cudaMemcpyAsync(
                 d_comp_sizes,
-                h_comp_sizes.data(),
+                deferred ? completion->comp_sizes : h_comp_sizes.data(),
                 n * sizeof(std::size_t),
                 cudaMemcpyHostToDevice,
                 stream),
@@ -365,16 +499,17 @@ py::object batch_decompress_impl(
         check_cuda(
             cudaMemcpyAsync(
                 d_out_sizes,
-                h_out_sizes.data(),
+                deferred ? completion->expected_sizes : h_out_sizes.data(),
                 n * sizeof(std::size_t),
                 cudaMemcpyHostToDevice,
                 stream),
             "copy out_sizes");
 
-        // The API return reports submission, not per-tile success. Wait for
-        // this stream before accepting pixels, while allowing Python I/O
-        // prefetch threads to progress. nvCOMP still requires valid input;
-        // these completion checks are not validation of compressed payloads.
+        // The API return reports submission, not per-tile success. Synchronous
+        // callers check before accepting pixels; deferred callers check at
+        // their batch boundary and guard downstream kernels with device status.
+        // nvCOMP still requires valid input: these completion checks are not
+        // validation of compressed payloads.
         {
             py::gil_scoped_release release;
             // Pass actual-size and status buffers together: nvCOMP 5.2
@@ -409,7 +544,7 @@ py::object batch_decompress_impl(
                              : "batched deflate decompression");
             check_cuda(
                 cudaMemcpyAsync(
-                    h_statuses.data(),
+                    deferred ? completion->statuses : h_statuses.data(),
                     d_statuses,
                     n * sizeof(nvcompStatus_t),
                     cudaMemcpyDeviceToHost,
@@ -417,31 +552,42 @@ py::object batch_decompress_impl(
                 "copy decode statuses");
             check_cuda(
                 cudaMemcpyAsync(
-                    h_actual_sizes.data(),
+                    deferred ? completion->actual_sizes : h_actual_sizes.data(),
                     d_actual_sizes,
                     n * sizeof(std::size_t),
                     cudaMemcpyDeviceToHost,
                     stream),
                 "copy actual decoded sizes");
-            check_cuda(
-                cudaStreamSynchronize(stream), "wait for decode completion");
-            for (std::size_t i = 0; i < n; ++i) {
-                if (h_statuses[i] != nvcompSuccess) {
-                    throw std::runtime_error(
-                        "nvcomp decompression failed for tile "
-                        + std::to_string(i) + ": status="
-                        + std::to_string(static_cast<int>(h_statuses[i])));
-                }
-                if (h_actual_sizes[i] != h_out_sizes[i]) {
-                    throw std::runtime_error(
-                        "nvcomp decoded size differs for tile "
-                        + std::to_string(i) + ": expected "
-                        + std::to_string(h_out_sizes[i]) + ", got "
-                        + std::to_string(h_actual_sizes[i]));
+            if (deferred) {
+                check_cuda(
+                    cudaEventRecord(completion->event, stream),
+                    "record decode completion event");
+                completion->event_recorded = true;
+            } else {
+                check_cuda(
+                    cudaStreamSynchronize(stream),
+                    "wait for decode completion");
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (h_statuses[i] != nvcompSuccess) {
+                        throw std::runtime_error(
+                            "nvcomp decompression failed for tile "
+                            + std::to_string(i) + ": status="
+                            + std::to_string(static_cast<int>(h_statuses[i])));
+                    }
+                    if (h_actual_sizes[i] != h_out_sizes[i]) {
+                        throw std::runtime_error(
+                            "nvcomp decoded size differs for tile "
+                            + std::to_string(i) + ": expected "
+                            + std::to_string(h_out_sizes[i]) + ", got "
+                            + std::to_string(h_actual_sizes[i]));
+                    }
                 }
             }
         }
 
+        if (deferred) {
+            return py::cast(completion);
+        }
         if (use_native_pool) {
             auto holder =
                 std::make_unique<std::vector<std::shared_ptr<void>>>();
@@ -453,6 +599,11 @@ py::object batch_decompress_impl(
             return owner;
         }
     } catch (...) {
+        if (deferred) {
+            py::gil_scoped_release release;
+            completion.reset();
+            throw;
+        }
         {
             // Keep host copy destinations and pooled owners alive until
             // outstanding stream work has finished, including copy failures.
@@ -480,6 +631,80 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
 
     xdr_gpu::bind_io(m);
     xdr_gpu::bind_memory_manager(m);
+
+    py::class_<
+        xdr_gpu::DecodeCompletion,
+        std::shared_ptr<xdr_gpu::DecodeCompletion>>(m, "DecodeCompletion")
+        .def(
+            "check",
+            &xdr_gpu::DecodeCompletion::check,
+            py::call_guard<py::gil_scoped_release>(),
+            "Wait for decode completion and validate per-tile status and size.")
+        .def_property_readonly(
+            "status_ptr",
+            [](const xdr_gpu::DecodeCompletion& c) {
+                return reinterpret_cast<std::uintptr_t>(c.d_statuses);
+            })
+        .def_property_readonly(
+            "actual_sizes_ptr",
+            [](const xdr_gpu::DecodeCompletion& c) {
+                return reinterpret_cast<std::uintptr_t>(c.d_actual_sizes);
+            })
+        .def_property_readonly(
+            "expected_sizes_ptr", [](const xdr_gpu::DecodeCompletion& c) {
+                return reinterpret_cast<std::uintptr_t>(c.d_expected_sizes);
+            });
+
+    auto bind_deferred = [&](const char* name, bool gzip_wrapped) {
+        m.def(
+            name,
+            [gzip_wrapped](
+                std::uintptr_t d_concat_ptr,
+                py::array_t<
+                    std::int64_t,
+                    py::array::c_style | py::array::forcecast> rel_offsets,
+                py::array_t<
+                    std::int64_t,
+                    py::array::c_style | py::array::forcecast> lengths,
+                std::uintptr_t d_out_ptr,
+                py::array_t<
+                    std::int64_t,
+                    py::array::c_style | py::array::forcecast> out_offsets,
+                py::array_t<
+                    std::int64_t,
+                    py::array::c_style | py::array::forcecast> out_sizes,
+                std::uintptr_t stream_ptr,
+                bool use_native_pool,
+                const std::string& decompression_backend) {
+                return xdr_gpu::batch_decompress_impl(
+                    d_concat_ptr,
+                    rel_offsets,
+                    lengths,
+                    d_out_ptr,
+                    out_offsets,
+                    out_sizes,
+                    stream_ptr,
+                    use_native_pool,
+                    gzip_wrapped,
+                    decompression_backend,
+                    true);
+            },
+            py::arg("d_concat_ptr"),
+            py::arg("rel_offsets"),
+            py::arg("lengths"),
+            py::arg("d_out_ptr"),
+            py::arg("out_offsets"),
+            py::arg("out_sizes"),
+            py::arg("stream_ptr") = 0,
+            py::arg("use_native_pool") = true,
+            py::arg("decompression_backend") = "auto",
+            "Submit decode and return a completion owner without a host wait.\n"
+            "Keep inputs, output and completion alive through downstream work.\n"
+            "Guard downstream reads with device status and decoded sizes, and\n"
+            "call completion.check() before publishing the batch result.");
+    };
+    bind_deferred("batch_gzip_decompress_deferred", true);
+    bind_deferred("batch_deflate_decompress_deferred", false);
 
     m.def(
         "batch_deflate_decompress",

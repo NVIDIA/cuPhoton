@@ -636,6 +636,16 @@ NativeDeviceAllocation acquire_native_device_allocation(
     return allocation;
 }
 
+NativePinnedAllocation acquire_native_pinned_allocation(
+    int device_id, std::size_t nbytes) {
+    auto buffer = native_pinned_pool().acquire(device_id, nbytes);
+    NativePinnedAllocation allocation;
+    allocation.data = buffer->data;
+    allocation.size = buffer->size;
+    allocation.owner = std::static_pointer_cast<void>(std::move(buffer));
+    return allocation;
+}
+
 py::dict native_pinned_pool_stats_dict(int device_id) {
     return native_pinned_pool().stats(device_id);
 }

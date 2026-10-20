@@ -437,6 +437,7 @@ class GpuCompImageReader:
         stream=None,
         keepalive=None,
         header_sizes=None,
+        _decode_checks=None,
         gzip_decoder: str = "auto",
         decompression_backend: str = "auto",
     ):
@@ -470,6 +471,11 @@ class GpuCompImageReader:
                 use_native_pool=keepalive is not None,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
+                **(
+                    {"_decode_checks": _decode_checks}
+                    if _decode_checks is not None
+                    else {}
+                ),
             )
 
     @staticmethod
@@ -482,6 +488,8 @@ class GpuCompImageReader:
         stream=None,
         keepalive=None,
         postprocess: str = "auto",
+        _decode_status=None,
+        _decode_tile_start: int = 0,
     ):
         """Restore FITS pixels without modifying the decoded input buffer.
 
@@ -503,6 +511,19 @@ class GpuCompImageReader:
         )
         if keepalive is not None:
             keepalive.extend([out, d_scatter_target])
+
+        decode_guard = (
+            (
+                int(_decode_status.status_ptr) + 4 * _decode_tile_start,
+                int(_decode_status.actual_sizes_ptr) + 8 * _decode_tile_start,
+                int(_decode_status.expected_sizes_ptr)
+                + 8 * _decode_tile_start,
+            )
+            if _decode_status is not None
+            else None
+        )
+        if decode_guard is not None and postprocess == "separate":
+            raise ValueError("deferred decode requires fused postprocessing")
 
         with stream or cp.cuda.Stream.null:
             d_tile_offsets = cp.asarray(tile_byte_offsets_np)
@@ -570,6 +591,7 @@ class GpuCompImageReader:
                     d_tile_byte_lengths,
                     *scatter_args[3:],
                     shuffled=shuffled,
+                    decode_guard=decode_guard,
                 )
 
             # Dequantize int -> float when ZSCALE/ZZERO are present.
@@ -587,6 +609,7 @@ class GpuCompImageReader:
                     d_widths,
                     d_sel_zscale,
                     d_sel_zzero,
+                    decode_guard=decode_guard,
                 )
 
         return out

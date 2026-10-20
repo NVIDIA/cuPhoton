@@ -314,22 +314,22 @@ uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; pr
 If the extension is missing, `batch_to_device` and `batch_to_device_stream`
 raise a `RuntimeError` that names the missing module and the build command.
 
-The native decoder waits for each batch on its CUDA stream to check every
-tile's completion status and decoded byte count before accepting its pixels.
-This adds a host wait per decode batch and may reduce overlap with subsequent
-GPU work. The wait releases the
-Python GIL, but Python prefetch submissions share the submission lock and can
-wait behind the current decode batch. These completion checks
-do not make nvCOMP a validator for untrusted compressed input.
+The native decoder checks every tile's completion status and decoded byte
+count. With fused postprocessing, batch readers submit decoding asynchronously
+and check its results when the GPU batch completes. Postprocessing skips any
+tile whose decode failed or returned an unexpected size, and the batch reader
+raises before returning results. Standalone decode calls and
+`postprocess="separate"` check results before returning from the decoder.
+These completion checks do not make nvCOMP a validator for untrusted
+compressed input.
 
-The native batch reader completes each span synchronously in its file worker.
-Its worker joins therefore finish storage reads before output buffers are
-released after an I/O error. Files can still be read concurrently, but spans
-within a file are read sequentially, each by one worker without KvikIO task
-splitting. These reads also bypass KvikIO's small-read GDS threshold: outside
-compatibility mode, every span uses cuFileRead. `native_read_threads` controls
-concurrency across files. Measure throughput with representative inputs when
-choosing file and decode batch sizes.
+The native batch reader queues spans concurrently and uses KvikIO's configured
+task size and small-read GDS threshold. Each builder owns its I/O task pool;
+after an I/O error, it stops new submissions and waits for queued reads before
+releasing their file handles and output buffers. `native_read_threads` controls
+concurrency across files, while KvikIO's thread count controls the builder's
+I/O tasks. Measure throughput with representative inputs when choosing file
+and decode batch sizes.
 
 If a Python KvikIO read submission or wait raises before completion can be
 confirmed, xDR retains the affected buffers and file handles and refuses
