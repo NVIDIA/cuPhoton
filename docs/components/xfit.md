@@ -315,7 +315,7 @@ no registration, image subtraction, candidate detection or background removal.
 
 Mask and variance HDUs are optional. A mask pixel is included when none of
 its `bad_mask_bits` are set; omit that field to exclude every nonzero mask
-pixel. The example value `15` selects bits 0–3; choose the bits appropriate
+pixel. The example value `15` selects bits 0 to 3; choose the bits appropriate
 for your own data. No instrument-specific mask policy is assumed. Split mode
 requires variance on every plane or on none. Nonfinite values retain the
 ordinary xFit validation rules described above.
@@ -467,7 +467,7 @@ mpirun -n 8 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
   --warmup-rounds 1 --measure-rounds 2
 ```
 
-The output directory must be new. Its basename is the run ID: 1–128 ASCII
+The output directory must be new. Its basename is the run ID: 1 to 128 ASCII
 letters, digits, dots, underscores or hyphens, starting with a letter or digit.
 Each pass retains normal xFit artifacts
 under `rounds/<round-id>/scientific/`, including warmup passes. Without round
@@ -523,20 +523,13 @@ of a device result to the host.
 
 ## Single sources
 
-A source present in only one of the two images leaves one lobe in the
-difference image. The two-lobe dipole fit still places its second lobe
-somewhere, on noise, and the correlation between that lobe's parameters
-and the measured lobe's position inflates the position covariance: on
-repeated noise realizations of one such stamp the dipole fit's 95%
-position interval covers the truth about 99% of the time with a spread
-(standard deviation of error over error bar) near 0.65, and one fit in five
-does not converge. `fit_single_sources` fits the one lobe alone with the
-same Levenberg-Marquardt solver and inverse-variance weighting as
-`fit_dipoles`, and its interval covers 95% with a spread near 1. Use it for
-candidates whose quality flags mark exactly one lobe unsupported
-(`NEGATIVE_LOBE_UNSUPPORTED` for a brightening source, sign `+1`;
-`POSITIVE_LOBE_UNSUPPORTED` for a fading one, sign `-1`), starting at the
-supported lobe's position:
+`fit_single_sources` fits one Gaussian lobe per stamp with the same
+Levenberg-Marquardt solver and inverse-variance weighting as `fit_dipoles`.
+Use it for a source present in only one of the two images, which leaves one
+lobe in the difference image: candidates whose quality flags mark exactly
+one lobe unsupported (`NEGATIVE_LOBE_UNSUPPORTED` for a brightening source,
+sign `+1`; `POSITIVE_LOBE_UNSUPPORTED` for a fading one, sign `-1`), started
+at the supported lobe's position:
 
 ```python
 from cuphoton.xfit import fit_single_sources
@@ -555,22 +548,35 @@ at the start; `result.sign` records that starting sign, and the fitted
 amplitude may end with the other one. Without `psf_sigma` the lobe is an
 elliptical Gaussian with `amplitude, sigma_x, sigma_y, theta, x, y` free,
 started 2 pixels wide; with `psf_sigma` (one value or one per stamp) it is
-circular at that fixed width and only `amplitude, x, y` are fitted. An
+circular at that fixed width and only `amplitude, x, y` are fitted. A
+`psf_sigma` or `sign` of any other length raises `ValueError`. An
 elliptical lobe has two labelings, `(sigma_x, sigma_y, theta)` and
 `(sigma_y, sigma_x, theta + pi/2)`, and the solver can end on either; the
 result is canonicalized to `sigma_x >= sigma_y` (widths swapped in the
 parameters, standard errors and covariance rows and columns, `theta`
 advanced by `pi/2` and wrapped to `[-pi/2, pi/2)`), so widths and
 orientation compare across stamps. Pixels that the mask excludes, or whose
-image or variance is not finite and positive, carry zero weight. The
-result holds the parameters, covariance and standard errors, the position
-with its per-axis error and cross term, the flux
-`2 pi |amplitude| sigma_x sigma_y` with its propagated error, the solver
-status, chi-square statistics, and `uncertainty_valid` with the same reason
-codes as `fit_dipoles`. The covariance is not rescaled by the reduced
-chi-square, so it is right when `variance` describes the noise; noise
-correlated between pixels makes it too small, as for any pixel-weighted
-fit. Arrays follow the backend of `images`: CuPy in, CuPy out.
+image or variance is not finite and positive, carry zero weight; a stamp
+without a usable pixel returns NaN parameters, position and flux with
+`uncertainty_valid` false. The result holds the parameters, covariance and
+standard errors, the position with its per-axis error and cross term, the
+flux `2 pi |amplitude| sigma_x sigma_y` with its propagated error, the
+solver status, chi-square statistics, and `uncertainty_valid` with the same
+reason codes as `fit_dipoles`. The covariance is not rescaled by the
+reduced chi-square, so it is right when `variance` describes the noise;
+noise correlated between pixels makes it too small, as for any
+pixel-weighted fit. Arrays follow the backend of `images`: CuPy in, CuPy
+out.
+
+### Why not the dipole fit
+
+The two-lobe dipole fit still places its second lobe somewhere, on noise,
+and the correlation between that lobe's parameters and the measured lobe's
+position inflates the position covariance. On repeated noise realizations
+of one such stamp the dipole fit's 95% position interval covers the truth
+about 99% of the time with a spread (standard deviation of error over
+error bar) near 0.65, and one fit in five does not converge. The one-lobe
+fit's interval covers 95% with a spread near 1.
 
 ## Opt-in observational-data checks
 
