@@ -143,3 +143,21 @@ def _array_module(*arrays: Any) -> Any:
 
             return cupy
     return np
+
+
+def _ndimage_module(xp: Any) -> Any:
+    """``scipy.ndimage`` for NumPy, ``cupyx.scipy.ndimage`` for CuPy."""
+
+    if xp is np:
+        import scipy.ndimage
+
+        return scipy.ndimage
+    import cupyx.scipy.ndimage
+
+    return cupyx.scipy.ndimage
+
+
+def _to_host(array: Any) -> np.ndarray:
+    """``array`` as a NumPy array, moved from the device when it is CuPy."""
+
+    return np.asarray(array.get() if hasattr(array, "get") else array)
