@@ -35,6 +35,11 @@ __all__ = [
 ]
 
 _MAX_CONDITION_NUMBER = 1e12
+# Element budgets of the batched intermediates: the float64 footprint images
+# of one coefficient chunk in the sandwich form (512 MB), and the response
+# complex spectra of one position chunk in ``kernel_fit_variance``.
+_FOOTPRINT_CHUNK_ELEMENTS = 2**26
+_RESPONSE_CHUNK_ELEMENTS = 2**24
 
 
 @dataclass(frozen=True)
@@ -101,7 +106,14 @@ def kernel_fit_covariance(
 
     The sandwich holds ``U`` as one full-size image per coefficient
     (``basis_count + background terms``) in memory, so its cost grows with
-    the image area times the coefficient count.
+    the image area times the coefficient count. The footprints are built
+    in chunks of coefficients, each chunk's images holding at most
+    ``_FOOTPRINT_CHUNK_ELEMENTS`` (2**26) float64 values, with one batched
+    convolution per chunk. On a 4096 x 4096 frame with 20 coefficients a
+    chunk is 4 coefficient images (512 MB); the chunk's convolution
+    temporaries peak near 3.3 GB on top of the 2.5 GB of ``U``, so the
+    sandwich peaks near 5.8 GB there. The plain form holds no full-size
+    array beyond the inputs.
 
     Parameters
     ----------
@@ -231,19 +243,30 @@ def kernel_fit_covariance(
         ).ravel()
         weight_image = xp.zeros(reference_arr.shape, dtype=xp.float64)
         weight_image[mask] = weights
-        footprint = xp.empty((n_coefficients, source_flat.size))
-        for j in range(n_coefficients):
-            if j < basis.shape[0]:
-                column = _fftconvolve(reference_model, basis[j], mode="same")
-            else:
-                column = background[j - basis.shape[0]]
-            footprint[j] = _fftconvolve(
-                _fftconvolve(column * weight_image, kernel, mode="same"),
-                stamp,
+        n_pixels = int(source_flat.size)
+        step = max(1, _FOOTPRINT_CHUNK_ELEMENTS // n_pixels)
+        footprint = xp.empty((n_coefficients, n_pixels))
+        for start in range(0, n_coefficients, step):
+            stop = min(start + step, n_coefficients)
+            columns = _design_columns(
+                xp, reference_model, basis, background, start, stop
+            )
+            footprint[start:stop] = _fftconvolve(
+                _fftconvolve(
+                    columns * weight_image[None],
+                    kernel[None],
+                    mode="same",
+                    axes=(1, 2),
+                ),
+                stamp[None],
                 mode="same",
-            ).ravel()
+                axes=(1, 2),
+            ).reshape(stop - start, n_pixels)
         footprint *= xp.sqrt(source_flat)
-        resampled = footprint @ footprint.T
+        resampled = xp.empty((n_coefficients, n_coefficients))
+        for start in range(0, n_coefficients, step):
+            stop = min(start + step, n_coefficients)
+            resampled[start:stop] = footprint[start:stop] @ footprint.T
         covariance = covariance + covariance @ resampled @ covariance
 
     return KernelFitCovariance(
@@ -269,6 +292,13 @@ def kernel_fit_variance(
     design terms. The added variance is ``gamma^T C gamma``. With
     ``weights`` it is the variance of the weighted sum of residual pixels
     around each position, ``g = sum_p w_p gamma_p`` and ``g^T C g``.
+
+    The response and the quadratic form are batched over positions. The
+    basis convolutions run in chunks of positions whose spectra hold at
+    most ``_RESPONSE_CHUNK_ELEMENTS`` (2**24) complex values; with 20
+    coefficients, a 15 x 15 kernel and 15 x 15 weights a chunk is 477
+    positions and its temporaries peak near 0.55 GB, independent of the
+    frame size.
 
     Parameters
     ----------
@@ -327,12 +357,7 @@ def kernel_fit_variance(
         (side + int(basis.shape[1]) - 1, side + int(basis.shape[2]) - 1),
     )
     inside = xp.isfinite(patches).all(axis=(1, 2))
-    response = _fftconvolve(
-        xp.where(inside[:, None, None], patches, 0.0)[:, None],
-        basis[None],
-        mode="valid",
-        axes=(2, 3),
-    )
+    patches = xp.where(inside[:, None, None], patches, 0.0)
     half = side // 2
     offsets = xp.arange(-half, half + 1)
     center = xp.rint(xy).astype(xp.int64)
@@ -343,8 +368,24 @@ def kernel_fit_variance(
         center[:, 1][:, None, None] + offsets[None, :, None],
         center[:, 0][:, None, None] + offsets[None, None, :],
     )
-    gamma = xp.concatenate([response, background], axis=1)
-    projected = xp.einsum("ncyx,nyx->nc", gamma, stamps)
+    projected = xp.empty((count, int(covariance.shape[0])), dtype=xp.float64)
+    spectrum = (
+        int(basis.shape[0])
+        * (patches.shape[1] + basis.shape[1] - 1)
+        * (patches.shape[2] + basis.shape[2] - 1)
+    )
+    step = max(1, _RESPONSE_CHUNK_ELEMENTS // spectrum)
+    for start in range(0, count, step):
+        stop = min(start + step, count)
+        response = _fftconvolve(
+            patches[start:stop, None], basis[None], mode="valid", axes=(2, 3)
+        )
+        projected[start:stop, : basis.shape[0]] = xp.einsum(
+            "ncyx,nyx->nc", response, stamps[start:stop]
+        )
+    projected[:, basis.shape[0] :] = xp.einsum(
+        "ncyx,nyx->nc", background, stamps
+    )
     variance = xp.einsum("nc,cd,nd->n", projected, covariance, projected)
     return xp.where(inside, variance, xp.nan)
 
@@ -365,6 +406,35 @@ def _inverse(xp: Any, hessian: Any) -> Any:
         return xp.linalg.inv(hessian)
     except xp.linalg.LinAlgError as exc:
         raise ValueError("fit normal equations are singular") from exc
+
+
+def _design_columns(
+    xp: Any,
+    reference: Any,
+    basis: Any,
+    background: Any,
+    start: int,
+    stop: int,
+) -> Any:
+    """Design columns ``start:stop`` as images, ``(stop - start, ny, nx)``.
+
+    The kernel columns are the reference convolved with each basis kernel of
+    the range in one batched convolution; the background columns are the
+    design terms.
+    """
+
+    n_basis = int(basis.shape[0])
+    columns = xp.empty((stop - start,) + reference.shape, dtype=xp.float64)
+    split = min(max(start, n_basis), stop)
+    if split > start:
+        columns[: split - start] = _fftconvolve(
+            reference[None], basis[start:split], mode="same", axes=(1, 2)
+        )
+    if stop > split:
+        columns[split - start :] = background[
+            split - n_basis : stop - n_basis
+        ]
+    return columns
 
 
 def _background_degree(n_terms: int) -> int:

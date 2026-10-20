@@ -458,7 +458,15 @@ variance. The stamp is the weights as applied to the source neighbors,
 under point reflection gives the same result in either orientation. The
 sandwich uses one resampling stamp for every fit pixel, so on a grid that
 rotates or scales against the reference's it is an approximation, and it
-holds `U` as one full-size image per coefficient in memory.
+holds `U` as one full-size image per coefficient in memory. The footprints
+are built in chunks of coefficients (at most `2**26` float64 values of
+coefficient images per chunk, one batched convolution each): on a
+4096 x 4096 frame with 20 coefficients a chunk is 4 images (512 MB) and the
+sandwich peaks near 5.8 GB including `U`. `kernel_fit_variance` and
+`correlation_factor` are batched over positions in chunks whose memory does
+not depend on the frame size (near 0.55 GB and under 10 MB per chunk for
+15 x 15 weights and kernel). `scripts/bench_kernel_uncertainty.py` times
+the three calls on a detector-sized frame on NumPy or CuPy.
 
 The result records `form` and `covariance_represented: True`. The added
 variance at a position is `gamma^T C gamma`, `gamma` the residual's
