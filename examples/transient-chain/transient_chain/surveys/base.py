@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -55,6 +55,7 @@ except ImportError:  # pragma: no cover
     )
 
 VARIANCE_KINDS = ("variance", "inverse_variance", "none")
+PIECE_RULES = ("correlated", "independent")
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,9 @@ class TemplateProvider:
     variance on the target grid (float64, NaN where the template is NaN) or
     None when the survey has none, and ``resampling(x, y)`` the
     ``cuphoton.xrep.ResamplingWeights`` of the same build at target pixels,
-    which the error budget's correlation term takes with the variance.
+    which the error budget's correlation term takes with the variance. A
+    provider with ``has_variance`` implements both;
+    :func:`check_template_provider` enforces the pairing.
     """
 
     refinable = False
@@ -281,7 +284,51 @@ class SurveyAdapter:
         *,
         mapping_grid_step: int,
     ) -> TemplateProvider:
+        """The template provider for ``sel``: :meth:`build_template`
+        checked by :func:`check_template_provider`.
+        """
+        return check_template_provider(
+            self.build_template(
+                sel, target, io, mapping_grid_step=mapping_grid_step
+            )
+        )
+
+    def build_template(
+        self,
+        sel: Mapping[str, Any],
+        target: TargetPlanes,
+        io: PlaneReader,
+        *,
+        mapping_grid_step: int,
+    ) -> TemplateProvider:
         raise NotImplementedError
+
+
+def check_template_provider(provider: TemplateProvider) -> TemplateProvider:
+    """Check that a provider which declares ``has_variance`` implements
+    ``variance()`` and ``resampling()``: the error budget's correlation
+    term needs the variance plane and the resampling weights of the same
+    build, and a plane without weights (or the reverse) cannot be used.
+    """
+    if not isinstance(provider, TemplateProvider):
+        raise TypeError(
+            f"template() must return a TemplateProvider, got "
+            f"{type(provider).__name__}"
+        )
+    cls = type(provider)
+    if provider.has_variance:
+        missing = [
+            name
+            for name in ("variance", "resampling")
+            if getattr(cls, name) is getattr(TemplateProvider, name)
+        ]
+        if missing:
+            raise TypeError(
+                f"{cls.__name__} declares has_variance but does not "
+                f"implement {missing}; a template variance plane and the "
+                "resampling weights of the same build go together"
+            )
+    return provider
 
 
 # ---------------------------------------------------------------------------
@@ -342,11 +389,19 @@ class ReprojectedSources(TemplateProvider):
     refine stage can rebuild the template.
 
     When every source carries a variance plane, each plane is reprojected
-    with its image (the same weights, squared) and the template's variance
-    is the mean of the variances of the sources that cover a pixel: the
-    pieces of one template are taken as fully correlated, so the mean of
-    their images has the mean of their variances, not the sum over the
-    count squared. A template with any source lacking a variance has none.
+    with its image (the same weights, squared) and combined under
+    ``pieces`` where ``n`` sources cover a pixel: ``"correlated"`` (the
+    default) gives ``(mean(sigma_i))**2``, exact when the pieces' noise is
+    fully correlated, as for patches cut from one coadd of the same
+    exposures; ``"independent"`` gives ``sum(var_i) / n**2``, exact when
+    the pieces' noise is independent, as for separate reference frames. A
+    template with any source lacking a variance has none.
+
+    The reprojection's prepared mappings are kept after a build only when
+    the template has a variance plane, since only the correlation term
+    reads the resampling weights; they hold one source coordinate pair per
+    target pixel for every piece, hundreds of megabytes per piece on a
+    four-thousand-pixel-square grid.
     """
 
     refinable = True
@@ -360,9 +415,15 @@ class ReprojectedSources(TemplateProvider):
         *,
         interpolation: str = "lanczos3",
         mapping_grid_step: int = 100,
+        pieces: Literal["correlated", "independent"] = "correlated",
     ) -> None:
         from cuphoton.xrep.mapping import make_wcs_pair_transform
 
+        if pieces not in PIECE_RULES:
+            raise ValueError(
+                f"pieces must be one of {PIECE_RULES}, got {pieces!r}"
+            )
+        self.pieces = pieces
         self.sources = [
             s if isinstance(s, TemplateSource) else TemplateSource(*s)
             for s in sources
@@ -453,7 +514,8 @@ class ReprojectedSources(TemplateProvider):
             img, rmask, rvar, spec, prepared = self._reproject(
                 source, mapping
             )
-            self._built.append((spec, prepared))
+            if self.has_variance:
+                self._built.append((spec, prepared))
             good = xp.isfinite(img)
             acc += xp.where(good, img, 0.0)
             cnt += good
@@ -461,16 +523,26 @@ class ReprojectedSources(TemplateProvider):
                 msk |= xp.where(good, rmask.astype(xp.int64), 0)
             if rvar is not None:
                 vgood = good & xp.isfinite(rvar)
-                vacc += xp.where(vgood, rvar, 0.0)
+                # correlated pieces add in sigma, independent ones in var
+                vacc += xp.where(
+                    vgood,
+                    xp.sqrt(rvar) if self.pieces == "correlated" else rvar,
+                    0.0,
+                )
                 vcnt += vgood
         template = xp.where(cnt > 0, acc / xp.maximum(cnt, 1), xp.nan).astype(
             xp.float32
         )
-        self._variance = (
-            xp.where(vcnt > 0, vacc / xp.maximum(vcnt, 1), xp.nan)
-            if self.has_variance
-            else None
-        )
+        if self.has_variance:
+            n = xp.maximum(vcnt, 1)
+            combined = (
+                (vacc / n) ** 2
+                if self.pieces == "correlated"
+                else vacc / n**2
+            )
+            self._variance = xp.where(vcnt > 0, combined, xp.nan)
+        else:
+            self._variance = None
         return template, (msk if any_mask else None), cnt
 
     def variance(self):
@@ -479,12 +551,18 @@ class ReprojectedSources(TemplateProvider):
     def resampling(self, x, y):
         """Resampling weights of the last build at target pixels ``(x, y)``:
         at each position, those of the first piece that covers it (all-zero
-        weights where none does).
+        weights where none does). Only a template with a variance plane
+        keeps them.
         """
         import dataclasses
 
         from cuphoton.xrep import resampling_weights_at
 
+        if not self.has_variance:
+            raise RuntimeError(
+                "resampling weights are kept only for a template with a "
+                "variance plane"
+            )
         if not self._built:
             raise RuntimeError("resampling weights need a build first")
         xp = self.xp

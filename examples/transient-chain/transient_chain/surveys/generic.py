@@ -34,6 +34,8 @@ plane.
       variance_kind: variance
       on_target_grid: false           # true: same pixel grid; false:
       reproject through WCS
+      pieces: correlated              # how the variances of overlapping
+      template pieces combine: correlated | independent
     mask_policy: strict               # none | strict | hsc-masklite |
     {planes: [...]} | {bits: N}
 
@@ -79,6 +81,7 @@ _TEMPLATE = {
     "variance_hdu": None,
     "variance_kind": "variance",
     "on_target_grid": False,
+    "pieces": "correlated",
 }
 _IDENTITY = {"exposure_id": "exposure_id", "ccd_id": "ccd_id", "band": "band"}
 
@@ -214,7 +217,7 @@ class GenericFitsAdapter(SurveyAdapter):
             mask=mask,
         )
 
-    def template(
+    def build_template(
         self,
         sel,
         target: TargetPlanes,
@@ -270,4 +273,5 @@ class GenericFitsAdapter(SurveyAdapter):
             target.shape,
             xp,
             mapping_grid_step=mapping_grid_step,
+            pieces=tp["pieces"],
         )

@@ -15,7 +15,9 @@ the hsc-masklite bad-plane policy. The template is the mean of every
 overlapping coadd patch
 reprojected onto the visit grid, unless the selection supplies
 ``template_fits`` already on
-that grid. Every one of these facts is a parameter below.
+that grid; the patches' variances combine as ``pieces`` says (patches of
+one coadd share their exposures, so ``correlated``). Every one of these
+facts is a parameter below.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     "coadd_image_hdu": 1,
     "coadd_mask_hdu": 2,
     "coadd_variance_hdu": None,
+    "pieces": "correlated",
     "mask_policy": "hsc-masklite",
     "variance_kind": "variance",
     "extra_keys": (
@@ -131,7 +134,7 @@ class RubinAdapter(SurveyAdapter):
             mask=mask,
         )
 
-    def template(
+    def build_template(
         self,
         sel,
         target: TargetPlanes,
@@ -190,4 +193,5 @@ class RubinAdapter(SurveyAdapter):
             target.shape,
             xp,
             mapping_grid_step=mapping_grid_step,
+            pieces=p["pieces"],
         )
