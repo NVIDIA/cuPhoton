@@ -87,6 +87,8 @@ def rubin_visit(tmp_path):
     visit = tmp_path / "visit.fits"
     hdus.writeto(visit)
     coadds = []
+    # each patch carries a constant variance plane in HDU 3 (4 and 16), so
+    # the mosaic's variance rule can be checked by hand
     for k, dx in enumerate((-NX // 3, NX // 3)):
         cw = tan_wcs(
             crpix=(NX / 2 - dx, NY / 2)
@@ -110,6 +112,11 @@ def rubin_visit(tmp_path):
                     header=mask_header_cards(fits.Header()),
                     compression_type="GZIP_2",
                     name="MASK",
+                ),
+                fits.CompImageHDU(
+                    np.full((NY, NX), 4.0 * (k + 1) ** 2, np.float32),
+                    compression_type="GZIP_2",
+                    name="VARIANCE",
                 ),
             ]
         )
@@ -142,12 +149,15 @@ def generic_pair(tmp_path):
     weight[0, 0] = 0.0
     mask = np.zeros(img.shape, np.int16)
     mask[30:33, 40:43] = 4
+    tvar = np.full(img.shape, 9.0, np.float32)
+    tvar[10, 10] = np.nan
     paths = {}
     for name, data, header in (
         ("image", img, w.to_header()),
         ("template", tmpl, w.to_header()),
         ("weight", weight, None),
         ("mask", mask, None),
+        ("template_variance", tvar, None),
     ):
         p = tmp_path / f"{name}.fits"
         fits.PrimaryHDU(data, header=header).writeto(p)

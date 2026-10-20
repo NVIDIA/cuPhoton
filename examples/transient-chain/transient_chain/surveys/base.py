@@ -117,17 +117,42 @@ class TemplateProvider:
     refinement.
 
     ``build(affine)`` returns ``(image float32, bad bool | None, coverage
-    count | None)``.
-    ``affine`` is ``(A, b)`` mapping target pixel coordinates to refined
-    target coordinates
-    before the survey's own mapping; providers that cannot apply it set
-    ``refinable = False``.
+    count | None)``. ``affine`` is ``(A, b)`` mapping target pixel
+    coordinates to refined target coordinates before the survey's own
+    mapping; providers that cannot apply it set ``refinable = False``.
+
+    A survey may supply a variance plane with its template. ``has_variance``
+    says so; after a ``build``, ``variance()`` returns the template's
+    variance on the target grid (float64, NaN where the template is NaN) or
+    None when the survey has none, and ``resampling(x, y)`` the
+    ``cuphoton.xrep.ResamplingWeights`` of the same build at target pixels,
+    which the error budget's correlation term takes with the variance.
     """
 
     refinable = False
+    has_variance = False
 
     def build(self, affine=None):
         raise NotImplementedError
+
+    def variance(self):
+        return None
+
+    def resampling(self, x, y):
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class TemplateSource:
+    """One image a template is assembled from: its pixels, the bad bits of
+    its mask (or None), its WCS, and its variance plane (or None when the
+    survey has none).
+    """
+
+    image: Any
+    mask: Any | None
+    wcs: Any
+    variance: Any | None = None
 
 
 def plane_map(header) -> dict[str, int]:
@@ -263,16 +288,49 @@ class SurveyAdapter:
 # template providers
 class GridTemplate(TemplateProvider):
     """A template already on the target grid (same shape); no refinement
-    possible.
+    possible. ``variance`` is the survey's plane on that grid or None.
     """
 
     refinable = False
 
-    def __init__(self, image, bad, xp) -> None:
+    def __init__(self, image, bad, xp, variance=None) -> None:
         self.image, self.bad, self.xp = image.astype(xp.float32), bad, xp
+        self._variance = (
+            None if variance is None else variance.astype(xp.float64)
+        )
+        self.has_variance = variance is not None
 
     def build(self, affine=None):
         return self.image, self.bad, None
+
+    def variance(self):
+        return self._variance
+
+    def resampling(self, x, y):
+        """Identity weights: the template was not resampled."""
+        return identity_resampling(self.xp, x, y)
+
+
+def identity_resampling(xp, x, y):
+    """``ResamplingWeights`` of a template already on the target grid: one
+    unit tap per position, a translation everywhere.
+    """
+    from cuphoton.xrep import ResamplingWeights
+
+    x = xp.asarray(x, dtype=xp.float64).ravel()
+    y = xp.asarray(y, dtype=xp.float64).ravel()
+    n = int(x.shape[0])
+    destination = xp.stack([xp.rint(x), xp.rint(y)], axis=1)
+    return ResamplingWeights(
+        weights=xp.ones((n, 1, 1), dtype=xp.float64),
+        phase=xp.zeros((n, 2), dtype=xp.float64),
+        is_translation=xp.ones(n, dtype=bool),
+        jacobian=xp.broadcast_to(xp.eye(2), (n, 2, 2)).copy(),
+        interpolation="identity",
+        offsets=xp.zeros(1, dtype=xp.int64),
+        source=destination,
+        destination=destination.astype(xp.int64),
+    )
 
 
 class ReprojectedSources(TemplateProvider):
@@ -280,16 +338,22 @@ class ReprojectedSources(TemplateProvider):
     target grid.
 
     One source is a single reference frame on its own grid; many are coadd
-    patches. The affine
-    is composed in front of each WCS mapping, so the refine stage can rebuild
-    the template.
+    patches. The affine is composed in front of each WCS mapping, so the
+    refine stage can rebuild the template.
+
+    When every source carries a variance plane, each plane is reprojected
+    with its image (the same weights, squared) and the template's variance
+    is the mean of the variances of the sources that cover a pixel: the
+    pieces of one template are taken as fully correlated, so the mean of
+    their images has the mean of their variances, not the sum over the
+    count squared. A template with any source lacking a variance has none.
     """
 
     refinable = True
 
     def __init__(
         self,
-        sources: Sequence[tuple[Any, Any | None, Any]],
+        sources: Sequence[TemplateSource | tuple[Any, Any | None, Any]],
         target_wcs,
         target_shape,
         xp,
@@ -299,17 +363,29 @@ class ReprojectedSources(TemplateProvider):
     ) -> None:
         from cuphoton.xrep.mapping import make_wcs_pair_transform
 
-        self.sources = list(sources)  # (image, integer mask or None, WCS)
+        self.sources = [
+            s if isinstance(s, TemplateSource) else TemplateSource(*s)
+            for s in sources
+        ]
         self.base_maps = [
-            make_wcs_pair_transform(target_wcs, w) for _, _, w in self.sources
+            make_wcs_pair_transform(target_wcs, s.wcs) for s in self.sources
         ]
         self.shape = tuple(int(v) for v in target_shape)
         self.xp = xp
         self.interpolation = interpolation
         self.step = int(mapping_grid_step)
+        self.has_variance = bool(self.sources) and all(
+            s.variance is not None for s in self.sources
+        )
+        self._variance = None
+        self._built: list[tuple[Any, Any]] = []  # (spec, prepared) per piece
 
-    def _reproject(self, image, mask, mapping):
+    def _reproject(self, source: TemplateSource, mapping):
+        """One piece onto the target grid: image, mask bits, variance, and
+        the spec and prepared mapping the resampling weights are read from.
+        """
         from cuphoton.xrep.geometry import BBox, ReprojectionSpec
+        from cuphoton.xrep.mapping import prepare_reprojection
 
         xp = self.xp
         ny, nx = self.shape
@@ -319,28 +395,40 @@ class ReprojectedSources(TemplateProvider):
             interpolation=self.interpolation,
             mapping_grid_step=self.step,
         )
-        if xp is np:
-            from cuphoton.xrep.reproject import reproject_array
-
-            r = reproject_array(
-                np.asarray(image),
-                spec,
-                source_mask=None if mask is None else np.asarray(mask),
-                backend="cpu",
-            )
-            return np.asarray(r.image), None if mask is None else np.asarray(
-                r.mask
-            )
-        from cuphoton.xrep.mapping import prepare_reprojection
-        from cuphoton.xrep.reproject import reproject_array_device
-
+        image, mask = source.image, source.mask
+        var = source.variance if self.has_variance else None
         prepared = prepare_reprojection(
             spec, source_shape=tuple(int(v) for v in image.shape), xp=xp
         )
-        r = reproject_array_device(
-            image, spec, source_mask=mask, backend="cupy", prepared=prepared
-        )
-        return r.image, None if mask is None else r.mask
+        if xp is np:
+            from cuphoton.xrep.backends import get_backend
+
+            cpu = get_backend("cpu")
+            r = cpu.reproject(
+                np.asarray(image),
+                prepared,
+                spec,
+                source_mask=None if mask is None else np.asarray(mask),
+            )
+            rvar = (
+                None
+                if var is None
+                else cpu.reproject_variance(np.asarray(var), prepared, spec)
+            )
+            rimg, rmask = np.asarray(r.image), np.asarray(r.mask)
+        else:
+            from cuphoton.xrep.reproject import reproject_array_device
+
+            r = reproject_array_device(
+                image,
+                spec,
+                source_mask=mask,
+                backend="cupy",
+                prepared=prepared,
+                source_variance=var,
+            )
+            rimg, rmask, rvar = r.image, r.mask, r.variance
+        return rimg, (None if mask is None else rmask), rvar, spec, prepared
 
     def build(self, affine=None):
         xp = self.xp
@@ -348,10 +436,11 @@ class ReprojectedSources(TemplateProvider):
         acc = xp.zeros((ny, nx), xp.float64)
         cnt = xp.zeros((ny, nx), xp.int32)
         msk = xp.zeros((ny, nx), xp.int64)
-        any_mask = any(m is not None for _, m, _ in self.sources)
-        for (image, mask, _), base in zip(
-            self.sources, self.base_maps, strict=True
-        ):
+        vacc = xp.zeros((ny, nx), xp.float64)
+        vcnt = xp.zeros((ny, nx), xp.int32)
+        any_mask = any(s.mask is not None for s in self.sources)
+        self._built = []
+        for source, base in zip(self.sources, self.base_maps, strict=True):
             mapping = (
                 base
                 if affine is None
@@ -361,13 +450,65 @@ class ReprojectedSources(TemplateProvider):
                     )
                 )
             )
-            img, rmask = self._reproject(image, mask, mapping)
+            img, rmask, rvar, spec, prepared = self._reproject(
+                source, mapping
+            )
+            self._built.append((spec, prepared))
             good = xp.isfinite(img)
             acc += xp.where(good, img, 0.0)
             cnt += good
             if rmask is not None:
                 msk |= xp.where(good, rmask.astype(xp.int64), 0)
+            if rvar is not None:
+                vgood = good & xp.isfinite(rvar)
+                vacc += xp.where(vgood, rvar, 0.0)
+                vcnt += vgood
         template = xp.where(cnt > 0, acc / xp.maximum(cnt, 1), xp.nan).astype(
             xp.float32
         )
+        self._variance = (
+            xp.where(vcnt > 0, vacc / xp.maximum(vcnt, 1), xp.nan)
+            if self.has_variance
+            else None
+        )
         return template, (msk if any_mask else None), cnt
+
+    def variance(self):
+        return self._variance
+
+    def resampling(self, x, y):
+        """Resampling weights of the last build at target pixels ``(x, y)``:
+        at each position, those of the first piece that covers it (all-zero
+        weights where none does).
+        """
+        import dataclasses
+
+        from cuphoton.xrep import resampling_weights_at
+
+        if not self._built:
+            raise RuntimeError("resampling weights need a build first")
+        xp = self.xp
+        merged = None
+        for spec, prepared in self._built:
+            at = resampling_weights_at(spec, x, y, prepared=prepared)
+            if merged is None:
+                merged = at
+                continue
+            covered = (merged.weights != 0).any(axis=(1, 2))
+            take = ~covered & (at.weights != 0).any(axis=(1, 2))
+            if not bool(take.any()):
+                continue
+            fields = {}
+            for name in (
+                "weights",
+                "phase",
+                "is_translation",
+                "jacobian",
+                "source",
+                "destination",
+            ):
+                a, b = getattr(merged, name), getattr(at, name)
+                sel = take.reshape((-1,) + (1,) * (a.ndim - 1))
+                fields[name] = xp.where(sel, b, a)
+            merged = dataclasses.replace(merged, **fields)
+        return merged

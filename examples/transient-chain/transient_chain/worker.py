@@ -242,6 +242,9 @@ class ChainWorker:
                 mapping_grid_step=int(a_cfg["mapping_grid_step"]),
             )
             timg, tbad_raw, tcnt = provider.build()
+            # the survey's template variance, reprojected with the image on
+            # the device (None when the survey has none)
+            tvar = provider.variance()
         w = int(a_cfg["xcorr_window_px"])
         y0, x0 = ny // 2 - w // 2, nx // 2 - w // 2
         win = (slice(y0, y0 + w), slice(x0, x0 + w))
@@ -252,6 +255,7 @@ class ChainWorker:
                 vimg[win], timg[win]
             ),
             "template_refinable": bool(provider.refinable),
+            "template_variance": tvar is not None,
             "template_coverage_max": None
             if tcnt is None
             else int(tcnt.max()),
@@ -327,6 +331,7 @@ class ChainWorker:
                     }
                 else:
                     timg, tbad_raw, tcnt = provider.build((A, b))
+                    tvar = provider.variance()
                     if gpu_finder:
                         ts = ops.smooth_image(timg, stars["fwhm"])
                     mv1, mt1 = ops.match_stars(
@@ -393,6 +398,9 @@ class ChainWorker:
             if target.bad is not None:
                 tgt_bad |= target.bad
             reference = cp.where(ref_bad, cp.nan, timg).astype(cp.float64)
+            reference_variance = (
+                None if tvar is None else cp.where(ref_bad, cp.nan, tvar)
+            )
             search = cp.where(tgt_bad, cp.nan, vimg).astype(cp.float64)
             variance = (
                 None
@@ -605,11 +613,13 @@ class ChainWorker:
                     psf_sigma=psf_sigma,
                     misalignment=self.misalignment,
                     star_xy=self.star_xy,
-                    # the template providers carry no variance plane yet, so
-                    # the reference's correlated noise (the corr term) is not
-                    # in this version's budget
-                    reference_variance=None,
-                    resampling=None,
+                    # the correlation term runs when the survey supplied a
+                    # template variance; the resampling weights come from
+                    # the same build as the template
+                    reference_variance=reference_variance,
+                    resampling=None
+                    if reference_variance is None
+                    else provider.resampling,
                 )
                 xfer["control_bytes"] += budget.control_bytes
             # 9. XScan through DLPack: the scaled stamps never leave the
@@ -755,6 +765,8 @@ class ChainWorker:
                 fit,
                 residual,
                 reference,
+                reference_variance,
+                tvar,
                 search,
                 variance,
                 vimg,
@@ -786,6 +798,7 @@ class ChainWorker:
             },
             "psf_sigma_px": self.psf_sigma_px,
             "psf_sigma_source": self.psf_sigma_source,
+            "template_variance": diag["align"]["template_variance"],
             "uq_terms": None if uq_diag is None else uq_diag["terms"],
             "uq": uq_diag,
             "config_sha256": self.config_sha256,

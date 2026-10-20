@@ -411,6 +411,37 @@ def test_reference_variance_adds_the_correlation_term(scene):
         scene.context(reference_variance=plane)
 
 
+def test_corr_term_follows_the_template_provider_variance(scene):
+    """The chain hands the provider's variance and resampling weights to the
+    budget: the corr column is non-zero only when the provider has a plane.
+    """
+    from transient_chain.surveys.base import GridTemplate
+
+    image = scene.reference.astype(np.float32)
+    without = GridTemplate(image, None, np)
+    without.build()
+    assert without.variance() is None
+    ctx = scene.context(reference_variance=None, resampling=None)
+    c = uq.budget(ctx, **scene.inputs()).columns
+    assert "corr" in ctx.excluded
+    for q in QUANTITIES:
+        np.testing.assert_array_equal(c[f"{q}_err_corr"][c["uq_valid"]], 0.0)
+
+    plane = np.full(scene.reference.shape, 4.0)
+    with_plane = GridTemplate(image, None, np, variance=plane)
+    with_plane.build()
+    ctx = scene.context(
+        reference_variance=with_plane.variance(),
+        resampling=with_plane.resampling,
+    )
+    assert "corr" in ctx.terms
+    c = uq.budget(ctx, **scene.inputs()).columns
+    valid = c["uq_valid"]
+    assert valid.tolist() == [True, True, True, False]
+    for q in QUANTITIES:
+        assert np.all(c[f"{q}_err_corr"][valid] > 0)
+
+
 def test_fit_only_writes_zero_terms(scene):
     err_fit = scene.inputs()["err_fit"]
     c = uq.fit_only(err_fit).columns

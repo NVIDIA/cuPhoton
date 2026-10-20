@@ -284,3 +284,102 @@ def test_workload_sizes_home_relative_paths():
         selections = workload.load_selections(manifest, adapter)
         items = workload.build_items(selections, adapter)
         assert items[0].weight_bytes == len(b"visittemplate")
+
+
+def test_generic_template_variance_with_and_without_the_plane(generic_pair):
+    base = {
+        "identity": {
+            "exposure_id": "expnum",
+            "ccd_id": "ccdnum",
+            "band": "band",
+        },
+        "template": {"on_target_grid": True},
+    }
+    io = host_reader()
+    adapter = make_adapter({"name": "generic", "params": base})
+    t = adapter.load_target(generic_pair, io)
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    assert not provider.has_variance
+    provider.build()
+    assert provider.variance() is None
+    assert "template_variance" not in adapter.required_keys
+
+    with_plane = {
+        **base,
+        "template": {
+            "on_target_grid": True,
+            "variance_path_key": "template_variance",
+        },
+    }
+    adapter = make_adapter({"name": "generic", "params": with_plane})
+    assert "template_variance" in adapter.required_keys
+    assert generic_pair["template_variance"] in adapter.input_paths(
+        generic_pair
+    )
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    assert provider.has_variance
+    provider.build()
+    var = provider.variance()
+    assert var.dtype == np.float64 and var.shape == t.shape
+    assert float(var[5, 5]) == 9.0 and np.isnan(var[10, 10])
+    at = provider.resampling(np.array([3.0, 40.2]), np.array([7.0, 20.6]))
+    assert at.weights.shape == (2, 1, 1) and at.is_translation.all()
+    np.testing.assert_array_equal(at.destination, [[3, 7], [40, 21]])
+
+    # the same plane through the WCS: a translation of the grid keeps the
+    # variance (squared unit weights) and the weights are Lanczos stamps
+    reprojected = {
+        **base,
+        "template": {"variance_path_key": "template_variance"},
+    }
+    adapter = make_adapter({"name": "generic", "params": reprojected})
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    timg, _, _ = provider.build()
+    var = provider.variance()
+    finite = np.isfinite(timg)
+    assert np.isnan(var[~finite]).all()
+    # the plane's NaN pixel spreads over its Lanczos footprint, no further
+    yy, xx = np.mgrid[: t.shape[0], : t.shape[1]]
+    away = finite & (np.maximum(np.abs(yy - 10), np.abs(xx - 10)) > 6)
+    assert np.isfinite(var[away]).all()
+    assert np.nanmedian(var) == pytest.approx(9.0, rel=1e-6)
+    at = provider.resampling(np.array([40.0]), np.array([20.0]))
+    assert at.weights.shape == (1, 6, 6) and at.is_translation.all()
+    assert at.weights.sum() == pytest.approx(1.0)
+
+
+def test_mosaic_variance_is_the_mean_where_pieces_overlap(rubin_visit):
+    io = host_reader()
+    plain = make_adapter({"name": "rubin"})
+    t = plain.load_target(rubin_visit, io)
+    provider = plain.template(rubin_visit, t, io, mapping_grid_step=16)
+    assert not provider.has_variance
+    provider.build()
+    assert provider.variance() is None
+
+    adapter = make_adapter(
+        {"name": "rubin", "params": {"coadd_variance_hdu": 3}}
+    )
+    provider = adapter.template(rubin_visit, t, io, mapping_grid_step=16)
+    assert provider.has_variance
+    timg, _, cnt = provider.build()
+    var = provider.variance()
+    assert var.shape == t.shape
+    # the patches are integer translations: each contributes its own
+    # constant (4 or 16); the overlap carries their mean (10), not their
+    # sum over the count squared (5)
+    one = (cnt == 1) & np.isfinite(timg)
+    two = (cnt == 2) & np.isfinite(timg)
+    assert one.sum() > 0 and two.sum() > 0
+    assert set(np.unique(np.round(var[one], 6))) == {4.0, 16.0}
+    np.testing.assert_allclose(var[two], 10.0, rtol=1e-6)
+    assert np.isnan(var[cnt == 0]).all()
+    # resampling weights come from the first piece covering a position
+    ys, xs = np.nonzero(two)
+    at = provider.resampling(xs[:3].astype(float), ys[:3].astype(float))
+    assert at.weights.shape[1:] == (6, 6) and at.is_translation.all()
+    assert np.allclose(at.weights.sum(axis=(1, 2)), 1.0)
+    ys, xs = np.nonzero(cnt == 0)
+    if len(xs):
+        at = provider.resampling(xs[:1].astype(float), ys[:1].astype(float))
+        assert not (at.weights != 0).any()

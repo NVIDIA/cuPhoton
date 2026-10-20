@@ -235,7 +235,9 @@ a template provider, and an identity (`exposure_id`, `ccd_id`, `band`, extras). 
 from HDUs 1 and 2 of each coadd patch, resolves bad pixels with the LSST stack's `MP_<NAME>`
 cards under the `hsc-masklite` policy, and mosaics the patches through their WCS. Each of these
 is a parameter (`image_hdu`, `mask_hdu`, `variance_hdu`, `coadd_image_hdu`, `coadd_mask_hdu`,
-`mask_policy`, `variance_kind`, `extra_keys`).
+`coadd_variance_hdu`, `mask_policy`, `variance_kind`, `extra_keys`). `coadd_variance_hdu` is null
+by default: set it when the patches carry a variance plane, and the template gets one (next
+paragraph).
 
 `generic` describes any FITS pair by parameters. A DECam-style layout with the image in the
 primary HDU, a separate inverse-variance weight file, a separate mask file, and a template on
@@ -259,6 +261,9 @@ survey:
       path_key: template
       image_hdu: 0
       mask_hdu: null
+      variance_path_key: null   # the template's variance plane, read like the target's
+      variance_hdu: null        # null = the survey has no template variance (the corr term is then off)
+      variance_kind: variance
       on_target_grid: false     # false: reproject the reference through its WCS onto the target grid
     mask_policy: strict         # none | strict (any nonzero bit) | hsc-masklite | {planes: [BAD, SAT]} | {bits: 5}
 ```
@@ -271,7 +276,14 @@ catalog has the columns `exposure_id`, `ccd_id`, `band` plus the adapter's extra
 Adding a third survey is one file in `transient_chain/surveys/` implementing `required_keys`,
 `identity`, `input_paths`, `payload`, `load_target` and `template`, registered in
 `surveys/__init__.py`. A template provider that is not a mosaic returns `refinable = False` and
-the refine stage skips itself.
+the refine stage skips itself. A survey with a template variance plane hands it to the provider
+(`GridTemplate(..., variance=)` for a template on the target grid, `TemplateSource(image, mask,
+wcs, variance)` per piece of a reprojected or mosaicked one); the provider's `variance()` then
+returns the plane on the target grid after each build and `resampling(x, y)` the resampling
+weights of that build, and `summary.json` records `template_variance: true`. Both are survey-free:
+each piece's variance is reprojected with its image (the same weights, squared), and where pieces
+overlap the mosaic's variance is the mean of theirs, the pieces of one template being taken as
+fully correlated.
 
 ## Catalog columns
 
@@ -330,10 +342,11 @@ center's stamp over both lobes).
   the kernel correlate the reference's pixels. The factor is measured against the target variance
   used by xFit, so it includes both the reference's diagonal noise and its correlations.
   It needs the reference's variance plane on the target grid and the resampling
-  weights (`cuphoton.xrep.resampling_weights_at` with the template's `ReprojectionSpec`); this
-  version's template providers carry no variance plane, so the term is 0 and `summary.json` lists
-  it under `uq.excluded`. Where the grid mapping is not locally a translation the factor is
-  undefined (`uq.rotated_grid` counts those rows).
+  weights (`cuphoton.xrep.resampling_weights_at` with the template's `ReprojectionSpec`), both
+  from the survey adapter's template provider (`variance()` and `resampling()` after each build,
+  "Other surveys"). When the survey supplies no template variance the term is 0, `summary.json`
+  records `template_variance: false` and lists `corr` under `uq.excluded`. Where the grid mapping
+  is not locally a translation the factor is undefined (`uq.rotated_grid` counts those rows).
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.

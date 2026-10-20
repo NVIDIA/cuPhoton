@@ -29,6 +29,9 @@ plane.
       image_hdu: 0
       mask_path_key: null
       mask_hdu: null
+      variance_path_key: null         # the template's variance plane, read
+      variance_hdu: null              # like the target's; null = none
+      variance_kind: variance
       on_target_grid: false           # true: same pixel grid; false:
       reproject through WCS
     mask_policy: strict               # none | strict | hsc-masklite |
@@ -52,6 +55,7 @@ from .base import (
     ReprojectedSources,
     SurveyAdapter,
     TargetPlanes,
+    TemplateSource,
     bad_from_mask,
     resolve_mask_bits,
     variance_from,
@@ -71,6 +75,9 @@ _TEMPLATE = {
     "image_hdu": None,
     "mask_path_key": None,
     "mask_hdu": None,
+    "variance_path_key": None,
+    "variance_hdu": None,
+    "variance_kind": "variance",
     "on_target_grid": False,
 }
 _IDENTITY = {"exposure_id": "exposure_id", "ccd_id": "ccd_id", "band": "band"}
@@ -129,6 +136,7 @@ class GenericFitsAdapter(SurveyAdapter):
             t["mask_path_key"],
             t["variance_path_key"],
             self.template_p["mask_path_key"],
+            self.template_p["variance_path_key"],
         ):
             if k:
                 keys.append(k)
@@ -151,6 +159,7 @@ class GenericFitsAdapter(SurveyAdapter):
             t["variance_path_key"],
             tp["path_key"],
             tp["mask_path_key"],
+            tp["variance_path_key"],
         ]
         return list(dict.fromkeys(sel[k] for k in keys if k and k in sel))
 
@@ -227,6 +236,15 @@ class GenericFitsAdapter(SurveyAdapter):
             if mask is None
             else resolve_mask_bits(self.mask_policy, mask_header)
         )
+        var, _ = self._read_role(
+            io, sel, tp["variance_path_key"], tp["variance_hdu"], path
+        )
+        var = variance_from(var, tp["variance_kind"], xp)
+        if var is not None and tuple(var.shape) != tuple(image.shape):
+            raise ValueError(
+                f"template variance has shape {tuple(var.shape)}, the "
+                f"template image {tuple(image.shape)}"
+            )
         if tp["on_target_grid"]:
             if tuple(image.shape) != target.shape:
                 raise ValueError(
@@ -239,6 +257,7 @@ class GenericFitsAdapter(SurveyAdapter):
                 image,
                 None if mask is None else bad_from_mask(mask, bits, xp),
                 xp,
+                variance=var,
             )
         bad_bits_plane = (
             None
@@ -246,7 +265,7 @@ class GenericFitsAdapter(SurveyAdapter):
             else (mask if bits is None else (mask & bits))
         )
         return ReprojectedSources(
-            [(image, bad_bits_plane, WCS(header))],
+            [TemplateSource(image, bad_bits_plane, WCS(header), var)],
             target.wcs,
             target.shape,
             xp,

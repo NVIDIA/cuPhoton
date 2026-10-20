@@ -8,7 +8,8 @@ on.
 
 Visit files carry IMAGE, MASK and VARIANCE in HDUs 1, 2 and 3; template coadd
 patches carry
-IMAGE and MASK in HDUs 1 and 2; both use the LSST stack's ``MP_<NAME>``
+IMAGE and MASK in HDUs 1 and 2 (a VARIANCE HDU, when the patches carry one,
+is named by ``coadd_variance_hdu``); both use the LSST stack's ``MP_<NAME>``
 mask-plane cards and
 the hsc-masklite bad-plane policy. The template is the mean of every
 overlapping coadd patch
@@ -31,6 +32,7 @@ from .base import (
     ReprojectedSources,
     SurveyAdapter,
     TargetPlanes,
+    TemplateSource,
     bad_from_mask,
     resolve_mask_bits,
     variance_from,
@@ -42,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
     "variance_hdu": 3,
     "coadd_image_hdu": 1,
     "coadd_mask_hdu": 2,
+    "coadd_variance_hdu": None,
     "mask_policy": "hsc-masklite",
     "variance_kind": "variance",
     "extra_keys": (
@@ -140,11 +143,19 @@ class RubinAdapter(SurveyAdapter):
 
         p = self.p
         xp = io.xp
+        hdus = [p["coadd_image_hdu"], p["coadd_mask_hdu"]]
+        if p["coadd_variance_hdu"] is not None:
+            hdus.append(p["coadd_variance_hdu"])
+
+        def planes(arrays):
+            img, mask = arrays[0], arrays[1]
+            var = None if len(arrays) < 3 else arrays[2]
+            return img, mask, variance_from(var, p["variance_kind"], xp)
+
         override = sel.get("template_fits")
         if override:
-            (img, mask), _ = io.read(
-                override, [p["coadd_image_hdu"], p["coadd_mask_hdu"]]
-            )
+            arrays, _ = io.read(override, hdus)
+            img, mask, var = planes(arrays)
             bits = resolve_mask_bits(
                 p["mask_policy"],
                 inspect_plane(override, p["coadd_mask_hdu"]).header,
@@ -154,13 +165,14 @@ class RubinAdapter(SurveyAdapter):
                     f"template_fits {override} has shape {tuple(img.shape)}, "
                     f"the visit has {target.shape}"
                 )
-            return GridTemplate(img, bad_from_mask(mask, bits, xp), xp)
+            return GridTemplate(
+                img, bad_from_mask(mask, bits, xp), xp, variance=var
+            )
         paths = list(sel["template_coadds"])
-        planes, _ = io.read_batch(
-            paths, [p["coadd_image_hdu"], p["coadd_mask_hdu"]]
-        )
+        batch, _ = io.read_batch(paths, hdus)
         sources = []
-        for path, (img, mask) in zip(paths, planes, strict=True):
+        for path, arrays in zip(paths, batch, strict=True):
+            img, mask, var = planes(arrays)
             header = inspect_plane(path, p["coadd_image_hdu"]).header
             bits = resolve_mask_bits(
                 p["mask_policy"],
@@ -169,7 +181,9 @@ class RubinAdapter(SurveyAdapter):
             # bits are resolved per patch; the provider ORs raw bits, so keep
             # only the bad ones
             bad_bits_plane = mask if bits is None else (mask & bits)
-            sources.append((img, bad_bits_plane, WCS(header)))
+            sources.append(
+                TemplateSource(img, bad_bits_plane, WCS(header), var)
+            )
         return ReprojectedSources(
             sources,
             target.wcs,
