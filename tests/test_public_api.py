@@ -83,12 +83,14 @@ def test_xpois_kernel_uncertainty_signatures_are_explicit() -> None:
         "target_variance",
         "reference_variance",
         "resampling_weights",
+        "chunk_elements",
     ]
     assert list(inspect.signature(xpois.kernel_fit_variance).parameters) == [
         "cov",
         "reference",
         "positions",
         "weights",
+        "chunk_elements",
     ]
     assert list(inspect.signature(xpois.window_stamps).parameters) == [
         "plane",
