@@ -293,10 +293,10 @@ def correlation_factor(
         plane cut around them (pixels outside the image count as invalid).
         An invalid pixel gets zero weight and its variance need not be
         finite, so a window with masked pixels keeps a factor. The factor
-        is a ratio of two quadratic forms in the weights, so it is the
-        same for the remaining weights renormalized, as the estimator does
-        over the unmasked pixels. A window with every pixel masked gets
-        ``NaN``; ``n_masked`` counts the masked pixels per position for
+        is a ratio of two quadratic forms in the weights, so renormalizing
+        the remaining weights (as the estimator does over the unmasked
+        pixels) does not change it. A window with every pixel masked gets
+        ``NaN``. ``n_masked`` counts the masked pixels per position for
         the caller's own limit.
 
     Returns
@@ -356,12 +356,10 @@ def correlation_factor(
     else:
         keep = xp.asarray(valid)
         if positions is not None and keep.ndim == 2:
+            # cut the boolean plane itself; only the windows become float64
             keep = (
                 window_stamps(
-                    keep.astype(xp.float64),
-                    xy,
-                    (int(w.shape[1]), int(w.shape[2])),
-                    fill=0.0,
+                    keep, xy, (int(w.shape[1]), int(w.shape[2])), fill=0.0
                 )
                 > 0.5
             )
@@ -482,17 +480,23 @@ def empirical_correlation_factor(
         & xp.isfinite(variance).all(axis=(1, 2))
         & (variance > 0).all(axis=(1, 2))
     )
-    data, variance = data[usable], variance[usable]
-    used = int(data.shape[0])
+    # one sync (the count) instead of a boolean compress of both stacks:
+    # unusable positions are zeroed and dropped from the statistics as NaN
+    used = int(usable.sum())
+    keep = usable[:, None, None]
+    data = xp.where(keep, data, 0.0)
+    variance = xp.where(keep, variance, 1.0)
     sums = xp.einsum("qyx,nyx->nq", w, data)
     predicted = xp.einsum("qyx,nyx->nq", w**2, variance)
     if used < 2:
         robust = plain = xp.full(w.shape[0], xp.nan)
     else:
-        z = sums / xp.sqrt(predicted)
-        spread = 1.4826 * xp.median(xp.abs(z - xp.median(z, axis=0)), axis=0)
+        z = xp.where(usable[:, None], sums / xp.sqrt(predicted), xp.nan)
+        spread = 1.4826 * xp.nanmedian(
+            xp.abs(z - xp.nanmedian(z, axis=0)), axis=0
+        )
         robust = spread**2
-        plain = z.var(axis=0, ddof=1)
+        plain = xp.nanvar(z, axis=0, ddof=1)
     return EmpiricalCorrelationFactor(
         factor=robust[0] if single else robust,
         positions_used=used,

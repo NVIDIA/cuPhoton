@@ -532,9 +532,9 @@ A window that holds a masked pixel keeps its factor when the caller passes
 `valid`, `(N, s, s)` booleans or a boolean plane cut around `positions`: the
 masked pixels get zero weight and need no finite variance, and the result's
 `n_masked` counts them per position. The factor is a ratio of two quadratic
-forms in the weights, so renormalizing the remaining weights, as the
-estimator the weights stand for does over the unmasked pixels, leaves it
-unchanged; a window with every pixel masked is `NaN`. On a 21 px window
+forms in the weights, so renormalizing the remaining weights (as the
+estimator does over the unmasked pixels) does not change it. A window with
+every pixel masked gets `NaN`. On a 21 px window
 with PSF-flux or PSF-derivative weights (`psf_sigma` 2), a masked column at
 4 px or more from the center moves the factor by under 10%, and at 1 to
 3 px by up to 12% (17% for a masked half-plane whose edge is 1 px from the
