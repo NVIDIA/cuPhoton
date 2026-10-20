@@ -16,6 +16,8 @@ basis and background columns.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from scipy.ndimage import correlate
@@ -728,10 +730,25 @@ def scene(seed):
     }
 
 
-def outputs(seed):
-    """The four arrays the references digest, for one seed."""
+def outputs(seed, xp=np, footprint_chunk=None, response_chunk=None):
+    """The four arrays the references digest, for one seed.
+
+    With ``xp`` the inputs (and the fit's arrays) move to that namespace;
+    the chunk budgets are passed through to the two calls.
+    """
 
     s = scene(seed)
+    if xp is not np:
+        s = {
+            key: xp.asarray(value) for key, value in s.items() if key != "fit"
+        }
+        fit = scene(seed)["fit"]
+        s["fit"] = replace(
+            fit,
+            basis_kernels=xp.asarray(fit.basis_kernels),
+            fit_mask=xp.asarray(fit.fit_mask),
+            kernel=xp.asarray(fit.kernel),
+        )
     plain = kernel_fit_covariance(
         s["fit"],
         reference=s["reference"],
@@ -743,12 +760,14 @@ def outputs(seed):
         target_variance=s["target_variance"],
         reference_variance=s["reference_variance"],
         resampling_weights=s["stamp"],
+        chunk_elements=footprint_chunk,
     )
     variance = kernel_fit_variance(
         sandwich,
         reference=s["reference"],
         positions=s["positions"],
         weights=s["weights"],
+        chunk_elements=response_chunk,
     )
     factor = correlation_factor(
         s["weights"],
@@ -815,3 +834,28 @@ def test_small_chunks_reproduce_the_frozen_references(
     monkeypatch.setattr(correlation_module, "_CHUNK", 7)
     for name, array in outputs(seed).items():
         _assert_frozen(name, seed, array)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_chunk_elements_pads_the_last_chunk_to_the_same_result(seed):
+    """Budgets that leave a partial last chunk (7 coefficients in chunks of
+    2; 25 positions in chunks of 4) reproduce the frozen references."""
+
+    n_basis = int(scene(seed)["fit"].basis_kernels.shape[0])
+    response = 4 * n_basis * (WINDOW + 2 * KERNEL_SHAPE[0] - 2) ** 2
+    for name, array in outputs(
+        seed, footprint_chunk=2 * SIZE**2, response_chunk=response
+    ).items():
+        _assert_frozen(name, seed, array)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_device_inputs_reproduce_the_frozen_references(seed):
+    cp = pytest.importorskip("cupy")
+    try:
+        cp.cuda.runtime.getDeviceCount()
+    except Exception as exc:  # pragma: no cover - no CUDA runtime
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    for name, array in outputs(seed, xp=cp).items():
+        assert type(array).__module__ == "cupy"
+        _assert_frozen(name, seed, cp.asnumpy(array))

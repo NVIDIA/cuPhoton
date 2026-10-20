@@ -12,6 +12,11 @@ and peak memory.
 
     python scripts/bench_kernel_uncertainty.py --backend numpy --size 1024
     python scripts/bench_kernel_uncertainty.py --backend cupy
+    python scripts/bench_kernel_uncertainty.py --backend cupy --chunk 2**24
+
+``--chunk`` sets the ``chunk_elements`` budget of both calls (the
+footprint images of one coefficient chunk and the response spectra of one
+position chunk); without it each call uses its own default.
 
 Every call runs twice and the second run is timed, so FFT plans and pool
 blocks from the first run do not count. Peak memory is the ``tracemalloc``
@@ -54,6 +59,13 @@ BACKGROUND_DEGREE = 0
 KERNEL_SHAPE = (15, 15)
 PSF_SIGMA = 2.0
 LANCZOS_A = 3
+
+
+def element_count(text):
+    """An integer, or a power such as ``2**24``."""
+
+    base, sep, exponent = text.partition("**")
+    return int(base) ** int(exponent) if sep else int(base)
 
 
 def window_side(psf_sigma):
@@ -200,6 +212,13 @@ def main():
     )
     parser.add_argument("--size", type=int, default=4096)
     parser.add_argument("--positions", type=int, default=2000)
+    parser.add_argument(
+        "--chunk",
+        type=element_count,
+        default=None,
+        help="chunk_elements budget of both calls, e.g. 2**24 (default: "
+        "each call's own default)",
+    )
     args = parser.parse_args()
     xp = np if args.backend == "numpy" else __import__("cupy")
 
@@ -224,6 +243,7 @@ def main():
         f"{args.positions} positions, "
         f"{stamp_np.shape[0]} x {stamp_np.shape[1]} resampling stamp "
         f"({stamp_origin}), {window} x {window} PSF window"
+        + ("" if args.chunk is None else f", chunk_elements {args.chunk}")
     )
     reference_d = xp.asarray(reference)
     target_variance_d = xp.asarray(target_variance)
@@ -248,7 +268,10 @@ def main():
     meter.run(
         "kernel_fit_covariance plain",
         lambda: kernel_fit_covariance(
-            fit, reference=reference_d, target_variance=target_variance_d
+            fit,
+            reference=reference_d,
+            target_variance=target_variance_d,
+            chunk_elements=args.chunk,
         ),
     )
     cov = meter.run(
@@ -259,12 +282,17 @@ def main():
             target_variance=target_variance_d,
             reference_variance=reference_variance_d,
             resampling_weights=stamp,
+            chunk_elements=args.chunk,
         ),
     )
     meter.run(
         "kernel_fit_variance",
         lambda: kernel_fit_variance(
-            cov, reference=reference_d, positions=xy_d, weights=weights
+            cov,
+            reference=reference_d,
+            positions=xy_d,
+            weights=weights,
+            chunk_elements=args.chunk,
         ),
     )
 
