@@ -26,7 +26,8 @@ class ResamplingWeights:
     ----------
     weights
         ``(N, k, k)`` normalized weights, rows along source y and columns
-        along source x. Entry ``[n, j, i]`` multiplies the source pixel in
+        along source x, before relative-area scaling. Entry ``[n, j, i]``
+        multiplies the source pixel in
         row ``floor(source[n, 1]) + offsets[j]`` and column
         ``floor(source[n, 0]) + offsets[i]``.
         All-zero rows mark positions the reprojection fills instead of
@@ -130,8 +131,9 @@ def resampling_weights_at(
         evaluating the mapping. Not accepted with the other forms.
     translation_tolerance
         Largest ``max|J - I|`` of the local Jacobian ``J`` still reported as
-        a translation. With the default ``1e-3`` the phase drifts by less
-        than 0.03 source pixels across a 51 pixel window.
+        a translation. For an affine mapping with the default ``1e-3``,
+        each phase coordinate drifts by less than 0.05 source pixels
+        from the center to a corner of a 51 pixel window.
     seam_tolerance
         Where the forward and backward one-pixel differences of the mapping
         disagree by more than this many source pixels, the Jacobian uses the
@@ -147,6 +149,10 @@ def resampling_weights_at(
 
     Notes
     -----
+    The normalized weights exclude relative-area scaling. When
+    ``area_scaling=True``, reprojection multiplies the weighted image by
+    ``prepared.relative_area`` and the weighted variance by its square.
+
     A prepared mapping gives exactly the coordinates the reprojection used.
     A spec or callable mapping is evaluated at the destination pixels, which
     matches the reprojection exactly only when the spec's
@@ -181,6 +187,8 @@ def resampling_weights_at(
     if interpolation not in {"bilinear", "lanczos3"}:
         raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
     lanczos_a = 3 if lanczos_a is None else lanczos_a
+    if interpolation == "lanczos3" and lanczos_a < 1:
+        raise ValueError("lanczos_a must be positive")
     two_a_footprint = True if two_a_footprint is None else two_a_footprint
     source_origin = (0, 0) if source_origin is None else source_origin
 
@@ -193,10 +201,12 @@ def resampling_weights_at(
             "mapping must be a ReprojectionSpec, a PreparedReprojection, "
             "or callable"
         )
-    x_arr = _as_namespace(xp, x).ravel()
-    y_arr = _as_namespace(xp, y).ravel()
+    x_arr = _as_namespace(xp, x)
+    y_arr = _as_namespace(xp, y)
     if x_arr.shape != y_arr.shape:
         raise ValueError("x and y must have the same shape")
+    x_arr = x_arr.ravel()
+    y_arr = y_arr.ravel()
     if not bool(xp.isfinite(x_arr).all() and xp.isfinite(y_arr).all()):
         raise ValueError("x and y must be finite")
     destination = xp.stack([xp.rint(x_arr), xp.rint(y_arr)], axis=1)

@@ -218,12 +218,17 @@ destination-to-source callable, with `interpolation`, `lanczos_a`,
 `two_a_footprint` and `source_origin` passed by hand. Positions are rounded to
 the nearest destination pixel with round-half-to-even (`numpy.rint`), and are
 pixels of the output grid in every form. A prepared mapping reproduces the
-reprojection exactly. A spec or callable mapping is evaluated at the
+source coordinates used by the reprojection exactly. A spec or callable
+mapping is evaluated at the
 destination pixels, which agrees with the reprojection only when
 `mapping_grid_step` is 1 or the mapping is affine: with the default coarse
 grid and a non-affine mapping (a WCS pair, for example) the reprojection
 interpolates the mapping bilinearly between grid nodes and the phase differs,
 so pass the prepared mapping.
+
+The weights exclude relative-area scaling. With `area_scaling=True`,
+reprojection multiplies the weighted image by `prepared.relative_area` and
+the weighted variance by its square.
 
 Each `(k, k)` block sums to one, or is all zero where the reprojection fills
 the pixel instead of resampling it: a non-finite source coordinate, or one
@@ -232,10 +237,11 @@ from its `valid` array and the other forms know only when `source_shape` is
 given. `source_shape` also zeroes and renormalizes the taps outside the source
 as the reprojection does at its edges; without it the weights are the
 interior weights. `is_translation` compares the local Jacobian with the
-identity (`translation_tolerance`, `1e-3` by default, under which the phase
-drifts by less than 0.03 source pixels across a 51 pixel window); where it is
-true the phase is the same across the window and one set of weights
-describes it. Where the forward and backward differences of the mapping
+identity (`translation_tolerance`, `1e-3` by default). For an affine mapping
+within that tolerance, each phase coordinate drifts by less than 0.05 source
+pixels from the center to a corner of a 51 pixel window. Where the flag is
+true, one set of weights locally approximates the window. Where the forward
+and backward differences of the mapping
 disagree by more than `seam_tolerance` source pixels (0.5 by default), as at
 a seam between tiled reference frames, the Jacobian uses the shorter one so
 the seam is not read as a rotation. Noise models that need the weights take
