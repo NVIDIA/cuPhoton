@@ -306,8 +306,9 @@ def test_fit_misalignment_recovers_the_quadratic_field():
     assert np.all(m.excess_variance < 0.003**2)
     var = m.variance(probe[:, 0], probe[:, 1])
     aff = m.affine_variance(probe[:, 0], probe[:, 1])
+    displacement = probe @ m.matrix.T + m.offset - probe + p
     np.testing.assert_allclose(
-        var, aff + p**2 + m.excess_variance, rtol=1e-12
+        var, aff + displacement**2 + m.excess_variance, rtol=1e-12
     )
 
 
@@ -345,7 +346,7 @@ def test_fit_misalignment_variance_describes_held_out_stars():
     meas = (
         held @ A.T + b + _field(held, 0.02) + rng.normal(0, sig, held.shape)
     )
-    e = meas - (held @ m.matrix.T + m.offset)
+    e = meas - held
     x, y = held[:, 0], held[:, 1]
     z = e / np.sqrt(m.variance(x, y) + sig**2)
     assert np.sqrt(np.mean(z**2)) == pytest.approx(1.0, abs=0.05)
@@ -353,6 +354,25 @@ def test_fit_misalignment_variance_describes_held_out_stars():
         m.affine_variance(x, y) + m.excess_variance + sig**2
     )
     assert np.sqrt(np.mean(without_field**2)) > 1.3
+
+
+@pytest.mark.parametrize("min_poly", [30, 10**9])
+def test_misalignment_includes_the_uncorrected_affine_shift(min_poly):
+    positions = np.random.default_rng(22).uniform(20, 490, (100, 2))
+    shift = np.array([0.3, -0.2])
+    noise = np.full_like(positions, 0.01**2)
+    model = ops.fit_misalignment(
+        positions,
+        positions + shift,
+        noise,
+        shape=(512, 512),
+        min_poly=min_poly,
+    )
+    np.testing.assert_allclose(
+        model.variance([255.5], [255.5]),
+        shift[None] ** 2 + model.affine_variance([255.5], [255.5]),
+        rtol=1e-10,
+    )
 
 
 def test_fit_misalignment_clips_outliers_and_keeps_good_stars():
@@ -481,7 +501,12 @@ def test_measure_matched_stars_models_a_synthetic_field():
         d["reason"] is None and d["stars_used"] == ms.misalignment.used.sum()
     )
     np.testing.assert_allclose(ms.misalignment.matrix, A, atol=5e-4)
-    assert np.all(np.array(d["center_sigma_px"]) < 0.05)
+    image_center = np.array([255.5, 255.5])
+    np.testing.assert_allclose(
+        d["center_sigma_px"],
+        np.abs(image_center @ A.T + b - image_center),
+        atol=0.05,
+    )
     assert d["residual_rms_px"] < 0.1
     assert ms.control_bytes > 0 and ms.control_bytes % 16 == 0
     assert ms.psf.sigma_px == pytest.approx(

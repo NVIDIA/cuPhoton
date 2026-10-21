@@ -768,9 +768,11 @@ class Misalignment:
     """Residual misalignment after the affine re-alignment, per axis, anywhere
     on the target grid; host arrays.
 
-    ``variance(x, y)`` = affine-fit variance at (x, y) + p^2, the quadratic
-    field fitted to the residuals there (positions are not corrected by it),
-    + the excess variance the field leaves. The field's estimation variance
+    ``variance(x, y)`` = affine-fit variance at (x, y) + the squared
+    modeled residual displacement (affine and quadratic together) + the
+    excess variance the field leaves. This affine is measured after the
+    template rebuild and is not applied to the catalog positions.
+    The field's estimation variance
     is not added: the estimate's square already exceeds the true field's
     square by it on average. With fewer than ``min_poly`` stars there is no
     field (``mode == "rms"``) and the excess is one constant per axis.
@@ -820,9 +822,16 @@ class Misalignment:
         """Misalignment variance per axis, pixels squared, (N, 2) at the
         positions (x, y) on the target grid.
         """
+        positions = np.column_stack([np.ravel(x), np.ravel(y)])
+        displacement = (
+            positions @ self.matrix.T
+            + self.offset
+            - positions
+            + self.excess(x, y)[0]
+        )
         return (
             self.affine_variance(x, y)
-            + self.excess(x, y)[0] ** 2
+            + displacement**2
             + self.excess_variance[None, :]
         )
 
