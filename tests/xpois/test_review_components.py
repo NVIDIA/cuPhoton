@@ -9,7 +9,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cuphoton.xpois.review import identify_residual_hotspots
+from cuphoton.xpois.review import (
+    identify_residual_hotspots,
+    residual_hotspot_table,
+)
 from cuphoton.xpois.review_bokeh import identify_mask_components
 
 
@@ -257,3 +260,64 @@ def test_mask_components_without_selected_pixels(mask, plane_map, names):
         )
         == []
     )
+
+
+def _hotspot_scene(
+    seed: int = 0, shape: tuple[int, int] = (600, 800), count: int = 60
+) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    residual = rng.normal(0.0, 1.0, shape)
+    ys = rng.integers(20, shape[0] - 20, count)
+    xs = rng.integers(20, shape[1] - 20, count)
+    yy, xx = np.mgrid[-4:5, -4:5]
+    blob = 20.0 * np.exp(-(xx**2 + yy**2) / 4.0)
+    for y, x, sign in zip(ys, xs, rng.choice([-1, 1], count), strict=True):
+        residual[y - 4 : y + 5, x - 4 : x + 5] += sign * blob
+    residual[100:104, 200:204] = 30.0
+    residual[5, 5] = np.nan
+    residual[300:310, 300:310] = np.nan
+    return residual
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_hotspot_scene_matches_full_scan_and_table(dtype):
+    residual = _hotspot_scene().astype(dtype)
+    options = dict(robust_sigma=1.0, threshold_sigma=5.0, max_regions=10_000)
+    result = identify_residual_hotspots(residual, **options)
+    assert len(result) > 40
+    assert result == _reference_identify_residual_hotspots(
+        residual, **options
+    )
+    table = residual_hotspot_table(residual, robust_sigma=1.0)
+    assert len(table["pixel_count"]) == len(result)
+    for index, item in enumerate(result):
+        assert item["pixel_count"] == table["pixel_count"][index]
+        assert item["peak_yx"] == [
+            table["peak_y"][index],
+            table["peak_x"][index],
+        ]
+        assert item["bbox_y0y1x0x1"] == [
+            table[name][index] for name in ("y0", "y1", "x0", "x1")
+        ]
+        assert item["mean_residual"] == table["mean_residual"][index]
+
+
+def test_hotspot_table_is_empty_below_threshold():
+    table = residual_hotspot_table(np.zeros((10, 10)), robust_sigma=1.0)
+    assert set(table) >= {"pixel_count", "peak_y", "peak_x", "y0", "x1"}
+    assert all(column.size == 0 for column in table.values())
+
+
+def test_hotspot_table_on_cupy_matches_host():
+    cupy = pytest.importorskip("cupy")
+    residual = _hotspot_scene(shape=(300, 400), count=30)
+    host = residual_hotspot_table(residual, robust_sigma=1.0, max_regions=16)
+    device = residual_hotspot_table(
+        cupy.asarray(residual), robust_sigma=1.0, max_regions=16
+    )
+    for name, column in host.items():
+        assert isinstance(device[name], np.ndarray)
+        assert device[name] == pytest.approx(column, rel=1e-12)
+    assert identify_residual_hotspots(
+        cupy.asarray(residual), robust_sigma=1.0
+    ) == pytest.approx(identify_residual_hotspots(residual, robust_sigma=1.0))

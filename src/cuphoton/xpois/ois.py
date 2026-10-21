@@ -31,6 +31,8 @@ from typing import (
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+from cuphoton.core.arrays import array_module, ndimage_module, to_host
+
 EXPLICIT_BACKENDS = ("cpu", "cupy", "numba-cuda", "cutile")
 AUTO_BACKEND_PREFERENCE = ("cupy", "numba-cuda", "cpu")
 SUPPORTED_BACKENDS = ("auto", *EXPLICIT_BACKENDS)
@@ -359,7 +361,8 @@ class AutoStampMaskResult:
     Attributes
     ----------
     mask
-        Boolean image mask containing selected rectangular stamps.
+        Boolean image mask containing selected rectangular stamps, NumPy or
+        CuPy to match the input image.
     centers, stamps
         Selected centers and half-open ``(y0, y1, x0, x1)`` rectangles.
     scores, compact_fractions, radial_moments
@@ -372,7 +375,7 @@ class AutoStampMaskResult:
         Source-selection filter sizes and spacing constraint.
     """
 
-    mask: np.ndarray
+    mask: Any
     centers: tuple[tuple[int, int], ...]
     stamps: tuple[tuple[int, int, int, int], ...]
     scores: tuple[float, ...]
@@ -466,10 +469,10 @@ def make_stamp_mask(
 
 
 def build_compact_source_stamp_mask(
-    image: np.ndarray,
+    image: Any,
     *,
-    variance: np.ndarray | None = None,
-    valid_mask: np.ndarray | None = None,
+    variance: Any | None = None,
+    valid_mask: Any | None = None,
     stamp_size: int = 31,
     max_stamps: int = 5,
     peak_percentile: float = 99.5,
@@ -483,7 +486,7 @@ def build_compact_source_stamp_mask(
     Parameters
     ----------
     image
-        Two-dimensional image used for peak selection.
+        Two-dimensional NumPy or CuPy image used for peak selection.
     variance
         Optional positive variance image for significance ranking.
     valid_mask
@@ -504,7 +507,9 @@ def build_compact_source_stamp_mask(
     Returns
     -------
     AutoStampMaskResult
-        Selected mask, stamp geometry, and ranking diagnostics.
+        Selected mask, stamp geometry, and ranking diagnostics. The mask
+        lives in the array module of ``image``; the diagnostics are host
+        values.
 
     Notes
     -----
@@ -515,8 +520,6 @@ def build_compact_source_stamp_mask(
     * Rank peaks by local significance and compactness.
     * Keep well-separated, odd-sized rectangular stamps.
     """
-
-    from scipy.ndimage import maximum_filter, median_filter
 
     stamp_size = _validate_odd_positive(stamp_size, name="stamp_size")
     background_filter_size = _validate_odd_positive(
@@ -538,41 +541,50 @@ def build_compact_source_stamp_mask(
     if not 0.0 < peak_percentile < 100.0:
         raise ValueError("peak_percentile must satisfy 0 < p < 100")
 
-    array = np.asarray(image, dtype=np.float64)
+    xp = array_module(image, variance, valid_mask)
+    ndimage = ndimage_module(xp)
+    array = xp.asarray(image, dtype=xp.float64)
     if array.ndim != 2:
         raise ValueError("build_compact_source_stamp_mask expects a 2D image")
 
-    base_valid = np.isfinite(array)
+    base_valid = xp.isfinite(array)
     if variance is not None:
-        variance_arr = np.asarray(variance, dtype=np.float64)
+        variance_arr = xp.asarray(variance, dtype=xp.float64)
         if variance_arr.shape != array.shape:
             raise ValueError("variance must match the image shape")
-        base_valid &= np.isfinite(variance_arr) & (variance_arr > 0)
+        base_valid &= xp.isfinite(variance_arr) & (variance_arr > 0)
     else:
         variance_arr = None
     if valid_mask is not None:
-        valid_arr = _coerce_boolean_mask(valid_mask)
+        valid_arr = (
+            _coerce_boolean_mask(valid_mask)
+            if xp is np
+            else _coerce_boolean_mask_cupy(valid_mask, cp=xp)
+        )
         if valid_arr.shape != array.shape:
             raise ValueError("valid_mask must match the image shape")
         base_valid &= valid_arr
 
-    if not np.any(base_valid):
+    if not bool(base_valid.any()):
         raise ValueError(
             "no finite pixels remain for compact-source selection"
         )
 
-    fill_value = float(np.median(array[base_valid]))
-    filtered_input = np.where(base_valid, array, fill_value)
-    background = median_filter(
-        filtered_input, size=background_filter_size, mode="nearest"
+    fill_value = xp.median(array[base_valid])
+    background = ndimage.median_filter(
+        xp.where(base_valid, array, fill_value),
+        size=background_filter_size,
+        mode="nearest",
     )
-    highpass = np.where(base_valid, array - background, -np.inf)
-    threshold = float(np.percentile(highpass[base_valid], peak_percentile))
-    maxima = maximum_filter(highpass, size=peak_filter_size, mode="nearest")
-    peaks = np.argwhere(
+    highpass = xp.where(base_valid, array - background, -xp.inf)
+    threshold = float(xp.percentile(highpass[base_valid], peak_percentile))
+    maxima = ndimage.maximum_filter(
+        highpass, size=peak_filter_size, mode="nearest"
+    )
+    peak_y, peak_x = xp.nonzero(
         (highpass == maxima) & base_valid & (highpass > threshold)
     )
-    if peaks.size == 0:
+    if peak_y.size == 0:
         raise ValueError(
             "no compact-source peaks found for the requested mask"
         )
@@ -584,69 +596,71 @@ def build_compact_source_stamp_mask(
     if min_distance <= 0:
         raise ValueError("min_separation must be positive")
 
-    candidates: list[
-        tuple[float, float, float, int, int, tuple[int, int, int, int]]
-    ] = []
+    inside = (
+        (peak_y >= half)
+        & (peak_y + half + 1 <= array.shape[0])
+        & (peak_x >= half)
+        & (peak_x + half + 1 <= array.shape[1])
+    )
+    peak_y, peak_x = peak_y[inside], peak_x[inside]
+    offsets = xp.arange(-half, half + 1)
+    rows = peak_y[:, None, None] + offsets[None, :, None]
+    columns = peak_x[:, None, None] + offsets[None, None, :]
+    stamp_valid = base_valid[rows, columns].all(axis=(1, 2))
+    peak_y, peak_x = peak_y[stamp_valid], peak_x[stamp_valid]
+    stamps = array[rows[stamp_valid], columns[stamp_valid]]
+    local_background = xp.median(stamps.reshape(len(peak_y), -1), axis=1)
+    weights = xp.clip(stamps - local_background[:, None, None], 0.0, None)
+    total_weight = weights.sum(axis=(1, 2))
     center_half = compact_core_size // 2
-    for y, x in peaks:
-        y = int(y)
-        x = int(x)
-        y0 = y - half
-        y1 = y + half + 1
-        x0 = x - half
-        x1 = x + half + 1
-        if y0 < 0 or x0 < 0 or y1 > array.shape[0] or x1 > array.shape[1]:
-            continue
-        stamp_valid = base_valid[y0:y1, x0:x1]
-        if not np.all(stamp_valid):
-            continue
-        stamp = array[y0:y1, x0:x1]
-        local_background = float(np.median(stamp))
-        weights = np.clip(stamp - local_background, 0.0, None)
-        total_weight = float(np.sum(weights))
-        if total_weight <= 0.0:
-            continue
-        center_weights = weights[
-            half - center_half : half + center_half + 1,
-            half - center_half : half + center_half + 1,
-        ]
-        compact_fraction = float(np.sum(center_weights) / total_weight)
-        yy, xx = np.mgrid[-half : half + 1, -half : half + 1]
-        radial_moment = float(
-            np.sum(weights * (xx * xx + yy * yy)) / total_weight
-        )
-        local_signal = float(stamp[half, half] - local_background)
-        if variance_arr is None:
-            score = local_signal
-        else:
-            score = float(local_signal / np.sqrt(variance_arr[y, x]))
-        candidates.append(
-            (
-                score,
-                compact_fraction,
-                -radial_moment,
-                y,
-                x,
-                (y0, y1, x0, x1),
-            )
-        )
-
-    if not candidates:
+    center_weight = weights[
+        :,
+        half - center_half : half + center_half + 1,
+        half - center_half : half + center_half + 1,
+    ].sum(axis=(1, 2))
+    yy, xx = xp.meshgrid(offsets, offsets, indexing="ij")
+    radial = (weights * (xx * xx + yy * yy)[None]).sum(axis=(1, 2))
+    local_signal = stamps[:, half, half] - local_background
+    score = (
+        local_signal
+        if variance_arr is None
+        else local_signal / xp.sqrt(variance_arr[peak_y, peak_x])
+    )
+    keep = total_weight > 0.0
+    candidates = np.rec.fromarrays(
+        [
+            to_host(score[keep]),
+            to_host(center_weight[keep] / total_weight[keep]),
+            -to_host(radial[keep] / total_weight[keep]),
+            to_host(peak_y[keep]).astype(int),
+            to_host(peak_x[keep]).astype(int),
+        ],
+        names="score,compact_fraction,negative_radial,y,x",
+    )
+    if len(candidates) == 0:
         raise ValueError(
             "no valid compact-source stamps remain after finite-mask "
             "filtering"
         )
+    candidates = candidates[
+        np.lexsort(
+            (
+                -candidates.x,
+                -candidates.y,
+                -candidates.negative_radial,
+                -candidates.compact_fraction,
+                -candidates.score,
+            )
+        )
+    ]
 
-    candidates.sort(reverse=True)
-    selected: list[
-        tuple[float, float, float, int, int, tuple[int, int, int, int]]
-    ] = []
+    selected: list[np.record] = []
     min_distance_sq = min_distance * min_distance
     for candidate in candidates:
-        _, _, _, y, x, _ = candidate
         if any(
-            (y - y2) ** 2 + (x - x2) ** 2 < min_distance_sq
-            for *_, y2, x2, _ in selected
+            (candidate.y - other.y) ** 2 + (candidate.x - other.x) ** 2
+            < min_distance_sq
+            for other in selected
         ):
             continue
         selected.append(candidate)
@@ -658,18 +672,30 @@ def build_compact_source_stamp_mask(
             "compact-source selection produced no separated stamps"
         )
 
-    stamps = tuple(stamp for *_, stamp in selected)
-    mask = make_stamp_mask(array.shape, stamps)
+    stamps_yx = tuple(
+        (
+            int(candidate.y) - half,
+            int(candidate.y) + half + 1,
+            int(candidate.x) - half,
+            int(candidate.x) + half + 1,
+        )
+        for candidate in selected
+    )
+    mask = xp.zeros(array.shape, dtype=bool)
+    for y0, y1, x0, x1 in stamps_yx:
+        mask[y0:y1, x0:x1] = True
     return AutoStampMaskResult(
         mask=mask,
-        centers=tuple((int(y), int(x)) for _, _, _, y, x, _ in selected),
-        stamps=stamps,
-        scores=tuple(float(score) for score, *_ in selected),
+        centers=tuple(
+            (int(candidate.y), int(candidate.x)) for candidate in selected
+        ),
+        stamps=stamps_yx,
+        scores=tuple(float(candidate.score) for candidate in selected),
         compact_fractions=tuple(
-            float(compact_fraction) for _, compact_fraction, *_ in selected
+            float(candidate.compact_fraction) for candidate in selected
         ),
         radial_moments=tuple(
-            float(-neg_radial) for _, _, neg_radial, *_ in selected
+            float(-candidate.negative_radial) for candidate in selected
         ),
         threshold=threshold,
         peak_percentile=float(peak_percentile),

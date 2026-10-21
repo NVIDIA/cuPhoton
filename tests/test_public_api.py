@@ -531,3 +531,35 @@ def test_core_arrays_signatures_are_explicit() -> None:
     assert list(inspect.signature(arrays.ndimage_module).parameters) == ["xp"]
     assert list(inspect.signature(arrays.fft_module).parameters) == ["xp"]
     assert list(inspect.signature(as_numpy).parameters) == ["value"]
+
+
+def test_xpois_review_selectors_are_exported_with_stable_signatures() -> None:
+    assert {"identify_residual_hotspots", "residual_hotspot_table"} <= set(
+        xpois.__all__
+    )
+    assert list(
+        inspect.signature(xpois.identify_residual_hotspots).parameters
+    ) == ["residual", "robust_sigma", "threshold_sigma", "max_regions"]
+    assert list(
+        inspect.signature(xpois.residual_hotspot_table).parameters
+    ) == ["residual", "robust_sigma", "threshold_sigma", "max_regions"]
+    assert (
+        inspect.signature(xpois.residual_hotspot_table)
+        .parameters["max_regions"]
+        .default
+        is None
+    )
+    assert list(
+        inspect.signature(xpois.build_compact_source_stamp_mask).parameters
+    ) == [
+        "image",
+        "variance",
+        "valid_mask",
+        "stamp_size",
+        "max_stamps",
+        "peak_percentile",
+        "background_filter_size",
+        "peak_filter_size",
+        "min_separation",
+        "compact_core_size",
+    ]

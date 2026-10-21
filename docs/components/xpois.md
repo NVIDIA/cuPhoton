@@ -611,6 +611,20 @@ is true (a plane with sources, such as the matched reference), builds the
 Gaussian with `psf_weights` at the sub-pixel offsets and hands the stamps to
 `cuphoton.xfit.forced_psf_photometry`, whose result it returns.
 
+Two review selectors take the same NumPy or CuPy planes.
+`build_compact_source_stamp_mask(image, variance=..., stamp_size=31,
+max_stamps=5)` ranks local maxima of the median-filtered image by
+significance and compactness and returns the fit mask in the image's array
+module with host diagnostics (centers, scores, threshold).
+`residual_hotspot_table(residual, robust_sigma=sigma, threshold_sigma=5.0,
+max_regions=None)` labels the connected pixels at or above the threshold and
+returns host columns (`pixel_count`, `peak_y`, `peak_x`, `centroid_y`,
+`centroid_x`, `peak_abs_sigma`, `peak_residual`, `mean_residual`, and the
+bounding box `y0`, `y1`, `x0`, `x1`) sorted by peak sigma then size;
+`identify_residual_hotspots` returns the same rows as records with
+`max_regions=8` by default. Both functions reduce on the device and move only
+the selected rows to the host.
+
 ## Distributed image-pair batches
 
 `fit-batch` assigns complete, independent reference/target pairs to GPU

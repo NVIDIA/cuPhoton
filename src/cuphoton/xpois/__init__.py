@@ -43,6 +43,7 @@ from .ois import (
     solve_separable_kernel,
     triangular_degree_pairs,
 )
+from .review import identify_residual_hotspots, residual_hotspot_table
 from .spatial_als import (
     SpatialALSConfig,
     SpatialALSFitResult,
@@ -84,6 +85,7 @@ __all__ = [
     "evaluate_background_model",
     "extract_centered_stamp",
     "forced_flux_at",
+    "identify_residual_hotspots",
     "inspect_hsc_data_tree",
     "kernel_centroid",
     "kernel_fit_covariance",
@@ -92,6 +94,7 @@ __all__ = [
     "make_stamp_mask",
     "psf_weights",
     "resampling_variance_factor",
+    "residual_hotspot_table",
     "resolve_backend",
     "simple_difference_stamp",
     "solve_constant_kernel",
