@@ -104,7 +104,8 @@ def fit_single_sources(
     ``positions`` has shape ``(batch, 2)`` as ``(x, y)`` starting positions
     in xFit's centered pixel coordinates. Without ``psf_sigma`` the lobe is
     an elliptical Gaussian with free ``amplitude, sigma_x, sigma_y, theta,
-    x, y``, started at a width of 2 pixels; the widths are optimized in log
+    x, y``, started at widths of 2 and 1.8 pixels to give the orientation a
+    nonzero derivative; the widths are optimized in log
     space and returned positive. The labeling ``(sigma_x, sigma_y, theta)``
     and ``(sigma_y, sigma_x, theta + pi/2)`` describe the same lobe, so the
     result is canonicalized to ``sigma_x >= sigma_y``: where the solver
@@ -258,7 +259,14 @@ def fit_single_sources(
     else:
         log_sigma = xp.log(fixed_sigma)
         initial = xp.stack(
-            (amplitude0, log_sigma, log_sigma, zeros, xy[:, 0], xy[:, 1]),
+            (
+                amplitude0,
+                log_sigma,
+                xp.log(0.9 * fixed_sigma),
+                zeros,
+                xy[:, 0],
+                xy[:, 1],
+            ),
             axis=1,
         )
     initial = initial.astype(dtype, copy=False)

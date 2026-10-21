@@ -90,15 +90,21 @@ def test_fixed_width_fits_a_circular_lobe_with_three_parameters():
     )
 
 
-def test_elliptical_widths_are_canonicalized_to_sigma_x_at_least_sigma_y():
-    """Three stamps of one lobe; the solver ends on either labeling.
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("theta", [-np.pi / 4, np.pi / 4])
+def test_diagonal_ellipse_does_not_converge_to_a_circular_fit(dtype, theta):
+    truth = (40.0, 3.0, 1.0, theta, 0.0, 0.0)
+    images = _single(*truth).astype(dtype)
+    result = fit_single_sources(
+        images, np.ones_like(images), np.zeros((1, 2))
+    )
+    assert result.converged.all() and result.uncertainty_valid.all()
+    np.testing.assert_allclose(result.parameters[0], truth, atol=2e-3)
+    assert result.chi_square[0] < 1e-3
 
-    Without canonicalization the second stamp at this seed returns
-    ``(sigma_x, sigma_y, theta) = (1.59, 1.98, -1.28)`` for a truth of
-    ``(2.0, 1.6, 0.3)``: the same lobe under the other labeling. A truth
-    written as ``(1.6, 2.0, 0.3)`` is the same image as ``(2.0, 1.6,
-    0.3 - pi/2)`` and must come back that way for every stamp.
-    """
+
+def test_elliptical_widths_are_canonicalized_to_sigma_x_at_least_sigma_y():
+    """Recover canonical widths and angle for either input labeling."""
 
     truth = (40.0, 2.0, 1.6, 0.3, 1.3, -0.8)
     images, variance = _noisy(_single(*truth), 3, seed=3, noise=0.5)
