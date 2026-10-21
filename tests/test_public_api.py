@@ -512,3 +512,22 @@ def test_xray_subcommands_have_descriptions(command: str) -> None:
     assert result.returncode == 0, result.stderr
     assert "\n\n" in result.stdout
     assert "usage:" in result.stdout
+
+
+def test_core_arrays_signatures_are_explicit() -> None:
+    from cuphoton.core import arrays
+    from cuphoton.xfit.backend import as_numpy
+
+    assert arrays.__all__ == [
+        "array_module",
+        "fft_module",
+        "ndimage_module",
+        "to_host",
+    ]
+    assert list(inspect.signature(arrays.array_module).parameters) == [
+        "arrays"
+    ]
+    assert list(inspect.signature(arrays.to_host).parameters) == ["array"]
+    assert list(inspect.signature(arrays.ndimage_module).parameters) == ["xp"]
+    assert list(inspect.signature(arrays.fft_module).parameters) == ["xp"]
+    assert list(inspect.signature(as_numpy).parameters) == ["value"]

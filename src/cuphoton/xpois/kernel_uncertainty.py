@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 import numpy as np
 
+from cuphoton.core.arrays import array_module, fft_module
+
 from .ois import (
     _accumulate_normal_equations,
     _accumulate_normal_equations_cupy_device,
@@ -26,7 +28,7 @@ from .ois import (
     background_design,
     triangular_degree_pairs,
 )
-from .stamps import _array_module, window_stamps
+from .stamps import window_stamps
 
 __all__ = [
     "KernelFitCovariance",
@@ -167,7 +169,7 @@ def kernel_fit_covariance(
     device in the first case.
     """
 
-    xp = _array_module(fit.basis_kernels, fit.fit_mask, reference)
+    xp = array_module(fit.basis_kernels, fit.fit_mask, reference)
     reference_arr = _real_2d_array(xp, "reference", reference)
     variance_arr = _real_2d_array(xp, "target_variance", target_variance)
     if variance_arr.shape != reference_arr.shape:
@@ -348,7 +350,7 @@ def kernel_fit_variance(
         CuPy arrays, NumPy otherwise.
     """
 
-    xp = _array_module(cov.covariance, cov.basis_kernels, reference)
+    xp = array_module(cov.covariance, cov.basis_kernels, reference)
     reference_arr = _real_2d_array(xp, "reference", reference)
     basis = xp.asarray(cov.basis_kernels, dtype=xp.float64)
     xy = xp.asarray(positions, dtype=xp.float64)
@@ -546,8 +548,8 @@ def _spectrum(
     areas.
     """
 
-    xp = _array_module(k)
-    next_fast_len = _fft_module(xp).next_fast_len
+    xp = array_module(k)
+    next_fast_len = fft_module(xp).next_fast_len
     axes = tuple(range(len(a_shape))) if axes is None else tuple(axes)
     full = [a_shape[i] + k.shape[i] - 1 for i in axes]
     fast = [next_fast_len(n, True) for n in full]
@@ -568,7 +570,7 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     if not isinstance(a, _Spectrum) and not isinstance(k, _Spectrum):
         k = _spectrum(a.shape, k, axes)
     spec, other = (a, k) if isinstance(a, _Spectrum) else (k, a)
-    xp = _array_module(other)
+    xp = array_module(other)
     axes, full, fast = spec.axes, spec.full, spec.fast
     if [a.shape[i] + k.shape[i] - 1 for i in axes] != full:
         raise ValueError("spectrum was taken for another array shape")
@@ -586,16 +588,7 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     return out[tuple(crop)]
 
 
-def _fft_module(xp: Any) -> Any:
-    """``scipy.fft`` for NumPy, ``cupyx.scipy.fft`` for CuPy."""
-
-    if xp is np:
-        import scipy.fft
-
-        return scipy.fft
-    import cupyx.scipy.fft
-
-    return cupyx.scipy.fft
+_fft_module = fft_module
 
 
 def _real_2d_array(xp: Any, name: str, value: Any) -> Any:

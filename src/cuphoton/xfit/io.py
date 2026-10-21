@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from cuphoton import __version__
+from cuphoton.core.arrays import array_module
 from cuphoton.core.artifacts import array_sha256, file_sha256
 
 from ._types import FIT_MODES, MODEL_NAMES, FitMode, ModelName
@@ -135,16 +136,11 @@ def _validate_real_array(
     valid_kinds = "fiub" if allow_bool else "fiu"
     if array.dtype.kind not in valid_kinds:
         raise ValueError(f"{name} must be a real numeric array")
-    if finite and not _array_module(array).isfinite(array).all():
+    if finite and not array_module(array).isfinite(array).all():
         raise ValueError(f"{name} must contain only finite values")
 
 
-def _array_module(array):
-    if type(array).__module__.split(".", maxsplit=1)[0] == "cupy":
-        import cupy
-
-        return cupy
-    return np
+_array_module = array_module
 
 
 def _validate_images(images: np.ndarray) -> None:
@@ -199,7 +195,7 @@ def _broadcast_image_auxiliary(
         *images.shape[-2:],
     ):
         array = array[:, None, :, :]
-    return _array_module(images).broadcast_to(array, images.shape)
+    return array_module(images).broadcast_to(array, images.shape)
 
 
 def _validate_dataset_contract(
@@ -208,7 +204,7 @@ def _validate_dataset_contract(
     mode: FitMode | None,
     model: ModelName | None,
 ) -> None:
-    ap = _array_module(dataset.images)
+    ap = array_module(dataset.images)
     _validate_images(dataset.images)
     _validate_candidate_id(dataset.candidate_id, dataset.batch_size)
     if dataset.batch_size == 0:

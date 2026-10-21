@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.core.arrays import array_module, ndimage_module, to_host
+
 
 def extract_centered_stamp(
     image: np.ndarray,
@@ -101,7 +103,7 @@ def window_stamps(
         ``(N, height, width)`` float64 windows in the namespace of ``plane``.
     """
 
-    xp = _array_module(plane)
+    xp = array_module(plane)
     image = xp.asarray(plane)
     if image.ndim != 2:
         raise ValueError("plane must be a two-dimensional array")
@@ -134,30 +136,6 @@ def window_stamps(
     return xp.where(inside, values.astype(xp.float64), fill)
 
 
-def _array_module(*arrays: Any) -> Any:
-    """NumPy, or CuPy when any of ``arrays`` is a CuPy array."""
-
-    for array in arrays:
-        if type(array).__module__.split(".", maxsplit=1)[0] == "cupy":
-            import cupy
-
-            return cupy
-    return np
-
-
-def _ndimage_module(xp: Any) -> Any:
-    """``scipy.ndimage`` for NumPy, ``cupyx.scipy.ndimage`` for CuPy."""
-
-    if xp is np:
-        import scipy.ndimage
-
-        return scipy.ndimage
-    import cupyx.scipy.ndimage
-
-    return cupyx.scipy.ndimage
-
-
-def _to_host(array: Any) -> np.ndarray:
-    """``array`` as a NumPy array, moved from the device when it is CuPy."""
-
-    return np.asarray(array.get() if hasattr(array, "get") else array)
+_array_module = array_module
+_ndimage_module = ndimage_module
+_to_host = to_host
