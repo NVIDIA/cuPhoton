@@ -318,6 +318,11 @@ def test_hotspot_table_on_cupy_matches_host():
     for name, column in host.items():
         assert isinstance(device[name], np.ndarray)
         assert device[name] == pytest.approx(column, rel=1e-12)
-    assert identify_residual_hotspots(
+    device_records = identify_residual_hotspots(
         cupy.asarray(residual), robust_sigma=1.0
-    ) == pytest.approx(identify_residual_hotspots(residual, robust_sigma=1.0))
+    )
+    host_records = identify_residual_hotspots(residual, robust_sigma=1.0)
+    assert len(device_records) == len(host_records)
+    for got, want in zip(device_records, host_records, strict=True):
+        # The device sums each region in another order: equal to rounding.
+        assert got == pytest.approx(want, rel=1e-12)

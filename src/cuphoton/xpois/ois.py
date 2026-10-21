@@ -642,14 +642,17 @@ def build_compact_source_stamp_mask(
             "no valid compact-source stamps remain after finite-mask "
             "filtering"
         )
+    # Order on keys rounded well below their noise so that two planted
+    # sources with equal scores sort the same on every backend (device
+    # sums differ from host sums at the 1e-16 level); y and x break ties.
     candidates = candidates[
         np.lexsort(
             (
                 -candidates.x,
                 -candidates.y,
-                -candidates.negative_radial,
-                -candidates.compact_fraction,
-                -candidates.score,
+                -np.round(candidates.negative_radial, 6),
+                -np.round(candidates.compact_fraction, 9),
+                -np.round(candidates.score, 6),
             )
         )
     ]
