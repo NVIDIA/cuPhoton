@@ -101,8 +101,7 @@ def kernel_fit_covariance(
 
     The sandwich holds ``U`` as one full-size image per coefficient
     (``basis_count + background terms``) in memory, so its cost grows with
-    the image area times the coefficient count. The plain form holds no
-    full-size array beyond the inputs.
+    the image area times the coefficient count.
 
     Parameters
     ----------
@@ -122,7 +121,8 @@ def kernel_fit_covariance(
         :func:`standardize_constant_kernel_residual` takes. The division
         by the resampling gain ``sum(resampling_weights**2)`` that gives
         the source-pixel variance happens here. Non-finite pixels count as
-        zero. Given together with ``resampling_weights``.
+        zero; finite values must be nonnegative. Given together with
+        ``resampling_weights``.
     resampling_weights
         One ``(k, k)`` stamp (or ``(1, k, k)``) of the interpolation weights
         that produced a resampled reference pixel from its source
@@ -208,6 +208,10 @@ def kernel_fit_covariance(
         )
         if resampled_arr.shape != reference_arr.shape:
             raise ValueError("reference_variance must match reference shape")
+        if bool(xp.any(xp.isfinite(resampled_arr) & (resampled_arr < 0.0))):
+            raise ValueError(
+                "reference_variance must be nonnegative where finite"
+            )
         stamp = xp.asarray(resampling_weights, dtype=xp.float64)
         if stamp.ndim == 3 and stamp.shape[0] == 1:
             stamp = stamp[0]

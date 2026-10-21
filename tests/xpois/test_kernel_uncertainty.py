@@ -404,6 +404,21 @@ def test_argument_validation():
         )
 
 
+def test_sandwich_rejects_negative_reference_variance():
+    _, reference, target, fit_mask, stamp, _ = _scene()
+    fit = _fit(reference, target, fit_mask)
+    reference_variance = np.ones_like(reference)
+    reference_variance[0, 0] = -1.0
+    with pytest.raises(ValueError, match="nonnegative"):
+        kernel_fit_covariance(
+            fit,
+            reference=reference,
+            target_variance=np.full(reference.shape, TARGET_VARIANCE),
+            reference_variance=reference_variance,
+            resampling_weights=stamp,
+        )
+
+
 def test_window_stamps_cuts_x_y_windows_with_a_fill():
     plane = np.arange(5 * 8, dtype=float).reshape(5, 8)
     windows = window_stamps(plane, [[6.0, 2.0], [0.4, 3.6]], 3)

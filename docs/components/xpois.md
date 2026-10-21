@@ -442,7 +442,7 @@ The plain form is `(A^T W A)^-1` over the fit pixels, `A` the design matrix
 of the reference convolved with each basis kernel plus the background terms
 and `W = 1 / target_variance`, the weights the fit used; no reduced
 chi-square scaling is applied. `H = A^T W A` is accumulated in chunks as in
-the solve, so the plain form holds no full-size array beyond its inputs.
+the solve, without materializing the full design matrix.
 
 The resampled reference also carries noise, which the residual contains but
 the fit's weights omit. Passing `reference_variance` (the resampled
