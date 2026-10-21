@@ -176,7 +176,10 @@ def test_cupy_input_returns_device_mask_and_host_diagnostics():
         image, variance=variance, stamp_size=21, max_stamps=4
     )
     device = build_compact_source_stamp_mask(
-        cupy.asarray(image), variance=cupy.asarray(variance), stamp_size=21
+        cupy.asarray(image),
+        variance=cupy.asarray(variance),
+        stamp_size=21,
+        max_stamps=4,
     )
     assert type(device.mask).__module__.startswith("cupy")
     assert device.centers == host.centers
