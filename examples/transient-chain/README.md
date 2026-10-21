@@ -72,8 +72,9 @@ The misalignment model (`ops.fit_misalignment`) is fitted only in affine mode an
 `reason: "daofind centroids"`). It is the affine fit with its covariance from the centroid noise,
 the excess residual as a quadratic field across the image (one constant per axis with fewer than
 30 stars) and outliers clipped at 5 sigma, a limit that keeps every Gaussian residual while a
-blend, tens of sigma out, still goes. `variance(x, y)` gives the misalignment variance per axis
-at any position, and the worker keeps the model for the later stages. The summary under
+blend, tens of sigma out, still goes. `variance(x, y)` includes the squared remaining affine and
+quadratic displacement because this diagnostic fit does not correct the template or catalog
+positions. The worker keeps the model for the later stages. The summary under
 `diagnostics.align.refine.misalignment` records `model` (`"polynomial"`, `"rms"`, or `null` with
 a `reason`), the star counts, the residual rms and the excess and image-center sigma in pixels.
 The template has no variance plane, so its centroid noise is counted as excess.
