@@ -20,7 +20,8 @@ SIZE = 200
 PSF = 1.8
 NOISE = 3.0
 FIELD = np.array([0.1, -0.05])  # constant reference-minus-target offset
-TAU2 = np.array([0.01, 0.0225])  # misalignment variance per axis
+TAU2 = np.array([0.01, 0.0225])  # excess variance per axis
+MIS_VARIANCE = TAU2 + FIELD**2
 QUANTITIES = uq.QUANTITIES
 
 
@@ -147,6 +148,58 @@ def scene():
     return Scene()
 
 
+@pytest.mark.parametrize("bad_offset", [np.nan, -1000.0])
+@pytest.mark.parametrize("photometry", [True, False])
+@pytest.mark.parametrize("psf_sigma", [PSF, None])
+def test_invalid_lobe_position_does_not_validate_its_fallback(
+    scene, bad_offset, photometry, psf_sigma
+):
+    context = scene.context(
+        fit=None, star_xy=None, misalignment=None, psf_sigma=psf_sigma
+    )
+    inputs = scene.inputs()
+    if not photometry:
+        inputs["photometry_xy"] = None
+    baseline = uq.budget(context, **inputs).columns
+    inputs["offsets"]["positive"][0][0] = bad_offset
+
+    columns = uq.budget(context, **inputs).columns
+
+    assert not columns["uq_valid"][0]
+    assert columns["uq_valid"][1:3].all()
+    for quantity in QUANTITIES:
+        if quantity == "psf_flux" and photometry:
+            assert np.isfinite(columns[f"{quantity}_err"][0])
+        else:
+            assert np.isnan(columns[f"{quantity}_err"][0])
+        np.testing.assert_allclose(
+            columns[f"{quantity}_err"][1:],
+            baseline[f"{quantity}_err"][1:],
+            equal_nan=True,
+        )
+
+
+@pytest.mark.parametrize("bad_offset", [np.nan, -1000.0])
+@pytest.mark.parametrize("psf_sigma", [PSF, None])
+def test_invalid_photometry_position_does_not_invalidate_lobes(
+    scene, bad_offset, psf_sigma
+):
+    context = scene.context(
+        fit=None, star_xy=None, misalignment=None, psf_sigma=psf_sigma
+    )
+    inputs = scene.inputs()
+    inputs["photometry_xy"][0, 0] = bad_offset
+
+    columns = uq.budget(context, **inputs).columns
+
+    assert not columns["uq_valid"][0]
+    assert columns["uq_valid"][1:3].all()
+    assert np.isnan(columns["psf_flux_err"][0])
+    for quantity in QUANTITIES:
+        if quantity != "psf_flux":
+            assert np.isfinite(columns[f"{quantity}_err"][0])
+
+
 def test_terms_and_fallbacks_are_recorded(scene):
     ctx = scene.context()
     assert ctx.terms == ("kfit", "kmatch", "mis")
@@ -177,7 +230,7 @@ def test_total_is_the_quadrature_and_never_below_the_fit_term(scene):
         )
         np.testing.assert_array_equal(c[f"{q}_err_corr"][valid], 0.0)
     # misalignment: 1/4 of the model for a center, the model for a lobe
-    for a, t2 in zip("xy", TAU2, strict=True):
+    for a, t2 in zip("xy", MIS_VARIANCE, strict=True):
         np.testing.assert_allclose(c[f"center_{a}_err_mis"] ** 2, 0.25 * t2)
         np.testing.assert_allclose(c[f"positive_{a}_err_mis"] ** 2, t2)
         np.testing.assert_array_equal(c[f"center_{a}_err_kmatch"], 0.0)
@@ -189,6 +242,15 @@ def test_total_is_the_quadrature_and_never_below_the_fit_term(scene):
     assert res.diagnostics["rotated_grid"] == 0
 
 
+def test_kernel_fit_term_is_excluded_without_target_noise_variance(scene):
+    context = scene.context(variance=None)
+    assert context.excluded["kfit"] == "no target variance plane"
+    assert context.kernel_covariance is None
+    columns = uq.budget(context, **scene.inputs()).columns
+    for quantity in QUANTITIES:
+        np.testing.assert_array_equal(columns[f"{quantity}_err_kfit"], 0.0)
+
+
 def test_worked_quadrature_by_hand(scene):
     """Kernel fit off, no stars, no reference variance: only misalignment
     adds to the fit term, so the numbers follow by hand.
@@ -197,14 +259,32 @@ def test_worked_quadrature_by_hand(scene):
     assert ctx.terms == ("mis",)
     c = uq.budget(ctx, **scene.inputs(err=0.05)).columns
     assert c["center_x_err"][0] == pytest.approx(
-        np.sqrt(0.05**2 + 0.25 * 0.01), rel=1e-12
+        np.sqrt(0.05**2 + 0.25 * MIS_VARIANCE[0]), rel=1e-12
     )
     assert c["positive_y_err"][1] == pytest.approx(
-        np.sqrt(0.05**2 + 0.0225), rel=1e-12
+        np.sqrt(0.05**2 + MIS_VARIANCE[1]), rel=1e-12
     )
     assert c["psf_flux_err"][0] == pytest.approx(40.0, rel=1e-12)
-    assert c["center_x_err_mis"][0] == pytest.approx(0.05)
-    assert c["positive_x_err_mis"][0] == pytest.approx(0.1)
+    assert c["center_x_err_mis"][0] == pytest.approx(
+        0.5 * np.sqrt(MIS_VARIANCE[0])
+    )
+    assert c["positive_x_err_mis"][0] == pytest.approx(
+        np.sqrt(MIS_VARIANCE[0])
+    )
+
+
+def test_nonfinite_fit_error_invalidates_only_its_quantity(scene):
+    inputs = scene.inputs()
+    inputs["err_fit"]["positive_x"][0] = np.nan
+    result = uq.budget(scene.context(fit=None, star_xy=None), **inputs)
+    columns = result.columns
+    assert columns["uq_valid"].tolist() == [False, True, True, False]
+    assert np.isnan(columns["positive_x_err"][0])
+    for quantity in QUANTITIES:
+        if quantity != "positive_x":
+            assert np.isfinite(columns[f"{quantity}_err"][0])
+    assert result.diagnostics["invalid_window"] == 1
+    assert result.diagnostics["rotated_grid"] == 0
 
 
 def test_kernel_mismatch_is_recovered_from_the_stars():
@@ -241,7 +321,7 @@ def test_single_source_sensitivity_scales_the_lobe_misalignment(
     single[0] = True
     res = uq.budget(s.context(), **s.inputs(single=single))
     c = res.columns
-    lam2 = c["positive_x_err_mis"][0] ** 2 / TAU2[0]
+    lam2 = c["positive_x_err_mis"][0] ** 2 / MIS_VARIANCE[0]
     if capped:
         assert lam2 == pytest.approx(uq.SENSITIVITY_CAP**2, rel=1e-9)
         assert res.diagnostics["sensitivity_capped"] == 1
@@ -252,8 +332,12 @@ def test_single_source_sensitivity_scales_the_lobe_misalignment(
         assert lam2 == pytest.approx((1 + seen) ** 2, rel=0.05)
         assert res.diagnostics["sensitivity_capped"] == 0
     # resolved dipoles keep lambda = 1
-    np.testing.assert_allclose(c["positive_x_err_mis"][1:] ** 2, TAU2[0])
-    np.testing.assert_allclose(c["center_x_err_mis"][0] ** 2, 0.25 * TAU2[0])
+    np.testing.assert_allclose(
+        c["positive_x_err_mis"][1:] ** 2, MIS_VARIANCE[0]
+    )
+    np.testing.assert_allclose(
+        c["center_x_err_mis"][0] ** 2, 0.25 * MIS_VARIANCE[0]
+    )
 
 
 def test_reference_variance_adds_the_correlation_term(scene):
@@ -303,6 +387,32 @@ def test_fit_only_writes_zero_terms(scene):
         for t in uq.TERMS:
             np.testing.assert_array_equal(c[f"{q}_err_{t}"], 0.0)
     assert c["uq_valid"].all() and c["uq_valid"].dtype == bool
+
+
+def test_reference_noise_is_relative_to_the_variance_used_by_xfit(scene):
+    def resampling(position_x, position_y):
+        return SimpleNamespace(
+            weights=np.ones((len(position_x), 1, 1)),
+            is_translation=np.ones(len(position_x), dtype=bool),
+        )
+
+    context = scene.context(
+        kernel=np.ones((1, 1)),
+        fit=None,
+        misalignment=None,
+        star_xy=None,
+        reference_variance=np.full_like(scene.variance, NOISE**2),
+        resampling=resampling,
+    )
+    inputs = scene.inputs()
+    columns = uq.budget(context, **inputs).columns
+    valid = columns["uq_valid"]
+    assert valid.tolist() == [True, True, True, False]
+    for quantity in QUANTITIES:
+        np.testing.assert_allclose(
+            columns[f"{quantity}_err"][valid],
+            np.sqrt(2.0) * inputs["err_fit"][quantity][valid],
+        )
 
 
 def test_forced_flux_matches_the_planted_flux(scene):
@@ -416,6 +526,36 @@ def test_lobe_kernel_fit_term_follows_the_sub_pixel_position():
         out.append(uq.budget(ctx, **inp).columns["positive_x_err_kfit"][0])
     assert off[0] > 0
     assert on[0] < 1e-3 * off[0]
+
+
+def test_flux_kernel_term_uses_the_published_photometry_position():
+    import dataclasses
+
+    from cuphoton.xpois import psf_weights
+
+    scene = Scene(cand=[[80, 80], [140, 50], [100, 150], [40, 160]])
+    star = _gaussians([80.3], [79.8], [1e6])
+    scene.reference += star
+    scene.matched = fftconvolve(scene.reference, scene.kernel, mode="same")
+    covariance = 1e-6
+    context = dataclasses.replace(
+        scene.context(star_xy=None),
+        kernel_covariance=_known_covariance(scene, covariance),
+    )
+    inputs = scene.inputs(single=np.array([True, False, False, False]))
+    result = uq.budget(context, **inputs)
+    assert result.diagnostics["sensitivity_capped"] == 1
+    position_x, position_y = (scene.cand + inputs["photometry_xy"])[0]
+    offset = np.array(
+        [[position_x - np.rint(position_x), position_y - np.rint(position_y)]]
+    )
+    weights = psf_weights(PSF, context.window, offset=offset)[0]
+    expected = (
+        covariance * _hand_sum(scene, weights, position_x, position_y) ** 2
+    )
+    assert result.columns["psf_flux_err_kfit"][0] ** 2 == pytest.approx(
+        expected, rel=1e-9
+    )
 
 
 def test_kernel_mismatch_term_is_eta_times_the_reference_flux(scene):

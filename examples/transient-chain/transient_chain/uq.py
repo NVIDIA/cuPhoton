@@ -175,6 +175,7 @@ def build_context(
         excluded["corr"] = "no reference variance plane"
     if variance is None:
         excluded.setdefault("corr", "no target variance plane")
+        excluded["kfit"] = "no target variance plane"
         excluded["kmatch"] = "no target variance plane"
     if psf_sigma is None:
         excluded.setdefault("corr", "no PSF width")
@@ -243,12 +244,9 @@ def _positions(xp, x, y):
     )
 
 
-def _safe_positions(xp, x, y, cx, cy, shape):
-    """Positions for image lookups: ``(x, y)`` where finite and inside the
-    image, else the candidate pixel ``(cx, cy)``.
-    """
+def _valid_positions(xp, x, y, shape):
     ny, nx = shape
-    ok = (
+    return (
         xp.isfinite(x)
         & xp.isfinite(y)
         & (x >= 0)
@@ -256,6 +254,13 @@ def _safe_positions(xp, x, y, cx, cy, shape):
         & (y >= 0)
         & (y <= ny - 1)
     )
+
+
+def _safe_positions(xp, x, y, cx, cy, shape):
+    """Positions for image lookups: ``(x, y)`` where finite and inside the
+    image, else the candidate pixel ``(cx, cy)``.
+    """
+    ok = _valid_positions(xp, x, y, shape)
     return xp.where(ok, x, cx), xp.where(ok, y, cy)
 
 
@@ -306,6 +311,7 @@ def _estimator_terms(ctx: BudgetContext, weights, pos):
             reference_variance=ctx.reference_variance,
             resampling_weights=at.weights,
             positions=pos,
+            residual_variance=ctx.target_variance,
             is_translation=at.is_translation,
         ).factor
     else:
@@ -545,25 +551,34 @@ def budget(
     pos = {}
     for name in POSITIONS:
         dx, dy = offsets[name]
-        px = cx + xp.asarray(dx, dtype=xp.float64)
-        py = cy + xp.asarray(dy, dtype=xp.float64)
         pos[name] = _positions(
-            xp, *_safe_positions(xp, px, py, cx, cy, shape)
+            xp,
+            cx + xp.asarray(dx, dtype=xp.float64),
+            cy + xp.asarray(dy, dtype=xp.float64),
         )
-    neg = 2.0 * pos["center"] - pos["positive"]
-    pos["negative"] = _positions(
-        xp, *_safe_positions(xp, neg[:, 0], neg[:, 1], cx, cy, shape)
-    )
+    pos["negative"] = 2.0 * pos["center"] - pos["positive"]
     if photometry_xy is None:
         pos["flux"] = pos["positive"]
     else:
         pxy = xp.asarray(photometry_xy, dtype=xp.float64)
-        pos["flux"] = _positions(
-            xp,
-            *_safe_positions(
-                xp, cx + pxy[:, 0], cy + pxy[:, 1], cx, cy, shape
-            ),
+        pos["flux"] = _positions(xp, cx + pxy[:, 0], cy + pxy[:, 1])
+    position_ok = {
+        name: _valid_positions(xp, at[:, 0], at[:, 1], shape)
+        for name, at in pos.items()
+    }
+    for axis in ("x", "y"):
+        window_ok[f"center_{axis}"] = (
+            position_ok["positive"] & position_ok["negative"]
         )
+        window_ok[f"positive_{axis}"] = position_ok["positive"]
+    if "psf_flux" in quantities:
+        window_ok["psf_flux"] = position_ok["flux"]
+    pos = {
+        name: _positions(
+            xp, *_safe_positions(xp, at[:, 0], at[:, 1], cx, cy, shape)
+        )
+        for name, at in pos.items()
+    }
     # one transfer: the host-side misalignment model's inputs
     host = ops.to_host(
         xp.stack([pos["center"], pos["positive"], pos["flux"]])
@@ -602,12 +617,16 @@ def budget(
         }
         for a in ("x", "y"):
             window_ok[f"center_{a}"] = (
-                valid_at["positive"] & valid_at["negative"]
+                window_ok[f"center_{a}"]
+                & valid_at["positive"]
+                & valid_at["negative"]
             )
-            window_ok[f"positive_{a}"] = valid_at["positive"]
+            window_ok[f"positive_{a}"] = (
+                window_ok[f"positive_{a}"] & valid_at["positive"]
+            )
         if "psf_flux" in quantities:
-            window_ok["psf_flux"] = valid_at["flux"]
-        lam, raw, t_ref, flux_pos = sensitivity(
+            window_ok["psf_flux"] = window_ok["psf_flux"] & valid_at["flux"]
+        lam, raw, t_ref, _ = sensitivity(
             ctx, pos["flux"], cx, cy, single, field
         )
         capped = xp.abs(raw) > SENSITIVITY_CAP
@@ -668,13 +687,13 @@ def budget(
                 psf = psf_weights(
                     ctx.psf_sigma,
                     ctx.window,
-                    offset=flux_pos - xp.rint(flux_pos),
+                    offset=pos["flux"] - xp.rint(pos["flux"]),
                     xp=xp,
                 )
                 w, ok = _matched_filter(
-                    xp, _inverse_variance(ctx, flux_pos, ctx.window), psf
+                    xp, _inverse_variance(ctx, pos["flux"], ctx.window), psf
                 )
-                f, kfit = _estimator_terms(ctx, w, flux_pos)
+                f, kfit = _estimator_terms(ctx, w, pos["flux"])
                 factor["psf_flux"] = f
                 var["psf_flux"]["kfit"] = kfit * ok
             if "kmatch" in ctx.terms:
@@ -699,14 +718,14 @@ def budget(
         f = factor[q]
         defined = xp.isfinite(f)
         f = xp.where(defined & (f > 1.0), f, 1.0)
-        ok = window_ok[q] & defined
-        valid = valid & ok
         windows = windows & window_ok[q]
         undefined = undefined | ~defined
         corr = fit**2 * (f - 1.0)
         total = xp.sqrt(
             fit**2 + corr + var[q]["kfit"] + var[q]["kmatch"] + var[q]["mis"]
         )
+        ok = window_ok[q] & defined & xp.isfinite(total)
+        valid = valid & ok
         names += [f"{q}_err_{t}" for t in TERMS] + [f"{q}_err"]
         rows += [
             xp.where(defined, xp.sqrt(corr), xp.nan),

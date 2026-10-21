@@ -160,8 +160,9 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
         "bool",
         "uq",
         "every <q>_err of the row is defined (false when a quantity's "
-        "window holds a masked pixel or its correlation factor is "
-        "undefined; the other quantities' <q>_err stay defined)",
+        "window holds a masked pixel, its correlation factor is "
+        "undefined, or its total uncertainty is non-finite; the other "
+        "quantities' <q>_err stay defined)",
     ),
     "sky_err_arcsec": (
         "float64",

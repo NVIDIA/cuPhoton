@@ -325,8 +325,9 @@ center's stamp over both lobes).
   noise is not in that plane (below).
 - `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of the
   quantity's weighted sum (`cuphoton.xpois.correlation_factor`, floored at 1): the resampling and
-  the kernel correlate the reference's pixels, so a weighted sum is noisier than the diagonal
-  variance plane says. It needs the reference's variance plane on the target grid and the resampling
+  the kernel correlate the reference's pixels. The factor is measured against the target variance
+  used by xFit, so it includes both the reference's diagonal noise and its correlations.
+  It needs the reference's variance plane on the target grid and the resampling
   weights (`cuphoton.xrep.resampling_weights_at` with the template's `ReprojectionSpec`); this
   version's template providers carry no variance plane, so the term is 0 and `summary.json` lists
   it under `uq.excluded`. Where the grid mapping is not locally a translation the factor is
@@ -335,7 +336,8 @@ center's stamp over both lobes).
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
   Largest where a candidate sits on a bright reference source, and 0 where the lobe flux is not
-  usable. `uq.kernel_fit: false` skips it.
+  usable. Without a target variance plane the term is excluded because its noise scale is unknown.
+  `uq.kernel_fit: false` skips it.
 - `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux `T` at the
   photometry position. `eta` is the fraction of a static star's reference flux that the subtraction
   leaves in the residual beyond noise: at the stars the refine stage kept, the residual's forced
@@ -359,8 +361,9 @@ center's stamp over both lobes).
 
 Validity is per quantity: `<q>_err` is NaN where the quantity's window (both lobes' windows for a
 center) holds a masked or non-finite pixel, or where its correlation factor is undefined; the term
-columns keep their values (`<q>_err_corr` is NaN with the factor). `uq_valid` is true where every
-quantity of the row is valid, so a candidate near a masked block can carry a valid `positive_x_err`
+columns keep their values (`<q>_err_corr` is NaN with the factor). Invalid original measurement positions and nonfinite total uncertainties also leave their
+quantity's error undefined. `uq_valid` is true where every
+quantity of the row has a finite total uncertainty and is valid, so a candidate near a masked block can carry a valid `positive_x_err`
 and a NaN `psf_flux_err` in the same row with `uq_valid` false. A rule for windows with masked
 pixels is a planned addition. A term the item could not compute is written as 0 and `summary.json`
 records the terms that went into the bars (`uq_terms`) with the reason for each one left out
