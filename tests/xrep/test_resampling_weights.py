@@ -398,6 +398,17 @@ def test_argument_validation() -> None:
             np.array([np.nan]),
             interpolation="bilinear",
         )
+    with pytest.raises(ValueError, match="same shape"):
+        resampling_weights_at(
+            _shift(0.0, 0.0),
+            np.ones((2, 3)),
+            np.ones((3, 2)),
+            interpolation="bilinear",
+        )
+    with pytest.raises(ValueError, match="lanczos_a"):
+        resampling_weights_at(
+            _shift(0.0, 0.0), x, x, interpolation="lanczos3", lanczos_a=0
+        )
     with pytest.raises(TypeError, match="callable"):
         resampling_weights_at(object(), x, x, interpolation="bilinear")
     prepared = prepare_reprojection(spec, source_shape=(8, 8))
