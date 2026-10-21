@@ -168,6 +168,38 @@ def test_valid_mask_and_small_stamps_match_reference_scan():
     _assert_matches_reference(result, reference)
 
 
+@pytest.mark.parametrize("scale", [1e-9, 1.0, 1e9])
+def test_source_ranking_preserves_flux_units(scale):
+    image = np.zeros((41, 61))
+    image[10, 10] = 100.0
+    image[30, 50] = 50.0
+    result = build_compact_source_stamp_mask(
+        image * scale,
+        stamp_size=5,
+        max_stamps=1,
+        background_filter_size=3,
+        peak_filter_size=3,
+    )
+    assert result.centers == ((10, 10),)
+
+
+@pytest.mark.parametrize("masked", [False, True])
+def test_rejected_stamps_report_no_valid_sources(masked):
+    image = np.zeros((41, 41))
+    if masked:
+        image[20, 20] = 100.0
+        image[19, 19] = np.nan
+    else:
+        image[1, 1] = 100.0
+    with pytest.raises(ValueError, match="no valid compact-source stamps"):
+        build_compact_source_stamp_mask(
+            image,
+            stamp_size=5,
+            background_filter_size=3,
+            peak_filter_size=3,
+        )
+
+
 def test_cupy_input_returns_device_mask_and_host_diagnostics():
     cupy = pytest.importorskip("cupy")
     image = _scene(shape=(300, 400), count=60)

@@ -249,10 +249,14 @@ def forced_flux_at(
     else:
         var = window_stamps(variance, at, window)
     if local_sky:
+        usable = xp.isfinite(data) & xp.isfinite(var) & (var > 0)
         with warnings.catch_warnings():
             # a window with no finite pixel has no median and stays NaN
             warnings.simplefilter("ignore", RuntimeWarning)
-            data = data - xp.nanmedian(data, axis=(1, 2), keepdims=True)
+            sky = xp.nanmedian(
+                xp.where(usable, data, xp.nan), axis=(1, 2), keepdims=True
+            )
+            data = data - sky
     offset = xy - xp.rint(xy)
     psf = psf_weights(psf_sigma, int(window), offset=offset, xp=xp)
     return forced_psf_photometry(data, var, offset, psf_sigma, psf=psf)

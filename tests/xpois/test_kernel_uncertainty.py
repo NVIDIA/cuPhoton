@@ -195,8 +195,11 @@ def test_weighted_sum_variance_is_the_projected_quadratic_form():
         assert value == pytest.approx(g @ cov.covariance @ g, rel=1e-8)
 
 
-@pytest.mark.parametrize("weights", [None, np.ones((3, 3))])
-def test_variance_with_no_positions_returns_empty(weights):
+@pytest.mark.parametrize(
+    "weights,expected_shape",
+    [(None, (0,)), (np.ones((3, 3)), (0,)), (np.ones((0, 3, 3, 3)), (0, 3))],
+)
+def test_variance_with_no_positions_returns_empty(weights, expected_shape):
     covariance = KernelFitCovariance(
         covariance=np.eye(2),
         basis_kernels=np.ones((1, 1, 1)),
@@ -210,7 +213,7 @@ def test_variance_with_no_positions_returns_empty(weights):
         positions=np.empty((0, 2)),
         weights=weights,
     )
-    assert result.shape == (0,)
+    assert result.shape == expected_shape
     assert result.dtype == np.float64
 
 

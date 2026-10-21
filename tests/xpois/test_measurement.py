@@ -246,6 +246,25 @@ def test_forced_flux_at_recovers_planted_fluxes():
     assert np.all(raw.flux > result.flux + 500.0)
 
 
+@pytest.mark.parametrize("invalid_variance", [0.0, -1.0, np.nan, np.inf])
+def test_forced_flux_local_sky_ignores_unusable_pixels(invalid_variance):
+    plane = 100.0 * psf_weights(1.0, 5) + 10.0
+    variance = np.ones_like(plane)
+    variance[:3] = invalid_variance
+    positions = np.array([[2.0, 2.0]])
+    plane[:3] = np.nan
+    expected = forced_flux_at(
+        plane, positions, 1.0, window=5, variance=variance
+    )
+    plane[:3] = 1e6
+    actual = forced_flux_at(
+        plane, positions, 1.0, window=5, variance=variance
+    )
+    assert actual.valid.all()
+    np.testing.assert_allclose(actual.flux, expected.flux)
+    np.testing.assert_allclose(actual.flux_error, expected.flux_error)
+
+
 def test_forced_flux_at_is_the_xfit_estimator_on_cut_windows():
     """The same numbers as ``forced_psf_photometry`` on windows cut by
     ``window_stamps`` with ``psf_weights`` at the sub-pixel offsets; without

@@ -609,7 +609,9 @@ def build_compact_source_stamp_mask(
     stamp_valid = base_valid[rows, columns].all(axis=(1, 2))
     peak_y, peak_x = peak_y[stamp_valid], peak_x[stamp_valid]
     stamps = array[rows[stamp_valid], columns[stamp_valid]]
-    local_background = xp.median(stamps.reshape(len(peak_y), -1), axis=1)
+    local_background = xp.median(
+        stamps.reshape(len(peak_y), stamp_size * stamp_size), axis=1
+    )
     weights = xp.clip(stamps - local_background[:, None, None], 0.0, None)
     total_weight = weights.sum(axis=(1, 2))
     center_half = compact_core_size // 2
@@ -654,6 +656,9 @@ def build_compact_source_stamp_mask(
     # Order on keys rounded well below their noise so that two planted
     # sources with equal scores sort the same on every backend (device
     # sums differ from host sums at the 1e-16 level); y and x break ties.
+    score_scale = max(
+        float(np.abs(candidates.score).max()), np.finfo(np.float64).tiny
+    )
     ordered = candidates[
         np.lexsort(
             (
@@ -661,7 +666,7 @@ def build_compact_source_stamp_mask(
                 -candidates.y,
                 -np.round(candidates.negative_radial, 6),
                 -np.round(candidates.compact_fraction, 9),
-                -np.round(candidates.score, 6),
+                -np.round(candidates.score / score_scale, 12),
             )
         )
     ]
