@@ -501,7 +501,8 @@ error_x, error_y = result.position_error_x, result.position_error_y
 at the start; `result.sign` records that starting sign, and the fitted
 amplitude may end with the other one. Without `psf_sigma` the lobe is an
 elliptical Gaussian with `amplitude, sigma_x, sigma_y, theta, x, y` free,
-started 2 pixels wide; with `psf_sigma` (one value or one per stamp) it is
+started with widths of 2 and 1.8 pixels so the orientation has a nonzero
+derivative; with `psf_sigma` (one value or one per stamp) it is
 circular at that fixed width and only `amplitude, x, y` are fitted. A
 `psf_sigma` or `sign` of any other length raises `ValueError`. An
 elliptical lobe has two labelings, `(sigma_x, sigma_y, theta)` and
@@ -509,8 +510,9 @@ elliptical lobe has two labelings, `(sigma_x, sigma_y, theta)` and
 result is canonicalized to `sigma_x >= sigma_y` (widths swapped in the
 parameters, standard errors and covariance rows and columns, `theta`
 advanced by `pi/2` and wrapped to `[-pi/2, pi/2)`), so widths and
-orientation compare across stamps. Pixels that the mask excludes, or whose
-image or variance is not finite and positive, carry zero weight; a stamp
+orientation compare across stamps. Pixels that the mask excludes, whose
+image is nonfinite, or whose variance is nonfinite or nonpositive carry
+zero weight; a stamp
 without a usable pixel returns NaN parameters, position and flux with
 `uncertainty_valid` false. The result holds the parameters, covariance and
 standard errors, the position with its per-axis error and cross term, the
