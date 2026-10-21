@@ -253,6 +253,37 @@ def test_an_unrecorded_pointing_shift_raises_the_chi2():
     assert q["arms"]["full"]["chi2_per_dof"] == pytest.approx(2.0, rel=0.1)
 
 
+def test_ra_zero_crossing_preserves_the_anchor_scale():
+    rng = np.random.default_rng(23)
+    frame = _exposures(rng, _sky(rng))
+    frame["ra"] = (frame["ra"] - frame["ra"].median()) % 360.0
+    report = rc.repeat(frame)
+    for exposure in report["detectors"]["D1"]["anchors"].values():
+        np.testing.assert_allclose(
+            exposure["fit"]["pixel_arcsec"], 0.2, rtol=1e-4
+        )
+    for quantity in report["quantities"].values():
+        assert quantity["arms"]["full"]["chi2_per_dof"] == pytest.approx(
+            1.0, rel=0.1
+        )
+
+
+def test_unsupported_and_outside_lobes_are_not_scored():
+    from cuphoton.xfit import DipoleQualityFlag
+
+    flags = [
+        DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED
+        | DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED,
+        DipoleQualityFlag.LOBE_OUTSIDE_STAMP,
+        DipoleQualityFlag.LOBE_OUTSIDE_STAMP
+        | DipoleQualityFlag.LOBES_OVERLAP,
+    ]
+    frame = pd.DataFrame(
+        {"quality_flags": flags, "converged": True, "uncertainty_valid": True}
+    )
+    assert rc.classify(frame).tolist() == ["failed"] * len(flags)
+
+
 def test_rotated_and_dithered_exposures_link_through_the_anchors():
     """A 15 degree rotation and a 200 px dither between exposures do not
     add scatter: the anchor fit per exposure carries the positions to one
@@ -271,6 +302,40 @@ def test_rotated_and_dithered_exposures_link_through_the_anchors():
     q = rc.repeat(df)["quantities"]["source position"]
     assert q["n_groups"] == 150
     assert q["arms"]["full"]["chi2_per_dof"] == pytest.approx(1.0, rel=0.05)
+
+
+@pytest.mark.parametrize("angles", [(90, 90, 90, 90), (0, 45, 90, -45)])
+def test_anisotropic_errors_follow_the_exposure_rotation(angles):
+    rng = np.random.default_rng(72)
+    sky = _sky(rng, n=500)
+    frames = [
+        _catalog(
+            rng,
+            sky,
+            exposure,
+            sigma=(0.01, 0.1),
+            wcs=_wcs(0, 0, angle),
+        )
+        for exposure, angle in enumerate(angles)
+    ]
+    report = rc.repeat(pd.concat(frames, ignore_index=True))
+    for quantity in report["quantities"].values():
+        full = quantity["arms"]["full"]
+        assert full["groups"] >= 490
+        assert full["chi2_per_dof"] == pytest.approx(1.0, rel=0.08)
+        assert full["median_group_chi2_ratio"] == pytest.approx(1.0, rel=0.1)
+
+
+def test_repeat_chi2_uses_cross_axis_covariance():
+    report = rc.repeat_chi2(
+        [0, 0],
+        [0.0, 1.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 1.0],
+        [0.5, 0.5],
+    )
+    assert report["chi2_per_dof"] == pytest.approx(1.0 / 3.0)
 
 
 def test_distorted_frames_keep_their_distortion_in_the_anchors():

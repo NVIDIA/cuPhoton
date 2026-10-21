@@ -338,9 +338,7 @@ center's stamp over both lobes).
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
   Largest where a candidate sits on a bright reference source. The position terms are 0 where
-  the lobe flux is not usable. Without a target variance plane the term is excluded because its
-  noise scale is unknown.
-  `uq.kernel_fit: false` skips it.
+  the lobe flux is not usable. `uq.kernel_fit: false` skips it.
 - `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux `T` at the
   photometry position. `eta` is the fraction of a static star's reference flux that the subtraction
   leaves in the residual beyond noise: at the stars the refine stage kept, the residual's forced
@@ -452,9 +450,10 @@ per degree of freedom, and the median per-group ratio (the median over groups of
 the chi-square median for the group's degrees of freedom, 1 for correct bars at any group size).
 Both are given for six arms: `<q>_err`, `<q>_err_fit` alone, and `<q>_err` with each of the corr,
 kfit, kmatch and mis terms removed in quadrature. Every arm uses the same rows, those whose
-`<q>_err` is defined on both axes in groups that keep two detections. The per-axis variances are
-along the pixel axes, scaled to arcsec by the anchor fit, and are paired with the tangent-plane
-offsets without rotation, which matters only where the two axes' variances differ. The JSON holds
+`<q>_err` is defined on both axes in groups that keep two detections. Each arm's pixel covariance
+is transformed by the refine affine and the anchor map into the tangent plane. The fit's x-y
+covariance is included when available; other terms contribute their reported per-axis variances.
+The mean position and chi-square use the resulting full two-dimensional covariance. The JSON holds
 every number; the printed table shows quantity, class, groups, arm, chi-square per degree of
 freedom and the median ratio.
 

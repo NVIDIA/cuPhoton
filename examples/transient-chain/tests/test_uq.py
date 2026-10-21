@@ -20,7 +20,7 @@ SIZE = 200
 PSF = 1.8
 NOISE = 3.0
 FIELD = np.array([0.1, -0.05])  # constant reference-minus-target offset
-TAU2 = np.array([0.01, 0.0225])  # excess variance per axis
+TAU2 = np.array([0.01, 0.0225])  # misalignment variance per axis
 MIS_VARIANCE = TAU2 + FIELD**2
 QUANTITIES = uq.QUANTITIES
 MAX_REACH = config.SCHEMA["uq"]["max_lobe_reach_px"][0]
@@ -251,6 +251,36 @@ def test_kernel_fit_term_is_excluded_without_target_noise_variance(scene):
     columns = uq.budget(context, **scene.inputs()).columns
     for quantity in QUANTITIES:
         np.testing.assert_array_equal(columns[f"{quantity}_err_kfit"], 0.0)
+
+
+def test_flux_kernel_term_uses_the_published_photometry_position():
+    import dataclasses
+
+    from cuphoton.xpois import psf_weights
+
+    scene = Scene(cand=[[80, 80], [140, 50], [100, 150], [40, 160]])
+    star = _gaussians([80.3], [79.8], [1e6])
+    scene.reference += star
+    scene.matched = fftconvolve(scene.reference, scene.kernel, mode="same")
+    covariance = 1e-6
+    context = dataclasses.replace(
+        scene.context(star_xy=None),
+        kernel_covariance=_known_covariance(scene, covariance),
+    )
+    inputs = scene.inputs(single=np.array([True, False, False, False]))
+    result = uq.budget(context, **inputs)
+    assert result.diagnostics["sensitivity_capped"] == 1
+    position_x, position_y = (scene.cand + inputs["photometry_xy"])[0]
+    offset = np.array(
+        [[position_x - np.rint(position_x), position_y - np.rint(position_y)]]
+    )
+    weights = psf_weights(PSF, context.window, offset=offset)[0]
+    expected = (
+        covariance * _hand_sum(scene, weights, position_x, position_y) ** 2
+    )
+    assert result.columns["psf_flux_err_kfit"][0] ** 2 == pytest.approx(
+        expected, rel=1e-9
+    )
 
 
 def test_worked_quadrature_by_hand(scene):
@@ -528,36 +558,6 @@ def test_lobe_kernel_fit_term_follows_the_sub_pixel_position():
         out.append(uq.budget(ctx, **inp).columns["positive_x_err_kfit"][0])
     assert off[0] > 0
     assert on[0] < 1e-3 * off[0]
-
-
-def test_flux_kernel_term_uses_the_published_photometry_position():
-    import dataclasses
-
-    from cuphoton.xpois import psf_weights
-
-    scene = Scene(cand=[[80, 80], [140, 50], [100, 150], [40, 160]])
-    star = _gaussians([80.3], [79.8], [1e6])
-    scene.reference += star
-    scene.matched = fftconvolve(scene.reference, scene.kernel, mode="same")
-    covariance = 1e-6
-    context = dataclasses.replace(
-        scene.context(star_xy=None),
-        kernel_covariance=_known_covariance(scene, covariance),
-    )
-    inputs = scene.inputs(single=np.array([True, False, False, False]))
-    result = uq.budget(context, **inputs)
-    assert result.diagnostics["sensitivity_capped"] == 1
-    position_x, position_y = (scene.cand + inputs["photometry_xy"])[0]
-    offset = np.array(
-        [[position_x - np.rint(position_x), position_y - np.rint(position_y)]]
-    )
-    weights = psf_weights(PSF, context.window, offset=offset)[0]
-    expected = (
-        covariance * _hand_sum(scene, weights, position_x, position_y) ** 2
-    )
-    assert result.columns["psf_flux_err_kfit"][0] ** 2 == pytest.approx(
-        expected, rel=1e-9
-    )
 
 
 def test_kernel_mismatch_term_is_eta_times_the_reference_flux(scene):

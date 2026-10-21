@@ -97,7 +97,18 @@ def classify(df: pd.DataFrame) -> np.ndarray:
     kind[pos & ~neg] = "fading"
     kind[(flags & int(F.LOBES_OVERLAP)) != 0] = "overlapping"
     kind[
-        (flags & int(F.WIDTH_OUT_OF_RANGE | F.NO_LOBE_AT_CANDIDATE)) != 0
+        (neg & pos)
+        | (
+            (
+                flags
+                & int(
+                    F.WIDTH_OUT_OF_RANGE
+                    | F.NO_LOBE_AT_CANDIDATE
+                    | F.LOBE_OUTSIDE_STAMP
+                )
+            )
+            != 0
+        )
     ] = "failed"
     valid = df["converged"].to_numpy(bool) & df["uncertainty_valid"].to_numpy(
         bool
@@ -274,28 +285,45 @@ def arm_variance(df: pd.DataFrame, q: str, arm: str) -> np.ndarray:
     return var
 
 
-def repeat_chi2(group, x, y, var_x, var_y) -> dict:
+def repeat_chi2(group, x, y, var_x, var_y, cov_xy=None) -> dict:
     """Scatter of repeated measurements of the same source against their
     predicted variances: per group with ``k >= 2`` detections, chi2 is the
-    sum over axes of ``sum((x - weighted mean)^2 / var)`` with ``2 (k - 1)``
-    degrees of freedom. ``chi2_per_dof`` pools the groups;
+    the covariance-weighted squared residual about the fitted mean with
+    ``2 (k - 1)`` degrees of freedom. ``cov_xy`` defaults to zero.
+    ``chi2_per_dof`` pools the groups;
     ``median_group_chi2_ratio`` is the median over groups of chi2 over the
     chi-square median for that group's degrees of freedom, 1 for correct
     variances at any group size.
     """
     df = pd.DataFrame(
-        {"g": group, "x": x, "y": y, "vx": var_x, "vy": var_y}
+        {
+            "g": group,
+            "x": x,
+            "y": y,
+            "vx": var_x,
+            "vy": var_y,
+            "cxy": 0.0 if cov_xy is None else cov_xy,
+        }
     ).dropna()
-    df = df[(df.vx > 0) & (df.vy > 0)]
+    finite = np.isfinite(df[["x", "y", "vx", "vy", "cxy"]]).all(axis=1)
+    determinant = df.vx * df.vy - df.cxy**2
+    df = df[finite & (df.vx > 0) & (df.vy > 0) & (determinant > 0)]
     chi, dof, per = 0.0, 0, []
     for _, s in df.groupby("g"):
         if len(s) < 2:
             continue
-        c = 0.0
-        for a, va in (("x", "vx"), ("y", "vy")):
-            w = 1.0 / s[va].values
-            m = float((w * s[a].values).sum() / w.sum())
-            c += float((((s[a].values - m) ** 2) / s[va].values).sum())
+        covariance = np.zeros((len(s), 2, 2))
+        covariance[:, 0, 0] = s.vx.values
+        covariance[:, 1, 1] = s.vy.values
+        covariance[:, 0, 1] = covariance[:, 1, 0] = s.cxy.values
+        precision = np.linalg.inv(covariance)
+        positions = s[["x", "y"]].to_numpy()
+        mean = np.linalg.solve(
+            precision.sum(axis=0),
+            np.einsum("nij,nj->i", precision, positions),
+        )
+        residual = positions - mean
+        c = float(np.einsum("ni,nij,nj->", residual, precision, residual))
         k = 2 * (len(s) - 1)
         chi += c
         dof += k
@@ -335,12 +363,28 @@ def score(linked: pd.DataFrame, prefix: str) -> dict:
     }
 
     def rep(t, arm):
+        variance_x = arm_variance(t, f"{prefix}_x", arm)
+        variance_y = arm_variance(t, f"{prefix}_y", arm)
+        covariance_xy = t.get(
+            f"{prefix}_xy_cov", pd.Series(0.0, index=t.index)
+        )
+        covariance_xy = covariance_xy.fillna(0.0).to_numpy(float)
+        jacobian = t[
+            ["jacobian_xx", "jacobian_xy", "jacobian_yx", "jacobian_yy"]
+        ]
+        jacobian = jacobian.to_numpy().reshape(-1, 2, 2)
+        covariance = np.zeros((len(t), 2, 2))
+        covariance[:, 0, 0] = variance_x
+        covariance[:, 1, 1] = variance_y
+        covariance[:, 0, 1] = covariance[:, 1, 0] = covariance_xy
+        sky_covariance = jacobian @ covariance @ jacobian.transpose(0, 2, 1)
         return repeat_chi2(
             t.group.values,
             t.ex.values,
             t.ey.values,
-            arm_variance(t, f"{prefix}_x", arm) * t.scale_x.values**2,
-            arm_variance(t, f"{prefix}_y", arm) * t.scale_y.values**2,
+            sky_covariance[:, 0, 0],
+            sky_covariance[:, 1, 1],
+            sky_covariance[:, 0, 1],
         )
 
     for arm in ARMS:
@@ -382,7 +426,16 @@ def place(df: pd.DataFrame, detectors: dict) -> pd.DataFrame:
     """
     placed = []
     for det, d in df.groupby("ccd_id"):
-        ra0, dec0 = float(np.median(d.ra)), float(np.median(d.dec))
+        angles = np.radians(d.ra.to_numpy(float))
+        ra0 = (
+            float(
+                np.degrees(
+                    np.arctan2(np.sin(angles).mean(), np.cos(angles).mean())
+                )
+            )
+            % 360.0
+        )
+        dec0 = float(np.median(d.dec))
         info = {
             "exposures": sorted(d.exposure_id.unique().tolist()),
             "exposures_without_anchor_fit": [],
@@ -411,6 +464,12 @@ def place(df: pd.DataFrame, detectors: dict) -> pd.DataFrame:
                 "pixel_arcsec": scale.tolist(),
             }
             cols = {}
+            jacobian = fit.matrix @ affine[0]
+            for row, axis in enumerate("xy"):
+                for column, source_axis in enumerate("xy"):
+                    cols[f"jacobian_{axis}{source_axis}"] = jacobian[
+                        row, column
+                    ]
             for prefix, _ in QUANTITIES.values():
                 ex, ey = sky_positions(e, prefix, affine, fit, ra0, dec0)
                 cols[f"{prefix}_ex"], cols[f"{prefix}_ey"] = ex, ey
