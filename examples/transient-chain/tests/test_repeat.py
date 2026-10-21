@@ -290,6 +290,25 @@ def test_unsupported_and_outside_lobes_are_not_scored():
     assert rc.classify(frame).tolist() == ["failed"] * len(flags)
 
 
+def test_accepted_single_refit_replaces_the_dipole_classification():
+    from cuphoton.xfit import DipoleQualityFlag
+
+    frame = pd.DataFrame(
+        {
+            "quality_flags": [
+                DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED
+                | DipoleQualityFlag.LOBE_OUTSIDE_STAMP,
+                DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED,
+                DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED,
+            ],
+            "converged": False,
+            "uncertainty_valid": False,
+            "fit_model": ["single", "single", "dipole"],
+        }
+    )
+    assert rc.classify(frame).tolist() == ["single", "fading", "invalid"]
+
+
 def test_rotated_and_dithered_exposures_link_through_the_anchors():
     """A 15 degree rotation and a 200 px dither between exposures do not
     add scatter: the anchor fit per exposure carries the positions to one
@@ -501,6 +520,35 @@ def test_source_arms_read_the_positive_terms():
         rc.arm_variance(df, "source_x", "without corr"),
         df["positive_x_err_fit"].to_numpy() ** 2,
     )
+
+
+def test_source_arms_use_the_positive_cross_axis_covariance():
+    frame = pd.DataFrame(
+        {
+            "group": [0, 0],
+            "class": ["single", "single"],
+            "ex": [0.0, 1.0],
+            "ey": [0.0, 1.0],
+            "jacobian_xx": [1.0, 1.0],
+            "jacobian_xy": [0.0, 0.0],
+            "jacobian_yx": [0.0, 0.0],
+            "jacobian_yy": [1.0, 1.0],
+            "positive_xy_cov": [0.5, 0.5],
+            "uq_kmatch_flag": [False, False],
+        }
+    )
+    for prefix in ("positive", "source"):
+        for axis in ("x", "y"):
+            frame[f"{prefix}_{axis}_err_fit"] = 1.0
+            frame[f"{prefix}_{axis}_err"] = 1.0
+    for axis in ("x", "y"):
+        for term in rc.TERMS:
+            frame[f"positive_{axis}_err_{term}"] = 0.0
+    positive = rc.score(frame, "positive")
+    source = rc.score(frame, "source")
+    assert source["arms"] == positive["arms"]
+    for result in source["arms"].values():
+        assert result["chi2_per_dof"] == pytest.approx(1.0 / 3.0)
 
 
 def test_arm_variances_by_hand():

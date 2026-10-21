@@ -125,6 +125,10 @@ def classify(df: pd.DataFrame) -> np.ndarray:
         bool
     )
     kind[~valid] = "invalid"
+    if "fit_model" in df:
+        accepted_single = df["fit_model"].to_numpy() == "single"
+        kind[accepted_single & neg & ~pos] = "single"
+        kind[accepted_single & pos & ~neg] = "fading"
     return kind
 
 
@@ -380,7 +384,8 @@ def score(linked: pd.DataFrame, prefix: str) -> dict:
         variance_x = arm_variance(t, f"{prefix}_x", arm)
         variance_y = arm_variance(t, f"{prefix}_y", arm)
         covariance_xy = t.get(
-            f"{prefix}_xy_cov", pd.Series(0.0, index=t.index)
+            f"{TERM_PREFIX.get(prefix, prefix)}_xy_cov",
+            pd.Series(0.0, index=t.index),
         )
         covariance_xy = covariance_xy.fillna(0.0).to_numpy(float)
         jacobian = t[

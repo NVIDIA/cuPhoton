@@ -98,13 +98,6 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
         "xfit",
         "bits of cuphoton.xfit.DipoleQualityFlag (0 when none is set)",
     ),
-    "fit_model": (
-        "object",
-        "xfit",
-        '"dipole" (two lobes) or "single" (one lobe, for a candidate with '
-        "one unsupported lobe whose one-lobe fit is valid; positive_* then "
-        "describe that lobe)",
-    ),
     **_position_columns("center", "midpoint of the two lobes"),
     **_position_columns("positive", "lobe with positive flux"),
     "separation": ("float64", "xfit", "distance between the lobes (pixels)"),
@@ -137,6 +130,13 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
         "uq",
         "error bar of psf_flux to quote: every term in quadrature (NaN "
         "where its window is not valid)",
+    ),
+    "fit_model": (
+        "object",
+        "xfit",
+        '"dipole" (two lobes) or "single" (one lobe, for a candidate with '
+        "one unsupported lobe whose one-lobe fit is valid; positive_* then "
+        "describe that lobe)",
     ),
 }
 BUDGET_QUANTITIES = (
