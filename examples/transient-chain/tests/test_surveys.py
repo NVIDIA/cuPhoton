@@ -330,6 +330,42 @@ def test_generic_template_variance_with_and_without_the_plane(generic_pair):
     assert at.weights.sum() == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("rule", ["correlated", "independent"])
+def test_mosaic_variance_requires_every_contributing_piece(rule):
+    from astropy.wcs import WCS
+    from transient_chain.surveys.base import (
+        ReprojectedSources,
+        TemplateSource,
+    )
+
+    shape = (12, 12)
+    coordinate_system = WCS(naxis=2)
+    coordinate_system.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    coordinate_system.wcs.cdelt = [0.001, 0.001]
+    sources = [
+        TemplateSource(
+            np.full(shape, value),
+            None,
+            coordinate_system,
+            np.full(shape, variance),
+        )
+        for value, variance in ((10.0, 4.0), (30.0, np.nan))
+    ]
+    provider = ReprojectedSources(
+        sources,
+        coordinate_system,
+        shape,
+        np,
+        interpolation="bilinear",
+        pieces=rule,
+    )
+    image, _, count = provider.build()
+    overlap = count == 2
+    assert overlap.any()
+    np.testing.assert_allclose(image[overlap], 20.0)
+    assert np.isnan(provider.variance()[overlap]).all()
+
+
 def test_mosaic_variance_follows_the_pieces_rule(rubin_visit):
     io = host_reader()
     plain = make_adapter({"name": "rubin"})

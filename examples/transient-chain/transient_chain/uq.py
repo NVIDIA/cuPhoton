@@ -344,8 +344,8 @@ def measured_correlation(
     ``positions_excluded_loud`` counts the usable pixels the loud rule
     removed. The measured factor is the squared robust spread of the
     weighted sums over their diagonal prediction
-    (``empirical_correlation_factor`` on the residual and the diagonal
-    plane the fit used, with the reference's variance where it exists),
+    (``empirical_correlation_factor`` on the residual and the target
+    variance plane the fit used),
     with its standard error ``measured_se`` (:func:`measured_standard_error`
     over ``n`` positions); the closed form is the median of
     ``correlation_factor`` at the same positions, 1 when the reference has
@@ -409,10 +409,6 @@ def measured_correlation(
         ]
     )
     diagonal = ctx.weights_plane
-    if ctx.reference_variance is not None:
-        diagonal = diagonal + ctx.reference_variance * float(
-            (xp.asarray(ctx.kernel) ** 2).sum()
-        )
     measured = empirical_correlation_factor(
         ctx.residual, diagonal, weights, pos
     )
@@ -432,6 +428,7 @@ def measured_correlation(
                         reference_variance=ctx.reference_variance,
                         resampling_weights=at.weights,
                         positions=pos,
+                        residual_variance=ctx.target_variance,
                         is_translation=at.is_translation,
                         valid=ctx.valid_plane,
                     ).factor
@@ -936,7 +933,6 @@ def budget(
             ctx, pos["flux"], cx, cy, single, field
         )
         capped = xp.abs(raw) > SENSITIVITY_CAP
-        # Keep the flux window at the published photometry position.
         usable = {
             name: _usable_fraction(ctx, at)
             for name, at in (
@@ -955,11 +951,11 @@ def budget(
                 & valid_at["positive"]
                 & valid_at["negative"]
             )
-            window_ok[f"positive_{a}"] = (
-                window_ok[f"positive_{a}"] & valid_at["positive"]
-            )
             window_masked[f"center_{a}"] = (
                 masked_at["positive"] | masked_at["negative"]
+            )
+            window_ok[f"positive_{a}"] = (
+                window_ok[f"positive_{a}"] & valid_at["positive"]
             )
             window_masked[f"positive_{a}"] = masked_at["positive"]
         if "psf_flux" in quantities:
@@ -1061,6 +1057,7 @@ def budget(
         defined = xp.isfinite(closed)
         f, used = _applied_factor(xp, closed, ctx.measured_factor(q))
         f = xp.where(defined & (f > 1.0), f, 1.0)
+        ok = window_ok[q] & defined
         windows = windows & window_ok[q]
         undefined = undefined | ~defined
         rotated = rotated | rotated_at[q]
@@ -1068,10 +1065,10 @@ def budget(
         total = xp.sqrt(
             fit**2 + corr + var[q]["kfit"] + var[q]["kmatch"] + var[q]["mis"]
         )
-        ok = window_ok[q] & defined & xp.isfinite(total)
-        valid = valid & ok
+        ok = ok & xp.isfinite(total)
         masked = masked | (ok & window_masked[q])
         measured = measured | (ok & used)
+        valid = valid & ok
         names += [f"{q}_err_{t}" for t in TERMS] + [f"{q}_err"]
         rows += [
             xp.where(defined, xp.sqrt(corr), xp.nan),

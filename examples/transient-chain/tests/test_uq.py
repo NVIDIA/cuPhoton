@@ -237,6 +237,48 @@ def test_invalid_photometry_position_does_not_invalidate_lobes(
             assert np.isfinite(columns[f"{quantity}_err"][0])
 
 
+def test_masked_and_measured_flags_require_a_valid_quantity():
+    scene = Scene(cand=[[52, 160], [140, 50], [100, 150], [60, 70]])
+    context = scene.context(
+        fit=None,
+        star_xy=None,
+        misalignment=None,
+        reference_variance=np.full((SIZE, SIZE), 4.0),
+        resampling=_half_pixel_resampling,
+    )
+    context = dataclasses.replace(
+        context,
+        correlation={
+            "measured": dict.fromkeys(uq.MEASURED_WEIGHTINGS, 10.0),
+            "source": dict.fromkeys(uq.MEASURED_WEIGHTINGS, "measured"),
+            "control_bytes": 0,
+        },
+    )
+    inputs = scene.inputs()
+    baseline = uq.budget(context, **inputs).columns
+    assert baseline["uq_valid"].all()
+    assert baseline["uq_window_masked"].tolist() == [
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert baseline["uq_corr_measured"].all()
+    for errors in inputs["err_fit"].values():
+        errors[0] = np.nan
+    inputs["err_fit"]["positive_x"][1] = np.nan
+
+    result = uq.budget(context, **inputs)
+    columns = result.columns
+
+    assert columns["uq_valid"].tolist() == [False, False, True, True]
+    assert not columns["uq_window_masked"].any()
+    assert columns["uq_corr_measured"].tolist() == [False, True, True, True]
+    assert result.diagnostics["masked_window"] == 0
+    assert result.diagnostics["corr_measured"] == 3
+    assert np.isfinite(columns["psf_flux_err"][1])
+
+
 def test_terms_and_fallbacks_are_recorded(scene):
     ctx = scene.context()
     assert ctx.terms == ("kfit", "kmatch", "mis")
@@ -278,6 +320,32 @@ def test_total_is_the_quadrature_and_never_below_the_fit_term(scene):
     assert res.diagnostics["invalid_window"] == 1
     assert res.diagnostics["undefined_factor"] == 0
     assert res.diagnostics["rotated_grid"] == 0
+
+
+def test_measured_correlation_uses_the_fit_variance(scene):
+    inputs = dict(
+        kernel=np.ones((1, 1)),
+        fit=None,
+        misalignment=None,
+        star_xy=None,
+        candidates=scene.cand.astype(float),
+    )
+    baseline = scene.context(**inputs).correlation
+    context = scene.context(
+        **inputs,
+        reference_variance=np.full_like(scene.variance, NOISE**2),
+        resampling=lambda position_x, position_y: SimpleNamespace(
+            weights=np.ones((len(position_x), 1, 1)),
+            is_translation=np.ones(len(position_x), dtype=bool),
+        ),
+    )
+    for weighting in uq.MEASURED_WEIGHTINGS:
+        assert context.correlation["closed_form"][weighting] == pytest.approx(
+            2.0
+        )
+        assert context.correlation["measured"][weighting] == pytest.approx(
+            baseline["measured"][weighting]
+        )
 
 
 def test_kernel_fit_term_is_excluded_without_target_noise_variance(scene):
@@ -529,6 +597,7 @@ def test_corr_term_follows_the_template_provider_variance(scene):
             target_variance=NOISE**2,
             reference_variance=100.0,
             resampling_weights=np.ones((1, 1)),
+            residual_variance=NOISE**2,
         ).factor[0]
         assert f > 1.5
         assert c["psf_flux_err_corr"][i] ** 2 == pytest.approx(
@@ -1039,16 +1108,15 @@ def test_weighting_of_covers_every_budget_quantity():
     assert uq.WEIGHTING_OF["center_y"] == "position_y"
 
 
-def test_flux_window_is_judged_at_the_shifted_position():
-    """A single source on a bright static star moves its flux position by
-    ``(lambda - 1)`` times the misalignment (here 0.45 px in y); a masked
-    pixel just inside the shifted window and outside the lobe windows
-    flags the row, one just outside it does not.
+def test_flux_window_is_judged_at_the_photometry_position():
+    """A single source on a bright static star uses a shifted position to
+    estimate its sensitivity, but its reported photometry stays at the
+    fitted position. Its mask follows that original measurement window.
     """
     cand = [[15, 100], [140, 50], [100, 150], [40, 160]]
     half = uq.window_side(PSF) // 2
     out = {}
-    for name, dy in (("inside", -(half + 1)), ("outside", half + 1)):
+    for name, dy in (("inside", -half), ("outside", half + 1)):
         s = Scene(seed=1, cand=cand)
         star = _gaussians(
             [s.cand[0, 0] + 0.3], [s.cand[0, 1] - 0.2], [200.0 * s.flux[0]]

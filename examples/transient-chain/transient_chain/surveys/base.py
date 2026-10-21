@@ -494,9 +494,9 @@ class ReprojectedSources(TemplateProvider):
     def build(self, affine=None):
         """The template as the mean of the pieces with a finite pixel
         (``cnt`` counts them), its mask bits and ``cnt``; the variance
-        combines the pieces whose variance is finite there too (``vcnt``),
-        so a piece with a finite pixel and a NaN variance counts in the
-        template but not in its variance.
+        is defined only where every contributing piece has a finite,
+        nonnegative variance. An unknown contributor's noise cannot be
+        inferred from the other pieces.
         """
         xp = self.xp
         ny, nx = self.shape
@@ -528,7 +528,7 @@ class ReprojectedSources(TemplateProvider):
             if rmask is not None:
                 msk |= xp.where(good, rmask.astype(xp.int64), 0)
             if rvar is not None:
-                vgood = good & xp.isfinite(rvar)
+                vgood = good & xp.isfinite(rvar) & (rvar >= 0)
                 # correlated pieces add in sigma, independent ones in var
                 vacc += xp.where(
                     vgood,
@@ -546,7 +546,9 @@ class ReprojectedSources(TemplateProvider):
                 if self.pieces == "correlated"
                 else vacc / n**2
             )
-            self._variance = xp.where(vcnt > 0, combined, xp.nan)
+            self._variance = xp.where(
+                (cnt > 0) & (vcnt == cnt), combined, xp.nan
+            )
         else:
             self._variance = None
         return template, (msk if any_mask else None), cnt

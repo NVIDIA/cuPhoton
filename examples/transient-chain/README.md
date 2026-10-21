@@ -290,7 +290,8 @@ same way for every survey: each piece's variance is reprojected with its image (
 weights, squared), and where `n` pieces overlap their variances combine under `pieces`: `correlated` (the default) gives `(mean sigma_i)^2`, exact when the pieces' noise is
 fully correlated, as for patches cut from one coadd of the same exposures; `independent` gives
 `sum(var_i) / n^2`, exact when the pieces' noise is independent, as for separate reference
-frames. The resampling weights at a position are those of the first piece that covers it. A
+frames. A pixel has a variance only when every contributing piece has a finite, nonnegative
+variance. The resampling weights are those of the first covering piece. A
 provider without a variance plane drops the reprojection's prepared mappings after each build
 (hundreds of megabytes per piece on a 4k grid); only the correlation term reads them.
 
@@ -350,8 +351,8 @@ center's stamp over both lobes).
   noise is not in that plane (below).
 - `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of the
   quantity's weighted sum, floored at 1. The resampling and the kernel correlate the reference's
-  pixels. The factor is measured against the target variance used by xFit, so it includes both
-  the reference's diagonal noise and its correlations. `f` comes from two places:
+  pixels. The factor is relative to the target variance used by xFit, so it includes both the
+  reference noise and its correlations. `f` comes from two places:
   - The closed form (`cuphoton.xpois.correlation_factor`) at the candidate, from the reference's
     variance plane on the target grid and the resampling weights of the template build, both from
     the survey adapter's template provider ("Other surveys"). Without a template variance plane
@@ -419,8 +420,7 @@ The quantity is invalid only where fewer than half of its window's pixels are us
 lobes' windows for a center), or where its correlation factor is undefined: `<q>_err` is NaN
 there while the term columns keep their values (`<q>_err_corr` is NaN with the factor).
 Invalid original measurement positions and nonfinite total uncertainties also leave their
-quantity's error undefined. `uq_valid` is true where every quantity of the row has a finite
-total uncertainty and is valid, so a candidate at the edge of a
+quantity's error undefined. `uq_valid` is true where every quantity of the row is valid, so a candidate at the edge of a
 masked block can carry a valid `positive_x_err` and a NaN `psf_flux_err` in the same row with
 `uq_valid` false. The kernel-mismatch fit at the stars keeps only stars whose window is fully
 usable. A term the item could not compute is written as 0 and `summary.json` records the terms
@@ -513,10 +513,10 @@ Both are given for six arms: `<q>_err`, `<q>_err_fit` alone, and `<q>_err` with 
 kfit, kmatch and mis terms removed in quadrature. All arms start with the rows whose `<q>_err`
 is finite and positive on both axes in groups that keep two detections. Each arm then drops rows
 with nonfinite or non-positive-definite covariance, so its group count and degrees of freedom can
-differ. Each arm's pixel covariance
-is transformed by the refine affine and the anchor map into the tangent plane. The fit's x-y
-covariance is included when available; other terms contribute their reported per-axis variances.
-The mean position and chi-square use the resulting full two-dimensional covariance. The JSON holds
+differ. Each arm's covariance
+is transformed through the refine affine and anchor map into the tangent plane. The fit's
+x-y covariance is included when available; other terms supply their per-axis variances.
+The fitted mean and chi-square use the resulting full covariance. The JSON holds
 every number; the printed table shows quantity, class, groups, arm, chi-square per degree of
 freedom and the median ratio.
 
