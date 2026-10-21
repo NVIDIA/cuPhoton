@@ -370,6 +370,8 @@ def kernel_fit_variance(
     n_terms = len(triangular_degree_pairs(cov.background_degree))
     if covariance.shape != (cov.basis_count + n_terms,) * 2:
         raise ValueError("covariance does not match basis_count and degree")
+    if count == 0:
+        return xp.empty(0, dtype=xp.float64)
 
     side = int(stamps.shape[-1])
     reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
