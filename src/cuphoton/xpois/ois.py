@@ -627,16 +627,25 @@ def build_compact_source_stamp_mask(
         else local_signal / xp.sqrt(variance_arr[peak_y, peak_x])
     )
     keep = total_weight > 0.0
-    candidates = np.rec.fromarrays(
+    candidate_dtype = np.dtype(
         [
-            to_host(score[keep]),
-            to_host(center_weight[keep] / total_weight[keep]),
-            -to_host(radial[keep] / total_weight[keep]),
-            to_host(peak_y[keep]).astype(int),
-            to_host(peak_x[keep]).astype(int),
-        ],
-        names="score,compact_fraction,negative_radial,y,x",
+            ("score", np.float64),
+            ("compact_fraction", np.float64),
+            ("negative_radial", np.float64),
+            ("y", np.int64),
+            ("x", np.int64),
+        ]
     )
+    candidates = np.empty(int(keep.sum()), dtype=candidate_dtype).view(
+        np.recarray
+    )
+    candidates.score = to_host(score[keep])
+    candidates.compact_fraction = to_host(
+        center_weight[keep] / total_weight[keep]
+    )
+    candidates.negative_radial = -to_host(radial[keep] / total_weight[keep])
+    candidates.y = to_host(peak_y[keep])
+    candidates.x = to_host(peak_x[keep])
     if len(candidates) == 0:
         raise ValueError(
             "no valid compact-source stamps remain after finite-mask "
@@ -645,7 +654,7 @@ def build_compact_source_stamp_mask(
     # Order on keys rounded well below their noise so that two planted
     # sources with equal scores sort the same on every backend (device
     # sums differ from host sums at the 1e-16 level); y and x break ties.
-    candidates = candidates[
+    ordered = candidates[
         np.lexsort(
             (
                 -candidates.x,
@@ -657,9 +666,9 @@ def build_compact_source_stamp_mask(
         )
     ]
 
-    selected: list[np.record] = []
+    selected: list[Any] = []
     min_distance_sq = min_distance * min_distance
-    for candidate in candidates:
+    for candidate in ordered:
         if any(
             (candidate.y - other.y) ** 2 + (candidate.x - other.x) ** 2
             < min_distance_sq

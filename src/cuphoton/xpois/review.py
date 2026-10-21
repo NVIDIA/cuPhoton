@@ -187,8 +187,8 @@ def residual_hotspot_table(
     mask = finite & (sigma >= threshold_sigma)
     if not bool(mask.any()):
         return empty
-    labels, count = ndimage_module(xp).label(mask)
-    count = int(count)
+    labels, label_count = ndimage_module(xp).label(mask)
+    count = int(label_count)
     flat = xp.flatnonzero(mask)
     label = labels.ravel()[flat]
     local_sigma = sigma.ravel()[flat]
