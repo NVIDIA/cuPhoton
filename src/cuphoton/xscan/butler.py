@@ -15,6 +15,8 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.core.bulk import sanitize_json
+
 
 @dataclass(slots=True)
 class ButlerRegistryContext:
@@ -728,11 +730,7 @@ def _safe_query(df, expression: str, *, source: str):
 
 
 def _jsonable(value: Any) -> Any:
-    if _is_missing(value):
-        return None
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
+    return None if _is_missing(value) else sanitize_json(value)
 
 
 def _is_missing(value: Any) -> bool:

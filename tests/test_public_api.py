@@ -563,3 +563,10 @@ def test_xpois_review_selectors_are_exported_with_stable_signatures() -> None:
         "min_separation",
         "compact_core_size",
     ]
+
+
+def test_core_bulk_sanitize_json_is_exported() -> None:
+    from cuphoton.core import bulk
+
+    assert "sanitize_json" in bulk.__all__
+    assert list(inspect.signature(bulk.sanitize_json).parameters) == ["obj"]

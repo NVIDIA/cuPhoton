@@ -21,6 +21,8 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.core.bulk import sanitize_json
+
 from .dataset import (
     load_metadata_rows,
     maybe_write_metadata_parquet,
@@ -6131,16 +6133,7 @@ def _fmt_metadata_value(value: Any) -> str:
     return html.escape(str(value))
 
 
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    return value
+_jsonable = sanitize_json
 
 
 def _json_dumps(payload: Any) -> str:
