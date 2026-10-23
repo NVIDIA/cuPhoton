@@ -74,6 +74,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "photometry",
         "torch",
         "viz",
+        "rubin",
         "ximage",
     }
 
