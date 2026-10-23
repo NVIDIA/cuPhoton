@@ -5,6 +5,13 @@ exposures using supplied PSFs, variance planes, exposure times, and masks.
 It provides a squared-error solver and robust-loss variants, with PyTorch
 execution on CPU or CUDA 13 GPUs.
 
+xImage implements a PyTorch adaptation of the
+[ImageMM reconstruction approach](https://doi.org/10.3847/1538-3881/adfb72)
+described by Sukurdeep et al. (2025). For publications using xImage
+reconstruction, cite both ImageMM and the cuPhoton version used; see the
+[citation guide](../../CITATION.md#ximage) and
+[scientific references](../references.md#image-restoration-and-super-resolution).
+
 PSF calibration is a separate operation: Adam or multiplicative updates fit
 per-exposure kernels to supplied PSF stamps using a Gaussian reference.
 Reconstruction holds its supplied kernels fixed. It does not estimate scene
