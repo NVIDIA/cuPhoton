@@ -120,23 +120,29 @@ jobs:
           name: cuphoton-wheels-${{ matrix.platform.arch }}
           path: wheelhouse
       - name: Pull the pinned Python image
-        timeout-minutes: 8
+        id: python-image
+        timeout-minutes: 14
         env:
           PYTHON_IMAGE: ${{ matrix.python.image }}
         run: |
-          # Retry image delivery only; installation and test failures are final.
+          # Both registries serve the same pinned image. Retry delivery only;
+          # installation and test failures are final.
+          DOCKER_HUB_IMAGE="docker.io/${PYTHON_IMAGE#public.ecr.aws/docker/}"
           for delay in 0 15 30; do
             sleep "$delay"
-            if timeout --kill-after=10s 120s docker pull "$PYTHON_IMAGE"; then
-              exit 0
-            fi
+            for image in "$PYTHON_IMAGE" "$DOCKER_HUB_IMAGE"; do
+              if timeout --kill-after=10s 120s docker pull "$image"; then
+                echo "image=$image" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
           done
-          echo "Unable to pull the pinned Python image after three attempts" >&2
+          echo "Unable to pull the pinned Python image from either registry" >&2
           exit 1
       - name: Install without a compiler, toolkit, or system CFITSIO
         env:
           PYTHON_VERSION: ${{ matrix.python.version }}
-          PYTHON_IMAGE: ${{ matrix.python.image }}
+          PYTHON_IMAGE: ${{ steps.python-image.outputs.image }}
         run: |
           docker run --pull=never --rm \
             -e WHEEL_ABI="cp${PYTHON_VERSION/./}" \
@@ -156,7 +162,7 @@ jobs:
       - name: Exercise installed cuTile imports and distributed CPU runtimes
         env:
           PYTHON_VERSION: ${{ matrix.python.version }}
-          PYTHON_IMAGE: ${{ matrix.python.image }}
+          PYTHON_IMAGE: ${{ steps.python-image.outputs.image }}
           WITH_DRAGON: ${{ matrix.python.dragon }}
         run: |
           mkdir -p stack-reports
