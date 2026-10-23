@@ -97,7 +97,11 @@ def check_install(mode, components, report):
     report["versions"] = {"cuphoton": distribution.version}
     report["paths"] = {
         name: str(module_path(distribution, name))
-        for name in ("cuphoton", *(f"cuphoton.{name}" for name in components))
+        for name in (
+            "cuphoton",
+            "cuphoton.ximage",
+            *(f"cuphoton.{name}" for name in components),
+        )
     }
     for name in GPU_DISTRIBUTIONS:
         try:
@@ -122,7 +126,11 @@ def check_install(mode, components, report):
             ),
             "Base imports loaded an optional GPU package",
         )
-    for argv in (["--version"], *([name, "--help"] for name in components)):
+    for argv in (
+        ["--version"],
+        ["ximage", "--help"],
+        *([name, "--help"] for name in components),
+    ):
         result = subprocess.run(
             [
                 sys.executable,

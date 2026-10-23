@@ -13,7 +13,7 @@ uv run cuphoton xpois --help
 uv run cuphoton xpois help fit-kernel
 ```
 
-Access each component through the fixed command groups: `xdr`, `xfit`, `xpois`,
+Access each component through the fixed command groups: `xdr`, `xfit`, `ximage`, `xpois`,
 `xscan`, `xrep`, `xray`, and `xmonitor`.
 
 `cuphoton xmonitor quickstart --output-dir xmonitor-demo` creates invented
@@ -64,6 +64,13 @@ uncertainty artifacts. FITS manifests select image HDUs and candidate regions;
 execution remains the default. `--warmup-rounds` or `--measure-rounds` opts
 into persistent workers and a separate artifact directory for each round.
 See [xFit](components/xfit.md).
+
+## xImage: `cuphoton ximage`
+
+`data-inspect` and `data-validate` check image bundles. `psf-solve-adam` and `psf-solve-mm`
+calibrate kernels from supplied PSF targets; `reconstruct-l2` and
+`reconstruct-rho` estimate a common scene from aligned exposures and kernels.
+See [xImage](components/ximage.md) for configuration and offline FITS adapters.
 
 ## xPois: `cuphoton xpois`
 

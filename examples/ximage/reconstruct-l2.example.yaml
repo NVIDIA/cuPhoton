@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# `auto` prefers PyTorch CUDA and falls back to CPU. float64 is the
+# parity-oriented reference precision.
+backend: auto
+device: auto
+dtype: float64
+algorithm: l2
+
+# Reconstruction bundle and self-contained output run.
+data:
+  base: data
+output:
+  root_dir: runs
+  name: reconstruct-l2-example
+  overwrite: false
+roi:
+  # Center is `(y, x)` in the source arrays; height and width are pixels.
+  # A 48x48 interior ROI leaves room for the 9x9 PSF under VALID padding.
+  center: null
+  height: 48
+  width: 48
+mask:
+  # Synthetic inputs need no mask; choose a mask policy and dilation
+  # appropriate to the instrument when using observed data.
+  mode: none
+  dilation_factor: 1
+psf_path: null
+# A null psf_path uses the PSFs in the input bundle.
+srf: 1
+x_initialization: median
+ucf: 2.0
+learning_rate: 1.0
+
+# Iteration and convergence controls.
+max_iter: 75
+stop_tol: 1.0e-6
+effective_mask_mu: 0.1
+# null processes all exposures together; set a positive batch size to bound
+# device memory.
+exposure_batch_size: null
+padding: VALID
+verbose: false

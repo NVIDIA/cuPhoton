@@ -76,8 +76,8 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "photometry",
         "torch",
         "viz",
-        "rubin",
         "ximage",
+        "rubin",
         "xmonitor-inference",
         "xmonitor-nooa",
     }
@@ -151,6 +151,7 @@ def test_packaged_assets_are_available() -> None:
         ["--version"],
         ["xdr", "--help"],
         ["xfit", "--help"],
+        ["ximage", "--help"],
         ["xpois", "--help"],
         ["xscan", "--help"],
         ["xrep", "--help"],
@@ -174,6 +175,8 @@ BLOCKED = (
     "numba",
     "photutils",
     "torch",
+    "zarr",
+    "lsst",
 )
 
 class BlockOptional(importlib.abc.MetaPathFinder):

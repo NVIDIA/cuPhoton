@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GROUPS = (
     "xdr",
     "xfit",
+    "ximage",
     "xpois",
     "xscan",
     "xrep",
@@ -32,6 +33,7 @@ PUBLIC_NAMESPACES = (
     "cuphoton.core",
     "cuphoton.xdr",
     "cuphoton.xfit",
+    "cuphoton.ximage",
     "cuphoton.xpois",
     "cuphoton.xscan",
     "cuphoton.xrep",

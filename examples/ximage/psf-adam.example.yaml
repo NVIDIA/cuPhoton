@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Execution backend, device, dtype, and optimizer. `auto` prefers CUDA and
+# reports a CPU fallback; float64 is the parity-oriented reference precision.
+backend: auto
+device: auto
+dtype: float64
+method: adam
+
+# Directory containing the reconstruction bundle described in
+# docs/data-artifacts.md. Paths resolve from the working directory.
+data:
+  base: data
+
+# Each workflow creates a named, self-contained run below root_dir.
+output:
+  root_dir: runs
+  name: psf-adam-example
+  overwrite: false
+psf_artifact: psfs
+# Seed used when h_initialization is random.
+seed: 0
+# Super-resolution factor, Gaussian initialization width in pixels, and
+# convolution padding convention.
+srf: 1
+sigma_g: 0.55
+padding: VALID
+h_initialization: ones
+
+# Objective and Adam schedule. num_steps is the optimization-step count.
+loss: L2
+grad_reg_coeff: 0.0
+lr: 0.001
+num_steps: 100
