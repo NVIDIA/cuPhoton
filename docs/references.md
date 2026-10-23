@@ -16,6 +16,18 @@ before drawing scientific conclusions.
 xPois uses Gaussian-times-polynomial bases, optional polynomial
 backgrounds, fit masks, and weighted least squares in this family of methods.
 
+## Image restoration and super-resolution
+
+- Yashil Sukurdeep, Tamás Budavári, Andrew J. Connolly, and Fausto Navarro,
+  “ImageMM: Joint Multi-frame Image Restoration and Super-resolution,”
+  *The Astronomical Journal*, 170(4), article 233, 2025.
+  [doi:10.3847/1538-3881/adfb72](https://doi.org/10.3847/1538-3881/adfb72)
+
+xImage's variance-weighted multiplicative reconstruction and robust
+residual weighting are based on the ImageMM approach. Its PyTorch
+implementation, supported options, and validation are described in the
+[xImage component guide](components/ximage.md).
+
 ## Transient classification
 
 - A. Inada et al., “Transformer-based Neural Network for Transient Detection
