@@ -62,6 +62,12 @@ artifact generation requires a GPU and fits row traces within tiles,
 repeating each result across that tile's columns. Interpret the maps at that
 granularity; CPU paths support individual trace and reference workflows.
 
+xImage can reconstruct a reference scene after registration with xRep. Its
+PSF calibration is a separate operation, and reconstruction requires supplied
+per-exposure kernels. It currently returns host arrays without propagated
+output variance or an effective output PSF; callers must qualify these
+quantities before using a reconstruction as an xPois reference.
+
 ## What an exposure contains
 
 An optical exposure includes an image and the information needed to interpret
@@ -105,7 +111,7 @@ metadata requirements.
 ## Package boundaries
 
 `cuphoton.core` owns shared CLI mechanics, application paths, logging, and
-invariant evaluation. The six science namespaces own their domain models,
+invariant evaluation. The science namespaces own their domain models,
 algorithms, adapters, workflow configuration, and workflows. They share
 Core's public CLI facade.
 

@@ -35,6 +35,7 @@ requirements.
   Astropy/xDR reader interface, with [runtime compression controls](components/xdr.md#runtime-choices)
   for CLI, Python and manifests; native GDS depends on the storage setup.
 - [xFit](components/xfit.md): batched nonlinear least-squares dipole fitting.
+- [xImage](components/ximage.md): multi-exposure reconstruction and PSF calibration.
 - [xPois](components/xpois.md): kernel fitting and image subtraction.
 - [xScan](components/xscan.md): transient datasets, classification,
   evaluation, and review.

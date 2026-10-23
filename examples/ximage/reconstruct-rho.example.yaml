@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# `auto` prefers PyTorch CUDA and falls back to CPU. float64 is the
+# parity-oriented reference precision.
+backend: auto
+device: auto
+dtype: float64
+algorithm: rho
+
+# Reconstruction bundle and self-contained output run.
+data:
+  base: data
+output:
+  root_dir: runs
+  name: reconstruct-rho-example
+  overwrite: false
+roi:
+  # Center is `(y, x)` in source-array coordinates.
+  # A 48x48 interior ROI leaves room for the 9x9 PSF under VALID padding.
+  center: null
+  height: 48
+  width: 48
+mask:
+  # Synthetic inputs need no mask; choose a mask policy for observed data.
+  mode: none
+  dilation_factor: 1
+psf_path: null
+# A null psf_path uses the input bundle's PSFs.
+srf: 1
+x_initialization: median
+ucf: 2.0
+learning_rate: 1.0
+max_iter: 75
+# Stop when the relative update is below stop_tol.
+stop_tol: 1.0e-6
+effective_mask_mu: 0.1
+exposure_batch_size: null
+padding: VALID
+verbose: false
+
+# Robust-loss family and continuation schedule. Delta is reduced linearly from
+# start to end across the configured iterations.
+rho_loss: huber
+delta_rho_start: 2.0
+delta_rho_end: 1.0

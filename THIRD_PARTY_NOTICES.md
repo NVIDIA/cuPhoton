@@ -43,6 +43,7 @@ more than one license.
 | `base` | `pandas>=2.2` | `3.0.3` | `BSD-3-Clause` | [pandas](https://github.com/pandas-dev/pandas) | `uv / PyPI` |
 | `photometry` | `photutils>=3.0` | `3.0.0` | `BSD-3-Clause` | [Photutils](https://github.com/astropy/photutils) | `uv / PyPI` |
 | `base` | `pyarrow>=23.0` | `24.0.0` | `Apache-2.0`; binary distributions include Arrow and third-party notices | [Apache Arrow](https://github.com/apache/arrow) | `uv / PyPI` |
+| `base` | `pydantic>=2.11,<3` | `2.14.1` | `MIT` | [Pydantic](https://github.com/pydantic/pydantic) | `uv / PyPI` |
 | `ximage` | `zarr>=3,<4` | `3.4.1` | `MIT` | [Zarr](https://github.com/zarr-developers/zarr-python) | `uv / PyPI` |
 | `rubin` | `lsst-images[https]==30.0.10` | `30.0.10` | `BSD-3-Clause`; optional dependency tree includes `starlink-pyast` under `LGPL-3.0-or-later` | [LSST Images](https://github.com/lsst/images) | `uv / PyPI` |
 | `base` | `PyYAML>=6.0` | `6.0.3` | `MIT` | [PyYAML](https://github.com/yaml/pyyaml) | `uv / PyPI` |
