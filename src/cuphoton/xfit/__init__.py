@@ -25,6 +25,7 @@ from .api import (
     fit_dipoles_device,
 )
 from .models import GaussianDipoleModel, StampDipoleModel
+from .photometry import ForcedPhotometryResult, forced_psf_photometry
 from .solver import (
     BatchedLeastSquaresProblem,
     JacobianFunction,
@@ -48,6 +49,7 @@ __all__ = [
     "DipoleFitUncertaintyReason",
     "FitMode",
     "FloatDType",
+    "ForcedPhotometryResult",
     "GaussianDipoleModel",
     "JacobianFunction",
     "LMConfig",
@@ -62,4 +64,5 @@ __all__ = [
     "batched_levenberg_marquardt",
     "fit_dipoles",
     "fit_dipoles_device",
+    "forced_psf_photometry",
 ]
