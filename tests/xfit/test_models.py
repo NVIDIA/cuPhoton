@@ -1641,8 +1641,20 @@ def test_fp32_public_covariance_matches_with_variance(
             ),
         ):
             np.testing.assert_allclose(actual, expected, rtol=3e-5, atol=3e-5)
+    for result in (cpu, gpu):
+        # Factor columns can differ by signs or rotations across backends.
+        # Compare their covariance, not a particular factor representation.
+        assert result.covariance_factor is not None
+        factor = result.covariance_factor
+        np.testing.assert_allclose(
+            factor @ factor.swapaxes(-2, -1),
+            result.covariance,
+            rtol=3e-5,
+            atol=3e-5,
+            equal_nan=True,
+        )
     for field, expected in vars(cpu).items():
-        if field in {"backend", "device"}:
+        if field in {"backend", "device", "covariance_factor"}:
             continue
         actual = getattr(gpu, field)
         if isinstance(expected, np.ndarray):
