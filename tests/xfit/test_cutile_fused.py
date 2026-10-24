@@ -531,13 +531,14 @@ def test_cutile_preserves_finite_jacobian_overflow_results(
 
 def test_fused_concurrent_workers_keep_independent_results(cutile_gpu):
     cp = cutile_gpu
+    device_id = cp.cuda.Device().id
     cases = [_case("split", np.float64) for _ in range(2)]
     cases[1]["images"] = cases[1]["images"] * 1.25
     cases[1]["initial"] = cases[1]["initial"].copy()
     cases[1]["initial"][:, 0] *= 1.25
     # Warm all specializations on the default stream before testing worker
     # ownership; compilation concurrency is a separate concern.
-    with cp.cuda.Stream.null:
+    with cp.cuda.Device(device_id), cp.cuda.Stream.null:
         expected = [fit_dipoles(**case, backend="cupy") for case in cases]
         for case in cases:
             fit_dipoles(**case, backend="cutile", fusion=True)
@@ -545,25 +546,26 @@ def test_fused_concurrent_workers_keep_independent_results(cutile_gpu):
     barrier = Barrier(2)
 
     def worker(index):
-        pool = cp.cuda.MemoryPool()
-        stream = cp.cuda.Stream(non_blocking=True)
         retained = []
-        with cp.cuda.Device(0), stream, cp.cuda.using_allocator(pool.malloc):
-            barrier.wait(timeout=30)
-            for _ in range(3):
-                result = fit_dipoles(
-                    **cases[index], backend="cutile", fusion=True
-                )
-                snapshots = {
-                    field.name: value.copy()
-                    for field in fields(result)
-                    if isinstance(
-                        value := getattr(result, field.name), np.ndarray
+        with cp.cuda.Device(device_id):
+            pool = cp.cuda.MemoryPool()
+            stream = cp.cuda.Stream(non_blocking=True)
+            with stream, cp.cuda.using_allocator(pool.malloc):
+                barrier.wait(timeout=30)
+                for _ in range(3):
+                    result = fit_dipoles(
+                        **cases[index], backend="cutile", fusion=True
                     )
-                }
-                retained.append((result, snapshots))
-            stream.synchronize()
-        pool.free_all_blocks()
+                    snapshots = {
+                        field.name: value.copy()
+                        for field in fields(result)
+                        if isinstance(
+                            value := getattr(result, field.name), np.ndarray
+                        )
+                    }
+                    retained.append((result, snapshots))
+                stream.synchronize()
+            pool.free_all_blocks()
         for result, snapshots in retained:
             _assert_fit_equal(result, expected[index], np.float64)
             for name, snapshot in snapshots.items():

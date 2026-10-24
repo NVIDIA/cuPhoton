@@ -1299,6 +1299,34 @@ def test_fusion_rejects_unsupported_settings_before_backend_resolution(
         )
 
 
+@pytest.mark.parametrize("device", [False, True])
+def test_fused_cutile_rejects_custom_gaussian_before_cuda(
+    monkeypatch, device
+) -> None:
+    class CustomGaussian(GaussianDipoleModel):
+        def to_backend(self, *args, **kwargs):
+            pytest.fail("custom model conversion must not run")
+
+    monkeypatch.setattr(
+        xfit_api,
+        "resolve_backend",
+        lambda _: pytest.fail("custom fused model resolved a backend"),
+    )
+    monkeypatch.setattr(
+        xfit_api,
+        "_load_cupy",
+        lambda: pytest.fail("custom fused model loaded CUDA"),
+    )
+    fit = fit_dipoles_device if device else fit_dipoles
+    with pytest.raises(ValueError, match="only the Gaussian model"):
+        fit(
+            np.zeros((1, 5, 7)),
+            model=CustomGaussian((5, 7)),
+            backend="cutile",
+            fusion=True,
+        )
+
+
 def test_cutile_rejects_finite_difference_provenance() -> None:
     model = GaussianDipoleModel((7, 9), dtype=np.float64)
     truth = _gaussian_truth()[:1]
