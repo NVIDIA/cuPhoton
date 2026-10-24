@@ -701,6 +701,9 @@ def test_warp_bridge_matches_xrep_array_api(
     tmp_path,
     backend,
 ) -> None:
+    if backend == "torch":
+        pytest.importorskip("torch")
+
     from cuphoton.xrep import (
         BBox,
         MaskedReprojectionResult,
