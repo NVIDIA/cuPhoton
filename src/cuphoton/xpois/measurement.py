@@ -135,6 +135,8 @@ def empty_positions(
         xy = xp.zeros((0, 2), dtype=xp.float64)
     if xy.ndim != 2 or xy.shape[1] != 2:
         raise ValueError("exclude_xy must have shape (M, 2)")
+    if usable.size == 0:
+        return xp.zeros((0, 2), dtype=xp.float64), 0
     filt = _ndimage_module(xp).maximum_filter
     reach = 2 * window + 1
 

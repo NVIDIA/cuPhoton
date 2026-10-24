@@ -137,6 +137,19 @@ def test_empty_positions_are_evenly_spaced_usable_pixels_away_from_sources():
     ].shape == (0, 2)
 
 
+@pytest.mark.parametrize("shape", [(0, 0), (0, 5), (5, 0)])
+def test_empty_positions_accepts_planes_with_no_pixels(shape):
+    positions, n_loud = empty_positions(
+        np.zeros(shape, dtype=bool),
+        exclude_xy=np.empty((0, 2)),
+        window=3,
+        count=4,
+    )
+    assert positions.shape == (0, 2)
+    assert positions.dtype == np.float64
+    assert n_loud == 0
+
+
 def test_loud_pixels_and_their_surroundings_are_not_empty():
     """A hot pixel removes the usable pixels within one window of it and
     the count says how many; a flat residual marks nothing."""
