@@ -157,6 +157,10 @@ jobs:
           tests/xfit/test_models.py::test_cupy_finite_difference_theta_fix_matches_numpy
           tests/xfit/test_models.py::test_fit_dipoles_device_matches_portable_result_without_bulk_d2h
           tests/xfit/test_solver.py::test_cupy_tall_jacobian_diagnostics_match_numpy
+          tests/xfit/test_models.py::test_fp32_public_covariance_matches_with_variance
+          tests/xfit/test_models.py::test_fp32_workspace_cast_preserves_subnormals_on_device
+          tests/xfit/test_models.py::test_fp32_normal_equations_preserve_subnormal_contributions
+          tests/xfit/test_models.py::test_fp32_solver_preserves_subnormal_curvature
       - name: Require all selected tests to execute
         run: |
           uv run --no-sync python - <<'PY'
@@ -166,7 +170,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 6, len(cases)
+          assert len(cases) == 15, len(cases)
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")

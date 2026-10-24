@@ -471,9 +471,9 @@ def batched_levenberg_marquardt(
     absent, or finite differences are requested, the solver allocates the
     perturbation workspace in the same backend as ``x0``.
 
-    Built-in FP32 normal equations accumulate in FP64 and are rounded back
-    before convergence checks. FP32 damped systems likewise use FP64 solve
-    intermediates and return FP32 steps. Model evaluations, solver state,
+    Built-in FP32 normal equations accumulate in FP64 and are rounded back.
+    Scaling, convergence checks and damped solves widen those stored values
+    before returning FP32 steps. Model evaluations, solver state,
     covariance and rank thresholds retain their input precision. A supplied
     normal-equations callback controls its own accumulation precision.
     """
@@ -659,6 +659,14 @@ def batched_levenberg_marquardt(
             gradient, hessian = _normal_equations_from_jacobian(
                 jacobian, residual_active, ap
             )
+        fp32_system = (
+            hessian.dtype == np.float32 and gradient.dtype == np.float32
+        )
+        if fp32_system:
+            # CuPy's FP32 scaling arithmetic flushes subnormal curvature.
+            # Widen the rounded entries before scaling and solving.
+            hessian = _cast_fp32_workspace(hessian, np.float64, ap)
+            gradient = _cast_fp32_workspace(gradient, np.float64, ap)
         diagonal = ap.diagonal(hessian, axis1=1, axis2=2)
         # Positive column norms retain their scale, even below epsilon.
         # A zero column has zero gradient and receives only regularization.
@@ -691,24 +699,12 @@ def batched_levenberg_marquardt(
             damping[active_indices, None, None] * identity
         )
         try:
-            if system.dtype == np.float32 and gradient.dtype == np.float32:
-                # NumPy already solves FP32 inputs with FP64 intermediates.
-                # Match that policy on the GPU before rounding the step.
-                scaled_step = _cast_fp32_workspace(
-                    ap.linalg.solve(
-                        _cast_fp32_workspace(system, np.float64, ap),
-                        -_cast_fp32_workspace(
-                            normalized_gradient[..., None], np.float64, ap
-                        ),
-                    )[..., 0],
-                    np.float32,
-                    ap,
-                )
-            else:
-                scaled_step = ap.linalg.solve(
-                    system, -normalized_gradient[..., None]
-                )[..., 0]
+            scaled_step = ap.linalg.solve(
+                system, -normalized_gradient[..., None]
+            )[..., 0]
             step = scaled_step / scale
+            if fp32_system:
+                step = _cast_fp32_workspace(step, np.float32, ap)
         except Exception:
             status[active_indices] = int(LMStatus.SINGULAR)
             continue
