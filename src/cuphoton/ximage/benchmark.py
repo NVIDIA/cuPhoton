@@ -132,6 +132,11 @@ def benchmark_devices(
                         ),
                         keep_artifacts=keep_artifacts,
                     )
+                    if evaluation.get("metrics_backend") == "cupy":
+                        import cupy as cp
+
+                        # Later Torch runs cannot reuse CuPy's cached blocks.
+                        cp.get_default_memory_pool().free_all_blocks()
                 run_dirs.append(str(result.run_dir))
                 if idx >= warmup:
                     timings.append(dt)
