@@ -40,7 +40,9 @@ class DatasetProbe:
     chunks: tuple[int, ...] | None
 
     def __str__(self) -> str:
-        shape = "x".join(str(dim) for dim in self.shape)
+        shape = (
+            "x".join(str(dim) for dim in self.shape) if self.shape else "()"
+        )
         chunks = (
             "-"
             if self.chunks is None
