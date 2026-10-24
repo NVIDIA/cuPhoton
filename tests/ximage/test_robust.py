@@ -24,7 +24,7 @@ torch = pytest.importorskip("torch")
         (
             "damped_rl",
             [0.33471074380165294, 0.33518305002165244, 2.0],
-            [1.0, 0.01759052276611328, 1.0],
+            [0.0, 0.01759052276611328, 1.0],
         ),
     ],
 )
@@ -91,6 +91,33 @@ def test_robust_loss_and_weights_are_finite(loss: str) -> None:
     assert torch.isfinite(weights).all()
     assert torch.all(rho >= 0.0)
     assert torch.all(weights >= 0.0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_damped_rl_weights_match_loss_derivative_with_finite_gradients(
+    dtype,
+) -> None:
+    residual = torch.tensor(
+        [-1e6, -1.0, -0.5, -1e-3, 0.0, 1e-3, 0.5, 1.0, 1e6],
+        dtype=dtype,
+        requires_grad=True,
+    )
+    kwargs = {
+        "loss": "damped_rl",
+        "delta": torch.ones_like(residual),
+        "variance": torch.ones_like(residual),
+    }
+    rho = rho_values(torch, residual, **kwargs)
+    weights = irls_weights(torch, residual, **kwargs)
+    loss_derivative = torch.autograd.grad(rho.sum(), residual)[0]
+    weight_derivative = torch.autograd.grad(weights.sum(), residual)[0]
+
+    assert torch.isfinite(loss_derivative).all()
+    assert torch.isfinite(weight_derivative).all()
+    torch.testing.assert_close(loss_derivative, weights * residual)
+    # The damping weight tends to zero near an exactly fitted sample.
+    assert weights[4] == 0.0
+    assert torch.all(weights[3:6] < 1e-20)
 
 
 @pytest.mark.parametrize(

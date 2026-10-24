@@ -315,7 +315,7 @@ def test_positive_coadd_handles_zero_negative_and_masked_pixels(
     )
 
 
-@pytest.mark.parametrize("size", [2, 3, 8, 9])
+@pytest.mark.parametrize("size", [2, 3, 8, np.int64(9)])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_gaussian_psf_is_centered_and_preserves_integrated_mass(size, dtype):
     psf = gaussian_psf(size, dtype=dtype)
@@ -329,6 +329,12 @@ def test_gaussian_psf_is_centered_and_preserves_integrated_mass(size, dtype):
         np.testing.assert_allclose(
             psf[size // 2, size // 2], erf(0.5 / sqrt(2)) ** 2, rtol=1e-6
         )
+
+
+@pytest.mark.parametrize("size", [0, -1, 2.5, True])
+def test_gaussian_psf_rejects_invalid_size(size):
+    with pytest.raises(ValueError, match="size must be a positive integer"):
+        gaussian_psf(size)
 
 
 @pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan, np.inf])
