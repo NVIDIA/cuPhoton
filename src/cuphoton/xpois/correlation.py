@@ -288,9 +288,11 @@ def correlation_factor(
         positions flagged false get ``NaN`` and are counted in
         ``n_rotated``.
     valid
-        Optional validity of the window pixels: ``(N, s, s)`` booleans, an
-        array that broadcasts to them, or with ``positions`` a boolean
-        plane cut around them (pixels outside the image count as invalid).
+        Optional validity of the window pixels: ``(N, s, s)`` booleans or
+        an array that broadcasts to them. With ``positions``, a
+        two-dimensional array is always a full image plane cut around
+        those positions (pixels outside the image count as invalid).
+        Use ``(1, s, s)`` to share one validity stamp across positions.
         An invalid pixel gets zero weight and its variance need not be
         finite, so a window with masked pixels keeps a factor. The factor
         is a ratio of two quadratic forms in the weights, so renormalizing
