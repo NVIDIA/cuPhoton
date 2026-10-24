@@ -290,7 +290,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
 | `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`). `<q>_err_fit`: standard uncertainty from xFit's covariance alone. `<q>_err`: the error bar to quote (see below). `*_xy_cov`: x-y covariance from xFit's covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote (see below). All three NaN without `xfit.psf_sigma_px` or a variance plane |
+| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote (see below). All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
