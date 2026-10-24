@@ -35,6 +35,7 @@ from cuphoton.ximage.evaluation import (
     load_reference_catalog_csv_sources,
     match_detections_to_catalog,
     project_restoration_to_observation_grid,
+    project_rubin_catalog_sky_to_store_roi,
     psnr,
     resolve_catalog_parquet,
     resolve_pipeline_coadd_fits,
@@ -137,8 +138,12 @@ def test_crop_about_center_preserves_odd_sizes() -> None:
     np.testing.assert_allclose(cropped, image[1:6, 1:6])
 
 
+@pytest.mark.parametrize(
+    "missing", [None, "reference", "roi", "coadd-wcs", "reference-wcs"]
+)
 def test_load_pipeline_coadd_roi_aligns_rubin_reference_wcs(
     tmp_path: Path,
+    missing: str | None,
 ) -> None:
     source_dir = tmp_path / "rubin"
     reference_path = source_dir / "visit.fits"
@@ -194,6 +199,41 @@ def test_load_pipeline_coadd_roi_aligns_rubin_reference_wcs(
         },
         "rubin_files": [{"relative_path": "visit.fits"}],
     }
+    if missing is not None:
+        if missing == "reference":
+            reference_path.unlink()
+        elif missing == "roi":
+            del metadata["selection"]["roi"]
+        else:
+            path = coadd_path if missing == "coadd-wcs" else reference_path
+            with fits.open(path, mode="update") as hdul:
+                del hdul["IMAGE"].header["CTYPE2"]
+        message = {
+            "reference": "Missing reference FITS",
+            "roi": "selection ROI",
+            "coadd-wcs": "Coadd IMAGE lacks WCS",
+            "reference-wcs": "Reference IMAGE lacks WCS",
+        }[missing]
+        error = FileNotFoundError if missing == "reference" else ValueError
+        with pytest.raises(error, match=message):
+            load_pipeline_coadd_roi(
+                coadd_path,
+                center=(4, 4),
+                height=4,
+                width=4,
+                bundle_metadata=metadata,
+            )
+        if missing == "reference-wcs":
+            with pytest.raises(ValueError, match=message):
+                project_rubin_catalog_sky_to_store_roi(
+                    ra=np.array([23.0]),
+                    dec=np.array([13.0]),
+                    bundle_metadata=metadata,
+                    roi_center=(4, 4),
+                    roi_shape=(4, 4),
+                )
+        return
+
     aligned = load_pipeline_coadd_roi(
         coadd_path,
         center=(4, 4),
@@ -204,6 +244,27 @@ def test_load_pipeline_coadd_roi_aligns_rubin_reference_wcs(
 
     expected = coadd_data[17:21, 27:31]
     np.testing.assert_allclose(aligned, expected)
+
+
+@pytest.mark.parametrize("alignment_policy", [None, "pixel-grid"])
+def test_load_pipeline_coadd_roi_direct_crop_without_reference_alignment(
+    tmp_path: Path,
+    alignment_policy: str | None,
+) -> None:
+    path = tmp_path / "coadd.fits"
+    image = np.arange(64, dtype=np.float64).reshape(8, 8)
+    fits.HDUList(
+        [fits.PrimaryHDU(), fits.ImageHDU(image, name="IMAGE")]
+    ).writeto(path)
+    metadata = (
+        {"selection": {"alignment_policy": alignment_policy}}
+        if alignment_policy is not None
+        else None
+    )
+    cropped = load_pipeline_coadd_roi(
+        path, center=None, height=4, width=4, bundle_metadata=metadata
+    )
+    np.testing.assert_array_equal(cropped, image[2:6, 2:6])
 
 
 def test_build_rubin_coadd_reference_catalog_writes_wcs_rows(
@@ -671,8 +732,10 @@ def test_catalog_photometry_metrics_reports_matches(
     )
 
 
+@pytest.mark.parametrize("center", [(16, 16), None])
 def test_parquet_catalog_matches_reprojected_coadd_grid(
     tmp_path: Path,
+    center: tuple[int, int] | None,
 ) -> None:
     reference_path = tmp_path / "reference.fits"
     coadd_path = tmp_path / "coadd.fits"
@@ -718,7 +781,7 @@ def test_parquet_catalog_matches_reprojected_coadd_grid(
     }
     coadd = load_pipeline_coadd_roi(
         coadd_path,
-        center=(16, 16),
+        center=center,
         height=16,
         width=16,
         bundle_metadata=metadata,
@@ -735,7 +798,7 @@ def test_parquet_catalog_matches_reprojected_coadd_grid(
         baseline_name="pipeline_coadd",
         catalog_band="r",
         catalog_match_radius_px=0.5,
-        roi_center=(16, 16),
+        roi_center=center,
         roi_shape=(16, 16),
         catalog_parquet=catalog_path,
         coadd_fits_path=coadd_path,

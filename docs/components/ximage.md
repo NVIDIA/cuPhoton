@@ -127,6 +127,9 @@ Its HTTPS support is needed to interpret archive schema identifiers even
 when reading local files.
 Data acquisition and authentication remain the caller's responsibility.
 
+Evaluating coadds or sky-coordinate catalogs against a reference-WCS-aligned
+bundle requires its local reference FITS file and valid WCS headers.
+
 Pipeline coadds carry resampling and combination effects. They can serve as
 comparison images; treating them as independent raw exposures requires an
 appropriate noise and PSF model. Coadd-derived reference catalogs inherit

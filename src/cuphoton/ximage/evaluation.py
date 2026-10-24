@@ -1232,19 +1232,27 @@ def project_rubin_catalog_sky_to_store_roi(
 
     reference_path = _rubin_reference_path(bundle_metadata)
     with fits.open(reference_path, memmap=True) as hdul:
-        reference_wcs = WCS(hdul["IMAGE"].header)
+        reference_header = hdul["IMAGE"].header
+        if (
+            "CTYPE1" not in reference_header
+            or "CTYPE2" not in reference_header
+        ):
+            raise ValueError("Reference IMAGE lacks WCS for store projection")
+        reference_wcs = WCS(reference_header)
     full_x, full_y = reference_wcs.all_world2pix(ra, dec, 0, quiet=True)
 
     store_y, store_x = parse_section_text(roi_text)
     x = np.asarray(full_x, dtype=np.float64) - store_x.start
     y = np.asarray(full_y, dtype=np.float64) - store_y.start
-    crop_start_y = 0
-    crop_start_x = 0
-    if roi_center is not None:
-        crop_start_y = int(roi_center[0]) - roi_shape[0] // 2
-        crop_start_x = int(roi_center[1]) - roi_shape[1] // 2
-        x = x - crop_start_x
-        y = y - crop_start_y
+    if roi_center is None:
+        roi_center = (
+            (store_y.stop - store_y.start) // 2,
+            (store_x.stop - store_x.start) // 2,
+        )
+    crop_start_y = int(roi_center[0]) - roi_shape[0] // 2
+    crop_start_x = int(roi_center[1]) - roi_shape[1] // 2
+    x = x - crop_start_x
+    y = y - crop_start_y
     return x, y, crop_start_y, crop_start_x
 
 
@@ -1517,28 +1525,10 @@ def load_rubin_reference_aligned_coadd_roi(
         return None
     if selection.get("alignment_policy") != "reference-image-wcs":
         return None
-    reference_index = selection.get("reference_index")
     roi_text = selection.get("roi")
-    source_dir = bundle_metadata.get("source_dir")
-    rubin_files = bundle_metadata.get("rubin_files")
-    if (
-        not isinstance(reference_index, int)
-        or not isinstance(roi_text, str)
-        or not isinstance(source_dir, str)
-        or not isinstance(rubin_files, list)
-        or reference_index >= len(rubin_files)
-    ):
-        return None
-    reference_row = rubin_files[reference_index]
-    if not isinstance(reference_row, dict):
-        return None
-    reference_relative = reference_row.get("relative_path")
-    if not isinstance(reference_relative, str):
-        return None
-
-    reference_path = Path(source_dir) / reference_relative
-    if not reference_path.exists():
-        return None
+    if not isinstance(roi_text, str):
+        raise ValueError("Rubin store metadata lacks a selection ROI")
+    reference_path = _rubin_reference_path(bundle_metadata)
 
     with fits.open(path, memmap=True) as hdul:
         coadd_hdu = hdul["IMAGE"]
@@ -1546,11 +1536,17 @@ def load_rubin_reference_aligned_coadd_roi(
             "CTYPE1" not in coadd_hdu.header
             or "CTYPE2" not in coadd_hdu.header
         ):
-            return None
+            raise ValueError("Coadd IMAGE lacks WCS for reference alignment")
         coadd_wcs = WCS(coadd_hdu.header)
         coadd_image = np.asarray(coadd_hdu.data, dtype=np.float64)
     with fits.open(reference_path, memmap=True) as hdul:
-        reference_wcs = WCS(hdul["IMAGE"].header)
+        reference_header = hdul["IMAGE"].header
+        if (
+            "CTYPE1" not in reference_header
+            or "CTYPE2" not in reference_header
+        ):
+            raise ValueError("Reference IMAGE lacks WCS for store projection")
+        reference_wcs = WCS(reference_header)
 
     store_y, store_x = parse_section_text(roi_text)
     if center is None:
