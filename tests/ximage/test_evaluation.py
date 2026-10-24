@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import csv
 import json
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -424,18 +423,12 @@ def test_evaluate_reconstruction_run_reports_metrics(
         )
     )
 
-    expected_warning = (
-        pytest.warns(RuntimeWarning, match="Photometry evaluation failed")
-        if incomplete_coadd
-        else nullcontext()
+    result = evaluate_reconstruction_run(
+        run_dir,
+        pipeline_coadd_fits=coadd_path,
+        catalog_parquet=catalog_path,
+        write_artifacts=True,
     )
-    with expected_warning:
-        result = evaluate_reconstruction_run(
-            run_dir,
-            pipeline_coadd_fits=coadd_path,
-            catalog_parquet=catalog_path,
-            write_artifacts=True,
-        )
     assert np.isfinite(result["restoration"]["sharpness_sf"])
     assert result["synthetic_coadd"]["method"] == "median"
     assert result["exposures"]["count"] == 2
@@ -456,7 +449,7 @@ def test_evaluate_reconstruction_run_reports_metrics(
     else:
         assert np.isfinite(pipeline["sharpness_sf"])
     assert resolve_pipeline_coadd_fits(explicit_path=coadd_path) == coadd_path
-    assert result["photometry"]["available"] is (not incomplete_coadd)
+    assert result["photometry"]["available"] is True
     assert result["photometry"]["baseline_name"] == "pipeline_coadd"
     assert "saved" in result
     assert Path(result["saved"]["evaluation_summary"]).exists()
@@ -1253,3 +1246,19 @@ def test_photometry_metrics_degrades_when_photutils_unavailable(
     )
     assert result["available"] is False
     assert "photutils-missing" in result["reason"]
+
+
+def test_photometry_background_fallback_preserves_finite_pixels(monkeypatch):
+    import cuphoton.ximage.evaluation as evaluation
+
+    image = np.full((32, 32), 7.0, dtype=np.float32)
+    image[0, 0] = np.nan
+
+    def fail_background(image):
+        raise ValueError("background unavailable")
+
+    monkeypatch.setattr(evaluation, "subtract_background", fail_background)
+    with pytest.warns(RuntimeWarning, match="falling back to median"):
+        result = evaluation.subtract_photometry_background(image)
+    assert np.isnan(result[0, 0])
+    np.testing.assert_array_equal(result[np.isfinite(image)], 0.0)
