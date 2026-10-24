@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path, PureWindowsPath
 from typing import Literal
 
+import numpy as np
 import yaml
 from pydantic import (
     BaseModel,
@@ -170,6 +171,23 @@ class ReconstructionConfig(WorkflowConfig):
     ] = "huber"
     delta_rho_start: float = Field(default=2.0, gt=0.0)
     delta_rho_end: float = Field(default=1.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def validate_robust_scales(self) -> ReconstructionConfig:
+        """Validate scale representation before the tensor iteration loop."""
+
+        if self.rho_loss in {"huber", "cauchy"}:
+            with np.errstate(over="ignore", under="ignore"):
+                scales = np.asarray(
+                    [self.delta_rho_start, self.delta_rho_end],
+                    dtype=self.dtype,
+                )
+            if not np.all(np.isfinite(scales) & (scales > 0)):
+                raise ValueError(
+                    "Huber and Cauchy scales must be finite and strictly "
+                    f"positive in {self.dtype}"
+                )
+        return self
 
 
 def load_config[ModelT: Model](

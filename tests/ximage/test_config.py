@@ -212,3 +212,18 @@ def test_output_run_name_requires_one_directory_component(name) -> None:
 
 def test_output_run_name_accepts_a_descriptive_leaf() -> None:
     assert OutputConfig(name="field-a run-1").name == "field-a run-1"
+
+
+@pytest.mark.parametrize("loss", ["huber", "cauchy"])
+@pytest.mark.parametrize("field", ["delta_rho_start", "delta_rho_end"])
+def test_robust_scale_must_remain_finite_and_positive_in_dtype(loss, field):
+    for value in (float("inf"), float("nan"), 1e100, 1e-100):
+        with pytest.raises(ValidationError):
+            ReconstructionConfig.model_validate(
+                {"rho_loss": loss, "dtype": "float32", field: value}
+            )
+    for value in (1e100, 1e-100):
+        config = ReconstructionConfig.model_validate(
+            {"rho_loss": loss, "dtype": "float64", field: value}
+        )
+        assert getattr(config, field) == value
