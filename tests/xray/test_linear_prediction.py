@@ -1921,7 +1921,7 @@ def test_model_order_sweep_batch_retains_results_and_provenance():
         time.tolist(),
         rows,
         sources,
-        components=(6, 2, 4),
+        components=(6, 2, 4, 2),
         relative_tolerance=0.05,
     )
     expected = [
