@@ -480,10 +480,8 @@ validation occur after the timed worker phase.
 `fit_single_sources` fits one Gaussian lobe per stamp with the same
 Levenberg-Marquardt solver and inverse-variance weighting as `fit_dipoles`.
 Use it for a source present in only one of the two images, which leaves one
-lobe in the difference image: candidates whose quality flags mark exactly
-one lobe unsupported (`NEGATIVE_LOBE_UNSUPPORTED` for a brightening source,
-sign `+1`; `POSITIVE_LOBE_UNSUPPORTED` for a fading one, sign `-1`), started
-at the supported lobe's position:
+lobe in the difference image. Start at that lobe's position and use sign
+`+1` for a brightening source or `-1` for a fading source:
 
 ```python
 from cuphoton.xfit import fit_single_sources
