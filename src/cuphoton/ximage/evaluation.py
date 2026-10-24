@@ -628,6 +628,7 @@ def catalog_photometry_metrics(
             coadd_fits_path=coadd_fits_path,
             roi_center=roi_center,
             roi_shape=roi_shape,
+            bundle_metadata=bundle_metadata,
         )
     else:
         return {
@@ -816,27 +817,41 @@ def load_catalog_sources_in_roi(
     coadd_fits_path: Path,
     roi_center: tuple[int, int] | None,
     roi_shape: tuple[int, int],
+    bundle_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     table = _load_catalog_table(catalog_parquet, band=band)
-    with fits.open(coadd_fits_path, memmap=True) as hdul:
-        image_shape = hdul["IMAGE"].data.shape
-        wcs = WCS(hdul["IMAGE"].header)
+    selection = (bundle_metadata or {}).get("selection")
+    if (
+        bundle_metadata is not None
+        and isinstance(selection, dict)
+        and selection.get("alignment_policy") == "reference-image-wcs"
+    ):
+        local_x, local_y, _, _ = project_rubin_catalog_sky_to_store_roi(
+            ra=table["coord_ra"],
+            dec=table["coord_dec"],
+            bundle_metadata=bundle_metadata,
+            roi_center=roi_center,
+            roi_shape=roi_shape,
+        )
+    else:
+        with fits.open(coadd_fits_path, memmap=True) as hdul:
+            image_shape = hdul["IMAGE"].data.shape
+            wcs = WCS(hdul["IMAGE"].header)
 
-    if roi_center is None:
-        roi_center = (image_shape[0] // 2, image_shape[1] // 2)
-    start_h, start_w, _, _ = crop_bounds_about_center(
-        center=roi_center,
-        height=roi_shape[0],
-        width=roi_shape[1],
-        image_shape=image_shape,
-    )
-
-    full_x, full_y = wcs.world_to_pixel_values(
-        table["coord_ra"],
-        table["coord_dec"],
-    )
-    local_x = full_x - start_w
-    local_y = full_y - start_h
+        if roi_center is None:
+            roi_center = (image_shape[0] // 2, image_shape[1] // 2)
+        start_h, start_w, _, _ = crop_bounds_about_center(
+            center=roi_center,
+            height=roi_shape[0],
+            width=roi_shape[1],
+            image_shape=image_shape,
+        )
+        full_x, full_y = wcs.world_to_pixel_values(
+            table["coord_ra"],
+            table["coord_dec"],
+        )
+        local_x = full_x - start_w
+        local_y = full_y - start_h
     in_roi = (
         np.isfinite(local_x)
         & np.isfinite(local_y)

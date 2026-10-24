@@ -127,6 +127,36 @@ def test_load_reconstruction_config_rejects_extra(tmp_path: Path) -> None:
         load_config(path, ReconstructionConfig)
 
 
+@pytest.mark.parametrize("document", ["false", "0", "[]", '""'])
+def test_load_config_rejects_non_mapping_documents(
+    tmp_path: Path, document: str
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(document)
+
+    with pytest.raises(ValidationError):
+        load_config(
+            path,
+            ReconstructionConfig,
+            default_output_root=tmp_path / "runs",
+        )
+
+
+@pytest.mark.parametrize("document", ["", "null"])
+def test_load_config_accepts_empty_documents(
+    tmp_path: Path, document: str
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(document)
+    output_root = tmp_path / "runs"
+
+    config = load_config(
+        path, ReconstructionConfig, default_output_root=output_root
+    )
+
+    assert config.output.root_dir == output_root
+
+
 def test_load_reconstruction_config_accepts_tiling(tmp_path: Path) -> None:
     path = tmp_path / "reconstruct-tiled.yaml"
     path.write_text(

@@ -671,6 +671,83 @@ def test_catalog_photometry_metrics_reports_matches(
     )
 
 
+def test_parquet_catalog_matches_reprojected_coadd_grid(
+    tmp_path: Path,
+) -> None:
+    reference_path = tmp_path / "reference.fits"
+    coadd_path = tmp_path / "coadd.fits"
+    for path, reference_pixel, pixel_scale in (
+        (reference_path, 1.0, 1.0),
+        (coadd_path, 6.0, 0.5),
+    ):
+        wcs = WCS(naxis=2)
+        wcs.wcs.ctype = ["LINEAR", "LINEAR"]
+        wcs.wcs.crpix = [reference_pixel, reference_pixel]
+        wcs.wcs.cdelt = [pixel_scale, pixel_scale]
+        image = np.zeros((96, 96), dtype=np.float64)
+        if path == coadd_path:
+            image[53, 69] = 1000.0
+        fits.HDUList(
+            [
+                fits.PrimaryHDU(),
+                fits.ImageHDU(image, header=wcs.to_header(), name="IMAGE"),
+            ]
+        ).writeto(path)
+
+    catalog_path = tmp_path / "catalog.parq"
+    pq.write_table(
+        pa.table(
+            {
+                "objectId": [1],
+                "coord_ra": [32.0],
+                "coord_dec": [24.0],
+                "r_psfFlux": [1000.0],
+                "r_extendedness": [0.0],
+            }
+        ),
+        catalog_path,
+    )
+    metadata = {
+        "source_dir": str(tmp_path),
+        "selection": {
+            "alignment_policy": "reference-image-wcs",
+            "reference_index": 0,
+            "roi": "10:42,20:52",
+        },
+        "rubin_files": [{"relative_path": reference_path.name}],
+    }
+    coadd = load_pipeline_coadd_roi(
+        coadd_path,
+        center=(16, 16),
+        height=16,
+        width=16,
+        bundle_metadata=metadata,
+    )
+    detection_y, detection_x = np.unravel_index(np.argmax(coadd), coadd.shape)
+    assert (detection_x, detection_y) == (4, 6)
+
+    result = catalog_photometry_metrics(
+        baseline_flux=np.array([coadd[detection_y, detection_x]]),
+        restoration_flux=np.array([1100.0]),
+        valid_mask=np.array([True]),
+        detection_x=np.array([detection_x]),
+        detection_y=np.array([detection_y]),
+        baseline_name="pipeline_coadd",
+        catalog_band="r",
+        catalog_match_radius_px=0.5,
+        roi_center=(16, 16),
+        roi_shape=(16, 16),
+        catalog_parquet=catalog_path,
+        coadd_fits_path=coadd_path,
+        bundle_metadata=metadata,
+    )
+    assert result["available"] is True
+    assert result["catalog_source_count"] == 1
+    assert result["matched_catalog_count"] == 1
+    assert result["_artifact_payload"]["catalog_x"] == pytest.approx([4.0])
+    assert result["_artifact_payload"]["catalog_y"] == pytest.approx([6.0])
+
+
 def test_catalog_photometry_metrics_accepts_reference_csv(
     tmp_path: Path,
 ) -> None:
