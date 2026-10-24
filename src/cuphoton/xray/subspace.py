@@ -104,6 +104,16 @@ class SubspaceBenchmarkBatch:
     traces: tuple[SubspaceBenchmark, ...]
 
     @property
+    def source_kind(self) -> str:
+        return (
+            "trace-npz-batch"
+            if all(
+                source.get("kind") == "trace-npz" for source in self.sources
+            )
+            else "trace-batch"
+        )
+
+    @property
     def method_summary(self) -> tuple[_SubspaceMethodSummary, ...]:
         summaries = []
         for method in self.methods:
@@ -154,7 +164,7 @@ class SubspaceBenchmarkBatch:
         )
         return "\n".join(
             (
-                "source=trace-npz-batch",
+                f"source={self.source_kind}",
                 f"trace_count={len(self.traces)}",
                 f"samples={self.samples}",
                 f"model_order={self.model_order}",
@@ -179,7 +189,7 @@ class SubspaceBenchmarkBatch:
         )
         return {
             "source": {
-                "kind": "trace-npz-batch",
+                "kind": self.source_kind,
                 "trace_count": len(self.sources),
                 "traces": self.sources,
             },
