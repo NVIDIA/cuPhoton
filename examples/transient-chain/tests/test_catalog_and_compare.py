@@ -3,6 +3,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import sys
+
 import compare_catalogs
 import numpy as np
 import pandas as pd
@@ -166,3 +169,57 @@ def test_compare_reports_reference_exposures_we_lost_entirely():
     lost = rows[("E", "8")]
     assert lost["n_ours"] == 0 and lost["n_reference"] == 1
     assert lost["matched"] == 0 and lost["matched_fraction_reference"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "name", ["x", "candidate_id", "amplitude", "astrometry"]
+)
+def test_catalog_rejects_identity_extras_that_overwrite_measurements(name):
+    with pytest.raises(ValueError, match="conflicts with the catalog schema"):
+        catalog.finish_table(
+            _full_table(1, np.random.default_rng(0)),
+            1,
+            {"exposure_id": "1", "ccd_id": "D", "band": "r", name: "extra"},
+            "header-wcs",
+            "1",
+            "D",
+            NAMES,
+        )
+
+
+def test_compare_reports_exposures_absent_from_reference():
+    ours = pd.DataFrame(
+        {"ccd_id": ["D"], "exposure_id": ["7"], "x": [1.0], "y": [1.0]}
+    )
+    ref = ours.iloc[:0]
+    row = compare_catalogs.compare(ours, ref, 1.5)[0]
+    assert row["matched"] == 0
+    assert row["matched_fraction_ours"] == 0.0
+    assert row["n_reference"] == 0
+
+
+def test_compare_cli_preserves_zero_prefixed_csv_identity(
+    tmp_path, monkeypatch, capsys
+):
+    ours = tmp_path / "ours.parquet"
+    pd.DataFrame(
+        {"ccd_id": ["001"], "exposure_id": ["0007"], "x": [1.0], "y": [2.0]}
+    ).to_parquet(ours)
+    reference = tmp_path / "reference.csv"
+    reference.write_text("detector,visit,x,y\n001,0007,1.0,2.0\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "compare_catalogs",
+            "--ours",
+            str(ours),
+            "--reference",
+            str(reference),
+        ],
+    )
+    compare_catalogs.main()
+    rows = json.loads(capsys.readouterr().out)["per_visit"]
+    assert len(rows) == 1
+    assert rows[0]["ccd_id"] == "001" and rows[0]["exposure_id"] == "0007"
+    assert rows[0]["matched"] == 1
