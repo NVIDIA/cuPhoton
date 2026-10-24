@@ -44,7 +44,7 @@ the request.
 |---|---|---|
 | Read | target image, mask, variance and every template plane; GZIP tiles inflated by nvCOMP under xDR | FITS headers (WCS, mask-plane cards); under `astropy` the decoded planes cross once |
 | Template | Lanczos-3 reprojection of each source onto the target grid, mean over sources, bad bits OR-ed | the WCS mapping on a coarse grid (Astropy is CPU-only; xRep expands it on the device) |
-| Refine | star finding on both images, rebuilt template | two star lists of at most `align.max_stars` rows; affine least squares |
+| Refine | each image median-subtracted and smoothed once; star finding on both images and the rebuilt template; per-star centroid errors and widths | two star lists of at most `align.max_stars` rows and two low-threshold peak lists (counted in `control_bytes`); affine least squares, misalignment model, PSF width |
 | Mask | bad pixels to NaN; compact-source fit mask | ranking of a few hundred peaks |
 | XPOIS | `solve_constant_kernel_device`, residual | chi2, dof, condition number |
 | Detect | hotspot rule (threshold, 4-connected label, per-component peak and centroid) | the hotspot table |
@@ -56,6 +56,32 @@ the request.
 `summary.json` splits host traffic into `transfers.terminal_bytes` (the catalog),
 `control_bytes` (star lists, hotspot table, candidate filter) and `diagnostic_bytes`
 (cross-correlation windows), and records `intermediate_files: 0`.
+
+After the affine fit, the refine stage measures the stars matched on the rebuilt template
+(`ops.measure_matched_stars`). A star with another peak above 5 sigma within one box width
+(`align.star_box_px` pixels) in either image is dropped: a neighbor moves the two centroids by
+different amounts and inflates a chip-wide rms. For each remaining pair it measures the standard
+error of both centroids, propagated from the pixel variance through the windowed centroid, and
+the target star's second-moment width; a pair whose centroid error is not finite is dropped and
+counted (`stars_nonfinite_dropped`).
+
+The misalignment model (`ops.fit_misalignment`) is fitted only in affine mode and only with the
+`gpu` star finder, whose centroids the error model describes (`daofind` centroids are skipped with
+`reason: "daofind centroids"`). It is the affine fit with its covariance from the centroid noise,
+the excess residual as a quadratic field across the image (one constant per axis with fewer than
+30 stars) and outliers clipped at 5 sigma, a limit that keeps every Gaussian residual while a
+blend, tens of sigma out, still goes. `variance(x, y)` includes the squared remaining affine and
+quadratic displacement because this diagnostic fit does not correct the template or catalog
+positions. The worker keeps the model for the later stages. The summary under
+`diagnostics.align.refine.misalignment` records `model` (`"polynomial"`, `"rms"`, or `null` with
+a `reason`), the star counts, the residual rms and the excess and image-center sigma in pixels.
+The template has no variance plane, so its centroid noise is counted as excess.
+
+The kept target stars always give the PSF width (`ops.psf_width`: clipped median of the widths
+with its standard error), written under the same diagnostics key as `psf_width`. When
+`xfit.psf_sigma_px` is null that width is the one the uncertainty stage uses, and `summary.json`
+records it as `psf_sigma_px` with `psf_sigma_source: "stars"` (`"config"` when the configuration
+set it, `null` when neither was available and the `psf_flux` columns are NaN).
 
 ## Prerequisites
 
@@ -260,7 +286,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
 | `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`). `<q>_err_fit`: standard uncertainty from xFit's covariance alone. `<q>_err`: the error bar to quote (see below). `*_xy_cov`: x-y covariance from xFit's covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote (see below). All three NaN without `xfit.psf_sigma_px` or a variance plane |
+| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote (see below). All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -281,7 +307,7 @@ difference image's noise by that amount. Without a variance plane, xFit scales e
 the fit's reduced chi-square, which estimates the noise from the stamp's residuals.
 
 `quality_flags` marks fits that a valid covariance does not exclude: widths outside 0.5 to 2.5 times
-`xfit.psf_sigma_px` (or xFit's default range when it is null), lobes outside the stamp, no lobe at the
+the PSF width (xFit's default range when none is known), lobes outside the stamp, no lobe at the
 candidate, overlapping lobes, and an unsupported lobe. A candidate with only
 `NEGATIVE_LOBE_UNSUPPORTED` is a brightening single source and one with only
 `POSITIVE_LOBE_UNSUPPORTED` a fading one; for them `psf_flux` is measured at the supported lobe and is
@@ -290,9 +316,10 @@ the quantity to use, and the dipole columns describe a lobe that is not there. E
 lobes, only the fitted center coordinates and the product of amplitude and separation are
 identifiable; neither the separation nor the individual lobe flux is measured independently.
 This is a limit on interpreting the dipole fit, not a switch of the forced-photometry position.
-The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, which
-must come from a measurement independent of the candidate fits, such as the image's stars; without
-it the `psf_flux` columns are NaN. `psf_flux_err` assumes the position and the PSF are fixed and
+The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, or of
+the width measured from the refine stage's stars when that key is null (`summary.json` records
+which, see above); the width must come from a measurement independent of the candidate fits, and
+without one the `psf_flux` columns are NaN. `psf_flux_err` assumes the position and the PSF are fixed and
 correct. The position is the fit's, measured on the same stamp, so the uncertainty is conditional on
 it; a fitted dipole width used as the PSF would make it far too small.
 

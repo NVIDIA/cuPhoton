@@ -25,7 +25,6 @@ summary.
 from __future__ import annotations
 
 import contextlib
-import functools
 import hashlib
 import importlib
 import os
@@ -102,6 +101,12 @@ class ChainWorker:
         self.consumer_stream = torch.cuda.Stream(device=self.device)
         self.closed = False
         self.items_done = 0
+        # per item, set at step 3: the misalignment model of the matched
+        # stars (None when refinement did not fit an affine) and the PSF
+        # width the xfit stage uses, with where it came from
+        self.misalignment: ops.Misalignment | None = None
+        self.psf_sigma_px: float | None = None
+        self.psf_sigma_source: str | None = None
 
     def _load_model(self, checkpoint_dir: Path) -> None:
         from cuphoton.xscan.config import PerformanceConfig
@@ -179,6 +184,11 @@ class ChainWorker:
             "diagnostic_bytes": 0,
         }
         identity = self.adapter.identity(sel)
+        self.misalignment = None
+        self.psf_sigma_px = cfg["xfit"]["psf_sigma_px"]
+        self.psf_sigma_source = (
+            None if self.psf_sigma_px is None else "config"
+        )
         a_cfg, s_cfg, d_cfg, c_cfg = (
             cfg["align"],
             cfg["subtract"],
@@ -263,15 +273,28 @@ class ChainWorker:
                     max_n=int(a_cfg["max_stars"]),
                 )
                 finder_name = a_cfg["star_finder"]
-                if finder_name == "daofind":
-                    finder = ops.find_stars_daofind
-                else:
-                    finder = functools.partial(
-                        ops.find_stars,
-                        box=int(a_cfg["star_box_px"]),
-                        iterations=int(a_cfg["centroid_iterations"]),
-                    )
-                sv, st = finder(vimg, **stars), finder(timg, **stars)
+                gpu_finder = finder_name != "daofind"
+
+                def finder(img, smoothed=None):
+                    if gpu_finder:
+                        return ops.find_stars(
+                            img,
+                            box=int(a_cfg["star_box_px"]),
+                            iterations=int(a_cfg["centroid_iterations"]),
+                            smoothed=smoothed,
+                            **stars,
+                        )
+                    return ops.find_stars_daofind(img, **stars)
+
+                # the gpu finder smooths each image once per item; step 3b
+                # reuses the smoothed target and rebuilt template
+                vs = (
+                    ops.smooth_image(vimg, stars["fwhm"])
+                    if gpu_finder
+                    else None
+                )
+                ts = None
+                sv, st = finder(vimg, vs), finder(timg)
                 xfer["control_bytes"] += sv.nbytes + st.nbytes
                 if finder_name == "daofind":
                     # DAOStarFinder ran on host copies of both images (and
@@ -300,12 +323,26 @@ class ChainWorker:
                     }
                 else:
                     timg, tbad_raw, tcnt = provider.build((A, b))
+                    if gpu_finder:
+                        ts = ops.smooth_image(timg, stars["fwhm"])
                     mv1, mt1 = ops.match_stars(
-                        sv,
-                        finder(timg, **stars),
-                        float(a_cfg["verify_radius_px"]),
+                        sv, finder(timg, ts), float(a_cfg["verify_radius_px"])
                     )
                     before, after = mv - mt, mv1 - mt1
+                    misalignment_diag = self._measure_stars(
+                        vimg,
+                        timg,
+                        target.variance,
+                        mv1,
+                        mt1,
+                        a_cfg,
+                        mode,
+                        finder_name,
+                        vs,
+                        ts,
+                        xfer,
+                    )
+                    del vs, ts
                     ref_diag = {
                         "mode": mode,
                         "matches_before": int(len(mv)),
@@ -322,6 +359,7 @@ class ChainWorker:
                         "xcorr_visit_minus_template_px_after": (
                             ops.xcorr_offset(vimg[win], timg[win])
                         ),
+                        "misalignment": misalignment_diag,
                     }
                     xfer["diagnostic_bytes"] += w * w * 8
             ref_diag["sign_convention"] = "visit minus template, pixels"
@@ -497,7 +535,7 @@ class ChainWorker:
             # propagated through the full covariance, and forced PSF
             # photometry at the source when the PSF width is configured
             with timer("uncertainty"):
-                psf_sigma = cfg["xfit"]["psf_sigma_px"]
+                psf_sigma = self.psf_sigma_px
                 qflags = dipole_quality_flags(
                     xres,
                     difference,
@@ -700,6 +738,8 @@ class ChainWorker:
                 **{k: int(v) for k, v in xfer.items()},
                 "intermediate_files": 0,
             },
+            "psf_sigma_px": self.psf_sigma_px,
+            "psf_sigma_source": self.psf_sigma_source,
             "config_sha256": self.config_sha256,
             "checkpoint_sha256": self.checkpoint_sha256,
             "inference_policy": self.inference_policy,
@@ -720,6 +760,51 @@ class ChainWorker:
             "wall_sec": {"item": wall},
             "candidates": n_cand,
         }
+
+    def _measure_stars(
+        self,
+        vimg,
+        timg,
+        variance,
+        mv,
+        mt,
+        a_cfg,
+        mode,
+        finder_name,
+        vs,
+        ts,
+        xfer,
+    ) -> dict[str, Any]:
+        """Step 3b: ``ops.measure_matched_stars`` on the pairs matched after
+        refinement, keeping the misalignment model on ``self.misalignment``
+        and, when the configuration left ``xfit.psf_sigma_px`` null, the
+        stars' PSF width on ``self.psf_sigma_px``.
+        """
+        if finder_name == "daofind":
+            # the centroid-error model describes the windowed centroid, not
+            # DAOStarFinder's
+            skip = "daofind centroids"
+        else:
+            skip = None if mode == "affine" else f"{mode} mode"
+        ms = ops.measure_matched_stars(
+            vimg,
+            timg,
+            variance,
+            mv,
+            mt,
+            box=int(a_cfg["star_box_px"]),
+            fwhm=float(a_cfg["star_fwhm_px"]),
+            min_stars=int(a_cfg["min_affine_matches"]),
+            skip_model=skip,
+            target_smoothed=vs,
+            template_smoothed=ts,
+        )
+        xfer["control_bytes"] += ms.control_bytes
+        self.misalignment = ms.misalignment
+        if ms.psf is not None and self.psf_sigma_source != "config":
+            self.psf_sigma_px = ms.psf.sigma_px
+            self.psf_sigma_source = "stars"
+        return ms.diagnostics
 
     def close(self) -> None:
         self.closed = True
