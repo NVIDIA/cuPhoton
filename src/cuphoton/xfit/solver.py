@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
+from functools import lru_cache
 from types import ModuleType
 from typing import Any, Protocol
 
@@ -274,6 +275,15 @@ def _finite(value: BackendArray, ap: ModuleType) -> bool:
     return _bool(ap.isfinite(value).all())
 
 
+def _row_norm(value: BackendArray, ap: ModuleType) -> BackendArray:
+    """Compute Euclidean row norms without squaring large coordinates."""
+
+    scale = ap.max(ap.abs(value), axis=1)
+    safe_scale = ap.where(scale > 0, scale, 1)
+    normalized = value / safe_scale[:, None]
+    return scale * ap.sqrt(ap.einsum("kn,kn->k", normalized, normalized))
+
+
 def _call_residual(
     problem: BatchedLeastSquaresProblem,
     x: BackendArray,
@@ -356,26 +366,96 @@ def _final_jacobian(
 
 def _factorize_jacobians(
     jacobians: BackendArray, ap: ModuleType
-) -> tuple[BackendArray, BackendArray]:
-    """Return left singular vectors and values for covariance diagnostics."""
+) -> tuple[BackendArray, BackendArray, BackendArray]:
+    """Factor equilibrated Jacobians and return their parameter scales."""
 
-    batch, parameters, observations = jacobians.shape
+    scale = ap.max(ap.abs(jacobians), axis=-1)
+    scale = ap.where(scale > 0, scale, 1)
+    normalized = jacobians / scale[..., None]
+    parameters, observations = jacobians.shape[-2:]
     module_name = type(jacobians).__module__.split(".", maxsplit=1)[0]
-    if module_name == "cupy" and batch > 1 and observations > 2 * parameters:
+    if (
+        module_name == "cupy"
+        and jacobians.ndim == 3
+        and jacobians.shape[0] > 1
+        and observations > 2 * parameters
+    ):
         # For a tall J.T = Q R, the small R.T has the same singular values and
         # left singular vectors as J. Avoid cuSOLVER's expensive batched SVD
         # setup for the wide parameter-major Jacobians used by image fits.
         reduced = ap.linalg.qr(
-            jacobians.transpose(0, 2, 1), mode="r"
+            normalized.transpose(0, 2, 1), mode="r"
         ).transpose(0, 2, 1)
         left_vectors, singular_values, _ = ap.linalg.svd(
             reduced, full_matrices=False
         )
-        return left_vectors, singular_values
+        return left_vectors, singular_values, scale
     left_vectors, singular_values, _ = ap.linalg.svd(
-        jacobians, full_matrices=False
+        normalized, full_matrices=False
     )
-    return left_vectors, singular_values
+    return left_vectors, singular_values, scale
+
+
+def _covariance_from_svd(
+    left_vectors: BackendArray,
+    singular_values: BackendArray,
+    scale: BackendArray,
+) -> BackendArray:
+    """Undo parameter scaling in a full-rank inverse normal matrix."""
+
+    inverse_factor = (left_vectors / singular_values[..., None, :]) / scale[
+        ..., None
+    ]
+    return inverse_factor @ inverse_factor.swapaxes(-2, -1)
+
+
+@lru_cache(maxsize=2)
+def _fp32_workspace_cast_kernel(ap: ModuleType, to_float32: bool) -> Any:
+    # CuPy appends -ftz=true even after a caller requests --ftz=false.
+    # Explicit PTX without .ftz preserves subnormals in both directions.
+    if to_float32:
+        return ap.ElementwiseKernel(
+            "float64 x",
+            "float32 y",
+            'asm("cvt.rn.f32.f64 %0, %1;" : "=f"(y) : "d"(x));',
+            "xfit_workspace_float32",
+        )
+    return ap.ElementwiseKernel(
+        "float32 x",
+        "float64 y",
+        'asm("cvt.f64.f32 %0, %1;" : "=d"(y) : "f"(x));',
+        "xfit_workspace_float64",
+    )
+
+
+def _cast_fp32_workspace(
+    values: BackendArray, dtype: Any, ap: ModuleType
+) -> BackendArray:
+    """Convert FP32 solver workspaces without flushing subnormal values."""
+
+    if ap is np:
+        return values.astype(dtype)
+    return _fp32_workspace_cast_kernel(ap, dtype == np.float32)(values)
+
+
+def _normal_equations_from_jacobian(
+    jacobian: BackendArray, residual: BackendArray, ap: ModuleType
+) -> tuple[BackendArray, BackendArray]:
+    """Accumulate FP32 products in FP64, then retain the input precision."""
+
+    widen = jacobian.dtype == np.float32 and residual.dtype == np.float32
+    normal_jacobian = (
+        _cast_fp32_workspace(jacobian, np.float64, ap) if widen else jacobian
+    )
+    normal_residual = (
+        _cast_fp32_workspace(residual, np.float64, ap) if widen else residual
+    )
+    gradient = ap.einsum("knm,km->kn", normal_jacobian, normal_residual)
+    hessian = ap.einsum("knm,kpm->knp", normal_jacobian, normal_jacobian)
+    if widen:
+        gradient = _cast_fp32_workspace(gradient, np.float32, ap)
+        hessian = _cast_fp32_workspace(hessian, np.float32, ap)
+    return gradient, hessian
 
 
 def batched_levenberg_marquardt(
@@ -390,6 +470,12 @@ def batched_levenberg_marquardt(
     interpreted as parameter-major, with shape ``(K, N, M)``. When it is
     absent, or finite differences are requested, the solver allocates the
     perturbation workspace in the same backend as ``x0``.
+
+    Built-in FP32 normal equations accumulate in FP64 and are rounded back
+    before convergence checks. FP32 damped systems likewise use FP64 solve
+    intermediates and return FP32 steps. Model evaluations, solver state,
+    covariance and rank thresholds retain their input precision. A supplied
+    normal-equations callback controls its own accumulation precision.
     """
 
     if not hasattr(x0, "ndim") or x0.ndim != 2:
@@ -512,13 +598,13 @@ def batched_levenberg_marquardt(
                     fallback_jacobian = fallback_jacobian[valid_fallback]
                     gradient = gradient.copy()
                     hessian = hessian.copy()
-                    gradient[recovered_positions] = ap.einsum(
-                        "knm,km->kn",
+                    (
+                        gradient[recovered_positions],
+                        hessian[recovered_positions],
+                    ) = _normal_equations_from_jacobian(
                         fallback_jacobian,
                         residual_active[recovered_positions],
-                    )
-                    hessian[recovered_positions] = ap.einsum(
-                        "knm,kpm->knp", fallback_jacobian, fallback_jacobian
+                        ap,
                     )
                     valid_normal_equations[recovered_positions] = True
                     jacobians[recovered_indices] = fallback_jacobian
@@ -570,11 +656,17 @@ def batched_levenberg_marquardt(
             jacobian = jacobian[valid_rows]
             jacobians[active_indices] = jacobian
             jacobian_current[active_indices] = True
-            gradient = ap.einsum("knm,km->kn", jacobian, residual_active)
-            hessian = ap.einsum("knm,kpm->knp", jacobian, jacobian)
-        diagonal = ap.maximum(ap.diagonal(hessian, axis1=1, axis2=2), eps)
-        scaled_gradient = ap.max(ap.abs(gradient) / ap.sqrt(diagonal), axis=1)
-        residual_norm = ap.linalg.norm(residual_active, axis=1)
+            gradient, hessian = _normal_equations_from_jacobian(
+                jacobian, residual_active, ap
+            )
+        diagonal = ap.diagonal(hessian, axis1=1, axis2=2)
+        # Positive column norms retain their scale, even below epsilon.
+        # A zero column has zero gradient and receives only regularization.
+        diagonal = ap.where(diagonal > 0, diagonal, 1)
+        scale = ap.sqrt(diagonal)
+        normalized_gradient = gradient / scale
+        scaled_gradient = ap.max(ap.abs(normalized_gradient), axis=1)
+        residual_norm = _row_norm(residual_active, ap)
         gradient_converged = scaled_gradient <= (
             settings.g_tol * ap.maximum(1.0, residual_norm)
         )
@@ -589,18 +681,44 @@ def batched_levenberg_marquardt(
         residual_active = residual_active[unconverged_rows]
         gradient = gradient[unconverged_rows]
         hessian = hessian[unconverged_rows]
-        diagonal = diagonal[unconverged_rows]
+        scale = scale[unconverged_rows]
+        normalized_gradient = normalized_gradient[unconverged_rows]
 
-        system = hessian + (
-            damping[active_indices, None, None]
-            * identity
-            * diagonal[:, None, :]
+        # Solve in Jacobian-scaled coordinates. This is the same damped
+        # least-squares system, without conditioning caused by parameter
+        # units. Convert the step back only after the linear solve.
+        system = hessian / scale[:, :, None] / scale[:, None, :] + (
+            damping[active_indices, None, None] * identity
         )
         try:
-            step = ap.linalg.solve(system, -gradient[..., None])[..., 0]
+            if system.dtype == np.float32 and gradient.dtype == np.float32:
+                # NumPy already solves FP32 inputs with FP64 intermediates.
+                # Match that policy on the GPU before rounding the step.
+                scaled_step = _cast_fp32_workspace(
+                    ap.linalg.solve(
+                        _cast_fp32_workspace(system, np.float64, ap),
+                        -_cast_fp32_workspace(
+                            normalized_gradient[..., None], np.float64, ap
+                        ),
+                    )[..., 0],
+                    np.float32,
+                    ap,
+                )
+            else:
+                scaled_step = ap.linalg.solve(
+                    system, -normalized_gradient[..., None]
+                )[..., 0]
+            step = scaled_step / scale
         except Exception:
             status[active_indices] = int(LMStatus.SINGULAR)
             continue
+        # The quadratic reduction uses the same scaled system and damping
+        # that produced the step, avoiding products of disparate units.
+        predicted_reduction = 0.5 * ap.einsum(
+            "kn,kn->k",
+            scaled_step,
+            damping[active_indices, None] * scaled_step - normalized_gradient,
+        )
         valid_step = finite_rows(step)
         status[active_indices[~valid_step]] = int(LMStatus.SINGULAR)
         valid_rows = ap.flatnonzero(valid_step)
@@ -610,6 +728,8 @@ def batched_levenberg_marquardt(
         x_active = x_active[valid_rows]
         residual_active = residual_active[valid_rows]
         step = step[valid_rows]
+        scaled_step = scaled_step[valid_rows]
+        predicted_reduction = predicted_reduction[valid_rows]
 
         can_evaluate = evaluations[active_indices] < settings.max_evaluations
         status[active_indices[~can_evaluate]] = int(LMStatus.MAX_EVALUATIONS)
@@ -620,6 +740,8 @@ def batched_levenberg_marquardt(
         x_active = x_active[evaluable_rows]
         residual_active = residual_active[evaluable_rows]
         step = step[evaluable_rows]
+        scaled_step = scaled_step[evaluable_rows]
+        predicted_reduction = predicted_reduction[evaluable_rows]
 
         trial_x = x_active + step
         trial_residual = _call_residual(problem, trial_x, active_indices)
@@ -635,7 +757,6 @@ def batched_levenberg_marquardt(
         accepted_rows = ap.flatnonzero(accepted)
         accepted_indices = active_indices[accepted_rows]
         if accepted_indices.shape[0] > 0:
-            accepted_step = step[accepted_rows]
             x[accepted_indices] = trial_x[accepted_rows]
             residuals[accepted_indices] = trial_residual[accepted_rows]
             jacobians[accepted_indices] = ap.nan
@@ -646,10 +767,22 @@ def batched_levenberg_marquardt(
                 damping[accepted_indices] * settings.damping_decrease,
             )
             rejected_steps[accepted_indices] = 0
-            f_converged = reduction[accepted_rows] <= (
-                settings.f_tol * ap.maximum(1.0, cost[accepted_rows])
+            # As in MINPACK, both actual and predicted progress must be
+            # small, without the model underpredicting by more than 2x.
+            prediction = predicted_reduction[accepted_rows]
+            f_threshold = settings.f_tol * ap.maximum(
+                1.0, cost[accepted_rows]
             )
-            x_converged = ap.linalg.norm(accepted_step, axis=1) <= (
+            f_converged = (
+                (reduction[accepted_rows] <= f_threshold)
+                & ap.isfinite(prediction)
+                & (prediction > 0)
+                & (prediction <= f_threshold)
+                & (0.5 * reduction[accepted_rows] <= prediction)
+            )
+            # Keep an absolute threshold: large periodic coordinates must
+            # not mask significant motion. Scaling removes parameter units.
+            x_converged = _row_norm(scaled_step[accepted_rows], ap) <= (
                 settings.x_tol * (settings.x_tol + 1.0)
             )
             status[accepted_indices[f_converged]] = int(
@@ -827,7 +960,7 @@ def _finalize_lm(
             hessians[diagnostic_indices] = ap.einsum(
                 "knm,kpm->knp", diagnostic_jacobians, diagnostic_jacobians
             )
-            left_vectors, singular_values = _factorize_jacobians(
+            left_vectors, singular_values, scale = _factorize_jacobians(
                 diagnostic_jacobians, ap
             )
             tolerance = max(n, m) * eps * ap.max(singular_values, axis=1)
@@ -836,14 +969,11 @@ def _finalize_lm(
             full_rank = rank_values == n
             full_rank_indices = diagnostic_indices[full_rank]
             if full_rank_indices.shape[0] > 0:
-                full_rank_vectors = left_vectors[full_rank]
-                full_rank_singular_values = singular_values[full_rank]
-                inverse_squared = 1.0 / (
-                    full_rank_singular_values * full_rank_singular_values
+                covariance[full_rank_indices] = _covariance_from_svd(
+                    left_vectors[full_rank],
+                    singular_values[full_rank],
+                    scale[full_rank],
                 )
-                covariance[full_rank_indices] = (
-                    full_rank_vectors * inverse_squared[:, None, :]
-                ) @ full_rank_vectors.transpose(0, 2, 1)
         except Exception:
             # Preserve row-level failure isolation if a backend cannot perform
             # one of the batched linear-algebra operations.
@@ -852,18 +982,15 @@ def _finalize_lm(
                     jacobian = jacobians[row]
                     gradients[row] = jacobian @ residuals[row]
                     hessians[row] = jacobian @ jacobian.T
-                    left_vectors, singular_values, _ = ap.linalg.svd(
-                        jacobian, full_matrices=False
+                    left_vectors, singular_values, scale = (
+                        _factorize_jacobians(jacobian, ap)
                     )
                     tolerance = max(n, m) * eps * ap.max(singular_values)
                     rank[row] = ap.sum(singular_values > tolerance)
                     if _int(rank[row]) == n:
-                        inverse_squared = 1.0 / (
-                            singular_values * singular_values
+                        covariance[row] = _covariance_from_svd(
+                            left_vectors, singular_values, scale
                         )
-                        covariance[row] = (
-                            left_vectors * inverse_squared[None, :]
-                        ) @ left_vectors.T
                 except Exception:
                     continue
 

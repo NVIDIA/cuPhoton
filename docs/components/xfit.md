@@ -216,6 +216,15 @@ weighting model that accounts for that dependence. `uncertainty_valid` reports
 numerical and rank validity. The xScan feature adapter requires difference-mode
 xFit runs.
 
+Rank is computed after normalizing the weighted Jacobian's parameter columns;
+covariance is returned in the original parameter units. This avoids declaring
+an independent parameter unresolved solely because of its units. A valid
+covariance describes the local linear approximation under the supplied noise
+model; it does not establish a unique global optimum or adequate model fit.
+Nearly dependent directions can still yield large, inaccurate uncertainties
+despite passing the numerical rank threshold; no fixed covariance accuracy
+is implied by the validity flag.
+
 ## Derived quantities and their uncertainties
 
 Catalogs report quantities that combine several Gaussian dipole parameters:
@@ -362,9 +371,19 @@ input archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
 `--max-evaluations`, and `--use-finite-difference`. Gaussian fits use their
 analytic Jacobian unless finite differences are requested; sampled-stamp
 fits always use finite differences and record that resolved choice in the
-effective configuration. `--x-tol` is an absolute step-norm tolerance, so
-its convergence criterion stays consistent when a periodic parameter drifts
-to a large equivalent value.
+effective configuration. For NumPy, CuPy and cuTile fits, `--x-tol` bounds
+the absolute step norm in Jacobian-scaled coordinates. The linear solve uses
+the same scaling, so changing parameter units preserves the optimization
+problem. The stopping threshold does not grow when a periodic parameter
+drifts to a large equivalent value. The native CUDA loop currently uses an
+absolute step norm in its original parameter coordinates.
+
+The shared NumPy/CuPy solver requires both actual and predicted progress to
+be small for `--f-tol` termination. Its built-in float32 normal equations and
+linear solves use float64 intermediates before rounding back to float32.
+Model evaluation, stored solver state and rank thresholds retain the selected
+precision. A custom normal-equations callback, including the unfused cuTile
+kernel, controls its own accumulation precision.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
 or `float64` to run the solver at an explicit precision while preserving the

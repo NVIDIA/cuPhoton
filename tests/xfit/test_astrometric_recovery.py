@@ -28,7 +28,8 @@ PSF_SIGMA = 1.8
 PSF_RADIUS = 10
 NOISE_SIGMA = 1.0
 PEAK_SNR = 100.0
-FIT_CONFIG = LMConfig(max_evaluations=3000, finite_difference_step=1.0e-2)
+# Keep position differences within a bilinear stamp cell near the solution.
+FIT_CONFIG = LMConfig(max_evaluations=3000, finite_difference_step=1.0e-3)
 OFFSETS = (
     (0.6, 25.0),
     (1.4, 110.0),
