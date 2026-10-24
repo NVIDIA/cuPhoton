@@ -198,7 +198,9 @@ def load_config[ModelT: Model](
 ) -> ModelT:
     """Load and strictly validate a YAML workflow configuration."""
 
-    payload = yaml.safe_load(path.read_text()) or {}
+    payload = yaml.safe_load(path.read_text())
+    if payload is None:
+        payload = {}
     if default_output_root is not None and isinstance(payload, dict):
         output = payload.get("output")
         if output is None:
