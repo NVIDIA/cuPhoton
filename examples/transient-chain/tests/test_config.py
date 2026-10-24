@@ -151,9 +151,7 @@ def test_noise_matching_requires_positive_reference_sigma():
 
 @pytest.mark.parametrize("value", ["0", "-1", ".nan", ".inf", "-.inf"])
 def test_psf_width_requires_a_finite_positive_value(value):
-    with pytest.raises(
-        ValueError, match="psf_sigma_px must be finite"
-    ):
+    with pytest.raises(ValueError, match="psf_sigma_px must be finite"):
         config.load_config(
             HERE / "config.yaml", [f"xfit.psf_sigma_px={value}"]
         )

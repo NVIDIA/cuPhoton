@@ -284,8 +284,11 @@ candidate, overlapping lobes, and an unsupported lobe. A candidate with only
 `NEGATIVE_LOBE_UNSUPPORTED` is a brightening single source and one with only
 `POSITIVE_LOBE_UNSUPPORTED` a fading one; for them `psf_flux` is measured at the supported lobe and is
 the quantity to use, and the dipole columns describe a lobe that is not there. Every other candidate's
-`psf_flux` is measured at the positive-flux lobe. Overlapping lobes measure the center, not the
-separation or the lobe flux. The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, which
+`psf_flux` is measured at the positive-flux lobe, including when the lobes overlap. For overlapping
+lobes, only the fitted center coordinates and the product of amplitude and separation are
+identifiable; neither the separation nor the individual lobe flux is measured independently.
+This is a limit on interpreting the dipole fit, not a switch of the forced-photometry position.
+The PSF is a circular Gaussian of width `xfit.psf_sigma_px`, which
 must come from a measurement independent of the candidate fits, such as the image's stars; without
 it the `psf_flux` columns are NaN. `psf_flux_err` assumes the position and the PSF are fixed and
 correct. The position is the fit's, measured on the same stamp, so the uncertainty is conditional on
