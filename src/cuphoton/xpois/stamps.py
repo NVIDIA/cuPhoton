@@ -111,6 +111,8 @@ def window_stamps(
     xy = xp.asarray(positions, dtype=xp.float64)
     if xy.ndim != 2 or xy.shape[1] != 2:
         raise ValueError("positions must have shape (N, 2)")
+    if 0 in image.shape:
+        return xp.full((len(xy), height, width), fill, dtype=xp.float64)
     rows = (
         xp.rint(xy[:, 1]).astype(xp.int64)[:, None, None]
         + xp.arange(-(height // 2), height // 2 + 1)[None, :, None]

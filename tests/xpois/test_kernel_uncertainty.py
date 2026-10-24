@@ -434,3 +434,11 @@ def test_window_stamps_cuts_x_y_windows_with_a_fill():
         window_stamps(plane, [[3.0, 2.0]], 4)
     with pytest.raises(ValueError, match="positions"):
         window_stamps(plane, [3.0, 2.0], 3)
+
+
+@pytest.mark.parametrize("shape", [(0, 5), (5, 0), (0, 0)])
+def test_window_stamps_fills_windows_from_empty_images(shape):
+    windows = window_stamps(np.empty(shape), [[2.0, 1.0]], (3, 5), fill=-2.0)
+    np.testing.assert_array_equal(windows, np.full((1, 3, 5), -2.0))
+    empty = window_stamps(np.empty(shape), np.empty((0, 2)), 3)
+    assert empty.shape == (0, 3, 3)
