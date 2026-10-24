@@ -107,10 +107,12 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "LMStatus",
         "NormalEquationsFunction",
         "ResidualFunction",
+        "SingleSourceFitResult",
         "StampDipoleModel",
         "batched_levenberg_marquardt",
         "fit_dipoles",
         "fit_dipoles_device",
+        "fit_single_sources",
     }
 
     assert expected <= set(xfit.__all__)
@@ -133,6 +135,16 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mode",
         "config",
         "backend",
+    ]
+    assert list(inspect.signature(xfit.fit_single_sources).parameters) == [
+        "images",
+        "variance",
+        "positions",
+        "psf_sigma",
+        "mask",
+        "sign",
+        "solver",
+        "compute_dtype",
     ]
     assert [field.name for field in fields(xfit.DipoleFitResult)] == [
         "parameters",
