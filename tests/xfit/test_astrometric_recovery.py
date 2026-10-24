@@ -279,12 +279,12 @@ def test_lanczos3_resampling_is_astrometrically_transparent() -> None:
 
 
 def test_offset_recovery_matches_between_numpy_and_cupy() -> None:
-    """NumPy and CuPy agree at round-off on jointly converged rows.
+    """Check backend parity and recovery across the prescribed valley starts.
 
-    A row on the flux-separation degeneracy valley may sit exactly at a
-    convergence threshold, so one backend can report ``no_progress`` where
-    the other converges; the parity contract is round-off agreement on the
-    rows both backends converge, with at most one threshold flip.
+    A start can stall on the flux-separation degeneracy valley in both
+    backends. Each start allows at most one status mismatch and requires
+    round-off parameter agreement wherever both converge. Every row must
+    converge jointly from at least one of the starts used by ``_fit_best``.
     """
 
     cp = pytest.importorskip("cupy")
@@ -294,16 +294,18 @@ def test_offset_recovery_matches_between_numpy_and_cupy() -> None:
     except Exception:
         pytest.skip("CUDA runtime is unavailable")
     images, masks, _ = _dipole_batch("lanczos3")
+    recovered = np.zeros(len(images), dtype=bool)
     for separation in START_SEPARATIONS:
         cpu = _fit_start(images, masks, separation, "numpy")
         gpu = _fit_start(images, masks, separation, "cupy")
         assert gpu.backend == "cupy"
         assert int((cpu.status == gpu.status).sum()) >= len(images) - 1
         both = cpu.converged & gpu.converged
-        assert int(both.sum()) >= len(images) - 1
+        recovered |= both
         assert np.allclose(
             cpu.parameters[both],
             gpu.parameters[both],
             rtol=1.0e-7,
             atol=1.0e-7,
         )
+    assert recovered.all()
