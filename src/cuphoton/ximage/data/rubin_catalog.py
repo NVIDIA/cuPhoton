@@ -174,6 +174,7 @@ def validate_catalog_product_csv(
     observed_visits: set[int] = set()
     invalid_visit_values: set[str] = set()
     band_values: set[str] = set()
+    visit_constrained = product in VISIT_CONSTRAINED_PRODUCTS
     with csv_path.open(newline="", encoding="utf-8") as handle:
         reader = DictReader(handle)
         columns = list(reader.fieldnames or [])
@@ -184,13 +185,25 @@ def validate_catalog_product_csv(
         row_count = 0
         for row in reader:
             row_count += 1
-            if visit_column is not None and row.get(visit_column):
+            visit_value = (
+                (row.get(visit_column) or "") if visit_column else ""
+            )
+            if visit_column is not None and (
+                visit_value or visit_constrained
+            ):
                 try:
-                    observed_visits.add(int(row[visit_column]))
+                    visit_id = int(visit_value)
                 except ValueError:
-                    invalid_visit_values.add(row[visit_column])
-            if band_column is not None and row.get(band_column):
-                band_values.add(row[band_column])
+                    invalid_visit_values.add(visit_value)
+                else:
+                    if visit_constrained and visit_id <= 0:
+                        invalid_visit_values.add(visit_value)
+                    else:
+                        observed_visits.add(visit_id)
+            if band_column is not None:
+                band_value = row.get(band_column) or ""
+                if band_value or visit_constrained:
+                    band_values.add(band_value)
 
     unexpected_visits = (
         sorted(observed_visits - expected_visit_set)
