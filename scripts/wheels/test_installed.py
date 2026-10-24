@@ -94,7 +94,7 @@ def check_install(mode, report):
     report["versions"] = {"cuphoton": distribution.version}
     report["paths"] = {
         name: str(module_path(distribution, name))
-        for name in ("cuphoton", "cuphoton.xdr")
+        for name in ("cuphoton", "cuphoton.xdr", "cuphoton.ximage")
     }
     for name in GPU_DISTRIBUTIONS:
         try:
@@ -111,7 +111,7 @@ def check_install(mode, report):
             ),
             "Base imports loaded an optional GPU package",
         )
-    for argv in (["--version"], ["xdr", "--help"]):
+    for argv in (["--version"], ["xdr", "--help"], ["ximage", "--help"]):
         result = subprocess.run(
             [
                 sys.executable,

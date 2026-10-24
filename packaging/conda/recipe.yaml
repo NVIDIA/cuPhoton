@@ -45,6 +45,7 @@ requirements:
     - numpy >=2.0,<2.6
     - pandas >=2.2
     - pyarrow >=23
+    - pydantic >=2.11,<3
     - pyyaml >=6
     - scipy >=1.13
     - cuda-version >=13,<14
@@ -59,6 +60,7 @@ tests:
       imports:
         - cuphoton
         - cuphoton.xdr
+        - cuphoton.ximage
       # Upstream GPU packages retain pip-only dependency names in METADATA.
       # Conda solves those dependencies; the next test loads the actual libs.
       pip_check: false

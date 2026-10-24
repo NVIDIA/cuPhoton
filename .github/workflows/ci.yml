@@ -74,12 +74,12 @@ jobs:
       - run: uv python install "${PYTHON_VERSION}"
       - run: >-
           uv sync --locked --python "${PYTHON_VERSION}"
-          --extra dev --extra torch --extra viz --extra photometry
+          --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin
       - run: make ci-test-cpu
       - name: Run synthetic CPU quickstarts
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
         run: >-
-          uv run --locked --extra dev --extra torch --extra viz --extra photometry
+          uv run --locked --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin
           python examples/run_quickstarts.py --profile cpu
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
 

@@ -302,3 +302,54 @@ Store generated run directories outside the checkout when practical and keep
 them out of source commits. A portable run includes structured configuration,
 numeric artifacts, and metadata alongside its HTML views so review files can
 be regenerated.
+
+## xImage reconstruction bundles
+
+xImage reads numeric arrays from an NPY directory (`images.npy`, etc.), an
+HDF5 file, or a Zarr store. Dataset names are the keys below. An NPY directory also requires
+`metadata.json`, which may contain an empty object (`{}`) or caller metadata;
+the arrays remain the solver inputs.
+
+| Key | Shape | Meaning |
+| --- | --- | --- |
+| `images` | `(batch, y, x, exposure)` | Registered image pixels |
+| `variances` | `(batch, y, x, exposure)` | Input pixel variances |
+| `sky` | `(batch, y, x, exposure)` | Sky estimates retained with the bundle |
+| `masks` | `(batch, y, x, 12, exposure)` | Boolean exclusion planes |
+| `psfs` | `(psf_y, psf_x, channel, exposure)` | Per-exposure convolution kernels |
+| `exp_times` | `(exposure,)` | Positive exposure times |
+| `mcgauss` | `(exposure, kernel_y, kernel_x)` | Per-exposure Gaussian kernels retained with the bundle |
+
+PSF calibration and reconstruction require one PSF channel. The evaluation
+workflow requires one image batch.
+All exposure axes must agree. It divides images by exposure time and
+variances by its square. Supply images with the intended sky/background
+convention: the `sky` array is retained metadata and is not automatically
+subtracted. `background_model: scalar_per_exposure` optionally fits a
+constant background for each exposure.
+
+Mask planes contain exclusions, with nonzero values meaning excluded.
+The non-conservative policy excludes planes 0, 4, and 8. The conservative
+policy additionally excludes planes 1, 7, 9, and 10; plane 10 is dilated by
+`mask.dilation_factor`. These planes describe chip gaps/borders, stripes, and
+large sources. Planes 2, 3, 5, 6, and 11 do not affect either policy.
+Translate an instrument's native bitmask into this schema
+before using it. `mask.mode: none` disables masking. Torch currently requires
+`dilation_factor: 1` for conservative masks.
+
+ROI centers are `(row, column)` in the source image. `VALID` padding requires
+real input pixels around the ROI: `ceil((psf_size // 2) / srf)` on each side.
+A region without this context is rejected. Saved raw reconstructions include
+convolution context; the evaluation workflow selects the requested ROI.
+Exposure selection
+applies to every array's exposure axis; saved calibrated kernels record their
+exposure selection and are checked before use. A saved PSF file without
+selection metadata is treated as being in caller-provided exposure order.
+
+Runs contain the resolved `config.yaml`, a `summary.json` with paths and
+execution metadata, numeric products under `artifacts/`, and traces under
+`trace/`. Reconstruction produces a host NumPy image in exposure-time-normalized
+units. It does not provide propagated output variance or an effective output
+PSF. Interpolation and reconstruction can correlate pixels; input variances
+are not an output uncertainty model. WCS and calibration remain caller-managed.
+See [xImage](components/ximage.md) for examples and evaluation limitations.

@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Execution backend, device, dtype, and multiplicative-update solver. `auto`
+# prefers CUDA; float64 is the parity-oriented reference precision.
+backend: auto
+device: auto
+dtype: float64
+method: mm
+
+# Replace with a reconstruction-bundle directory or container.
+data:
+  base: data
+
+# Run location and overwrite policy for this named example.
+output:
+  root_dir: runs
+  name: psf-mm-example
+  overwrite: false
+psf_artifact: psfs
+# Seed used when h_initialization is random.
+seed: 0
+# PSF model geometry and initialization.
+srf: 1
+sigma_g: 0.55
+padding: VALID
+h_initialization: ones
+
+# Update correction factor and convergence controls.
+ucf: 2.0
+min_iter: 10
+max_iter: 100
+tol: 1.0e-6
+verbose: false
