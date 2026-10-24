@@ -174,7 +174,7 @@ jobs:
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
-          print("All 6 selected tests passed without skips")
+          print(f"All {len(cases)} selected tests passed without skips")
           PY
       - name: Run native xFit GPU tests
         run: >-
