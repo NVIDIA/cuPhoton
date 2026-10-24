@@ -171,6 +171,12 @@ class BackendInvariant(SetInvariant):
     _set = SUPPORTED_BACKENDS
 
 
+class MetricsBackendInvariant(SetInvariant):
+    """Image-evaluation metric backend choice."""
+
+    _set = {"auto", "cpu", "cupy"}
+
+
 class DeviceInvariant(SetInvariant):
     """Workflow execution device choice."""
 
@@ -738,6 +744,7 @@ class BenchmarkDevicesCommand(XImageCommand):
     output_dir: str | None = None
     cuda_visible_devices: str | None = None
     evaluate: bool = False
+    metrics_backend: str = "auto"
     coadd_method: str = "median"
     pipeline_coadd_fits: str | None = None
     catalog_parquet: str | None = None
@@ -796,6 +803,12 @@ class BenchmarkDevicesCommand(XImageCommand):
         _help = "Also evaluate reconstruction quality for measured runs."
         _mandatory = False
         _default = False
+
+    class MetricsBackendArg(MetricsBackendInvariant):
+        _arg = "--metrics-backend"
+        _help = "Image metric backend when evaluating. [default: %default]"
+        _mandatory = False
+        _default = "auto"
 
     class CoaddMethodArg(SetInvariant):
         _arg = "--coadd-method"
@@ -914,6 +927,7 @@ class BenchmarkDevicesCommand(XImageCommand):
             ),
             cuda_visible_devices=self.cuda_visible_devices,
             evaluate=bool(self.evaluate),
+            metrics_backend=self.metrics_backend,
             coadd_method=self.coadd_method,
             pipeline_coadd_fits=self._path(self.pipeline_coadd_fits),
             catalog_parquet=self._path(self.catalog_parquet),
@@ -1158,6 +1172,7 @@ class EvaluateReconstructionCommand(XImageCommand):
 
     run_dir: str | None = None
     base: str | None = None
+    metrics_backend: str = "auto"
     coadd_method: str = "median"
     pipeline_coadd_fits: str | None = None
     catalog_parquet: str | None = None
@@ -1178,6 +1193,12 @@ class EvaluateReconstructionCommand(XImageCommand):
         _help = "Optional data-base override instead of the run config value."
         _mandatory = False
         _default = None
+
+    class MetricsBackendArg(MetricsBackendInvariant):
+        _arg = "--metrics-backend"
+        _help = "Image metric backend: auto prefers CuPy. [default: %default]"
+        _mandatory = False
+        _default = "auto"
 
     class CoaddMethodArg(SetInvariant):
         _arg = "--coadd-method"
@@ -1277,6 +1298,7 @@ class EvaluateReconstructionCommand(XImageCommand):
             evaluate_reconstruction_run,
             self._path(self.run_dir),
             base_override=self._path(self.base),
+            metrics_backend=self.metrics_backend,
             coadd_method=self.coadd_method,
             pipeline_coadd_fits=self._path(self.pipeline_coadd_fits),
             catalog_parquet=self._path(self.catalog_parquet),

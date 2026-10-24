@@ -132,6 +132,7 @@ def test_benchmark_devices_can_attach_reconstruction_evaluation(
         return WorkflowResult(output_root / device_override, {})
 
     def fake_evaluate(*args, **kwargs) -> dict[str, object]:
+        assert kwargs["metrics_backend"] == "cpu"
         return {
             "run_dir": "temporary",
             "image_path": "temporary.npy",
@@ -165,6 +166,7 @@ def test_benchmark_devices_can_attach_reconstruction_evaluation(
         repeats=1,
         warmup=0,
         evaluate=True,
+        metrics_backend="cpu",
     )
 
     evaluation = result["results"]["cpu"]["evaluation"]
