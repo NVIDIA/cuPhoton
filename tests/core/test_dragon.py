@@ -290,6 +290,7 @@ def test_shared_gpu_workers_remain_persistent_and_keep_disjoint_shards(
     monkeypatch, tmp_path
 ):
     state = _install_runtime(monkeypatch)
+    # Check shard ownership without a short filesystem deadline.
     result = _run(
         tmp_path,
         worker_count=None,
@@ -298,6 +299,7 @@ def test_shared_gpu_workers_remain_persistent_and_keep_disjoint_shards(
             WorkItem(f"item-{index}", {"value": index}) for index in range(5)
         ),
         benchmark=BenchmarkOptions(0, 2),
+        result_timeout=5.0,
     )
     assert result.status == "success", result.summary
     assert result.summary["worker_count"] == 4
