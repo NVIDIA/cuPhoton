@@ -1951,7 +1951,7 @@ def _prepare_photometry_image(image: np.ndarray) -> np.ndarray:
 
 def subtract_photometry_background(image: np.ndarray) -> np.ndarray:
     if min(image.shape) < 32:
-        return image - np.median(image)
+        return image - np.nanmedian(image)
     try:
         return subtract_background(image)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -1961,7 +1961,7 @@ def subtract_photometry_background(image: np.ndarray) -> np.ndarray:
             RuntimeWarning,
             stacklevel=2,
         )
-        return image - np.median(image)
+        return image - np.nanmedian(image)
 
 
 def is_recoverable_photometry_error(exc: Exception) -> bool:
