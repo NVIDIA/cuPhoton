@@ -263,3 +263,133 @@ def crop_bounds_about_center(
             f"image bounds {image_shape}."
         )
     return start_h, start_w, stop_h, stop_w
+
+
+def evaluate_image_metrics(
+    reference: np.ndarray,
+    candidate: np.ndarray,
+    *,
+    background_mask: np.ndarray | None = None,
+    backend: str = "auto",
+) -> dict[str, Any]:
+    """Evaluate two equally shaped, nonempty 2-D images in float64.
+
+    ``auto`` uses CuPy when it can initialize a CUDA device, otherwise the
+    NumPy/SciPy reference. ``cpu`` never imports CuPy; ``cupy`` requires it.
+    GPU computation errors propagate after backend selection. GPU reductions
+    and Gaussian filtering can differ from CPU results by floating-point
+    rounding. Fourier sharpness's logarithm amplifies FFT roundoff at zero
+    or nearly zero coefficients; such spectra need not closely match between
+    backends. One packed result transfer completes all GPU metrics.
+
+    Fourier sharpness is unavailable for incomplete images. Sky statistics
+    use finite pixels in the optional shared background mask. PSNR and SSIM
+    use jointly finite support; no common pixels yields NaN. Identical valid
+    values yield infinite PSNR. Returns both image summaries, pair metrics,
+    joint finite coverage, and the selected ``backend``.
+    """
+
+    metrics = _evaluate_metric_group(
+        [reference, candidate],
+        background_mask=background_mask,
+        backend=backend,
+    )
+    return {
+        "backend": metrics["backend"],
+        "reference": metrics["images"][0],
+        "candidate": metrics["images"][1],
+        **metrics["comparisons"][0],
+    }
+
+
+def _evaluate_metric_group(
+    images: list[np.ndarray],
+    *,
+    background_mask: np.ndarray | None,
+    backend: str,
+    exposures: np.ndarray | None = None,
+) -> dict[str, Any]:
+    if backend not in {"auto", "cpu", "cupy"}:
+        raise ValueError("metrics backend must be 'auto', 'cpu', or 'cupy'")
+    arrays = [np.asarray(image, dtype=np.float64) for image in images]
+    shape = arrays[0].shape
+    if (
+        len(shape) != 2
+        or not all(shape)
+        or any(image.shape != shape for image in arrays)
+    ):
+        raise ValueError(
+            "Metric images must be nonempty 2-D arrays of equal shape"
+        )
+    if background_mask is not None:
+        background_mask = np.asarray(background_mask, dtype=bool)
+        if background_mask.shape != shape:
+            raise ValueError("background_mask must match the image shape")
+    exposure_images = [] if exposures is None else list(exposures)
+    if any(image.shape != shape for image in exposure_images):
+        raise ValueError("Exposure images must match the reference shape")
+    if backend != "cpu":
+        from cuphoton.ximage._metrics_cupy import (
+            compute_metrics,
+            load_cupy,
+        )
+
+        try:
+            cp, gpu_gaussian_filter = load_cupy()
+        except RuntimeError:
+            if backend == "cupy":
+                raise
+        else:
+            summaries, comparisons = compute_metrics(
+                arrays,
+                background_mask,
+                exposure_images,
+                cp,
+                gpu_gaussian_filter,
+            )
+            image_results = []
+            for sharpness, sigma, coverage in summaries:
+                image_result: dict[str, Any] = {
+                    "sharpness_sf": float(sharpness)
+                    if coverage == 1.0
+                    else None,
+                    "sky_sigma": float(sigma),
+                    "finite_pixel_fraction": float(coverage),
+                }
+                if coverage != 1.0:
+                    image_result["sharpness_sf_unavailable_reason"] = (
+                        "Fourier sharpness requires a complete finite image."
+                    )
+                image_results.append(image_result)
+            pair_results = [
+                {
+                    "psnr": float(p),
+                    "ssim": float(s),
+                    "comparison_valid_fraction": float(coverage),
+                }
+                for p, s, coverage in comparisons
+            ]
+            return {
+                "backend": "cupy",
+                "images": image_results,
+                "comparisons": pair_results[: len(arrays) - 1],
+                "exposures": pair_results[len(arrays) - 1 :],
+            }
+
+    reference = arrays[0]
+    pair_results = [
+        {
+            "psnr": psnr(reference, image),
+            "ssim": ssim(reference, image),
+            "comparison_valid_fraction": float(
+                np.mean(np.isfinite(reference) & np.isfinite(image))
+            ),
+        }
+        for image in [*arrays[1:], *exposure_images]
+    ]
+    return {
+        "backend": "cpu",
+        "images": [image_metrics(image, background_mask) for image in arrays],
+        "comparisons": pair_results[: len(arrays) - 1],
+        "exposures": pair_results[len(arrays) - 1 :],
+    }
