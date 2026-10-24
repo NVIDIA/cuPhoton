@@ -339,6 +339,31 @@ def test_chunk_boundary_is_seamless():
     assert result.factor[-1] != pytest.approx(result.factor[0])
 
 
+@pytest.mark.parametrize(
+    "name", ["target_variance", "reference_variance", "residual_variance"]
+)
+@pytest.mark.parametrize("planes", [False, True])
+def test_negative_variance_invalidates_only_its_window(name, planes):
+    shape = (9, 9) if planes else (2, 3, 3)
+    variances = {
+        "target_variance": np.ones(shape),
+        "reference_variance": np.ones(shape),
+        "residual_variance": np.full(shape, 2.0),
+    }
+    variances[name][(2, 2) if planes else (0, 1, 1)] = -0.5
+    result = correlation_factor(
+        np.ones((2, 3, 3)),
+        kernel=np.ones((1, 1)),
+        resampling_weights=np.ones((1, 1)),
+        positions=np.array([[2, 2], [6, 6]]) if planes else None,
+        **variances,
+    )
+    assert np.isnan(result.factor[0])
+    assert np.isnan(result.pixel_ratio[0])
+    assert result.factor[1] == pytest.approx(1.0)
+    assert result.pixel_ratio[1] == pytest.approx(1.0)
+
+
 def test_residual_variance_plane_scales_the_factor():
     kernel = _gaussian(15, 1.2)
     stamp = _lanczos_stamp(0.5, 0.25)
