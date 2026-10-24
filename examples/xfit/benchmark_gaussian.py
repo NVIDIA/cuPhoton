@@ -116,7 +116,7 @@ def _run(treatment):
             variance=_worker.variance,
             mode=_worker.mode,
             backend=backend,
-            fusion=_worker.fusion,
+            fusion=_worker.fusion and backend == "cutile",
         )
         seconds = time.perf_counter() - start
     if result.backend != backend:
@@ -254,9 +254,11 @@ def main() -> None:
         os.sched_setaffinity(0, allowed[: args.cpus])
         allowed = sorted(os.sched_getaffinity(0))
     treatments = ["cupy", "native"] if args.compare_native else backends
-    # Native comparisons always validate against CuPy, including when only
-    # native timings were requested. Reference work is outside measurements.
-    reference = "cupy" if "native" in treatments else treatments[0]
+    # Fused and native comparisons validate against independent CuPy fits.
+    # Reference work is outside measurements.
+    reference = (
+        "cupy" if args.fusion or "native" in treatments else treatments[0]
+    )
     dtype = np.dtype(args.dtype)
     context = multiprocessing.get_context("spawn")
     for batch in batches:

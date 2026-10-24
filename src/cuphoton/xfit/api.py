@@ -1152,7 +1152,7 @@ def fit_dipoles(
         gaussian_model=(
             model == "gaussian"
             if isinstance(model, str)
-            else isinstance(model, GaussianDipoleModel)
+            else type(model) is GaussianDipoleModel
         ),
         use_finite_difference=(
             config is not None and config.use_finite_difference
@@ -1214,7 +1214,7 @@ def fit_dipoles_device(
         gaussian_model=(
             model == "gaussian"
             if isinstance(model, str)
-            else isinstance(model, GaussianDipoleModel)
+            else type(model) is GaussianDipoleModel
         ),
         use_finite_difference=(
             config is not None and config.use_finite_difference
