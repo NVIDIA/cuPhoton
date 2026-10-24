@@ -109,7 +109,7 @@ jobs:
           version: "0.12.1"
           enable-cache: false
       - run: uv python install 3.12
-      - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
+      - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz --extra ximage
       - name: Build native xFit with CUDA 13 compiler wheels
         env:
           CUPHOTON_XFIT_BUILD_EXT: "1"
@@ -172,6 +172,26 @@ jobs:
           assert not report.findall(".//error")
           print("All 6 selected tests passed without skips")
           PY
+      - name: Run xImage GPU parity tests
+        run: >-
+          uv run --no-sync pytest -q -rs -m gpu
+          --junitxml="${RUNNER_TEMP}/ximage-gpu.xml"
+          tests/ximage
+      - name: Require xImage GPU tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "ximage-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert cases, "xImage GPU tests must execute"
+          assert not report.findall(".//skipped"), "xImage GPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print(f"All {len(cases)} xImage GPU tests passed without skips")
+          PY
       - name: Run native xFit GPU tests
         run: >-
           uv run --no-sync pytest -q -rs
@@ -204,6 +224,7 @@ jobs:
           path: |
             ${{ runner.temp }}/xfit-gpu.xml
             ${{ runner.temp }}/xfit-native-gpu.xml
+            ${{ runner.temp }}/ximage-gpu.xml
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
           if-no-files-found: error
           retention-days: 14
