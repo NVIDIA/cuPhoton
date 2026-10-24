@@ -109,3 +109,18 @@ def test_config_revalidates_after_checkpoint_path_injection(tmp_path):
 def test_fit_mode_is_difference_only():
     with pytest.raises(ValueError, match="mode"):
         config.load_config(HERE / "config.yaml", ["xfit.mode=search"])
+
+
+@pytest.mark.parametrize("value", ["[1.5]", "[-1]", "[true]", "[]"])
+def test_basis_degrees_reject_invalid_values(value):
+    with pytest.raises(ValueError, match="basis_degrees"):
+        config.load_config(
+            HERE / "config.yaml", [f"subtract.basis_degrees={value}"]
+        )
+
+
+def test_basis_degrees_preserve_nonnegative_integers():
+    cfg = config.load_config(
+        HERE / "config.yaml", ["subtract.basis_degrees=[0, 1, 2]"]
+    )
+    assert cfg["subtract"]["basis_degrees"] == [0, 1, 2]

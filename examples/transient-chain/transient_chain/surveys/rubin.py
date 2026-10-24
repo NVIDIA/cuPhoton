@@ -75,7 +75,7 @@ class RubinAdapter(SurveyAdapter):
         if not sel.get("template_fits") and not sel.get("template_coadds"):
             raise ValueError(
                 f"selection {index} needs 'template_coadds' (a list of coadd "
-                f" patch files) or 'template_fits'"
+                f"patch files) or 'template_fits'"
             )
 
     def identity(self, sel):
@@ -152,7 +152,7 @@ class RubinAdapter(SurveyAdapter):
             if tuple(img.shape) != target.shape:
                 raise ValueError(
                     f"template_fits {override} has shape {tuple(img.shape)}, "
-                    f" the visit has {target.shape}"
+                    f"the visit has {target.shape}"
                 )
             return GridTemplate(img, bad_from_mask(mask, bits, xp), xp)
         paths = list(sel["template_coadds"])

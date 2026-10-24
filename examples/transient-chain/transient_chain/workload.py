@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import statistics
 import time
 from collections.abc import Mapping, Sequence
@@ -114,7 +113,10 @@ def build_items(
 
     items = []
     for sel in selections:
-        weight = sum(os.stat(p).st_size for p in adapter.input_paths(sel))
+        weight = sum(
+            Path(p).expanduser().stat().st_size
+            for p in adapter.input_paths(sel)
+        )
         items.append(
             WorkItem(
                 item_id=adapter.identity(sel).item_id,
