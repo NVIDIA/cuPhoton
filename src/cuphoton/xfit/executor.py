@@ -48,7 +48,9 @@ _META_FIELDS = {
 _ARRAY_FIELDS = tuple(
     field.name
     for field in fields(DipoleFitResult)
-    if field.name not in _META_FIELDS
+    # The optional live-result factor is outside the existing v1 artifact
+    # format, which persists the dense covariance only.
+    if field.name not in _META_FIELDS | {"covariance_factor"}
 )
 _DEFAULTS = {
     "model": "gaussian",

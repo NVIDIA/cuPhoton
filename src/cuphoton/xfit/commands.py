@@ -289,7 +289,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
 
     class XTolArg(NonNegativeFloatInvariant):
         _arg = "--x-tol"
-        _help = "Optional absolute step-norm tolerance."
+        _help = "Optional absolute Jacobian-scaled step-norm tolerance."
         _mandatory = False
         _default = None
 

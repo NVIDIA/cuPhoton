@@ -93,7 +93,9 @@ def _gate_producer(stream):
     return release, entered, expired
 
 
-def _assert_fit_matches(actual, expected, dtype=np.float64):
+def _assert_fit_matches(
+    actual, expected, dtype=np.float64, *, compare_residuals=True
+):
     # Predeclared xFit cross-kernel tolerances, also used by the existing
     # cuTile Gaussian tests. Explicit variance keeps covariance measurable
     # instead of scaling it by rounding-level noiseless residuals.
@@ -119,6 +121,8 @@ def _assert_fit_matches(actual, expected, dtype=np.float64):
         "null_chi_square",
         "delta_chi_square",
     ):
+        if name == "residuals" and not compare_residuals:
+            continue
         np.testing.assert_allclose(
             getattr(actual, name),
             getattr(expected, name),
@@ -358,8 +362,10 @@ def test_native_varied_gaussian_batches_match_cupy(count, shape, mode):
     _assert_fit_matches(actual, expected)
 
 
-def test_native_fit_with_bright_overlapping_lobes():
-    _require_native()
+def test_native_fit_with_bright_overlapping_lobes(monkeypatch):
+    from cuphoton.xfit import _native, api
+
+    cp = _require_native()
     shape = (51, 51)
     model = GaussianDipoleModel(shape, dtype=np.float64)
     initial = np.asarray(
@@ -387,7 +393,156 @@ def test_native_fit_with_bright_overlapping_lobes():
     assert expected.evaluations.tolist() == [2]
     assert np.max(np.abs(expected.parameters - initial)) > 1.0e-4
     actual = fit_dipoles(images, backend="native", **options)
-    _assert_fit_matches(actual, expected)
+    _assert_fit_matches(actual, expected, compare_residuals=False)
+
+    # Check the damped step itself: tiny solve-rounding differences can move
+    # bright-lobe residuals beyond their tolerance at different endpoints.
+    jacobian = model.jacobian(initial)[0].reshape(8, -1)
+    jacobian[1:3] *= initial[0, 1:3, None]
+    jacobian *= weights[0].ravel()
+    scale = np.linalg.norm(jacobian, axis=1)
+    normalized = jacobian / scale[:, None]
+    system = normalized @ normalized.T
+    system += options["config"].initial_damping * np.eye(8)
+    residual = ((model.evaluate(initial) - images) * weights).ravel()
+    gradient = normalized @ residual
+    for result in (actual, expected):
+        step = result.parameters[0] - initial[0]
+        step[1:3] = np.log(result.parameters[0, 1:3] / initial[0, 1:3])
+        scaled_step = scale * step
+        error = np.linalg.norm(system @ scaled_step + gradient, ord=np.inf)
+        magnitude = np.linalg.norm(system, ord=np.inf) * np.linalg.norm(
+            scaled_step, ord=np.inf
+        ) + np.linalg.norm(gradient, ord=np.inf)
+        assert error / magnitude <= 5e-12
+
+    # Public outputs recompute residuals after fitting. Observe the actual
+    # LM buffers to compare the two evaluators at identical moved parameters.
+    captured = []
+
+    def capture(function):
+        def call(*args, **kwargs):
+            result = function(*args, **kwargs)
+            captured.append(
+                (cp.asnumpy(result.parameters), cp.asnumpy(result.residuals))
+            )
+            return result
+
+        return call
+
+    monkeypatch.setattr(
+        api,
+        "batched_levenberg_marquardt",
+        capture(api.batched_levenberg_marquardt),
+    )
+    monkeypatch.setattr(
+        _native, "fit_gaussian", capture(_native.fit_gaussian)
+    )
+    for endpoint in (actual.parameters, expected.parameters):
+        captured.clear()
+        for backend in ("cupy", "native"):
+            fixed = fit_dipoles(
+                images,
+                **{
+                    **options,
+                    "initial": endpoint,
+                    "config": LMConfig(max_evaluations=1),
+                    "backend": backend,
+                },
+            )
+            assert fixed.evaluations.tolist() == [1]
+            np.testing.assert_array_equal(fixed.parameters, endpoint)
+        assert len(captured) == 2
+        np.testing.assert_array_equal(captured[0][0], captured[1][0])
+        np.testing.assert_allclose(
+            captured[1][1], captured[0][1], rtol=5e-12, atol=5e-12
+        )
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_native_gaussian_fit_is_independent_of_flux_units(dtype):
+    _require_native()
+    exponent = 8 if dtype is np.float32 else 20
+    units = np.asarray([10.0**-exponent, 1, 10.0**exponent], dtype=dtype)
+    truth = np.tile(
+        np.asarray([1, 1.7, 1.1, 0.35, -1.8, 0.7, 2.2, -0.4], dtype=dtype),
+        (3, 1),
+    )
+    truth[:, 0] *= units
+    initial = truth.copy()
+    initial[:, 0] *= 0.7
+    initial[:, 1:3] *= [1.1, 0.9]
+    initial[:, 3:] += [0.1, 0.1, -0.1, -0.1, 0.1]
+    model = GaussianDipoleModel((25, 25), dtype=dtype)
+    images = model.evaluate(truth)
+    variance = np.broadcast_to(units[:, None, None] ** 2, images.shape)
+
+    result = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        variance=variance,
+        backend="native",
+    )
+
+    assert result.converged.all()
+    assert result.uncertainty_valid.all()
+    assert (result.evaluations > 2).all()
+    # Check known truth in noise units, independently of another solver's
+    # trajectory. Raw amplitude steps must not set the stopping decision.
+    prediction_error = (model.evaluate(result.parameters) - images) / units[
+        :, None, None
+    ]
+    prediction_tolerance = 3e-5 if dtype is np.float32 else 1e-7
+    np.testing.assert_allclose(
+        prediction_error, 0, atol=prediction_tolerance, rtol=0
+    )
+    actual = result.parameters.copy()
+    expected = truth.copy()
+    actual[:, 0] /= units
+    expected[:, 0] /= units
+    parameter_tolerance = 1e-4 if dtype is np.float32 else 1e-7
+    np.testing.assert_allclose(
+        actual, expected, atol=parameter_tolerance, rtol=parameter_tolerance
+    )
+
+
+def test_native_f_tol_requires_small_predicted_progress():
+    _require_native()
+    model = GaussianDipoleModel((11, 15))
+    truth = np.asarray([[5, 1.3, 1.8, 0.25, -2, 0.5, 2.2, -0.7]])
+    initial = np.asarray(
+        [
+            [
+                2.6057400816822,
+                0.6352224510616611,
+                1.2229674362952558,
+                -0.30532721881901603,
+                -1.528461477454861,
+                1.5127158178198286,
+                2.355429327668466,
+                -0.3482435916007965,
+            ]
+        ]
+    )
+    images = model.evaluate(truth)
+    initial_residual = model.evaluate(initial) - images
+    cost = 0.5 * np.sum(initial_residual**2)
+    # The damped linear model predicts about 79.34 cost improvement, while
+    # the actual first step improves cost by only 0.49. Its cost starts at
+    # 102.35, so actual reduction alone incorrectly satisfies f_tol=0.05.
+    result = fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        config=LMConfig(f_tol=0.05, max_evaluations=2),
+        backend="native",
+    )
+
+    reduction = cost - 0.5 * np.sum(result.residuals**2)
+    assert 0 < reduction < 0.05 * cost
+    assert result.status.tolist() == ["max_evaluations"]
+    assert result.evaluations.tolist() == [2]
 
 
 def test_masked_nonfinite_split_data_and_independent_row_convergence():

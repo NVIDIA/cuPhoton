@@ -216,6 +216,15 @@ weighting model that accounts for that dependence. `uncertainty_valid` reports
 numerical and rank validity. The xScan feature adapter requires difference-mode
 xFit runs.
 
+Rank is computed after normalizing the weighted Jacobian's parameter columns;
+covariance is returned in the original parameter units. This avoids declaring
+an independent parameter unresolved solely because of its units. A valid
+covariance describes the local linear approximation under the supplied noise
+model; it does not establish a unique global optimum or adequate model fit.
+Nearly dependent directions can still yield large, inaccurate uncertainties
+despite passing the numerical rank threshold; no fixed covariance accuracy
+is implied by the validity flag.
+
 ## Derived quantities and their uncertainties
 
 Catalogs report quantities that combine several Gaussian dipole parameters:
@@ -232,8 +241,16 @@ q.lobe_flux, q.lobe_flux_error
 ```
 
 Each uncertainty is `sqrt(g C g^T)`, with `C` the fit covariance and `g`
-the quantity's derivatives with respect to the fitted parameters. The
-covariance's cross terms are needed: amplitude and widths are
+the quantity's derivatives with respect to the fitted parameters. Live fit
+results retain `covariance_factor`, a matrix `F` with `C = F F^T`.
+The implementation computes `g F` before taking its squared norm, preserving
+small uncertainties that rounding large, correlated covariance entries can
+otherwise erase. Results constructed without the optional factor use the
+dense covariance. The existing v1 fit artifacts store only the dense
+covariance; calculate derived uncertainties from the live result to use
+the factor.
+
+The covariance's cross terms are needed: amplitude and widths are
 anticorrelated, so combining `standard_errors` as if independent overstates
 the lobe flux uncertainty. For 400 noise realizations of one dipole with
 well-separated lobes, the propagated uncertainties match the scatter of the
@@ -362,9 +379,18 @@ input archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
 `--max-evaluations`, and `--use-finite-difference`. Gaussian fits use their
 analytic Jacobian unless finite differences are requested; sampled-stamp
 fits always use finite differences and record that resolved choice in the
-effective configuration. `--x-tol` is an absolute step-norm tolerance, so
-its convergence criterion stays consistent when a periodic parameter drifts
-to a large equivalent value.
+effective configuration. `--x-tol` bounds the absolute step norm in
+Jacobian-scaled coordinates. The linear solve uses the same scaling, so
+changing parameter units preserves the optimization problem. The stopping
+threshold does not grow when a periodic parameter drifts to a large
+equivalent value.
+
+The shared NumPy/CuPy solver and native CUDA loop require both actual and
+predicted progress to be small for `--f-tol` termination. Their built-in
+float32 normal equations and linear solves use float64 intermediates before
+rounding back to float32. Model evaluation, stored solver state and rank
+thresholds retain the selected precision. A custom normal-equations callback,
+including the unfused cuTile kernel, controls its own accumulation precision.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
 or `float64` to run the solver at an explicit precision while preserving the

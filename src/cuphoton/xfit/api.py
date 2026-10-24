@@ -35,7 +35,23 @@ from .solver import (
 
 @dataclass(frozen=True)
 class DipoleFitResult:
-    """Portable fit outputs with residual and uncertainty diagnostics."""
+    """Portable fit outputs with residual and uncertainty diagnostics.
+
+    ``uncertainty_valid`` records convergence, available degrees of freedom,
+    and finite, full-rank local covariance diagnostics. The uncertainties
+    describe a linear approximation under the fit's noise model. Individual
+    parameters can remain poorly constrained, particularly when the lobes
+    overlap; the flag does not establish interval coverage or model adequacy.
+
+    ``covariance_factor`` contains F with covariance F F.T in physical
+    parameter units. Propagate a derived quantity's gradient g through F
+    before squaring: its local variance is the squared norm of g F. This
+    preserves small uncertainties that cancellation in the dense covariance
+    can erase. The factor is NaN for invalid rows and may be None in results
+    constructed by callers. Its columns are not uniquely determined.
+    The v1 fit artifacts store the dense covariance only; consume the factor
+    from the live result when calculating derived uncertainties.
+    """
 
     parameters: np.ndarray
     parameter_names: tuple[str, ...]
@@ -61,6 +77,7 @@ class DipoleFitResult:
     dtype: FloatDType
     model: ModelName
     mode: FitMode
+    covariance_factor: np.ndarray | None = None
 
 
 class DipoleFitUncertaintyReason(IntEnum):
@@ -98,6 +115,9 @@ class DeviceDipoleFitResult:
     Fitting returns residual arrays. Callers that no longer need them may
     use ``dataclasses.replace(result, residuals=None)`` and release the
     original result before transforming xScan features.
+
+    ``covariance_factor`` has the same meaning as in :class:`DipoleFitResult`
+    and remains on the device alongside the dense covariance.
     """
 
     parameters: Any
@@ -136,6 +156,7 @@ class DeviceDipoleFitResult:
         init=False,
         default="device",
     )
+    covariance_factor: Any | None = None
 
     def __post_init__(self) -> None:
         if self.backend not in {"cupy", "native"}:
@@ -182,6 +203,8 @@ class DeviceDipoleFitResult:
         }
         if self.residuals is None:
             del arrays["residuals"]
+        if self.covariance_factor is not None:
+            arrays["covariance_factor"] = self.covariance_factor
         for name, value in arrays.items():
             if not isinstance(value, cp.ndarray):
                 raise TypeError(f"{name} must be a CuPy array")
@@ -224,6 +247,13 @@ class DeviceDipoleFitResult:
             raise ValueError(
                 f"covariance must have shape {expected_square_shape}"
             )
+        if (
+            self.covariance_factor is not None
+            and self.covariance_factor.shape != expected_square_shape
+        ):
+            raise ValueError(
+                f"covariance_factor must have shape {expected_square_shape}"
+            )
         if self.standard_errors.shape != (batch, parameter_count):
             raise ValueError(
                 "standard_errors must align with the parameter array"
@@ -253,11 +283,12 @@ class DeviceDipoleFitResult:
             "null_chi_square",
             "delta_chi_square",
             "covariance",
+            "covariance_factor",
             "standard_errors",
             "residuals",
         )
         for name in compute_float_arrays:
-            if name == "residuals" and self.residuals is None:
+            if name not in arrays:
                 continue
             if np.dtype(arrays[name].dtype) != np.dtype(self.dtype):
                 raise TypeError(f"{name} must have {self.dtype} dtype")
@@ -307,6 +338,7 @@ class _BackendDipoleFitResult:
     degrees_of_freedom: BackendArray
     reduced_chi_square: BackendArray
     covariance: BackendArray
+    covariance_factor: BackendArray | None
     standard_errors: BackendArray
     uncertainty_valid: BackendArray
     uncertainty_reason_codes: BackendArray
@@ -868,6 +900,7 @@ def _fit_dipoles_backend(
     rank = low_level.rank.astype(np.int64)
     jacobian_available = ap.isfinite(low_level.jacobian).all(axis=(1, 2))
     base_covariance = low_level.covariance
+    covariance_factor = low_level.covariance_factor
     if gaussian_model:
         covariance_chain = ap.ones_like(parameters_backend)
         covariance_chain[:, 1:3] = parameters_backend[:, 1:3]
@@ -876,10 +909,17 @@ def _fit_dipoles_backend(
             * covariance_chain[:, :, None]
             * covariance_chain[:, None, :]
         )
+        if covariance_factor is not None:
+            covariance_factor = (
+                covariance_factor * covariance_chain[:, :, None]
+            )
     scaled_covariance = base_covariance
     if variance is None:
         scaled_covariance = base_covariance.copy()
         scaled_covariance *= reduced_chi_square[:, None, None]
+        if covariance_factor is not None:
+            covariance_factor = covariance_factor.copy()
+            covariance_factor *= ap.sqrt(reduced_chi_square)[:, None, None]
     base_covariance_finite = ap.isfinite(base_covariance).all(axis=(1, 2))
     diagonal = ap.diagonal(scaled_covariance, axis1=1, axis2=2)
     diagonal_valid = ap.isfinite(diagonal).all(axis=1) & ~(diagonal < 0).any(
@@ -915,6 +955,10 @@ def _fit_dipoles_backend(
     covariance = ap.where(
         uncertainty_valid[:, None, None], scaled_covariance, ap.nan
     )
+    if covariance_factor is not None:
+        covariance_factor = ap.where(
+            uncertainty_valid[:, None, None], covariance_factor, ap.nan
+        )
     safe_diagonal = ap.where(diagonal_valid[:, None], diagonal, 0)
     standard_errors = ap.where(
         uncertainty_valid[:, None], ap.sqrt(safe_diagonal), ap.nan
@@ -936,6 +980,7 @@ def _fit_dipoles_backend(
         degrees_of_freedom=degrees_of_freedom,
         reduced_chi_square=reduced_chi_square,
         covariance=covariance,
+        covariance_factor=covariance_factor,
         standard_errors=standard_errors,
         uncertainty_valid=uncertainty_valid,
         uncertainty_reason_codes=uncertainty_reason_codes,
@@ -978,6 +1023,11 @@ def _materialize_dipole_fit_result(
         ),
         reduced_chi_square=as_numpy(result.reduced_chi_square).copy(),
         covariance=as_numpy(result.covariance).copy(),
+        covariance_factor=(
+            None
+            if result.covariance_factor is None
+            else as_numpy(result.covariance_factor).copy()
+        ),
         standard_errors=as_numpy(result.standard_errors).copy(),
         uncertainty_valid=as_numpy(result.uncertainty_valid).astype(
             bool, copy=True
@@ -1151,6 +1201,7 @@ def fit_dipoles_device(
         degrees_of_freedom=result.degrees_of_freedom,
         reduced_chi_square=result.reduced_chi_square,
         covariance=result.covariance,
+        covariance_factor=result.covariance_factor,
         standard_errors=result.standard_errors,
         uncertainty_valid=result.uncertainty_valid,
         uncertainty_reason_codes=result.uncertainty_reason_codes,
