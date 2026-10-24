@@ -121,13 +121,14 @@ def test_compare_subspace_methods_can_use_partial_svd():
     assert len(method.roots_real) == 5
 
 
-def test_subspace_batch_preserves_trace_results_and_source_order():
+@pytest.mark.parametrize("source_kind", ["trace-npz", "synthetic"])
+def test_subspace_batch_preserves_trace_results_and_source_order(source_kind):
     time, trace = synthetic_trace(samples=64)
     trace_rows = np.stack((trace, trace + 0.1 * np.cos(3.0 * time)))
     sources = (
-        {"kind": "trace-npz", "path": "trace-y2.npz"},
+        {"kind": source_kind, "path": "trace-y2.npz"},
         {
-            "kind": "trace-npz",
+            "kind": source_kind,
             "path": "trace-y10.npz",
             "summary": {"detector_row": 10},
             "time_matches_first": True,
@@ -148,6 +149,11 @@ def test_subspace_batch_preserves_trace_results_and_source_order():
     )
     payload = batch.to_dict()
 
+    expected_kind = (
+        "trace-npz-batch" if source_kind == "trace-npz" else "trace-batch"
+    )
+    assert payload["source"]["kind"] == expected_kind
+    assert str(batch).splitlines()[0] == f"source={expected_kind}"
     assert payload["source"]["traces"] == sources
     assert payload["trace_count"] == 2
     for index, (trace_result, trace_payload) in enumerate(

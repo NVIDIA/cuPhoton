@@ -1402,11 +1402,14 @@ def model_order_sweep_batch(
 ) -> ModelOrderSweepBatch:
     """Sweep component counts for rows sharing one time axis."""
 
+    normalized_components = tuple(
+        dict.fromkeys(int(item) for item in components)
+    )
     results = tuple(
         model_order_sweep(
             time,
             trace,
-            components,
+            normalized_components,
             roots_backend=roots_backend,
             relative_tolerance=relative_tolerance,
         )
@@ -1418,7 +1421,7 @@ def model_order_sweep_batch(
         samples=results[0].samples,
         roots_backend=roots_backend,
         relative_tolerance=float(relative_tolerance),
-        component_counts=tuple(int(item) for item in components),
+        component_counts=normalized_components,
         sources=tuple(sources),
         traces=results,
     )
