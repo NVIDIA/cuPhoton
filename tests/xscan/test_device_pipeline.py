@@ -1444,9 +1444,7 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
         assert kwargs == {
             "model": "gaussian",
             "mode": "difference",
-            "backend": "cupy",
             "config": context.solver_config,
-            "fusion": False,
         }
         stage_calls.append("xfit")
         return _fake_xfit_result(cp, 2)
