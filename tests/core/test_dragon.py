@@ -762,7 +762,8 @@ def test_fast_worker_waits_for_close_until_all_round_results_arrive(
     monkeypatch, tmp_path
 ):
     state = _install_runtime(monkeypatch, interleave_close=True)
-    result = _run(tmp_path)
+    # Events enforce receipt ordering; allow time for durable close artifacts.
+    result = _run(tmp_path, result_timeout=5.0)
 
     assert result.status == "success", result.summary
     assert state.fast_waiting_for_close.is_set()
