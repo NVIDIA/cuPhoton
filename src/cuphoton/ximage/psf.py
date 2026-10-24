@@ -25,11 +25,11 @@ def gaussian_psf(
     size
         Height and width of the square output array.
     sigma
-        Standard deviation in pixels. Must be positive.
+        Standard deviation in pixels. Must be finite and positive.
     offset
-        Subpixel ``(row, column)`` displacement from the array center.
+        Finite subpixel ``(row, column)`` displacement from the array center.
     dtype
-        NumPy dtype for the returned array.
+        Floating-point NumPy dtype for the returned array.
 
     Returns
     -------
@@ -41,13 +41,16 @@ def gaussian_psf(
 
     if size < 1:
         raise ValueError("size must be at least one")
-    if sigma <= 0:
-        raise ValueError("sigma must be positive")
+    if not np.isfinite(sigma) or sigma <= 0:
+        raise ValueError("sigma must be finite and positive")
     if len(offset) != 2:
         raise ValueError("offset must contain row and column displacements")
+    if not np.all(np.isfinite(offset)):
+        raise ValueError("offset components must be finite")
+    if not np.issubdtype(np.dtype(dtype), np.floating):
+        raise ValueError("dtype must be floating-point")
 
-    half_width = size // 2
-    edges = np.arange(size + 1, dtype=np.float64) - half_width - 0.5
+    edges = np.arange(size + 1, dtype=np.float64) - size / 2
     row_mass = np.diff(ndtr((edges - float(offset[0])) / sigma))
     column_mass = np.diff(ndtr((edges - float(offset[1])) / sigma))
     return np.asarray(np.outer(row_mass, column_mass), dtype=dtype)

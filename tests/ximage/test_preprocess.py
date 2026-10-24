@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from math import erf, sqrt
 from pathlib import Path
 
 import numpy as np
@@ -16,16 +17,60 @@ from cuphoton.ximage.preprocess import (
     prepare_reconstruction_inputs_roi,
     round_down_to_odd,
 )
+from cuphoton.ximage.psf import gaussian_psf
 
 
-def test_round_down_to_odd_rejects_non_positive() -> None:
+@pytest.mark.parametrize("value", [0, 0.5])
+def test_round_down_to_odd_rejects_values_below_one(value) -> None:
     with pytest.raises(ValueError):
-        round_down_to_odd(0)
+        round_down_to_odd(value)
 
 
 def test_round_down_to_odd_rounds_even_values() -> None:
     assert round_down_to_odd(10) == 9
     assert round_down_to_odd(11) == 11
+    assert round_down_to_odd(1) == 1
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        preprocess.prepare_reconstruction_inputs,
+        prepare_reconstruction_inputs_roi,
+    ],
+)
+def test_prepare_reconstruction_inputs_validates_exposure_times(prepare):
+    bundle = XImageBundle(
+        store_format="npy",
+        store_path=Path("."),
+        arrays={
+            "images": np.full((1, 2, 2, 2), 6.0),
+            "variances": np.full((1, 2, 2, 2), 36.0),
+            "exp_times": np.array([2.0, 3.0]),
+        },
+        metadata={},
+    )
+    images, masks, variances = prepare(
+        bundle, mask_mode="none", dilation_factor=1
+    )
+    np.testing.assert_allclose(images[..., 0], 3.0)
+    np.testing.assert_allclose(images[..., 1], 2.0)
+    np.testing.assert_allclose(variances[..., 0], 9.0)
+    np.testing.assert_allclose(variances[..., 1], 4.0)
+    assert masks is None
+
+    for invalid in (
+        [0.0, 1.0],
+        [-1.0, 1.0],
+        [np.nan, 1.0],
+        [np.inf, 1.0],
+        [1.0],
+        [1.0, 1.0, 1.0],
+        [[1.0, 1.0]],
+    ):
+        bundle.arrays["exp_times"] = np.asarray(invalid)
+        with pytest.raises(ValueError, match="exposure times"):
+            prepare(bundle, mask_mode="none", dilation_factor=1)
 
 
 def test_validate_bundle_rejects_wrong_rank() -> None:
@@ -58,6 +103,21 @@ def test_create_object_masks_does_not_mutate_input() -> None:
 def test_prepare_reconstruction_inputs_roi_crops_before_mask_dilation(
     monkeypatch,
 ) -> None:
+    class SliceOnlyArray:
+        def __init__(self, array):
+            self.array = array
+            self.shape = array.shape
+            self.ndim = array.ndim
+            self.dtype = array.dtype
+            self.nbytes = array.nbytes
+
+        def __array__(self, *args, **kwargs):
+            raise AssertionError("Full array materialization is not allowed")
+
+        def __getitem__(self, key):
+            assert key[1:3] == (slice(3, 7), slice(3, 7))
+            return self.array[key]
+
     exposure_count = 2
     images = np.ones((1, 10, 10, exposure_count), dtype=np.float64)
     variances = np.ones_like(images)
@@ -67,10 +127,10 @@ def test_prepare_reconstruction_inputs_roi_crops_before_mask_dilation(
         store_format="npy",
         store_path=Path("."),
         arrays={
-            "images": images,
-            "masks": masks,
+            "images": SliceOnlyArray(images),
+            "masks": SliceOnlyArray(masks),
             "sky": np.ones_like(images),
-            "variances": variances,
+            "variances": SliceOnlyArray(variances),
             "psfs": np.zeros((3, 3, 1, exposure_count), dtype=np.float64),
             "exp_times": exp_times,
             "mcgauss": np.zeros((exposure_count, 3, 3), dtype=np.float64),
@@ -234,3 +294,56 @@ def test_coadd_excludes_invalid_samples_and_handles_empty_pixels(
         preprocess.coadd(images, masks=0, variances=variances, method=method),
         np.zeros((1, 1, 1, 1)),
     )
+
+
+@pytest.mark.parametrize("method", ["mean", "median"])
+@pytest.mark.parametrize(
+    "values,mask", [([0.0, 0.0], 1), ([-2.0, -1.0], 1), ([1.0, 2.0], 0)]
+)
+def test_positive_coadd_handles_zero_negative_and_masked_pixels(
+    method, values, mask
+):
+    images = np.asarray(values).reshape(1, 1, 2, 1)
+    original = preprocess.coadd(images, masks=mask, method=method)
+    result = preprocess.coadd(
+        images, masks=mask, method=method, positive=True
+    )
+    assert np.isfinite(result).all()
+    assert (result > 0).all()
+    np.testing.assert_allclose(
+        np.diff(result, axis=2), np.diff(original, axis=2)
+    )
+
+
+@pytest.mark.parametrize("size", [2, 3, 8, 9])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_gaussian_psf_is_centered_and_preserves_integrated_mass(size, dtype):
+    psf = gaussian_psf(size, dtype=dtype)
+    assert psf.dtype == dtype
+    np.testing.assert_allclose(psf, psf[::-1, :], rtol=1e-6)
+    np.testing.assert_allclose(psf, psf[:, ::-1], rtol=1e-6)
+    np.testing.assert_allclose(
+        psf.sum(), erf(size / (2 * sqrt(2))) ** 2, rtol=1e-6
+    )
+    if size % 2:
+        np.testing.assert_allclose(
+            psf[size // 2, size // 2], erf(0.5 / sqrt(2)) ** 2, rtol=1e-6
+        )
+
+
+@pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan, np.inf])
+def test_gaussian_psf_rejects_invalid_sigma(sigma):
+    with pytest.raises(ValueError, match="sigma must be finite and positive"):
+        gaussian_psf(5, sigma=sigma)
+
+
+@pytest.mark.parametrize("offset", [(np.nan, 0.0), (0.0, np.inf)])
+def test_gaussian_psf_rejects_nonfinite_offset(offset):
+    with pytest.raises(ValueError, match="offset components must be finite"):
+        gaussian_psf(5, offset=offset)
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.bool_, np.complex128])
+def test_gaussian_psf_rejects_nonfloating_dtype(dtype):
+    with pytest.raises(ValueError, match="dtype must be floating-point"):
+        gaussian_psf(5, dtype=dtype)
