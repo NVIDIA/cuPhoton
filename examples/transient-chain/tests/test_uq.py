@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from scipy.signal import fftconvolve
-from transient_chain import ops, uq
+from transient_chain import config, ops, uq
 
 SIZE = 200
 PSF = 1.8
@@ -23,6 +23,7 @@ FIELD = np.array([0.1, -0.05])  # constant reference-minus-target offset
 TAU2 = np.array([0.01, 0.0225])  # excess variance per axis
 MIS_VARIANCE = TAU2 + FIELD**2
 QUANTITIES = uq.QUANTITIES
+MAX_REACH = config.SCHEMA["uq"]["max_lobe_reach_px"][0]
 
 
 def _gaussians(xs, ys, fluxes, sigma=PSF):
@@ -127,6 +128,7 @@ class Scene:
         err_fit = {q: np.full(n, err) for q in QUANTITIES}
         err_fit["psf_flux"] = np.full(n, 40.0)
         return dict(
+            max_lobe_reach_px=MAX_REACH,
             cand_x=self.cand[:, 0],
             cand_y=self.cand[:, 1],
             # a resolved dipole: lobes 2.5 px either side of the center
@@ -643,7 +645,11 @@ def test_error_budget_runs_step_8c(scene, enabled):
         positive_y_error=err,
         lobe_flux=scene.flux,
     )
-    u_cfg = {"enabled": enabled, "kernel_fit": True}
+    u_cfg = {
+        "enabled": enabled,
+        "kernel_fit": True,
+        "max_lobe_reach_px": MAX_REACH,
+    }
     res, summary = uq.error_budget(
         u_cfg,
         cand_x=scene.cand[:, 0],
@@ -682,3 +688,42 @@ def test_error_budget_runs_step_8c(scene, enabled):
         np.testing.assert_array_equal(cols["center_x_err"], 0.05)
         np.testing.assert_array_equal(cols["psf_flux_err"], 40.0)
         assert cols["uq_valid"].all()
+
+
+def test_far_lobe_is_capped_out_of_the_center_stamp(scene):
+    """One row whose positive lobe sits 120 px from its center (a diverged
+    dipole fit; its mirrored lobe falls off the image) leaves the center
+    stamp size as it is without it, loses its own center bars and is
+    counted; every other row and its own positive-lobe and flux quantities
+    are what they are without the cap.
+    """
+    ctx = scene.context()
+    near = scene.inputs()
+    far = scene.inputs()
+    far["offsets"]["positive"][0][1] = -119.7
+    base = uq.budget(ctx, **near)
+    capped = uq.budget(ctx, **far)
+    uncapped = uq.budget(ctx, **(far | {"max_lobe_reach_px": 1000.0}))
+    assert base.diagnostics["center_reach_exceeded"] == 0
+    assert capped.diagnostics["center_reach_exceeded"] == 1
+    assert capped.diagnostics["max_lobe_reach_px"] == MAX_REACH
+    assert (
+        capped.diagnostics["center_window_px"]
+        == base.diagnostics["center_window_px"]
+        == ctx.window + 2 * 3
+    )
+    assert uncapped.diagnostics["center_window_px"] > ctx.window + 2 * 120
+    assert uncapped.diagnostics["center_reach_exceeded"] == 0
+    c, b, u = capped.columns, base.columns, uncapped.columns
+    assert c["uq_valid"].tolist() == [True, False, True, False]
+    assert b["uq_valid"].tolist() == [True, True, True, False]
+    assert capped.diagnostics["invalid_window"] == 2
+    for a in ("x", "y"):
+        assert np.isnan(c[f"center_{a}_err"][1])
+        assert np.isfinite(c[f"positive_{a}_err"][1])
+    keep = [0, 2, 3]
+    for name in b:
+        np.testing.assert_array_equal(c[name][keep], b[name][keep])
+    for q in ("positive_x", "positive_y", "psf_flux"):
+        for col in [f"{q}_err_{t}" for t in uq.TERMS] + [f"{q}_err"]:
+            np.testing.assert_array_equal(c[col], u[col])

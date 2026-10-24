@@ -191,6 +191,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
     "uq": {
         "enabled": (True, _bool),
         "kernel_fit": (True, _bool),
+        "max_lobe_reach_px": (32, _positive_finite_num),
         "sky_astrometry_arcsec": (None, _opt(_nonnegative_finite_num)),
         "sky_astrometry_source": (None, _opt(_nonempty_str)),
     },

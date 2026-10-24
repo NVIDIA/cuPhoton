@@ -506,6 +506,7 @@ def budget(
     err_fit: dict[str, Any],
     lobe_flux,
     single,
+    max_lobe_reach_px: float,
     photometry_xy=None,
 ) -> BudgetResult:
     """Every budget term and the full error bar per candidate.
@@ -516,7 +517,9 @@ def budget(
     (``psf_flux`` absent or None when forced photometry did not run);
     ``lobe_flux`` is the fitted lobe flux and ``single`` marks candidates
     with one supported lobe. ``photometry_xy`` (N, 2) is the offset forced
-    photometry measured at, None without it.
+    photometry measured at, None without it. ``max_lobe_reach_px`` caps
+    each lobe's distance from the center pixel; rows beyond it get no
+    center error bar and cannot inflate every candidate's center stamp.
 
     Returns the ``<q>_err_{corr,kfit,kmatch,mis}`` and ``<q>_err`` columns
     and ``uq_valid``. A quantity is valid where every pixel of its window
@@ -602,11 +605,16 @@ def budget(
     # the center's stamp holds both lobes: this far from the center pixel
     center_pixel = np.rint(host[0])
     reach = 0
-    if n:
-        lobes = np.abs(
-            np.stack([host[1], 2.0 * host[0] - host[1]]) - center_pixel
-        )
-        reach = int(math.ceil(np.nanmax(lobes)))
+    lobes = np.abs(
+        np.stack([host[1], 2.0 * host[0] - host[1]]) - center_pixel
+    )
+    distance = lobes.max(axis=(0, 2)) if n else np.zeros(0)
+    exceeded = distance > max_lobe_reach_px
+    within = distance[~exceeded]
+    if within.size and np.isfinite(within).any():
+        reach = int(math.ceil(min(np.nanmax(within), max_lobe_reach_px)))
+    for axis in ("x", "y"):
+        window_ok[f"center_{axis}"] &= ~xp.asarray(exceeded)
 
     lam = ones
     capped = xp.zeros(n, dtype=bool)
@@ -739,6 +747,8 @@ def budget(
     flags = ops.to_host(xp.stack([valid, windows, undefined, capped]))
     control_bytes += int(flags.nbytes)
     diag.update(
+        max_lobe_reach_px=max_lobe_reach_px,
+        center_reach_exceeded=int(exceeded.sum()),
         invalid_window=int((~flags[1]).sum()),
         rotated_grid=int(flags[2].sum()),
         sensitivity_capped=int(flags[3].sum()),
@@ -823,6 +833,7 @@ def error_budget(
         err_fit=err_fit,
         lobe_flux=derived.lobe_flux,
         single=single,
+        max_lobe_reach_px=float(u_cfg["max_lobe_reach_px"]),
         photometry_xy=photometry_xy,
     )
     return res, {

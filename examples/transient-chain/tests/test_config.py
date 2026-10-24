@@ -175,6 +175,7 @@ def test_uq_block_defaults_and_sky_term_rule():
     assert cfg["uq"] == {
         "enabled": True,
         "kernel_fit": True,
+        "max_lobe_reach_px": 32,
         "sky_astrometry_arcsec": None,
         "sky_astrometry_source": None,
     }
@@ -204,3 +205,11 @@ def test_uq_block_defaults_and_sky_term_rule():
     bad["uq"] = {"sky_astrometry_arcsec": 0.01, "sky_astrometry_source": " "}
     with pytest.raises(ValueError, match="non-empty string"):
         config.validate_config(bad)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, float("nan"), 10**400])
+def test_lobe_reach_limit_requires_a_positive_finite_number(value):
+    raw = yaml.safe_load((HERE / "config.yaml").read_text())
+    raw["uq"]["max_lobe_reach_px"] = value
+    with pytest.raises(ValueError, match="max_lobe_reach_px"):
+        config.validate_config(raw)

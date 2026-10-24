@@ -68,6 +68,7 @@ xfit:                         # cuphoton.xfit.fit_dipoles_device with the Gaussi
 uq:                           # the error budget behind <q>_err (step 8c; README "How the error bar is built")
   enabled: true               # false: <q>_err equals <q>_err_fit and every other term is 0
   kernel_fit: true            # the kernel fit's own uncertainty (kfit); one covariance per item over the fit pixels
+  max_lobe_reach_px: 32       # largest center-to-lobe distance with a center error bar
   sky_astrometry_arcsec: null # external astrometric uncertainty per axis, written to sky_err_arcsec; set with
   sky_astrometry_source: null # its provenance (e.g. the survey's astrometric summary), never added to pixel columns
 

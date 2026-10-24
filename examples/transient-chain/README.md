@@ -214,7 +214,7 @@ named, odd sizes and enumerations are checked, and every default lives in
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
 | `stamps` | stamp cutting | `stamp_size` (odd; equals the checkpoint's `image_size`) |
 | `xfit` | dipole fits, quality flags, forced photometry | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`), `psf_sigma_px` |
-| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
+| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
 | `classify` | XScan | `inference_policy: strict\|checkpoint`, `apply_noise_match`, `noise_reference_sigma`, `decision_threshold`, `batch_size` |
 
 `classify.noise_reference_sigma` is a property of the checkpoint, not of the survey: it is the
