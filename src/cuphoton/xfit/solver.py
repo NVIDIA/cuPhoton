@@ -286,7 +286,7 @@ def _row_norm(value: BackendArray, ap: ModuleType) -> BackendArray:
     scale = ap.max(ap.abs(value), axis=1)
     safe_scale = ap.where(scale > 0, scale, 1)
     normalized = value / safe_scale[:, None]
-    return scale * ap.sqrt(ap.einsum("kn,kn->k", normalized, normalized))
+    return scale * ap.sqrt(ap.sum(normalized * normalized, axis=1))
 
 
 def _call_residual(

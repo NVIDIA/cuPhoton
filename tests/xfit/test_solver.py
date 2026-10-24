@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from math import fsum, sqrt
 
 import numpy as np
 import pytest
@@ -1270,3 +1271,42 @@ def test_large_parameter_does_not_hide_motion_in_other_coordinates() -> None:
 
     assert result.converged.all()
     np.testing.assert_allclose(result.residuals, 0, atol=1e-9)
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_cupy_gradient_convergence_retains_small_residual_contributions(
+    count,
+):
+    ap = pytest.importorskip("cupy")
+    try:
+        if ap.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("CUDA device is unavailable")
+    except Exception:
+        pytest.skip("CUDA runtime is unavailable")
+    # The 164 small components collectively affect the stopping boundary.
+    # Exact summation supplies an independent reference for this linear fit.
+    row = np.full(165, 2.0**-27)
+    row[0] = 1.0
+    residual_norm = sqrt(fsum(float(value * value) for value in row))
+    template = ap.asarray(row)
+
+    def residual(x, *, indices):
+        del indices
+        value = ap.broadcast_to(template, (x.shape[0], row.size)).copy()
+        value[:, 0] += x[:, 0]
+        return value
+
+    def jacobian(x, *, indices):
+        del indices
+        value = ap.zeros((x.shape[0], 1, row.size))
+        value[:, 0, 0] = 1
+        return value
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        ap.zeros((count, 1)),
+        config=LMConfig(g_tol=1.0 / residual_norm, max_evaluations=2),
+    )
+    assert (result.status == int(LMStatus.CONVERGED_G_TOL)).all()
+    assert (result.evaluations == 1).all()
+    assert (result.parameters == 0).all()
