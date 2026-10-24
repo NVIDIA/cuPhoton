@@ -211,7 +211,9 @@ def validate_catalog_product_csv(
         else []
     )
     missing_expected_visits = (
-        sorted(expected_visit_set - observed_visits) if visit_column else []
+        sorted(expected_visit_set - observed_visits)
+        if visit_column or visit_constrained
+        else []
     )
     unexpected_bands = sorted(value for value in band_values if value != band)
     result.update(
