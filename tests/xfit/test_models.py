@@ -1914,11 +1914,22 @@ def test_cutile_device_results_survive_worker_reuse(dtype, fusion) -> None:
         )
 
     def snapshot(result):
-        return {
+        arrays = {
             field.name: cp.asnumpy(value)
             for field in fields(result)
             if isinstance(value := getattr(result, field.name), cp.ndarray)
         }
+
+        factor = arrays["covariance_factor"]
+        factor_tolerance = 3e-5 if dtype is np.float32 else 5e-12
+        np.testing.assert_allclose(
+            factor @ factor.swapaxes(-2, -1),
+            arrays["covariance"],
+            rtol=factor_tolerance,
+            atol=factor_tolerance,
+            equal_nan=True,
+        )
+        return arrays
 
     def features(result):
         transformed = transform_xfit_result_features_device(
@@ -1958,6 +1969,9 @@ def test_cutile_device_results_survive_worker_reuse(dtype, fusion) -> None:
                     reference, reference_features = expected[case_index]
                     assert arrays.keys() == reference.keys()
                     for name, actual in arrays.items():
+                        # Factor columns have no unique cross-backend basis.
+                        if name == "covariance_factor":
+                            continue
                         target = reference[name]
                         if actual.dtype.kind in "fc":
                             np.testing.assert_array_equal(
