@@ -650,6 +650,11 @@ def _validate_fusion(
         return
     if backend != "cupy":
         raise ValueError("fusion requires backend='cupy'")
+    if (
+        isinstance(model, GaussianDipoleModel)
+        and type(model) is not GaussianDipoleModel
+    ):
+        raise ValueError("fusion does not support custom Gaussian models")
     if isinstance(model, StampDipoleModel) or (
         isinstance(model, str) and model != "gaussian"
     ):
