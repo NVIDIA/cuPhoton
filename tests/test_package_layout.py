@@ -20,6 +20,7 @@ COMPONENTS = (
     "core",
     "xdr",
     "xfit",
+    "ximage",
     "xpois",
     "xscan",
     "xrep",
@@ -73,6 +74,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "photometry",
         "torch",
         "viz",
+        "ximage",
     }
 
 
