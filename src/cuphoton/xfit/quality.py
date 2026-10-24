@@ -87,9 +87,10 @@ def dipole_quality_flags(
     divided by the spread of the same statistic at a grid of empty
     positions in that stamp, at least three lobe widths from either lobe.
     The grid has a 6-pixel step along each axis. A stamp whose grid keeps
-    fewer than 12 such positions is left uncalibrated; when the stamp size
-    alone rules calibration out (below about 33 pixels on a side), a
-    warning is issued.
+    fewer than 12 such positions is left uncalibrated. A warning is issued
+    when the grid itself holds fewer than 12 positions (square stamps of
+    26 pixels or less on a side). If lobe exclusion leaves too few usable
+    positions, the significance is left uncalibrated without a warning.
 
     Without ``variance``, each stamp's noise is its median absolute deviation
     times 1.4826 over the unmasked pixels.
