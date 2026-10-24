@@ -240,7 +240,8 @@ def correlation_factor(
 
     The variance inputs are either full planes cut here around
     ``positions`` with :func:`window_stamps`, or stamps already cut on the
-    same windows; the stamps' side ``s`` sets the window.
+    same windows; the stamps' side ``s`` sets the window. Negative variance
+    in a window makes its factor and pixel ratio ``NaN``.
 
     Parameters
     ----------
@@ -354,6 +355,9 @@ def correlation_factor(
         & xp.isfinite(target).all(axis=(1, 2))
         & xp.isfinite(resampled).all(axis=(1, 2))
         & xp.isfinite(residual).all(axis=(1, 2))
+        & (target >= 0).all(axis=(1, 2))
+        & (resampled >= 0).all(axis=(1, 2))
+        & (residual >= 0).all(axis=(1, 2))
         & (diagonal_sum > 0)
         & (w2_sum > 0)
     )
