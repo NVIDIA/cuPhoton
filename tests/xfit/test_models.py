@@ -1613,12 +1613,37 @@ def test_fp32_public_covariance_matches_with_variance(
     cpu, gpu = results
     assert cpu.uncertainty_valid.all() and gpu.uncertainty_valid.all()
     assert gpu.parameters.dtype == gpu.covariance.dtype == np.float32
+    # Nearby FP32 endpoints can have different exact covariances. Check the
+    # physical weighted Jacobian at each endpoint with a direct FP64 SVD.
+    reference_model = GaussianDipoleModel(model.image_shape, dtype=np.float64)
+    effective_weights = np.where(
+        mask, 1 / np.sqrt(np.where(mask, variance, 1).astype(np.float64)), 0
+    )
+    for result in results:
+        jacobian = reference_model.jacobian(
+            result.parameters.astype(np.float64)
+        ).reshape(2, 8, -1)
+        jacobian *= effective_weights.reshape(2, 1, -1)
+        left, singular, _ = np.linalg.svd(jacobian, full_matrices=False)
+        inverse_factor = left / singular[:, None, :]
+        covariance = inverse_factor @ inverse_factor.swapaxes(-2, -1)
+        # Supplied variance is absolute; no fitted noise multiplier applies.
+        for actual, expected in (
+            (result.covariance, covariance),
+            (
+                result.standard_errors,
+                np.sqrt(np.diagonal(covariance, axis1=1, axis2=2)),
+            ),
+        ):
+            np.testing.assert_allclose(actual, expected, rtol=3e-5, atol=3e-5)
     for field, expected in vars(cpu).items():
         if field in {"backend", "device"}:
             continue
         actual = getattr(gpu, field)
         if isinstance(expected, np.ndarray):
             assert actual.dtype == expected.dtype
+        if field in {"covariance", "standard_errors"}:
+            continue
         if isinstance(expected, np.ndarray) and expected.dtype.kind == "f":
             np.testing.assert_allclose(
                 actual, expected, rtol=3e-5, atol=3e-5, equal_nan=True

@@ -93,7 +93,9 @@ def _gate_producer(stream):
     return release, entered, expired
 
 
-def _assert_fit_matches(actual, expected, dtype=np.float64):
+def _assert_fit_matches(
+    actual, expected, dtype=np.float64, *, compare_residuals=True
+):
     # Predeclared xFit cross-kernel tolerances, also used by the existing
     # cuTile Gaussian tests. Explicit variance keeps covariance measurable
     # instead of scaling it by rounding-level noiseless residuals.
@@ -119,6 +121,8 @@ def _assert_fit_matches(actual, expected, dtype=np.float64):
         "null_chi_square",
         "delta_chi_square",
     ):
+        if name == "residuals" and not compare_residuals:
+            continue
         np.testing.assert_allclose(
             getattr(actual, name),
             getattr(expected, name),
@@ -358,8 +362,10 @@ def test_native_varied_gaussian_batches_match_cupy(count, shape, mode):
     _assert_fit_matches(actual, expected)
 
 
-def test_native_fit_with_bright_overlapping_lobes():
-    _require_native()
+def test_native_fit_with_bright_overlapping_lobes(monkeypatch):
+    from cuphoton.xfit import _native, api
+
+    cp = _require_native()
     shape = (51, 51)
     model = GaussianDipoleModel(shape, dtype=np.float64)
     initial = np.asarray(
@@ -387,7 +393,70 @@ def test_native_fit_with_bright_overlapping_lobes():
     assert expected.evaluations.tolist() == [2]
     assert np.max(np.abs(expected.parameters - initial)) > 1.0e-4
     actual = fit_dipoles(images, backend="native", **options)
-    _assert_fit_matches(actual, expected)
+    _assert_fit_matches(actual, expected, compare_residuals=False)
+
+    # Check the damped step itself: tiny solve-rounding differences can move
+    # bright-lobe residuals beyond their tolerance at different endpoints.
+    jacobian = model.jacobian(initial)[0].reshape(8, -1)
+    jacobian[1:3] *= initial[0, 1:3, None]
+    jacobian *= weights[0].ravel()
+    scale = np.linalg.norm(jacobian, axis=1)
+    normalized = jacobian / scale[:, None]
+    system = normalized @ normalized.T
+    system += options["config"].initial_damping * np.eye(8)
+    residual = ((model.evaluate(initial) - images) * weights).ravel()
+    gradient = normalized @ residual
+    for result in (actual, expected):
+        step = result.parameters[0] - initial[0]
+        step[1:3] = np.log(result.parameters[0, 1:3] / initial[0, 1:3])
+        scaled_step = scale * step
+        error = np.linalg.norm(system @ scaled_step + gradient, ord=np.inf)
+        magnitude = np.linalg.norm(system, ord=np.inf) * np.linalg.norm(
+            scaled_step, ord=np.inf
+        ) + np.linalg.norm(gradient, ord=np.inf)
+        assert error / magnitude <= 5e-12
+
+    # Public outputs recompute residuals after fitting. Observe the actual
+    # LM buffers to compare the two evaluators at identical moved parameters.
+    captured = []
+
+    def capture(function):
+        def call(*args, **kwargs):
+            result = function(*args, **kwargs)
+            captured.append(
+                (cp.asnumpy(result.parameters), cp.asnumpy(result.residuals))
+            )
+            return result
+
+        return call
+
+    monkeypatch.setattr(
+        api,
+        "batched_levenberg_marquardt",
+        capture(api.batched_levenberg_marquardt),
+    )
+    monkeypatch.setattr(
+        _native, "fit_gaussian", capture(_native.fit_gaussian)
+    )
+    for endpoint in (actual.parameters, expected.parameters):
+        captured.clear()
+        for backend in ("cupy", "native"):
+            fixed = fit_dipoles(
+                images,
+                **{
+                    **options,
+                    "initial": endpoint,
+                    "config": LMConfig(max_evaluations=1),
+                    "backend": backend,
+                },
+            )
+            assert fixed.evaluations.tolist() == [1]
+            np.testing.assert_array_equal(fixed.parameters, endpoint)
+        assert len(captured) == 2
+        np.testing.assert_array_equal(captured[0][0], captured[1][0])
+        np.testing.assert_allclose(
+            captured[1][1], captured[0][1], rtol=5e-12, atol=5e-12
+        )
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
