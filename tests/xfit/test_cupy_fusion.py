@@ -89,7 +89,9 @@ def test_fusion_rejects_unsupported_backend_before_cuda(monkeypatch, backend):
 
 
 @pytest.mark.parametrize("device", [False, True])
-@pytest.mark.parametrize("case", ["stamp", "finite_difference", "nonboolean"])
+@pytest.mark.parametrize(
+    "case", ["stamp", "custom_gaussian", "finite_difference", "nonboolean"]
+)
 def test_fusion_rejects_unsupported_configuration_before_cuda(
     monkeypatch, device, case
 ):
@@ -101,6 +103,13 @@ def test_fusion_rejects_unsupported_configuration_before_cuda(
     if case == "stamp":
         model = StampDipoleModel(np.ones((3, 3)), image_shape=(5, 7))
         match = "Gaussian model"
+    elif case == "custom_gaussian":
+
+        class CustomGaussian(GaussianDipoleModel):
+            pass
+
+        model = CustomGaussian(image_shape=(5, 7))
+        match = "custom Gaussian"
     elif case == "finite_difference":
         config = LMConfig(use_finite_difference=True)
     else:
