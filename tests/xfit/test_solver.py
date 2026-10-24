@@ -1056,6 +1056,33 @@ def test_ill_scaled_covariance_and_rank_are_independent_of_units() -> None:
     np.testing.assert_allclose(converted, expected, rtol=2.0e-8, atol=2.0e-8)
 
 
+def test_covariance_factor_preserves_a_well_measured_parameter_combination():
+    # Independent unit-noise observations measure the mean directly and the
+    # difference very weakly. Var((x+y)/2) is exactly one, although rounding
+    # the ~2**60 covariance entries loses that information completely.
+    scale = 2.0**30
+    matrix = np.asarray([[0.5, 0.5 / scale], [0.5, -0.5 / scale]])
+
+    def residual(x, *, indices):
+        del indices
+        return x @ matrix
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(matrix, (len(x), 2, 2))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian), np.zeros((1, 2))
+    )
+
+    assert result.converged.all()
+    assert result.rank.tolist() == [2]
+    assert result.covariance_factor is not None
+    gradient = np.asarray([0.5, 0.5])
+    projected = gradient @ result.covariance_factor[0]
+    np.testing.assert_allclose(projected @ projected, 1.0, rtol=1.0e-12)
+
+
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_gaussian_uncertainty_is_independent_of_flux_units(dtype) -> None:
     model = GaussianDipoleModel((25, 25), dtype=dtype)
@@ -1077,6 +1104,13 @@ def test_gaussian_uncertainty_is_independent_of_flux_units(dtype) -> None:
 
     assert result.converged.all()
     assert result.uncertainty_valid.all()
+    assert result.covariance_factor is not None
+    np.testing.assert_allclose(
+        result.covariance_factor @ result.covariance_factor.swapaxes(-2, -1),
+        result.covariance,
+        rtol=2.0e-5 if dtype is np.float32 else 2.0e-12,
+        atol=0,
+    )
     normalized_covariance = result.covariance.copy()
     normalized_covariance[:, 0, :] /= units[:, None]
     normalized_covariance[:, :, 0] /= units[:, None]
@@ -1114,6 +1148,8 @@ def test_gaussian_equilibration_preserves_true_rank_deficiency() -> None:
     assert not result.uncertainty_valid.any()
     assert result.uncertainty_reason == ("rank-deficient Jacobian",) * 2
     assert np.isnan(result.covariance).all()
+    assert result.covariance_factor is not None
+    assert np.isnan(result.covariance_factor).all()
 
 
 @pytest.mark.parametrize(

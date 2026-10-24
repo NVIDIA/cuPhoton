@@ -164,6 +164,10 @@ class LMResult:
     ``evaluations`` counts residual evaluations per row, including finite
     differences. ``rank`` is ``-1`` when no final Jacobian was available
     within the configured evaluation budget.
+
+    ``covariance_factor`` retains F with covariance F F.T so derived
+    uncertainties can be computed without subtracting rounded covariance
+    entries. It is None for results constructed without the optional field.
     """
 
     parameters: BackendArray
@@ -177,6 +181,7 @@ class LMResult:
     gn_hessian: BackendArray
     covariance: BackendArray
     rank: BackendArray
+    covariance_factor: BackendArray | None = None
 
     @property
     def solution(self) -> BackendArray:
@@ -396,17 +401,14 @@ def _factorize_jacobians(
     return left_vectors, singular_values, scale
 
 
-def _covariance_from_svd(
+def _covariance_factor_from_svd(
     left_vectors: BackendArray,
     singular_values: BackendArray,
     scale: BackendArray,
 ) -> BackendArray:
-    """Undo parameter scaling in a full-rank inverse normal matrix."""
+    """Return F with inverse normal matrix F F.T, before rounding it dense."""
 
-    inverse_factor = (left_vectors / singular_values[..., None, :]) / scale[
-        ..., None
-    ]
-    return inverse_factor @ inverse_factor.swapaxes(-2, -1)
+    return (left_vectors / singular_values[..., None, :]) / scale[..., None]
 
 
 @lru_cache(maxsize=2)
@@ -844,6 +846,7 @@ def _finalize_lm(
     gradients = ap.full((k, n), ap.nan, dtype=dtype)
     hessians = ap.full((k, n, n), ap.nan, dtype=dtype)
     covariance = ap.full((k, n, n), ap.nan, dtype=dtype)
+    covariance_factor = ap.full((k, n, n), ap.nan, dtype=dtype)
     rank = ap.full(k, -1, dtype=np.int32)
     status_host = as_numpy(status)
     jacobian_current_host = as_numpy(jacobian_current)
@@ -965,10 +968,14 @@ def _finalize_lm(
             full_rank = rank_values == n
             full_rank_indices = diagnostic_indices[full_rank]
             if full_rank_indices.shape[0] > 0:
-                covariance[full_rank_indices] = _covariance_from_svd(
+                inverse_factor = _covariance_factor_from_svd(
                     left_vectors[full_rank],
                     singular_values[full_rank],
                     scale[full_rank],
+                )
+                covariance_factor[full_rank_indices] = inverse_factor
+                covariance[full_rank_indices] = inverse_factor @ ap.swapaxes(
+                    inverse_factor, -2, -1
                 )
         except Exception:
             # Preserve row-level failure isolation if a backend cannot perform
@@ -984,8 +991,12 @@ def _finalize_lm(
                     tolerance = max(n, m) * eps * ap.max(singular_values)
                     rank[row] = ap.sum(singular_values > tolerance)
                     if _int(rank[row]) == n:
-                        covariance[row] = _covariance_from_svd(
+                        inverse_factor = _covariance_factor_from_svd(
                             left_vectors, singular_values, scale
+                        )
+                        covariance_factor[row] = inverse_factor
+                        covariance[row] = inverse_factor @ ap.transpose(
+                            inverse_factor
                         )
                 except Exception:
                     continue
@@ -1006,6 +1017,7 @@ def _finalize_lm(
         gn_hessian=hessians,
         covariance=covariance,
         rank=rank,
+        covariance_factor=covariance_factor,
     )
 
 

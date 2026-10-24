@@ -59,18 +59,27 @@ def derived_dipole_quantities(
     separation; ``separation_error`` is NaN for coincident lobes.
 
     Uncertainties are NaN where ``uncertainty_valid`` is false. Values are
-    returned for every fit.
+    returned for every fit. When available, the fit's covariance factor is
+    used to evaluate the same propagation before forming a dense covariance;
+    this avoids cancellation between large correlated entries. Results
+    constructed without that factor use the dense covariance, whose rounding
+    can limit the accuracy of small derived uncertainties.
     """
 
     if result.model != "gaussian":
         raise ValueError("derived quantities require a Gaussian dipole fit")
     xp = _array_module(result.parameters)
     p = xp.asarray(result.parameters, dtype=xp.float64)
-    covariance = xp.asarray(result.covariance, dtype=xp.float64)
     values, gradients = _values_and_gradients(p, xp)
-    propagated = xp.einsum(
-        "bqi,bij,brj->bqr", gradients, covariance, gradients
-    )
+    factor = getattr(result, "covariance_factor", None)
+    if factor is None:
+        covariance = xp.asarray(result.covariance, dtype=xp.float64)
+        propagated = xp.einsum(
+            "bqi,bij,brj->bqr", gradients, covariance, gradients
+        )
+    else:
+        projected = gradients @ xp.asarray(factor, dtype=xp.float64)
+        propagated = projected @ projected.swapaxes(-2, -1)
     valid = xp.asarray(result.uncertainty_valid, dtype=bool)
     propagated = xp.where(valid[:, None, None], propagated, xp.nan)
     error = xp.sqrt(xp.diagonal(propagated, axis1=1, axis2=2))

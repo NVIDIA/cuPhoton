@@ -159,6 +159,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "dtype",
         "model",
         "mode",
+        "covariance_factor",
     ]
 
 
