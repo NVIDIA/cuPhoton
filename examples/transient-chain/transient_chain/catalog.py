@@ -61,6 +61,63 @@ XFIT_STATUS_COLUMNS: dict[str, tuple[str, str, str]] = {
     "evaluations": ("int64", "xfit", "residual evaluations used"),
     "valid_pixel_count": ("int64", "xfit", "finite stamp pixels in the fit"),
 }
+
+
+def _position_columns(
+    name: str, what: str
+) -> dict[str, tuple[str, str, str]]:
+    cols: dict[str, tuple[str, str, str]] = {}
+    for axis in ("x", "y"):
+        cols[f"{name}_{axis}"] = (
+            "float64",
+            "xfit",
+            f"{what}, {axis} in pixels relative to the candidate's (x, y)",
+        )
+        cols[f"{name}_{axis}_err"] = (
+            "float64",
+            "xfit",
+            f"standard uncertainty of {name}_{axis}",
+        )
+    cols[f"{name}_xy_cov"] = (
+        "float64",
+        "xfit",
+        f"covariance of {name}_x and {name}_y (pixels squared)",
+    )
+    return cols
+
+
+UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
+    "quality_flags": (
+        "int64",
+        "xfit",
+        "bits of cuphoton.xfit.DipoleQualityFlag (0 when none is set)",
+    ),
+    **_position_columns("center", "midpoint of the two lobes"),
+    **_position_columns("positive", "lobe with positive flux"),
+    "separation": ("float64", "xfit", "distance between the lobes (pixels)"),
+    "separation_err": (
+        "float64",
+        "xfit",
+        "standard uncertainty of separation (NaN for coincident lobes)",
+    ),
+    "lobe_flux": (
+        "float64",
+        "xfit",
+        "total flux of each lobe, 2 pi |amplitude| sigma_x sigma_y",
+    ),
+    "lobe_flux_err": ("float64", "xfit", "standard uncertainty of lobe_flux"),
+    "psf_flux": (
+        "float64",
+        "xfit",
+        "forced PSF flux at the source (NaN without xfit.psf_sigma_px or a "
+        "variance plane)",
+    ),
+    "psf_flux_err": (
+        "float64",
+        "xfit",
+        "standard uncertainty of psf_flux, given the position and the PSF",
+    ),
+}
 CLASSIFY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "logit": (
         "float32",
@@ -126,6 +183,7 @@ def schema(parameter_names: Sequence[str]) -> dict[str, tuple[str, str, str]]:
     return {
         **BASE_COLUMNS,
         **xfit_columns(parameter_names),
+        **UNCERTAINTY_COLUMNS,
         **CLASSIFY_COLUMNS,
         **SKY_COLUMNS,
         **IDENTITY_COLUMNS,
@@ -170,7 +228,7 @@ def finish_table(
             continue
         if name in table:
             values = np.asarray(table[name])
-        elif name in CLASSIFY_COLUMNS:
+        elif name in CLASSIFY_COLUMNS or name in ("psf_flux", "psf_flux_err"):
             values = (
                 np.full(n, False)
                 if dtype == "bool"
