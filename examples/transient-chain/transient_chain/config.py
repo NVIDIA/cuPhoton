@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ def _num(lo=None, hi=None, kind=(int, float)):
     def check(v, name):
         if isinstance(v, bool) or not isinstance(v, kind):
             raise ValueError(f"{name} must be a number, got {v!r}")
+        if isinstance(v, float) and not math.isfinite(v):
+            raise ValueError(f"{name} must be finite, got {v!r}")
         if lo is not None and v < lo:
             raise ValueError(f"{name} must be >= {lo}, got {v}")
         if hi is not None and v > hi:
@@ -276,6 +279,14 @@ def validate_config(raw: Mapping[str, Any]) -> dict[str, Any]:
             "classify.apply_noise_match is true; "
             "it is the robust sigma of the search stamps the classifier was "
             "trained on"
+        )
+    if (
+        cfg["classify"]["apply_noise_match"]
+        and cfg["classify"]["noise_reference_sigma"] == 0
+    ):
+        raise ValueError(
+            "classify.noise_reference_sigma must be > 0 when "
+            "classify.apply_noise_match is true"
         )
     return cfg
 

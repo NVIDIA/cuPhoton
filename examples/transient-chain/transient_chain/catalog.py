@@ -185,6 +185,10 @@ def finish_table(
         )
     df = pd.DataFrame(cols)
     for k, v in identity_columns.items():
+        if k in sch and k not in {"exposure_id", "ccd_id", "band"}:
+            raise ValueError(
+                f"identity column {k!r} conflicts with the catalog schema"
+            )
         df[k] = pd.Series([v] * n, dtype=object)
     df["astrometry"] = pd.Series([astrometry] * n, dtype=object)
     return df

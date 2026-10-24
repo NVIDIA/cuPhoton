@@ -123,9 +123,11 @@ def compare(
             "exposure_id": exp,
             "n_ours": int(len(o)),
             "n_reference": int(len(r)),
+            "matched": 0,
         }
-        if len(r) and not len(o):
-            row["matched"] = 0
+        if len(o):
+            row["matched_fraction_ours"] = 0.0
+        if len(r):
             row["matched_fraction_reference"] = 0.0
         if len(r) and len(o):
             keep, j, d, dup = match(o, r, radius)
@@ -195,7 +197,10 @@ def main() -> None:
     a = ap.parse_args()
     ours = pd.read_parquet(a.ours)
     ref = (
-        pd.read_csv(a.reference)
+        pd.read_csv(
+            a.reference,
+            dtype={name: str for pair in ID_COLUMNS for name in pair},
+        )
         if a.reference.endswith(".csv")
         else pd.read_parquet(a.reference)
     )

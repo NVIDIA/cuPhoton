@@ -124,3 +124,26 @@ def test_basis_degrees_preserve_nonnegative_integers():
         HERE / "config.yaml", ["subtract.basis_degrees=[0, 1, 2]"]
     )
     assert cfg["subtract"]["basis_degrees"] == [0, 1, 2]
+
+
+@pytest.mark.parametrize("value", [".nan", ".inf", "-.inf"])
+def test_numeric_settings_reject_nonfinite_values(value):
+    with pytest.raises(ValueError, match="decision_threshold must be finite"):
+        config.load_config(
+            HERE / "config.yaml", [f"classify.decision_threshold={value}"]
+        )
+
+
+def test_noise_matching_requires_positive_reference_sigma():
+    with pytest.raises(ValueError, match="noise_reference_sigma must be > 0"):
+        config.load_config(
+            HERE / "config.yaml", ["classify.noise_reference_sigma=0"]
+        )
+    cfg = config.load_config(
+        HERE / "config.yaml",
+        [
+            "classify.noise_reference_sigma=0",
+            "classify.apply_noise_match=false",
+        ],
+    )
+    assert cfg["classify"]["noise_reference_sigma"] == 0
