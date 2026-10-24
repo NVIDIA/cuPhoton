@@ -139,7 +139,7 @@ class ChainWorker:
             raise ValueError(
                 "this chain scores stamp triplets; the checkpoint's "
                 "input_mode is "
-                f"{mc.get('input_mode')!r}. Train or pick a triplet image- "
+                f"{mc.get('input_mode')!r}. Train or pick a triplet image-"
                 f"only checkpoint."
             )
         if int(mc.get("image_size", -1)) != stamp:
@@ -147,7 +147,7 @@ class ChainWorker:
                 f"checkpoint image_size {mc.get('image_size')} != "
                 f"stamps.stamp_size {stamp}; "
                 "set stamps.stamp_size to the checkpoint's image_size or use "
-                " a matching checkpoint"
+                "a matching checkpoint"
             )
         if mc.get("xfit_feature_names"):
             raise ValueError(

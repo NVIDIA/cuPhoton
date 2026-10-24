@@ -158,7 +158,7 @@ def resolve_mask_bits(policy, header) -> int | None:
         names = tuple(str(n).upper() for n in policy["planes"])
     else:
         raise ValueError(
-            f"unknown mask policy {policy!r}; use none, strict, hsc- "
+            f"unknown mask policy {policy!r}; use none, strict, hsc-"
             f"masklite, {{planes: [...]}} or {{bits: N}}"
         )
     planes = plane_map(header)

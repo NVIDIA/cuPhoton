@@ -81,6 +81,12 @@ def _num_list(v, name):
     return [_num()(x, name) for x in v]
 
 
+def _degree_list(v, name):
+    if not isinstance(v, Sequence) or isinstance(v, str) or not v:
+        raise ValueError(f"{name} must be a non-empty list of integers")
+    return [_int(0)(x, name) for x in v]
+
+
 def _opt(check):
     def wrapped(v, name):
         if v is None:
@@ -130,7 +136,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "kernel_height": (_REQUIRED, _odd_int),
         "kernel_width": (_REQUIRED, _odd_int),
         "basis_sigmas": (_REQUIRED, _num_list),
-        "basis_degrees": (_REQUIRED, _num_list),
+        "basis_degrees": (_REQUIRED, _degree_list),
         "background_degree": (0, _int(0)),
         "flux_conserve": (False, _bool),
         "template_bad_dilation_px": (0, _int(0)),

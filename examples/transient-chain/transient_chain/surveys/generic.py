@@ -233,7 +233,7 @@ class GenericFitsAdapter(SurveyAdapter):
                     f"template {path} has shape {tuple(image.shape)}, the "
                     f"target has {target.shape}; "
                     "set template.on_target_grid: false to reproject through "
-                    " the WCS"
+                    "the WCS"
                 )
             return GridTemplate(
                 image,

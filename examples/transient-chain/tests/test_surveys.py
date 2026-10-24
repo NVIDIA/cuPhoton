@@ -8,6 +8,8 @@ masks, variance, templates, identity.
 """
 
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pytest
@@ -261,3 +263,24 @@ def test_generic_mask_path_without_hdu_reads_its_first_image(generic_pair):
         t.bad is not None
         and t.bad.sum() == (generic_pair["_mask"] != 0).sum()
     )
+
+
+def test_workload_sizes_home_relative_paths():
+    adapter = make_adapter({"name": "rubin"})
+    with TemporaryDirectory(dir=Path.home()) as directory:
+        image = Path(directory) / "visit.fits"
+        image.write_bytes(b"visit")
+        template = Path(directory) / "template.fits"
+        template.write_bytes(b"template")
+        selection = {
+            "visit": 1,
+            "detector": "R22_S00",
+            "band": "r",
+            "visit_image": "~/" + str(image.relative_to(Path.home())),
+            "template_fits": "~/" + str(template.relative_to(Path.home())),
+        }
+        manifest = Path(directory) / "selection.json"
+        manifest.write_text(json.dumps({"selections": [selection]}))
+        selections = workload.load_selections(manifest, adapter)
+        items = workload.build_items(selections, adapter)
+        assert items[0].weight_bytes == len(b"visittemplate")
