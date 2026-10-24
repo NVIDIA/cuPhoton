@@ -1683,9 +1683,15 @@ def _load_psfs(
             )
         return psfs[:, :, :, exposure_indices]
     if max_exposures is not None:
-        if psfs.shape[-1] <= max_exposures:
-            return psfs
-        return psfs[:, :, :, :max_exposures]
+        psfs = psfs[:, :, :, :max_exposures]
+    if (
+        target_exposure_count is not None
+        and psfs.shape[-1] != target_exposure_count
+    ):
+        raise RuntimeError(
+            "External PSFs are not aligned with the selected exposure "
+            f"count: expected {target_exposure_count}, got {psfs.shape[-1]}."
+        )
     return psfs
 
 

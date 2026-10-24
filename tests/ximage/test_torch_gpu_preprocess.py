@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from cuphoton.ximage.backends.torch_gpu_preprocess import (
+    _coadd,
     prepare_torch_reconstruction_inputs,
 )
 from cuphoton.ximage.config import ReconstructionConfig
@@ -282,3 +283,22 @@ def test_torch_padding_matches_numpy_at_source_boundary(
     actual, _, _ = _pad_with_data(torch, torch.from_numpy(images), **kwargs)
     expected, _, _ = pad_with_data(images, **kwargs)
     np.testing.assert_array_equal(actual.numpy(), expected)
+
+
+@pytest.mark.parametrize("method", ["mean", "median"])
+@pytest.mark.parametrize("value", [0.0, -2.0])
+def test_positive_torch_coadd_handles_nonpositive_images(method, value):
+    images = torch.full((1, 4, 4, 2), value, dtype=torch.float64)
+    result = _coadd(torch, images, method=method, positive=True)
+    assert bool(torch.all(result > 0))
+    np.testing.assert_allclose(
+        result.numpy(), np.full((1, 4, 4, 1), 1e-6 * (abs(value) or 1.0))
+    )
+
+
+def test_torch_same_padding_rejects_superresolution() -> None:
+    config = _config().model_copy(update={"padding": "SAME", "srf": 2})
+    with pytest.raises(ValueError, match="SAME padding requires srf=1"):
+        prepare_torch_reconstruction_inputs(
+            _bundle(), config, device=torch.device("cpu"), dtype=torch.float64
+        )
