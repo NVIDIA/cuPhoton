@@ -4403,21 +4403,22 @@ def test_late_vdif_upload_failure_is_propagated(tmp_path, monkeypatch):
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("quadratic", [0.0, 1e-23, -1e-23])
-def test_long_front_rotation_preserves_phase(quadratic):
+@pytest.mark.parametrize("rows", [1, 8])
+def test_long_front_rotation_preserves_phase(quadratic, rows):
     """Long FFTs must not accumulate float32 phase drift."""
     cupy = _cupy()
     n, fs, edge = 262144, 4096000000.0, 210000000000.0
     delay = 0.0123456789012345
     step = 7.125e-7 / fs
     parameters = prepare_block_parameters(
-        output_indices=np.array([0], np.int64),
-        coarse_samples=np.array([0], np.int64),
-        block_starts=np.array([0.0]),
-        delay_zero=np.array([delay]),
-        delay_step=np.array([step]),
-        delay_quadratic=np.array([quadratic]),
+        output_indices=np.zeros(rows, np.int64),
+        coarse_samples=np.zeros(rows, np.int64),
+        block_starts=np.zeros(rows),
+        delay_zero=np.full(rows, delay),
+        delay_step=np.full(rows, step),
+        delay_quadratic=np.full(rows, quadratic),
         sample_rate_hz=fs,
-        centre_delay=np.array([delay]),
+        centre_delay=np.full(rows, delay),
         xp=cupy,
     )
     rotated, weights = front_rotate(
@@ -4447,7 +4448,7 @@ def test_long_front_rotation_preserves_phase(quadratic):
     actual = cupy.asnumpy(rotated[0])
     assert np.linalg.norm(actual - expected) / np.linalg.norm(expected) < 2e-5
     assert np.max(abs(actual - expected)) < 2e-5
-    np.testing.assert_array_equal(cupy.asnumpy(weights), [1.0])
+    np.testing.assert_array_equal(cupy.asnumpy(weights), np.ones(rows))
 
 
 @pytest.mark.parametrize(
