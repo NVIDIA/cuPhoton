@@ -26,7 +26,12 @@ def rho_values(
     delta: Any,
     variance: Any,
 ) -> Any:
-    """Evaluate a configured robust loss elementwise."""
+    """Evaluate a configured robust loss elementwise.
+
+    For Huber and Cauchy, ``delta`` must be finite, strictly positive,
+    and broadcastable with ``residual``. These tensor operations assume
+    the caller has validated those preconditions.
+    """
 
     _validate_loss(loss)
     if loss == "huber":
@@ -56,7 +61,12 @@ def irls_weights(
     delta: Any,
     variance: Any,
 ) -> Any:
-    """Evaluate robust IRLS weights elementwise."""
+    """Evaluate robust IRLS weights elementwise.
+
+    For Huber and Cauchy, ``delta`` must be finite, strictly positive,
+    and broadcastable with ``residual``. These tensor operations assume
+    the caller has validated those preconditions.
+    """
 
     _validate_loss(loss)
     if loss == "huber":

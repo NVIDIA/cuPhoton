@@ -73,6 +73,21 @@ def test_prepare_reconstruction_inputs_validates_exposure_times(prepare):
             prepare(bundle, mask_mode="none", dilation_factor=1)
 
 
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        preprocess.prepare_reconstruction_inputs,
+        prepare_reconstruction_inputs_roi,
+    ],
+)
+def test_prepare_rejects_invalid_mask_mode_before_bundle_access(prepare):
+    bundle = XImageBundle(
+        store_format="npy", store_path=Path("."), arrays={}, metadata={}
+    )
+    with pytest.raises(ValueError, match="Unsupported mask mode: invalid"):
+        prepare(bundle, mask_mode="invalid", dilation_factor=1)
+
+
 def test_validate_bundle_rejects_wrong_rank() -> None:
     bundle = XImageBundle(
         store_format="npy",
@@ -227,6 +242,19 @@ def test_padding_rejects_roi_without_surrounding_pixels(center) -> None:
     with pytest.raises(ValueError, match="Padded ROI exceeds.*bounds"):
         preprocess.pad_with_data(
             images, center_roi=center, height_roi=4, width_roi=4, psf_size=3
+        )
+
+
+@pytest.mark.parametrize("height,width", [(0, 4), (4, 0), (-1, 4), (4, -1)])
+def test_padding_rejects_nonpositive_roi_before_adding_halo(height, width):
+    with pytest.raises(
+        ValueError, match="ROI height and width must be positive"
+    ):
+        preprocess.pad_with_data(
+            np.ones((1, 16, 16, 1)),
+            height_roi=height,
+            width_roi=width,
+            psf_size=9,
         )
 
 
