@@ -17,6 +17,8 @@ def lanczos_offsets(a: int, two_a_footprint: bool = True) -> np.ndarray:
     symmetric footprint spans ``-a .. a`` (``2a + 1`` taps).
     """
 
+    if a < 1:
+        raise ValueError("Lanczos radius must be positive")
     start = -(a - 1) if two_a_footprint else -a
     window = 2 * a if two_a_footprint else 2 * a + 1
     return np.arange(start, start + window)

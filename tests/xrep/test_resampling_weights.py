@@ -374,6 +374,15 @@ def test_nonfinite_mapping_gives_zero_weights_and_nan_phase() -> None:
     assert result.is_translation.tolist() == [True, False]
 
 
+@pytest.mark.parametrize("radius", [0, -1])
+@pytest.mark.parametrize("two_a_footprint", [True, False])
+def test_lanczos_offsets_reject_nonpositive_radius(
+    radius, two_a_footprint
+) -> None:
+    with pytest.raises(ValueError, match="radius must be positive"):
+        lanczos_offsets(radius, two_a_footprint)
+
+
 def test_argument_validation() -> None:
     x = np.array([1.0])
     spec = ReprojectionSpec(
