@@ -586,6 +586,30 @@ def test_external_psfs_reject_unmatched_saved_exposure_ids(
         )
 
 
+@pytest.mark.parametrize("max_exposures", [None, 3])
+@pytest.mark.parametrize("psf_count", [2, 4])
+def test_external_psfs_match_selected_exposure_count(
+    tmp_path, max_exposures, psf_count
+) -> None:
+    psfs = np.ones((3, 3, 1, psf_count), dtype=np.float64)
+    path = tmp_path / "psfs.npy"
+    np.save(path, psfs)
+    bundle = _bundle(np.ones((3, 3, 1, 3)))
+    if max_exposures == 3 and psf_count == 4:
+        selected = torch_backend._load_psfs(
+            bundle, path, max_exposures=3, target_exposure_count=3
+        )
+        np.testing.assert_array_equal(selected, psfs[..., :3])
+    else:
+        with pytest.raises(RuntimeError, match="selected exposure count"):
+            torch_backend._load_psfs(
+                bundle,
+                path,
+                max_exposures=max_exposures,
+                target_exposure_count=3,
+            )
+
+
 @pytest.mark.parametrize("shape", [(3, 3), (3, 3, 1), (3, 3, 1, 1, 1)])
 def test_external_psfs_reject_wrong_rank_with_clear_error(tmp_path, shape):
     path = tmp_path / "psfs.npy"

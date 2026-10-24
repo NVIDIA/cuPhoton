@@ -36,6 +36,9 @@ def prepare_torch_reconstruction_inputs(
 ) -> TorchReconstructionInputs:
     """Prepare xImage reconstruction tensors on the target Torch device."""
 
+    if config.padding == "SAME" and config.srf != 1:
+        raise ValueError("SAME padding requires srf=1 for reconstruction.")
+
     torch = _load_torch()
     timings: dict[str, float] = {}
 
@@ -380,10 +383,13 @@ def _coadd(torch: Any, images: Any, *, method: str, positive: bool):
         raise ValueError("method must be 'median' or 'mean'")
 
     if positive:
-        epsilon = 1e-6 * torch.amax(result, dim=(1, 2), keepdim=True)
         min_value = torch.min(result)
         if bool((min_value <= 0).detach().cpu().item()):
-            result = result + torch.abs(min_value) + epsilon
+            scale = torch.amax(torch.abs(result), dim=(1, 2), keepdim=True)
+            epsilon = 1e-6 * torch.where(
+                scale > 0, scale, torch.ones_like(scale)
+            )
+            result = result - min_value + epsilon
     return result
 
 
