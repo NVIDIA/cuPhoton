@@ -38,6 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+rubin = ["lsst-images[https]==30.0.10"]
 ximage = ["zarr>=3,<4"]
 photometry = [
   "photutils>=3.0",
