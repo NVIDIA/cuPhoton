@@ -263,6 +263,59 @@ jobs:
               raise SystemExit("Require all 48 selected cuTile tests without skips, failures or errors")
           print("All 48 cuTile tests passed without skips or teardown errors")
           PY
+      - name: Run real cuTile classifier pipeline
+        run: |
+          # Keep CUDA Torch's runtime pins; reuse the separate compiler tools.
+          uv pip install --python .venv/bin/python --no-deps 'cuda-tile==1.6.0'
+          CUTILE_COMPILER_ROOT="$(
+            "${RUNNER_TEMP}/cuphoton-cutile/bin/python" -c \
+              'import sysconfig; print(sysconfig.get_path("purelib") + "/nvidia/cu13")'
+          )"
+          export CUTILE_COMPILER_ROOT
+          export CUDA_HOME="$CUTILE_COMPILER_ROOT"
+          export PATH="$CUTILE_COMPILER_ROOT/bin:$PATH"
+          uv pip freeze --python .venv/bin/python \
+            > "${RUNNER_TEMP}/cutile-pipeline-packages.txt"
+          .venv/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+          from cuda.tile._compile import _find_compiler_bin
+
+          compiler = _find_compiler_bin()
+          expected = Path(os.environ["CUTILE_COMPILER_ROOT"]) / "bin/tileiras"
+          assert Path(compiler.path).resolve() == expected.resolve()
+          print(f"Pipeline tileiras: {compiler.path}")
+          PY
+          pipeline_status=0
+          .venv/bin/python -m pytest -q -s -rs \
+            --junitxml="${RUNNER_TEMP}/cutile-pipeline-gpu.xml" \
+            tests/xscan/test_cutile_pipeline.py \
+            > "${RUNNER_TEMP}/cutile-pipeline-gpu.log" 2>&1 || pipeline_status=$?
+          cat "${RUNNER_TEMP}/cutile-pipeline-gpu.log"
+          CUTILE_PIPELINE_STATUS="$pipeline_status" .venv/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          output = (root / "cutile-pipeline-gpu.log").read_text()
+          lifecycle_error = re.compile(
+              r"CUDA_ERROR_|cudaError|CUDADriverError|CUDARuntimeError|CUDA error|CUDA driver error|"
+              r"CUDA runtime error|PytestUnraisableExceptionWarning|unraisable exception|"
+              r"Exception ignored in:|Exception ignored while|moduleUnload|Module\.__dealloc__",
+              re.IGNORECASE,
+          )
+          if lifecycle_error.search(output):
+              raise SystemExit("cuTile pipeline emitted CUDA or interpreter teardown errors")
+          if int(os.environ["CUTILE_PIPELINE_STATUS"]) != 0:
+              raise SystemExit("cuTile pipeline pytest process failed")
+          report = ET.parse(root / "cutile-pipeline-gpu.xml")
+          cases = report.findall(".//testcase")
+          if len(cases) != 2 or any(report.findall(".//" + tag) for tag in ("skipped", "failure", "error")):
+              raise SystemExit("Require both real cuTile pipeline cases without skips, failures or errors")
+          print("Both real cuTile pipeline cases passed without skips or teardown errors")
+          PY
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -275,6 +328,9 @@ jobs:
             ${{ runner.temp }}/cutile-gpu.log
             ${{ runner.temp }}/cutile-packages.txt
             ${{ runner.temp }}/cutile-compiler.txt
+            ${{ runner.temp }}/cutile-pipeline-gpu.xml
+            ${{ runner.temp }}/cutile-pipeline-gpu.log
+            ${{ runner.temp }}/cutile-pipeline-packages.txt
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
           if-no-files-found: error
           retention-days: 14
