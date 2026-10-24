@@ -17,7 +17,7 @@ import numpy as np
 
 from cuphoton.core.fits_options import normalize_xdr_options
 
-from .gds import GdsHeapLoader, pread_to_device
+from .gds import GdsHeapLoader, _pread_into, pread_to_device
 from .kernels import (
     apply_bzero_bscale,
     byteswap_inplace,
@@ -110,6 +110,9 @@ class GpuImageReader:
         `loader` is accepted for API parity with `GpuCompImageReader`; the
         uncompressed path is a single pread so reusing a CuFile is still a
         small win when loading many HDUs from one file.
+
+        A failed I/O wait leaves completion unknown and requires a process
+        restart. Do not reuse a caller-supplied output buffer after failure.
         """
         import cupy as cp
 
@@ -128,12 +131,9 @@ class GpuImageReader:
 
         with stream or cp.cuda.Stream.null:
             if loader is not None:
-                fut = loader._file().pread(
-                    out,
-                    size=self.nbytes,
-                    file_offset=self.file_offset,
+                _pread_into(
+                    loader._file(), out, self.nbytes, self.file_offset
                 )
-                fut.get()
             else:
                 pread_to_device(self.path, self.file_offset, self.nbytes, out)
             # FITS on disk is big-endian; byteswap to native little-endian.
@@ -437,6 +437,7 @@ class GpuCompImageReader:
         stream=None,
         keepalive=None,
         header_sizes=None,
+        _decode_checks=None,
         gzip_decoder: str = "auto",
         decompression_backend: str = "auto",
     ):
@@ -470,6 +471,11 @@ class GpuCompImageReader:
                 use_native_pool=keepalive is not None,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
+                **(
+                    {"_decode_checks": _decode_checks}
+                    if _decode_checks is not None
+                    else {}
+                ),
             )
 
     @staticmethod
@@ -482,6 +488,8 @@ class GpuCompImageReader:
         stream=None,
         keepalive=None,
         postprocess: str = "auto",
+        _decode_status=None,
+        _decode_tile_start: int = 0,
     ):
         """Restore FITS pixels without modifying the decoded input buffer.
 
@@ -503,6 +511,19 @@ class GpuCompImageReader:
         )
         if keepalive is not None:
             keepalive.extend([out, d_scatter_target])
+
+        decode_guard = (
+            (
+                int(_decode_status.status_ptr) + 4 * _decode_tile_start,
+                int(_decode_status.actual_sizes_ptr) + 8 * _decode_tile_start,
+                int(_decode_status.expected_sizes_ptr)
+                + 8 * _decode_tile_start,
+            )
+            if _decode_status is not None
+            else None
+        )
+        if decode_guard is not None and postprocess == "separate":
+            raise ValueError("deferred decode requires fused postprocessing")
 
         with stream or cp.cuda.Stream.null:
             d_tile_offsets = cp.asarray(tile_byte_offsets_np)
@@ -570,6 +591,7 @@ class GpuCompImageReader:
                     d_tile_byte_lengths,
                     *scatter_args[3:],
                     shuffled=shuffled,
+                    decode_guard=decode_guard,
                 )
 
             # Dequantize int -> float when ZSCALE/ZZERO are present.
@@ -587,6 +609,7 @@ class GpuCompImageReader:
                     d_widths,
                     d_sel_zscale,
                     d_sel_zzero,
+                    decode_guard=decode_guard,
                 )
 
         return out
@@ -682,11 +705,13 @@ class GpuCompImageReader:
         -----
         With an explicit stream, independent reads can submit while this call
         waits for GDS I/O. Reads without a stream retain the submission lock.
+        Native decode completion also waits while holding that lock.
 
         Control signals and I/O errors propagate without another CUDA wait.
         Owners remain quarantined until I/O and CUDA completion are known.
-        Failure before an I/O handle is returned leaves completion unknown and
-        requires a process restart before further GPU submissions.
+        Failure before an I/O handle is returned, or a failed KvikIO get,
+        leaves completion unknown and requires a process restart. Do not
+        reuse caller-supplied output buffers after such a failure.
         """
         normalize_xdr_options(
             {
@@ -745,7 +770,7 @@ class GpuCompImageReader:
                     _quarantine_gpu_batches([completion])
                     _mark_gpu_batches_unresolved([completion])
                     if not io_completion.io_complete:
-                        # CuFile.close can wait for pending I/O.
+                        # CuFile.close does not drain pending I/O.
                         owns_loader = False
 
             if stream is None:

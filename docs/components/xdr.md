@@ -314,6 +314,31 @@ uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; pr
 If the extension is missing, `batch_to_device` and `batch_to_device_stream`
 raise a `RuntimeError` that names the missing module and the build command.
 
+The native decoder checks every tile's completion status and decoded byte
+count. With fused postprocessing, batch readers submit decoding asynchronously
+and check its results when the GPU batch completes. Postprocessing skips any
+tile whose decode failed or returned an unexpected size, and the batch reader
+raises before returning results. Standalone decode calls and
+`postprocess="separate"` check results before returning from the decoder.
+These completion checks do not make nvCOMP a validator for untrusted
+compressed input.
+
+The native batch reader queues spans concurrently and uses KvikIO's configured
+task size and small-read GDS threshold. Each builder owns its I/O task pool;
+after an I/O error, it stops new submissions and waits for queued reads before
+releasing their file handles and output buffers. `native_read_threads` controls
+concurrency across files, while KvikIO's thread count controls the builder's
+I/O tasks. Measure throughput with representative inputs when choosing file
+and decode batch sizes.
+
+If a Python KvikIO read submission or wait raises before completion can be
+confirmed, xDR retains the affected buffers and file handles and refuses
+further Python read submissions. Restart the process before resuming xDR reads;
+do not reuse caller-supplied output buffers after that failure. KvikIO can
+consume a failed future while sibling reads are still running, and closing
+its file handle does not wait for them. A completed read with an incorrect
+byte count is rejected without this process-lifetime restriction.
+
 ## Benchmark
 
 ```bash

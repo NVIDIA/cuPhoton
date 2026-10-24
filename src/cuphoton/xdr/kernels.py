@@ -90,6 +90,18 @@ def byteswap_inplace(d_buf, itemsize: int) -> None:
     _byteswap_kernel(itemsize)(u8, size=n_items)
 
 
+def _decode_guard_source(checked: bool) -> tuple[str, str]:
+    """Skip failed tiles before reading decoded bytes or intermediates."""
+    if not checked:
+        return "", ""
+    return (
+        ", const int* decode_status, const unsigned long long* actual_sizes, "
+        "const unsigned long long* expected_sizes",
+        "if (decode_status[t] != 0 || "
+        "actual_sizes[t] != expected_sizes[t]) { return; }",
+    )
+
+
 def scatter_tiles_2d(
     d_tiles_concat,
     d_out,
@@ -105,6 +117,7 @@ def scatter_tiles_2d(
     itemsize: int,
     *,
     shuffled: bool,
+    decode_guard: tuple[int, int, int] | None = None,
 ) -> None:
     """Unshuffle and byteswap decoded FITS tiles into a 2D output image.
 
@@ -124,7 +137,9 @@ def scatter_tiles_2d(
         raise ValueError("output pixels must be contiguous")
     n_tiles = tile_byte_offsets.size
 
-    kern = _scatter_tiles_2d_kernel(itemsize, shuffled)
+    kern = _scatter_tiles_2d_kernel(
+        itemsize, shuffled, decode_guard is not None
+    )
     threads_per_block = 256
     kern(
         (n_tiles,),
@@ -142,15 +157,19 @@ def scatter_tiles_2d(
             tile_src_off_col,
             tile_full_widths,
             np.int64(pix_stride_out),
+            *(np.uint64(ptr) for ptr in decode_guard or ()),
         ),
     )
 
 
 @functools.cache
-def _scatter_tiles_2d_kernel(itemsize: int, shuffled: bool):
+def _scatter_tiles_2d_kernel(
+    itemsize: int, shuffled: bool, checked: bool = False
+):
     import cupy as cp
 
-    name = f"scatter_fits_tiles_{itemsize}_{int(shuffled)}"
+    name = f"scatter_fits_tiles_{itemsize}_{int(shuffled)}_{int(checked)}"
+    guard_args, guard_body = _decode_guard_source(checked)
     src = rf"""
     extern "C" __global__
     void {name}(
@@ -165,9 +184,10 @@ def _scatter_tiles_2d_kernel(itemsize: int, shuffled: bool):
         const int* __restrict__ src_off_row,
         const int* __restrict__ src_off_col,
         const int* __restrict__ tile_full_w,
-        long long out_row_stride_bytes
+        long long out_row_stride_bytes{guard_args}
     ) {{
         const int t = blockIdx.x;
+        {guard_body}
         const int ITEMSIZE = {itemsize};
         const long long src_off = tile_byte_offsets[t];
         const long long n_pixels = tile_byte_lengths[t] / ITEMSIZE;
@@ -360,7 +380,9 @@ def unshuffle_gzip2_tiles(
 
 
 @functools.cache
-def _dequantize_int_to_float_kernel(int_itemsize: int, float_dtype_char: str):
+def _dequantize_int_to_float_kernel(
+    int_itemsize: int, float_dtype_char: str, checked: bool = False
+):
     """Per-tile `out[p] = (float)int_buf[p] * zscale[t] + zzero[t]`.
 
     FITS ZSCALE/ZZERO quantization stores integer values in the compressed
@@ -389,9 +411,10 @@ def _dequantize_int_to_float_kernel(int_itemsize: int, float_dtype_char: str):
             f"dequantize float output must be f4/f8, got {float_dtype_char}"
         )
 
+    guard_args, guard_body = _decode_guard_source(checked)
     src = rf"""
     extern "C" __global__
-    void dequantize_tiles_i{int_itemsize}_{float_dtype_char}(
+    void dequantize_tiles_i{int_itemsize}_{float_dtype_char}_{int(checked)}(
         const {int_type}* __restrict__ int_buf,
         {float_type}* __restrict__ out,
         const int* __restrict__ origins_row,
@@ -400,9 +423,10 @@ def _dequantize_int_to_float_kernel(int_itemsize: int, float_dtype_char: str):
         const int* __restrict__ tile_w,
         const double* __restrict__ zscale,
         const double* __restrict__ zzero,
-        long long row_stride
+        long long row_stride{guard_args}
     ) {{
         const int t = blockIdx.x;
+        {guard_body}
         const int r0 = origins_row[t];
         const int c0 = origins_col[t];
         const int h  = tile_h[t];
@@ -419,7 +443,9 @@ def _dequantize_int_to_float_kernel(int_itemsize: int, float_dtype_char: str):
         }}
     }}
     """
-    name = f"dequantize_tiles_i{int_itemsize}_{float_dtype_char}"
+    name = (
+        f"dequantize_tiles_i{int_itemsize}_{float_dtype_char}_{int(checked)}"
+    )
     return cp.RawKernel(src, name)
 
 
@@ -432,6 +458,8 @@ def dequantize_int_to_float(
     tile_w,
     zscale,
     zzero,
+    *,
+    decode_guard: tuple[int, int, int] | None = None,
 ):
     """Read quantized ints, dequantize per tile, and write floats.
 
@@ -445,7 +473,9 @@ def dequantize_int_to_float(
     if d_int.dtype not in (cp.int32, cp.int64):
         raise ValueError("d_int must be int32 or int64")
     float_char = "f4" if d_float_out.dtype == cp.float32 else "f8"
-    kern = _dequantize_int_to_float_kernel(d_int.itemsize, float_char)
+    kern = _dequantize_int_to_float_kernel(
+        d_int.itemsize, float_char, decode_guard is not None
+    )
     n_tiles = origins_row.size
     row_stride = d_float_out.strides[0] // d_float_out.itemsize
     kern(
@@ -461,6 +491,7 @@ def dequantize_int_to_float(
             zscale,
             zzero,
             np.int64(row_stride),
+            *(np.uint64(ptr) for ptr in decode_guard or ()),
         ),
     )
 

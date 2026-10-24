@@ -351,6 +351,9 @@ def get_extensions():
             define_macros=[
                 ("KVIKIO_CUFILE_FOUND", "1"),
                 ("KVIKIO_CUFILE_VERSION_API_FOUND", "1"),
+                # Match the BS::thread_pool target exported by KvikIO 26.6;
+                # this flag changes the pool's layout across the library ABI.
+                ("BS_THREAD_POOL_ENABLE_PAUSE", "1"),
             ],
             extra_compile_args=[
                 "-O3",

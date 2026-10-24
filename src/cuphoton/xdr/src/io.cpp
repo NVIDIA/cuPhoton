@@ -11,7 +11,9 @@
 
 #include <cuda_runtime.h>
 #include <fitsio.h>
+#include <kvikio/defaults.hpp>
 #include <kvikio/file_handle.hpp>
+#include <kvikio/utils.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -28,6 +30,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -947,6 +950,42 @@ py::list plan_native_files(
     return out;
 }
 
+// Keep at most one drained pool between calls. Active builders exclusively
+// own their pool so a failure never drains another builder's reads.
+class NativeReadPoolCache {
+public:
+    std::unique_ptr<kvikio::ThreadPool> acquire() {
+        std::unique_ptr<kvikio::ThreadPool> pool;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pool = std::move(idle_);
+        }
+        const auto threads = kvikio::defaults::thread_pool_nthreads();
+        if (pool && pool->get_thread_count() == threads) {
+            return pool;
+        }
+        pool.reset();
+        return std::make_unique<kvikio::ThreadPool>(threads);
+    }
+
+    void release(std::unique_ptr<kvikio::ThreadPool> pool) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!idle_) {
+            idle_ = std::move(pool);
+        }
+        // Any excess pool is destroyed after the cache lock is released.
+    }
+
+private:
+    std::mutex mutex_;
+    std::unique_ptr<kvikio::ThreadPool> idle_;
+};
+
+NativeReadPoolCache& native_read_pool_cache() {
+    static NativeReadPoolCache cache;
+    return cache;
+}
+
 class NativeBatchBuilder {
 public:
     NativeBatchBuilder(
@@ -968,9 +1007,15 @@ public:
             throw std::invalid_argument("native_read_threads must be >= 1");
         }
         max_outstanding_batches_ = batch_queue_depth_ + native_read_threads_;
-        workers_.reserve(native_read_threads_);
-        for (std::size_t i = 0; i < native_read_threads_; ++i) {
-            workers_.emplace_back(&NativeBatchBuilder::worker_loop, this);
+        io_pool_ = native_read_pool_cache().acquire();
+        try {
+            workers_.reserve(native_read_threads_);
+            for (std::size_t i = 0; i < native_read_threads_; ++i) {
+                workers_.emplace_back(&NativeBatchBuilder::worker_loop, this);
+            }
+        } catch (...) {
+            request_stop();
+            throw;
         }
     }
 
@@ -982,6 +1027,7 @@ public:
     }
 
     void request_stop() {
+        std::lock_guard<std::mutex> stop_lock(stop_mutex_);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stop_ = true;
@@ -993,6 +1039,10 @@ public:
             if (worker.joinable()) {
                 worker.join();
             }
+        }
+        if (io_pool_) {
+            io_pool_->wait();
+            native_read_pool_cache().release(std::move(io_pool_));
         }
     }
 
@@ -1143,61 +1193,83 @@ private:
     ReadyFile read_file(const ReadTask& task) {
         const auto& plan = task.plan;
         kvikio::FileHandle file_handle(plan.path, "r");
-        struct PendingRead {
-            std::future<std::size_t> future;
-            std::size_t expected = 0;
-        };
-        std::vector<PendingRead> pending_reads;
-        pending_reads.reserve(plan.spans.size() + plan.direct_spans.size());
+        std::vector<std::pair<std::future<std::size_t>, std::size_t>> reads;
+        reads.reserve(plan.spans.size() + plan.direct_spans.size());
+        auto submit_span =
+            [&](void* dst, std::size_t nbytes, std::size_t file_offset) {
+                auto [base, allocation_size, device_offset] =
+                    kvikio::get_alloc_info(dst);
+                if (device_offset > allocation_size
+                    || nbytes > allocation_size - device_offset) {
+                    throw std::invalid_argument(
+                        "native read span exceeds device allocation");
+                }
+                std::shared_lock<std::shared_mutex> lock(io_mutex_);
+                if (io_error_) {
+                    std::rethrow_exception(io_error_);
+                }
+                reads.emplace_back(
+                    file_handle.pread(
+                        dst,
+                        nbytes,
+                        file_offset,
+                        kvikio::defaults::task_size(),
+                        kvikio::defaults::gds_threshold(),
+                        false,
+                        io_pool_.get()),
+                    nbytes);
+            };
 
-        for (const auto& span : plan.spans) {
-            if (span.nbytes == 0) {
-                continue;
+        try {
+            for (const auto& span : plan.spans) {
+                if (span.nbytes == 0) {
+                    continue;
+                }
+                auto batch = task.batch;
+                if (!batch || !batch->device_buffer.owner) {
+                    throw std::runtime_error(
+                        "native batch device buffer is not allocated");
+                }
+                auto dst = static_cast<void*>(
+                    batch->device_buffer.data + task.batch_offset
+                    + static_cast<std::size_t>(span.host_offset));
+                submit_span(
+                    dst,
+                    static_cast<std::size_t>(span.nbytes),
+                    static_cast<std::size_t>(span.file_offset));
             }
-            auto batch = task.batch;
-            if (!batch || !batch->device_buffer.owner) {
-                throw std::runtime_error(
-                    "native batch device buffer is not allocated");
-            }
-            auto dst = static_cast<void*>(
-                batch->device_buffer.data + task.batch_offset
-                + static_cast<std::size_t>(span.host_offset));
-            auto future = file_handle.pread(
-                dst,
-                static_cast<std::size_t>(span.nbytes),
-                static_cast<std::size_t>(span.file_offset),
-                kvikio::defaults::task_size(),
-                kvikio::defaults::gds_threshold(),
-                false);
-            pending_reads.push_back(
-                PendingRead{
-                    std::move(future), static_cast<std::size_t>(span.nbytes)});
-        }
 
-        for (const auto& span : plan.direct_spans) {
-            if (span.nbytes == 0) {
-                continue;
+            for (const auto& span : plan.direct_spans) {
+                if (span.nbytes == 0) {
+                    continue;
+                }
+                auto dst = reinterpret_cast<void*>(span.device_ptr);
+                submit_span(
+                    dst,
+                    static_cast<std::size_t>(span.nbytes),
+                    static_cast<std::size_t>(span.file_offset));
             }
-            auto dst = reinterpret_cast<void*>(span.device_ptr);
-            auto future = file_handle.pread(
-                dst,
-                static_cast<std::size_t>(span.nbytes),
-                static_cast<std::size_t>(span.file_offset),
-                kvikio::defaults::task_size(),
-                kvikio::defaults::gds_threshold(),
-                false);
-            pending_reads.push_back(
-                PendingRead{
-                    std::move(future), static_cast<std::size_t>(span.nbytes)});
-        }
 
-        for (auto& read : pending_reads) {
-            const auto got = read.future.get();
-            if (got != read.expected) {
-                throw std::runtime_error("short KvikIO read on " + plan.path);
+            for (auto& [future, nbytes] : reads) {
+                const auto got = future.get();
+                if (got != nbytes) {
+                    throw std::runtime_error(
+                        "short KvikIO read on " + plan.path);
+                }
+                kvikio_reads_.fetch_add(1);
+                kvikio_bytes_.fetch_add(static_cast<std::uint64_t>(got));
             }
-            kvikio_reads_.fetch_add(1);
-            kvikio_bytes_.fetch_add(static_cast<std::uint64_t>(got));
+        } catch (...) {
+            // An aggregate pread future may throw before sibling I/O tasks
+            // finish. Prevent further submissions and drain our entire pool
+            // while this file and its destinations are still alive. Other
+            // workers keep their own owners until their futures/drain finish.
+            std::unique_lock<std::shared_mutex> lock(io_mutex_);
+            if (!io_error_) {
+                io_error_ = std::current_exception();
+            }
+            io_pool_->wait();
+            std::rethrow_exception(io_error_);
         }
 
         ReadyFile file;
@@ -1278,12 +1350,16 @@ private:
     int device_id_ = -1;
 
     mutable std::mutex mutex_;
+    std::mutex stop_mutex_;
     std::condition_variable cv_not_empty_;
     std::condition_variable cv_submit_;
     std::condition_variable cv_ready_;
     std::deque<ReadTask> pending_;
     std::map<std::uint64_t, std::shared_ptr<ReadyBatch>> completed_;
     std::vector<std::thread> workers_;
+    std::unique_ptr<kvikio::ThreadPool> io_pool_;
+    std::shared_mutex io_mutex_;
+    std::exception_ptr io_error_;
     std::uint64_t next_submit_batch_id_ = 0;
     std::uint64_t next_emit_batch_id_ = 0;
     std::size_t outstanding_batches_ = 0;
