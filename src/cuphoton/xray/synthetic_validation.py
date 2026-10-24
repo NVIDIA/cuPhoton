@@ -174,7 +174,14 @@ def distort_trace(
         raise ValueError("distortion amount must be finite")
     if kind == "gaussian_envelope" and amount <= 0:
         raise ValueError("gaussian_envelope amount must be positive")
+    time = np.asarray(time, dtype=np.float64)
+    if time.ndim != 1 or time.size == 0 or not np.all(np.isfinite(time)):
+        raise ValueError(
+            "time must be a nonempty finite one-dimensional array"
+        )
     span = float(time[-1] - time[0])
+    if kind in {"chirp", "baseline_drift"} and span == 0:
+        raise ValueError(f"{kind} requires a nonzero time span")
     out = np.full(time.shape, float(constant))
     for k, m in enumerate(modes):
         phase = m.angular_frequency * time + m.phase
@@ -1136,16 +1143,16 @@ def write_validation_run(
 ) -> dict[str, Any]:
     """Write ``summary.json`` and, when Bokeh is available, the figure
     into ``output_dir`` (created if needed). Returns the summary."""
+    summary = build_summary(sweeps, command=command)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     have_figure = write_validation_figure(
         sweeps, out / figure_name, title="xray linear prediction validation"
     )
-    artifacts = {
+    summary["artifacts"] = {
         "summary": "summary.json",
         "figure": figure_name if have_figure else None,
     }
-    summary = build_summary(sweeps, command=command, artifacts=artifacts)
     with open(out / "summary.json", "w", encoding="utf-8", newline="\n") as f:
         json.dump(summary, f, indent=2, sort_keys=True, allow_nan=False)
         f.write("\n")

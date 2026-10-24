@@ -672,3 +672,26 @@ def test_refined_validation_is_available_without_the_cli(tmp_path):
         json.loads((tmp_path / "summary.json").read_text())
         == report.to_dict()
     )
+
+
+@pytest.mark.parametrize("time", [[], [[0.0, 1.0]], [0.0, float("nan")]])
+def test_distort_trace_rejects_invalid_time(time):
+    with pytest.raises(ValueError, match="time must be"):
+        distort_trace(time, (), 1.0, "glitch", 0.5)
+
+
+@pytest.mark.parametrize("kind", ["chirp", "baseline_drift"])
+def test_span_based_distortions_reject_zero_span(kind):
+    with pytest.raises(ValueError, match="nonzero time span"):
+        distort_trace(np.zeros(2), (), 1.0, kind, 0.5)
+    # Non-span distortions remain meaningful for a single sample.
+    np.testing.assert_array_equal(
+        distort_trace([0.0], (), 1.0, "glitch", 0.5), [1.5]
+    )
+
+
+def test_invalid_validation_run_does_not_create_output(tmp_path):
+    out = tmp_path / "run"
+    with pytest.raises(ValueError, match="at least one sweep"):
+        write_validation_run(out, [])
+    assert not out.exists()
