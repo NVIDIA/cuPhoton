@@ -1060,12 +1060,12 @@ def _validate_execution_options(
     config: LMConfig | None,
 ) -> None:
     if (
-        backend == "native"
+        backend in {"native", "numba-cuda-mlir"}
         and isinstance(model, GaussianDipoleModel)
         and type(model) is not GaussianDipoleModel
     ):
         raise ValueError(
-            "native xFit does not support custom Gaussian models"
+            f"{backend} xFit does not support custom Gaussian models"
         )
     if backend in {"cutile", "native", "numba-cuda-mlir"}:
         if isinstance(model, StampDipoleModel) or model == "stamp":

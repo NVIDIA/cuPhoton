@@ -26,6 +26,32 @@ from cuphoton.xfit import (
 _BACKEND = "numba-cuda-mlir"
 
 
+@pytest.mark.parametrize("device_result", [False, True])
+def test_custom_gaussian_is_rejected_before_cuda(monkeypatch, device_result):
+    import cuphoton.xfit.api as api
+
+    class CustomGaussian(GaussianDipoleModel):
+        def _evaluate_positive_unchecked(self, parameters, *, mode):
+            return 2 * super()._evaluate_positive_unchecked(
+                parameters, mode=mode
+            )
+
+        def to_backend(self, backend, *, dtype=None):
+            pytest.fail("converted custom model")
+
+    model = CustomGaussian((7, 9))
+    monkeypatch.setattr(
+        api, "resolve_backend", lambda *a, **k: pytest.fail("resolved CUDA")
+    )
+    monkeypatch.setattr(api, "_load_cupy", lambda: pytest.fail("loaded CUDA"))
+    fit = fit_dipoles_device if device_result else fit_dipoles
+    with pytest.raises(
+        ValueError,
+        match="numba-cuda-mlir xFit does not support custom Gaussian",
+    ):
+        fit(np.zeros((1, 7, 9)), model=model, backend=_BACKEND)
+
+
 @pytest.fixture(scope="module")
 def gpu():
     cp = pytest.importorskip("cupy")
