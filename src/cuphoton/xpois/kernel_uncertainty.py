@@ -242,7 +242,8 @@ def kernel_fit_covariance(
                 stamp,
                 mode="same",
             ).ravel()
-        resampled = (footprint * source_flat) @ footprint.T
+        footprint *= xp.sqrt(source_flat)
+        resampled = footprint @ footprint.T
         covariance = covariance + covariance @ resampled @ covariance
 
     return KernelFitCovariance(
