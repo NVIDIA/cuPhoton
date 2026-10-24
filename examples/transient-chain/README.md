@@ -117,7 +117,7 @@ set it, `null` when neither was available and the `psf_flux` columns are NaN).
 `{"selections": [ ... ]}` with one object per target image (a bench `{"shards": [...]}` is
 accepted too). The keys depend on `survey.name`.
 
-For `rubin` (the default): `visit`, `detector`, `band`, `visit_image`, and either
+For `survey.name: rubin`: `visit`, `detector`, `band`, `visit_image`, and either
 `template_coadds` (a list of coadd patch files, mosaicked onto the visit grid) or `template_fits`
 (a template already on the visit grid). `date`, `tract`, `patch` and `physical_filter` are
 copied into the catalog when present.

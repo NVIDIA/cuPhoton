@@ -495,6 +495,33 @@ def test_template_fits_override_carries_the_variance_hdu(rubin_visit):
     assert at.weights.shape == (1, 1, 1) and at.is_translation.all()
 
 
+@pytest.mark.parametrize(
+    "selection_key", ["template_fits", "template_coadds"]
+)
+def test_rubin_template_rejects_mismatched_variance_shape(
+    rubin_visit, tmp_path, selection_key
+):
+    from astropy.io import fits
+
+    malformed = tmp_path / "mismatched_template.fits"
+    with fits.open(rubin_visit["template_coadds"][0]) as hdul:
+        hdul[3].data = np.full((8, 8), 4.0, np.float32)
+        hdul.writeto(malformed)
+    sel = dict(rubin_visit)
+    sel[selection_key] = (
+        str(malformed)
+        if selection_key == "template_fits"
+        else [str(malformed)]
+    )
+    io = host_reader()
+    adapter = make_adapter(
+        {"name": "rubin", "params": {"coadd_variance_hdu": 3}}
+    )
+    target = adapter.load_target(sel, io)
+    with pytest.raises(ValueError, match="template variance has shape"):
+        adapter.template(sel, target, io, mapping_grid_step=16)
+
+
 def test_generic_template_inverse_variance_and_shape_mismatch(
     generic_pair, tmp_path
 ):

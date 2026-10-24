@@ -153,7 +153,13 @@ class RubinAdapter(SurveyAdapter):
         def planes(arrays):
             img, mask = arrays[0], arrays[1]
             var = None if len(arrays) < 3 else arrays[2]
-            return img, mask, variance_from(var, p["variance_kind"], xp)
+            var = variance_from(var, p["variance_kind"], xp)
+            if var is not None and tuple(var.shape) != tuple(img.shape):
+                raise ValueError(
+                    f"template variance has shape {tuple(var.shape)}, the "
+                    f"template image {tuple(img.shape)}"
+                )
+            return img, mask, var
 
         override = sel.get("template_fits")
         if override:
