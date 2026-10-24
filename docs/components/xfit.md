@@ -241,8 +241,16 @@ q.lobe_flux, q.lobe_flux_error
 ```
 
 Each uncertainty is `sqrt(g C g^T)`, with `C` the fit covariance and `g`
-the quantity's derivatives with respect to the fitted parameters. The
-covariance's cross terms are needed: amplitude and widths are
+the quantity's derivatives with respect to the fitted parameters. Live fit
+results retain `covariance_factor`, a matrix `F` with `C = F F^T`.
+The implementation computes `g F` before taking its squared norm, preserving
+small uncertainties that rounding large, correlated covariance entries can
+otherwise erase. Results constructed without the optional factor use the
+dense covariance. The existing v1 fit artifacts store only the dense
+covariance; calculate derived uncertainties from the live result to use
+the factor.
+
+The covariance's cross terms are needed: amplitude and widths are
 anticorrelated, so combining `standard_errors` as if independent overstates
 the lobe flux uncertainty. For 400 noise realizations of one dipole with
 well-separated lobes, the propagated uncertainties match the scatter of the
