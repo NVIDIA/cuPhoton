@@ -9,12 +9,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from cuphoton.ximage.backends import torch_gpu_preprocess
 from cuphoton.ximage.backends.torch_gpu_preprocess import (
     _coadd,
     prepare_torch_reconstruction_inputs,
 )
 from cuphoton.ximage.config import ReconstructionConfig
-from cuphoton.ximage.data import XImageBundle
+from cuphoton.ximage.data import XImageBundle, load_ximage_bundle
 from cuphoton.ximage.preprocess import (
     coadd,
     pad_with_data,
@@ -73,7 +74,12 @@ def _config(
     )
 
 
-def _expected_inputs(bundle: XImageBundle, config: ReconstructionConfig):
+def _expected_inputs(
+    bundle: XImageBundle,
+    config: ReconstructionConfig,
+    psfs: np.ndarray | None = None,
+):
+    psfs = np.asarray(bundle.psfs if psfs is None else psfs)
     images, masks, variances = prepare_reconstruction_inputs(
         bundle,
         mask_mode=config.mask.mode,
@@ -83,28 +89,35 @@ def _expected_inputs(bundle: XImageBundle, config: ReconstructionConfig):
         images,
         masks=masks,
         variances=variances,
-        center_roi=list(config.roi.center),
+        center_roi=config.roi.center,
         height_roi=config.roi.height,
         width_roi=config.roi.width,
     )
-    y0, _, _ = pad_with_data(
-        images,
-        masks=masks,
-        variances=variances,
-        center_roi=list(config.roi.center),
-        height_roi=config.roi.height,
-        width_roi=config.roi.width,
-        srf=config.srf,
-        psf_size=bundle.psfs.shape[0],
+    if config.padding == "VALID":
+        y0, _, _ = pad_with_data(
+            images,
+            masks=masks,
+            variances=variances,
+            center_roi=config.roi.center,
+            height_roi=config.roi.height,
+            width_roi=config.roi.width,
+            srf=config.srf,
+            psf_size=psfs.shape[0],
+        )
+    else:
+        y0 = y
+    x0 = (
+        np.full_like(y0[:, :, :, [0]], 0.1)
+        if config.x_initialization == "constant"
+        else coadd(y0, method=config.x_initialization, positive=True)
     )
-    x0 = coadd(y0, method=config.x_initialization, positive=True)
     return {
         "x0": np.transpose(x0, (0, 3, 1, 2)),
         "y": np.transpose(y, (0, 3, 1, 2)),
         "m": np.transpose(m, (0, 3, 1, 2)),
         "v": np.transpose(v, (0, 3, 1, 2)),
         "w": np.transpose(m / np.maximum(v, 1e-30), (0, 3, 1, 2)),
-        "f": np.transpose(bundle.psfs, (3, 2, 0, 1)),
+        "f": np.transpose(psfs, (3, 2, 0, 1)),
     }
 
 
@@ -152,6 +165,148 @@ def test_torch_preprocess_matches_numpy_inputs(
     assert "unmasked_fraction" in actual.metadata["mask_summary"]
 
 
+@pytest.mark.parametrize(
+    "padding,center,size,srf,psf_size,initialization,mask_mode,support",
+    [
+        ("SAME", (5, 6), (4, 6), 1, 3, "mean", "non_conservative", (4, 6)),
+        ("SAME", None, (5, 7), 1, 3, "median", "conservative", (5, 7)),
+        ("VALID", (3, 3), (5, 4), 1, 3, "median", "conservative", (7, 6)),
+        ("VALID", (4, 4), (5, 4), 2, 7, "constant", "none", (9, 8)),
+        ("SAME", None, (None, None), 1, 3, "mean", "none", (10, 10)),
+    ],
+    ids=["even", "odd", "valid-edge", "external-psf-srf", "full-frame"],
+)
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
+)
+def test_torch_preprocess_transfers_only_required_source_pixels(
+    monkeypatch,
+    padding,
+    center,
+    size,
+    srf,
+    psf_size,
+    initialization,
+    mask_mode,
+    support,
+    device,
+):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    bundle = _bundle()
+    bundle.arrays["images"] = bundle.images - 150
+    bundle.arrays["variances"] = np.linspace(0.5, 2.0, 200).reshape(
+        1, 10, 10, 2
+    )
+    config = _config(mask_mode=mask_mode).model_copy(
+        update={
+            "padding": padding,
+            "srf": srf,
+            "x_initialization": initialization,
+        }
+    )
+    config.roi.center = center
+    config.roi.height, config.roi.width = size
+    psfs = np.zeros((psf_size, psf_size, 1, 2), dtype=np.float64)
+    psfs[psf_size // 2, psf_size // 2, 0, :] = 1.0
+    expected = _expected_inputs(bundle, config, psfs)
+    converted_shapes = []
+    convert = torch_gpu_preprocess._as_device_tensor
+
+    def record_transfer(torch, value, *, device, dtype):
+        converted_shapes.append(value.shape)
+        return convert(torch, value, device=device, dtype=dtype)
+
+    monkeypatch.setattr(
+        torch_gpu_preprocess, "_as_device_tensor", record_transfer
+    )
+    actual = prepare_torch_reconstruction_inputs(
+        bundle,
+        config,
+        device=torch.device(device),
+        dtype=torch.float64,
+        psfs=psfs,
+    )
+
+    height, width = support
+    assert converted_shapes[:3] == [
+        (1, height, width, 2),
+        (1, height, width, 2),
+        (1, height, width, 12, 2),
+    ]
+    for name, value in expected.items():
+        tensor = getattr(actual, name)
+        assert tensor.device.type == device
+        np.testing.assert_allclose(tensor.cpu().numpy(), value, atol=1e-12)
+    assert actual.metadata["raw_shapes"] == {
+        "images": [1, 10, 10, 2],
+        "variances": [1, 10, 10, 2],
+        "masks": [1, 10, 10, 12, 2],
+        "psfs": list(psfs.shape),
+    }
+    assert config.roi.center == center
+    assert (config.roi.height, config.roi.width) == size
+
+
+@pytest.mark.parametrize(
+    "padding,center,error",
+    [
+        ("SAME", (1, 5), "ROI exceeds image bounds"),
+        ("VALID", (2, 5), "Padded ROI exceeds the input image bounds"),
+    ],
+)
+def test_torch_preprocess_checks_source_bounds_before_transfer(
+    monkeypatch, padding, center, error
+):
+    config = _config().model_copy(update={"padding": padding})
+    config.roi.center = center
+
+    def unexpected_transfer(*args, **kwargs):
+        pytest.fail("Invalid ROI must be rejected before transferring arrays")
+
+    monkeypatch.setattr(
+        torch_gpu_preprocess, "_as_device_tensor", unexpected_transfer
+    )
+    with pytest.raises(ValueError, match=error):
+        prepare_torch_reconstruction_inputs(
+            _bundle(), config, device=torch.device("cpu"), dtype=torch.float64
+        )
+
+
+def test_torch_preprocess_slices_lazy_hdf5_before_materializing(
+    tmp_path, monkeypatch
+):
+    h5py = pytest.importorskip("h5py")
+    bundle = _bundle()
+    config = _config()
+    expected = _expected_inputs(bundle, config)
+    path = tmp_path / "bundle.h5"
+    with h5py.File(path, "w") as handle:
+        for name, value in bundle.arrays.items():
+            handle.create_dataset(name, data=value)
+    materialize = h5py.Dataset.__array__
+
+    def reject_full_spatial_array(dataset, *args, **kwargs):
+        if dataset.name in ("/images", "/variances", "/masks"):
+            pytest.fail(
+                "Spatial datasets must be sliced before materializing"
+            )
+        return materialize(dataset, *args, **kwargs)
+
+    monkeypatch.setattr(h5py.Dataset, "__array__", reject_full_spatial_array)
+    with load_ximage_bundle(path, prefer=("hdf5",)) as lazy_bundle:
+        actual = prepare_torch_reconstruction_inputs(
+            lazy_bundle,
+            config,
+            device=torch.device("cpu"),
+            dtype=torch.float64,
+        )
+    for name, value in expected.items():
+        np.testing.assert_allclose(
+            getattr(actual, name).numpy(), value, atol=1e-12
+        )
+
+
 def test_torch_preprocess_rejects_unsupported_conservative_dilation() -> None:
     with pytest.raises(NotImplementedError, match="dilation_factor=1"):
         prepare_torch_reconstruction_inputs(
@@ -191,7 +346,8 @@ def test_torch_same_padding_accepts_full_image_at_bounds() -> None:
         bundle, config, device=torch.device("cpu"), dtype=torch.float64
     )
     expected = np.transpose(
-        bundle.images / bundle.exp_times.reshape(1, 1, 1, -1), (0, 3, 1, 2)
+        bundle.images / np.asarray(bundle.exp_times).reshape(1, 1, 1, -1),
+        (0, 3, 1, 2),
     )
     np.testing.assert_array_equal(prepared.y.numpy(), expected)
 
