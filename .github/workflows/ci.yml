@@ -149,7 +149,7 @@ jobs:
           assert float((tensor * tensor).sum().item()) == 1240.0
           print("CuPy and PyTorch CUDA kernels and DLPack passed")
           PY
-      - name: Run xFit GPU parity tests
+      - name: Run xFit and xRay GPU parity tests
         run: >-
           uv run --no-sync pytest -q -rs
           --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
@@ -157,6 +157,7 @@ jobs:
           tests/xfit/test_models.py::test_cupy_finite_difference_theta_fix_matches_numpy
           tests/xfit/test_models.py::test_fit_dipoles_device_matches_portable_result_without_bulk_d2h
           tests/xfit/test_solver.py::test_cupy_tall_jacobian_diagnostics_match_numpy
+          tests/xray/test_mode_refinement_batched.py::test_batched_refinement_on_cupy_matches_numpy
       - name: Require all selected tests to execute
         run: |
           uv run --no-sync python - <<'PY'
@@ -166,11 +167,11 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 6, len(cases)
+          assert len(cases) == 9, len(cases)
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
-          print("All 6 selected tests passed without skips")
+          print("All 9 selected tests passed without skips")
           PY
       - name: Run native xFit GPU tests
         run: >-
