@@ -18,6 +18,7 @@ from cuphoton.xrep import (
     reproject_stack,
 )
 from cuphoton.xrep.backends import get_backend
+from cuphoton.xrep.interpolation import sample_lanczos_variance_array
 
 cp = pytest.importorskip("cupy")
 
@@ -396,6 +397,193 @@ def test_cupy_masked_reproject_matches_cpu(interpolation: str) -> None:
     assert np.array_equal(result.mask, cpu.mask)
 
 
+@pytest.mark.parametrize("area_scaling", [True, False])
+@pytest.mark.parametrize("case", ["plain", "source_mask", "prepared"])
+@pytest.mark.parametrize(
+    ("interpolation", "kernel", "kernel_options"),
+    [
+        ("bilinear", "elementwise", {}),
+        ("lanczos3", "elementwise", {}),
+        ("lanczos3", "raw", {}),
+        ("lanczos3", "raw", {"lanczos_a": 2, "two_a_footprint": False}),
+    ],
+)
+def test_cupy_device_variance_matches_cpu_masked_variance(
+    interpolation: str,
+    kernel: str,
+    kernel_options: dict,
+    case: str,
+    area_scaling: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUPHOTON_XREP_CUPY_LANCZOS_KERNEL", kernel)
+    rng = np.random.default_rng(11)
+    image = rng.normal(size=(12, 12))
+    variance = rng.uniform(0.5, 3.0, size=image.shape)
+    variance[5, 6] = np.nan
+    variance[2, 3] = np.inf
+    mask = np.zeros(image.shape, dtype=np.uint16)
+    mask[4, 4] = 8
+    scale = np.array([1.2, 0.8], dtype=np.float64)
+    offset = np.array([-1.75, 2.375], dtype=np.float64)
+    spec = ReprojectionSpec(
+        mapping=lambda coords: (
+            np.asarray(coords, dtype=np.float64) * scale + offset
+        ),
+        output_bbox=BBox(min_x=0, min_y=0, width=12, height=9),
+        interpolation=interpolation,
+        mapping_grid_step=1,
+        area_scaling=area_scaling,
+        **kernel_options,
+    )
+
+    cpu = reproject_masked_array(
+        image,
+        variance,
+        mask,
+        spec,
+        backend="cpu",
+        variance_fill_value=-1.0,
+    )
+    kwargs = {}
+    if case == "source_mask":
+        kwargs["source_mask"] = cp.asarray(mask)
+    elif case == "prepared":
+        kwargs["prepared"] = prepare_reprojection(
+            spec,
+            source_shape=image.shape,
+            xp=cp,
+        )
+        reproject_array_device(
+            cp.asarray(rng.normal(size=image.shape)),
+            spec,
+            source_variance=cp.ones(image.shape),
+            **kwargs,
+        )
+    device = reproject_array_device(
+        cp.asarray(image),
+        spec,
+        source_variance=cp.asarray(variance),
+        variance_fill_value=-1.0,
+        **kwargs,
+    )
+    image_only = reproject_array_device(cp.asarray(image), spec, **kwargs)
+
+    assert isinstance(device.variance, cp.ndarray)
+    assert device.variance.dtype == cp.float64
+    result = cp.asnumpy(device.variance)
+    assert np.any(result == -1.0)
+    assert np.any(~np.isfinite(result))
+    assert np.allclose(
+        result, cpu.variance, atol=0.0, rtol=1e-12, equal_nan=True
+    )
+    assert np.allclose(
+        cp.asnumpy(device.image),
+        cpu.image,
+        atol=1e-10,
+        rtol=1e-12,
+        equal_nan=True,
+    )
+    assert np.allclose(
+        cp.asnumpy(device.image),
+        cp.asnumpy(image_only.image),
+        atol=1e-12,
+        rtol=0.0,
+        equal_nan=True,
+    )
+    assert np.array_equal(
+        cp.asnumpy(device.mask), cp.asnumpy(image_only.mask)
+    )
+    if case == "source_mask":
+        expected_mask = reproject_array(
+            image, spec, source_mask=mask, backend="cpu"
+        ).mask
+        assert np.array_equal(cp.asnumpy(device.mask), expected_mask)
+    for key in (
+        "variance_propagation",
+        "variance_covariance_propagated",
+        "variance_area_scaling_power",
+    ):
+        assert device.metadata[key] == cpu.metadata[key]
+    expected_kernel = "elementwise" if kernel_options else kernel
+    if interpolation == "lanczos3":
+        assert device.metadata["lanczos_kernel"] == expected_kernel
+
+
+def test_cupy_device_variance_is_none_when_not_requested() -> None:
+    source = cp.arange(64, dtype=cp.float64).reshape(8, 8)
+    spec = ReprojectionSpec(
+        mapping=lambda coords: np.asarray(coords, dtype=np.float64),
+        output_bbox=BBox(min_x=0, min_y=0, width=8, height=8),
+        interpolation="lanczos3",
+        mapping_grid_step=1,
+    )
+
+    result = reproject_array_device(source, spec)
+
+    assert result.variance is None
+    assert "variance_propagation" not in result.metadata
+
+
+def test_cupy_device_variance_passes_negative_input_through() -> None:
+    source = cp.ones((4, 4), dtype=cp.float64)
+    spec = ReprojectionSpec(
+        mapping=lambda coords: np.asarray(coords, dtype=np.float64),
+        output_bbox=BBox(min_x=0, min_y=0, width=4, height=4),
+        interpolation="bilinear",
+        mapping_grid_step=1,
+    )
+
+    result = reproject_array_device(
+        source,
+        spec,
+        source_variance=-2.0 * cp.ones((4, 4)),
+    )
+
+    assert np.array_equal(cp.asnumpy(result.variance), np.full((4, 4), -2.0))
+
+
+@pytest.mark.parametrize("specialized", [False, True])
+def test_cupy_lanczos_variance_weight_sum_fallback_matches_host(
+    specialized: bool,
+) -> None:
+    # The fallback is defensive: the backends mark positions outside the
+    # source invalid before the kernel runs, so this calls the kernel
+    # directly with a valid flag the backends would never set.
+    rng = np.random.default_rng(5)
+    image = rng.normal(size=(6, 6))
+    variance = rng.uniform(0.5, 3.0, size=image.shape)
+    x = np.array([[-10.0, 2.5]])
+    y = np.array([[-10.0, 3.25]])
+
+    out, out_var = cupy_kernels.reproject_with_variance_cupy(
+        cp.asarray(image),
+        cp.asarray(variance),
+        cp.asarray(x),
+        cp.asarray(y),
+        cp.ones(x.shape, dtype=cp.bool_),
+        cp.full(x.shape, 2.0),
+        interpolation="lanczos3",
+        lanczos3_specialized=specialized,
+        area_scaling=True,
+        fill_value=-99.0,
+        variance_fill_value=-7.0,
+    )
+    host_var = sample_lanczos_variance_array(variance, x, y, fill_value=-7.0)
+    device_image = sample_lanczos_cupy(
+        cp.asarray(image), cp.asarray(x), cp.asarray(y)
+    )
+
+    assert host_var[0, 0] == -7.0
+    assert np.allclose(
+        cp.asnumpy(out_var), 4.0 * host_var, atol=0.0, rtol=1e-12
+    )
+    assert np.allclose(
+        cp.asnumpy(out), 2.0 * cp.asnumpy(device_image), rtol=1e-12
+    )
+    assert cp.asnumpy(out)[0, 0] == 2.0 * image[0, 0]
+
+
 @pytest.mark.parametrize(
     ("interpolation", "kernel"),
     [
@@ -430,6 +618,63 @@ def test_cupy_ignores_zero_weight_nonfinite_neighbors(
 
     assert result.image[0, 0] == pytest.approx(5.0)
     assert result.variance[0, 0] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    ("lanczos_a", "two_a_footprint"),
+    [(9, True), (8, False), (0, True)],
+)
+def test_cupy_fused_variance_rejects_lanczos_window_over_register_limit(
+    lanczos_a: int, two_a_footprint: bool
+) -> None:
+    source = cp.ones((4, 4), dtype=cp.float64)
+    x = cp.full((1, 1), 1.5)
+    with pytest.raises(ValueError, match="lanczos_a must be between 1 and"):
+        cupy_kernels.reproject_with_variance_cupy(
+            source,
+            source,
+            x,
+            x,
+            cp.ones(x.shape, dtype=cp.bool_),
+            cp.ones(x.shape),
+            interpolation="lanczos3",
+            lanczos_a=lanczos_a,
+            two_a_footprint=two_a_footprint,
+            area_scaling=False,
+            fill_value=0.0,
+            variance_fill_value=0.0,
+        )
+
+
+def test_cupy_fused_variance_accepts_largest_lanczos_window() -> None:
+    rng = np.random.default_rng(9)
+    image = rng.normal(size=(24, 24))
+    variance = rng.uniform(0.5, 3.0, size=image.shape)
+    x = cp.asarray([[11.3, 12.5]])
+    y = cp.asarray([[10.7, 9.25]])
+    kwargs = dict(area_scaling=False, fill_value=0.0, variance_fill_value=0.0)
+
+    for lanczos_a, two_a_footprint in ((8, True), (7, False)):
+        _, out_var = cupy_kernels.reproject_with_variance_cupy(
+            cp.asarray(image),
+            cp.asarray(variance),
+            x,
+            y,
+            cp.ones(x.shape, dtype=cp.bool_),
+            cp.ones(x.shape),
+            interpolation="lanczos3",
+            lanczos_a=lanczos_a,
+            two_a_footprint=two_a_footprint,
+            **kwargs,
+        )
+        host = sample_lanczos_variance_array(
+            variance,
+            cp.asnumpy(x),
+            cp.asnumpy(y),
+            a=lanczos_a,
+            two_a_footprint=two_a_footprint,
+        )
+        assert np.allclose(cp.asnumpy(out_var), host, atol=0.0, rtol=1e-12)
 
 
 def test_cupy_uses_variance_fill_independent_from_image_fill() -> None:

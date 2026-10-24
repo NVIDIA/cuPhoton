@@ -176,6 +176,19 @@ variance sentinel independently of the image `fill_value`; it defaults to
 NaN. Finite variance values must be nonnegative; NaN and positive infinity
 remain available as no-data representations.
 
+On the CuPy backend, `reproject_array_device` keeps results on the GPU. Pass
+`source_variance=` to propagate a variance plane there. The variance uses the
+same prepared mapping and interpolation kernel as the image, with the
+interpolation weights squared and the relative-area factor squared, where the
+image uses the weights and the factor to the first power. The result's
+`variance` field holds the device array and is `None` when no variance is
+given. As in `reproject_masked_array`, the variance is diagonal
+(interpolation-induced covariance is not represented) and
+`variance_fill_value` sets the out-of-footprint value, NaN by default.
+Unlike `reproject_masked_array`, the device path does not check variance
+values, since that would need a device-to-host transfer: negative input
+variance gives negative output variance.
+
 The `reproject_array` API ORs the nonzero bilinear mask neighborhood even when
 the image interpolation is Lanczos-3. Use `reproject_masked_array` when the
 mask must cover every nonzero contributor in the selected image kernel.

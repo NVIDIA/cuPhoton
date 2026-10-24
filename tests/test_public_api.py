@@ -230,14 +230,19 @@ def test_xrep_existing_function_signatures_remain_stable() -> None:
         "source_mask",
         "backend",
     ]
-    assert list(
+    device_parameters = list(
         inspect.signature(xrep.reproject_array_device).parameters
-    ) == [
+    )
+    assert device_parameters[:5] == [
         "source",
         "spec",
         "source_mask",
         "backend",
         "prepared",
+    ]
+    assert device_parameters[5:] == [
+        "source_variance",
+        "variance_fill_value",
     ]
     assert (
         "variance_fill_value"
