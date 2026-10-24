@@ -41,7 +41,8 @@ def forced_psf_photometry(
     sigma_y`` is for a Gaussian dipole lobe. ``psf`` replaces the Gaussian
     with ``(batch, y, x)`` model stamps already evaluated at ``positions``
     (such as ``cuphoton.xpois.psf_weights`` with their offsets); the
-    estimator and the validity rules are the same.
+    estimator and pixel-validity rules are the same. ``psf_sigma`` is ignored
+    when ``psf`` is supplied.
 
     The model is linear in the flux, so the weighted least-squares solution
     and its standard error are exact: ``flux = sum(w P D) / sum(w P^2)`` and
@@ -71,14 +72,16 @@ def forced_psf_photometry(
     xy = xp.asarray(positions, dtype=xp.float64)
     if xy.shape != (batch, 2):
         raise ValueError("positions must have shape (batch, 2)")
-    sigma = xp.broadcast_to(xp.asarray(psf_sigma, dtype=xp.float64), (batch,))
     good = xp.isfinite(data) & xp.isfinite(var) & (var > 0)
     if mask is not None:
         good &= xp.asarray(mask, dtype=bool)
     weight = xp.where(good, 1.0 / xp.where(good, var, 1.0), 0.0)
 
-    positive = xp.isfinite(sigma) & (sigma > 0)
     if psf is None:
+        sigma = xp.broadcast_to(
+            xp.asarray(psf_sigma, dtype=xp.float64), (batch,)
+        )
+        positive = xp.isfinite(sigma) & (sigma > 0)
         x = xp.arange(width, dtype=xp.float64) - (width - 1) / 2
         y = xp.arange(height, dtype=xp.float64) - (height - 1) / 2
         s2 = xp.where(positive, sigma**2, 1.0)[:, None, None]
@@ -87,6 +90,7 @@ def forced_psf_photometry(
         ) ** 2
         kernel = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
     else:
+        positive = xp.ones(batch, dtype=bool)
         kernel = xp.asarray(psf, dtype=xp.float64)
         if kernel.shape != data.shape:
             raise ValueError("psf must share the shape of images")

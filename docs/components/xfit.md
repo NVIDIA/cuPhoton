@@ -401,7 +401,7 @@ sigma_y`. Masked pixels and pixels with a nonfinite image or a nonpositive
 variance do not contribute. `psf` replaces the Gaussian with `(batch, y, x)`
 model stamps already evaluated at the positions (`cuphoton.xpois.psf_weights`
 with the sub-pixel offsets gives the same Gaussian); `cuphoton.xpois.forced_flux_at`
-uses it to measure positions on a full plane.
+uses it to measure fluxes at fixed positions on a full plane.
 
 `flux_error` is conditional: it assumes the position and the PSF width are
 fixed and correct and that the variance describes the noise. A position or a

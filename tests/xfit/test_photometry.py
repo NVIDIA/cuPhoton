@@ -92,7 +92,8 @@ def test_cupy_matches_numpy():
     np.testing.assert_allclose(cp.asnumpy(device.flux_error), host.flux_error)
 
 
-def test_supplied_psf_stamps_replace_the_gaussian():
+@pytest.mark.parametrize("sigma", [1.8, 0.0, np.nan])
+def test_supplied_psf_stamps_replace_the_gaussian(sigma):
     images, variance, positions = _sources(3, seed=5)
     x = np.arange(SHAPE[1]) - (SHAPE[1] - 1) / 2
     y = np.arange(SHAPE[0]) - (SHAPE[0] - 1) / 2
@@ -101,7 +102,7 @@ def test_supplied_psf_stamps_replace_the_gaussian():
     ) ** 2
     psf = np.exp(-0.5 * r2 / 1.8**2) / (2 * np.pi * 1.8**2)
     built = forced_psf_photometry(images, variance, positions, 1.8)
-    given = forced_psf_photometry(images, variance, positions, 1.8, psf=psf)
+    given = forced_psf_photometry(images, variance, positions, sigma, psf=psf)
     np.testing.assert_allclose(given.flux, built.flux, rtol=1e-12)
     np.testing.assert_allclose(given.flux_error, built.flux_error, rtol=1e-12)
     wider = forced_psf_photometry(
