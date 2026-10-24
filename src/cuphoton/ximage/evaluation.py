@@ -80,6 +80,7 @@ def evaluate_reconstruction_run(
     photometry_threshold: float = 0.1,
     photometry_minarea: int = 5,
     write_artifacts: bool = False,
+    metrics_backend: str = "auto",
 ) -> dict[str, Any]:
     run = load_reconstruction_run(run_dir)
     data_base = (
@@ -105,6 +106,7 @@ def evaluate_reconstruction_run(
             photometry_threshold=photometry_threshold,
             photometry_minarea=photometry_minarea,
             write_artifacts=write_artifacts,
+            metrics_backend=metrics_backend,
         )
     finally:
         loaded_bundle.close()
@@ -124,6 +126,7 @@ def _evaluate_reconstruction_bundle(
     photometry_threshold: float,
     photometry_minarea: int,
     write_artifacts: bool,
+    metrics_backend: str = "auto",
 ) -> dict[str, Any]:
     selected = run.summary.get("selected_exposures")
     if selected:
@@ -165,41 +168,14 @@ def _evaluate_reconstruction_bundle(
         m_roi, min_fraction=background_min_fraction
     )
 
-    result = {
-        "run_dir": str(run.run_dir),
-        "image_path": str(run.image_path),
-        "backend": run.summary.get("backend"),
-        "algorithm": run.summary.get("algorithm"),
-        "selected_exposures": selected,
-        "projection_shape": list(projected.shape),
-        "background_fraction": float(np.mean(background_mask)),
-        "restoration": image_metrics(projected, background_mask),
-        "synthetic_coadd": {
-            "method": coadd_method,
-            **image_metrics(synthetic_2d, background_mask),
-            "psnr_vs_restoration": psnr(projected, synthetic_2d),
-            "ssim_vs_restoration": ssim(projected, synthetic_2d),
-        },
-        "exposures": {
-            "count": int(exposures.shape[0]),
-            "avg_psnr_vs_restoration": float(
-                np.mean([psnr(projected, exposure) for exposure in exposures])
-            ),
-            "avg_ssim_vs_restoration": float(
-                np.mean([ssim(projected, exposure) for exposure in exposures])
-            ),
-        },
-    }
-
     coadd_path = resolve_pipeline_coadd_fits(
-        explicit_path=pipeline_coadd_fits,
+        explicit_path=pipeline_coadd_fits
     )
-    catalog_path = resolve_catalog_parquet(
-        explicit_path=catalog_parquet,
-    )
+    catalog_path = resolve_catalog_parquet(explicit_path=catalog_parquet)
     reference_catalog_path = resolve_reference_catalog_csv(
         explicit_path=reference_catalog_csv,
     )
+    metric_images = [projected, synthetic_2d]
     if coadd_path is not None:
         pipeline_coadd = load_pipeline_coadd_roi(
             coadd_path,
@@ -208,14 +184,49 @@ def _evaluate_reconstruction_bundle(
             width=target_shape[1],
             bundle_metadata=bundle.metadata,
         )
+        metric_images.append(pipeline_coadd)
+    metrics = _evaluate_metric_group(
+        metric_images,
+        background_mask=background_mask,
+        exposures=exposures,
+        backend=metrics_backend,
+    )
+    result = {
+        "run_dir": str(run.run_dir),
+        "image_path": str(run.image_path),
+        "backend": run.summary.get("backend"),
+        "metrics_backend": metrics["backend"],
+        "algorithm": run.summary.get("algorithm"),
+        "selected_exposures": selected,
+        "projection_shape": list(projected.shape),
+        "background_fraction": float(np.mean(background_mask)),
+        "restoration": metrics["images"][0],
+        "synthetic_coadd": {
+            "method": coadd_method,
+            **metrics["images"][1],
+            "psnr_vs_restoration": metrics["comparisons"][0]["psnr"],
+            "ssim_vs_restoration": metrics["comparisons"][0]["ssim"],
+        },
+        "exposures": {
+            "count": int(exposures.shape[0]),
+            "avg_psnr_vs_restoration": float(
+                np.mean([item["psnr"] for item in metrics["exposures"]])
+            ),
+            "avg_ssim_vs_restoration": float(
+                np.mean([item["ssim"] for item in metrics["exposures"]])
+            ),
+        },
+    }
+
+    if coadd_path is not None:
         result["pipeline_coadd"] = {
             "path": str(coadd_path),
-            **image_metrics(pipeline_coadd, background_mask),
-            "comparison_valid_fraction": float(
-                np.mean(np.isfinite(projected) & np.isfinite(pipeline_coadd))
-            ),
-            "psnr_vs_restoration": psnr(projected, pipeline_coadd),
-            "ssim_vs_restoration": ssim(projected, pipeline_coadd),
+            **metrics["images"][2],
+            "comparison_valid_fraction": metrics["comparisons"][1][
+                "comparison_valid_fraction"
+            ],
+            "psnr_vs_restoration": metrics["comparisons"][1]["psnr"],
+            "ssim_vs_restoration": metrics["comparisons"][1]["ssim"],
         }
 
     photometry_baseline_name = (
@@ -244,6 +255,136 @@ def _evaluate_reconstruction_bundle(
         strip_internal_artifact_payloads(result)
 
     return result
+
+
+def evaluate_image_metrics(
+    reference: np.ndarray,
+    candidate: np.ndarray,
+    *,
+    background_mask: np.ndarray | None = None,
+    backend: str = "auto",
+) -> dict[str, Any]:
+    """Evaluate two equally shaped, nonempty 2-D images in float64.
+
+    ``auto`` uses CuPy when it can initialize a CUDA device, otherwise the
+    NumPy/SciPy reference. ``cpu`` never imports CuPy; ``cupy`` requires it.
+    GPU computation errors propagate after backend selection. GPU reductions
+    and Gaussian filtering can differ from CPU results by floating-point
+    rounding. Fourier sharpness's logarithm amplifies FFT roundoff at zero
+    or nearly zero coefficients; such spectra need not closely match between
+    backends. One packed result transfer completes all GPU metrics.
+
+    Fourier sharpness is unavailable for incomplete images. Sky statistics
+    use finite pixels in the optional shared background mask. PSNR and SSIM
+    use jointly finite support; no common pixels yields NaN. Identical valid
+    values yield infinite PSNR. Returns both image summaries, pair metrics,
+    joint finite coverage, and the selected ``backend``.
+    """
+
+    metrics = _evaluate_metric_group(
+        [reference, candidate],
+        background_mask=background_mask,
+        backend=backend,
+    )
+    return {
+        "backend": metrics["backend"],
+        "reference": metrics["images"][0],
+        "candidate": metrics["images"][1],
+        **metrics["comparisons"][0],
+    }
+
+
+def _evaluate_metric_group(
+    images: list[np.ndarray],
+    *,
+    background_mask: np.ndarray | None,
+    backend: str,
+    exposures: np.ndarray | None = None,
+) -> dict[str, Any]:
+    if backend not in {"auto", "cpu", "cupy"}:
+        raise ValueError("metrics backend must be 'auto', 'cpu', or 'cupy'")
+    arrays = [np.asarray(image, dtype=np.float64) for image in images]
+    shape = arrays[0].shape
+    if (
+        len(shape) != 2
+        or not all(shape)
+        or any(image.shape != shape for image in arrays)
+    ):
+        raise ValueError(
+            "Metric images must be nonempty 2-D arrays of equal shape"
+        )
+    if background_mask is not None:
+        background_mask = np.asarray(background_mask, dtype=bool)
+        if background_mask.shape != shape:
+            raise ValueError("background_mask must match the image shape")
+    exposure_images = [] if exposures is None else list(exposures)
+    if any(image.shape != shape for image in exposure_images):
+        raise ValueError("Exposure images must match the reference shape")
+    if backend != "cpu":
+        from cuphoton.ximage._evaluation_cupy import (
+            compute_metrics,
+            load_cupy,
+        )
+
+        try:
+            cp, gpu_gaussian_filter = load_cupy()
+        except RuntimeError:
+            if backend == "cupy":
+                raise
+        else:
+            summaries, comparisons = compute_metrics(
+                arrays,
+                background_mask,
+                exposure_images,
+                cp,
+                gpu_gaussian_filter,
+            )
+            image_results = []
+            for sharpness, sigma, coverage in summaries:
+                image_result: dict[str, Any] = {
+                    "sharpness_sf": float(sharpness)
+                    if coverage == 1.0
+                    else None,
+                    "sky_sigma": float(sigma),
+                    "finite_pixel_fraction": float(coverage),
+                }
+                if coverage != 1.0:
+                    image_result["sharpness_sf_unavailable_reason"] = (
+                        "Fourier sharpness requires a complete finite image."
+                    )
+                image_results.append(image_result)
+            pair_results = [
+                {
+                    "psnr": float(p),
+                    "ssim": float(s),
+                    "comparison_valid_fraction": float(coverage),
+                }
+                for p, s, coverage in comparisons
+            ]
+            return {
+                "backend": "cupy",
+                "images": image_results,
+                "comparisons": pair_results[: len(arrays) - 1],
+                "exposures": pair_results[len(arrays) - 1 :],
+            }
+
+    reference = arrays[0]
+    pair_results = [
+        {
+            "psnr": psnr(reference, image),
+            "ssim": ssim(reference, image),
+            "comparison_valid_fraction": float(
+                np.mean(np.isfinite(reference) & np.isfinite(image))
+            ),
+        }
+        for image in [*arrays[1:], *exposure_images]
+    ]
+    return {
+        "backend": "cpu",
+        "images": [image_metrics(image, background_mask) for image in arrays],
+        "comparisons": pair_results[: len(arrays) - 1],
+        "exposures": pair_results[len(arrays) - 1 :],
+    }
 
 
 def image_metrics(

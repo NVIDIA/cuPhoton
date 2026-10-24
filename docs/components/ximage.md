@@ -85,11 +85,22 @@ annotated example configurations for command options.
 
 ```bash
 cuphoton ximage evaluate-reconstruction \
-  --run-dir runs/reconstruct-l2-example
+  --run-dir runs/reconstruct-l2-example --metrics-backend auto
 cuphoton ximage benchmark-devices \
   --config examples/ximage/reconstruct-l2.example.yaml \
   --workflow reconstruct-l2 --devices cpu,cuda --warmup 1 --repeats 3
 ```
+
+Image metrics use CuPy when a CUDA device is available, otherwise NumPy/SciPy.
+Select `--metrics-backend cpu` or `cupy` to require an engine; the same option
+applies to `benchmark-devices --evaluate`. Install `--extra ximage --extra gpu`
+for CuPy support. FFT sharpness, sky statistics, finite coverage, PSNR and
+SSIM run in float64; partial images retain finite-support comparisons and
+unavailable Fourier sharpness. Photometry and WCS alignment remain on CPU.
+Reports record `metrics_backend` separately from the reconstruction backend.
+Fourier sharpness takes the logarithm of FFT magnitudes, which amplifies
+roundoff near zero coefficients. Such spectra can give different sharpness
+values across backends; select `cpu` when comparing against CPU baselines.
 
 Evaluation reports image similarity, background statistics, and aperture
 photometry against an equally weighted mean or median coadd of valid,
