@@ -629,8 +629,8 @@ class RubinValidateCatalogsCommand(XImageCommand):
             for token in str(self.products).split(",")
             if token.strip()
         )
-        visits = parse_visit_text(self.visits) + load_visit_file(
-            self._path(self.visits_file)
+        visits = self._call(parse_visit_text, self.visits) + self._call(
+            load_visit_file, self._path(self.visits_file)
         )
         result = self._call(
             validate_rubin_catalog_export,
@@ -701,7 +701,10 @@ class RubinCoaddSemanticsCommand(XImageCommand):
 
     class RequireOkArg(BoolInvariant):
         _arg = "--require-ok"
-        _help = "Exit with an error when the requested metadata is missing."
+        _help = (
+            "Exit with an error unless archive completeness and requested "
+            "metadata requirements are met. Requires lsst-images-archive."
+        )
         _mandatory = False
         _default = False
 

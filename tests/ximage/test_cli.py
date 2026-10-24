@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from cuphoton.core.cli import (
+    CommandError,
     InvariantError,
     build_component_cli,
     get_component,
@@ -21,6 +22,7 @@ from cuphoton.ximage.commands import (
     ArtifactSpecInvariant,
     FiniteFloatInvariant,
     PositiveFloatInvariant,
+    RubinValidateCatalogsCommand,
     UnitIntervalFloatInvariant,
 )
 
@@ -411,6 +413,43 @@ def test_help_for_rubin_validate_catalogs_command(capsys) -> None:
     assert "--products" in captured.out
 
 
+@pytest.mark.parametrize("source", ["visits", "visits-file", "missing-file"])
+def test_rubin_validate_catalogs_translates_visit_errors(
+    tmp_path: Path, source: str
+) -> None:
+    command = RubinValidateCatalogsCommand()
+    command.input_dir = str(tmp_path)
+    if source == "visits":
+        args = ["--visits", "12,invalid"]
+        message = "invalid literal for int()"
+        command.visits = args[1]
+    else:
+        visits_file = tmp_path / "visits.txt"
+        if source == "visits-file":
+            visits_file.write_text("12\ninvalid\n")
+            message = "invalid literal for int()"
+        else:
+            message = str(visits_file)
+        args = ["--visits-file", str(visits_file)]
+        command.visits_file = str(visits_file)
+    with pytest.raises(CommandError):
+        command.run()
+    output = StringIO()
+    error = StringIO()
+
+    rc = _run_cli(
+        ["rubin-validate-catalogs", "--input-dir", str(tmp_path), *args],
+        out=output,
+        err=error,
+        environ={},
+    )
+
+    assert rc == 1
+    assert output.getvalue() == ""
+    assert error.getvalue().startswith("ERROR: ")
+    assert message in error.getvalue()
+
+
 def test_rubin_coadd_semantics_emits_json(
     monkeypatch,
     tmp_path,
@@ -476,4 +515,4 @@ def test_rubin_coadd_semantics_require_ok_fails(
         ]
     )
 
-    assert rc != 0
+    assert rc == 1
