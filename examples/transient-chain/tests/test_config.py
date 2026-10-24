@@ -149,7 +149,9 @@ def test_noise_matching_requires_positive_reference_sigma():
     assert cfg["classify"]["noise_reference_sigma"] == 0
 
 
-@pytest.mark.parametrize("value", ["0", "-1", ".nan", ".inf", "-.inf"])
+@pytest.mark.parametrize(
+    "value", ["0", "-1", ".nan", ".inf", "-.inf", str(10**400)]
+)
 def test_psf_width_requires_a_finite_positive_value(value):
     with pytest.raises(ValueError, match="psf_sigma_px must be finite"):
         config.load_config(
