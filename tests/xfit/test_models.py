@@ -645,16 +645,24 @@ def test_vignetted_bilinear_preserves_visible_requested_flux() -> None:
     assert vignetted.to_backend("numpy").evaluation == "bilinear-vignetted"
 
 
-def test_rank_deficient_fit_reports_invalid_public_uncertainty() -> None:
-    model = GaussianDipoleModel((7, 9), dtype=np.float64)
-    initial = np.asarray([[0.0, 1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0]])
+@pytest.mark.parametrize("backend", ["numpy", "cupy"])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_rank_deficient_fit_reports_invalid_public_uncertainty(
+    backend, dtype
+) -> None:
+    if backend == "cupy":
+        _require_cupy_device()
+    model = GaussianDipoleModel((7, 9), dtype=dtype)
+    initial = np.asarray(
+        [[0.0, 1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0]], dtype=dtype
+    )
     images = model.evaluate(initial)
 
     result = fit_dipoles(
         images,
         model=model,
         initial=initial,
-        backend="numpy",
+        backend=backend,
     )
 
     assert result.converged.all()
@@ -662,6 +670,7 @@ def test_rank_deficient_fit_reports_invalid_public_uncertainty() -> None:
     assert result.uncertainty_reason == ("rank-deficient Jacobian",)
     assert np.isnan(result.covariance).all()
     assert np.isnan(result.standard_errors).all()
+    assert result.covariance.dtype == dtype
 
 
 def test_stamp_multi_mode_basis_requires_explicit_weights() -> None:
@@ -1548,3 +1557,175 @@ def test_cutile_preserves_rank_and_budget_failure_semantics() -> None:
     assert np.array_equal(cutile_budget.status, cupy_budget.status)
     assert np.array_equal(cutile_budget.evaluations, cupy_budget.evaluations)
     assert cutile_budget.uncertainty_reason == cupy_budget.uncertainty_reason
+
+
+@pytest.mark.parametrize(
+    "variation", ["original", "nearby-noise", "masked-nonfinite"]
+)
+def test_fp32_public_covariance_matches_with_variance(
+    variation,
+) -> None:
+    _require_cupy_device()
+    truth = np.asarray(
+        [
+            [4.0, 1.2, 1.6, 0.13, -1.0, 0.2, 1.0, -0.2],
+            [3.1, 1.4, 1.1, -0.17, -0.8, -0.3, 0.9, 0.35],
+        ],
+        dtype=np.float32,
+    )
+    model = GaussianDipoleModel((7, 9), dtype=np.float32)
+    images = model.evaluate(truth)
+    images += (
+        np.random.default_rng(20260929)
+        .normal(0, 0.004, images.shape)
+        .astype(np.float32)
+    )
+    if variation == "nearby-noise":
+        images += (
+            np.random.default_rng(20261013)
+            .normal(0, 1e-4, images.shape)
+            .astype(np.float32)
+        )
+    weights = np.linspace(0.7, 1.6, images.size, dtype=np.float32).reshape(
+        images.shape
+    )
+    weights.reshape(2, -1)[:, ::11] = 0
+    mask = weights != 0
+    images[~mask] = np.nan
+    variance = 1 / np.where(mask, weights, 1) ** 2
+    if variation == "masked-nonfinite":
+        variance[~mask] = np.inf
+    initial = truth + np.asarray(
+        [0.1, 0.04, -0.04, 0.015, 0.05, -0.04, -0.05, 0.04],
+        dtype=np.float32,
+    )
+    originals = [value.copy() for value in (images, initial, variance, mask)]
+    results = []
+    for backend in ("numpy", "cupy"):
+        results.append(
+            fit_dipoles(
+                images,
+                model=model,
+                initial=initial,
+                mask=mask,
+                variance=variance,
+                config=LMConfig(max_evaluations=80),
+                backend=backend,
+            )
+        )
+        with pytest.raises(ValueError, match="finite on included pixels"):
+            fit_dipoles(images, model=model, initial=initial, backend=backend)
+    cpu, gpu = results
+    assert cpu.uncertainty_valid.all() and gpu.uncertainty_valid.all()
+    assert gpu.parameters.dtype == gpu.covariance.dtype == np.float32
+    for field, expected in vars(cpu).items():
+        if field in {"backend", "device"}:
+            continue
+        actual = getattr(gpu, field)
+        if isinstance(expected, np.ndarray):
+            assert actual.dtype == expected.dtype
+        if isinstance(expected, np.ndarray) and expected.dtype.kind == "f":
+            np.testing.assert_allclose(
+                actual, expected, rtol=3e-5, atol=3e-5, equal_nan=True
+            )
+        else:
+            np.testing.assert_array_equal(actual, expected)
+    for actual, expected in zip(
+        (images, initial, variance, mask), originals, strict=True
+    ):
+        assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_fp32_workspace_cast_preserves_subnormals_on_device(dtype) -> None:
+    cp = _require_cupy_device()
+    values = np.asarray(
+        [
+            0,
+            0x80000000,
+            1,
+            0x80000001,
+            16384,
+            0x80004000,
+            0x7FFFFF,
+            0x807FFFFF,
+            0x800000,
+            0x80800000,
+            0x3F800000,
+            0xBF800000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x7F800000,
+            0xFF800000,
+            0x7FC00000,
+        ],
+        dtype=np.uint32,
+    ).view(np.float32)
+    if dtype == np.float32:
+        tiny = float(np.finfo(np.float32).smallest_subnormal)
+        values = np.concatenate(
+            (
+                values.astype(np.float64),
+                np.asarray(
+                    [
+                        tiny * 0.5,
+                        tiny * 1.5,
+                        tiny * 2.5,
+                        -tiny * 0.5,
+                        -tiny * 1.5,
+                        -tiny * 2.5,
+                    ]
+                ),
+            )
+        )
+    expected = values.astype(dtype)
+    stream = cp.cuda.Stream(non_blocking=True)
+    with stream:
+        device = cp.asarray(np.repeat(values, 2))[::2]
+        actual_device = xfit_solver._cast_fp32_workspace(device, dtype, cp)
+    stream.synchronize()
+    actual = cp.asnumpy(actual_device)
+    assert not device.flags.c_contiguous
+    assert actual.shape == expected.shape
+    assert actual.dtype == expected.dtype
+    np.testing.assert_array_equal(np.isnan(actual), np.isnan(expected))
+    np.testing.assert_array_equal(np.isposinf(actual), np.isposinf(expected))
+    np.testing.assert_array_equal(np.isneginf(actual), np.isneginf(expected))
+    finite = np.isfinite(expected)
+    bits = np.uint32 if dtype == np.float32 else np.uint64
+    np.testing.assert_array_equal(
+        actual[finite].view(bits), expected[finite].view(bits)
+    )
+    assert cp.asnumpy(device).tobytes() == values.tobytes()
+
+
+@pytest.mark.parametrize(
+    ("jacobian_scale", "residual_scale"),
+    [(2.0**-65, 2.0**-70), (2.0**-135, 2.0**100)],
+)
+def test_fp32_normal_equations_preserve_subnormal_contributions(
+    jacobian_scale, residual_scale
+) -> None:
+    cp = _require_cupy_device()
+    jacobian = np.full((2, 2, 16), jacobian_scale, dtype=np.float32)
+    residual = np.full((2, 16), residual_scale, dtype=np.float32)
+    expected_gradient = np.full(
+        (2, 2), 16 * jacobian_scale * residual_scale, dtype=np.float32
+    )
+    expected_hessian = np.full(
+        (2, 2, 2), 16 * jacobian_scale**2, dtype=np.float32
+    )
+    for ap in (np, cp):
+        gradient, hessian = xfit_solver._normal_equations_from_jacobian(
+            ap.asarray(jacobian), ap.asarray(residual), ap
+        )
+        if ap is cp:
+            gradient, hessian = cp.asnumpy(gradient), cp.asnumpy(hessian)
+        for actual, expected in (
+            (gradient, expected_gradient),
+            (hessian, expected_hessian),
+        ):
+            assert actual.dtype == np.float32
+            np.testing.assert_array_equal(
+                actual.view(np.uint32), expected.view(np.uint32)
+            )
