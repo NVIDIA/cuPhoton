@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Row norms matching the CuPy 14.1.1 CUB and singleton reduction order.
+// Scaled row norms using the CuPy 14.1.1 CUB and singleton reduction order.
 // Algorithm reference: cupy/cupy v14.1.1 cupy/_core/_cub_reduction.pyx.
 // Singleton fallback reference: cupy/_core/_reduction.pyx at the same tag.
 #include <cmath>
@@ -18,18 +18,36 @@ struct Add {
     }
 };
 
+template <typename T>
+struct Maximum {
+    __device__ __forceinline__ T operator()(T a, T b) const {
+        return isnan(a) || isnan(b) ? T(NAN) : (a > b ? a : b);
+    }
+};
+
 template <typename T, int block_size>
 __global__ void norm_rows(const T* input, T* output, int observations) {
     using Reduce = cub::BlockReduce<T, block_size>;
     __shared__ typename Reduce::TempStorage storage;
     const T* row = input + std::size_t(blockIdx.x) * observations;
+    T local_scale = 0;
+    for (int i = threadIdx.x; i < observations; i += block_size) {
+        local_scale = Maximum<T>()(local_scale, abs(row[i]));
+    }
+    T reduced_scale = Reduce(storage).Reduce(local_scale, Maximum<T>());
+    __shared__ T scale;
+    if (threadIdx.x == 0) {
+        scale = reduced_scale;
+    }
+    __syncthreads();
+    T safe_scale = scale > T(0) ? scale : T(1);
     T aggregate = 0;
     for (int tile = 0; tile < observations; tile += block_size * 4) {
         T values[4];
 #pragma unroll
         for (int j = 0; j < 4; ++j) {
             int index = tile + int(threadIdx.x) * 4 + j;
-            T value = index < observations ? row[index] : T(0);
+            T value = index < observations ? row[index] / safe_scale : T(0);
             values[j] = value * value;
         }
         aggregate =
@@ -37,7 +55,7 @@ __global__ void norm_rows(const T* input, T* output, int observations) {
         __syncthreads();
     }
     if (threadIdx.x == 0) {
-        output[blockIdx.x] = sqrt(aggregate);
+        output[blockIdx.x] = scale * sqrt(aggregate);
     }
 }
 
@@ -48,9 +66,25 @@ __global__ void norm_singleton(
     int tid = threadIdx.x;
     int output_index = tid % stride;
     int first = output_index + tid / stride;
+    T local_scale = 0;
+    for (int index = first; index < observations; index += 512 / stride) {
+        local_scale = Maximum<T>()(local_scale, abs(input[index]));
+    }
+    sums[tid] = local_scale;
+    __syncthreads();
+    for (int offset = 256; offset > 0; offset /= 2) {
+        if (tid < offset) {
+            sums[tid] = Maximum<T>()(sums[tid], sums[tid + offset]);
+        }
+        __syncthreads();
+    }
+    T scale = sums[0];
+    T safe_scale = scale > T(0) ? scale : T(1);
+    __syncthreads();
     T value = 0;
     for (int index = first; index < observations; index += 512 / stride) {
-        value += input[index] * input[index];
+        T normalized = input[index] / safe_scale;
+        value += normalized * normalized;
     }
     sums[tid] = value;
     __syncthreads();
@@ -64,7 +98,7 @@ __global__ void norm_singleton(
         __syncthreads();
     }
     if (tid == 0) {
-        output[0] = sqrt(sums[0]);
+        output[0] = scale * sqrt(sums[0]);
     }
 }
 
