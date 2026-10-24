@@ -192,3 +192,47 @@ def test_benchmark_devices_rejects_invalid_requests(tmp_path: Path) -> None:
             repeats=1,
             evaluate=True,
         )
+
+
+@pytest.mark.parametrize("failure_stage", ["runner", "evaluation"])
+@pytest.mark.parametrize("keep_artifacts", [False, True])
+def test_benchmark_failure_cleans_only_temporary_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure_stage: str,
+    keep_artifacts: bool,
+) -> None:
+    roots: list[Path] = []
+
+    def fake_run(config_path, *, output_root, **kwargs):
+        roots.append(output_root)
+        (output_root / "partial.txt").write_text("partial result")
+        if failure_stage == "runner":
+            raise RuntimeError("runner failed")
+        return WorkflowResult(output_root, {})
+
+    def fake_evaluate(*args, **kwargs):
+        raise RuntimeError("evaluation failed")
+
+    monkeypatch.setattr(benchmark.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(benchmark, "_device_environment", lambda device: {})
+    monkeypatch.setattr(benchmark, "run_reconstruction", fake_run)
+    monkeypatch.setattr(
+        benchmark, "evaluate_reconstruction_run", fake_evaluate
+    )
+
+    with pytest.raises(RuntimeError, match=f"{failure_stage} failed"):
+        benchmark.benchmark_devices(
+            workflow="reconstruct-l2",
+            config_path=tmp_path / "config.yaml",
+            devices=["cpu"],
+            repeats=1,
+            warmup=0,
+            evaluate=True,
+            output_root=tmp_path / "saved" if keep_artifacts else None,
+        )
+
+    assert len(roots) == 1
+    assert roots[0].exists() is keep_artifacts
+    if keep_artifacts:
+        assert (roots[0] / "partial.txt").read_text() == "partial result"

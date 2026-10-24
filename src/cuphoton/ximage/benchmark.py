@@ -103,35 +103,37 @@ def benchmark_devices(
                         prefix=f"ximage-bench-{workflow}-{device}-{idx}-"
                     )
                 )
-            t0 = time.perf_counter()
-            result = runner(
-                config_path,
-                device_override=device,
-                output_root=root,
-            )
-            dt = time.perf_counter() - t0
-            if evaluate and idx >= warmup and evaluation is None:
-                evaluation = _finalize_evaluation_result(
-                    evaluate_reconstruction_run(
-                        result.run_dir,
-                        coadd_method=coadd_method,
-                        pipeline_coadd_fits=pipeline_coadd_fits,
-                        catalog_parquet=catalog_parquet,
-                        reference_catalog_csv=reference_catalog_csv,
-                        catalog_band=catalog_band,
-                        catalog_match_radius_px=catalog_match_radius_px,
-                        background_min_fraction=background_min_fraction,
-                        photometry_threshold=photometry_threshold,
-                        photometry_minarea=photometry_minarea,
-                        write_artifacts=keep_artifacts,
-                    ),
-                    keep_artifacts=keep_artifacts,
+            try:
+                t0 = time.perf_counter()
+                result = runner(
+                    config_path,
+                    device_override=device,
+                    output_root=root,
                 )
-            run_dirs.append(str(result.run_dir))
-            if idx >= warmup:
-                timings.append(dt)
-            if not keep_artifacts:
-                shutil.rmtree(root, ignore_errors=True)
+                dt = time.perf_counter() - t0
+                if evaluate and idx >= warmup and evaluation is None:
+                    evaluation = _finalize_evaluation_result(
+                        evaluate_reconstruction_run(
+                            result.run_dir,
+                            coadd_method=coadd_method,
+                            pipeline_coadd_fits=pipeline_coadd_fits,
+                            catalog_parquet=catalog_parquet,
+                            reference_catalog_csv=reference_catalog_csv,
+                            catalog_band=catalog_band,
+                            catalog_match_radius_px=catalog_match_radius_px,
+                            background_min_fraction=background_min_fraction,
+                            photometry_threshold=photometry_threshold,
+                            photometry_minarea=photometry_minarea,
+                            write_artifacts=keep_artifacts,
+                        ),
+                        keep_artifacts=keep_artifacts,
+                    )
+                run_dirs.append(str(result.run_dir))
+                if idx >= warmup:
+                    timings.append(dt)
+            finally:
+                if not keep_artifacts:
+                    shutil.rmtree(root, ignore_errors=True)
 
         mean_sec = statistics.mean(timings)
         stdev_sec = statistics.pstdev(timings) if len(timings) > 1 else 0.0
