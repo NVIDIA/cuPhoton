@@ -7,6 +7,11 @@
 from cuphoton import __version__
 
 from .data import inspect_hsc_data_tree, load_image_array
+from .kernel_uncertainty import (
+    KernelFitCovariance,
+    kernel_fit_covariance,
+    kernel_fit_variance,
+)
 from .noise import (
     ConstantKernelNoiseResult,
     standardize_constant_kernel_residual,
@@ -34,7 +39,11 @@ from .spatial_als import (
     SpatialALSFitResult,
     solve_spatial_als,
 )
-from .stamps import extract_centered_stamp, simple_difference_stamp
+from .stamps import (
+    extract_centered_stamp,
+    simple_difference_stamp,
+    window_stamps,
+)
 from .statistics import (
     StandardizedResidualStatistics,
     StandardizedResidualSummary,
@@ -49,6 +58,7 @@ __all__ = [
     "ConstantKernelNoiseResult",
     "DeviceConstantKernelFitResult",
     "GaussianBasisComponent",
+    "KernelFitCovariance",
     "SeparableKernelFitResult",
     "SpatialALSConfig",
     "SpatialALSFitResult",
@@ -60,6 +70,8 @@ __all__ = [
     "evaluate_background_model",
     "extract_centered_stamp",
     "inspect_hsc_data_tree",
+    "kernel_fit_covariance",
+    "kernel_fit_variance",
     "load_image_array",
     "make_stamp_mask",
     "resolve_backend",
@@ -71,4 +83,5 @@ __all__ = [
     "standardize_constant_kernel_residual",
     "summarize_standardized_residuals",
     "triangular_degree_pairs",
+    "window_stamps",
 ]

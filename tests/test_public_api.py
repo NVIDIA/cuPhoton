@@ -71,6 +71,30 @@ def test_xpois_noise_signature_is_explicit() -> None:
     ]
 
 
+def test_xpois_kernel_uncertainty_signatures_are_explicit() -> None:
+    assert list(
+        inspect.signature(xpois.kernel_fit_covariance).parameters
+    ) == [
+        "fit",
+        "reference",
+        "target_variance",
+        "reference_variance",
+        "resampling_weights",
+    ]
+    assert list(inspect.signature(xpois.kernel_fit_variance).parameters) == [
+        "cov",
+        "reference",
+        "positions",
+        "weights",
+    ]
+    assert list(inspect.signature(xpois.window_stamps).parameters) == [
+        "plane",
+        "positions",
+        "size",
+        "fill",
+    ]
+
+
 def test_research_solver_requires_module_qualified_import() -> None:
     assert callable(solve_spatial_gaussian_polynomial_kernel)
     assert "solve_spatial_gaussian_polynomial_kernel" not in xpois.__all__

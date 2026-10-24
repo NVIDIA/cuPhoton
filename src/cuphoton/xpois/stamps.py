@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 
@@ -70,3 +72,74 @@ def simple_difference_stamp(
     if search_arr.shape != template_arr.shape:
         raise ValueError("search_stamp and template_stamp must share a shape")
     return search_arr - template_arr
+
+
+def window_stamps(
+    plane: Any,
+    positions: Any,
+    size: int | tuple[int, int],
+    *,
+    fill: float = np.nan,
+) -> Any:
+    """Cut one window of ``plane`` around each position.
+
+    Parameters
+    ----------
+    plane
+        Two-dimensional image, NumPy or CuPy.
+    positions
+        ``(N, 2)`` array of ``(x, y)`` pixel coordinates. Each window is
+        centered on the nearest integer pixel.
+    size
+        Odd side length of the square window, or odd ``(height, width)``.
+    fill
+        Value of the window pixels that fall outside the image.
+
+    Returns
+    -------
+    ndarray
+        ``(N, height, width)`` float64 windows in the namespace of ``plane``.
+    """
+
+    xp = _array_module(plane)
+    image = xp.asarray(plane)
+    if image.ndim != 2:
+        raise ValueError("plane must be a two-dimensional array")
+    height, width = (size, size) if isinstance(size, int) else size
+    if min(height, width) <= 0 or height % 2 == 0 or width % 2 == 0:
+        raise ValueError("size must be positive and odd")
+    xy = xp.asarray(positions, dtype=xp.float64)
+    if xy.ndim != 2 or xy.shape[1] != 2:
+        raise ValueError("positions must have shape (N, 2)")
+    if 0 in image.shape:
+        return xp.full((len(xy), height, width), fill, dtype=xp.float64)
+    rows = (
+        xp.rint(xy[:, 1]).astype(xp.int64)[:, None, None]
+        + xp.arange(-(height // 2), height // 2 + 1)[None, :, None]
+    )
+    columns = (
+        xp.rint(xy[:, 0]).astype(xp.int64)[:, None, None]
+        + xp.arange(-(width // 2), width // 2 + 1)[None, None, :]
+    )
+    inside = (
+        (rows >= 0)
+        & (rows < image.shape[0])
+        & (columns >= 0)
+        & (columns < image.shape[1])
+    )
+    values = image[
+        xp.clip(rows, 0, image.shape[0] - 1),
+        xp.clip(columns, 0, image.shape[1] - 1),
+    ]
+    return xp.where(inside, values.astype(xp.float64), fill)
+
+
+def _array_module(*arrays: Any) -> Any:
+    """NumPy, or CuPy when any of ``arrays`` is a CuPy array."""
+
+    for array in arrays:
+        if type(array).__module__.split(".", maxsplit=1)[0] == "cupy":
+            import cupy
+
+            return cupy
+    return np

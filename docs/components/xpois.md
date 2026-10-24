@@ -413,6 +413,63 @@ as well as pair counts, using a matching white-noise baseline. These
 diagnostics do not whiten the residual, estimate a covariance model, set
 acceptance thresholds, or calibrate statistical significance.
 
+## Kernel-fit covariance and the variance it adds
+
+`standardize_constant_kernel_residual` treats the fitted kernel as fixed.
+Near a bright reference source the uncertainty of the fitted kernel and
+background adds variance to every residual pixel. `kernel_fit_covariance`
+returns the covariance of the fit coefficients and `kernel_fit_variance`
+carries it to a residual pixel, or to a weighted sum of residual pixels such
+as a PSF-weighted flux:
+
+```python
+from cuphoton.xpois import kernel_fit_covariance, kernel_fit_variance
+
+cov = kernel_fit_covariance(
+    fit,
+    reference=reference,
+    target_variance=target_variance,
+)
+added = kernel_fit_variance(
+    cov,
+    reference=reference,
+    positions=positions,  # (N, 2) x, y target pixels
+    weights=psf_weights,  # optional (N, s, s) stamps
+)
+```
+
+The plain form is `(A^T W A)^-1` over the fit pixels, `A` the design matrix
+of the reference convolved with each basis kernel plus the background terms
+and `W = 1 / target_variance`, the weights the fit used; no reduced
+chi-square scaling is applied. `H = A^T W A` is accumulated in chunks as in
+the solve, without materializing the full design matrix.
+
+The resampled reference also carries noise, which the residual contains but
+the fit's weights omit. Passing `reference_variance` (the resampled
+reference variance in squared reference units, the plane
+`standardize_constant_kernel_residual` takes; the division by the
+resampling gain `sum(resampling_weights**2)` happens inside) together with
+one `(k, k)` stamp of `resampling_weights` selects the sandwich form
+`H^-1 (H + M) H^-1`, `M = U diag(V) U^T` with row `j` of `U` the footprint
+of the weighted design column `W A_j` on the reference's source pixels
+through the kernel and the resampling weights, and `V` the source-pixel
+variance. The stamp is the weights as applied to the source neighbors,
+`resampled[p] = sum_q weights[q] source[p + q - c]`; a stamp symmetric
+under point reflection gives the same result in either orientation. The
+sandwich uses one resampling stamp for every fit pixel, so on a grid that
+rotates or scales against the reference's it is an approximation, and it
+holds `U` as one full-size image per coefficient in memory.
+
+The result records `form` and `covariance_represented: True`. The added
+variance at a position is `gamma^T C gamma`, `gamma` the residual's
+response to each coefficient, and `NaN` where a stamp and its kernel
+footprint leave the image. Host and device fit results are accepted; the
+computation runs in CuPy when the fit's arrays or `reference` are CuPy
+arrays and in NumPy otherwise. `window_stamps(plane, positions, size)` cuts
+the `(N, s, s)` windows of any plane around `(x, y)` positions, `NaN` (or
+`fill`) outside the image; it is the window convention of
+`kernel_fit_variance`.
+
 ## Distributed image-pair batches
 
 `fit-batch` assigns complete, independent reference/target pairs to GPU
