@@ -18,7 +18,10 @@ def round_down_to_odd(n: float) -> int:
         raise ValueError(f"round_down_to_odd: expected positive n, got {n}")
     if (n % 2) == 1:
         return int(n)
-    return int(np.ceil(n) // 2 * 2 - 1)
+    result = int(np.ceil(n) // 2 * 2 - 1)
+    if result < 1:
+        raise ValueError(f"round_down_to_odd: no positive odd integer <= {n}")
+    return result
 
 
 def create_object_masks(
@@ -82,10 +85,25 @@ def create_object_masks(
     return conservative, non_conservative
 
 
+def _exposure_times(bundle: XImageBundle) -> np.ndarray:
+    exp_times = np.asarray(bundle.exp_times, dtype=np.float64)
+    n_exposures = bundle.images.shape[3]
+    if exp_times.shape != (n_exposures,):
+        raise ValueError(
+            f"Expected {n_exposures} exposure times, saw shape "
+            f"{exp_times.shape}"
+        )
+    if not np.all(np.isfinite(exp_times) & (exp_times > 0)):
+        raise ValueError(
+            "exposure times must be finite and strictly positive"
+        )
+    return exp_times.reshape(1, 1, 1, -1)
+
+
 def prepare_reconstruction_inputs(
     bundle: XImageBundle, mask_mode: str, dilation_factor: int
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
-    exp_times = np.asarray(bundle.exp_times).reshape(1, 1, 1, -1)
+    exp_times = _exposure_times(bundle)
     images = np.asarray(bundle.images) / exp_times
     variances = np.asarray(bundle.variances) / (exp_times**2)
 
@@ -119,16 +137,16 @@ def prepare_reconstruction_inputs_roi(
         height_roi=height_roi,
         width_roi=width_roi,
     )
-    exp_times = np.asarray(bundle.exp_times).reshape(1, 1, 1, -1)
-    images = np.asarray(bundle.images)[:, slice_h, slice_w, :] / exp_times
-    variances = np.asarray(bundle.variances)[:, slice_h, slice_w, :] / (
+    exp_times = _exposure_times(bundle)
+    images = np.asarray(bundle.images[:, slice_h, slice_w, :]) / exp_times
+    variances = np.asarray(bundle.variances[:, slice_h, slice_w, :]) / (
         exp_times**2
     )
 
     if mask_mode == "none":
         masks = None
     else:
-        mask_roi = np.asarray(bundle.masks)[:, slice_h, slice_w, :, :]
+        mask_roi = np.asarray(bundle.masks[:, slice_h, slice_w, :, :])
         conservative, non_conservative = create_object_masks(
             mask_roi, df=dilation_factor
         )
@@ -332,8 +350,9 @@ def coadd(
         raise ValueError("method must be 'median' or 'mean'")
 
     if positive:
-        epsilon = 1e-6 * np.max(result, axis=(1, 2), keepdims=True)
         min_value = np.min(result)
         if min_value <= 0:
-            result = result + np.abs(min_value) + epsilon
+            scale = np.max(np.abs(result), axis=(1, 2), keepdims=True)
+            epsilon = 1e-6 * np.where(scale > 0, scale, 1.0)
+            result = result - min_value + epsilon
     return result
