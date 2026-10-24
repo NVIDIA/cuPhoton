@@ -128,12 +128,18 @@ def _evaluate_reconstruction_bundle(
     selected = run.summary.get("selected_exposures")
     if selected:
         bundle = bundle.select_exposures(selected)
+    roi_center = run.config.roi.center
+    if roi_center is None:
+        roi_center = (
+            bundle.images.shape[1] // 2,
+            bundle.images.shape[2] // 2,
+        )
 
     y_roi, m_roi, v_roi = prepare_reconstruction_inputs_roi(
         bundle,
         mask_mode=run.config.mask.mode,
         dilation_factor=run.config.mask.dilation_factor,
-        center_roi=run.config.roi.center,
+        center_roi=roi_center,
         height_roi=run.config.roi.height,
         width_roi=run.config.roi.width,
     )
@@ -197,7 +203,7 @@ def _evaluate_reconstruction_bundle(
     if coadd_path is not None:
         pipeline_coadd = load_pipeline_coadd_roi(
             coadd_path,
-            center=run.config.roi.center,
+            center=roi_center,
             height=target_shape[0],
             width=target_shape[1],
             bundle_metadata=bundle.metadata,
@@ -205,6 +211,9 @@ def _evaluate_reconstruction_bundle(
         result["pipeline_coadd"] = {
             "path": str(coadd_path),
             **image_metrics(pipeline_coadd, background_mask),
+            "comparison_valid_fraction": float(
+                np.mean(np.isfinite(projected) & np.isfinite(pipeline_coadd))
+            ),
             "psnr_vs_restoration": psnr(projected, pipeline_coadd),
             "ssim_vs_restoration": ssim(projected, pipeline_coadd),
         }
@@ -226,7 +235,7 @@ def _evaluate_reconstruction_bundle(
         catalog_band=catalog_band,
         catalog_match_radius_px=catalog_match_radius_px,
         coadd_fits_path=coadd_path,
-        roi_center=run.config.roi.center,
+        roi_center=roi_center,
         roi_shape=target_shape,
         bundle_metadata=bundle.metadata,
     )
@@ -240,15 +249,27 @@ def _evaluate_reconstruction_bundle(
 def image_metrics(
     image: np.ndarray,
     background_mask: np.ndarray | None = None,
-) -> dict[str, float]:
-    return {
-        "sharpness_sf": fourier_sharpness(image),
+) -> dict[str, Any]:
+    """Report finite coverage; Fourier sharpness needs a complete image."""
+
+    finite = np.isfinite(image)
+    complete = bool(np.all(finite))
+    result: dict[str, Any] = {
+        "sharpness_sf": fourier_sharpness(image) if complete else None,
         "sky_sigma": sky_sigma(image, background_mask=background_mask),
+        "finite_pixel_fraction": float(np.mean(finite)),
     }
+    if not complete:
+        result["sharpness_sf_unavailable_reason"] = (
+            "Fourier sharpness requires a complete finite image."
+        )
+    return result
 
 
 def fourier_sharpness(image: np.ndarray) -> float:
     image_2d = np.asarray(image, dtype=np.float64)
+    if not np.all(np.isfinite(image_2d)):
+        return float("nan")
     spectrum = np.fft.fft2(image_2d)
     return float(np.mean(np.log(np.abs(spectrum) + 1e-12)))
 
@@ -259,12 +280,12 @@ def sky_sigma(
     background_mask: np.ndarray | None = None,
 ) -> float:
     arr = np.asarray(image, dtype=np.float64)
-    if background_mask is not None and np.any(background_mask):
-        values = arr[background_mask]
-    else:
-        values = arr.reshape(-1)
+    valid = np.isfinite(arr)
+    if background_mask is not None:
+        valid &= background_mask
+    values = arr[valid]
     if values.size == 0:
-        return 0.0
+        return float("nan")
     median = np.median(values)
     mad = np.median(np.abs(values - median))
     scale = 1.4826 * mad
@@ -277,8 +298,15 @@ def sky_sigma(
 
 
 def psnr(reference: np.ndarray, candidate: np.ndarray) -> float:
+    """Compare values and dynamic range on jointly finite pixels."""
+
     ref = np.asarray(reference, dtype=np.float64)
     cand = np.asarray(candidate, dtype=np.float64)
+    valid = np.isfinite(ref) & np.isfinite(cand)
+    if not np.any(valid):
+        return float("nan")
+    ref = ref[valid]
+    cand = cand[valid]
     mse = np.mean((ref - cand) ** 2)
     if mse == 0:
         return float("inf")
@@ -289,28 +317,45 @@ def psnr(reference: np.ndarray, candidate: np.ndarray) -> float:
 
 
 def ssim(reference: np.ndarray, candidate: np.ndarray) -> float:
+    """Average SSIM on joint finite support with normalized local moments."""
+
     ref = np.asarray(reference, dtype=np.float64)
     cand = np.asarray(candidate, dtype=np.float64)
-    data_min = min(float(ref.min()), float(cand.min()))
-    data_max = max(float(ref.max()), float(cand.max()))
+    valid = np.isfinite(ref) & np.isfinite(cand)
+    if not np.any(valid):
+        return float("nan")
+    data_min = min(float(ref[valid].min()), float(cand[valid].min()))
+    data_max = max(float(ref[valid].max()), float(cand[valid].max()))
     data_range = max(data_max - data_min, 1e-12)
     c1 = (0.01 * data_range) ** 2
     c2 = (0.03 * data_range) ** 2
 
-    mu_ref = gaussian_filter(ref, sigma=1.5, mode="reflect")
-    mu_cand = gaussian_filter(cand, sigma=1.5, mode="reflect")
+    weight: float | np.ndarray = 1.0
+    if not np.all(valid):
+        ref = np.where(valid, ref, 0.0)
+        cand = np.where(valid, cand, 0.0)
+        weight = gaussian_filter(
+            valid.astype(float), sigma=1.5, mode="reflect"
+        )
+        weight = np.where(weight > 0.0, weight, 1.0)
+
+    mu_ref = gaussian_filter(ref, sigma=1.5, mode="reflect") / weight
+    mu_cand = gaussian_filter(cand, sigma=1.5, mode="reflect") / weight
     mu_ref_sq = mu_ref * mu_ref
     mu_cand_sq = mu_cand * mu_cand
     mu_ref_cand = mu_ref * mu_cand
 
     sigma_ref_sq = (
-        gaussian_filter(ref * ref, sigma=1.5, mode="reflect") - mu_ref_sq
+        gaussian_filter(ref * ref, sigma=1.5, mode="reflect") / weight
+        - mu_ref_sq
     )
     sigma_cand_sq = (
-        gaussian_filter(cand * cand, sigma=1.5, mode="reflect") - mu_cand_sq
+        gaussian_filter(cand * cand, sigma=1.5, mode="reflect") / weight
+        - mu_cand_sq
     )
     sigma_ref_cand = (
-        gaussian_filter(ref * cand, sigma=1.5, mode="reflect") - mu_ref_cand
+        gaussian_filter(ref * cand, sigma=1.5, mode="reflect") / weight
+        - mu_ref_cand
     )
     sigma_ref_sq = np.maximum(sigma_ref_sq, 0.0)
     sigma_cand_sq = np.maximum(sigma_cand_sq, 0.0)
@@ -320,7 +365,7 @@ def ssim(reference: np.ndarray, candidate: np.ndarray) -> float:
         sigma_ref_sq + sigma_cand_sq + c2
     )
     score = numerator / np.maximum(denominator, 1e-12)
-    return float(np.mean(score))
+    return float(np.mean(score[valid]))
 
 
 def build_background_mask(

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +18,10 @@ import yaml
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from cuphoton.ximage.config import ReconstructionConfig
+from cuphoton.ximage.data import XImageBundle
 from cuphoton.ximage.evaluation import (
+    RestorationRun,
     _load_catalog_table,
     average_downsample,
     build_catalog_photometry_binned_rows,
@@ -49,6 +53,44 @@ def test_psnr_and_ssim_identity_cases() -> None:
     assert ssim(image, image) == 1.0
 
 
+def test_finite_comparison_metrics_keep_existing_values() -> None:
+    reference = np.arange(63, dtype=float).reshape(7, 9)
+    candidate = reference.copy()
+    candidate[2:5, 3:7] += 5.0
+    assert psnr(reference, candidate) == pytest.approx(
+        20 * np.log10(62) - 10 * np.log10(300 / 63)
+    )
+    assert ssim(reference, candidate) == pytest.approx(0.9857266589706286)
+
+
+def test_comparison_metrics_use_joint_finite_support() -> None:
+    reference = np.array([[0.0, 1.0], [np.nan, 1000.0]])
+    candidate = np.array([[0.0, 2.0], [-1000.0, np.inf]])
+    assert psnr(reference, candidate) == pytest.approx(10 * np.log10(8))
+    reference[1, 1] = np.inf
+    candidate[1, 0] = np.nan
+    assert np.isfinite(ssim(reference, candidate))
+    assert np.isnan(psnr(reference, np.full((2, 2), np.nan)))
+    assert np.isnan(ssim(reference, np.full((2, 2), np.nan)))
+
+
+def test_ssim_normalizes_masked_neighborhoods() -> None:
+    reference = np.full((9, 11), 2.0)
+    candidate = np.full((9, 11), 3.0)
+    reference[2:6, 4:8] = np.nan
+    candidate[0:3, 1:5] = np.inf
+    expected = (2 * 2 * 3 + 0.01**2) / (2**2 + 3**2 + 0.01**2)
+    assert ssim(reference, candidate) == pytest.approx(expected)
+
+    reference = np.arange(99, dtype=float).reshape(9, 11)
+    candidate = reference.copy()
+    candidate[2:5, 3:7] += 5.0
+    candidate[0:3, 1:5] = np.nan
+    assert ssim(reference, candidate) == pytest.approx(
+        ssim(reference.T, candidate.T), abs=1e-12
+    )
+
+
 def test_fourier_sharpness_prefers_checkerboard() -> None:
     smooth = np.ones((8, 8), dtype=np.float64)
     sharp = np.indices((8, 8)).sum(axis=0) % 2
@@ -61,6 +103,18 @@ def test_sky_sigma_respects_background_mask() -> None:
     mask = np.ones((4, 4), dtype=bool)
     mask[0, 0] = False
     assert sky_sigma(image, background_mask=mask) == 0.0
+
+
+def test_sky_sigma_uses_only_finite_background_pixels() -> None:
+    image = np.array([[1.0, 2.0, np.nan], [3.0, np.inf, 1000.0]])
+    mask = np.array([[True, True, True], [True, True, False]])
+    assert sky_sigma(image, background_mask=mask) == pytest.approx(
+        np.std([1.0, 2.0, 3.0])
+    )
+    mask = ~np.isfinite(image)
+    assert np.isnan(sky_sigma(image, background_mask=mask))
+    assert np.isnan(sky_sigma(image, background_mask=np.zeros_like(mask)))
+    assert np.isnan(fourier_sharpness(image))
 
 
 def test_projection_downsamples_and_crops() -> None:
@@ -241,9 +295,11 @@ def test_resolve_saved_path_handles_relative_artifacts(
     assert resolved == (run_dir / "artifacts" / "image.npy").resolve()
 
 
+@pytest.mark.parametrize("incomplete_coadd", [False, True])
 def test_evaluate_reconstruction_run_reports_metrics(
     tmp_path: Path,
     monkeypatch,
+    incomplete_coadd: bool,
 ) -> None:
     import cuphoton.ximage.evaluation as evaluation
 
@@ -288,11 +344,14 @@ def test_evaluate_reconstruction_run_reports_metrics(
     coadd_dir = data_dir / "coadd"
     coadd_dir.mkdir(parents=True)
     coadd_path = coadd_dir / "coadd.fits"
+    coadd_image = np.ones((8, 8), dtype=np.float64)
+    if incomplete_coadd:
+        coadd_image[3, 3] = np.nan
     coadd_hdul = fits.HDUList(
         [
             fits.PrimaryHDU(),
             fits.ImageHDU(
-                data=np.ones((8, 8), dtype=np.float64),
+                data=coadd_image,
                 name="IMAGE",
             ),
         ]
@@ -365,22 +424,131 @@ def test_evaluate_reconstruction_run_reports_metrics(
         )
     )
 
-    result = evaluate_reconstruction_run(
-        run_dir,
-        pipeline_coadd_fits=coadd_path,
-        catalog_parquet=catalog_path,
-        write_artifacts=True,
+    expected_warning = (
+        pytest.warns(RuntimeWarning, match="Photometry evaluation failed")
+        if incomplete_coadd
+        else nullcontext()
     )
+    with expected_warning:
+        result = evaluate_reconstruction_run(
+            run_dir,
+            pipeline_coadd_fits=coadd_path,
+            catalog_parquet=catalog_path,
+            write_artifacts=True,
+        )
     assert np.isfinite(result["restoration"]["sharpness_sf"])
     assert result["synthetic_coadd"]["method"] == "median"
     assert result["exposures"]["count"] == 2
     assert "pipeline_coadd" in result
+    pipeline = result["pipeline_coadd"]
+    expected_fraction = 15 / 16 if incomplete_coadd else 1.0
+    assert pipeline["finite_pixel_fraction"] == expected_fraction
+    assert pipeline["comparison_valid_fraction"] == expected_fraction
+    assert pipeline["psnr_vs_restoration"] == float("inf")
+    assert np.isfinite(pipeline["ssim_vs_restoration"])
+    assert pipeline["sky_sigma"] == 0.0
+    if incomplete_coadd:
+        assert pipeline["sharpness_sf"] is None
+        assert (
+            "complete finite image"
+            in pipeline["sharpness_sf_unavailable_reason"]
+        )
+    else:
+        assert np.isfinite(pipeline["sharpness_sf"])
     assert resolve_pipeline_coadd_fits(explicit_path=coadd_path) == coadd_path
-    assert result["photometry"]["available"] is True
+    assert result["photometry"]["available"] is (not incomplete_coadd)
     assert result["photometry"]["baseline_name"] == "pipeline_coadd"
     assert "saved" in result
     assert Path(result["saved"]["evaluation_summary"]).exists()
     assert closed == [True]
+
+
+@pytest.mark.parametrize("coordinates", ["pixel", "sky"])
+def test_evaluator_resolves_default_store_center_for_catalogs_and_coadd(
+    tmp_path: Path, monkeypatch, coordinates: str
+) -> None:
+    import cuphoton.ximage.evaluation as evaluation
+
+    image = np.arange(100, dtype=float).reshape(10, 10)
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = [1.0, 1.0]
+    wcs.wcs.ctype = ["LINEAR", "LINEAR"]
+    coadd_path = tmp_path / "coadd.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(data=image, header=wcs.to_header(), name="IMAGE"),
+        ]
+    ).writeto(coadd_path)
+    metadata = {}
+    catalog_path = tmp_path / "reference.csv"
+    if coordinates == "pixel":
+        catalog_path.write_text("x,y,aperture_flux\n5,5,100\n")
+    else:
+        catalog_path.write_text("ra,dec,aperture_flux\n5,5,100\n")
+        metadata = {
+            "source_dir": str(tmp_path),
+            "selection": {
+                "alignment_policy": "reference-image-wcs",
+                "reference_index": 0,
+                "roi": "0:10,0:10",
+            },
+            "rubin_files": [{"relative_path": coadd_path.name}],
+        }
+    bundle = XImageBundle(
+        "npy",
+        tmp_path,
+        {
+            "images": image[None, :, :, None],
+            "variances": np.ones((1, 10, 10, 1)),
+            "exp_times": np.ones(1),
+        },
+        metadata,
+    )
+    config = ReconstructionConfig.model_validate(
+        {
+            "data": {"base": str(tmp_path)},
+            "roi": {"height": 4, "width": 4},
+            "mask": {"mode": "none"},
+        }
+    )
+    run = RestorationRun(
+        tmp_path,
+        config,
+        {},
+        tmp_path / "image.npy",
+        image[None, 3:7, 3:7, None],
+    )
+    monkeypatch.setattr(
+        evaluation, "load_reconstruction_run", lambda path: run
+    )
+    monkeypatch.setattr(
+        evaluation, "load_ximage_bundle", lambda *a, **k: bundle
+    )
+
+    def catalog_metrics(**kwargs):
+        np.testing.assert_array_equal(kwargs["restoration"], image[3:7, 3:7])
+        np.testing.assert_allclose(kwargs["baseline"], image[3:7, 3:7])
+        return load_reference_catalog_csv_sources(
+            kwargs["reference_catalog_csv"],
+            roi_center=kwargs["roi_center"],
+            roi_shape=kwargs["roi_shape"],
+            catalog_band=kwargs["catalog_band"],
+            bundle_metadata=kwargs["bundle_metadata"],
+        )
+
+    monkeypatch.setattr(evaluation, "photometry_metrics", catalog_metrics)
+    result = evaluate_reconstruction_run(
+        tmp_path,
+        pipeline_coadd_fits=coadd_path,
+        reference_catalog_csv=catalog_path,
+    )
+    catalog = result["photometry"]
+    assert catalog["crop_origin_yx"] == [3, 3]
+    assert catalog["count"] == 1
+    np.testing.assert_allclose(catalog["x"], [2.0])
+    np.testing.assert_allclose(catalog["y"], [2.0])
+    assert config.roi.center is None
 
 
 def test_evaluate_reconstruction_run_closes_bundle_on_failure(

@@ -191,12 +191,15 @@ def _compare_evaluations(
     right_name: str,
     right_eval: dict[str, Any],
 ) -> dict[str, Any]:
+    left_sharpness = left_eval["restoration"]["sharpness_sf"]
+    right_sharpness = right_eval["restoration"]["sharpness_sf"]
     result = {
         "left_device": left_name,
         "right_device": right_name,
         "restoration_sharpness_delta": (
-            left_eval["restoration"]["sharpness_sf"]
-            - right_eval["restoration"]["sharpness_sf"]
+            left_sharpness - right_sharpness
+            if left_sharpness is not None and right_sharpness is not None
+            else None
         ),
         "restoration_sky_sigma_delta": (
             left_eval["restoration"]["sky_sigma"]

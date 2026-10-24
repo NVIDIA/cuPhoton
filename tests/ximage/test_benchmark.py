@@ -173,6 +173,25 @@ def test_benchmark_devices_can_attach_reconstruction_evaluation(
     assert "image_path" not in evaluation
 
 
+def test_benchmark_comparison_preserves_unavailable_sharpness() -> None:
+    evaluation = {
+        "restoration": {"sharpness_sf": None, "sky_sigma": 0.5},
+        "synthetic_coadd": {
+            "psnr_vs_restoration": 30.0,
+            "ssim_vs_restoration": 0.9,
+        },
+        "exposures": {
+            "avg_psnr_vs_restoration": 30.0,
+            "avg_ssim_vs_restoration": 0.9,
+        },
+    }
+    result = benchmark._compare_evaluations(
+        "cpu", evaluation, "cuda", evaluation
+    )
+    assert result["restoration_sharpness_delta"] is None
+    assert result["restoration_sky_sigma_delta"] == 0.0
+
+
 def test_benchmark_devices_rejects_invalid_requests(tmp_path: Path) -> None:
     config_path = tmp_path / "cfg.yaml"
     config_path.write_text("backend: auto\nmethod: adam\n")
