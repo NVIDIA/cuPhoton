@@ -103,6 +103,8 @@ def _exposure_times(bundle: XImageBundle) -> np.ndarray:
 def prepare_reconstruction_inputs(
     bundle: XImageBundle, mask_mode: str, dilation_factor: int
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    if mask_mode not in ("none", "conservative", "non_conservative"):
+        raise ValueError(f"Unsupported mask mode: {mask_mode}")
     exp_times = _exposure_times(bundle)
     images = np.asarray(bundle.images) / exp_times
     variances = np.asarray(bundle.variances) / (exp_times**2)
@@ -131,6 +133,8 @@ def prepare_reconstruction_inputs_roi(
     height_roi: int | None = None,
     width_roi: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    if mask_mode not in ("none", "conservative", "non_conservative"):
+        raise ValueError(f"Unsupported mask mode: {mask_mode}")
     slice_h, slice_w = spatial_roi_slices(
         (bundle.images.shape[1], bundle.images.shape[2]),
         center_roi=center_roi,
@@ -268,6 +272,8 @@ def pad_with_data(
     if width_roi is None:
         width_roi = images.shape[2]
 
+    if height_roi <= 0 or width_roi <= 0:
+        raise ValueError("ROI height and width must be positive.")
     if srf < 1 or psf_size < 1:
         raise ValueError("srf and psf_size must be positive")
     half_pad_size = psf_size // 2
