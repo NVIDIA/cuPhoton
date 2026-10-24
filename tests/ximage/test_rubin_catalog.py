@@ -119,6 +119,30 @@ def test_validate_local_catalog_reports_missing_columns(tmp_path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "product,missing_visits",
+    [("source", [101, 102]), ("object", []), ("dia-object", [])],
+)
+def test_missing_visit_column_preserves_product_coverage(
+    tmp_path, product, missing_visits
+):
+    columns = sorted(
+        required_columns_for_product(product, band="r") - {"visit"}
+    )
+    row = {column: "r" if column == "band" else "1" for column in columns}
+    write_csv(tmp_path / f"{product.replace('-', '_')}.csv", columns, [row])
+
+    result = validate_rubin_catalog_export(
+        input_dir=tmp_path, products=[product], visits=[102, 101]
+    )["product_results"][product]
+
+    assert result["ok"] is (product != "source")
+    assert result["missing_expected_visits"] == missing_visits
+    assert result["missing_columns"] == (
+        ["visit"] if product == "source" else []
+    )
+
+
 def test_parse_visit_text_and_file(tmp_path) -> None:
     visits_file = tmp_path / "visits.txt"
     visits_file.write_text("# visits\n102\n101 trailing text\n")
