@@ -69,9 +69,9 @@ struct DeviceGuard {
 template <typename T>
 struct Work {
     T *jacobian, *packed_jacobian, *transposed, *compact_residual;
-    T *gradient, *hessian, *system, *step, *step_packed;
-    T *trial_x, *trial_residual, *damping, *cost, *trial_cost;
-    T *residual_norm, *step_norm, *scale, *scaled_step, *prediction;
+    T *gradient, *hessian, *step;
+    T *trial_x, *trial_residual, *damping, *cost, *trial_cost, *residual_norm;
+    double *system, *step_packed, *step_norm, *scale, *scaled_step, *prediction;
     double *matrix_packed, *solve_packed;
     double *wide_jacobian, *wide_transposed, *wide_residual;
     double *wide_gradient, *wide_hessian;
@@ -443,18 +443,24 @@ __global__ void prepare_system(Batch b, Settings s, Work<T> w, int count) {
         return;
     }
     int row = w.indices[slot];
-    T scale[parameters];
-    T scaled_gradient = 0;
+    double scale[parameters];
+    double scaled_gradient = 0;
     for (int p = 0; p < parameters; ++p) {
-        T diagonal = w.hessian[slot * 64 + p * parameters + p];
-        scale[p] = sqrt(diagonal > T(0) ? diagonal : T(1));
+        // Widen before comparison or division: FP32 curvature can be
+        // subnormal even when the solution and covariance are representable.
+        double diagonal =
+            workspace_cast<double>(w.hessian[slot * 64 + p * parameters + p]);
+        scale[p] = sqrt(diagonal > 0.0 ? diagonal : 1.0);
         w.scale[row * parameters + p] = scale[p];
-        T gradient = rn_div(w.gradient[slot * parameters + p], scale[p]);
-        w.step[row * parameters + p] = -gradient;
+        double gradient = rn_div(
+            workspace_cast<double>(w.gradient[slot * parameters + p]),
+            scale[p]);
+        w.scaled_step[row * parameters + p] = -gradient;
         scaled_gradient = maximum(scaled_gradient, abs(gradient));
     }
-    if (scaled_gradient
-        <= rn_mul(T(s.g_tol), maximum(T(1), w.residual_norm[slot]))) {
+    if (scaled_gradient <= rn_mul(
+            s.g_tol,
+            maximum(1.0, workspace_cast<double>(w.residual_norm[slot])))) {
         b.status[row] = g_converged;
         return;
     }
@@ -462,12 +468,14 @@ __global__ void prepare_system(Batch b, Settings s, Work<T> w, int count) {
     // output is therefore already column-major for the following LU copy.
     for (int column = 0; column < parameters; ++column) {
         for (int line = 0; line < parameters; ++line) {
-            T normalized = rn_div(
+            double normalized = rn_div(
                 rn_div(
-                    w.hessian[slot * 64 + column * parameters + line],
+                    workspace_cast<double>(
+                        w.hessian[slot * 64 + column * parameters + line]),
                     scale[column]),
                 scale[line]);
-            T damping = rn_mul(w.damping[row], T(line == column));
+            double damping = rn_mul(
+                workspace_cast<double>(w.damping[row]), double(line == column));
             w.system[row * 64 + column * parameters + line] =
                 rn_add(normalized, damping);
         }
@@ -482,12 +490,11 @@ __global__ void pack_systems(Work<T> w, int count) {
     }
     int row = w.indices[slot];
     for (int p = 0; p < 64; ++p) {
-        w.matrix_packed[slot * 64 + p] =
-            workspace_cast<double>(w.system[row * 64 + p]);
+        w.matrix_packed[slot * 64 + p] = w.system[row * 64 + p];
     }
     for (int p = 0; p < parameters; ++p) {
         w.solve_packed[slot * parameters + p] =
-            workspace_cast<double>(w.step[row * parameters + p]);
+            w.scaled_step[row * parameters + p];
     }
     w.matrix_ptrs[slot] = w.matrix_packed + slot * 64;
     w.rhs_ptrs[slot] = w.solve_packed + slot * parameters;
@@ -501,27 +508,27 @@ __global__ void scatter_step(Batch b, Work<T> w, int count) {
     }
     int row = w.indices[slot];
     bool valid = true;
-    T prediction = 0;
+    double prediction = 0;
     const T* x = static_cast<const T*>(b.x);
     for (int p = 0; p < parameters; ++p) {
-        T scaled_step =
-            workspace_cast<T>(w.solve_packed[slot * parameters + p]);
-        T value = rn_div(scaled_step, w.scale[row * parameters + p]);
+        double scaled_step = w.solve_packed[slot * parameters + p];
+        T value = workspace_cast<T>(
+            rn_div(scaled_step, w.scale[row * parameters + p]));
         valid &= isfinite(value);
-        // step still holds the normalized right-hand side, -gradient.
+        // scaled_step still holds the normalized right-hand side, -gradient.
         prediction = rn_add(
             prediction,
             rn_mul(
                 scaled_step,
                 rn_add(
-                    rn_mul(w.damping[row], scaled_step),
-                    w.step[row * parameters + p])));
+                    rn_mul(workspace_cast<double>(w.damping[row]), scaled_step),
+                    w.scaled_step[row * parameters + p])));
         w.scaled_step[row * parameters + p] = scaled_step;
         w.step[row * parameters + p] = value;
         w.trial_x[row * parameters + p] =
             rn_add(x[row * parameters + p], value);
     }
-    w.prediction[row] = rn_mul(T(0.5), prediction);
+    w.prediction[row] = rn_mul(0.5, prediction);
     if (!valid) {
         b.status[row] = singular;
     }
@@ -570,7 +577,7 @@ __global__ void classify_trial(Batch b, Settings s, Work<T> w) {
                 maximum(eps, rn_mul(w.damping[row], T(s.damping_decrease)));
             w.rejected[row] = 0;
             T threshold = rn_mul(T(s.f_tol), maximum(T(1), cost));
-            T prediction = w.prediction[row];
+            double prediction = w.prediction[row];
             if (reduction <= threshold && isfinite(prediction)
                 && prediction > T(0) && prediction <= threshold
                 && rn_mul(T(0.5), reduction) <= prediction) {
@@ -619,7 +626,7 @@ __global__ void finish_convergence(Batch b, Settings s, Work<T> w, int count) {
     }
     int row = w.indices[slot];
     if (b.status[row] == active
-        && w.step_norm[slot] <= T(rn_mul(s.x_tol, rn_add(s.x_tol, 1.0)))) {
+        && w.step_norm[slot] <= rn_mul(s.x_tol, rn_add(s.x_tol, 1.0))) {
         b.status[row] = x_converged;
     }
 }
@@ -689,8 +696,8 @@ struct Workspace::Impl {
     Work<T> workspace(const Batch& b) {
         std::size_t count = b.count;
         std::size_t observations = std::size_t(b.height) * b.width * b.planes;
-        std::size_t row_bytes = (182 + 26 * observations) * sizeof(T)
-            + 72 * sizeof(double) + 12 * sizeof(int) + 2 * sizeof(double*);
+        std::size_t row_bytes = (92 + 26 * observations) * sizeof(T)
+            + 162 * sizeof(double) + 12 * sizeof(int) + 2 * sizeof(double*);
         if constexpr (sizeof(T) == 4) {
             row_bytes += (72 + 17 * observations) * sizeof(double);
         }
@@ -730,19 +737,13 @@ struct Workspace::Impl {
         w.compact_residual = take(count * observations);
         w.gradient = take(count * 8);
         w.hessian = take(count * 64);
-        w.system = take(count * 64);
         w.step = take(count * 8);
-        w.step_packed = take(count * 8);
         w.trial_x = take(count * 8);
         w.trial_residual = take(count * observations);
         w.damping = take(count);
         w.cost = take(count);
         w.trial_cost = take(count);
         w.residual_norm = take(count);
-        w.step_norm = take(count);
-        w.scale = take(count * 8);
-        w.scaled_step = take(count * 8);
-        w.prediction = take(count);
         auto take_double = [&cursor](std::size_t size) {
             std::uintptr_t address = reinterpret_cast<std::uintptr_t>(cursor);
             address = (address + array_alignment - 1) & ~(array_alignment - 1);
@@ -750,6 +751,12 @@ struct Workspace::Impl {
             cursor = reinterpret_cast<T*>(result + size);
             return result;
         };
+        w.system = take_double(count * 64);
+        w.step_packed = take_double(count * 8);
+        w.step_norm = take_double(count);
+        w.scale = take_double(count * 8);
+        w.scaled_step = take_double(count * 8);
+        w.prediction = take_double(count);
         w.matrix_packed = take_double(count * 64);
         w.solve_packed = take_double(count * 8);
         if constexpr (sizeof(T) == 4) {

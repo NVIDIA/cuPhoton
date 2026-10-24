@@ -1729,3 +1729,50 @@ def test_fp32_normal_equations_preserve_subnormal_contributions(
             np.testing.assert_array_equal(
                 actual.view(np.uint32), expected.view(np.uint32)
             )
+
+
+@pytest.mark.parametrize("specialized", [False, True])
+def test_fp32_solver_preserves_subnormal_curvature(specialized) -> None:
+    cp = _require_cupy_device()
+    coefficient = np.float32(5e-20)
+    jacobian_values = cp.asarray(np.full((1, 1, 2), coefficient, np.float32))
+
+    def residual(x, *, indices):
+        del indices
+        return cp.broadcast_to(x * coefficient - 1, (len(x), 2))
+
+    def jacobian(x, *, indices):
+        del indices
+        return cp.broadcast_to(jacobian_values, (len(x), 1, 2))
+
+    def normal_equations(x, residuals, *, indices):
+        return xfit_solver._normal_equations_from_jacobian(
+            jacobian(x, indices=indices), residuals, cp
+        )
+
+    result = xfit_solver.batched_levenberg_marquardt(
+        xfit_solver.BatchedLeastSquaresProblem(
+            residual,
+            jacobian,
+            normal_equations=normal_equations if specialized else None,
+        ),
+        cp.zeros((1, 1), dtype=cp.float32),
+    )
+
+    # H is about 5e-39, but both the solution 2e19 and covariance 2e38
+    # are representable. FP32 scaling must not erase this search direction.
+    assert bool(result.converged.all())
+    assert int(result.evaluations[0]) > 1
+    np.testing.assert_allclose(cp.asnumpy(result.residuals), 0, atol=1e-6)
+    np.testing.assert_allclose(
+        cp.asnumpy(result.parameters).astype(np.float64) * coefficient,
+        1,
+        rtol=1e-6,
+    )
+    assert result.parameters.dtype == result.covariance.dtype == np.float32
+    assert result.rank.tolist() == [1]
+    np.testing.assert_allclose(
+        cp.asnumpy(result.covariance),
+        1 / (2 * float(coefficient) ** 2),
+        rtol=1e-6,
+    )
