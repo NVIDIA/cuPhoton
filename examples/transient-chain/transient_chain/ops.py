@@ -216,8 +216,11 @@ def match_stars(
     if len(a) == 0 or len(b) == 0:
         return np.empty((0, 2)), np.empty((0, 2))
     d, j = cKDTree(b).query(a, distance_upper_bound=r)
-    ok = np.isfinite(d)
-    return a[ok], b[j[ok]]
+    candidates = np.flatnonzero(np.isfinite(d))
+    order = candidates[np.argsort(d[candidates], kind="stable")]
+    _, first = np.unique(j[order], return_index=True)
+    keep = np.sort(order[first])
+    return a[keep], b[j[keep]]
 
 
 def fit_affine(src: np.ndarray, dst: np.ndarray):

@@ -108,6 +108,14 @@ def test_find_stars_recovers_planted_positions():
     assert len(a2) == 4 and np.abs(a2 - b2).max() < 0.1
 
 
+def test_match_stars_keeps_only_the_closest_pair_per_template_star():
+    visit = np.array([[10.4, 10.0], [10.1, 10.0], [20.1, 20.0], [99, 99]])
+    template = np.array([[10.0, 10.0], [20.0, 20.0]])
+    matched_visit, matched_template = ops.match_stars(visit, template, 1.0)
+    np.testing.assert_array_equal(matched_visit, visit[[1, 2]])
+    np.testing.assert_array_equal(matched_template, template)
+
+
 def test_affine_and_xcorr():
     src = np.random.default_rng(0).uniform(0, 1000, (40, 2))
     A, b = (
