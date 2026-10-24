@@ -65,7 +65,11 @@ def _positive_finite_num(v, name):
 
 def _nonnegative_finite_num(v, name):
     _num()(v, name)
-    if not math.isfinite(v) or v < 0:
+    try:
+        finite = math.isfinite(v)
+    except OverflowError:
+        finite = False
+    if not finite or v < 0:
         raise ValueError(f"{name} must be finite and >= 0, got {v}")
     return v
 

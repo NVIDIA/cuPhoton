@@ -213,3 +213,12 @@ def test_lobe_reach_limit_requires_a_positive_finite_number(value):
     raw["uq"]["max_lobe_reach_px"] = value
     with pytest.raises(ValueError, match="max_lobe_reach_px"):
         config.validate_config(raw)
+
+
+def test_external_astrometric_uncertainty_rejects_overflow():
+    with pytest.raises(
+        ValueError, match="sky_astrometry_arcsec must be finite"
+    ):
+        config.load_config(
+            HERE / "config.yaml", [f"uq.sky_astrometry_arcsec={10**400}"]
+        )
