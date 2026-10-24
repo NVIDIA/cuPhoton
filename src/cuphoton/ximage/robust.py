@@ -81,21 +81,24 @@ def irls_weights(
     numerator = _damped_rl_g(torch, residual) * _damped_rl_gprime(
         torch, residual
     )
+    nonzero = torch.abs(residual) > 1e-12
+    safe = torch.where(nonzero, residual, torch.ones_like(residual))
     return torch.where(
-        torch.abs(residual) > 1e-12,
-        numerator / residual,
-        torch.ones_like(residual),
+        nonzero,
+        numerator / safe,
+        torch.zeros_like(residual),
     )
 
 
 def _damped_rl_g(torch: Any, residual: Any, *, order: int = 10) -> Any:
     magnitude = torch.abs(residual)
+    polynomial_input = magnitude.clamp(max=1.0)
     coefficient = (order - 1.0) / (order + 1.0)
     transformed = torch.where(
         magnitude > 1.0,
         magnitude,
-        magnitude.pow(order)
-        - coefficient * magnitude.pow(order + 1)
+        polynomial_input.pow(order)
+        - coefficient * polynomial_input.pow(order + 1)
         + coefficient,
     )
     return transformed
@@ -103,10 +106,12 @@ def _damped_rl_g(torch: Any, residual: Any, *, order: int = 10) -> Any:
 
 def _damped_rl_gprime(torch: Any, residual: Any, *, order: int = 10) -> Any:
     magnitude = torch.abs(residual)
+    polynomial_input = magnitude.clamp(max=1.0)
     derivative = torch.where(
         magnitude > 1.0,
         torch.ones_like(magnitude),
-        order * magnitude.pow(order - 1) - (order - 1) * magnitude.pow(order),
+        order * polynomial_input.pow(order - 1)
+        - (order - 1) * polynomial_input.pow(order),
     )
     return derivative * torch.sign(residual)
 

@@ -23,7 +23,7 @@ def gaussian_psf(
     Parameters
     ----------
     size
-        Height and width of the square output array.
+        Positive integer height and width of the square output array.
     sigma
         Standard deviation in pixels. Must be finite and positive.
     offset
@@ -39,8 +39,12 @@ def gaussian_psf(
         slightly less than one when the Gaussian extends beyond the grid.
     """
 
-    if size < 1:
-        raise ValueError("size must be at least one")
+    if (
+        isinstance(size, (bool, np.bool_))
+        or not isinstance(size, (int, np.integer))
+        or size < 1
+    ):
+        raise ValueError("size must be a positive integer")
     if not np.isfinite(sigma) or sigma <= 0:
         raise ValueError("sigma must be finite and positive")
     if len(offset) != 2:
