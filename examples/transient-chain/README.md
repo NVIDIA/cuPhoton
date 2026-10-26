@@ -6,9 +6,10 @@ memory through the FITS reader you choose (xDR GPU decode, Astropy, or automatic
 the detector, xFit and XScan then work on device arrays; the catalog is the only thing that
 comes back. cuPhoton's executors place the workers locally, under Dragon, or under MPI.
 
-The example builds on `cuphoton` 0.1.3 and later. The shipped `config.yaml` holds the
-parameters of the file-based reference chain on Rubin DP1; with a different `survey:` block
-the same chain runs on other FITS surveys.
+The example uses the cuPhoton development APIs in this checkout. Install the library and
+example together from the same checkout. The shipped `config.yaml` holds the parameters
+of the file-based reference chain on Rubin DP1; with a different `survey:` block the same
+chain runs on other FITS surveys.
 
 ```
 launch.py                   CLI: --executor local|dragon|mpi, --set block.key=value overrides
@@ -59,13 +60,15 @@ the request.
 
 ## Prerequisites
 
-1. cuPhoton 0.1.3 or later with the `gpu` extra (CuPy, xDR dependencies, Torch, photutils) plus `dragon`
-   or `mpi` for those executors; Python 3.12 or 3.13 (Dragon has no 3.14 wheel). Follow the
-   library's `docs/getting-started.md` for the install that matches your release (checkout or
-   wheels) and `docs/components/xdr.md` for the xDR native extension. Then, from the library checkout:
+1. cuPhoton with the `gpu` extra (CuPy, xDR dependencies, Torch, photutils) plus `dragon`
+   or `mpi` for those executors; Python 3.12 or 3.13 (Dragon has no 3.14 wheel). Follow
+   `docs/getting-started.md` for development environment setup and
+   `docs/components/xdr.md` for the xDR native extension. From the root of this development
+   checkout, install both packages in editable mode:
    ```bash
-   uv pip install -e examples/transient-chain --no-deps
+   uv pip install -e '.[gpu]' -e examples/transient-chain
    ```
+   Use `'.[gpu,dragon]'` or `'.[gpu,mpi]'` for the corresponding executor.
    The example itself needs only `pyyaml`, `pandas`, `pyarrow`, `astropy` and `scipy`, all of which
    cuPhoton already requires.
    The host tests run without a GPU, from this directory, with the `dev` and `photometry`
