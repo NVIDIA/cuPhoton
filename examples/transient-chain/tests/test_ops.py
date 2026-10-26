@@ -201,3 +201,370 @@ def test_find_stars_keeps_the_brightest_when_precutting():
     assert (
         np.hypot(stars[0, 0] - 480, stars[0, 1] - 480) < 1.0
     )  # ranked first by flux, not cut by the peak pre-cut
+
+
+def _render(size, xs, ys, fluxes, sigma, sky=400.0):
+    """Pixel-integrated circular Gaussians on a flat sky."""
+    from scipy.special import erf
+
+    img = np.full((size, size), sky)
+    edges = np.arange(size + 1) - 0.5
+    for x, y, f in zip(xs, ys, fluxes, strict=True):
+        cx = 0.5 * np.diff(erf((edges - x) / (np.sqrt(2) * sigma)))
+        cy = 0.5 * np.diff(erf((edges - y) / (np.sqrt(2) * sigma)))
+        img += f * np.outer(cy, cx)
+    return img
+
+
+STAR_FINDER = dict(fwhm=4.0, nsigma=20.0, max_n=600, box=15, iterations=4)
+
+
+def test_star_centroid_error_matches_monte_carlo():
+    clean = _render(64, [31.3], [32.6], [2.0e4], 2.0)
+    var = clean + 25.0
+    rng = np.random.default_rng(1)
+    xs, us = [], []
+    for _ in range(300):
+        img = clean + rng.normal(0.0, np.sqrt(var))
+        c = ops.find_stars(img, **STAR_FINDER)
+        assert len(c) == 1
+        xs.append(c[0])
+        us.append(
+            ops.star_measurements(img, var, c, box=15).centroid_error[0]
+        )
+    scatter, pred = (
+        np.std(np.array(xs), axis=0),
+        np.mean(np.array(us), axis=0),
+    )
+    np.testing.assert_allclose(scatter, pred, rtol=0.15)
+
+
+def test_star_width_is_the_pixel_level_gaussian_width():
+    img = _render(64, [31.3], [32.6], [1.0e5], 2.0, sky=0.0)
+    m = ops.star_measurements(
+        img, np.ones_like(img), np.array([[31.3, 32.6]]), box=15
+    )
+    assert m.width[0] == pytest.approx(np.sqrt(4.0 + 1.0 / 12.0), rel=2e-3)
+    assert m.snr[0] > 100 and m.flux[0] == pytest.approx(1.0e5, rel=1e-2)
+    none = ops.star_measurements(img, None, np.array([[31.3, 32.6]]), box=15)
+    assert np.all(none.centroid_error == 0) and np.isnan(none.snr[0])
+
+    # a box with no positive flux has no width: NaN, not the starting guess
+    empty = ops.star_measurements(
+        np.zeros((64, 64)), None, np.array([[31.3, 32.6]]), box=15
+    )
+    assert np.isnan(empty.width[0])
+    sm = ops.smooth_image(img, 4.0)
+    assert sm.n_finite == img.size and sm.fwhm == 4.0
+    same = ops.star_measurements(
+        img, np.ones_like(img), np.array([[31.3, 32.6]]), box=15, smoothed=sm
+    )
+    assert same.width[0] == m.width[0]
+    with pytest.raises(ValueError):
+        ops.star_measurements(
+            img, None, [[31.3, 32.6]], box=15, fwhm=3.0, smoothed=sm
+        )
+
+
+def test_find_stars_reuses_a_smoothed_image():
+    rng = np.random.default_rng(11)
+    xs, ys = rng.uniform(20, 236, 30), rng.uniform(20, 236, 30)
+    img = _render(256, xs, ys, np.full(30, 2e4), 1.8)
+    img += rng.normal(0, 20.0, img.shape)
+    sm = ops.smooth_image(img, 4.0)
+    a = ops.find_stars(img, **STAR_FINDER)
+    b = ops.find_stars(img, smoothed=sm, **STAR_FINDER)
+    np.testing.assert_array_equal(a, b)
+    peaks = ops.find_stars(img, fwhm=4.0, smoothed=sm, **ops.NEIGHBOR_PEAKS)
+    assert len(peaks) >= 25 and np.all(peaks == np.rint(peaks))  # blends
+
+
+def _field(xy, d=0.2, half=256.0, c=255.5):
+    X, Y = (xy[:, 0] - c) / half, (xy[:, 1] - c) / half
+    return np.column_stack([d * (X**2 - Y**2), d * 2 * X * Y])
+
+
+AFFINE = (
+    np.array([[1.0002, -0.0003], [0.0001, 0.9998]]),
+    np.array([0.3, -0.2]),
+)
+
+
+def test_fit_misalignment_recovers_the_quadratic_field():
+    rng = np.random.default_rng(2)
+    A, b = AFFINE
+    src = rng.uniform(20, 490, (200, 2))
+    noise = np.full((200, 2), 0.01**2)
+    dst = src @ A.T + b + _field(src) + rng.normal(0, 0.01, src.shape)
+    m = ops.fit_misalignment(src, dst, noise, shape=(512, 512))
+    assert m.mode == "polynomial" and m.used.sum() >= 195
+    np.testing.assert_allclose(m.matrix, A, atol=2e-4)
+    probe = rng.uniform(40, 470, (50, 2))
+    true = probe @ A.T + b + _field(probe) - (probe @ m.matrix.T + m.offset)
+    p, vp = m.excess(probe[:, 0], probe[:, 1])
+    assert np.max(np.abs(p - true)) < 0.01
+    assert np.all(m.excess_variance < 0.003**2)
+    var = m.variance(probe[:, 0], probe[:, 1])
+    aff = m.affine_variance(probe[:, 0], probe[:, 1])
+    displacement = probe @ m.matrix.T + m.offset - probe + p
+    np.testing.assert_allclose(
+        var, aff + displacement**2 + m.excess_variance, rtol=1e-12
+    )
+
+
+@pytest.mark.parametrize("min_poly", [30, 10**9], ids=["polynomial", "rms"])
+def test_fit_misalignment_recovers_the_excess_variance(min_poly):
+    # 1000 stars whose residuals scatter by 0.02 px around the model while
+    # the centroid noise says 0.01: the excess is sqrt(3) * 0.01 per axis
+    rng = np.random.default_rng(6)
+    A, b = AFFINE
+    src = rng.uniform(20, 490, (1000, 2))
+    noise = np.full((1000, 2), 0.01**2)
+    d = 0.2 if min_poly == 30 else 0.0  # no field to leave in rms mode
+    dst = src @ A.T + b + _field(src, d) + rng.normal(0, 0.02, src.shape)
+    m = ops.fit_misalignment(
+        src, dst, noise, shape=(512, 512), min_poly=min_poly
+    )
+    assert m.mode == ("polynomial" if min_poly == 30 else "rms")
+    assert m.used.sum() >= 995
+    np.testing.assert_allclose(
+        np.sqrt(m.excess_variance), np.sqrt(3) * 0.01, rtol=0.05
+    )
+
+
+def test_fit_misalignment_variance_describes_held_out_stars():
+    # a field whose square is larger than the centroid noise, so the test
+    # fails when variance(x, y) drops the field or the affine term
+    rng = np.random.default_rng(7)
+    A, b = AFFINE
+    src = rng.uniform(20, 490, (300, 2))
+    sig = 0.005
+    noise = np.full((300, 2), sig**2)
+    dst = src @ A.T + b + _field(src, 0.02) + rng.normal(0, sig, src.shape)
+    m = ops.fit_misalignment(src, dst, noise, shape=(512, 512))
+    held = rng.uniform(20, 490, (4000, 2))
+    meas = (
+        held @ A.T + b + _field(held, 0.02) + rng.normal(0, sig, held.shape)
+    )
+    e = meas - held
+    x, y = held[:, 0], held[:, 1]
+    z = e / np.sqrt(m.variance(x, y) + sig**2)
+    assert np.sqrt(np.mean(z**2)) == pytest.approx(1.0, abs=0.05)
+    without_field = e / np.sqrt(
+        m.affine_variance(x, y) + m.excess_variance + sig**2
+    )
+    assert np.sqrt(np.mean(without_field**2)) > 1.3
+
+
+@pytest.mark.parametrize("min_poly", [30, 10**9])
+def test_misalignment_includes_the_uncorrected_affine_shift(min_poly):
+    positions = np.random.default_rng(22).uniform(20, 490, (100, 2))
+    shift = np.array([0.3, -0.2])
+    noise = np.full_like(positions, 0.01**2)
+    model = ops.fit_misalignment(
+        positions,
+        positions + shift,
+        noise,
+        shape=(512, 512),
+        min_poly=min_poly,
+    )
+    np.testing.assert_allclose(
+        model.variance([255.5], [255.5]),
+        shift[None] ** 2 + model.affine_variance([255.5], [255.5]),
+        rtol=1e-10,
+    )
+
+
+def test_fit_misalignment_clips_outliers_and_keeps_good_stars():
+    rng = np.random.default_rng(8)
+    A, b = AFFINE
+    src = rng.uniform(20, 490, (200, 2))
+    noise = np.full((200, 2), 0.01**2)
+    dst = src @ A.T + b + _field(src) + rng.normal(0, 0.01, src.shape)
+    dst[:5] += rng.normal(0, 0.5, (5, 2)) + 0.5  # blends and mismatches
+    m = ops.fit_misalignment(src, dst, noise, shape=(512, 512))
+    assert not m.used[:5].any() and m.used[5:].sum() >= 190
+    np.testing.assert_allclose(m.matrix, A, atol=2e-4)
+    assert np.all(m.excess_variance < 0.003**2)
+    kept = ops.fit_misalignment(src, dst, noise, shape=(512, 512), clip=None)
+    assert kept.used.all() and kept.excess_variance.min() > 0.05**2
+
+
+def test_fit_misalignment_rms_mode():
+    rng = np.random.default_rng(3)
+    src = rng.uniform(20, 490, (20, 2))
+    noise = np.full((20, 2), 0.01**2)
+    dst = src + rng.normal(0, 0.02, src.shape)
+    dst[0] += 1.0  # a blended pair
+    m = ops.fit_misalignment(src, dst, noise, shape=(512, 512))
+    assert m.mode == "rms" and not m.used[0] and m.used[1:].all()
+    assert np.sqrt(m.excess_variance).mean() == pytest.approx(
+        np.sqrt(3) * 0.01, rel=0.6
+    )
+    var = m.variance([100.0, 400.0], [100.0, 400.0])
+    assert var.shape == (2, 2) and np.all(var >= m.excess_variance)
+    p, vp = m.excess([100.0], [100.0])
+    assert np.all(p == 0) and np.all(vp == 0)
+    assert (
+        ops.fit_misalignment(
+            src, dst, np.zeros_like(noise), shape=(512, 512)
+        ).excess_variance.min()
+        > 0
+    )
+
+
+def test_affine_covariance_matches_monte_carlo():
+    rng = np.random.default_rng(4)
+    src = rng.uniform(20, 490, (40, 2))
+    sig = rng.uniform(0.005, 0.03, (40, 2))
+    probe = np.array([[255.5, 255.5], [40.0, 470.0]])
+    preds = []
+    for _ in range(400):
+        A, b, _ = ops.fit_affine(
+            src, src + sig * rng.standard_normal(src.shape)
+        )
+        preds.append(probe @ A.T + b - probe)
+    m = ops.fit_misalignment(
+        src, src, sig**2, shape=(512, 512), min_poly=10**9
+    )
+    np.testing.assert_allclose(
+        np.var(np.array(preds), axis=0),
+        m.affine_variance(probe[:, 0], probe[:, 1]),
+        rtol=0.2,
+    )
+
+
+def test_neighbor_free_drops_stars_with_a_close_peak():
+    xs, ys = [40.0, 150.0, 158.0, 100.0], [40.0, 150.0, 152.0, 160.0]
+    img = _render(200, xs, ys, [3e4, 3e4, 1e4, 3e4], 1.7, sky=0.0)
+    img += np.random.default_rng(5).normal(0, 1.0, img.shape)
+    xy = np.column_stack([xs, ys])
+    peaks = ops.find_stars(img, fwhm=4.0, **ops.NEIGHBOR_PEAKS)
+    np.testing.assert_array_equal(
+        ops.neighbor_free(peaks, xy, 15.0), [True, False, False, True]
+    )
+    assert ops.neighbor_free(peaks, np.empty((0, 2)), 15.0).shape == (0,)
+    assert ops.neighbor_free(np.empty((0, 2)), xy, 15.0).all()
+
+
+def test_psf_width_clips_and_reports_a_standard_error():
+    rng = np.random.default_rng(5)
+    w = np.concatenate([rng.normal(2.02, 0.01, 60), [3.5, 4.0, 5.0, np.nan]])
+    r = ops.psf_width(w)
+    assert r.n == 63 and r.n_used == 60
+    assert r.sigma_px == pytest.approx(2.02, abs=0.005)
+    assert r.standard_error_px == pytest.approx(
+        1.2533 * 0.01 / np.sqrt(60), rel=0.3
+    )
+    assert r.optical_sigma_px == pytest.approx(
+        np.sqrt(r.sigma_px**2 - 1 / 12)
+    )
+    with pytest.raises(ValueError):
+        ops.psf_width([np.nan])
+
+
+def _star_field(rng, n=80, size=512, sigma=1.8, sky=200.0):
+    """A target and a template of the same stars under a known affine, with
+    noise, as the refine stage sees them after the template rebuild.
+    """
+    A, b = (
+        np.array([[1.0003, -0.0002], [0.0001, 0.9997]]),
+        np.array([0.21, -0.14]),
+    )
+    xy = rng.uniform(24, size - 24, (n, 2))
+    flux = rng.uniform(5e3, 5e4, n)
+    target = _render(size, xy[:, 0], xy[:, 1], flux, sigma, sky)
+    tpl_xy = xy @ A.T + b
+    template = _render(size, tpl_xy[:, 0], tpl_xy[:, 1], flux, sigma, sky)
+    var = target + 25.0
+    target = target + rng.normal(0, np.sqrt(var))
+    template = template + rng.normal(0, np.sqrt(template + 25.0) / 2)
+    return target, template, var, (A, b), sigma
+
+
+def test_measure_matched_stars_models_a_synthetic_field():
+    rng = np.random.default_rng(9)
+    target, template, var, (A, b), sigma = _star_field(rng)
+    sv = ops.find_stars(target, **STAR_FINDER)
+    st = ops.find_stars(template, **STAR_FINDER)
+    mv, mt = ops.match_stars(sv, st, 5.0)
+    assert len(mv) >= 60
+    ms = ops.measure_matched_stars(
+        target, template, var, mv, mt, box=15, fwhm=4.0, min_stars=15
+    )
+    d = ms.diagnostics
+    assert d["stars_matched"] == len(mv)
+    assert 3 <= d["stars_neighbor_free"] <= len(mv)
+    assert d["stars_nonfinite_dropped"] == 0
+    assert d["model"] == ms.misalignment.mode == "polynomial"
+    assert (
+        d["reason"] is None and d["stars_used"] == ms.misalignment.used.sum()
+    )
+    np.testing.assert_allclose(ms.misalignment.matrix, A, atol=5e-4)
+    image_center = np.array([255.5, 255.5])
+    np.testing.assert_allclose(
+        d["center_sigma_px"],
+        np.abs(image_center @ A.T + b - image_center),
+        atol=0.05,
+    )
+    assert d["residual_rms_px"] < 0.1
+    assert ms.control_bytes > 0 and ms.control_bytes % 16 == 0
+    assert ms.psf.sigma_px == pytest.approx(
+        np.sqrt(sigma**2 + 1 / 12), rel=0.02
+    )
+    assert d["psf_width"]["n_used"] == ms.psf.n_used <= d["stars_used"]
+    # the same call with the smoothed images prepared once
+    again = ops.measure_matched_stars(
+        target,
+        template,
+        var,
+        mv,
+        mt,
+        box=15,
+        fwhm=4.0,
+        min_stars=15,
+        target_smoothed=ops.smooth_image(target, 4.0),
+        template_smoothed=ops.smooth_image(template, 4.0),
+    )
+    assert again.diagnostics == d
+
+
+def test_measure_matched_stars_skips_the_model_but_measures_the_width():
+    rng = np.random.default_rng(10)
+    target, template, var, _, sigma = _star_field(rng)
+    sv = ops.find_stars(target, **STAR_FINDER)
+    mv, mt = ops.match_stars(sv, ops.find_stars(template, **STAR_FINDER), 5.0)
+    skipped = ops.measure_matched_stars(
+        target,
+        template,
+        var,
+        mv,
+        mt,
+        box=15,
+        fwhm=4.0,
+        min_stars=15,
+        skip_model="daofind centroids",
+    )
+    assert skipped.misalignment is None
+    assert skipped.diagnostics["model"] is None
+    assert skipped.diagnostics["reason"] == "daofind centroids"
+    assert skipped.psf.sigma_px == pytest.approx(
+        np.sqrt(sigma**2 + 1 / 12), rel=0.02
+    )
+    assert skipped.psf.n == skipped.diagnostics["stars_neighbor_free"]
+    few = ops.measure_matched_stars(
+        target, template, var, mv, mt, box=15, fwhm=4.0, min_stars=10**6
+    )
+    assert (
+        few.misalignment is None
+        and few.diagnostics["reason"] == "fewer than 1000000 stars"
+    )
+    none = ops.measure_matched_stars(
+        target, template, var, mv[:2], mt[:2], box=15, fwhm=4.0, min_stars=15
+    )
+    assert none.psf is None and none.control_bytes == 0
+    assert none.diagnostics == {
+        "stars_matched": 2,
+        "model": None,
+        "reason": "fewer than 3 matched stars",
+    }
