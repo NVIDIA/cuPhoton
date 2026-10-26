@@ -13,6 +13,7 @@ from cuphoton.xrep import (
     ReprojectionSpec,
     prepare_reprojection,
     reproject_array,
+    reproject_array_device,
     reproject_masked_array,
 )
 
@@ -368,3 +369,17 @@ def test_masked_reproject_rejects_negative_variance_but_allows_no_data() -> (
         backend="cpu",
     )
     assert result.variance[0, 0] == pytest.approx(1.0)
+
+
+def test_device_variance_validates_shape_and_dtype() -> None:
+    image = np.ones((2, 2), dtype=np.float64)
+    spec = _offset_spec(shape=(2, 2))
+
+    with pytest.raises(ValueError, match="source_variance shape"):
+        reproject_array_device(image, spec, source_variance=np.ones((1, 2)))
+    with pytest.raises(TypeError, match="real numeric"):
+        reproject_array_device(
+            image,
+            spec,
+            source_variance=np.ones((2, 2), dtype=np.complex128),
+        )

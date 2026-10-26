@@ -11,6 +11,7 @@ area arrays as the CPU and Torch backends.
 
 from __future__ import annotations
 
+import functools
 import os
 
 import numpy as np
@@ -73,18 +74,23 @@ class CupyBackend:
         spec: ReprojectionSpec,
         *,
         source_mask=None,
+        source_variance=None,
+        variance_fill_value: float = float("nan"),
     ) -> DeviceReprojectionResult:
         import cupy as cp
 
         from ._cupy_kernels import (
             propagate_mask_or_cupy_raw,
             reproject_lanczos3_cupy_raw,
+            reproject_with_variance_cupy,
             sample_bilinear_cupy,
             sample_lanczos_cupy,
         )
 
         if getattr(source, "ndim", None) != 2:
             raise ValueError("source must be a 2D array")
+        if spec.interpolation not in {"bilinear", "lanczos3"}:
+            raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
 
         src = cp.asarray(source, dtype=cp.float64)
         x = cp.asarray(prepared.x_local, dtype=cp.float64)
@@ -92,44 +98,49 @@ class CupyBackend:
         valid = cp.asarray(prepared.valid)
         area = cp.asarray(prepared.relative_area, dtype=cp.float64)
 
-        if spec.interpolation == "bilinear":
-            lanczos_kernel = None
-            sampled_is_final = False
+        lanczos_kernel = _resolve_lanczos_kernel(spec)
+
+        variance = None
+        if source_variance is not None:
+            sampled, variance = reproject_with_variance_cupy(
+                src,
+                cp.asarray(source_variance, dtype=cp.float64),
+                x,
+                y,
+                valid,
+                area,
+                interpolation=spec.interpolation,
+                lanczos_a=spec.lanczos_a,
+                two_a_footprint=spec.two_a_footprint,
+                lanczos3_specialized=lanczos_kernel == "raw",
+                area_scaling=spec.area_scaling,
+                fill_value=spec.fill_value,
+                variance_fill_value=variance_fill_value,
+            )
+        elif spec.interpolation == "bilinear":
             sampled = sample_bilinear_cupy(
                 src, x, y, fill_value=spec.fill_value
             )
-        elif spec.interpolation == "lanczos3":
-            lanczos_kernel = _lanczos_kernel_variant()
-            if (
-                lanczos_kernel == "raw"
-                and spec.lanczos_a == 3
-                and spec.two_a_footprint
-            ):
-                sampled_is_final = True
-                sampled = reproject_lanczos3_cupy_raw(
-                    src,
-                    x,
-                    y,
-                    valid,
-                    area,
-                    area_scaling=spec.area_scaling,
-                    fill_value=spec.fill_value,
-                )
-            else:
-                if lanczos_kernel == "raw":
-                    lanczos_kernel = "elementwise"
-                sampled_is_final = False
-                sampled = sample_lanczos_cupy(
-                    src,
-                    x,
-                    y,
-                    a=spec.lanczos_a,
-                    two_a_footprint=spec.two_a_footprint,
-                )
+        elif lanczos_kernel == "raw":
+            sampled = reproject_lanczos3_cupy_raw(
+                src,
+                x,
+                y,
+                valid,
+                area,
+                area_scaling=spec.area_scaling,
+                fill_value=spec.fill_value,
+            )
         else:
-            raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
+            sampled = sample_lanczos_cupy(
+                src,
+                x,
+                y,
+                a=spec.lanczos_a,
+                two_a_footprint=spec.two_a_footprint,
+            )
 
-        if not sampled_is_final:
+        if source_variance is None and lanczos_kernel != "raw":
             if spec.area_scaling:
                 sampled = sampled * area
             sampled = cp.where(valid, sampled, spec.fill_value)
@@ -144,9 +155,23 @@ class CupyBackend:
         else:
             mask = ~valid
 
-        device = cp.cuda.runtime.getDeviceProperties(
-            cp.cuda.runtime.getDevice()
-        )["name"].decode()
+        metadata = {
+            "area_scaling": spec.area_scaling,
+            "mapping_grid_step": spec.mapping_grid_step,
+            "device": _device_name(cp.cuda.runtime.getDevice()),
+            "lanczos_kernel": lanczos_kernel,
+            "result_location": "device",
+        }
+        if variance is not None:
+            metadata.update(
+                {
+                    "variance_propagation": "diagonal",
+                    "variance_covariance_propagated": False,
+                    "variance_area_scaling_power": (
+                        2 if spec.area_scaling else 0
+                    ),
+                }
+            )
 
         return DeviceReprojectionResult(
             image=sampled,
@@ -154,13 +179,8 @@ class CupyBackend:
             bbox=spec.output_bbox,
             backend=self.name,
             interpolation=spec.interpolation,
-            metadata={
-                "area_scaling": spec.area_scaling,
-                "mapping_grid_step": spec.mapping_grid_step,
-                "device": device,
-                "lanczos_kernel": lanczos_kernel,
-                "result_location": "device",
-            },
+            metadata=metadata,
+            variance=variance,
         )
 
     def reproject_mask(
@@ -198,42 +218,54 @@ class CupyBackend:
 
         import cupy as cp
 
-        from ._cupy_kernels import (
-            sample_bilinear_variance_cupy,
-            sample_lanczos_variance_cupy,
-        )
+        from ._cupy_kernels import reproject_with_variance_cupy
 
         if getattr(source_variance, "ndim", None) != 2:
             raise ValueError("variance must be a 2D array")
 
+        # The image half of the fused kernel is discarded; it takes the
+        # image fill so a swapped return would not pass as a variance.
         variance = cp.asarray(source_variance, dtype=cp.float64)
-        x = cp.asarray(prepared.x_local, dtype=cp.float64)
-        y = cp.asarray(prepared.y_local, dtype=cp.float64)
-        valid = cp.asarray(prepared.valid)
-        area = cp.asarray(prepared.relative_area, dtype=cp.float64)
-
-        if spec.interpolation == "bilinear":
-            sampled = sample_bilinear_variance_cupy(
-                variance,
-                x,
-                y,
-                fill_value=variance_fill_value,
-            )
-        elif spec.interpolation == "lanczos3":
-            sampled = sample_lanczos_variance_cupy(
-                variance,
-                x,
-                y,
-                a=spec.lanczos_a,
-                two_a_footprint=spec.two_a_footprint,
-            )
-        else:
-            raise ValueError("interpolation must be 'bilinear' or 'lanczos3'")
-
-        sampled = cp.where(valid, sampled, variance_fill_value)
-        if spec.area_scaling:
-            sampled = sampled * cp.square(cp.where(valid, area, 1.0))
+        _, sampled = reproject_with_variance_cupy(
+            variance,
+            variance,
+            cp.asarray(prepared.x_local, dtype=cp.float64),
+            cp.asarray(prepared.y_local, dtype=cp.float64),
+            cp.asarray(prepared.valid),
+            cp.asarray(prepared.relative_area, dtype=cp.float64),
+            interpolation=spec.interpolation,
+            lanczos_a=spec.lanczos_a,
+            two_a_footprint=spec.two_a_footprint,
+            lanczos3_specialized=_resolve_lanczos_kernel(spec) == "raw",
+            area_scaling=spec.area_scaling,
+            fill_value=spec.fill_value,
+            variance_fill_value=variance_fill_value,
+        )
         return cp.asnumpy(sampled)
+
+
+@functools.cache
+def _device_name(device_id: int) -> str:
+    import cupy as cp
+
+    properties = cp.cuda.runtime.getDeviceProperties(device_id)
+    return properties["name"].decode()
+
+
+def _resolve_lanczos_kernel(spec: ReprojectionSpec) -> str | None:
+    """Return the Lanczos kernel variant for ``spec``, ``None`` for bilinear.
+
+    The compile-time ``raw`` variant covers only ``lanczos_a=3`` with the
+    two-radius footprint; other kernels fall back to ``elementwise``.
+    """
+
+    if spec.interpolation != "lanczos3":
+        return None
+    variant = _lanczos_kernel_variant()
+    specialized = spec.lanczos_a == 3 and spec.two_a_footprint
+    if variant == "raw" and not specialized:
+        return "elementwise"
+    return variant
 
 
 def _lanczos_kernel_variant() -> str:
