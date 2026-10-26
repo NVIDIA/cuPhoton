@@ -517,7 +517,9 @@ the grid holds fewer than 12 positions (square stamps of 26 pixels or less
 on a side), the flags warn and leave the significance uncalibrated. If
 lobe exclusion leaves too few usable positions, the significance is left
 uncalibrated without a warning. The flags follow the backend of `images`
-without host copies and accept `DeviceDipoleFitResult`.
+and accept `DeviceDipoleFitResult`. CuPy images keep the computation on the
+device. NumPy images copy only the parameters and uncertainty-valid mask
+of a device result to the host.
 
 ## Opt-in observational-data checks
 

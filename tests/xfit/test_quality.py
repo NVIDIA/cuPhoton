@@ -192,6 +192,35 @@ def test_correlated_noise_does_not_support_a_spurious_lobe():
     assert calibrated[0] & flag
 
 
+@pytest.mark.parametrize("device_field", ["parameters", "uncertainty_valid"])
+def test_numpy_images_accept_device_result_fields(device_field):
+    class DeviceArray:
+        __module__ = "cupy"
+
+        def __init__(self, values):
+            self.values = values
+
+        def __array__(self, *args, **kwargs):
+            raise TypeError(
+                "Implicit conversion to a NumPy array is forbidden"
+            )
+
+        def get(self):
+            return self.values.copy()
+
+    truth = [[60.0, 2.0, 1.8, 0.3, 3.0, 1.0, -3.0, -1.0]]
+    images = _stamps(truth)
+    fit = _result(truth, valid=False)
+    expected = dipole_quality_flags(fit, images)
+    setattr(fit, device_field, DeviceArray(getattr(fit, device_field)))
+
+    flags = dipole_quality_flags(fit, images)
+
+    assert isinstance(flags, np.ndarray)
+    np.testing.assert_array_equal(flags, expected)
+    assert flags[0] & DipoleQualityFlag.UNCERTAINTY_INVALID
+
+
 def test_cupy_matches_numpy():
     cp = pytest.importorskip("cupy")
     try:
@@ -216,16 +245,20 @@ def test_cupy_matches_numpy():
         mask=mask,
     )
     host = dipole_quality_flags(fit, images, mask=mask)
+    device_fit = SimpleNamespace(
+        parameters=cp.asarray(fit.parameters),
+        uncertainty_valid=cp.asarray(fit.uncertainty_valid),
+    )
     device = dipole_quality_flags(
-        SimpleNamespace(
-            parameters=cp.asarray(fit.parameters),
-            uncertainty_valid=cp.asarray(fit.uncertainty_valid),
-        ),
+        device_fit,
         cp.asarray(images),
         mask=cp.asarray(mask),
     )
     assert isinstance(device, cp.ndarray)
     assert cp.asnumpy(device).tolist() == host.tolist()
+    mixed = dipole_quality_flags(device_fit, images, mask=mask)
+    assert isinstance(mixed, np.ndarray)
+    np.testing.assert_array_equal(mixed, host)
 
 
 def test_small_stamps_skip_calibration_with_a_warning():

@@ -22,6 +22,7 @@ import numpy as np
 
 from ._types import ArrayLike
 from .api import DeviceDipoleFitResult, DipoleFitResult
+from .backend import as_numpy
 from .io import _array_module
 from .models import GaussianDipoleModel
 
@@ -97,7 +98,9 @@ def dipole_quality_flags(
 
     Computation follows the backend of ``images``: CuPy images, with a
     :class:`DeviceDipoleFitResult` or any result whose arrays CuPy accepts,
-    return a CuPy array of flags.
+    return a CuPy array of flags. NumPy images return NumPy flags, copying
+    only the parameters and uncertainty-valid mask of a device result
+    to the host.
     """
 
     with (
@@ -109,7 +112,12 @@ def dipole_quality_flags(
         data = xp.asarray(images, dtype=xp.float64)
         if data.ndim != 3:
             raise ValueError("images must have shape (batch, height, width)")
-        p = xp.asarray(result.parameters, dtype=xp.float64)
+        parameters = result.parameters
+        uncertainty_valid = result.uncertainty_valid
+        if xp is np:
+            parameters = as_numpy(parameters)
+            uncertainty_valid = as_numpy(uncertainty_valid)
+        p = xp.asarray(parameters, dtype=xp.float64)
         batch, height, width = data.shape
         if p.shape != (batch, 8):
             raise ValueError(
@@ -145,7 +153,7 @@ def dipole_quality_flags(
             flags = flags | xp.where(condition, int(flag), 0).astype(xp.int32)
 
         mark(
-            ~xp.asarray(result.uncertainty_valid, dtype=bool),
+            ~xp.asarray(uncertainty_valid, dtype=bool),
             DipoleQualityFlag.UNCERTAINTY_INVALID,
         )
         lo, hi = width_range
