@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "transient-chain"
+version = "0.2.0"
+description = "GPU-resident difference-imaging chain on cuPhoton's executors, Rubin DP1 and other FITS surveys"
+requires-python = ">=3.12"
+dependencies = ["cuphoton>=0.2.0.dev0", "pyyaml", "pandas", "pyarrow", "astropy", "scipy"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["transient_chain*"]
