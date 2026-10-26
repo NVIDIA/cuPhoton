@@ -13,15 +13,18 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from cuphoton.xdr import prefetch, reader
+from cuphoton.xdr import gds, prefetch, reader
 from cuphoton.xdr.gds import HeapReadHandle
 from cuphoton.xdr.reader import GpuCompImageReader, _validate_comp_geometry
 
 
 @pytest.mark.parametrize("use_loader", [False, True])
-@pytest.mark.parametrize("contiguous", [False, True])
+@pytest.mark.parametrize(
+    ("contiguous", "short_read"),
+    [(False, False), (True, False), (True, True)],
+)
 def test_image_reader_validates_output_before_io(
-    monkeypatch, use_loader, contiguous
+    monkeypatch, use_loader, contiguous, short_read
 ):
     output = np.zeros((2, 4), dtype=np.int16)
     if not contiguous:
@@ -41,14 +44,17 @@ def test_image_reader_validates_output_before_io(
         assert size == output.nbytes
         assert file_offset == 2880
         calls.append("pread")
-        return SimpleNamespace(get=lambda: calls.append("wait"))
+
+        def wait():
+            calls.append("wait")
+            return size - 1 if short_read else size
+
+        return SimpleNamespace(get=wait)
 
     monkeypatch.setattr(
-        reader,
-        "pread_to_device",
-        lambda path, offset, size, out: pread(
-            out, size=size, file_offset=offset
-        ).get(),
+        gds,
+        "open_cufile",
+        lambda path: nullcontext(SimpleNamespace(pread=pread)),
     )
     monkeypatch.setattr(
         reader, "byteswap_inplace", lambda *args: calls.append("byteswap")
@@ -65,7 +71,11 @@ def test_image_reader_validates_output_before_io(
         if use_loader
         else None
     )
-    if contiguous:
+    if short_read:
+        with pytest.raises(OSError, match="xDR read size differs"):
+            image_reader.read(out=output, loader=loader)
+        assert calls == ["pread", "wait"]
+    elif contiguous:
         assert image_reader.read(out=output, loader=loader) is output
         assert calls == ["pread", "wait", "byteswap"]
     else:
@@ -399,10 +409,13 @@ def test_heap_read_handle_done_checks_all_futures_without_waiting():
 
         def get(self):
             self.get_calls += 1
+            return 4
 
     first = Future(True)
     second = Future(False)
-    handle = HeapReadHandle("device-input", "offsets", [first, second])
+    handle = HeapReadHandle(
+        "device-input", "offsets", [(first, 4), (second, 4)]
+    )
     assert handle.done is False
     first.ready, second.ready = False, True
     assert handle.done is False

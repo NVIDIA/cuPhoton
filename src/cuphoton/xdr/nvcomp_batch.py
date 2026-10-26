@@ -850,6 +850,7 @@ def gpu_gzip_decompress_batch(
     use_native_pool: bool = False,
     keepalive: list | None = None,
     header_sizes=None,
+    _decode_checks: list | None = None,
 ):
     """Batch-decompress gzip tiles already resident on the device.
 
@@ -901,7 +902,15 @@ def gpu_gzip_decompress_batch(
     Header checks do not validate the compressed body or its checksum.
     The Python fallback uses the current CuPy stream. Callers using an
     externally owned stream must keep its underlying CUDA stream alive.
+    Standalone native calls wait for their CUDA stream to check per-tile
+    decode status and sizes, releasing the GIL during the wait. Batch readers
+    can defer those checks to their completion boundary while retaining
+    owners and guarding downstream kernels with the device status and sizes.
+    nvCOMP requires valid compressed input; completion checks do not validate
+    an untrusted compressed stream.
     """
+    if _decode_checks is not None and keepalive is None:
+        raise ValueError("deferred decode requires an explicit owner list")
     if decompression_backend not in ("auto", "cuda"):
         raise ValueError("decompression_backend must be 'auto' or 'cuda'")
     if gzip_decoder not in ("auto", "gzip", "deflate"):
@@ -1027,6 +1036,35 @@ def gpu_gzip_decompress_batch(
             stream_ptr = int(cp.cuda.get_current_stream().ptr)
             d_concat_ptr = int(d_concat.data.ptr)
             d_out_ptr = int(d_out.data.ptr)
+            deferred_fn = (
+                getattr(
+                    ext,
+                    "batch_gzip_decompress_deferred"
+                    if use_gzip
+                    else "batch_deflate_decompress_deferred",
+                    None,
+                )
+                if _decode_checks is not None
+                else None
+            )
+            if deferred_fn is not None:
+                assert keepalive is not None
+                assert _decode_checks is not None
+                keepalive.append(d_concat)
+                completion = deferred_fn(
+                    d_concat_ptr,
+                    offset_array if use_gzip else deflate_offsets,
+                    length_array if use_gzip else deflate_lengths,
+                    d_out_ptr,
+                    out_offsets,
+                    size_array,
+                    stream_ptr,
+                    use_native_pool=True,
+                    **backend_kwargs,
+                )
+                keepalive.append(completion)
+                _decode_checks.append(completion)
+                return d_out, out_offsets
             if use_gzip:
                 assert gzip_fn is not None
                 scratch_owner = gzip_fn(
@@ -1093,7 +1131,21 @@ def gpu_gzip_decompress_batch(
             for i in range(n)
         ]
         codec = _get_codec()
-        codec.decode(src_arrays, out=out_arrays)
+        # nvCOMP 5.2 returns views sized to the decoded bytes even with out=.
+        decoded = codec.decode(src_arrays, out=out_arrays)
+        if len(decoded) != n:
+            raise RuntimeError(
+                "nvcomp returned different decoded tile coverage"
+            )
+        for index, (array, expected) in enumerate(
+            zip(decoded, size_array, strict=True)
+        ):
+            actual = array.buffer_size
+            if actual != expected:
+                raise RuntimeError(
+                    f"nvcomp decoded size differs for tile {index}: "
+                    f"expected {expected}, got {actual}"
+                )
         return d_out, out_offsets
     except Exception:
         # A failed decode cannot return an output to retain its input owners.

@@ -23,15 +23,22 @@ from collections import deque
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
 from cuphoton.core.fits_options import normalize_xdr_options
 
-from .gds import available_cpu_cores, configure_kvikio_parallelism
+from .gds import (
+    _close_cufile,
+    _quarantine_read_failure,
+    _read_submission,
+    _wait_for_reads,
+    available_cpu_cores,
+    configure_kvikio_parallelism,
+)
 
 # Sentinel value pushed on the queue when the prefetcher has finished so the
 # consumer knows to stop waiting.
@@ -269,6 +276,7 @@ class _GpuBatchHandle:
     stream: _GpuCompletion
     device_id: int | None = None
     actively_awaited: bool = False
+    decode_checks: list = field(default_factory=list)
 
 
 _UNRESOLVED_GPU_BATCHES: list[_GpuBatchHandle] = []
@@ -359,10 +367,11 @@ def _ensure_gpu_submissions_safe() -> None:
         )
     if unresolved:
         raise RuntimeError(
-            "previous xDR GPU work could not be synchronized; refusing "
+            "previous xDR GPU work or KvikIO read completion is "
+            "unconfirmed; refusing "
             "another submission while its source, scratch, and output "
             "buffers remain quarantined; "
-            "restart the process if the CUDA context cannot recover"
+            "restart the process if completion cannot be confirmed"
         )
 
 
@@ -389,6 +398,7 @@ def _synchronize_gpu_batch(
         with _gpu_batch_device(handle):
             target.synchronize()
         completion_confirmed = True
+        _check_decoded_batches(handle)
     finally:
         if completion_confirmed:
             _release_quarantined_gpu_batches([handle])
@@ -543,23 +553,33 @@ class _FilePrefetcher(threading.Thread):
         import kvikio
 
         configure_kvikio_parallelism()
-        with kvikio.CuFile(planned.path, "r") as f:
-            futures = []
-            for span in planned.spans:
-                view = host_buf[
-                    span.host_offset : span.host_offset + span.nbytes
-                ]
-                futures.append(
-                    f.pread(
-                        view,
-                        size=span.nbytes,
-                        file_offset=span.file_offset,
+        f = kvikio.CuFile(planned.path, "r")
+        futures: list[tuple[Any, int]] = []
+        try:
+            with _read_submission(futures, owners=(host_buf,), file=f):
+                for span in planned.spans:
+                    view = host_buf[
+                        span.host_offset : span.host_offset + span.nbytes
+                    ]
+                    futures.append(
+                        (
+                            f.pread(
+                                view,
+                                size=span.nbytes,
+                                file_offset=span.file_offset,
+                            ),
+                            span.nbytes,
+                        )
                     )
-                )
             # Block until all reads for this file complete. This is where
             # kvikio releases the GIL and the consumer thread makes progress.
-            for fut in futures:
-                fut.get()
+            _wait_for_reads(futures, owners=(host_buf,), file=f)
+        except BaseException as error:
+            if futures:
+                _quarantine_read_failure(futures, (host_buf,), f, error)
+            raise
+        finally:
+            _close_cufile(f)
 
         hdu_header_sizes = _parse_hdu_header_sizes(planned, host_buf)
 
@@ -601,6 +621,7 @@ def _consume_comp_batch(
     stream,
     keepalive=None,
     *,
+    decode_checks=None,
     postprocess="auto",
     gzip_decoder: str = "auto",
     decompression_backend: str = "auto",
@@ -712,6 +733,12 @@ def _consume_comp_batch(
             else None
         )
 
+        checks_before = len(decode_checks) if decode_checks is not None else 0
+        decode_options = (
+            {"_decode_checks": decode_checks}
+            if decode_checks is not None and postprocess != "separate"
+            else {}
+        )
         d_pixels, tile_byte_offsets_np = (
             GpuCompImageReader.inflate_device_heap(
                 d_concat,
@@ -723,9 +750,16 @@ def _consume_comp_batch(
                 decompression_backend=decompression_backend,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
+                **decode_options,
             )
         )
 
+        decode_status = (
+            decode_checks[-1]
+            if decode_checks is not None
+            and len(decode_checks) > checks_before
+            else None
+        )
         for (
             entry,
             tile_start,
@@ -745,6 +779,14 @@ def _consume_comp_batch(
                 out=entry.out,
                 stream=stream,
                 keepalive=keepalive,
+                **(
+                    {
+                        "_decode_status": decode_status,
+                        "_decode_tile_start": tile_start,
+                    }
+                    if decode_status is not None
+                    else {}
+                ),
             )
 
 
@@ -804,6 +846,7 @@ def _consume_prefetched_group(
     stream,
     keepalive=None,
     *,
+    decode_checks=None,
     postprocess="auto",
     gzip_decoder: str = "auto",
     decompression_backend: str = "auto",
@@ -841,6 +884,7 @@ def _consume_prefetched_group(
     _consume_comp_batch(
         comp_entries,
         stream,
+        decode_checks=decode_checks,
         keepalive=keepalive,
         postprocess=postprocess,
         gzip_decoder=gzip_decoder,
@@ -889,6 +933,14 @@ def _native_file_plans_with_direct_outputs(
             if hdu.kind == "image":
                 target = outs[slot][item.file_index]
                 if target.dtype == np.dtype(hdu.image_dtype_char):
+                    if (
+                        hdu.image_shape != tuple(target.shape)
+                        or hdu.heap_span_len != target.nbytes
+                    ):
+                        raise ValueError(
+                            f"{item.path}: ImageHDU {hdu.hdu_index} shape "
+                            "or byte count does not match native output slice"
+                        )
                     if not target.flags.c_contiguous:
                         raise ValueError(
                             "native direct ImageHDU output slice must be "
@@ -1103,6 +1155,7 @@ def _submit_prefetched_group(
                     outs,
                     stream,
                     keepalive=keepalive,
+                    decode_checks=guard.decode_checks,
                     postprocess=postprocess,
                     gzip_decoder=gzip_decoder,
                     decompression_backend=decompression_backend,
@@ -1146,6 +1199,12 @@ def _submit_prefetched_group(
     raise submission_error
 
 
+def _check_decoded_batches(handle: _GpuBatchHandle) -> None:
+    """Report codec errors after confirming CUDA completion."""
+    for completion in handle.decode_checks:
+        completion.check()
+
+
 def _release_completed_gpu_batches(
     in_flight: deque[_GpuBatchHandle],
 ) -> None:
@@ -1153,6 +1212,7 @@ def _release_completed_gpu_batches(
     while in_flight:
         if not _gpu_batch_completion_is_confirmed(in_flight[0]):
             break
+        _check_decoded_batches(in_flight[0])
         in_flight.popleft()
 
 
@@ -1209,7 +1269,17 @@ def _wait_for_all_gpu_batches(
                 if control_error is not None:
                     break
             else:
-                _release_quarantined_gpu_batches([handle])
+                try:
+                    _check_decoded_batches(handle)
+                except BaseException as exc:
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        control_error = exc
+                    elif first_error is None:
+                        first_error = exc
+                finally:
+                    _release_quarantined_gpu_batches([handle])
+                if control_error is not None:
+                    break
 
         if control_error is not None:
             _mark_gpu_batches_unresolved(handles)

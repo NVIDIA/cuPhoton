@@ -50,6 +50,9 @@ class _ImmediateFuture:
     def get(self) -> int:
         return self._nbytes
 
+    def done(self) -> bool:
+        return True
+
 
 class StorageCache:
     """In-memory cache of FITS file bytes.
@@ -109,11 +112,15 @@ class StorageCache:
             import cupy as cp
             import kvikio
 
+            from .gds import _close_cufile, _pread_into
+
             buf = cp.empty(nbytes, dtype=cp.uint8)
             # Use a real kvikio read for the one-time population.
-            with kvikio.CuFile(path, "r") as f:
-                fut = f.pread(buf, size=nbytes, file_offset=0)
-                fut.get()
+            f = kvikio.CuFile(path, "r")
+            try:
+                _pread_into(f, buf, nbytes, 0)
+            finally:
+                _close_cufile(f)
             return buf
         else:  # "host" — pinned host memory
             import cupy as cp

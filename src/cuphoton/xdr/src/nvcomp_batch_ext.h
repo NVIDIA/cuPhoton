@@ -33,7 +33,15 @@ struct NativeDeviceAllocation {
     std::size_t size = 0;
 };
 
+struct NativePinnedAllocation {
+    std::shared_ptr<void> owner;
+    std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+};
+
 NativeDeviceAllocation acquire_native_device_allocation(
+    int device_id, std::size_t nbytes);
+NativePinnedAllocation acquire_native_pinned_allocation(
     int device_id, std::size_t nbytes);
 py::dict native_pinned_pool_stats_dict(int device_id);
 void clear_native_pinned_pool_impl(int device_id);

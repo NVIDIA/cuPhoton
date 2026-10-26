@@ -22,6 +22,89 @@ from cuphoton.xdr import kernels, nvcomp_batch, prefetch
 from cuphoton.xdr.reader import GpuCompImageReader
 
 
+@pytest.mark.parametrize("failure", ["short", "get", "submit", "wait-entry"])
+def test_file_prefetch_preserves_read_owners_on_failure(monkeypatch, failure):
+    calls = []
+    refs = []
+    quarantine = []
+    monkeypatch.setattr(prefetch, "_UNRESOLVED_GPU_BATCHES", quarantine)
+    planned = SimpleNamespace(
+        path="input.fits",
+        total_bytes=10,
+        spans=[
+            SimpleNamespace(host_offset=0, nbytes=4, file_offset=32),
+            SimpleNamespace(host_offset=4, nbytes=6, file_offset=64),
+        ],
+    )
+
+    class File:
+        def close(self):
+            calls.append("close")
+
+        def pread(self, buffer, *, size, file_offset):
+            refs.extend([weakref.ref(buffer.base), weakref.ref(self)])
+            calls.append(("read", file_offset, size))
+            if failure == "submit" and file_offset == 64:
+                raise RuntimeError("submit failed")
+
+            def get():
+                calls.append(("wait", file_offset))
+                if failure == "get" and file_offset == 32:
+                    raise RuntimeError("get failed")
+                return size - 1 if file_offset == 32 else size
+
+            return SimpleNamespace(get=get)
+
+    monkeypatch.setitem(
+        sys.modules, "kvikio", SimpleNamespace(CuFile=lambda *args: File())
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(cuda=SimpleNamespace(alloc_pinned_memory=bytearray)),
+    )
+    monkeypatch.setattr(
+        prefetch, "configure_kvikio_parallelism", lambda: None
+    )
+    monkeypatch.setattr(
+        prefetch, "_plan_file", lambda *args, **kwargs: planned
+    )
+
+    def reject_header_parsing(*args):
+        pytest.fail("incomplete input must not reach gzip header parsing")
+
+    monkeypatch.setattr(
+        prefetch, "_parse_hdu_header_sizes", reject_header_parsing
+    )
+    if failure == "wait-entry":
+
+        def interrupt_wait(*args, **kwargs):
+            raise KeyboardInterrupt("wait interrupted")
+
+        monkeypatch.setattr(prefetch, "_wait_for_reads", interrupt_wait)
+    worker = prefetch._FilePrefetcher([], (), queue.Queue())
+    with pytest.raises((OSError, RuntimeError, KeyboardInterrupt)) as caught:
+        worker._plan_file("input.fits", 0)
+    caught.value.__traceback__ = None
+    del caught
+    gc.collect()
+    expected = [
+        ("read", 32, 4),
+        ("read", 64, 6),
+    ]
+    if failure in {"short", "get"}:
+        expected.extend([("wait", 32), ("wait", 64)])
+    if failure == "short":
+        expected.append("close")
+        assert quarantine == []
+    else:
+        assert len(quarantine) == 1
+        assert all(ref() is not None for ref in refs)
+        with pytest.raises(RuntimeError, match="previous xDR GPU work"):
+            prefetch._ensure_gpu_submissions_safe()
+    assert calls == expected
+
+
 class _CudaDevice:
     def __init__(self, device_id=None):
         self.id = 0 if device_id is None else int(device_id)
@@ -782,6 +865,85 @@ def test_native_plan_stages_image_when_output_dtype_is_promoted():
     assert converted.hdus[0].direct_output is False
     assert converted.total_bytes == 2
     assert native_plan[-1] == []
+
+
+@pytest.mark.parametrize(
+    "shape,nbytes,valid",
+    [
+        ((2, 2), 8, True),
+        ((3, 2), 12, False),
+        ((1, 4), 8, False),
+        ((2, 2), 12, False),
+    ],
+)
+def test_native_planner_checks_each_direct_output_slice(
+    monkeypatch, shape, nbytes, valid
+):
+    planned = []
+    for index, (image_shape, image_bytes) in enumerate(
+        [((2, 2), 8), (shape, nbytes)]
+    ):
+        image = prefetch._HduPlan(
+            hdu_index=0,
+            kind="image",
+            plan=None,
+            heap_rel_offsets=None,
+            heap_span_start=2880,
+            heap_span_len=image_bytes,
+            image_shape=image_shape,
+            image_dtype_char="i2",
+            image_itemsize=2,
+        )
+        planned.append(
+            prefetch._PlannedFile(
+                path=f"image-{index}.fits",
+                file_index=index,
+                hdus=[image],
+                spans=[prefetch._ReadSpan(2880, image_bytes, 0)],
+                total_bytes=image_bytes,
+            )
+        )
+    target = SimpleNamespace(
+        shape=(2, 2),
+        nbytes=8,
+        dtype=np.dtype("i2"),
+        flags=SimpleNamespace(c_contiguous=True),
+        data=SimpleNamespace(ptr=1024),
+    )
+    submitted = []
+    stopped = []
+    builder = SimpleNamespace(
+        submit_batch=lambda *args: submitted.append(args),
+        request_stop=lambda: stopped.append(True),
+        close_input=lambda: None,
+    )
+    planner = prefetch._NativeBatchPlanner(
+        [item.path for item in planned],
+        (0,),
+        builder,
+        object(),
+        decode_batch_files=2,
+        native_plan_threads=1,
+        outs=[[target, target]],
+    )
+    monkeypatch.setattr(planner, "_plan_group_native", lambda *_: planned)
+
+    planner.run()
+
+    if valid:
+        assert planner.error is None
+        assert len(submitted) == 1
+        assert [plan[-1] for plan in submitted[0][1]] == [
+            [(2880, 8, 1024)],
+            [(2880, 8, 1024)],
+        ]
+        assert stopped == []
+    else:
+        assert isinstance(planner.error, ValueError)
+        assert "ImageHDU" in str(planner.error)
+        assert "output slice" in str(planner.error)
+        assert submitted == []
+        assert stopped == [True]
 
 
 def test_file_prefetcher_retries_sentinel_until_queue_accepts_it():
@@ -2690,3 +2852,72 @@ def test_batch_stream_does_not_consume_partial_group_after_prefetch_error(
 
     assert consumed == []
     np.testing.assert_array_equal(output, np.zeros_like(output))
+
+
+@pytest.mark.parametrize("retirement", ["poll", "backpressure", "drain"])
+def test_decode_error_is_reported_at_every_batch_retirement(retirement):
+    from collections import deque
+
+    class Event:
+        done = True
+
+        def synchronize(self):
+            pass
+
+    class Decode:
+        def check(self):
+            raise RuntimeError("decoded size differs")
+
+    handle = prefetch._GpuBatchHandle(Event(), ["output"], object())
+    handle.decode_checks.append(Decode())
+    pending = deque([handle])
+    retire = {
+        "poll": prefetch._release_completed_gpu_batches,
+        "backpressure": prefetch._wait_for_oldest_gpu_batch,
+        "drain": prefetch._wait_for_all_gpu_batches,
+    }[retirement]
+    with pytest.raises(RuntimeError, match="decoded size differs"):
+        retire(pending)
+    assert handle not in prefetch._UNRESOLVED_GPU_BATCHES
+
+
+def test_decode_failure_still_drains_later_batch_owners():
+    from collections import deque
+
+    trace = []
+
+    class Event:
+        def __init__(self, index):
+            self.index = index
+
+        def synchronize(self):
+            trace.append(("complete", self.index))
+
+    class Decode:
+        def __init__(self, index):
+            self.index = index
+
+        def check(self):
+            trace.append(("check", self.index))
+            if self.index == 0:
+                raise RuntimeError("decompression failed")
+
+    handles = [
+        prefetch._GpuBatchHandle(
+            Event(i), [object()], object(), decode_checks=[Decode(i)]
+        )
+        for i in range(2)
+    ]
+    pending = deque(handles)
+    with pytest.raises(RuntimeError, match="decompression failed"):
+        prefetch._wait_for_all_gpu_batches(pending)
+    assert trace == [
+        ("complete", 0),
+        ("check", 0),
+        ("complete", 1),
+        ("check", 1),
+    ]
+    assert not pending
+    assert not any(
+        handle in prefetch._UNRESOLVED_GPU_BATCHES for handle in handles
+    )
