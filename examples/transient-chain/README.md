@@ -3,8 +3,9 @@
 One worker per GPU takes a target image from FITS bytes to a scored candidate catalog without
 writing an intermediate file. A survey adapter reads the target and template planes to device
 memory through the FITS reader you choose (xDR GPU decode, Astropy, or automatic); xRep, XPOIS,
-the detector, xFit and XScan then work on device arrays; the catalog is the only thing that
-comes back. cuPhoton's executors place the workers locally, under Dragon, or under MPI.
+the detector, xFit and XScan then work on device arrays. Headers, control data, diagnostics
+and the final catalog use host memory as detailed in the per-stage table below. cuPhoton's
+executors place the workers locally, under Dragon, or under MPI.
 
 The example uses the cuPhoton development APIs in this checkout. Install the library and
 example together from the same checkout. The shipped `config.yaml` holds the parameters
@@ -289,8 +290,8 @@ that alignment.
 
 ## Known issues
 
-- At cuPhoton 0.1.3 the device reprojection propagates mask bits with a bilinear 2x2 footprint
-  even when the image is sampled with Lanczos-3 (`xrep/backends/cupy_backend.py` does not pass
+- In this development checkout, device reprojection propagates mask bits with a bilinear
+  2x2 footprint even when the image is sampled with Lanczos-3 (`xrep/backends/cupy_backend.py` does not pass
   the spec's interpolation to the mask kernel; the host path does). A bad coadd pixel 2 to 3
   source pixels from an output center can therefore contaminate the template value without
   setting a bad bit. `subtract.template_bad_dilation_px: 3` is the stopgap until the library
