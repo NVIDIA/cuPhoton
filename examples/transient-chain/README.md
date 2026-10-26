@@ -71,16 +71,15 @@ The misalignment model (`ops.fit_misalignment`) is fitted only in affine mode an
 `gpu` star finder, whose centroids the error model describes (`daofind` centroids are skipped with
 `reason: "daofind centroids"`). It is the affine fit with its covariance from the centroid noise,
 the excess residual as a quadratic field across the image (one constant per axis with fewer than
-30 stars) and outliers clipped at 5 sigma, a limit that keeps every Gaussian residual while a
-blend, tens of sigma out, still goes. `variance(x, y)` includes the squared remaining affine and
+30 stars) and outliers clipped at 5 sigma. `variance(x, y)` includes the squared remaining affine and
 quadratic displacement because this diagnostic fit does not correct the template or catalog
 positions. The worker keeps the model for the later stages. The summary under
 `diagnostics.align.refine.misalignment` records `model` (`"polynomial"`, `"rms"`, or `null` with
 a `reason`), the star counts, the residual rms and the excess and image-center sigma in pixels.
 The template has no variance plane, so its centroid noise is counted as excess.
 
-The kept target stars always give the PSF width (`ops.psf_width`: clipped median of the widths
-with its standard error), written under the same diagnostics key as `psf_width`. When
+When at least one kept target star has a finite width, `ops.psf_width` computes the clipped
+median and its standard error, written under the same diagnostics key as `psf_width`. When
 `xfit.psf_sigma_px` is null that width is the one the uncertainty stage uses, and `summary.json`
 records it as `psf_sigma_px` with `psf_sigma_source: "stars"` (`"config"` when the configuration
 set it, `null` when neither was available and the `psf_flux` columns are NaN).
