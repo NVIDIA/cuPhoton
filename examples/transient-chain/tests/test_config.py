@@ -147,3 +147,23 @@ def test_noise_matching_requires_positive_reference_sigma():
         ],
     )
     assert cfg["classify"]["noise_reference_sigma"] == 0
+
+
+@pytest.mark.parametrize(
+    "value", ["0", "-1", ".nan", ".inf", "-.inf", str(10**400)]
+)
+def test_psf_width_requires_a_finite_positive_value(value):
+    with pytest.raises(ValueError, match="psf_sigma_px must be finite"):
+        config.load_config(
+            HERE / "config.yaml", [f"xfit.psf_sigma_px={value}"]
+        )
+
+
+@pytest.mark.parametrize("value, expected", [("null", None), ("1.5", 1.5)])
+def test_psf_width_accepts_an_independent_width_or_no_photometry(
+    value, expected
+):
+    cfg = config.load_config(
+        HERE / "config.yaml", [f"xfit.psf_sigma_px={value}"]
+    )
+    assert cfg["xfit"]["psf_sigma_px"] == expected
