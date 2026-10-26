@@ -475,6 +475,52 @@ flags, a single pass writes them under `scientific/`. The execution summary
 records placement, item receipts and round timing; scientific merging and
 validation occur after the timed worker phase.
 
+## Fit quality flags
+
+A converged fit with a valid covariance can still describe the wrong thing:
+widths far from the point-spread function, a lobe outside the stamp, no lobe
+at the detection, two lobes on top of each other, or a lobe that the data
+do not support because the stamp holds a single source.
+`dipole_quality_flags` returns one integer of `DipoleQualityFlag` bits per
+Gaussian difference-mode fit:
+
+```python
+from cuphoton.xfit import DipoleQualityFlag, dipole_quality_flags
+
+flags = dipole_quality_flags(
+    result, images, variance=variance, mask=mask, width_range=(0.9, 4.5)
+)
+brightening = (flags & int(DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED)) != 0
+```
+
+CuPy arrays do not combine with `IntFlag` members directly, so convert a flag
+with `int()` before masking, as above.
+
+| Flag | Set when |
+|---|---|
+| `UNCERTAINTY_INVALID` | the fit has no valid covariance |
+| `WIDTH_OUT_OF_RANGE` | a fitted width lies outside `width_range` pixels |
+| `LOBE_OUTSIDE_STAMP` | a lobe center lies outside the stamp |
+| `NO_LOBE_AT_CANDIDATE` | no lobe lies within `center_radius` pixels of the stamp center |
+| `LOBES_OVERLAP` | the lobes are closer than `overlap_separation` pixels |
+| `NEGATIVE_LOBE_UNSUPPORTED` | the negative lobe's amplitude, refitted jointly with the positive lobe, is below `lobe_snr` standard errors: a brightening single source |
+| `POSITIVE_LOBE_UNSUPPORTED` | the same test for the positive lobe: a fading single source |
+
+Set `width_range` from the image's point-spread function, for example 0.5
+to 2.5 times its standard deviation. Overlapping lobes measure the dipole
+center, but their amplitude and separation trade against each other.
+Difference images carry noise correlated between neighboring pixels, which
+inflates a lobe's significance; with `calibrate_noise=True` (the default)
+each stamp's significance is rescaled by the spread of the same statistic
+at empty positions of that stamp, on a 6-pixel grid along each axis. When
+the grid holds fewer than 12 positions (square stamps of 26 pixels or less
+on a side), the flags warn and leave the significance uncalibrated. If
+lobe exclusion leaves too few usable positions, the significance is left
+uncalibrated without a warning. The flags follow the backend of `images`
+and accept `DeviceDipoleFitResult`. CuPy images keep the computation on the
+device. NumPy images copy only the parameters and uncertainty-valid mask
+of a device result to the host.
+
 ## Opt-in observational-data checks
 
 The observational checks read caller-supplied FITS files and create every
