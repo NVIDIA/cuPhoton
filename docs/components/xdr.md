@@ -275,15 +275,20 @@ PYTHON="$(uv run python -c 'import sys; print(sys.executable)')" \
 For a bare CUDA 13 development container, install a C/C++ compiler, `make`,
 `pkg-config`, zlib development headers, and the CUDA/cuFile development headers.
 If the system CFITSIO package lacks thread support, build a reentrant copy
-from the [CFITSIO source distribution](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/):
+from the [CFITSIO 4.7.0 source](https://github.com/HEASARC/cfitsio/tree/d6d27653740864a0483e74cff23c53e34e1dceee):
 
 ```bash
 # Run in a writable build directory outside the checkout.
 export CUPHOTON_XDR_CFITSIO_ROOT="$PWD/cfitsio-install"
-curl -fLO https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-4.7.0.tar.gz
-tar -xzf cfitsio-4.7.0.tar.gz
+cfitsio_commit=d6d27653740864a0483e74cff23c53e34e1dceee
+curl -fL --proto '=https' --proto-redir '=https' --output cfitsio.tar.gz \
+  "https://codeload.github.com/HEASARC/cfitsio/tar.gz/${cfitsio_commit}"
+printf '%s  cfitsio.tar.gz\n' \
+  b99c555309eee9187615a9d64cb9a7ad84c2f3e94a0241c11bb024ccd5c56dde \
+  | sha256sum --check --strict
+tar -xzf cfitsio.tar.gz
 (
-  cd cfitsio-4.7.0
+  cd "cfitsio-${cfitsio_commit}"
   ./configure --prefix="$CUPHOTON_XDR_CFITSIO_ROOT" \
     --enable-reentrant --disable-curl
   make -j4
