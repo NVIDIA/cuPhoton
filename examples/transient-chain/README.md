@@ -262,9 +262,9 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `chi_square`, `reduced_chi_square` | float64 | xfit | fit quality on the difference stamp |
 | `evaluations`, `valid_pixel_count` | int64 | xfit | solver bookkeeping |
 | `quality_flags` | int64 | xfit | bits of `cuphoton.xfit.DipoleQualityFlag`; 0 when none is set |
-| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`), standard uncertainties and x-y covariances from the full fit covariance |
+| `center_x`, `center_y`, `positive_x`, `positive_y` and `*_err_fit`, `*_err`, `center_xy_cov`, `positive_xy_cov` | float64 | xfit | lobe midpoint and positive-flux lobe in pixels relative to (`x`, `y`). `<q>_err_fit`: standard uncertainty from xFit's covariance alone. `<q>_err`: the error bar to quote (see below). `*_xy_cov`: x-y covariance from xFit's covariance |
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
-| `psf_flux`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source and its conditional uncertainty (NaN without `xfit.psf_sigma_px` or a variance plane) |
+| `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote (see below). All three NaN without `xfit.psf_sigma_px` or a variance plane |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -272,6 +272,12 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `astrometry` | object | identity | how `ra`/`dec` were derived (`header-wcs-approx` for Rubin: the header WCS, unrefined) |
 
 `transient_chain.catalog.markdown_table()` prints this table from the schema.
+
+For `center_x`, `center_y`, `positive_x`, `positive_y` and `psf_flux`, `<q>_err` is the error bar
+to quote and grows as uncertainty terms are added to the chain: this version includes only the xFit
+covariance term, so `<q>_err` equals `<q>_err_fit`. The `*_err` columns of the raw dipole parameters
+(`amplitude`, `sigma_x`, `sigma_y`, `theta`, `x_pos`, `y_pos`, `x_neg`, `y_neg`), `separation` and
+`lobe_flux` are xFit's term alone and do not grow.
 
 The xFit standard errors come from the target's variance plane. The template's noise, carried
 through the subtraction kernel, is not in that variance, so the standard errors understate the

@@ -610,9 +610,11 @@ class ChainWorker:
                         table[f"{name}_{axis}"] = ops.to_host(
                             getattr(derived, f"{name}_{axis}")
                         )
-                        table[f"{name}_{axis}_err"] = ops.to_host(
+                        err_fit = ops.to_host(
                             getattr(derived, f"{name}_{axis}_error")
                         )
+                        table[f"{name}_{axis}_err_fit"] = err_fit
+                        table[f"{name}_{axis}_err"] = err_fit
                     table[f"{name}_xy_cov"] = ops.to_host(
                         getattr(derived, f"{name}_xy_covariance")
                     )
@@ -623,7 +625,9 @@ class ChainWorker:
                     )
                 if photometry is not None:
                     table["psf_flux"] = ops.to_host(photometry.flux)
-                    table["psf_flux_err"] = ops.to_host(photometry.flux_error)
+                    err_fit = ops.to_host(photometry.flux_error)
+                    table["psf_flux_err_fit"] = err_fit
+                    table["psf_flux_err"] = err_fit
                 if self.model is not None:
                     table["logit"] = logits_t.detach().cpu().numpy()
                     table["probability"] = probs_t.detach().cpu().numpy()

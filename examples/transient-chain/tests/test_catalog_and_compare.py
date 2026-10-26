@@ -47,7 +47,12 @@ def _full_table(n, rng):
         quality_flags=rng.integers(0, 128, n),
     )
     for name in catalog.UNCERTAINTY_COLUMNS:
-        if name not in ("quality_flags", "psf_flux", "psf_flux_err"):
+        if name not in (
+            "quality_flags",
+            "psf_flux",
+            "psf_flux_err_fit",
+            "psf_flux_err",
+        ):
             t[name] = rng.normal(size=n)
     t["ra"] = rng.uniform(size=n)
     t["dec"] = rng.uniform(size=n)
@@ -88,7 +93,10 @@ def test_empty_and_full_items_share_one_schema_and_merge_without_promotion():
         and np.isnan(full["probability"]).all()
         and full["quality_flags"].dtype == np.int64
         and np.isnan(full["psf_flux"]).all()
+        and np.isnan(full["psf_flux_err"]).all()
     )
+    for q in ("center_x", "center_y", "positive_x", "positive_y", "psf_flux"):
+        assert {f"{q}_err_fit", f"{q}_err"} <= set(full.columns)
     merged = pd.concat([empty, full], ignore_index=True)
     assert (
         merged["x"].dtype == np.int64

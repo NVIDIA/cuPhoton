@@ -73,10 +73,16 @@ def _position_columns(
             "xfit",
             f"{what}, {axis} in pixels relative to the candidate's (x, y)",
         )
+        cols[f"{name}_{axis}_err_fit"] = (
+            "float64",
+            "xfit",
+            f"xFit covariance term of {name}_{axis}_err",
+        )
         cols[f"{name}_{axis}_err"] = (
             "float64",
             "xfit",
-            f"standard uncertainty of {name}_{axis}",
+            f"error bar of {name}_{axis} to quote (the terms listed in the "
+            "README)",
         )
     cols[f"{name}_xy_cov"] = (
         "float64",
@@ -112,10 +118,15 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
         "forced PSF flux at the source (NaN without xfit.psf_sigma_px or a "
         "variance plane)",
     ),
+    "psf_flux_err_fit": (
+        "float64",
+        "xfit",
+        "xFit term of psf_flux_err, given the position and the PSF",
+    ),
     "psf_flux_err": (
         "float64",
         "xfit",
-        "standard uncertainty of psf_flux, given the position and the PSF",
+        "error bar of psf_flux to quote (the terms listed in the README)",
     ),
 }
 CLASSIFY_COLUMNS: dict[str, tuple[str, str, str]] = {
@@ -228,7 +239,7 @@ def finish_table(
             continue
         if name in table:
             values = np.asarray(table[name])
-        elif name in CLASSIFY_COLUMNS or name in ("psf_flux", "psf_flux_err"):
+        elif name in CLASSIFY_COLUMNS or name.startswith("psf_flux"):
             values = (
                 np.full(n, False)
                 if dtype == "bool"
