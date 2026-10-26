@@ -8,17 +8,17 @@ set -euo pipefail
 
 cfitsio_prefix=${CUPHOTON_XDR_CFITSIO_ROOT:?Set the CFITSIO installation prefix}
 cfitsio_version=4.7.0
-cfitsio_sha256=ce573bbea8e75b429f8c3d3e86498741ba3dc9628a1530d2f65268397ad059e8
+cfitsio_sha256=f281ca292407d8682e83a37ea68fce6e1383d2449d923647ea62fa0570c59aee
 cfitsio_build_dir=$(mktemp -d)
 trap 'rm -rf "$cfitsio_build_dir"' EXIT
 
 cd "$cfitsio_build_dir"
 curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' \
   --output cfitsio.tar.gz \
-  "https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-${cfitsio_version}.tar.gz"
+  "https://codeload.github.com/HEASARC/cfitsio/tar.gz/refs/tags/cfitsio-${cfitsio_version}"
 printf '%s  cfitsio.tar.gz\n' "$cfitsio_sha256" | sha256sum --check --strict
 tar -xzf cfitsio.tar.gz
-cd "cfitsio-${cfitsio_version}"
+cd "cfitsio-cfitsio-${cfitsio_version}"
 ./configure --prefix="$cfitsio_prefix" \
   --enable-reentrant --disable-curl --without-bzip2 \
   --disable-static --enable-shared
