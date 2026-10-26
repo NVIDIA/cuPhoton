@@ -31,6 +31,8 @@ requirements.
 ## Workflow guides
 
 - [Core](components/core.md): shared CLI and configuration behavior.
+- [cuPhoton xMon](components/xmon.md): scientific monitoring, offline dashboards
+  and optional evidence-based investigation through institution-hosted models.
 - [xDataReader](components/xdr.md): GPU FITS loading and the shared
   Astropy/xDR reader interface, with [runtime compression controls](components/xdr.md#runtime-choices)
   for CLI, Python and manifests; native GDS depends on the storage setup.

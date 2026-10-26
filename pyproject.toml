@@ -39,6 +39,9 @@ dependencies = [
 
 [project.optional-dependencies]
 ximage = ["zarr>=3,<4"]
+xmon-inference = [
+  "httpx>=0.28,<1",
+]
 photometry = [
   "photutils>=3.0",
 ]
@@ -119,6 +122,7 @@ where = ["src"]
 include = ["cuphoton*"]
 
 [tool.setuptools.package-data]
+"cuphoton.xmon" = ["assets/*.html", "assets/*.css", "assets/*.js"]
 "cuphoton.xpois" = ["assets/*"]
 "cuphoton.xscan" = ["assets/*"]
 "cuphoton.xray" = ["templates/*.html"]
