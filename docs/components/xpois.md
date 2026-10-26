@@ -528,6 +528,22 @@ locally a translation, and the flag is the one the resampling weights'
 provider returns. `resampling_variance_factor` is the reference-term ratio
 for one residual pixel alone, 1 for independent reference pixels.
 
+A window that holds a masked pixel keeps its factor when the caller passes
+`valid`, `(N, s, s)` booleans or a boolean plane cut around `positions`.
+With `positions`, every two-dimensional validity array is a full image
+plane, even when its dimensions equal the stamp size; use `(1, s, s)` to
+share one validity stamp across positions. The masked pixels get zero
+weight and need no finite variance, and the result's
+`n_masked` counts them per position. The factor is a ratio of two quadratic
+forms in the weights, so renormalizing the remaining weights (as the
+estimator does over the unmasked pixels) does not change it. A window with
+every pixel masked gets `NaN`. On a 21 px window
+with PSF-flux or PSF-derivative weights (`psf_sigma` 2), a masked column at
+4 px or more from the center moves the factor by under 10%, and at 1 to
+3 px by up to 12% (17% for a masked half-plane whose edge is 1 px from the
+center); what fraction of a window may be masked is the caller's rule, read
+from `n_masked`.
+
 `empirical_correlation_factor` measures the same factor on an image: the
 squared robust spread of the weighted sums at empty positions over their
 diagonal prediction, returned with the number of positions used and the
