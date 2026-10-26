@@ -98,6 +98,32 @@ def test_xpois_kernel_uncertainty_signatures_are_explicit() -> None:
     ]
 
 
+def test_xpois_correlation_signatures_are_explicit() -> None:
+    assert list(inspect.signature(xpois.correlation_factor).parameters) == [
+        "weights",
+        "kernel",
+        "target_variance",
+        "reference_variance",
+        "resampling_weights",
+        "positions",
+        "residual_variance",
+        "is_translation",
+    ]
+    assert list(
+        inspect.signature(xpois.resampling_variance_factor).parameters
+    ) == ["kernel", "resampling_weights", "is_translation"]
+    assert list(
+        inspect.signature(xpois.empirical_correlation_factor).parameters
+    ) == ["residual", "residual_variance", "weights", "positions"]
+    assert list(inspect.signature(xpois.psf_weights).parameters) == [
+        "psf_sigma",
+        "size",
+        "offset",
+        "derivative",
+        "xp",
+    ]
+
+
 def test_research_solver_requires_module_qualified_import() -> None:
     assert callable(solve_spatial_gaussian_polynomial_kernel)
     assert "solve_spatial_gaussian_polynomial_kernel" not in xpois.__all__
