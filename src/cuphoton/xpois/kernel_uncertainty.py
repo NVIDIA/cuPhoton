@@ -35,6 +35,11 @@ __all__ = [
 ]
 
 _MAX_CONDITION_NUMBER = 1e12
+# Element budgets of the batched intermediates: the float64 footprint images
+# of one coefficient chunk in the sandwich form (512 MB), and the response
+# complex spectra of one position chunk in ``kernel_fit_variance``.
+_FOOTPRINT_CHUNK_ELEMENTS = 2**26
+_RESPONSE_CHUNK_ELEMENTS = 2**24
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,7 @@ def kernel_fit_covariance(
     target_variance: Any,
     reference_variance: Any | None = None,
     resampling_weights: Any | None = None,
+    chunk_elements: int | None = None,
 ) -> KernelFitCovariance:
     """Covariance of the coefficients of a constant-kernel fit.
 
@@ -101,7 +107,20 @@ def kernel_fit_covariance(
 
     The sandwich holds ``U`` as one full-size image per coefficient
     (``basis_count + background terms``) in memory, so its cost grows with
-    the image area times the coefficient count.
+    the image area times the coefficient count. The footprints are built
+    in chunks of coefficients, each chunk's images holding at most
+    ``chunk_elements`` float64 values, with one batched convolution per
+    chunk (kernel and resampling stamp composed into one) at the next fast
+    FFT length; every chunk has the same size, the last one padded with
+    zero images, so one FFT plan serves them all. Array memory on a
+    4096 x 4096 frame with 11 coefficients: ``U`` is 1.5 GB, a chunk is 4
+    coefficient images (0.5 GB) and its spectra, products and inverse
+    transforms at the padded 4320 x 4320 size are 0.6 GB each, so the
+    sandwich peaks near 5.2 GB of arrays (the plain form near 1.0 GB). On
+    CuPy, cuFFT plan work areas come on top of these figures. Padding to
+    the next fast length keeps them small; at an odd full length cuFFT
+    would fall back to a Bluestein plan whose work area runs to several
+    GB.
 
     Parameters
     ----------
@@ -130,6 +149,11 @@ def kernel_fit_covariance(
         with ``c`` the stamp center, taken at a representative position
         such as the image center. A stamp symmetric under point reflection
         gives the same result in either orientation.
+    chunk_elements
+        Element budget of one coefficient chunk of the sandwich footprints,
+        by default ``_FOOTPRINT_CHUNK_ELEMENTS`` (2**26, 512 MB of float64
+        images). A smaller budget lowers the peak memory and runs more
+        chunks.
 
     Returns
     -------
@@ -163,14 +187,12 @@ def kernel_fit_covariance(
     mask = mask & _default_fit_mask_impl(xp, mask.shape, basis.shape[1:])
     degree = _background_degree(int(np.size(fit.background_coefficients)))
 
-    fit_variance = variance_arr[mask]
-    if not bool(xp.isfinite(fit_variance).all()) or bool(
-        (fit_variance <= 0).any()
-    ):
+    # one device sync for the whole check instead of a compress and two
+    bad = mask & ~(xp.isfinite(variance_arr) & (variance_arr > 0))
+    if bool(bad.any()):
         raise ValueError(
             "target_variance must be positive and finite on the fit pixels"
         )
-    weights = 1.0 / fit_variance
     reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
     if xp is np:
         background = background_design(reference_arr.shape, degree)
@@ -229,20 +251,37 @@ def kernel_fit_covariance(
         source_flat = (
             xp.where(xp.isfinite(resampled_arr), resampled_arr, 0.0) / gain
         ).ravel()
-        weight_image = xp.zeros(reference_arr.shape, dtype=xp.float64)
-        weight_image[mask] = weights
-        footprint = xp.empty((n_coefficients, source_flat.size))
-        for j in range(n_coefficients):
-            if j < basis.shape[0]:
-                column = _fftconvolve(reference_model, basis[j], mode="same")
-            else:
-                column = background[j - basis.shape[0]]
-            footprint[j] = _fftconvolve(
-                _fftconvolve(column * weight_image, kernel, mode="same"),
-                stamp,
-                mode="same",
-            ).ravel()
-        footprint *= xp.sqrt(source_flat)
+        weight_image = xp.where(
+            mask, 1.0 / xp.where(mask, variance_arr, 1.0), 0.0
+        )
+        n_pixels = int(source_flat.size)
+        if chunk_elements is None:
+            chunk_elements = _FOOTPRINT_CHUNK_ELEMENTS
+        step = min(n_coefficients, max(1, chunk_elements // n_pixels))
+        shape = (step,) + reference_arr.shape
+        # the kernel and the resampling stamp in one pass; its "same" crop
+        # is the one the two passes give in turn
+        footprint_spectrum = _spectrum(
+            shape,
+            _fftconvolve(kernel[None], stamp[None], mode="full", axes=(1, 2)),
+            axes=(1, 2),
+        )
+        reference_spectrum = _spectrum(
+            basis.shape, reference_model[None], axes=(1, 2)
+        )
+        footprint = xp.empty((n_coefficients, n_pixels))
+        for start in range(0, n_coefficients, step):
+            stop = min(start + step, n_coefficients)
+            columns = _design_columns(
+                xp, reference_spectrum, basis, background, start, stop, step
+            )
+            columns *= weight_image[None]
+            footprint[start:stop] = _fftconvolve(
+                columns, footprint_spectrum, mode="same", axes=(1, 2)
+            )[: stop - start].reshape(stop - start, n_pixels)
+        # source_flat is a variance over a positive gain, so it is not
+        # negative and the weighted Gram matrix is a product with itself
+        footprint *= xp.sqrt(source_flat)[None]
         resampled = footprint @ footprint.T
         covariance = covariance + covariance @ resampled @ covariance
 
@@ -261,6 +300,7 @@ def kernel_fit_variance(
     reference: Any,
     positions: Any,
     weights: Any | None = None,
+    chunk_elements: int | None = None,
 ) -> Any:
     """Variance the kernel fit adds to the residual at given positions.
 
@@ -269,6 +309,14 @@ def kernel_fit_variance(
     design terms. The added variance is ``gamma^T C gamma``. With
     ``weights`` it is the variance of the weighted sum of residual pixels
     around each position, ``g = sum_p w_p gamma_p`` and ``g^T C g``.
+
+    The response and the quadratic form are batched over positions. The
+    basis convolutions run in chunks of positions whose spectra hold at
+    most ``chunk_elements`` complex values; with 11 coefficients, a 15 x 15
+    kernel and 21 x 21 weights a chunk is 698 positions and its arrays peak
+    near 0.6 GB, independent of the frame size (FFT plan work areas add to
+    this on CuPy). Every chunk has the same size, the last one padded with
+    zero stamps, so one FFT plan serves them all.
 
     Parameters
     ----------
@@ -283,6 +331,10 @@ def kernel_fit_variance(
     weights
         Optional ``(N, s, s)`` or ``(s, s)`` odd-sized weight stamps. Without
         them the variance of the single residual pixel is returned.
+    chunk_elements
+        Element budget of one position chunk's response spectra, by default
+        ``_RESPONSE_CHUNK_ELEMENTS`` (2**24 complex values). A smaller
+        budget lowers the peak memory and runs more chunks.
 
     Returns
     -------
@@ -318,6 +370,8 @@ def kernel_fit_variance(
     n_terms = len(triangular_degree_pairs(cov.background_degree))
     if covariance.shape != (cov.basis_count + n_terms,) * 2:
         raise ValueError("covariance does not match basis_count and degree")
+    if count == 0:
+        return xp.empty(0, dtype=xp.float64)
 
     side = int(stamps.shape[-1])
     reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
@@ -327,12 +381,7 @@ def kernel_fit_variance(
         (side + int(basis.shape[1]) - 1, side + int(basis.shape[2]) - 1),
     )
     inside = xp.isfinite(patches).all(axis=(1, 2))
-    response = _fftconvolve(
-        xp.where(inside[:, None, None], patches, 0.0)[:, None],
-        basis[None],
-        mode="valid",
-        axes=(2, 3),
-    )
+    patches = xp.where(inside[:, None, None], patches, 0.0)
     half = side // 2
     offsets = xp.arange(-half, half + 1)
     center = xp.rint(xy).astype(xp.int64)
@@ -343,8 +392,37 @@ def kernel_fit_variance(
         center[:, 1][:, None, None] + offsets[None, :, None],
         center[:, 0][:, None, None] + offsets[None, None, :],
     )
-    gamma = xp.concatenate([response, background], axis=1)
-    projected = xp.einsum("ncyx,nyx->nc", gamma, stamps)
+    projected = xp.empty((count, int(covariance.shape[0])), dtype=xp.float64)
+    spectrum = (
+        int(basis.shape[0])
+        * (patches.shape[1] + basis.shape[1] - 1)
+        * (patches.shape[2] + basis.shape[2] - 1)
+    )
+    if chunk_elements is None:
+        chunk_elements = _RESPONSE_CHUNK_ELEMENTS
+    step = min(count, max(1, chunk_elements // spectrum))
+    padded = -(-count // step) * step
+    if padded > count:
+        patches = xp.concatenate(
+            [patches, xp.zeros((padded - count,) + patches.shape[1:])]
+        )
+    basis_spectrum = _spectrum(
+        (step, 1) + patches.shape[1:], basis[None], axes=(2, 3)
+    )
+    for start in range(0, count, step):
+        stop = min(start + step, count)
+        response = _fftconvolve(
+            patches[start : start + step, None],
+            basis_spectrum,
+            mode="valid",
+            axes=(2, 3),
+        )
+        projected[start:stop, : basis.shape[0]] = xp.einsum(
+            "ncyx,nyx->nc", response[: stop - start], stamps[start:stop]
+        )
+    projected[:, basis.shape[0] :] = xp.einsum(
+        "ncyx,nyx->nc", background, stamps
+    )
     variance = xp.einsum("nc,cd,nd->n", projected, covariance, projected)
     return xp.where(inside, variance, xp.nan)
 
@@ -365,6 +443,37 @@ def _inverse(xp: Any, hessian: Any) -> Any:
         return xp.linalg.inv(hessian)
     except xp.linalg.LinAlgError as exc:
         raise ValueError("fit normal equations are singular") from exc
+
+
+def _design_columns(
+    xp: Any,
+    reference: _Spectrum,
+    basis: Any,
+    background: Any,
+    start: int,
+    stop: int,
+    step: int,
+) -> Any:
+    """Design columns ``start:stop`` as images, ``(step, ny, nx)``.
+
+    The kernel columns are the reference (given as its spectrum for the
+    basis shape) convolved with each basis kernel of the range in one
+    batched convolution; the background columns are the design terms.
+    Images past ``stop - start`` are zero, so every chunk has one shape.
+    """
+
+    n_basis = int(basis.shape[0])
+    columns = xp.zeros((step,) + reference.shape[1:], dtype=xp.float64)
+    split = min(max(start, n_basis), stop)
+    if split > start:
+        columns[: split - start] = _fftconvolve(
+            reference, basis[start:split], mode="same", axes=(1, 2)
+        )
+    if stop > split:
+        columns[split - start : stop - start] = background[
+            split - n_basis : stop - n_basis
+        ]
+    return columns
 
 
 def _background_degree(n_terms: int) -> int:
@@ -399,19 +508,60 @@ def _background_terms(
     return xp.stack(terms, axis=-3)
 
 
+@dataclass(frozen=True)
+class _Spectrum:
+    """The transform of a convolution kernel at fixed fast FFT lengths.
+
+    ``_fftconvolve`` takes it in place of the kernel, so a kernel that
+    meets every chunk of a batch is transformed once.
+    """
+
+    shape: tuple[int, ...]
+    axes: tuple[int, ...]
+    full: list[int]
+    fast: list[int]
+    values: Any
+
+
+def _spectrum(
+    a_shape: tuple[int, ...], k: Any, axes: Any = None
+) -> _Spectrum:
+    """Transform ``k`` for convolution with arrays of shape ``a_shape``.
+
+    The lengths are the next fast FFT length above the full linear size
+    (``next_fast_len`` of ``scipy.fft`` or ``cupyx.scipy.fft``), so odd or
+    prime lengths never take the Bluestein plans with their large work
+    areas.
+    """
+
+    xp = _array_module(k)
+    next_fast_len = _fft_module(xp).next_fast_len
+    axes = tuple(range(len(a_shape))) if axes is None else tuple(axes)
+    full = [a_shape[i] + k.shape[i] - 1 for i in axes]
+    fast = [next_fast_len(n, True) for n in full]
+    return _Spectrum(
+        tuple(k.shape), axes, full, fast, xp.fft.rfftn(k, fast, axes)
+    )
+
+
 def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     """Linear convolution of real arrays by FFT in their own namespace.
 
     Transforms ``axes`` (every axis by default; the others broadcast) at the
-    full linear size, then crops to the full, same (centered on ``a``) or
-    valid output.
+    fast lengths of :func:`_spectrum`, then crops the full linear size to
+    the full, same (centered on ``a``) or valid output. Either operand may
+    be given as its :class:`_Spectrum` taken for the other's shape.
     """
 
-    xp = _array_module(a)
-    axes = tuple(range(a.ndim)) if axes is None else tuple(axes)
-    full = [a.shape[i] + k.shape[i] - 1 for i in axes]
+    if not isinstance(a, _Spectrum) and not isinstance(k, _Spectrum):
+        k = _spectrum(a.shape, k, axes)
+    spec, other = (a, k) if isinstance(a, _Spectrum) else (k, a)
+    xp = _array_module(other)
+    axes, full, fast = spec.axes, spec.full, spec.fast
+    if [a.shape[i] + k.shape[i] - 1 for i in axes] != full:
+        raise ValueError("spectrum was taken for another array shape")
     out = xp.fft.irfftn(
-        xp.fft.rfftn(a, full, axes) * xp.fft.rfftn(k, full, axes), full, axes
+        xp.fft.rfftn(other, fast, axes) * spec.values, fast, axes
     )
     keep = {
         "full": full,
@@ -422,6 +572,18 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     for i, n, m in zip(axes, full, keep, strict=True):
         crop[i] = slice((n - m) // 2, (n - m) // 2 + m)
     return out[tuple(crop)]
+
+
+def _fft_module(xp: Any) -> Any:
+    """``scipy.fft`` for NumPy, ``cupyx.scipy.fft`` for CuPy."""
+
+    if xp is np:
+        import scipy.fft
+
+        return scipy.fft
+    import cupyx.scipy.fft
+
+    return cupyx.scipy.fft
 
 
 def _real_2d_array(xp: Any, name: str, value: Any) -> Any:

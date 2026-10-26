@@ -249,6 +249,12 @@ def correlation_factor(
     same windows; the stamps' side ``s`` sets the window. Negative variance
     in a window makes its factor and pixel ratio ``NaN``.
 
+    Every step is batched over positions; the footprint convolutions run
+    in chunks of ``_CHUNK`` (512) positions, the only loop. A chunk's
+    temporaries are ``(512, s + kernel + stamp - 2, ...)`` images, under
+    10 MB for 15 x 15 weights, a 15 x 15 kernel and a 4 x 4 stamp, so the
+    memory is set by the input planes, not the frame size.
+
     Parameters
     ----------
     weights
