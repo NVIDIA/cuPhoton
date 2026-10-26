@@ -16,6 +16,7 @@ structured run artifacts provide integration points for those workflows.
 | Small cutouts containing positive/negative residuals | [xFit](docs/components/xfit.md) | Fitted positions, amplitudes, shapes, uncertainties, and fit status |
 | Candidate cutouts to score, or reviewed examples to train on | [xScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
 | X-ray detector images sampled over experimental delay | [xRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
+| Scientific measurements and findings to monitor | [cuPhoton xMon](docs/components/xmon.md) | Revision-aware evidence, dashboards and optional model reports |
 
 Each component can be used independently. An optical workflow can combine
 loading, reprojection, subtraction, and candidate analysis; xRay handles a

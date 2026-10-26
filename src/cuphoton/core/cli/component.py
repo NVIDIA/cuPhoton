@@ -121,6 +121,13 @@ COMPONENTS = (
         group_help_style="commands",
         version_label="cuphoton xray",
     ),
+    ComponentSpec(
+        "xmon",
+        "cuphoton.xmon",
+        "cuPhoton xMon: scientific monitoring and evidence review.",
+        parser_style="argparse",
+        version_label="cuphoton xmon",
+    ),
 )
 
 COMPONENT_REGISTRY = {component.group: component for component in COMPONENTS}

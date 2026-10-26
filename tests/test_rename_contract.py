@@ -26,6 +26,7 @@ GROUPS = (
     "xscan",
     "xrep",
     "xray",
+    "xmon",
 )
 PUBLIC_NAMESPACES = (
     "cuphoton.core",
@@ -35,6 +36,7 @@ PUBLIC_NAMESPACES = (
     "cuphoton.xscan",
     "cuphoton.xrep",
     "cuphoton.xray",
+    "cuphoton.xmon",
 )
 
 
