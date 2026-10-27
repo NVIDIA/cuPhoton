@@ -10,6 +10,7 @@ from .dashboard import Dashboard, serve
 from .inference import InferenceConfig, Investigator
 from .monitor import Monitor
 from .records import Artifact, Finding, Measurement, Sample
+from .session import MonitorSession
 
 __all__ = [
     "__version__",
@@ -20,6 +21,7 @@ __all__ = [
     "Investigator",
     "Measurement",
     "Monitor",
+    "MonitorSession",
     "Sample",
     "serve",
 ]

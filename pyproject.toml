@@ -41,6 +41,11 @@ dependencies = [
 xmon-inference = [
   "httpx>=0.28,<1",
 ]
+xmon-nooa = [
+  "httpx>=0.28,<1",
+  "nooa==0.0.10; python_version < '3.14' and platform_system == 'Linux'",
+  "packaging>=23.0",
+]
 photometry = [
   "photutils>=3.0",
 ]
@@ -167,7 +172,7 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = [
   "astropy.*", "bokeh.*", "cuda.*", "cupy.*", "cupyx.*", "dragon.*",
-  "h5py.*", "httpx.*", "kvikio.*", "mpi4py.*", "numba.*", "nvidia.*", "nvtx.*",
+  "h5py.*", "httpx.*", "kvikio.*", "mpi4py.*", "nooa.*", "numba.*", "nvidia.*", "nvtx.*",
   "pandas.*", "photutils.*", "PIL.*", "pyarrow.*", "pybind11.*",
   "scipy.*", "setuptools.*", "torch.*",
 ]
