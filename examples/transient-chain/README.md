@@ -337,7 +337,8 @@ center's stamp over both lobes).
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
-  Largest where a candidate sits on a bright reference source. The position terms are 0 where
+  Largest where a candidate sits on a bright reference source. Without a target variance plane
+  the term is excluded because its noise scale is unknown. The position terms are 0 where
   the lobe flux is not usable. `uq.kernel_fit: false` skips it.
 - `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux `T` at the
   photometry position. `eta` is the fraction of a static star's reference flux that the subtraction
