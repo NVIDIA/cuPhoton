@@ -18,6 +18,7 @@ uv run cuphoton xmon serve --state xmon-demo/state --port 8765
 ```
 
 Open `http://127.0.0.1:8765` or the generated `xmon-demo/report.html`.
+
 The eight invented samples include a level change and a missing measurement.
 Their irregular observation times are independent of their sequence numbers.
 The dashboard supports sample/category filtering, named measurement histories,
@@ -30,6 +31,43 @@ Python 3.12–3.14 is supported. Monitoring and export need no inference service
 key, GPU, Node/npm, browser library or model framework. The Python artifacts
 include the HTML/CSS/JavaScript resources; these are authored with cuPhoton and
 contain no bundled third-party libraries or fonts.
+
+## Serve an application site
+
+An installed application can provide a collection of monitors and its own
+landing page through a local `xmon-site.toml`:
+
+```toml
+[site]
+application = "my_monitoring_app.site:serve"
+prefix = "/monitoring/"
+
+[collection]
+title = "Observation review"
+```
+
+Point the shared command at the directory containing that file, or at the
+manifest itself:
+
+```sh
+cuphoton xmon serve --site ./observations --host 0.0.0.0 --port 8765
+```
+
+The application package must be installed in the same environment as
+cuPhoton. The manifest names trusted application code; loading it invokes
+`serve(*, root, config, host, port, prefix)`. `root` is the manifest directory,
+`config` is the complete parsed TOML, and `prefix` is a validated absolute URL
+path ending in `/`. `--prefix` overrides the configured mount. The application
+owns routing, discovery, configuration of its monitors and server shutdown.
+Reading saved measurements and serving prepared domain views requires no GPU.
+
+Use exactly one of `--site` and `--state`. A single saved monitor also supports
+`--prefix /monitoring/run/`. Mount URLs redirect to their trailing-slash form
+so the dashboard's relative API requests stay inside their mount. Live pages
+load domain views as samples are selected; offline exports include all visible
+samples. A collection server can reuse `Dashboard.render(ui=...)` and
+`Dashboard.display_sample(sample_id, ui=...)`, calling `Monitor.refresh()`
+before reading independently updated state.
 
 ## Connect an application
 
@@ -263,5 +301,6 @@ with `access_token_env="XMON_BROWSER_TOKEN"` or `--access-token-env` and at leas
 24 characters. Enter that token in the browser's password field; it stays in
 page memory and is not embedded in the HTML export or bootstrap. It is distinct
 from the model API credential, which never goes to the browser. Use institutional
-TLS and access controls when sharing the service. The lightweight server is a
-local inspection tool rather than a production hosting platform.
+TLS and access controls when sharing the service. Shared deployments run the
+lightweight HTTP viewer behind their reverse proxy and service manager;
+cuPhoton does not configure TLS, process supervision or public access policy.

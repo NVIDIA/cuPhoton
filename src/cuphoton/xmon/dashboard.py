@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 from .monitor import Monitor
 from .records import Sample, encode, sample_from_dict
 from .session import MonitorSession
+from .site import normalize_prefix
 
 
 class Dashboard:
@@ -97,10 +98,38 @@ class Dashboard:
                 "inspect application artifacts.</p>"
             )
 
+    def display_sample(
+        self, sample_id: str, *, ui: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Display data plus one selected domain view for live polling."""
+        display = self.display(ui=ui)
+        record = next(
+            (
+                item
+                for item in display["records"]
+                if item["sample"]["id"] == sample_id
+            ),
+            None,
+        )
+        if record:
+            sample = sample_from_dict(record["sample"])
+            display["domain_view"] = {
+                "sample_id": sample.id,
+                "revision": sample.revision,
+                "digest": record["digest"],
+                "html": self.domain_view(sample),
+            }
+        return display
+
     def render(self, *, ui: dict[str, Any] | None = None) -> str:
         display = self.display(ui=ui)
         panels = []
-        for index, record in enumerate(display["records"]):
+        # Live viewers request other domain views as samples are selected.
+        # Offline exports retain every visible sample for disconnected use.
+        records = display["records"]
+        if display["ui"].get("live"):
+            records = records[:1]
+        for index, record in enumerate(records):
             sample = sample_from_dict(record["sample"])
             fragment = self.domain_view(sample)
             panels.append(
@@ -145,8 +174,10 @@ def make_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     session: MonitorSession | None = None,
+    prefix: str = "/",
 ) -> ThreadingHTTPServer:
     """Construct a viewer with optional investigation actions."""
+    prefix = normalize_prefix(prefix)
     if session is not None and session.monitor is not dashboard.monitor:
         raise ValueError("dashboard and session must share one monitor")
     try:
@@ -178,41 +209,35 @@ def make_server(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            parsed = urlsplit(self.path)
+            if prefix != "/" and parsed.path == prefix.rstrip("/"):
+                self.send_response(308)
+                self.send_header("Location", prefix)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if not parsed.path.startswith(prefix):
+                self.send_error(404)
+                return
+            path = parsed.path[len(prefix) :]
             try:
                 if session is None:
                     dashboard.monitor.refresh()
             except (OSError, ValueError, KeyError, TypeError):
                 self.send_error(503, "Saved monitor state is unavailable")
                 return
-            parsed = urlsplit(self.path)
-            if parsed.path == "/":
+            if path == "":
                 body = dashboard.render(ui=ui()).encode()
                 content_type = "text/html; charset=utf-8"
-            elif parsed.path == "/api/state":
+            elif path == "api/state":
                 body = encode(dashboard.monitor.snapshot()).encode()
                 content_type = "application/json"
-            elif parsed.path == "/api/dashboard":
-                display = dashboard.display(ui=ui())
+            elif path == "api/dashboard":
                 identifier = parse_qs(parsed.query).get("sample_id", [""])[0]
-                record = next(
-                    (
-                        item
-                        for item in display["records"]
-                        if item["sample"]["id"] == identifier
-                    ),
-                    None,
-                )
-                if record:
-                    sample = sample_from_dict(record["sample"])
-                    display["domain_view"] = {
-                        "sample_id": sample.id,
-                        "revision": sample.revision,
-                        "digest": record["digest"],
-                        "html": dashboard.domain_view(sample),
-                    }
+                display = dashboard.display_sample(identifier, ui=ui())
                 body = encode(display).encode()
                 content_type = "application/json"
-            elif parsed.path == "/health":
+            elif path == "health":
                 state = dashboard.monitor.snapshot()
                 body = json.dumps(
                     {
@@ -245,7 +270,7 @@ def make_server(
             self.wfile.write(body)
 
         def do_POST(self) -> None:
-            if self.path not in {"/api/ask", "/api/cancel"}:
+            if self.path not in {prefix + "api/ask", prefix + "api/cancel"}:
                 self._json(404, {"error": "Unknown monitor action."})
                 return
             if session is None or not session.can_ask:
@@ -298,7 +323,7 @@ def make_server(
                 request = json.loads(self.rfile.read(length))
                 if not isinstance(request, dict):
                     raise ValueError("request must be a JSON object")
-                if self.path == "/api/ask":
+                if self.path == prefix + "api/ask":
                     if set(request) - {"question", "scope", "sample_ids"}:
                         raise ValueError("unsupported question fields")
                     identifier = session.submit(
@@ -330,10 +355,11 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     session: MonitorSession | None = None,
+    prefix: str = "/",
 ) -> None:
     """Serve until interrupted, owning the optional live session lifecycle."""
     with make_server(
-        dashboard, host=host, port=port, session=session
+        dashboard, host=host, port=port, session=session, prefix=prefix
     ) as server:
         try:
             if session:

@@ -393,7 +393,7 @@
     cancelling.add(id);
     renderReports(true);
     try {
-      await post("/api/cancel", {report_id: id});
+      await post("api/cancel", {report_id: id});
       byId("question-status").textContent = "Cancellation requested.";
       await refresh();
     } catch (error) {
@@ -413,7 +413,7 @@
     byId("question-status").textContent = "Submitting question…";
     try {
       const scope = byId("scope").value;
-      await post("/api/ask", {question, scope, sample_ids: scope === "selected" ? [selectedId] : []});
+      await post("api/ask", {question, scope, sample_ids: scope === "selected" ? [selectedId] : []});
       byId("question").value = "";
       byId("question-status").textContent = "Question accepted. Progress appears in the history below.";
       byId("related-reports").checked = false;
@@ -434,7 +434,7 @@
     const requestedId = selectedId;
     try {
       const query = requestedId ? "?sample_id=" + encodeURIComponent(requestedId) : "";
-      const response = await fetch("/api/dashboard" + query, {cache: "no-store", credentials: "same-origin", redirect: "error"});
+      const response = await fetch("api/dashboard" + query, {cache: "no-store", credentials: "same-origin", redirect: "error"});
       if (!response.ok) throw new Error("Saved monitor state is unavailable.");
       const next = await response.json();
       if (!Array.isArray(next.records) || !Array.isArray(next.reports)) throw new Error("The monitor returned an incomplete snapshot.");
