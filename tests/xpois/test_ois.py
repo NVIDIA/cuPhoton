@@ -475,7 +475,9 @@ def test_solve_constant_kernel_device_matches_cpu_and_stays_on_device(
         replace(result, kernel=result.kernel.astype(cp.float32))
     with pytest.raises(ValueError, match="matched image shape"):
         replace(result, background=result.background[:-1])
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        (TypeError, ValueError), match="declared with init=False"
+    ):
         replace(result, solver="spatial-als")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="cannot be pickled"):
         pickle.dumps(result)
