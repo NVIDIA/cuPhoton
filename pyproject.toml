@@ -136,7 +136,7 @@ extend-exclude = [
   "*.ipynb",
   "papers",
   "agents",
-  "/data",
+  "./data",
   "runs",
   "demo-data",
   "notebooks",
