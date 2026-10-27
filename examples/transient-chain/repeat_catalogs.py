@@ -17,16 +17,20 @@ sign). Each is scored overall and per class, for the full error bar
 ``<q>_err``, for ``<q>_err_fit`` alone, and with each of the corr, kfit,
 kmatch and mis terms dropped in turn (``ARMS``).
 
-Classes come from ``quality_flags``, ``converged`` and ``uncertainty_valid``
-(``classify``): ``resolved`` (two supported lobes), ``overlapping``,
+Classes come from ``quality_flags``, ``converged``, ``uncertainty_valid``
+and ``fit_model`` (``classify``): ``resolved`` (two supported lobes),
+``overlapping``,
 ``single`` (a brightening source, only the positive lobe supported),
 ``fading`` (only the negative lobe supported), ``failed`` (width out of
 range or no lobe at the candidate) and ``invalid`` (no usable covariance).
-The center is scored on resolved and overlapping candidates, the source
-position on resolved and single ones, and the either-lobe position on
-resolved, single and fading ones; a fading source whose one-lobe fit fell
-back to the dipole has no ``source_*`` error bar and is dropped with the
-other rows whose bar is undefined.
+After the dipole validity checks, ``fit_model = "single"`` classifies an
+accepted one-lobe row as ``single`` or ``fading``. The center is scored on
+resolved and overlapping candidates, the source position on resolved and
+single ones, and the either-lobe position on
+resolved, single and fading ones; a fading source with no applied one-lobe
+result (refit disabled, no variance plane, or invalid fit) has no
+``source_*`` error bar and is dropped with the other rows whose bar is
+undefined.
 
 Positions reach the sky in two steps. The refine stage's affine from the
 item's ``summary.json`` (read by ``load`` when it sits beside the catalog)
@@ -95,8 +99,9 @@ MAX_ANCHOR_CONDITION = 1e3
 
 
 def classify(df: pd.DataFrame) -> np.ndarray:
-    """One class per row (``CLASSES``) from ``quality_flags``, ``converged``
-    and ``uncertainty_valid``.
+    """One class per row (``CLASSES``) from ``quality_flags``, ``converged``,
+    ``uncertainty_valid`` and ``fit_model``. Accepted one-lobe rows override
+    dipole validity with their single/fading class.
     """
     from cuphoton.xfit import DipoleQualityFlag as F
 

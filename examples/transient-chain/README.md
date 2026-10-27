@@ -324,7 +324,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
 | `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions instead of the quantity's closed form (`uq.correlation` in `summary.json`, next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
-| `source_x`, `source_y` and `*_err_fit`, `*_err` | float64 | uq | the measured lobe whichever its sign, in pixels relative to (`x`, `y`), filled from the columns above after the budget: the `positive_*` values on a row with two supported lobes or `fit_model = "single"` (where they describe the one measured lobe, brightening or fading); the dipole's negative lobe, `2 center - positive`, for a fading source whose one-lobe fit fell back, with NaN error bars because the budget was built for the positive lobe only. Use these to score or quote a source position without reading `fit_model` |
+| `source_x`, `source_y` and `*_err_fit`, `*_err` | float64 | uq | the measured lobe whichever its sign, in pixels relative to (`x`, `y`), filled from the columns above after the budget: the `positive_*` values on a row with two supported lobes or `fit_model = "single"` (where they describe the one measured lobe, brightening or fading); the dipole's negative lobe, `2 center - positive`, for a fading source with no applied one-lobe result (refit disabled, no variance plane, or invalid fit), with NaN error bars because the budget was built for the positive lobe only. Use these to score or quote a source position without reading `fit_model` |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -408,7 +408,7 @@ center's stamp over both lobes).
   residual); `|lambda|` is capped at 10 and `uq.sensitivity_capped` counts the rows it capped. A
   resolved dipole's positive lobe gets `lambda = 1`. For a fading single source with
   `fit_model = "single"` the `positive_*` columns describe the measured negative lobe, so the term
-  applies to it; with `fit_model = "dipole"` (the one-lobe fit was invalid) they describe the
+  applies to it; with `fit_model = "dipole"` (no valid one-lobe result was applied) they describe the
   unsupported lobe and `psf_flux` is the quantity to use. 0 without a misalignment model
   (refinement off, a shift-only refinement, or the `daofind` star finder).
 - `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
@@ -464,7 +464,8 @@ forced photometry did not run (no PSF width), the one-lobe fit's flux and error 
 keeps the dipole values and `fit_model = "dipole"`; every other row is untouched. Without a
 variance plane nothing is refit: the dipole covariance is then scaled by its reduced chi-square
 and the two fits would not be comparable. `summary.json` records `uq.single_candidates`,
-`uq.single_fitted`, `uq.single_fallback` and `uq.single_model` (`circular` or `elliptical`).
+`uq.single_fitted`, `uq.single_fallback` and `uq.single_model` (`circular`, `elliptical`, or
+`null` when refitting was not attempted).
 `uq.single_source_refit: false` (or `uq.enabled: false`) skips the refit: every row keeps the
 dipole values and `fit_model = "dipole"`, and `uq.single_fitted` is 0. In either case the
 `source_*` columns name the measured lobe whichever its sign (column table above).
@@ -530,11 +531,13 @@ exposure are dropped within `--duplicate-px` (default 1, keeping the highest `pe
 group seen in fewer than two exposures, or twice in one, is dropped.
 
 Three quantities are scored, each on the classes whose columns describe the source. The classes come
-from `quality_flags`, `converged` and `uncertainty_valid`: `resolved` (two supported lobes),
+from `quality_flags`, `converged`, `uncertainty_valid` and `fit_model`: `resolved` (two supported lobes),
 `overlapping`, `single` (a brightening source: only the positive lobe supported), `fading` (only
 the negative lobe supported), `failed` (both lobes unsupported, width out of range, no lobe at the
 candidate, or a lobe outside the stamp) and
-`invalid` (no usable covariance). The dipole center (`center_*`) is scored on resolved and
+`invalid` (no usable covariance). After the dipole validity checks, `fit_model = "single"`
+classifies an accepted one-lobe row as `single` or `fading` according to the supported lobe.
+The dipole center (`center_*`) is scored on resolved and
 overlapping candidates; the source position (`positive_*`) on resolved and single ones; the source
 position of either lobe (`source_*`, the measured lobe whichever its sign) on resolved, single and
 fading ones, so a fading single's measured negative lobe is scored where its one-lobe fit held.
