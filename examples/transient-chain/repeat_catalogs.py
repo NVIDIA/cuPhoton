@@ -36,9 +36,10 @@ stays in the anchors, and dithers and rotations between exposures are not
 scatter.
 
 What the test cannot see: the reference's noise is the same in every
-exposure of a detector and never scatters between them, so every arm keeps a
-term the test does not measure; and a bias common to all exposures (a
-reference position error, a systematic of the fit) passes unseen.
+exposure of a detector and never scatters between them, so an arm that
+includes this noise keeps a term the test does not measure; and a bias
+common to all exposures (a reference position error, a systematic of the
+fit) passes unseen.
 """
 
 from __future__ import annotations
