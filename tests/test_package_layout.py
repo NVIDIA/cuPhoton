@@ -75,6 +75,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "torch",
         "viz",
         "xmon-inference",
+        "xmon-nooa",
     }
 
 
