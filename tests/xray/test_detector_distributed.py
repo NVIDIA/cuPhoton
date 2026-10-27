@@ -1194,7 +1194,7 @@ def test_iterative_distributed_options_change_identity_and_worker_command(
     monkeypatch.setattr(
         xray_commands, "_detector_artifacts", capture_worker_options
     )
-    assert main(command[4:]) == 0
+    assert main(command[command.index("detector-artifacts") :]) == 0
     assert parsed_values == [value]
     assert "--fit-method" not in lp["commands"][0]
     assert not any(

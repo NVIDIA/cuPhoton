@@ -20,6 +20,7 @@ from numpy.typing import DTypeLike
 from cuphoton import __version__ as CUPHOTON_VERSION
 from cuphoton.core.runtime import runtime_metadata
 
+from ._hdf5_input import hdf5_input_reader, self_contained_hdf5_input
 from ._types import FIT_DIAGNOSTICS_LEVELS, FitDiagnosticsLevel
 from .detector_mask import (
     AxisRange,
@@ -418,8 +419,10 @@ def build_detector_artifacts_cupy(
     staging_dir: tempfile.TemporaryDirectory[str] | None = None
 
     with h5py.File(on_path, "r") as on_h5, h5py.File(off_path, "r") as off_h5:
-        on_image = on_h5[plan.image_dataset]
-        off_image = off_h5[plan.image_dataset]
+        read_on = hdf5_input_reader(on_h5)
+        read_off = hdf5_input_reader(off_h5)
+        on_image = read_on(plan.image_dataset)
+        off_image = read_off(plan.image_dataset)
         if len(on_image.shape) != 3 or len(off_image.shape) != 3:
             raise ValueError(
                 "detector artifact input requires 3D image cubes"
@@ -440,11 +443,11 @@ def build_detector_artifacts_cupy(
                 "savgol_window must be less than or equal to usable samples"
             )
         delay = np.asarray(
-            on_h5[plan.delay_dataset][drop_leading:],
+            read_on(plan.delay_dataset)[drop_leading:],
             dtype=np.float64,
         )
         off_delay = np.asarray(
-            off_h5[plan.delay_dataset][drop_leading:],
+            read_off(plan.delay_dataset)[drop_leading:],
             dtype=np.float64,
         )
         if delay.shape != (sample_count,) or off_delay.shape != delay.shape:
@@ -453,11 +456,11 @@ def build_detector_artifacts_cupy(
             raise ValueError("on/off delay axes do not match")
 
         on_norm = np.asarray(
-            on_h5[plan.ipm_pair.normalization][drop_leading:],
+            read_on(plan.ipm_pair.normalization)[drop_leading:],
             dtype=np.float64,
         )
         off_norm = np.asarray(
-            off_h5[plan.ipm_pair.normalization][drop_leading:],
+            read_off(plan.ipm_pair.normalization)[drop_leading:],
             dtype=np.float64,
         )
         if on_norm.shape != (sample_count,) or off_norm.shape != (
@@ -1005,8 +1008,10 @@ def write_detector_artifact_normalization(
     plan = on_probe.load_plan
 
     with h5py.File(on_path, "r") as on_h5, h5py.File(off_path, "r") as off_h5:
-        on_image = on_h5[plan.image_dataset]
-        off_image = off_h5[plan.image_dataset]
+        read_on = hdf5_input_reader(on_h5)
+        read_off = hdf5_input_reader(off_h5)
+        on_image = read_on(plan.image_dataset)
+        off_image = read_off(plan.image_dataset)
         if len(on_image.shape) != 3 or len(off_image.shape) != 3:
             raise ValueError(
                 "detector artifact input requires 3D image cubes"
@@ -1022,11 +1027,11 @@ def write_detector_artifact_normalization(
             raise ValueError("drop_leading removes all frames")
         sample_count = frame_count - drop_leading
         delay = np.asarray(
-            on_h5[plan.delay_dataset][drop_leading:],
+            read_on(plan.delay_dataset)[drop_leading:],
             dtype=np.float64,
         )
         off_delay = np.asarray(
-            off_h5[plan.delay_dataset][drop_leading:],
+            read_off(plan.delay_dataset)[drop_leading:],
             dtype=np.float64,
         )
         if delay.shape != (sample_count,) or off_delay.shape != delay.shape:
@@ -1034,11 +1039,11 @@ def write_detector_artifact_normalization(
         if not np.allclose(delay, off_delay):
             raise ValueError("on/off delay axes do not match")
         on_norm = np.asarray(
-            on_h5[plan.ipm_pair.normalization][drop_leading:],
+            read_on(plan.ipm_pair.normalization)[drop_leading:],
             dtype=np.float64,
         )
         off_norm = np.asarray(
-            off_h5[plan.ipm_pair.normalization][drop_leading:],
+            read_off(plan.ipm_pair.normalization)[drop_leading:],
             dtype=np.float64,
         )
         if on_norm.shape != (sample_count,) or off_norm.shape != (
@@ -2003,6 +2008,7 @@ class _ThreadedHdf5BlockReader:
         self._on_path = on_path
         self._off_path = off_path
         self._image_dataset = image_dataset
+        self._self_contained = self_contained_hdf5_input()
         self._executor = ThreadPoolExecutor(max_workers=workers)
 
     def __enter__(self):
@@ -2017,12 +2023,14 @@ class _ThreadedHdf5BlockReader:
             self._on_path,
             self._image_dataset,
             selection,
+            self_contained=self._self_contained,
         )
         off_future = self._executor.submit(
             _read_hdf5_block,
             self._off_path,
             self._image_dataset,
             selection,
+            self_contained=self._self_contained,
         )
         on_result = None
         off_result = None
@@ -2093,11 +2101,14 @@ def _hdf5_reader_runtime(*, hdf5_reader: str, h5py) -> dict[str, Any]:
     return runtime
 
 
-def _read_hdf5_block(path: Path, dataset: str, selection):
+def _read_hdf5_block(
+    path: Path, dataset: str, selection, *, self_contained: bool | None = None
+):
     import h5py
 
     with h5py.File(path, "r") as h5:
-        return np.asarray(h5[dataset][selection], dtype=np.float64)
+        read_input = hdf5_input_reader(h5, self_contained=self_contained)
+        return np.asarray(read_input(dataset)[selection], dtype=np.float64)
 
 
 def _fit_error_types(cp) -> tuple[type[BaseException], ...]:

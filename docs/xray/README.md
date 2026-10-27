@@ -51,6 +51,38 @@ uv run cuphoton xray help extract-trace
 xRay recognizes two on/off cube layouts. Both files in a pair must use the
 same schema, matching array shapes and matching delay coordinates.
 
+By default, xRay follows HDF5 links and reads external raw storage and virtual
+datasets through h5py. Keep any referenced files available when moving an
+input or running it on another node. Schema probing also follows top-level
+links when inspecting dataset shapes.
+
+For workflows requiring self-contained inputs, enable the stricter policy
+for the process:
+
+```bash
+CUPHOTON_XRAY_HDF5_SELF_CONTAINED=1 cuphoton xray data-probe \
+  --h5dir ./data --fon on.h5 --foff off.h5 --json
+```
+
+The same setting applies to all xRay HDF5 workflows, including Python API
+calls, visualization, and reads on newly opened handles. Distributed plans
+created with it enabled retain it in their worker commands, including saved
+local and Slurm scripts. Set the policy before starting a read: each open
+handle and threaded block reader retains its selected policy for its lifetime.
+Leave it unset or set it to `0` for normal h5py
+behavior; other nonempty values raise `ValueError`.
+
+In this mode, accessed objects must use in-file hard links and ordinary
+datasets. Soft links, external links, external raw storage, and virtual
+datasets raise `ValueError` before their targets or payloads are read. This
+includes same-file soft links and virtual datasets. Materialize those datasets
+as ordinary datasets before using this mode. Hard-link aliases are supported.
+Schema probing validates every top-level member, including unused members.
+Unused links nested inside ordinary groups are not traversed; nested objects
+are checked when accessed. Validation covers the objects xRay inspects; it
+does not certify the whole file as portable. HDF5 metadata still passes
+through native HDF5 parsing.
+
 | Schema | Image cube | Delay axis | Entry counts | Normalization |
 | --- | --- | --- | --- | --- |
 | `cropped-cube` | `imgs` `(frame, y, x)` | `scan_var` `(frame,)` | `bin_count` `(frame,)` | `i0` and `i0_ipm3` `(frame,)`; `ROI` is also required |
