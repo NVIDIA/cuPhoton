@@ -596,7 +596,8 @@ def test_native_workers_keep_spawn_children_on_standard_multiprocessing(
 
 def test_ordinary_workload_retains_root_artifacts(monkeypatch, tmp_path):
     state = _install_runtime(monkeypatch)
-    result = _run(tmp_path)
+    # Check root artifact placement without a short filesystem deadline.
+    result = _run(tmp_path, result_timeout=5.0)
     assert result.status == "success", result.summary
     assert "benchmark" not in result.summary
     assert (result.run_dir / "records/one.json").is_file()
