@@ -293,7 +293,8 @@ fully correlated, as for patches cut from one coadd of the same exposures; `inde
 frames. A pixel has a variance only when every contributing piece has a finite, nonnegative
 variance. The resampling weights are those of the first covering piece. A
 provider without a variance plane drops the reprojection's prepared mappings after each build
-(hundreds of megabytes per piece on a 4k grid); only the correlation term reads them.
+(hundreds of megabytes per piece on a 4k grid); the correlation term and kernel-fit covariance
+read them when the reference has a variance plane.
 
 ## Catalog columns
 
