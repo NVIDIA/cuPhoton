@@ -81,7 +81,11 @@ class Monitor:
                 raise ValueError("history digest mismatch")
         changed = False
         for report in state["reports"]:
-            if recover and report["status"] in {"pending", "running"}:
+            if recover and report["status"] in {
+                "pending",
+                "queued",
+                "running",
+            }:
                 report["status"] = "interrupted"
                 report["finished_at"] = now()
                 changed = True

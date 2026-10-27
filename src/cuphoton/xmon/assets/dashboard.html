@@ -1,18 +1,73 @@
 <!doctype html>
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 -->
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'">
-<title>__TITLE__</title><style>__STYLE__</style></head>
-<body><header><div class="brand">cuPhoton <b>xMon</b></div><h1>__TITLE__</h1>
-<p>Scientific measurements · deterministic findings · separate model interpretation</p></header>
-<main><section class="overview" aria-label="Run status"><div><small>RUN</small><strong id="run"></strong></div><div><small>SAMPLES</small><strong id="count"></strong></div><div><small>COLLECTOR</small><strong id="health"></strong></div><div><small>REVISIONS</small><strong id="history"></strong></div></section>
-<div id="notice" role="status"></div><div class="workspace"><aside><label for="filter">Filter samples</label><input id="filter" type="search" placeholder="Identity or finding">
-<label for="category">Finding category</label><select id="category"><option value="">All samples</option value="scientific">Scientific interest</option><option value="data_quality">Data quality</option><option value="processing">Processing</option></select><nav id="timeline" aria-label="Sample timeline"></nav></aside>
-<article><section class="card"><div class="section-head"><h2>Measurement history</h2><select id="metric" aria-label="Measurement"></select></div><svg id="trend" viewBox="0 0 800 180" role="img" aria-label="Measurement by sequence"></svg><p class="muted">Horizontal position uses sample sequence; observation intervals are recorded separately. Invalid and missing values leave gaps.</p></section>
-<section class="card"><div class="section-head"><h2 id="sample-title">Select a sample</h2><span id="revision" class="badge"></span></div><p id="times" class="muted"></p><div id="findings"></div><div class="table-wrap"><table><thead><tr><th>Measurement</th><th>Value</th><th>Unit</th><th>Status</th><th>Coverage</th></tr></thead><tbody id="measurements"></tbody></table></div><div id="domain-panels">__PANELS__</div><details><summary>Configuration, provenance and artifacts</summary><pre id="provenance"></pre></details></section>
-<section class="card"><h2>Model interpretation</h2><p class="muted">Narratives are advisory. Structured citations are checked against recorded values; this does not establish the correctness of the interpretation.</p><div id="reports"></div></section>
-<section class="card"><h2>Ingestion diagnostics</h2><div id="errors"></div></section></article></div></main>
-<footer>cuPhoton xMon · Offline snapshot · Reload the served page to refresh.<br>Copyright © 2026 NVIDIA CORPORATION &amp; AFFILIATES. Apache License 2.0. Built-in HTML, CSS and JavaScript contain no bundled third-party libraries or fonts.</footer>
-<script id="state" type="application/json">__DATA__</script><script>__SCRIPT__</script></body></html>
+<title>__TITLE__</title>
+<style>__STYLE__</style>
+</head>
+<body>
+<header>
+  <div class="section-head"><div class="brand">cuPhoton <b>xMon</b></div><span id="connection" class="badge" role="status">Saved snapshot</span></div>
+  <h1>__TITLE__</h1>
+  <p>Scientific measurements · deterministic findings · separate model interpretation</p>
+</header>
+<main>
+  <section class="overview" aria-label="Run status">
+    <div><small>RUN</small><strong id="run"></strong></div>
+    <div><small>SAMPLES</small><strong id="count"></strong></div>
+    <div><small>COLLECTOR</small><strong id="health"></strong></div>
+    <div><small>REVISIONS</small><strong id="history"></strong></div>
+  </section>
+  <div id="notice" role="status"></div>
+  <div class="workspace">
+    <aside>
+      <label for="filter">Filter samples</label><input id="filter" type="search" placeholder="Identity or finding">
+      <label for="category">Finding category</label>
+      <select id="category"><option value="">All samples</option><option value="scientific">Scientific interest</option><option value="data_quality">Data quality</option><option value="processing">Processing</option></select>
+      <nav id="timeline" aria-label="Sample timeline"></nav>
+    </aside>
+    <article>
+      <section class="card" aria-labelledby="trend-title">
+        <div class="section-head"><h2 id="trend-title">Measurement history</h2><span id="metric-count" class="muted"></span></div>
+        <div class="plot-controls">
+          <label>Horizontal axis<select id="axis"><option value="sequence">Sample sequence</option><option value="observed">Observation time</option></select></label>
+          <label>Value scale<select id="scale"><option value="linear">Linear</option><option value="log">Logarithmic</option></select></label>
+        </div>
+        <details class="metric-picker"><summary>Choose measurements</summary><fieldset id="metrics"><legend>Show up to six measurements</legend></fieldset></details>
+        <div id="trends"></div>
+        <p class="muted">Select a point to inspect its sample. Outlined points have findings. Missing or invalid measurements leave gaps; each chart retains its own unit.</p>
+      </section>
+      <section class="card" aria-labelledby="sample-title">
+        <div class="section-head"><h2 id="sample-title">Select a sample</h2><span id="revision" class="badge"></span></div>
+        <p id="times" class="muted"></p><div id="findings"></div>
+        <div class="table-wrap"><table><thead><tr><th>Measurement</th><th>Value</th><th>Unit</th><th>Status</th><th>Coverage</th></tr></thead><tbody id="measurements"></tbody></table></div>
+        <div id="domain-panels">__PANELS__</div>
+        <details><summary>Configuration, provenance and artifacts</summary><pre id="provenance"></pre></details>
+      </section>
+      <section class="card" aria-labelledby="questions-title">
+        <div class="section-head"><h2 id="questions-title">Investigate this run</h2><span id="backend" class="badge"></span></div>
+        <p id="interaction-status" class="muted"></p>
+        <form id="question-form">
+          <div id="access-control" hidden><label for="access-token">Investigation access token</label><input id="access-token" type="password" autocomplete="off" spellcheck="false"><p class="muted">Use the monitor access token supplied by its operator. It stays in this page's memory.</p></div>
+          <label for="scope">Evidence scope</label><select id="scope"><option value="selected">Selected sample</option><option value="run">Current run</option></select>
+          <p id="scope-note" class="muted"></p>
+          <label for="question">Question</label><textarea id="question" rows="3" maxlength="4096" placeholder="Which measurements support these findings?" required></textarea>
+          <div class="question-actions"><button id="question-submit" class="primary" type="submit">Ask</button><span id="question-status" role="status"></span></div>
+        </form>
+        <p class="muted">Reports are advisory. Citations are checked against recorded values; this does not establish the correctness of an interpretation. Action messages describe work the investigator reports, not hidden model reasoning.</p>
+        <div class="section-head history-heading"><h3>Questions and investigations</h3><label class="inline-label"><input id="related-reports" type="checkbox"> Selected sample only</label></div>
+        <div id="reports" aria-label="Saved questions and investigations"></div>
+      </section>
+      <section class="card"><h2>Ingestion diagnostics</h2><div id="errors"></div></section>
+    </article>
+  </div>
+</main>
+<footer><span id="footer-mode">Offline snapshot</span><br>Copyright © 2026 NVIDIA CORPORATION &amp; AFFILIATES. Apache License 2.0. Built-in HTML, CSS and JavaScript contain no bundled third-party libraries or fonts.</footer>
+<script id="state" type="application/json">__DATA__</script>
+<script>__SCRIPT__</script>
+</body>
+</html>

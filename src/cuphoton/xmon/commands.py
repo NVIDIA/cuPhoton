@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from cuphoton.core.cli import (
+    BoolInvariant,
     CommandError,
     IntegerInvariant,
     InvariantAwareCommand,
@@ -23,6 +24,7 @@ from .dashboard import Dashboard, serve
 from .inference import InferenceConfig, Investigator
 from .monitor import Monitor
 from .quickstart import quickstart
+from .session import MonitorSession
 
 
 class _XMonCommand(InvariantAwareCommand):
@@ -79,9 +81,25 @@ class ExportCommand(_StateCommand):
 
 
 class ServeCommand(_StateCommand):
-    _description_ = "Serve a read-only dashboard and JSON API."
+    _description_ = "Serve a live dashboard with optional investigation."
     host = "127.0.0.1"
     port = 8765
+    inference_config: Path | None = None
+    auto_investigate = False
+    access_token_env: str | None = None
+
+    class InferenceConfigArg(PathValueInvariant):
+        _arg = "--inference-config"
+        _help = "Optional endpoint/backend TOML for browser investigation."
+
+    class AutoInvestigateArg(BoolInvariant):
+        _arg = "--auto-investigate"
+        _help = "Automatically investigate new findings in this session."
+        _default = False
+
+    class AccessTokenEnvArg(StringInvariant):
+        _arg = "--access-token-env"
+        _help = "Environment reference for remote investigation access."
 
     class HostArg(StringInvariant):
         _arg = "--host"
@@ -94,10 +112,31 @@ class ServeCommand(_StateCommand):
         _default = 8765
 
     def execute(self) -> None:
+        config = (
+            InferenceConfig.from_toml(self.inference_config)
+            if self.inference_config
+            else None
+        )
+        monitor = Monitor.load(self.state, recover=config is not None)
+        session = (
+            MonitorSession(
+                monitor,
+                config=config,
+                auto_investigate=self.auto_investigate,
+                access_token_env=self.access_token_env,
+            )
+            if config
+            else None
+        )
+        if self.auto_investigate and config is None:
+            raise ValueError(
+                "automatic investigation requires inference configuration"
+            )
         serve(
-            Dashboard(Monitor.load(self.state, recover=False)),
+            Dashboard(monitor),
             host=self.host,
             port=self.port,
+            session=session,
         )
 
 
