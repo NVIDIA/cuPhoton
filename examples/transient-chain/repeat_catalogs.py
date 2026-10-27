@@ -519,6 +519,13 @@ def repeat(
             "with load(), which adds each item's refine affine"
         )
     df = df.copy()
+    # Earlier catalogs have no measured-lobe columns. Keep their existing
+    # center/positive reports without inferring a fading source's position.
+    for axis in "xy":
+        for suffix in ("", "_err_fit", "_err"):
+            name = f"source_{axis}{suffix}"
+            if name not in df:
+                df[name] = np.nan
     df["class"] = classify(df)
     out: dict = {
         "link_px": link_px,

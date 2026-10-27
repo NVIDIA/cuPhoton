@@ -679,10 +679,10 @@ class SingleSourceResult:
     ``positive_xy_covariance`` replaced on the rows ``applied`` (host).
     ``lobe_flux`` is the flux the budget divides a lobe's shift by: the
     one-lobe flux on those rows, the dipole lobe flux elsewhere. ``flux``
-    and ``flux_error`` are the one-lobe flux and its error on those rows and
-    NaN elsewhere (the stand-in for ``psf_flux`` when forced photometry did
-    not run). ``fit_model`` is the catalog column, ``"single"`` on the
-    applied rows and ``"dipole"`` elsewhere.
+    and ``flux_error`` are the signed one-lobe flux and its error on those
+    rows and NaN elsewhere (the stand-in for ``psf_flux`` when forced
+    photometry did not run). ``fit_model`` is the catalog column,
+    ``"single"`` on the applied rows and ``"dipole"`` elsewhere.
     """
 
     derived: Any
@@ -821,7 +821,7 @@ def single_source_fit(
     return SingleSourceResult(
         new,
         replaced(derived.lobe_flux, res.flux),
-        replaced(nan, res.flux),
+        replaced(nan, sign * res.flux),
         replaced(nan, res.flux_error),
         applied,
         fit_model,
@@ -894,8 +894,9 @@ def psf_flux_inputs(
     """Choose what ``psf_flux`` holds: forced photometry (``flux``,
     ``flux_error``) at ``photometry_xy`` where it ran, else the one-lobe
     fit's flux and error at its position on the rows it replaced and NaN
-    elsewhere. The budget takes the flux when photometry ran or at least
-    one row carries the one-lobe stand-in.
+    elsewhere. The budget takes the flux only when photometry ran; the
+    stand-in keeps its fit-only error because no independent PSF width is
+    available for the additional flux terms.
     """
     if photometry is not None:
         return PsfFluxInputs(
@@ -905,9 +906,7 @@ def psf_flux_inputs(
     xy = xp.stack(
         [singles.derived.positive_x, singles.derived.positive_y], axis=1
     )
-    return PsfFluxInputs(
-        singles.flux, singles.flux_error, xy, bool(singles.applied.any())
-    )
+    return PsfFluxInputs(singles.flux, singles.flux_error, xy, False)
 
 
 # --- the misalignment model on the host -----------------------------------

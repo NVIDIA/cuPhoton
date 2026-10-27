@@ -1391,9 +1391,10 @@ def test_single_sources_take_the_one_lobe_fit(psf_sigma):
         assert (
             new.positive_xy_covariance[i] != dipole.positive_xy_covariance[i]
         )
-        assert res.flux[i] == pytest.approx(4000.0, rel=0.1)
+        sign = 1 if i == 0 else -1
+        assert res.flux[i] == pytest.approx(sign * 4000.0, rel=0.1)
         assert res.flux_error[i] > 0
-        assert res.lobe_flux[i] == res.flux[i]
+        assert res.lobe_flux[i] == sign * res.flux[i]
     # the dipole row is byte-identical, in every field
     assert _row_bytes(new, 1) == _row_bytes(dipole, 1)
     assert res.lobe_flux[1] == dipole.lobe_flux[1]
@@ -1485,8 +1486,7 @@ def test_single_source_fit_needs_a_variance_plane_and_single_flags():
 def test_psf_flux_inputs_choose_photometry_else_the_one_lobe_flux():
     """Forced photometry, when it ran, fills ``psf_flux`` at the supported
     lobe; without it the one-lobe fit's flux stands in on the rows it
-    replaced (NaN elsewhere) and the budget takes the flux only when such
-    a row exists.
+    replaced (NaN elsewhere), with its fit-only error.
     """
     stamps, variance, mask, dipole, flags = _single_scene()
     brightening, fading = uq.single_sources(flags)
@@ -1510,7 +1510,7 @@ def test_psf_flux_inputs_choose_photometry_else_the_one_lobe_flux():
     assert unfit[2, 1] == 2.0 * dipole.center_y[2] - dipole.positive_y[2]
 
     stand_in = uq.psf_flux_inputs(singles)
-    assert stand_in.budget
+    assert not stand_in.budget
     np.testing.assert_array_equal(stand_in.flux, singles.flux)
     np.testing.assert_array_equal(stand_in.flux_error, singles.flux_error)
     np.testing.assert_array_equal(stand_in.position_xy, xy)
@@ -1530,6 +1530,64 @@ def test_psf_flux_inputs_choose_photometry_else_the_one_lobe_flux():
     assert forced.flux is photometry.flux
     assert forced.flux_error is photometry.flux_error
     assert forced.position_xy is unfit
+
+
+def test_no_psf_stand_in_keeps_the_resolved_rows_budget_valid(scene):
+    stamps, variance, mask, dipole, flags = _single_scene()
+    brightening, fading = uq.single_sources(flags)
+    cand = scene.cand[:3]
+    u_cfg = {
+        "enabled": True,
+        "kernel_fit": True,
+        "max_lobe_reach_px": MAX_REACH,
+    }
+    results = []
+    for refit in (False, True):
+        singles = uq.single_source_fit(
+            dipole, flags, stamps, variance, mask=mask, refit=refit
+        )
+        flux = uq.psf_flux_inputs(singles)
+        out, _ = uq.error_budget(
+            u_cfg,
+            cand_x=cand[:, 0],
+            cand_y=cand[:, 1],
+            derived=singles.derived,
+            single=brightening | fading,
+            psf_flux_error=flux.flux_error if flux.budget else None,
+            photometry_xy=flux.position_xy if flux.budget else None,
+            lobe_flux=singles.lobe_flux,
+            fit=scene.fit,
+            kernel=scene.kernel,
+            reference=scene.reference,
+            matched=scene.matched,
+            residual=scene.residual,
+            variance=scene.variance,
+            psf_sigma=None,
+            misalignment=scene.misalignment,
+            star_xy=scene.star_xy,
+        )
+        # As in the worker, the stand-in error reaches the catalog before
+        # any budget columns are applied.
+        results.append(
+            {
+                "psf_flux": flux.flux,
+                "psf_flux_err_fit": flux.flux_error,
+                "psf_flux_err": flux.flux_error,
+                **out.host_columns(),
+            }
+        )
+    before, after = results
+    assert before["uq_valid"][1] and after["uq_valid"][1]
+    for axis in "xy":
+        name = f"positive_{axis}_err"
+        assert after[name][1] == before[name][1]
+    np.testing.assert_array_equal(after["psf_flux_err"], singles.flux_error)
+    np.testing.assert_array_equal(
+        after["psf_flux_err_fit"], after["psf_flux_err"]
+    )
+    np.testing.assert_array_equal(after["psf_flux"], singles.flux)
+    assert np.isfinite(after["psf_flux_err"][[0, 2]]).all()
+    assert np.isnan(after["psf_flux_err"][1])
 
 
 def test_budget_uses_the_single_rows_position_and_flux(scene):

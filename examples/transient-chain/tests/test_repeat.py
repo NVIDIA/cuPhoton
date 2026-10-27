@@ -677,6 +677,24 @@ def test_repeat_needs_the_rows_load_returns():
         rc.repeat(df)
 
 
+def test_repeat_reads_catalogs_from_before_the_source_columns(tmp_path):
+    rng = np.random.default_rng(21)
+    sky = _sky(rng, n=30)
+    frames = [_catalog(rng, sky, e) for e in (1, 2)]
+    expected = rc.repeat(pd.concat(frames, ignore_index=True))
+    paths = []
+    for e, df in enumerate(frames):
+        path = tmp_path / f"catalog{e}.parquet"
+        df.drop(
+            columns=df.filter(regex=r"^(source_|affine_)").columns
+        ).to_parquet(path, index=False)
+        paths.append(path)
+    actual = rc.repeat(rc.load(paths))
+    for name in ("dipole center", "source position"):
+        assert actual["quantities"][name] == expected["quantities"][name]
+    assert actual["quantities"]["source position (either lobe)"] is None
+
+
 def test_load_reads_the_affine_beside_each_catalog(tmp_path):
     rng = np.random.default_rng(5)
     sky = _sky(rng, n=30)
