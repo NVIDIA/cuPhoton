@@ -200,7 +200,9 @@
     }
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 800 200");
+    const width = Math.max(320, Math.min(800, byId("trends").clientWidth));
+    const left = 70, right = width - 30;
+    svg.setAttribute("viewBox", "0 0 " + width + " 200");
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", name + " by " + (timed ? "observation time" : "sample sequence"));
     const add = (tag, attrs, text) => {
@@ -218,22 +220,22 @@
     const low = Math.min(...values), high = Math.max(...values);
     const margin = (high - low || Math.abs(high) * .1 || 1) * .08;
     const ymin = low - margin, ymax = high + margin;
-    const x = value => 90 + (value - xmin) / (xmax - xmin || 1) * 680;
+    const x = value => left + (value - xmin) / (xmax - xmin || 1) * (right - left);
     const y = value => 155 - (transformed(value) - ymin) / (ymax - ymin) * 125;
     const labels = logarithmic ? [Math.pow(10, low), Math.pow(10, high)] : [low, high];
     for (const value of [...new Set(labels)]) {
-      add("line", {x1: 90, y1: y(value), x2: 770, y2: y(value), stroke: "#28384b"});
-      add("text", {x: 80, y: y(value) + 4, "text-anchor": "end", fill: "#aabbd0", "font-size": 11}, valueText(value));
+      add("line", {x1: left, y1: y(value), x2: right, y2: y(value), stroke: "var(--line)"});
+      add("text", {x: left - 10, y: y(value) + 4, "text-anchor": "end", fill: "var(--muted)", "font-size": 11}, valueText(value));
     }
-    add("line", {x1: 90, y1: 160, x2: 770, y2: 160, stroke: "#526379"});
-    add("text", {x: 90, y: 180, fill: "#aabbd0", "font-size": 11}, valueText(xmin));
-    add("text", {x: 770, y: 180, fill: "#aabbd0", "font-size": 11, "text-anchor": "end"}, valueText(xmax));
-    add("text", {x: 430, y: 197, fill: "#aabbd0", "font-size": 11, "text-anchor": "middle"},
+    add("line", {x1: left, y1: 160, x2: right, y2: 160, stroke: "var(--line-strong)"});
+    add("text", {x: left, y: 180, fill: "var(--muted)", "font-size": 11}, valueText(xmin));
+    add("text", {x: right, y: 180, fill: "var(--muted)", "font-size": 11, "text-anchor": "end"}, valueText(xmax));
+    add("text", {x: (left + right) / 2, y: 197, fill: "var(--muted)", "font-size": 11, "text-anchor": "middle"},
       (timed ? "Observation start" + (timeUnit ? " (" + timeUnit + ")" : "") : "Sample sequence") + (logarithmic ? " · logarithmic values" : ""));
     let previous = null;
     for (const point of points) {
       if (!usable(point)) { previous = null; continue; }
-      if (previous) add("line", {x1: x(previous.x), y1: y(previous.m.value), x2: x(point.x), y2: y(point.m.value), stroke: "#8fd39b", "stroke-width": 2});
+      if (previous) add("line", {x1: x(previous.x), y1: y(previous.m.value), x2: x(point.x), y2: y(point.m.value), stroke: "var(--accent)", "stroke-width": 2});
       const sample = point.record.sample;
       const flagged = sample.findings.length > 0;
       const selected = sample.id === selectedId;
@@ -241,8 +243,8 @@
         sample.findings.some(f => f.category === "data_quality") ? "#83c9e9" : "#edbc76";
       if (flagged) add("line", {x1: x(point.x), y1: 24, x2: x(point.x), y2: 160, stroke: color, "stroke-dasharray": "3 5", opacity: .3});
       const circle = add("circle", {cx: x(point.x), cy: y(point.m.value), r: selected ? 6 : 4,
-        fill: selected ? "#edbc76" : flagged ? "#121d2a" : "#8fd39b",
-        stroke: flagged ? color : "#8fd39b", "stroke-width": flagged ? 2.5 : 1,
+        fill: selected ? "#edbc76" : flagged ? "var(--panel)" : "var(--accent)",
+        stroke: flagged ? color : "var(--accent)", "stroke-width": flagged ? 2.5 : 1,
         class: "trend-point", tabindex: 0, role: "button", "aria-label": sample.id + ": " + name + " " + valueText(point.m.value) + " " + unit});
       const title = document.createElementNS(ns, "title");
       title.textContent = sample.id + " · " + valueText(point.m.value) + " " + unit +
@@ -265,6 +267,13 @@
   }
 
   function updateControls() {
+    const home = byId("home-link");
+    home.hidden = !ui.home_url;
+    if (ui.home_url) {
+      home.href = ui.home_url;
+      home.textContent = "← " + (ui.home_label || "Back to site");
+    }
+    if (ui.description) byId("description").textContent = ui.description;
     byId("backend").textContent = ui.can_ask && ui.backend ? ui.backend : "";
     byId("access-control").hidden = !ui.live || !ui.can_ask || !ui.authentication_required;
     byId("interaction-status").textContent = !ui.live ?
@@ -280,7 +289,7 @@
     byId("scope-note").textContent = byId("scope").value === "selected" ?
       "Evidence: " + (selectedId || "no sample selected") :
       "The investigator can inspect this run within its configured evidence limits.";
-    byId("footer-mode").textContent = ui.live ? "Live monitor · saved state refreshes automatically." : "Offline snapshot · saved measurements and reports.";
+    byId("footer-mode").textContent = ui.live ? "Connected viewer · saved state refreshes automatically." : "Offline snapshot · saved measurements and reports.";
     document.querySelectorAll("button[data-cancel]").forEach(button => {
       button.disabled = disabled || cancelling.has(button.dataset.cancel);
     });
@@ -451,7 +460,7 @@
       const signature = JSON.stringify([state.records.map(record => [record.sample.id, record.digest]), state.collector, state.storage_error, state.errors, state.history_count, state.total_samples]);
       if (signature !== displaySignature) { displaySignature = signature; renderState(); }
       else { renderDomain(); renderReports(); updateControls(); }
-      byId("connection").textContent = "Live · updated " + new Date().toLocaleTimeString();
+      byId("connection").textContent = "Connected · updated " + new Date().toLocaleTimeString();
       byId("connection").classList.remove("error");
       if (requestedId !== selectedId) delay = 0;
     } catch (_) {
@@ -471,6 +480,7 @@
   byId("scope").onchange = updateControls;
   byId("access-token").oninput = () => { updateControls(); renderReports(); };
   byId("related-reports").onchange = () => renderReports(true);
+  window.addEventListener("resize", renderPlots);
   window.addEventListener("hashchange", () => {
     try { selectSample(decodeURIComponent(location.hash.slice(1))); } catch (_) { /* Invalid bookmark. */ }
   });

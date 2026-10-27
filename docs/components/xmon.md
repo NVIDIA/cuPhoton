@@ -67,7 +67,9 @@ so the dashboard's relative API requests stay inside their mount. Live pages
 load domain views as samples are selected; offline exports include all visible
 samples. A collection server can reuse `Dashboard.render(ui=...)` and
 `Dashboard.display_sample(sample_id, ui=...)`, calling `Monitor.refresh()`
-before reading independently updated state.
+before reading independently updated state. The optional `ui` fields
+`home_url`, `home_label` and `description` supply navigation and explanatory
+text for the host application.
 
 ## Connect an application
 
