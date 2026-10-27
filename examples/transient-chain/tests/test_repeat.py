@@ -542,6 +542,41 @@ def test_anchor_fit_needs_enough_well_spread_anchors():
     assert rep["quantities"]["source position"] is None
 
 
+@pytest.mark.parametrize(
+    "column,value", [("ra", np.nan), ("dec", np.inf), ("x", np.nan)]
+)
+def test_repeat_uses_finite_anchors_without_losing_valid_sources(
+    column, value
+):
+    rng = np.random.default_rng(112)
+    sky = _sky(rng, n=30)
+    df = pd.concat([_catalog(rng, sky, e) for e in (1, 2)], ignore_index=True)
+    df.loc[0, column] = value
+    rep = rc.repeat(df)
+    detector = rep["detectors"]["D1"]
+    assert detector["exposures_without_anchor_fit"] == []
+    assert detector["anchors"]["1"]["fit"]["anchors"] == 29
+    assert detector["anchors"]["2"]["fit"]["anchors"] == 30
+    for quantity in rep["quantities"].values():
+        assert quantity["n_groups"] == 29
+        assert np.isfinite(quantity["arms"]["full"]["chi2_per_dof"])
+
+
+@pytest.mark.parametrize("bad_count,skipped", [(25, ["1"]), (60, ["1", "2"])])
+def test_repeat_reports_exposures_without_enough_finite_anchors(
+    bad_count, skipped
+):
+    rng = np.random.default_rng(112)
+    sky = _sky(rng, n=30)
+    df = pd.concat([_catalog(rng, sky, e) for e in (1, 2)], ignore_index=True)
+    df.loc[: bad_count - 1, "ra"] = np.nan
+    rep = rc.repeat(df)
+    detector = rep["detectors"]["D1"]
+    assert detector["exposures_without_anchor_fit"] == skipped
+    assert all(detector["anchors"][e]["fit"] is None for e in skipped)
+    assert all(quantity is None for quantity in rep["quantities"].values())
+
+
 def test_repeat_needs_the_rows_load_returns():
     rng = np.random.default_rng(9)
     df = _catalog(rng, _sky(rng, n=12), 1).drop(columns=["affine_A"])

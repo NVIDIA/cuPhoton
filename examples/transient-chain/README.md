@@ -424,8 +424,9 @@ several detectors are linked separately and pooled.
 Positions reach the sky in two steps. The refine affine from the `summary.json` beside each
 per-item catalog (identity when there is none) moves each sub-pixel position into the reference
 frame. The catalog's own `ra`/`dec` at the integer candidate pixel then anchors it: per exposure
-an affine pixel-to-tangent-plane map is fitted to those anchors (at least 10 of them, in a layout
-that is not a line; exposures that fail are listed under `detectors.<id>.exposures_without_anchor_fit`),
+an affine pixel-to-tangent-plane map is fitted to finite anchors (at least 10, with a centered,
+unit-scaled design condition number at most 1e3; exposures that fail are listed under
+`detectors.<id>.exposures_without_anchor_fit`),
 and a detection's sky position is its anchor's plus the linear part of that map applied to the
 offset from the integer pixel. The header WCS's distortion stays in the anchors, and dithers and
 rotations between exposures are not scatter. `detectors.<id>.anchors.<exposure>` records each
@@ -439,7 +440,8 @@ group seen in fewer than two exposures, or twice in one, is dropped.
 Two quantities are scored, each on the classes whose columns describe the source. The classes come
 from `quality_flags`, `converged` and `uncertainty_valid`: `resolved` (two supported lobes),
 `overlapping`, `single` (a brightening source: only the positive lobe supported), `fading` (only
-the negative lobe supported), `failed` (width out of range or no lobe at the candidate) and
+the negative lobe supported), `failed` (both lobes unsupported, width out of range, no lobe at the
+candidate, or a lobe outside the stamp) and
 `invalid` (no usable covariance). The dipole center (`center_*`) is scored on resolved and
 overlapping candidates; the source position (`positive_*`) on resolved and single ones. A fading
 single's source is its negative lobe, which the catalog does not carry as a position, so that class
@@ -449,8 +451,10 @@ For each quantity, overall and per class, the report gives two statistics: the p
 per degree of freedom, and the median per-group ratio (the median over groups of chi-square over
 the chi-square median for the group's degrees of freedom, 1 for correct bars at any group size).
 Both are given for six arms: `<q>_err`, `<q>_err_fit` alone, and `<q>_err` with each of the corr,
-kfit, kmatch and mis terms removed in quadrature. Every arm uses the same rows, those whose
-`<q>_err` is defined on both axes in groups that keep two detections. Each arm's pixel covariance
+kfit, kmatch and mis terms removed in quadrature. All arms start with the rows whose `<q>_err`
+is finite and positive on both axes in groups that keep two detections. Each arm then drops rows
+with nonfinite or non-positive-definite covariance, so its group count and degrees of freedom can
+differ. Each arm's pixel covariance
 is transformed by the refine affine and the anchor map into the tangent plane. The fit's x-y
 covariance is included when available; other terms contribute their reported per-axis variances.
 The mean position and chi-square use the resulting full two-dimensional covariance. The JSON holds
@@ -458,8 +462,8 @@ every number; the printed table shows quantity, class, groups, arm, chi-square p
 freedom and the median ratio.
 
 What the test cannot see, stated in its output: the reference's noise is the same in every
-exposure of a detector and never scatters between them, so every arm keeps a term the test does
-not measure and a chi-square below 1 by that share is still consistent; and a bias common to all
+exposure of a detector and never scatters between them, so an arm that includes this noise can
+have a chi-square below 1 by that share even with correct error bars; and a bias common to all
 exposures (a reference position error, a systematic of the fit) moves every detection alike and
 passes unseen.
 

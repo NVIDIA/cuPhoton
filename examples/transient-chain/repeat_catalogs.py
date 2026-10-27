@@ -70,8 +70,8 @@ QUANTITIES = {
 CLASSES = ("invalid", "failed", "overlapping", "fading", "single", "resolved")
 BLIND_SPOTS = (
     "The reference's noise is shared by every exposure of a detector and "
-    "does not scatter between them: each arm keeps a term the test cannot "
-    "measure, so a chi-square below 1 by that share is still consistent.",
+    "does not scatter between them: an arm that includes this noise can "
+    "have a chi-square below 1 by that share even with correct error bars.",
     "A bias common to all exposures (a reference position error, a "
     "systematic of the fit) moves every detection alike and passes unseen.",
 )
@@ -151,11 +151,12 @@ class AnchorFit:
 
 def fit_anchor_affine(x, y, ex, ey) -> AnchorFit | None:
     """The affine map from the integer-pixel anchors of one exposure; None
-    with fewer than ``MIN_ANCHORS`` anchors or a layout whose design on
+    with fewer than ``MIN_ANCHORS`` finite anchors or a layout whose design on
     centered, unit-scaled coordinates is conditioned worse than
     ``MAX_ANCHOR_CONDITION`` (anchors along a line cannot fix the map).
     """
-    x, y = np.asarray(x, float), np.asarray(y, float)
+    anchors = np.column_stack([x, y, ex, ey]).astype(float)
+    x, y, ex, ey = anchors[np.isfinite(anchors).all(axis=1)].T
     if len(x) < MIN_ANCHORS:
         return None
     centered = np.column_stack([x - x.mean(), y - y.mean()])
@@ -338,8 +339,8 @@ def repeat_chi2(group, x, y, var_x, var_y, cov_xy=None) -> dict:
 
 def score(linked: pd.DataFrame, prefix: str) -> dict:
     """Every arm on the linked detections whose full error bar is defined
-    and positive on both axes, in groups that keep at least two of them, so
-    the arms are compared on the same sources.
+    and positive on both axes, in groups that keep at least two of them.
+    Each arm then excludes rows whose own covariance is unusable.
     """
     ok = np.ones(len(linked), bool)
     for a in ("x", "y"):
@@ -426,7 +427,8 @@ def place(df: pd.DataFrame, detectors: dict) -> pd.DataFrame:
     """
     placed = []
     for det, d in df.groupby("ccd_id"):
-        angles = np.radians(d.ra.to_numpy(float))
+        sky = d[np.isfinite(d[["ra", "dec"]]).all(axis=1)]
+        angles = np.radians(sky.ra.to_numpy(float))
         ra0 = (
             float(
                 np.degrees(
@@ -434,8 +436,10 @@ def place(df: pd.DataFrame, detectors: dict) -> pd.DataFrame:
                 )
             )
             % 360.0
+            if len(sky)
+            else math.nan
         )
-        dec0 = float(np.median(d.dec))
+        dec0 = float(np.median(sky.dec)) if len(sky) else math.nan
         info = {
             "exposures": sorted(d.exposure_id.unique().tolist()),
             "exposures_without_anchor_fit": [],
