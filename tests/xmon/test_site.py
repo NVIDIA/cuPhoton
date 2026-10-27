@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import sys
@@ -106,6 +107,23 @@ def test_site_reports_actionable_configuration_errors(
         serve_site(tmp_path)
 
 
+def test_site_reports_the_cause_of_application_import_failure(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "xmon-site.toml").write_text(
+        '[site]\napplication = "example_site:serve"\n'
+    )
+
+    def unavailable(module):
+        raise ModuleNotFoundError("No module named 'application_dependency'")
+
+    monkeypatch.setattr(
+        "cuphoton.xmon.site.importlib.import_module", unavailable
+    )
+    with pytest.raises(ValueError, match="application_dependency"):
+        serve_site(tmp_path)
+
+
 @pytest.mark.parametrize("prefix", ["relative", "//site", "/a/../b", "/a?b"])
 def test_site_prefix_requires_a_plain_absolute_mount(prefix):
     with pytest.raises(ValueError):
@@ -136,6 +154,16 @@ def test_mounted_dashboard_refresh_and_lazy_domain_views(tmp_path):
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     try:
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_port
+        )
+        connection.request("GET", "/review/run?view=saved")
+        redirect = connection.getresponse()
+        assert redirect.status == 308
+        assert redirect.getheader("Location") == "/review/run/?view=saved"
+        assert redirect.getheader("Cache-Control") == "no-store"
+        redirect.read()
+        connection.close()
         with urllib.request.urlopen(base + "/review/run") as response:
             assert response.url.endswith("/review/run/")
             initial = response.read().decode()

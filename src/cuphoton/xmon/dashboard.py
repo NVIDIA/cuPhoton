@@ -212,7 +212,11 @@ def make_server(
             parsed = urlsplit(self.path)
             if prefix != "/" and parsed.path == prefix.rstrip("/"):
                 self.send_response(308)
-                self.send_header("Location", prefix)
+                location = prefix
+                if parsed.query:
+                    location += "?" + parsed.query
+                self.send_header("Location", location)
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
