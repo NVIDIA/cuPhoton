@@ -45,6 +45,8 @@ _CUTILE_MMA_LARGE_ROWS_PER_TILE = 128
 # Fits with at least this many rows use the 128-row tile specialization.
 _CUTILE_MMA_LARGE_ROW_THRESHOLD = 1 << 20
 _CUTILE_MMA_K_TILE = 16
+# Element budget for batched candidate stamps (8 MiB of float64 values).
+_STAMP_CHUNK_ELEMENTS = 2**20
 _NUMBA_ACCUMULATE_KERNEL: Any | None = None
 ct: Any | None = None
 
@@ -604,31 +606,9 @@ def build_compact_source_stamp_mask(
     )
     peak_y, peak_x = peak_y[inside], peak_x[inside]
     offsets = xp.arange(-half, half + 1)
-    rows = peak_y[:, None, None] + offsets[None, :, None]
-    columns = peak_x[:, None, None] + offsets[None, None, :]
-    stamp_valid = base_valid[rows, columns].all(axis=(1, 2))
-    peak_y, peak_x = peak_y[stamp_valid], peak_x[stamp_valid]
-    stamps = array[rows[stamp_valid], columns[stamp_valid]]
-    local_background = xp.median(
-        stamps.reshape(len(peak_y), stamp_size * stamp_size), axis=1
-    )
-    weights = xp.clip(stamps - local_background[:, None, None], 0.0, None)
-    total_weight = weights.sum(axis=(1, 2))
     center_half = compact_core_size // 2
-    center_weight = weights[
-        :,
-        half - center_half : half + center_half + 1,
-        half - center_half : half + center_half + 1,
-    ].sum(axis=(1, 2))
     yy, xx = xp.meshgrid(offsets, offsets, indexing="ij")
-    radial = (weights * (xx * xx + yy * yy)[None]).sum(axis=(1, 2))
-    local_signal = stamps[:, half, half] - local_background
-    score = (
-        local_signal
-        if variance_arr is None
-        else local_signal / xp.sqrt(variance_arr[peak_y, peak_x])
-    )
-    keep = total_weight > 0.0
+    radius_sq = xx * xx + yy * yy
     candidate_dtype = np.dtype(
         [
             ("score", np.float64),
@@ -638,21 +618,56 @@ def build_compact_source_stamp_mask(
             ("x", np.int64),
         ]
     )
-    candidates = np.empty(int(keep.sum()), dtype=candidate_dtype).view(
-        np.recarray
-    )
-    candidates.score = to_host(score[keep])
-    candidates.compact_fraction = to_host(
-        center_weight[keep] / total_weight[keep]
-    )
-    candidates.negative_radial = -to_host(radial[keep] / total_weight[keep])
-    candidates.y = to_host(peak_y[keep])
-    candidates.x = to_host(peak_x[keep])
-    if len(candidates) == 0:
+    candidate_chunks = []
+    chunk_size = max(1, _STAMP_CHUNK_ELEMENTS // (stamp_size * stamp_size))
+    for start in range(0, len(peak_y), chunk_size):
+        chunk_y = peak_y[start : start + chunk_size]
+        chunk_x = peak_x[start : start + chunk_size]
+        rows = chunk_y[:, None, None] + offsets[None, :, None]
+        columns = chunk_x[:, None, None] + offsets[None, None, :]
+        stamp_valid = base_valid[rows, columns].all(axis=(1, 2))
+        chunk_y, chunk_x = chunk_y[stamp_valid], chunk_x[stamp_valid]
+        if not len(chunk_y):
+            continue
+        stamps = array[rows[stamp_valid], columns[stamp_valid]]
+        local_background = xp.median(
+            stamps.reshape(len(chunk_y), stamp_size * stamp_size), axis=1
+        )
+        weights = xp.clip(stamps - local_background[:, None, None], 0.0, None)
+        total_weight = weights.sum(axis=(1, 2))
+        center_weight = weights[
+            :,
+            half - center_half : half + center_half + 1,
+            half - center_half : half + center_half + 1,
+        ].sum(axis=(1, 2))
+        radial = (weights * radius_sq[None]).sum(axis=(1, 2))
+        local_signal = stamps[:, half, half] - local_background
+        score = (
+            local_signal
+            if variance_arr is None
+            else local_signal / xp.sqrt(variance_arr[chunk_y, chunk_x])
+        )
+        keep = total_weight > 0.0
+        count = int(keep.sum())
+        if not count:
+            continue
+        candidates = np.empty(count, dtype=candidate_dtype).view(np.recarray)
+        candidates.score = to_host(score[keep])
+        candidates.compact_fraction = to_host(
+            center_weight[keep] / total_weight[keep]
+        )
+        candidates.negative_radial = -to_host(
+            radial[keep] / total_weight[keep]
+        )
+        candidates.y = to_host(chunk_y[keep])
+        candidates.x = to_host(chunk_x[keep])
+        candidate_chunks.append(candidates)
+    if not candidate_chunks:
         raise ValueError(
             "no valid compact-source stamps remain after finite-mask "
             "filtering"
         )
+    candidates = np.concatenate(candidate_chunks).view(np.recarray)
     # Order on keys rounded well below their noise so that two planted
     # sources with equal scores sort the same on every backend (device
     # sums differ from host sums at the 1e-16 level); y and x break ties.

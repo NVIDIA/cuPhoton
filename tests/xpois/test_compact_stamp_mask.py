@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cuphoton.xpois import build_compact_source_stamp_mask
+from cuphoton.xpois import build_compact_source_stamp_mask, ois
 
 
 def _reference_compact_source_stamp_mask(
@@ -168,6 +168,37 @@ def test_valid_mask_and_small_stamps_match_reference_scan():
     _assert_matches_reference(result, reference)
 
 
+def test_many_candidates_use_bounded_stamp_batches(monkeypatch):
+    image = np.zeros((161, 161))
+    image[8:153:8, 8:153:8] = np.arange(1, 362).reshape(19, 19)
+    valid_mask = np.ones(image.shape, dtype=bool)
+    valid_mask[9, :] = False  # Reject every stamp in the first chunks.
+    options = dict(
+        valid_mask=valid_mask,
+        stamp_size=7,
+        max_stamps=5,
+        peak_percentile=90.0,
+        background_filter_size=3,
+        peak_filter_size=3,
+    )
+    reference = _reference_compact_source_stamp_mask(image, **options)
+    budget = 7 * 7 * 7
+    monkeypatch.setattr(ois, "_STAMP_CHUNK_ELEMENTS", budget, raising=False)
+    median = np.median
+    measured_shapes = []
+
+    def bounded_median(values, *args, **kwargs):
+        if kwargs.get("axis") == 1:
+            measured_shapes.append(values.shape)
+            assert values.size <= budget
+        return median(values, *args, **kwargs)
+
+    monkeypatch.setattr(np, "median", bounded_median)
+    result = build_compact_source_stamp_mask(image, **options)
+    assert len(measured_shapes) > 1
+    _assert_matches_reference(result, reference)
+
+
 @pytest.mark.parametrize("scale", [1e-9, 1.0, 1e9])
 def test_source_ranking_preserves_flux_units(scale):
     image = np.zeros((41, 61))
@@ -200,8 +231,9 @@ def test_rejected_stamps_report_no_valid_sources(masked):
         )
 
 
-def test_cupy_input_returns_device_mask_and_host_diagnostics():
+def test_cupy_input_returns_device_mask_and_host_diagnostics(monkeypatch):
     cupy = pytest.importorskip("cupy")
+    monkeypatch.setattr(ois, "_STAMP_CHUNK_ELEMENTS", 3 * 21 * 21)
     image = _scene(shape=(300, 400), count=60)
     variance = np.full(image.shape, 9.0)
     host = build_compact_source_stamp_mask(

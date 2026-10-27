@@ -94,6 +94,7 @@ def forced_psf_photometry(
         kernel = xp.asarray(psf, dtype=xp.float64)
         if kernel.shape != data.shape:
             raise ValueError("psf must share the shape of images")
+        kernel = xp.where(good, kernel, 0.0)
 
     information = (weight * kernel * kernel).sum(axis=(1, 2))
     valid = (

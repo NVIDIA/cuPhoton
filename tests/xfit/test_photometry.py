@@ -67,6 +67,34 @@ def test_invalid_rows_return_nan():
     assert np.isnan(result.flux_error[1:]).all()
 
 
+@pytest.mark.parametrize("nonfinite", [np.nan, np.inf])
+@pytest.mark.parametrize("unusable", ["mask", "image", "variance"])
+def test_supplied_psf_nonfinite_pixels_follow_image_validity(
+    nonfinite, unusable
+):
+    images = np.full((2, 3, 3), 3.0)
+    variance = np.ones_like(images)
+    mask = np.ones_like(images, dtype=bool)
+    psf = np.ones_like(images)
+    psf[:, 0, 0] = nonfinite
+    if unusable == "mask":
+        mask[0, 0, 0] = False
+    elif unusable == "image":
+        images[0, 0, 0] = np.nan
+    else:
+        variance[0, 0, 0] = 0.0
+    with np.errstate(invalid="ignore"):
+        result = forced_psf_photometry(
+            images, variance, np.zeros((2, 2)), 1.0, mask=mask, psf=psf
+        )
+    # The second stamp's bad PSF pixel is usable, so it remains invalid.
+    assert result.valid.tolist() == [True, False]
+    assert result.flux[0] == pytest.approx(3.0)
+    assert result.flux_error[0] == pytest.approx(1.0 / np.sqrt(8))
+    assert np.isnan(result.flux[1])
+    assert np.isnan(result.flux_error[1])
+
+
 def test_shape_validation():
     images, variance, positions = _sources(2)
     with pytest.raises(ValueError, match="positions"):
