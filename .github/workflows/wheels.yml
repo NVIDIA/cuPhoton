@@ -121,7 +121,7 @@ jobs:
           path: wheelhouse
       - name: Pull the pinned Python image
         id: python-image
-        timeout-minutes: 14
+        timeout-minutes: 15
         env:
           PYTHON_IMAGE: ${{ matrix.python.image }}
         run: |
