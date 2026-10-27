@@ -442,6 +442,11 @@ through the subtraction kernel, is not in that variance, so the standard errors 
 difference image's noise by that amount. Without a variance plane, xFit scales each covariance by
 the fit's reduced chi-square, which estimates the noise from the stamp's residuals.
 
+These are local errors conditional on the supplied diagonal weights. A valid
+covariance does not establish calibrated coverage for the difference image,
+and reduced-chi-square scaling does not account for spatial correlation or
+separate noise from model mismatch.
+
 A single source leaves one lobe in the difference image. The one-lobe model fits
 that source without a spare lobe.
 Step 8b refits every candidate whose quality flags leave exactly one lobe unsupported with the
