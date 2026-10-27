@@ -483,7 +483,19 @@ class Investigator:
                         domain_query=diagnostic if domain_query else None,
                         domain_views=domain_views,
                     )
-                    answer = _validate_answer(answer, evidence)
+                    try:
+                        answer = _validate_answer(answer, evidence)
+                    except ValueError as exc:
+                        # These validator messages are fixed descriptions,
+                        # never model response content.
+                        raise InferenceError(
+                            f"NOOA response failed evidence validation: {exc}"
+                        ) from exc
+                    except (KeyError, TypeError) as exc:
+                        raise InferenceError(
+                            "NOOA response failed evidence validation: "
+                            "invalid answer structure"
+                        ) from exc
                 else:
                     emit(
                         {

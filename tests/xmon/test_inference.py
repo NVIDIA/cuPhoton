@@ -169,6 +169,59 @@ def test_reject_incorrect_evidence_and_unsupported_capability(
     assert seen[-1]["body"]["response_format"] == {"type": "json_object"}
 
 
+@pytest.mark.parametrize(
+    ("changed", "reason"),
+    [
+        (
+            {"value": 999},
+            "citation does not match the recorded measurement",
+        ),
+        ({"sample_id": ["observation"]}, "invalid answer structure"),
+    ],
+)
+def test_nooa_invalid_answer_reports_validation_not_transport(
+    tmp_path, monkeypatch, changed, reason
+):
+    monitor = make_monitor(tmp_path)
+    before = monitor.snapshot()["samples"]
+    answer = {
+        "narrative": "private response text must not enter a failed report",
+        "citations": [
+            {
+                "sample_id": "observation",
+                "revision": 1,
+                "measurement": "flux",
+                "value": 2.5,
+                "unit": "arb",
+                **changed,
+            }
+        ],
+    }
+
+    async def completed_nooa(*args, **kwargs):
+        return answer
+
+    monkeypatch.setattr("cuphoton.xmon.nooa_backend.run_nooa", completed_nooa)
+    investigator = Investigator(
+        InferenceConfig(
+            "http://inference.example/v1", "custom", backend="nooa"
+        )
+    )
+    report = asyncio.run(investigator.investigate(monitor, ["observation"]))
+    assert report["status"] == "failed"
+    assert report["diagnostic"] == (
+        "NOOA response failed evidence validation: " + reason
+    )
+    assert answer["narrative"] not in json.dumps(report)
+    assert monitor.snapshot()["reports"][-1] == report
+    assert monitor.snapshot()["samples"] == before
+
+    answer["citations"][0].update(sample_id="observation", value=2.5)
+    report = asyncio.run(investigator.investigate(monitor, ["observation"]))
+    assert report["status"] == "completed"
+    assert report["citations"][0]["value"] == 2.5
+
+
 def test_bounds_missing_credentials_and_timeouts(
     tmp_path, monkeypatch, endpoint
 ):
