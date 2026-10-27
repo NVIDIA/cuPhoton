@@ -10,12 +10,15 @@ SPDX-License-Identifier: Apache-2.0 -->
 <style>__STYLE__</style>
 </head>
 <body>
+<a class="skip-link" href="#workspace">Skip to measurements</a>
 <header>
-  <div class="section-head"><div class="brand">cuPhoton <b>xMon</b></div><span id="connection" class="badge" role="status">Saved snapshot</span></div>
+  <div class="section-head masthead"><div class="brand"><span class="brand-mark" aria-hidden="true"></span>cuPhoton <b>xMon</b></div><span id="connection" class="badge connection" role="status">Saved snapshot</span></div>
+  <a id="home-link" class="home-link" hidden>Back to site</a>
+  <p class="eyebrow">Scientific monitoring</p>
   <h1>__TITLE__</h1>
-  <p>Scientific measurements · deterministic findings · separate model interpretation</p>
+  <p id="description" class="description">Explore measurements, inspect findings and trace interpretations to recorded evidence.</p>
 </header>
-<main>
+<main id="workspace">
   <section class="overview" aria-label="Run status">
     <div><small>RUN</small><strong id="run"></strong></div>
     <div><small>SAMPLES</small><strong id="count"></strong></div>
@@ -25,6 +28,7 @@ SPDX-License-Identifier: Apache-2.0 -->
   <div id="notice" role="status"></div>
   <div class="workspace">
     <aside>
+      <div class="section-head"><h2 class="sidebar-title">Samples</h2><span class="eyebrow">Explore</span></div>
       <label for="filter">Filter samples</label><input id="filter" type="search" placeholder="Identity or finding">
       <label for="category">Finding category</label>
       <select id="category"><option value="">All samples</option><option value="scientific">Scientific interest</option><option value="data_quality">Data quality</option><option value="processing">Processing</option></select>
@@ -45,7 +49,7 @@ SPDX-License-Identifier: Apache-2.0 -->
         <div class="section-head"><h2 id="sample-title">Select a sample</h2><span id="revision" class="badge"></span></div>
         <p id="times" class="muted"></p><div id="findings"></div>
         <div class="table-wrap"><table><thead><tr><th>Measurement</th><th>Value</th><th>Unit</th><th>Status</th><th>Coverage</th></tr></thead><tbody id="measurements"></tbody></table></div>
-        <div id="domain-panels">__PANELS__</div>
+        <div id="domain-panels" aria-label="Application view">__PANELS__</div>
         <details><summary>Configuration, provenance and artifacts</summary><pre id="provenance"></pre></details>
       </section>
       <section class="card" aria-labelledby="questions-title">
@@ -66,7 +70,7 @@ SPDX-License-Identifier: Apache-2.0 -->
     </article>
   </div>
 </main>
-<footer><span id="footer-mode">Offline snapshot</span><br>Copyright © 2026 NVIDIA CORPORATION &amp; AFFILIATES. Apache License 2.0. Built-in HTML, CSS and JavaScript contain no bundled third-party libraries or fonts.</footer>
+<footer><div class="section-head"><span class="brand">cuPhoton <b>xMon</b></span><span id="footer-mode">Offline snapshot</span></div><p>Copyright © 2026 NVIDIA CORPORATION &amp; AFFILIATES. Apache License 2.0.</p></footer>
 <script id="state" type="application/json">__DATA__</script>
 <script>__SCRIPT__</script>
 </body>
