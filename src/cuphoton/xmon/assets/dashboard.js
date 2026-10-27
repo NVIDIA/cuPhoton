@@ -23,6 +23,7 @@
   let metricNames = [];
   let refreshTimer;
   let refreshing = false;
+  let connected = true;
   let submitting = false;
   let reportSignature = "";
   let displaySignature = "";
@@ -82,16 +83,19 @@
     const cached = domainViews.get(record.sample.id);
     const current = cached && cached.digest === record.digest ? cached.html : null;
     if (displayedDomain && displayedDomain.id === record.sample.id &&
-        displayedDomain.digest === record.digest && displayedDomain.html === current) return;
-    displayedDomain = {id: record.sample.id, digest: record.digest, html: current};
+        displayedDomain.digest === record.digest && displayedDomain.html === current &&
+        displayedDomain.connected === connected) return;
+    displayedDomain = {id: record.sample.id, digest: record.digest, html: current, connected};
     const panel = element("section", undefined, "domain");
     panel.dataset.sampleId = record.sample.id;
     if (current !== null) {
       // Only trusted, application-authored HTML from this server is inserted.
       panel.innerHTML = current;
     } else {
-      panel.append(element("p", ui.live ? "Loading the current application view…" :
-        "This sample's application view is unavailable in this snapshot.", "muted"));
+      const message = !ui.live ? "This sample's application view is unavailable in this snapshot." :
+        connected ? "Loading the current application view…" :
+        "Connection interrupted. This sample's application view will load when the monitor reconnects.";
+      panel.append(element("p", message, "muted"));
     }
     container.replaceChildren(panel);
   }
@@ -449,6 +453,7 @@
       if (!Array.isArray(next.records) || !Array.isArray(next.reports)) throw new Error("The monitor returned an incomplete snapshot.");
       state = next;
       ui = state.ui || ui;
+      connected = true;
       if (!state.records.some(record => record.sample.id === selectedId)) selectedId = state.records[0]?.sample.id || null;
       const view = state.domain_view;
       if (view && typeof view.html === "string") {
@@ -464,6 +469,8 @@
       byId("connection").classList.remove("error");
       if (requestedId !== selectedId) delay = 0;
     } catch (_) {
+      connected = false;
+      renderDomain();
       byId("connection").textContent = "Connection interrupted · showing last saved view";
       byId("connection").classList.add("error");
       delay = 5000;
@@ -480,6 +487,10 @@
   byId("scope").onchange = updateControls;
   byId("access-token").oninput = () => { updateControls(); renderReports(); };
   byId("related-reports").onchange = () => renderReports(true);
+  byId("skip-link").onclick = event => {
+    event.preventDefault();
+    byId("workspace").focus();
+  };
   window.addEventListener("resize", renderPlots);
   window.addEventListener("hashchange", () => {
     try { selectSample(decodeURIComponent(location.hash.slice(1))); } catch (_) { /* Invalid bookmark. */ }

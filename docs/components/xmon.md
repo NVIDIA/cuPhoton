@@ -69,7 +69,10 @@ samples. A collection server can reuse `Dashboard.render(ui=...)` and
 `Dashboard.display_sample(sample_id, ui=...)`, calling `Monitor.refresh()`
 before reading independently updated state. The optional `ui` fields
 `home_url`, `home_label` and `description` supply navigation and explanatory
-text for the host application.
+text for the host application. Pass the same `ui` configuration to both
+`render` and `display_sample` so navigation remains available after polling.
+The JSON and health routes also live beneath the mount, for example
+`/monitoring/run/api/state` and `/monitoring/run/health`.
 
 ## Connect an application
 

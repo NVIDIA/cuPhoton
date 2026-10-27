@@ -62,8 +62,8 @@ def serve_site(
         callback = getattr(importlib.import_module(module_name), attribute)
     except (ImportError, AttributeError) as exc:
         raise ValueError(
-            f"cannot load site application {application!r}; "
-            "install its package in the cuPhoton environment"
+            f"cannot load site application {application!r}: {exc}; "
+            "check that its package and dependencies are installed"
         ) from exc
     if not callable(callback):
         raise ValueError("site.application must refer to a callable")
