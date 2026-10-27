@@ -77,6 +77,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "viz",
         "ximage",
         "xmon-inference",
+        "xmon-nooa",
     }
 
 
