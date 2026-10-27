@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -15,6 +16,31 @@ from cuphoton.ximage.config import PsfSolveConfig, ReconstructionConfig
 from cuphoton.ximage.data import XImageBundle
 
 torch = pytest.importorskip("torch")
+
+
+@pytest.mark.parametrize("benchmark_limit", [None, 0, 2])
+def test_device_summary_preserves_unavailable_cudnn_benchmark_limit(
+    benchmark_limit: int | None,
+) -> None:
+    cpu_torch = SimpleNamespace(
+        __version__="cpu-test",
+        version=SimpleNamespace(cuda=None),
+        cuda=SimpleNamespace(is_available=lambda: False),
+        backends=SimpleNamespace(
+            cudnn=SimpleNamespace(
+                version=lambda: None,
+                benchmark=False,
+                benchmark_limit=benchmark_limit,
+                deterministic=False,
+            )
+        ),
+    )
+    summary = torch_backend._torch_device_summary(
+        cpu_torch, torch.device("cpu")
+    )
+    assert summary["cudnn_benchmark_limit"] == benchmark_limit
+    assert summary["cudnn_version"] is None
+    assert summary["cuda_available"] is False
 
 
 def _bundle(psfs: np.ndarray) -> XImageBundle:

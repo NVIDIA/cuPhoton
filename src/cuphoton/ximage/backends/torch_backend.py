@@ -1073,6 +1073,7 @@ def _psf_performance_summary(
 
 def _torch_device_summary(torch, device) -> dict[str, Any]:
     cuda_available = bool(torch.cuda.is_available())
+    benchmark_limit = torch.backends.cudnn.benchmark_limit
     summary = {
         "torch": getattr(torch, "__version__", None),
         "torch_cuda": getattr(torch.version, "cuda", None),
@@ -1083,7 +1084,9 @@ def _torch_device_summary(torch, device) -> dict[str, Any]:
         "max_memory_reserved_bytes": 0,
         "cudnn_version": torch.backends.cudnn.version(),
         "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
-        "cudnn_benchmark_limit": int(torch.backends.cudnn.benchmark_limit),
+        "cudnn_benchmark_limit": (
+            int(benchmark_limit) if benchmark_limit is not None else None
+        ),
         "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
     }
     if getattr(device, "type", None) != "cuda":
