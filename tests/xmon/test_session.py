@@ -78,8 +78,9 @@ def reports(monitor):
     return monitor.snapshot()["reports"]
 
 
+@pytest.mark.parametrize("prefix", ["/", "/review/run/"])
 def test_http_question_access_progress_and_saved_export(
-    tmp_path, monkeypatch, controlled
+    tmp_path, monkeypatch, controlled, prefix
 ):
     token = "fixture-investigation-access-token"
     monkeypatch.setenv("XMON_TEST_ACCESS", token)
@@ -93,7 +94,7 @@ def test_http_question_access_progress_and_saved_export(
     dashboard = Dashboard(
         monitor, render_sample=lambda item: f"<p>revision {item.revision}</p>"
     )
-    server = make_server(dashboard, port=0, session=session)
+    server = make_server(dashboard, port=0, session=session, prefix=prefix)
     session.start()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -101,7 +102,7 @@ def test_http_question_access_progress_and_saved_export(
 
     def post(access, origin=base):
         request = urllib.request.Request(
-            base + "/api/ask",
+            base + prefix + "api/ask",
             data=json.dumps(
                 {
                     "question": "Explain lag",
@@ -136,7 +137,7 @@ def test_http_question_access_progress_and_saved_export(
             )
         )
         with urllib.request.urlopen(
-            base + "/api/dashboard?sample_id=signal"
+            base + prefix + "api/dashboard?sample_id=signal"
         ) as response:
             display = json.load(response)
         assert display["ui"]["authentication_required"]

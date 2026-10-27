@@ -25,6 +25,7 @@ from .inference import InferenceConfig, Investigator
 from .monitor import Monitor
 from .quickstart import quickstart
 from .session import MonitorSession
+from .site import normalize_prefix, serve_site
 
 
 class _XMonCommand(InvariantAwareCommand):
@@ -80,13 +81,28 @@ class ExportCommand(_StateCommand):
         )
 
 
-class ServeCommand(_StateCommand):
-    _description_ = "Serve a live dashboard with optional investigation."
+class ServeCommand(_XMonCommand):
+    _description_ = "Serve a saved monitor or installed application site."
+    state: Path | None = None
+    site: Path | None = None
+    prefix: str | None = None
     host = "127.0.0.1"
     port = 8765
     inference_config: Path | None = None
     auto_investigate = False
     access_token_env: str | None = None
+
+    class StateArg(PathValueInvariant):
+        _arg = "--state"
+        _help = "Existing xMon state directory; use --state or --site."
+
+    class SiteArg(PathValueInvariant):
+        _arg = "--site"
+        _help = "Application directory or its trusted xmon-site.toml."
+
+    class PrefixArg(StringInvariant):
+        _arg = "--prefix"
+        _help = "URL mount path; defaults to the site's prefix or /."
 
     class InferenceConfigArg(PathValueInvariant):
         _arg = "--inference-config"
@@ -110,8 +126,28 @@ class ServeCommand(_StateCommand):
         _arg = "--port"
         _help = "Listen port."
         _default = 8765
+        _min = 0
+        _max = 65535
 
     def execute(self) -> None:
+        if (self.state is None) == (self.site is None):
+            raise ValueError("supply exactly one of --state or --site")
+        if self.site is not None:
+            if (
+                self.inference_config
+                or self.auto_investigate
+                or self.access_token_env
+            ):
+                raise ValueError(
+                    "site applications configure their own investigation; "
+                    "inference flags require --state"
+                )
+            serve_site(
+                self.site, host=self.host, port=self.port, prefix=self.prefix
+            )
+            return
+        assert self.state is not None
+        prefix = normalize_prefix(self.prefix or "/")
         config = (
             InferenceConfig.from_toml(self.inference_config)
             if self.inference_config
@@ -137,6 +173,7 @@ class ServeCommand(_StateCommand):
             host=self.host,
             port=self.port,
             session=session,
+            prefix=prefix,
         )
 
 
