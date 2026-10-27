@@ -680,7 +680,9 @@ def test_error_budget_runs_step_8c(scene, enabled):
         assert summary["excluded"] == {"corr": "no reference variance plane"}
         assert summary["kernel_fit_form"] == "plain"
         assert summary["invalid_window"] == 1
-        assert res.control_bytes == 3 * n * 2 * 8 + 4 * n
+        mismatch_bytes = 3 * summary["kernel_mismatch"]["n"] * 8
+        assert res.control_bytes == 3 * n * 2 * 8 + 4 * n + mismatch_bytes
+        assert "control_bytes" not in summary["kernel_mismatch"]
         assert np.all(cols["center_x_err"][:3] > 0.05)
     else:
         assert summary == {"terms": ["fit"], "excluded": {}, "disabled": True}
@@ -688,6 +690,32 @@ def test_error_budget_runs_step_8c(scene, enabled):
         np.testing.assert_array_equal(cols["center_x_err"], 0.05)
         np.testing.assert_array_equal(cols["psf_flux_err"], 40.0)
         assert cols["uq_valid"].all()
+
+
+@pytest.mark.parametrize("stars", ["kept", "too_few", "rejected"])
+def test_control_bytes_include_mismatch_downloads(scene, monkeypatch, stars):
+    downloaded = []
+    to_host = ops.to_host
+
+    def record_download(array):
+        host = to_host(array)
+        downloaded.append(host.nbytes)
+        return host
+
+    monkeypatch.setattr(ops, "to_host", record_download)
+    star_xy = scene.star_xy
+    if stars == "too_few":
+        star_xy = star_xy[:1]
+    elif stars == "rejected":
+        star_xy = np.zeros_like(star_xy)
+    context = scene.context(star_xy=star_xy)
+    result = uq.budget(context, **scene.inputs())
+    assert result.control_bytes == sum(downloaded)
+    assert "control_bytes" not in result.diagnostics["kernel_mismatch"]
+    if stars == "kept":
+        assert context.control_bytes > 0
+    else:
+        assert context.control_bytes == 0
 
 
 def test_far_lobe_is_capped_out_of_the_center_stamp(scene):

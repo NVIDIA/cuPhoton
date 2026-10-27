@@ -53,12 +53,13 @@ the request.
 | Detect | hotspot rule (threshold, 4-connected label, per-component peak and centroid) | the hotspot table |
 | Stamps | search, template = search minus difference, difference; per-stamp noise-match factor | none |
 | xFit | `fit_dipoles_device` on float64 difference stamps, weighted by the target variance, with masked and nonfinite pixels excluded | none |
-| Budget | the kernel-fit covariance once per item, then per candidate the correlation windows, forced fluxes and kernel-fit terms | the candidate positions, for the misalignment model and the kernel-mismatch solve |
+| Budget | the kernel-fit covariance once per item, then per candidate the correlation windows, forced fluxes and kernel-fit terms | candidate positions for the misalignment model, kept-star fluxes and variances for the kernel-mismatch solve, and validity flags |
 | XScan | DLPack handoff of the scaled stamps to Torch, `predict_tensors` | none |
 | End | one packed download: positions, fit parameters, uncertainties, logits, probabilities | `catalog.parquet` and `summary.json` per item |
 
 `summary.json` splits host traffic into `transfers.terminal_bytes` (the catalog),
-`control_bytes` (star lists, hotspot table, candidate filter) and `diagnostic_bytes`
+`control_bytes` (star lists, hotspot table, candidate filter, and budget control
+payloads downloaded to the host) and `diagnostic_bytes`
 (cross-correlation windows), and records `intermediate_files: 0`.
 
 After the affine fit, the refine stage measures the stars matched on the rebuilt template

@@ -31,8 +31,9 @@ Every term is a variance in the quantity's squared units; ``<q>_err`` is
 their quadrature with the fit term. Arrays follow one array module (NumPy or
 CuPy); only the misalignment model and the kernel-mismatch solve run on the
 host, on arrays with one row per candidate or per star, and the device
-arrays cross to the host three times per item: the positions the model
-needs, the validity flags, and the stacked columns.
+arrays cross to the host for the positions the model needs, the validity
+flags, and the stacked columns, plus the kept stars' fluxes and variances
+when the kernel-mismatch solve runs.
 """
 
 from __future__ import annotations
@@ -86,6 +87,7 @@ class BudgetContext:
     resampling: Callable[[Any, Any], Any] | None
     terms: tuple[str, ...]
     excluded: dict[str, str]
+    control_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -230,7 +232,11 @@ def build_context(
     )
     if "kmatch" in ctx.terms:
         mismatch = kernel_mismatch(ctx, np.asarray(star_xy, dtype=np.float64))
-        ctx = dataclasses.replace(ctx, kernel_mismatch=mismatch)
+        ctx = dataclasses.replace(
+            ctx,
+            control_bytes=int(mismatch.pop("control_bytes")),
+            kernel_mismatch=mismatch,
+        )
     return ctx
 
 
@@ -402,7 +408,12 @@ def kernel_mismatch(ctx: BudgetContext, star_xy: np.ndarray) -> dict:
     half = ctx.window // 2
     pos = xp.asarray(star_xy, dtype=xp.float64)
     x, y = pos[:, 0], pos[:, 1]
-    out = {"eta": 0.0, "n": int(len(star_xy)), "median_ratio": None}
+    out = {
+        "eta": 0.0,
+        "n": int(len(star_xy)),
+        "median_ratio": None,
+        "control_bytes": 0,
+    }
     if len(star_xy) < MIN_MISMATCH_STARS:
         return out
     field = xp.asarray(misalignment_field(ctx.misalignment, *star_xy.T))
@@ -435,7 +446,9 @@ def kernel_mismatch(ctx: BudgetContext, star_xy: np.ndarray) -> dict:
         & (t > 0)
         & (base > 0)
     )
-    d, t, base = ops.to_host(xp.stack([d, t, base])[:, ok])
+    host = ops.to_host(xp.stack([d, t, base])[:, ok])
+    out["control_bytes"] = int(host.nbytes)
+    d, t, base = host
     out["n"] = int(len(d))
     if len(d) < MIN_MISMATCH_STARS:
         return out
@@ -586,7 +599,7 @@ def budget(
     host = ops.to_host(
         xp.stack([pos["center"], pos["positive"], pos["flux"]])
     )
-    control_bytes = int(host.nbytes)
+    control_bytes = ctx.control_bytes + int(host.nbytes)
     model = xp.asarray(
         np.concatenate(
             [
