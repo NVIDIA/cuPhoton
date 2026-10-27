@@ -668,12 +668,9 @@ def build_compact_source_stamp_mask(
             "filtering"
         )
     candidates = np.concatenate(candidate_chunks).view(np.recarray)
-    # Order on keys rounded well below their noise so that two planted
-    # sources with equal scores sort the same on every backend (device
-    # sums differ from host sums at the 1e-16 level); y and x break ties.
-    score_scale = max(
-        float(np.abs(candidates.score).max()), np.finfo(np.float64).tiny
-    )
+    # Keep exact score ordering. Round the summed compactness and radial
+    # metrics so equal-score sources sort consistently across backends;
+    # device sums differ at the 1e-16 level. y and x break ties.
     ordered = candidates[
         np.lexsort(
             (
@@ -681,7 +678,7 @@ def build_compact_source_stamp_mask(
                 -candidates.y,
                 -np.round(candidates.negative_radial, 6),
                 -np.round(candidates.compact_fraction, 9),
-                -np.round(candidates.score / score_scale, 12),
+                -candidates.score,
             )
         )
     ]

@@ -214,6 +214,25 @@ def test_source_ranking_preserves_flux_units(scale):
     assert result.centers == ((10, 10),)
 
 
+def test_near_tie_keeps_higher_score_ahead_of_compactness():
+    image = np.zeros((101, 111))
+    image[50, 50] = 100.0
+    image[48, 50] = image[52, 50] = 20.0
+    image[50, 48] = image[50, 52] = 20.0
+    image[50, 56] = 100.0 - 1e-11
+    options = dict(
+        stamp_size=5,
+        max_stamps=1,
+        background_filter_size=3,
+        peak_filter_size=3,
+        min_separation=7,
+    )
+    reference = _reference_compact_source_stamp_mask(image, **options)
+    assert reference["centers"] == ((50, 50),)
+    result = build_compact_source_stamp_mask(image, **options)
+    _assert_matches_reference(result, reference)
+
+
 @pytest.mark.parametrize("masked", [False, True])
 def test_rejected_stamps_report_no_valid_sources(masked):
     image = np.zeros((41, 41))
