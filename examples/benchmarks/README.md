@@ -13,8 +13,9 @@ Dry-run validates declarations and prints the resolved schedule, original
 manifest SHA256 and resolved plan SHA256 without running commands or creating
 output. Execution saves that plan and refuses an existing output directory.
 Each block rotates treatment order; successive complete cycles reverse it.
-Every treatment occupies each position once per complete cycle. A partial
-cycle is recorded as such in the schedule; it is not completely balanced.
+Every treatment occupies each position once per complete cycle. A trailing
+partial cycle is not completely balanced; `summary.json` reports the realized
+treatment-position counts.
 Six fresh blocks are the default and minimum for explicit `headline` runs.
 An omitted `experiment_kind` defaults to `pilot`; pilots may use fewer blocks
 and are never headline-eligible.
