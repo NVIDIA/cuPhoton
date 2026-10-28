@@ -1706,8 +1706,11 @@ def _load_saved_selected_exposures(psf_path: Path | None) -> list[int] | None:
         return None
     try:
         payload = json.loads(summary_path.read_text())
-    except Exception:
-        return None
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            "Cannot verify PSF exposure alignment: failed to read "
+            f"saved summary metadata at {summary_path}."
+        ) from exc
     selected = payload.get("selected_exposures")
     if isinstance(selected, list) and all(
         isinstance(item, int) for item in selected

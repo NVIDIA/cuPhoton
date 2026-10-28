@@ -674,6 +674,30 @@ def test_external_psfs_select_saved_exposure_ids_not_array_positions(
     np.testing.assert_array_equal(result, psfs[:, :, :, [2, 0]])
 
 
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_external_psfs_reject_unreadable_saved_exposure_metadata(
+    tmp_path, unreadable
+) -> None:
+    psfs = np.arange(27, dtype=np.float64).reshape(3, 3, 1, 3)
+    path = tmp_path / "artifacts" / "psfs.npy"
+    path.parent.mkdir()
+    np.save(path, psfs)
+    summary_path = tmp_path / "summary.json"
+    if unreadable:
+        summary_path.mkdir()
+    else:
+        summary_path.write_text('{"selected_exposures": [3, 8,')
+    with pytest.raises(
+        RuntimeError, match="Cannot verify PSF exposure alignment"
+    ):
+        torch_backend._load_psfs(
+            _bundle(psfs[:, :, :, :2]),
+            path,
+            exposure_indices=[0, 1],
+            target_exposure_count=2,
+        )
+
+
 def test_external_psfs_allow_identity_prefix(tmp_path) -> None:
     import json
 
