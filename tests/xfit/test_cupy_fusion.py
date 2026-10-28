@@ -20,6 +20,7 @@ from cuphoton.xfit import (
     fit_dipoles,
     fit_dipoles_device,
 )
+from cuphoton.xfit.solver import _normal_equations_from_jacobian
 
 
 def _require_cupy():
@@ -226,8 +227,9 @@ def test_cupy_fusion_callbacks_preserve_weighting_indices_and_layout(
     gradient, hessian = problem.normal_equations(
         parameters, residual, indices=indices
     )
-    expected_gradient = cp.einsum("knm,km->kn", jacobian, residual)
-    expected_hessian = cp.einsum("knm,kpm->knp", jacobian, jacobian)
+    expected_gradient, expected_hessian = _normal_equations_from_jacobian(
+        jacobian, residual, cp
+    )
     _assert_numeric(
         cp.asnumpy(gradient), cp.asnumpy(expected_gradient), dtype
     )
@@ -235,6 +237,35 @@ def test_cupy_fusion_callbacks_preserve_weighting_indices_and_layout(
     np.testing.assert_array_equal(
         cp.asnumpy(hessian), cp.asnumpy(hessian).swapaxes(1, 2)
     )
+
+
+@pytest.mark.parametrize("backend", ["numpy", "cupy"])
+def test_cupy_fusion_preserves_representable_fp32_normal_equations(
+    monkeypatch, backend
+):
+    from cuphoton.xfit._cupy_fused import GaussianFusedProblem
+
+    ap = np if backend == "numpy" else _require_cupy()
+    problem = object.__new__(GaussianFusedProblem)
+    problem._cp = ap
+    problem._dtype = np.dtype(np.float32)
+    problem._observations = 16
+    # Each product is below FP32 range, but their sum is representable.
+    jacobian = ap.full((1, 8, 16), 2.0**-75, dtype=ap.float32)
+    residual = ap.full((1, 16), 2.0**-75, dtype=ap.float32)
+    monkeypatch.setattr(
+        problem, "weighted_log_jacobian", lambda *args, **kwargs: jacobian
+    )
+    gradient, hessian = problem.normal_equations(
+        ap.zeros((1, 8), dtype=ap.float32),
+        residual,
+        indices=ap.asarray([0], dtype=ap.int64),
+    )
+    expected = np.float32(2.0**-146)
+    for result in (gradient, hessian):
+        actual = result if backend == "numpy" else ap.asnumpy(result)
+        assert actual.dtype == np.float32
+        np.testing.assert_array_equal(actual, np.full(actual.shape, expected))
 
 
 def test_cupy_fusion_preserves_cancelling_hessian_terms():
@@ -309,16 +340,13 @@ def test_cupy_fusion_extreme_widths_preserve_nonfinite_results(dtype):
     gradient, hessian = problem.normal_equations(
         parameters, residual, indices=indices
     )
-    _assert_numeric(
-        cp.asnumpy(gradient),
-        cp.asnumpy(cp.einsum("knm,km->kn", jacobian, residual)),
-        dtype,
+    expected_gradient, expected_hessian = _normal_equations_from_jacobian(
+        jacobian, residual, cp
     )
     _assert_numeric(
-        cp.asnumpy(hessian),
-        cp.asnumpy(cp.einsum("knm,kpm->knp", jacobian, jacobian)),
-        dtype,
+        cp.asnumpy(gradient), cp.asnumpy(expected_gradient), dtype
     )
+    _assert_numeric(cp.asnumpy(hessian), cp.asnumpy(expected_hessian), dtype)
 
 
 @pytest.mark.parametrize("mode", ["difference", "split"])

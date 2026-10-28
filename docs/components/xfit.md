@@ -74,7 +74,8 @@ variances. Final uncertainty diagnostics use the full analytic Jacobian.
 Each fit owns its buffers and runs on the current CuPy stream.
 Select it in the CLI with `--backend cupy --fusion`; the default is
 `fusion=False`. Device pipeline manifests select it with `xfit.fusion: true`.
-Sampled-stamp and finite-difference fits use the default path.
+Sampled-stamp, custom Gaussian and finite-difference fits require
+`fusion=False`; requesting fusion for them raises `ValueError`.
 
 The public synthetic benchmark records the first call separately from every
 warmed sample, including input transfer and result materialization:

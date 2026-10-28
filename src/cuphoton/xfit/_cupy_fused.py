@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from ._types import BackendArray, FitMode
+from .solver import _normal_equations_from_jacobian
 
 _BLOCK_SIZE = 128
 
@@ -304,7 +305,4 @@ class GaussianFusedProblem:
                 self._cp.empty((0, 8), dtype=self._dtype),
                 self._cp.empty((0, 8, 8), dtype=self._dtype),
             )
-        # Keep the solver's contraction order for ill-conditioned fits.
-        gradient = self._cp.einsum("knm,km->kn", jacobian, residuals)
-        hessian = self._cp.einsum("knm,kpm->knp", jacobian, jacobian)
-        return gradient, hessian
+        return _normal_equations_from_jacobian(jacobian, residuals, self._cp)
