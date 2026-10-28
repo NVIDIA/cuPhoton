@@ -858,9 +858,10 @@ def source_position_columns(
     """The ``source_x``, ``source_y`` columns with ``_err_fit`` and ``_err``:
     the measured lobe whichever its sign, filled from the host ``table``
     after the budget so no term is recomputed. Every row takes its
-    ``positive_*`` values, which describe the measured lobe on a row with
-    two supported lobes or ``fit_model = "single"``; a ``fading`` row the
-    one-lobe fit did not replace (``applied`` false) takes the dipole's
+    ``positive_*`` values, including brightening rows without an applied
+    refit. An accepted one-lobe fit's values describe its measured lobe of
+    either sign. A ``fading`` row the one-lobe fit did not replace
+    (``applied`` false) takes the dipole's
     negative lobe, ``2 center - positive``, with NaN error bars, since the
     budget was built for the positive lobe only.
     """

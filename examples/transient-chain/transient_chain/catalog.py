@@ -212,8 +212,8 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
             "float64",
             "uq",
             f"{what} of the measured lobe whichever its sign: the positive_*"
-            " value where that lobe is the source (fit_model single, or two "
-            "supported lobes), the dipole's negative lobe for a fading "
+            " value by default, including brightening sources without an "
+            "applied refit; the dipole's negative lobe for a fading "
             "source the one-lobe fit did not replace (its error bars NaN)",
         )
         for suffix, what in (

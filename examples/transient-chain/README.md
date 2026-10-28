@@ -324,7 +324,7 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
 | `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions instead of the quantity's closed form (`uq.correlation` in `summary.json`, next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
-| `source_x`, `source_y` and `*_err_fit`, `*_err` | float64 | uq | the measured lobe whichever its sign, in pixels relative to (`x`, `y`), filled from the columns above after the budget: the `positive_*` values on a row with two supported lobes or `fit_model = "single"` (where they describe the one measured lobe, brightening or fading); the dipole's negative lobe, `2 center - positive`, for a fading source with no applied one-lobe result (refit disabled, no variance plane, or invalid fit), with NaN error bars because the budget was built for the positive lobe only. Use these to score or quote a source position without reading `fit_model` |
+| `source_x`, `source_y` and `*_err_fit`, `*_err` | float64 | uq | the measured lobe whichever its sign, in pixels relative to (`x`, `y`), filled from `positive_*` after the budget, including brightening rows without an applied refit. On `fit_model = "single"` rows these describe the measured lobe of either sign. A fading row with no applied one-lobe result (refit disabled, no variance plane, or invalid fit) takes the dipole's negative lobe, `2 center - positive`, with NaN error bars because the budget was built for the positive lobe only. Use these to score or quote a source position without reading `fit_model` |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
 | `ra`, `dec` | float64 | terminal | degrees from the header WCS at the integer candidate pixel, not the xFit sub-pixel position |
@@ -458,8 +458,8 @@ otherwise. Where that fit's covariance is valid the row carries `fit_model = "si
 `positive_x`, `positive_y`, `positive_*_err_fit` and `positive_xy_cov` are the one-lobe values, so
 for a fading source they describe the measured negative lobe; the `corr`, `kfit` and `mis` terms
 are built at that position with the one-lobe weights the budget already uses for a lobe (the
-PSF-derivative-weighted sum divided by the one-lobe flux), and `psf_flux` is measured there. Where
-forced photometry did not run (no PSF width), the one-lobe fit's flux and error stand in for
+PSF-derivative-weighted sum divided by the one-lobe flux), and `psf_flux` is measured there. With
+a variance plane but no PSF width, the one-lobe fit's flux and error stand in for
 `psf_flux` and `psf_flux_err_fit` on those rows. A single source whose one-lobe fit is invalid
 keeps the dipole values and `fit_model = "dipole"`; every other row is untouched. Without a
 variance plane nothing is refit: the dipole covariance is then scaled by its reduced chi-square
