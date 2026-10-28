@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import ipaddress
 import json
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -148,16 +149,15 @@ class Dashboard:
             .replace(">", "\\u003e")
             .replace("&", "\\u0026")
         )
-        return (
-            template.replace("__TITLE__", html.escape(self.title))
-            .replace(
-                "__STYLE__", resources.joinpath("dashboard.css").read_text()
-            )
-            .replace("__PANELS__", "".join(panels))
-            .replace("__DATA__", data)
-            .replace(
-                "__SCRIPT__", resources.joinpath("dashboard.js").read_text()
-            )
+        values = {
+            "__TITLE__": html.escape(self.title),
+            "__STYLE__": resources.joinpath("dashboard.css").read_text(),
+            "__PANELS__": "".join(panels),
+            "__DATA__": data,
+            "__SCRIPT__": resources.joinpath("dashboard.js").read_text(),
+        }
+        return re.sub(
+            "|".join(values), lambda match: values[match.group(0)], template
         )
 
     def export(self, path: str | Path) -> Path:

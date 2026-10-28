@@ -256,3 +256,76 @@ def test_cancellation_and_visible_collection_failure(tmp_path, controlled):
         assert "private diagnostic" not in json.dumps(monitor.snapshot())
     finally:
         session.close()
+
+
+def test_report_limit_stops_automatic_investigation_but_keeps_collecting(
+    tmp_path, controlled
+):
+    monitor = Monitor(tmp_path / "run", run_id="report-limit")
+    monitor.publish(sample())
+    state = monitor.snapshot()
+    state.pop("storage_error")
+    state["reports"] = [
+        {"id": str(index), "status": "completed", "evidence": {}}
+        for index in range(1000)
+    ]
+    monitor._commit(state)
+    polls = []
+
+    def poll():
+        polls.append(1)
+        if len(polls) == 2:
+            monitor.publish(replace(sample(), id="later-input"))
+
+    session = MonitorSession(
+        monitor,
+        config=InferenceConfig("http://127.0.0.1:1/v1", "fixture"),
+        poll=poll,
+        poll_interval=0.05,
+        auto_investigate=True,
+    )
+    session.start()
+    try:
+        wait_for(lambda: "later-input" in monitor.snapshot()["samples"])
+        assert not session.auto_investigate
+        assert not controlled["calls"]
+        assert monitor.snapshot()["collector"] == "watching"
+        errors = monitor.snapshot()["errors"]
+        assert len(errors) == 1
+        assert errors[0]["source_id"] == "auto-investigation-stopped"
+    finally:
+        session.close()
+
+
+def test_idle_polling_does_not_copy_or_rewrite_full_state(
+    tmp_path, monkeypatch
+):
+    monitor = Monitor(tmp_path / "run", run_id="idle")
+    polls = []
+    writes = []
+    snapshots = []
+    original_commit = monitor._commit
+    original_snapshot = monitor.snapshot
+
+    def commit(state):
+        writes.append(state["collector"])
+        return original_commit(state)
+
+    def snapshot():
+        snapshots.append(1)
+        return original_snapshot()
+
+    monkeypatch.setattr(monitor, "_commit", commit)
+    monkeypatch.setattr(monitor, "snapshot", snapshot)
+    session = MonitorSession(
+        monitor, poll=lambda: polls.append(1), poll_interval=0.05
+    )
+    session.start()
+    try:
+        wait_for(lambda: len(polls) >= 2)
+        counts = len(writes), len(snapshots)
+        first = len(polls)
+        wait_for(lambda: len(polls) >= first + 2)
+        assert (len(writes), len(snapshots)) == counts
+    finally:
+        session.close()

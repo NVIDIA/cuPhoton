@@ -301,47 +301,53 @@ class MonitorSession:
         next_poll = 0.0
         interactive_count = 0
         try:
+            if self.poll:
+                self.monitor._collector("running")
             while not self._closing:
                 if self.poll and self._loop.time() >= next_poll:
                     try:
-                        self.monitor._collector("running")
                         self.poll()
                         self.monitor._collector("watching")
                     except Exception as exc:
                         self.monitor._error("live-source", exc)
                         self.monitor._collector("failed")
                     next_poll = self._loop.time() + self.poll_interval
-                state = self.monitor.snapshot()
-                for report in state["reports"]:
+                stale, candidates = self.monitor._session_state(
+                    include_candidates=self.auto_investigate and self.can_ask
+                )
+                for identifier in stale:
+                    if identifier in self._active:
+                        self._active[identifier].cancel()
+                for identity in candidates:
+                    if identity in self._seen:
+                        continue
                     if (
-                        report["status"] == "stale"
-                        and report["id"] in self._active
+                        len(self._interactive)
+                        + len(self._automatic)
+                        + len(self._active)
+                        >= 16
                     ):
-                        self._active[report["id"]].cancel()
-                if self.auto_investigate and self.can_ask:
-                    for record in state["samples"].values():
-                        sample = record["sample"]
-                        identity = (sample["id"], sample["revision"])
-                        if identity in self._seen or not any(
-                            f["severity"] in {"warning", "error"}
-                            for f in sample["findings"]
-                        ):
-                            continue
-                        if (
-                            len(self._interactive)
-                            + len(self._automatic)
-                            + len(self._active)
-                            >= 16
-                        ):
-                            break
+                        break
+                    self._seen.add(identity)
+                    try:
                         await self._submit(
                             "Investigate these findings and compare "
                             "relevant evidence in this run.",
-                            [sample["id"]],
+                            [identity[0]],
                             scope="selected",
                             trigger="automatic",
                         )
-                        self._seen.add(identity)
+                    except (ValueError, OSError) as exc:
+                        self.auto_investigate = False
+                        try:
+                            self.monitor._error(
+                                "auto-investigation-stopped", exc
+                            )
+                        except OSError:
+                            # The monitor exposes failed persistence in its
+                            # storage_error flag; collection can still retry.
+                            pass
+                        break
                 capacity = self.config.max_concurrent if self.config else 1
                 while len(self._active) < capacity and (
                     self._interactive or self._automatic

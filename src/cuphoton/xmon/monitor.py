@@ -187,10 +187,33 @@ class Monitor:
 
     def _collector(self, status: str) -> None:
         with self._lock:
+            if self._state["collector"] == status and not self._storage_error:
+                return
             state = self.snapshot()
             state.pop("storage_error")
             state["collector"] = status
             self._commit(state)
+
+    def _session_state(
+        self, *, include_candidates: bool
+    ) -> tuple[list[str], list[tuple[str, int]]]:
+        """Read detached scheduling metadata without copying evidence."""
+        with self._lock:
+            stale = [
+                report["id"]
+                for report in self._state["reports"]
+                if report["status"] == "stale"
+            ]
+            candidates = []
+            if include_candidates:
+                for record in self._state["samples"].values():
+                    sample = record["sample"]
+                    if any(
+                        finding["severity"] in {"warning", "error"}
+                        for finding in sample["findings"]
+                    ):
+                        candidates.append((sample["id"], sample["revision"]))
+            return stale, candidates
 
     def _error(self, source_id: str, exc: Exception) -> None:
         # Exception text may contain credentials or local paths. Keep only
@@ -247,13 +270,17 @@ class Monitor:
     def save_report(self, report: dict[str, Any]) -> dict[str, Any]:
         """Store a separate report, invalidating it if evidence changed."""
         with self._lock:
-            state = self.snapshot()
-            state.pop("storage_error")
             report = json.loads(encode(report))
             for identifier, revision in report["evidence"].items():
-                current = state["samples"].get(identifier)
+                current = self._state["samples"].get(identifier)
                 if not current or current["sample"]["revision"] != revision:
                     report["status"] = "stale"
+            if not self._storage_error and any(
+                old == report for old in self._state["reports"]
+            ):
+                return report
+            state = self.snapshot()
+            state.pop("storage_error")
             reports = [x for x in state["reports"] if x["id"] != report["id"]]
             if len(reports) >= 1000:
                 raise ValueError(

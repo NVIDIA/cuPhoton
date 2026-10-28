@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.request
 from dataclasses import replace
@@ -141,3 +142,51 @@ def test_dashboard_installed_resources_and_refresh(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_dashboard_preserves_placeholder_text_in_evidence_and_views(tmp_path):
+    monitor = Monitor(tmp_path / "state", run_id="placeholders")
+    message = "__SCRIPT__ __DATA__ </script> &"
+    monitor.publish(
+        replace(sample(), findings=(Finding("literal", message),))
+    )
+    page = Dashboard(
+        monitor,
+        title="__STYLE__ <title>",
+        render_sample=lambda _sample: "<p>__DATA__ __SCRIPT__</p>",
+    ).render()
+    state = re.search(
+        r'<script id="state" type="application/json">(.*?)</script>',
+        page,
+        flags=re.DOTALL,
+    )
+    assert state is not None
+    display = json.loads(state.group(1))
+    assert (
+        display["records"][0]["sample"]["findings"][0]["message"] == message
+    )
+    assert "<title>__STYLE__ &lt;title&gt;</title>" in page
+    assert "<p>__DATA__ __SCRIPT__</p>" in page
+
+
+def test_unchanged_collector_and_report_do_not_rewrite_state(
+    tmp_path, monkeypatch
+):
+    monitor = Monitor(tmp_path / "state", run_id="no-op")
+    monitor.publish(sample())
+    monitor._collector("watching")
+    report = {
+        "id": "report",
+        "status": "completed",
+        "evidence": {"window-a": 1},
+    }
+    monitor.save_report(report)
+
+    def unexpected_commit(_state):
+        raise AssertionError("unchanged state must not be rewritten")
+
+    monkeypatch.setattr(monitor, "_commit", unexpected_commit)
+    monitor._collector("watching")
+    returned = monitor.save_report(report)
+    returned["evidence"].clear()
+    assert monitor.snapshot()["reports"][0]["evidence"] == {"window-a": 1}
