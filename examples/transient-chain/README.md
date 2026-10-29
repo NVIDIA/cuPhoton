@@ -117,7 +117,7 @@ set it, `null` when neither was available and the `psf_flux` columns are NaN).
 `{"selections": [ ... ]}` with one object per target image (a bench `{"shards": [...]}` is
 accepted too). The keys depend on `survey.name`.
 
-For `rubin` (the default): `visit`, `detector`, `band`, `visit_image`, and either
+For `survey.name: rubin`: `visit`, `detector`, `band`, `visit_image`, and either
 `template_coadds` (a list of coadd patch files, mosaicked onto the visit grid) or `template_fits`
 (a template already on the visit grid). `date`, `tract`, `patch` and `physical_filter` are
 copied into the catalog when present.
@@ -210,13 +210,13 @@ named, odd sizes and enumerations are checked, and every default lives in
 | Block | What it controls | Keys worth knowing |
 |---|---|---|
 | `io` | FITS reader | `reader: auto\|xdr\|astropy` |
-| `survey` | which adapter reads the files | `name: rubin\|generic`, `params` (adapter-specific; see below) |
+| `survey` | which adapter reads the files | `name: rubin\|generic` (required, no default), `params` (adapter-specific; see below) |
 | `align` | template refinement | `refine`, `star_finder`, `star_fwhm_px`, `star_threshold_sigma`, `max_stars`, `star_box_px`, `centroid_iterations`, `match_radius_px`, `verify_radius_px`, `min_affine_matches`, `min_shift_matches`, `mapping_grid_step`, `xcorr_window_px` |
 | `subtract` | XPOIS and the fit mask | `kernel_height`, `kernel_width`, `basis_sigmas`, `basis_degrees`, `background_degree`, `flux_conserve`, `template_bad_dilation_px`, `auto_stamp_*` (mask selection), `auto_background_filter_size`, `auto_peak_filter_size`, `auto_compact_core_size` |
 | `detect` | hotspot rule | `threshold_sigma`, `min_pixels` |
 | `stamps` | stamp cutting | `stamp_size` (odd; equals the checkpoint's `image_size`) |
 | `xfit` | dipole fits, quality flags, forced photometry | `mode`, `compute_dtype`, `solver` (LMConfig: `f_tol`, `x_tol`, `g_tol`, `max_evaluations`, `initial_damping`, `damping_increase`, `damping_decrease`), `psf_sigma_px` |
-| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
+| `uq` | the error budget behind `<q>_err` | `enabled`, `kernel_fit` (the kernel fit's own term, one covariance per item), `max_lobe_reach_px` (largest center-to-lobe distance with a center error bar; default 32), `measure_correlation` and `correlation_positions` (the factor measured at empty positions; at least 20), `sky_astrometry_arcsec` and `sky_astrometry_source` (set together; written to `sky_err_arcsec` and `sky_err_source`) |
 | `classify` | XScan | `inference_policy: strict\|checkpoint`, `apply_noise_match`, `noise_reference_sigma`, `decision_threshold`, `batch_size` |
 
 `classify.noise_reference_sigma` is a property of the checkpoint, not of the survey: it is the
@@ -235,11 +235,14 @@ a template provider, and an identity (`exposure_id`, `ccd_id`, `band`, extras). 
 from HDUs 1 and 2 of each coadd patch, resolves bad pixels with the LSST stack's `MP_<NAME>`
 cards under the `hsc-masklite` policy, and mosaics the patches through their WCS. Each of these
 is a parameter (`image_hdu`, `mask_hdu`, `variance_hdu`, `coadd_image_hdu`, `coadd_mask_hdu`,
-`mask_policy`, `variance_kind`, `extra_keys`).
+`coadd_variance_hdu`, `pieces`, `mask_policy`, `variance_kind`, `extra_keys`). `coadd_variance_hdu`
+is null by default: set it when the patches carry a variance plane, and the template gets one;
+`pieces` says how the patches' variances combine where they overlap ("Other surveys" below).
 
 `generic` describes any FITS pair by parameters. A DECam-style layout with the image in the
 primary HDU, a separate inverse-variance weight file, a separate mask file, and a template on
-another pixel grid:
+another pixel grid (`config-generic.yaml` ships this block with every other block filled in,
+ready to load and edit):
 
 ```yaml
 survey:
@@ -250,16 +253,21 @@ survey:
     target:
       path_key: image
       image_hdu: 0              # index, EXTNAME, or null for the first 2D image
-      mask_path_key: mask       # null = same file as the image
-      mask_hdu: 0               # null = this survey has no mask plane
+      mask_path_key: mask       # a mask plane is read like the variance below: both null = no mask plane
+      mask_hdu: 0               # (path key alone = the file's first 2D image; hdu alone = that HDU of the image file)
       variance_path_key: weight
-      variance_hdu: 0           # null = no variance (XPOIS then fits unweighted)
+      variance_hdu: 0           # both null = no variance (XPOIS then fits unweighted)
       variance_kind: inverse_variance   # variance | inverse_variance | none
     template:
       path_key: template
       image_hdu: 0
       mask_hdu: null
+      variance_path_key: null   # the template's variance plane, read like the target's: both null = no
+      variance_hdu: null        # plane (the corr term is off); a path key alone = the first 2D image of
+                                # that file; an hdu alone = that HDU of the template file
+      variance_kind: variance
       on_target_grid: false     # false: reproject the reference through its WCS onto the target grid
+      pieces: correlated        # how overlapping template pieces' variances combine: correlated | independent
     mask_policy: strict         # none | strict (any nonzero bit) | hsc-masklite | {planes: [BAD, SAT]} | {bits: 5}
 ```
 
@@ -269,9 +277,24 @@ catalog has the columns `exposure_id`, `ccd_id`, `band` plus the adapter's extra
 `detector`, `date`, `tract`, `patch`, `physical_filter`).
 
 Adding a third survey is one file in `transient_chain/surveys/` implementing `required_keys`,
-`identity`, `input_paths`, `payload`, `load_target` and `template`, registered in
+`identity`, `input_paths`, `payload`, `load_target` and `build_template`, registered in
 `surveys/__init__.py`. A template provider that is not a mosaic returns `refinable = False` and
-the refine stage skips itself.
+the refine stage skips itself. A survey with a template variance plane hands it to the provider
+(`GridTemplate(..., variance=)` for a template on the target grid, `TemplateSource(image, mask,
+wcs, variance)` per piece of a reprojected or mosaicked one); the provider's `variance()` then
+returns the plane on the target grid after each build and `resampling(x, y)` the resampling
+weights of that build, and `summary.json` records `template_variance: true`. The two go together:
+a provider that declares `has_variance` must implement both, and the base adapter's `template()`
+rejects one that does not. `ReprojectedSources` implements `variance()` and `resampling()` the
+same way for every survey: each piece's variance is reprojected with its image (the same
+weights, squared), and where `n` pieces overlap their variances combine under `pieces`: `correlated` (the default) gives `(mean sigma_i)^2`, exact when the pieces' noise is
+fully correlated, as for patches cut from one coadd of the same exposures; `independent` gives
+`sum(var_i) / n^2`, exact when the pieces' noise is independent, as for separate reference
+frames. A pixel has a variance only when every contributing piece has a finite, nonnegative
+variance. The resampling weights are those of the first covering piece. A
+provider without a variance plane drops the reprojection's prepared mappings after each build
+(hundreds of megabytes per piece on a 4k grid); the correlation term and kernel-fit covariance
+read them when the reference has a variance plane.
 
 ## Catalog columns
 
@@ -296,7 +319,9 @@ thousand and whether a checkpoint was given, so per-item catalogs merge without 
 | `separation`, `lobe_flux` and `*_err` | float64 | xfit | distance between the lobes and each lobe's total flux, with standard uncertainties |
 | `psf_flux`, `psf_flux_err_fit`, `psf_flux_err` | float64 | xfit, uq | forced PSF photometry at the source. `psf_flux_err_fit`: conditional uncertainty from xFit alone. `psf_flux_err`: the error bar to quote, NaN where its window is not valid. All three NaN without a variance plane or a PSF width from `xfit.psf_sigma_px` or the refine stage's stars |
 | `<q>_err_corr`, `<q>_err_kfit`, `<q>_err_kmatch`, `<q>_err_mis` for `q` in `center_x`, `center_y`, `positive_x`, `positive_y`, `psf_flux` | float64 | uq | the terms of `<q>_err` beyond `<q>_err_fit`, each a standard uncertainty in the quantity's units (next section); 0 where a term does not apply or could not be computed for the item; `<q>_err_corr` NaN where the factor is undefined |
-| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where any quantity's window holds a masked pixel or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
+| `uq_valid` | bool | uq | every `<q>_err` of the row is defined; false where fewer than half of a quantity's window pixels are usable or its correlation factor is undefined (that quantity's `<q>_err` is NaN, the others stay defined, the term columns keep their values) |
+| `uq_window_masked` | bool | uq | a valid quantity's window holds a masked pixel: its weighted sums and correlation factor were taken over the usable pixels (next section) |
+| `uq_corr_measured` | bool | uq | the `corr` term of at least one quantity of the row uses the exposure's correlation factor measured at empty positions instead of the quantity's closed form (`uq.correlation` in `summary.json`, next section) |
 | `sky_err_arcsec`, `sky_err_source` | float64, object | uq | the external astrometric uncertainty per axis and its provenance, copied from `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` (NaN and None when null); never added to the pixel-frame error bars |
 | `logit`, `probability` | float32 | xscan | classifier output (NaN without a checkpoint) |
 | `decision` | bool | xscan | `probability >= classify.decision_threshold` (false without a checkpoint) |
@@ -326,14 +351,38 @@ center's stamp over both lobes).
 - `fit` (`<q>_err_fit`): xFit's covariance, weighted by the target variance plane; the template's
   noise is not in that plane (below).
 - `corr` (`<q>_err_corr`): `<q>_err_fit * sqrt(f - 1)`, `f` the correlation factor of the
-  quantity's weighted sum (`cuphoton.xpois.correlation_factor`, floored at 1): the resampling and
-  the kernel correlate the reference's pixels. The factor is measured against the target variance
-  used by xFit, so it includes both the reference's diagonal noise and its correlations.
-  It needs the reference's variance plane on the target grid and the resampling
-  weights (`cuphoton.xrep.resampling_weights_at` with the template's `ReprojectionSpec`); this
-  version's template providers carry no variance plane, so the term is 0 and `summary.json` lists
-  it under `uq.excluded`. Where the grid mapping is not locally a translation the factor is
-  undefined (`uq.rotated_grid` counts those rows).
+  quantity's weighted sum, floored at 1. The resampling and the kernel correlate the reference's
+  pixels. The factor is relative to the target variance used by xFit, so it includes both the
+  reference noise and its correlations. `f` comes from two places:
+  - The closed form (`cuphoton.xpois.correlation_factor`) at the candidate, from the reference's
+    variance plane on the target grid and the resampling weights of the template build, both from
+    the survey adapter's template provider ("Other surveys"). Without a template variance plane
+    the term is 0, `summary.json` records `template_variance: false` and lists `corr` under
+    `uq.excluded`. The factor is undefined where the window has no usable pixel or the reprojection
+    filled the reference, and where the grid mapping is not locally a translation; `uq.undefined_factor`
+    counts the rows with an undefined factor and `uq.rotated_grid` those among them on a rotated
+    grid.
+  - The measurement, once per exposure (`cuphoton.xpois.empirical_correlation_factor`): the closed
+    form models the resampling of independent reference pixels through the kernel and nothing
+    else, so a coadd's own pixel correlation or faint sources in the windows escape it. The chain
+    measures the squared robust spread of the weighted sums over their diagonal prediction at up to
+    `uq.correlation_positions` empty positions, for the PSF-flux weights and the two
+    position-derivative weights. Empty means a usable pixel more than one window from every
+    candidate, star and loud pixel (a residual more than 5 robust sigmas from the median;
+    `positions_excluded_loud` counts the pixels that rule removed).
+  The exposure uses the measured factor for a weighting only where it exceeds 1 and exceeds the
+  median closed form at the same positions by more than two standard errors of the measurement,
+  `f * sqrt(2 / (0.3675 (n - 1)))` over `n` positions (the spread of a sample variance, widened
+  by the efficiency of the median absolute deviation the measurement uses); otherwise the closed
+  form stands. Each quantity's `f`
+  is then its own closed form, or the measured factor where the exposure chose it and it exceeds
+  the candidate's closed form; such rows carry `uq_corr_measured` (`uq.corr_measured` counts them)
+  and the kernel-mismatch fit at the stars uses the same factor. `summary.json` writes
+  `uq.correlation` with the positions requested and used, `closed_form`, `measured`, `measured_se` and
+  `plain_ratio` per weighting (`psf_flux`, `position_x`, `position_y`), and `source` (`"measured"`
+  or `"closed_form"`; null without a template variance, where the measured values are reported as
+  the diagonal plane's under-prediction but not applied). `uq.measure_correlation: false` skips the
+  measurement.
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
@@ -361,17 +410,27 @@ center's stamp over both lobes).
 - `sky` (`sky_err_arcsec`): the exposure's absolute astrometry, an input the chain does not measure;
   reported with its provenance and kept out of the pixel-frame columns.
 
-Validity is per quantity: `<q>_err` is NaN where the quantity's window (both lobes' windows for a
-center) holds a masked or non-finite pixel, or where its correlation factor is undefined; the term
-columns keep their values (`<q>_err_corr` is NaN with the factor). Invalid original measurement positions and nonfinite total uncertainties also leave their
-quantity's error undefined. `uq_valid` is true where every
-quantity of the row has a finite total uncertainty and is valid, so a candidate near a masked block can carry a valid `positive_x_err`
-and a NaN `psf_flux_err` in the same row with `uq_valid` false. A rule for windows with masked
-pixels is a planned addition. A term the item could not compute is written as 0 and `summary.json`
-records the terms that went into the bars (`uq_terms`) with the reason for each one left out
-(`uq.excluded`), the kernel-fit form, the kernel-mismatch fit at the stars (`eta`, the stars used
-and the median residual-to-reference flux ratio), the window sizes and the counts of rows with an
-invalid window, an undefined factor and a capped sensitivity. `uq.enabled: false` writes
+Masked pixels (a bad pixel of either image, a non-finite residual, target variance or template
+variance, the edge of the image) do not cost a candidate its error bar. A quantity's weighted
+sums run over the usable pixels of its window, with zero weight on the rest and the
+normalization taken over the usable ones, and its correlation factor is computed over the same pixels
+(`cuphoton.xpois.correlation_factor(valid=...)`); the row is flagged `uq_window_masked` so a user
+can tell a renormalized bar from a full-window one. On a 21 px window a masked column 4 px or
+more from the center moves the factor by under 10%, and one at 1 to 3 px by up to 12% to 17%.
+The quantity is invalid only where fewer than half of its window's pixels are usable (both
+lobes' windows for a center), or where its correlation factor is undefined: `<q>_err` is NaN
+there while the term columns keep their values (`<q>_err_corr` is NaN with the factor).
+Invalid original measurement positions and nonfinite total uncertainties also leave their
+quantity's error undefined. `uq_valid` is true where every quantity of the row is valid, so a candidate at the edge of a
+masked block can carry a valid `positive_x_err` and a NaN `psf_flux_err` in the same row with
+`uq_valid` false. The kernel-mismatch fit at the stars keeps only stars whose window is fully
+usable. A term the item could not compute is written as 0 and `summary.json` records the terms
+that went into the bars (`uq_terms`) with the reason for each one left out (`uq.excluded`), the
+kernel-fit form, the kernel-mismatch fit at the stars (`eta`, the stars used and the median
+residual-to-reference flux ratio), the window sizes and the counts of rows with an invalid window
+(`uq.invalid_window`), a renormalized one (`uq.masked_window`), an undefined factor
+(`uq.undefined_factor`, of which `uq.rotated_grid` on a rotated grid) and a capped sensitivity
+(`uq.sensitivity_capped`). `uq.enabled: false` writes
 `<q>_err = <q>_err_fit`, zero terms and `uq_valid` true.
 
 The xFit standard errors come from the target's variance plane. The template's noise, carried
@@ -455,10 +514,10 @@ Both are given for six arms: `<q>_err`, `<q>_err_fit` alone, and `<q>_err` with 
 kfit, kmatch and mis terms removed in quadrature. All arms start with the rows whose `<q>_err`
 is finite and positive on both axes in groups that keep two detections. Each arm then drops rows
 with nonfinite or non-positive-definite covariance, so its group count and degrees of freedom can
-differ. Each arm's pixel covariance
-is transformed by the refine affine and the anchor map into the tangent plane. The fit's x-y
-covariance is included when available; other terms contribute their reported per-axis variances.
-The mean position and chi-square use the resulting full two-dimensional covariance. The JSON holds
+differ. Each arm's covariance
+is transformed through the refine affine and anchor map into the tangent plane. The fit's
+x-y covariance is included when available; other terms supply their per-axis variances.
+The fitted mean and chi-square use the resulting full covariance. The JSON holds
 every number; the printed table shows quantity, class, groups, arm, chi-square per degree of
 freedom and the median ratio.
 

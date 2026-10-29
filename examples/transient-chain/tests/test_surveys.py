@@ -18,9 +18,15 @@ from transient_chain.fitsio import PlaneReader, inspect_plane
 from transient_chain.surveys import make_adapter
 from transient_chain.surveys.base import Identity, resolve_mask_bits
 
+IDENTITY = {"exposure_id": "expnum", "ccd_id": "ccdnum", "band": "band"}
+
 
 def host_reader(policy="astropy"):
     return PlaneReader(policy, device=False)
+
+
+def _generic(**params):
+    return make_adapter({"name": "generic", "params": params})
 
 
 def test_rubin_adapter_reads_planes_and_resolves_hsc_masklite(rubin_visit):
@@ -107,13 +113,9 @@ def test_rubin_mask_policy_override_and_missing_planes(rubin_visit):
 def test_generic_adapter_separate_files_inverse_variance_and_grid_template(
     generic_pair,
 ):
-    params = {
-        "identity": {
-            "exposure_id": "expnum",
-            "ccd_id": "ccdnum",
-            "band": "band",
-        },
-        "target": {
+    adapter = _generic(
+        identity=IDENTITY,
+        target={
             "path_key": "image",
             "image_hdu": 0,
             "mask_path_key": "mask",
@@ -122,14 +124,13 @@ def test_generic_adapter_separate_files_inverse_variance_and_grid_template(
             "variance_hdu": 0,
             "variance_kind": "inverse_variance",
         },
-        "template": {
+        template={
             "path_key": "template",
             "image_hdu": 0,
             "on_target_grid": True,
         },
-        "mask_policy": "strict",
-    }
-    adapter = make_adapter({"name": "generic", "params": params})
+        mask_policy="strict",
+    )
     assert set(adapter.required_keys) == {
         "expnum",
         "ccdnum",
@@ -153,7 +154,7 @@ def test_generic_adapter_separate_files_inverse_variance_and_grid_template(
 
 
 def test_generic_adapter_defaults_need_no_mask_or_variance(generic_pair):
-    adapter = make_adapter({"name": "generic"})
+    adapter = _generic()
     t = adapter.load_target(
         {
             "exposure_id": 1,
@@ -244,19 +245,10 @@ def test_selections_validation_names_the_entry_and_the_missing_file(
 
 
 def test_generic_mask_path_without_hdu_reads_its_first_image(generic_pair):
-    adapter = make_adapter(
-        {
-            "name": "generic",
-            "params": {
-                "identity": {
-                    "exposure_id": "expnum",
-                    "ccd_id": "ccdnum",
-                    "band": "band",
-                },
-                "target": {"mask_path_key": "mask"},
-                "mask_policy": "strict",
-            },
-        }
+    adapter = _generic(
+        identity=IDENTITY,
+        target={"mask_path_key": "mask"},
+        mask_policy="strict",
     )
     t = adapter.load_target(generic_pair, host_reader())
     assert (
@@ -284,3 +276,348 @@ def test_workload_sizes_home_relative_paths():
         selections = workload.load_selections(manifest, adapter)
         items = workload.build_items(selections, adapter)
         assert items[0].weight_bytes == len(b"visittemplate")
+
+
+def test_generic_template_variance_with_and_without_the_plane(generic_pair):
+    io = host_reader()
+    adapter = _generic(identity=IDENTITY, template={"on_target_grid": True})
+    t = adapter.load_target(generic_pair, io)
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    assert not provider.has_variance
+    provider.build()
+    assert provider.variance() is None
+    assert "template_variance" not in adapter.required_keys
+
+    adapter = _generic(
+        identity=IDENTITY,
+        template={
+            "on_target_grid": True,
+            "variance_path_key": "template_variance",
+        },
+    )
+    assert "template_variance" in adapter.required_keys
+    assert generic_pair["template_variance"] in adapter.input_paths(
+        generic_pair
+    )
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    assert provider.has_variance
+    provider.build()
+    var = provider.variance()
+    assert var.dtype == np.float64 and var.shape == t.shape
+    assert float(var[5, 5]) == 9.0 and np.isnan(var[10, 10])
+    at = provider.resampling(np.array([3.0, 40.2]), np.array([7.0, 20.6]))
+    assert at.weights.shape == (2, 1, 1) and at.is_translation.all()
+    np.testing.assert_array_equal(at.destination, [[3, 7], [40, 21]])
+
+    # the same plane through the WCS: a translation of the grid keeps the
+    # variance (squared unit weights) and the weights are Lanczos stamps
+    adapter = _generic(
+        identity=IDENTITY,
+        template={"variance_path_key": "template_variance"},
+    )
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    timg, _, _ = provider.build()
+    var = provider.variance()
+    finite = np.isfinite(timg)
+    assert np.isnan(var[~finite]).all()
+    # the plane's NaN pixel spreads over its Lanczos footprint, no further
+    yy, xx = np.mgrid[: t.shape[0], : t.shape[1]]
+    away = finite & (np.maximum(np.abs(yy - 10), np.abs(xx - 10)) > 6)
+    assert np.isfinite(var[away]).all()
+    assert np.nanmedian(var) == pytest.approx(9.0, rel=1e-6)
+    at = provider.resampling(np.array([40.0]), np.array([20.0]))
+    assert at.weights.shape == (1, 6, 6) and at.is_translation.all()
+    assert at.weights.sum() == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("rule", ["correlated", "independent"])
+def test_mosaic_variance_requires_every_contributing_piece(rule):
+    from astropy.wcs import WCS
+    from transient_chain.surveys.base import (
+        ReprojectedSources,
+        TemplateSource,
+    )
+
+    shape = (12, 12)
+    coordinate_system = WCS(naxis=2)
+    coordinate_system.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    coordinate_system.wcs.cdelt = [0.001, 0.001]
+    sources = [
+        TemplateSource(
+            np.full(shape, value),
+            None,
+            coordinate_system,
+            np.full(shape, variance),
+        )
+        for value, variance in ((10.0, 4.0), (30.0, np.nan))
+    ]
+    provider = ReprojectedSources(
+        sources,
+        coordinate_system,
+        shape,
+        np,
+        interpolation="bilinear",
+        pieces=rule,
+    )
+    image, _, count = provider.build()
+    overlap = count == 2
+    assert overlap.any()
+    np.testing.assert_allclose(image[overlap], 20.0)
+    assert np.isnan(provider.variance()[overlap]).all()
+
+
+def test_mosaic_variance_follows_the_pieces_rule(rubin_visit):
+    io = host_reader()
+    plain = make_adapter({"name": "rubin"})
+    t = plain.load_target(rubin_visit, io)
+    provider = plain.template(rubin_visit, t, io, mapping_grid_step=16)
+    assert not provider.has_variance
+    provider.build()
+    assert provider.variance() is None
+    # without a variance plane the prepared mappings are not kept and the
+    # weights are not offered
+    assert provider._built == []
+    with pytest.raises(RuntimeError, match="variance plane"):
+        provider.resampling(np.array([40.0]), np.array([20.0]))
+
+    # the patches are integer translations: each contributes its own
+    # constant (4 or 16); the overlap carries (mean sigma)^2 = 9 for
+    # correlated pieces (the default) and sum(var) / n^2 = 5 for
+    # independent ones, never the mean of the variances (10)
+    expected = {"correlated": 9.0, "independent": 5.0}
+    for rule, value in expected.items():
+        adapter = make_adapter(
+            {
+                "name": "rubin",
+                "params": {"coadd_variance_hdu": 3, "pieces": rule},
+            }
+        )
+        provider = adapter.template(rubin_visit, t, io, mapping_grid_step=16)
+        assert provider.has_variance and provider.pieces == rule
+        timg, _, cnt = provider.build()
+        var = provider.variance()
+        assert var.shape == t.shape
+        one = (cnt == 1) & np.isfinite(timg)
+        two = (cnt == 2) & np.isfinite(timg)
+        assert one.sum() > 0 and two.sum() > 0
+        assert set(np.unique(np.round(var[one], 6))) == {4.0, 16.0}
+        np.testing.assert_allclose(var[two], value, rtol=1e-6)
+        assert np.isnan(var[cnt == 0]).all()
+    assert len(provider._built) == 2
+    # resampling weights come from the first piece covering a position
+    ys, xs = np.nonzero(two)
+    at = provider.resampling(xs[:3].astype(float), ys[:3].astype(float))
+    assert at.weights.shape[1:] == (6, 6) and at.is_translation.all()
+    assert np.allclose(at.weights.sum(axis=(1, 2)), 1.0)
+    # positions covered by one piece alone take that piece's weights, on
+    # either side of the overlap (the right side is covered by the second
+    # piece only, so its weights are substituted into the first piece's)
+    ys, xs = np.nonzero(one)
+    left, right = xs < xs.min() + 5, xs > xs.max() - 5
+    for side in (left, right):
+        at = provider.resampling(
+            xs[side].astype(float), ys[side].astype(float)
+        )
+        assert (at.weights != 0).any(axis=(1, 2)).all()
+        assert np.allclose(at.weights.sum(axis=(1, 2)), 1.0)
+        np.testing.assert_array_equal(at.destination[:, 0], xs[side])
+    first = provider._built[0]
+    from cuphoton.xrep import resampling_weights_at
+
+    alone = resampling_weights_at(
+        first[0],
+        xs[right].astype(float),
+        ys[right].astype(float),
+        prepared=first[1],
+    )
+    assert not (alone.weights != 0).any()
+    ys, xs = np.nonzero(cnt == 0)
+    if len(xs):
+        at = provider.resampling(xs[:1].astype(float), ys[:1].astype(float))
+        assert not (at.weights != 0).any()
+    with pytest.raises(ValueError, match="pieces must be one of"):
+        make_adapter(
+            {
+                "name": "rubin",
+                "params": {"coadd_variance_hdu": 3, "pieces": "mean"},
+            }
+        ).template(rubin_visit, t, io, mapping_grid_step=16)
+
+
+def test_generic_pieces_rule_is_a_template_parameter(generic_pair):
+    io = host_reader()
+    t = _generic(identity=IDENTITY).load_target(generic_pair, io)
+    for rule in ("correlated", "independent"):
+        adapter = _generic(
+            identity=IDENTITY,
+            template={
+                "variance_path_key": "template_variance",
+                "pieces": rule,
+            },
+        )
+        provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+        assert provider.pieces == rule
+        # one piece: both rules give the piece's own variance
+        provider.build()
+        assert np.nanmedian(provider.variance()) == pytest.approx(
+            9.0, rel=1e-6
+        )
+    with pytest.raises(ValueError, match="pieces must be one of"):
+        _generic(identity=IDENTITY, template={"pieces": "mean"}).template(
+            generic_pair, t, io, mapping_grid_step=16
+        )
+
+
+def test_template_fits_override_carries_the_variance_hdu(rubin_visit):
+    """A template already on the visit grid read through ``template_fits``
+    takes its variance from ``coadd_variance_hdu`` like a patch does."""
+    io = host_reader()
+    sel = dict(rubin_visit)
+    sel["template_fits"] = rubin_visit["template_coadds"][0]
+    t = make_adapter({"name": "rubin"}).load_target(sel, io)
+    plain = make_adapter({"name": "rubin"}).template(
+        sel, t, io, mapping_grid_step=16
+    )
+    assert not plain.refinable and not plain.has_variance
+    plain.build()
+    assert plain.variance() is None
+    adapter = make_adapter(
+        {"name": "rubin", "params": {"coadd_variance_hdu": 3}}
+    )
+    provider = adapter.template(sel, t, io, mapping_grid_step=16)
+    assert provider.has_variance and not provider.refinable
+    timg, tbad, _ = provider.build()
+    var = provider.variance()
+    assert var.shape == t.shape and var.dtype == np.float64
+    np.testing.assert_array_equal(var, 4.0)  # the first patch's plane
+    assert tbad is not None and tbad.sum() == 9  # the BAD block
+    at = provider.resampling(np.array([3.0]), np.array([7.0]))
+    assert at.weights.shape == (1, 1, 1) and at.is_translation.all()
+
+
+@pytest.mark.parametrize(
+    "selection_key", ["template_fits", "template_coadds"]
+)
+def test_rubin_template_rejects_mismatched_variance_shape(
+    rubin_visit, tmp_path, selection_key
+):
+    from astropy.io import fits
+
+    malformed = tmp_path / "mismatched_template.fits"
+    with fits.open(rubin_visit["template_coadds"][0]) as hdul:
+        hdul[3].data = np.full((8, 8), 4.0, np.float32)
+        hdul.writeto(malformed)
+    sel = dict(rubin_visit)
+    sel[selection_key] = (
+        str(malformed)
+        if selection_key == "template_fits"
+        else [str(malformed)]
+    )
+    io = host_reader()
+    adapter = make_adapter(
+        {"name": "rubin", "params": {"coadd_variance_hdu": 3}}
+    )
+    target = adapter.load_target(sel, io)
+    with pytest.raises(ValueError, match="template variance has shape"):
+        adapter.template(sel, target, io, mapping_grid_step=16)
+
+
+def test_generic_template_inverse_variance_and_shape_mismatch(
+    generic_pair, tmp_path
+):
+    """``template.variance_kind: inverse_variance`` inverts the plane (zero
+    weight is a NaN variance); a plane of another shape than the template
+    is rejected by name.
+    """
+    from astropy.io import fits
+
+    io = host_reader()
+    adapter = _generic(
+        identity=IDENTITY,
+        template={
+            "on_target_grid": True,
+            "variance_path_key": "weight",
+            "variance_kind": "inverse_variance",
+        },
+    )
+    t = adapter.load_target(generic_pair, io)
+    provider = adapter.template(generic_pair, t, io, mapping_grid_step=16)
+    provider.build()
+    var = provider.variance()
+    assert float(var[5, 5]) == pytest.approx(25.0) and np.isnan(var[0, 0])
+
+    small = tmp_path / "small_variance.fits"
+    fits.PrimaryHDU(np.full((8, 8), 9.0, np.float32)).writeto(small)
+    sel = {**generic_pair, "small": str(small)}
+    adapter = _generic(
+        identity=IDENTITY,
+        template={"on_target_grid": True, "variance_path_key": "small"},
+    )
+    with pytest.raises(ValueError, match="template variance has shape"):
+        adapter.template(sel, t, io, mapping_grid_step=16)
+
+
+def test_generic_variance_hdu_reads_the_template_file(generic_pair, tmp_path):
+    """``template.variance_hdu`` alone names an HDU of the template file."""
+    from astropy.io import fits
+
+    with fits.open(generic_pair["template"]) as hdul:
+        tmpl, header = hdul[0].data, hdul[0].header
+    tvar = np.full(tmpl.shape, 16.0, np.float32)
+    path = tmp_path / "template_with_variance.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(tmpl, header=header),
+            fits.ImageHDU(tvar, name="VARIANCE"),
+        ]
+    ).writeto(path)
+    sel = {**generic_pair, "template": str(path)}
+    adapter = _generic(
+        identity=IDENTITY,
+        template={
+            "image_hdu": 0,
+            "variance_hdu": "VARIANCE",
+            "on_target_grid": True,
+        },
+    )
+    assert "template_variance" not in adapter.required_keys
+    io = host_reader()
+    t = adapter.load_target(sel, io)
+    provider = adapter.template(sel, t, io, mapping_grid_step=16)
+    assert provider.has_variance
+    provider.build()
+    np.testing.assert_array_equal(provider.variance(), 16.0)
+
+
+def test_adapter_rejects_a_variance_plane_without_resampling_weights(
+    generic_pair,
+):
+    """``has_variance`` promises both ``variance()`` and ``resampling()``;
+    the base adapter's ``template()`` checks the pairing."""
+    from transient_chain.surveys.base import (
+        SurveyAdapter,
+        TemplateProvider,
+        check_template_provider,
+    )
+
+    class PlaneOnly(TemplateProvider):
+        has_variance = True
+
+        def build(self, affine=None):
+            return None, None, None
+
+        def variance(self):
+            return np.ones((2, 2))
+
+    class Broken(SurveyAdapter):
+        def build_template(self, sel, target, io, *, mapping_grid_step):
+            return PlaneOnly()
+
+    with pytest.raises(
+        TypeError, match="does not implement \\['resampling'\\]"
+    ):
+        Broken().template({}, None, None, mapping_grid_step=16)
+    with pytest.raises(TypeError, match="must return a TemplateProvider"):
+        check_template_provider(object())
+    bare = TemplateProvider()
+    assert check_template_provider(bare) is bare

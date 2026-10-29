@@ -9,8 +9,27 @@ from pathlib import Path
 import pytest
 import yaml
 from transient_chain import config
+from transient_chain.surveys import make_adapter
 
 HERE = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture
+def raw():
+    return yaml.safe_load((HERE / "config.yaml").read_text())
+
+
+def _rejects(raw, block, key, value, match):
+    """Validation of ``raw`` with ``block.key`` (the whole block when ``key``
+    is None) set to ``value`` raises ``ValueError`` matching ``match``.
+    """
+    bad = copy.deepcopy(raw)
+    if key is None:
+        bad[block] = value
+    else:
+        bad[block][key] = value
+    with pytest.raises(ValueError, match=match):
+        config.validate_config(bad)
 
 
 def test_shipped_config_loads_and_fills_defaults():
@@ -21,46 +40,58 @@ def test_shipped_config_loads_and_fills_defaults():
     assert cfg["align"]["star_box_px"] == 15
 
 
-def test_unknown_block_and_key_are_rejected(tmp_path):
-    raw = yaml.safe_load((HERE / "config.yaml").read_text())
-    bad = copy.deepcopy(raw)
-    bad["xfit"]["model"] = "gaussian"
-    with pytest.raises(ValueError, match="unknown keys \\['model'\\]"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["extra"] = {}
-    with pytest.raises(ValueError, match="unknown blocks"):
-        config.validate_config(bad)
+def test_generic_config_loads_and_builds_the_generic_adapter():
+    cfg = config.load_config(HERE / "config-generic.yaml")
+    assert set(cfg) == set(config.SCHEMA)
+    assert cfg["survey"]["name"] == "generic"
+    adapter = make_adapter(cfg["survey"])
+    assert adapter.name == "generic"
+    assert adapter.template_p["variance_path_key"] is None
+    assert cfg["uq"]["enabled"] and cfg["uq"]["correlation_positions"] == 1000
 
 
-def test_required_keys_and_value_checks():
-    raw = yaml.safe_load((HERE / "config.yaml").read_text())
-    bad = copy.deepcopy(raw)
-    del bad["detect"]["threshold_sigma"]
+def test_survey_name_is_required_with_no_default(raw):
+    _rejects(raw, "survey", "name", "", "survey.name must be a non-empty")
+    del raw["survey"]["name"]
+    with pytest.raises(ValueError, match="survey.name' is required"):
+        config.validate_config(raw)
+    with pytest.raises(ValueError, match="survey.name' is required"):
+        make_adapter({"params": {}})
+
+
+def test_unknown_block_and_key_are_rejected(raw):
+    _rejects(raw, "xfit", "model", "gaussian", "unknown keys \\['model'\\]")
+    _rejects(raw, "extra", None, {}, "unknown blocks")
+
+
+def test_required_keys_and_value_checks(raw):
+    _rejects(raw, "stamps", "stamp_size", 50, "odd")
+    _rejects(raw, "io", "reader", "cfitsio", "io.reader must be one of")
+    _rejects(
+        raw, "classify", "inference_policy", "Strict", "inference_policy"
+    )
+    _rejects(
+        raw,
+        "classify",
+        "noise_reference_sigma",
+        None,
+        "noise_reference_sigma is required",
+    )
+    _rejects(raw, "xfit", "solver", {"max_evaluations": 0}, "max_evaluations")
+    # the measurement needs at least the positions it would refuse to use
+    _rejects(
+        raw,
+        "uq",
+        "correlation_positions",
+        config.MIN_MEASURE_POSITIONS - 1,
+        "correlation_positions must be >=",
+    )
+    assert config.MIN_MEASURE_POSITIONS == 20
+    del raw["detect"]["threshold_sigma"]
     with pytest.raises(
         ValueError, match="detect.threshold_sigma' is required"
     ):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["stamps"]["stamp_size"] = 50
-    with pytest.raises(ValueError, match="odd"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["io"]["reader"] = "cfitsio"
-    with pytest.raises(ValueError, match="io.reader must be one of"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["classify"]["inference_policy"] = "Strict"
-    with pytest.raises(ValueError, match="inference_policy"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["classify"]["noise_reference_sigma"] = None
-    with pytest.raises(ValueError, match="noise_reference_sigma is required"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["xfit"]["solver"] = {"max_evaluations": 0}
-    with pytest.raises(ValueError, match="max_evaluations"):
-        config.validate_config(bad)
+        config.validate_config(raw)
 
 
 def test_overrides_parse_yaml_values_and_nest():
@@ -169,13 +200,14 @@ def test_psf_width_accepts_an_independent_width_or_no_photometry(
     assert cfg["xfit"]["psf_sigma_px"] == expected
 
 
-def test_uq_block_defaults_and_sky_term_rule():
-    raw = yaml.safe_load((HERE / "config.yaml").read_text())
+def test_uq_block_defaults_and_sky_term_rule(raw):
     cfg = config.validate_config(raw)
     assert cfg["uq"] == {
         "enabled": True,
         "kernel_fit": True,
         "max_lobe_reach_px": 32,
+        "measure_correlation": True,
+        "correlation_positions": 1000,
         "sky_astrometry_arcsec": None,
         "sky_astrometry_source": None,
     }
@@ -189,22 +221,22 @@ def test_uq_block_defaults_and_sky_term_rule():
         {"sky_astrometry_arcsec": 0.01},
         {"sky_astrometry_source": "survey"},
     ):
-        bad = copy.deepcopy(raw)
-        bad["uq"] = block
-        with pytest.raises(ValueError, match="set together"):
-            config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["uq"] = {"sky_astrometry_arcsec": -1.0, "sky_astrometry_source": "s"}
-    with pytest.raises(ValueError, match=">= 0"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["uq"] = {"enabled": "yes"}
-    with pytest.raises(ValueError, match="true or false"):
-        config.validate_config(bad)
-    bad = copy.deepcopy(raw)
-    bad["uq"] = {"sky_astrometry_arcsec": 0.01, "sky_astrometry_source": " "}
-    with pytest.raises(ValueError, match="non-empty string"):
-        config.validate_config(bad)
+        _rejects(raw, "uq", None, block, "set together")
+    _rejects(
+        raw,
+        "uq",
+        None,
+        {"sky_astrometry_arcsec": -1.0, "sky_astrometry_source": "s"},
+        ">= 0",
+    )
+    _rejects(raw, "uq", None, {"enabled": "yes"}, "true or false")
+    _rejects(
+        raw,
+        "uq",
+        None,
+        {"sky_astrometry_arcsec": 0.01, "sky_astrometry_source": " "},
+        "non-empty string",
+    )
 
 
 @pytest.mark.parametrize("value", [0, -1, True, float("nan"), 10**400])

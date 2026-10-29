@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# A complete configuration for the generic FITS adapter: any survey whose target image and
+# template are FITS files named in the selections file. The layout below is a DECam-style one
+# (image in the primary HDU, a separate inverse-variance weight file, a separate mask file, a
+# template on another pixel grid); change the survey block to match your files. Every other
+# block holds the same values as config.yaml and reads the same way. Unknown blocks or keys are
+# rejected at load; keys marked (required) have no default. Override any key from the command
+# line with --set block.key=value. See README "Other surveys".
+
+io:
+  reader: auto                # auto: GPU decode when the file and environment allow it, Astropy otherwise
+
+survey:
+  name: generic               # (required) generic: any FITS pair described by the parameters below
+  params:
+    identity: {exposure_id: expnum, ccd_id: ccdnum, band: band}   # selection keys that name an exposure
+    extra_keys: [field]       # selection keys copied into the catalog as columns
+    target:
+      path_key: image         # selection key holding the target image path
+      image_hdu: 0            # index, EXTNAME, or null for the file's first 2D image
+      mask_path_key: mask     # mask plane: path key and hdu as for the variance below; both null = no mask
+      mask_hdu: 0
+      variance_path_key: weight   # variance plane: a path key alone = that file's first 2D image, an hdu
+      variance_hdu: 0             # alone = that HDU of the image file, both null = no variance plane
+      variance_kind: inverse_variance   # variance | inverse_variance | none
+    template:
+      path_key: template      # selection key holding the template path
+      image_hdu: 0
+      mask_path_key: null
+      mask_hdu: null
+      variance_path_key: null # the template's variance plane, read like the target's; both null = no plane,
+      variance_hdu: null      # and the corr term of the error budget is off (README "Other surveys")
+      variance_kind: variance
+      on_target_grid: false   # false: reproject the template through its WCS onto the target grid
+      pieces: correlated      # how overlapping template pieces' variances combine: correlated | independent
+    mask_policy: strict       # none | strict (any nonzero bit) | hsc-masklite | {planes: [BAD, SAT]} | {bits: 5}
+
+align:                        # template on the target grid, then star-based refinement (worker step 2-3)
+  refine: true
+  star_finder: gpu            # gpu: device peaks + windowed centroids; daofind: photutils DAOStarFinder on host copies
+  mapping_grid_step: 100      # WCS evaluated every this many output pixels
+  min_affine_matches: 15      # fewer matches than this: fall back to a pure shift
+  min_shift_matches: 4        # fewer than this: skip refinement
+  star_fwhm_px: 4.0           # (required) smoothing FWHM of the star finder
+  star_threshold_sigma: 20.0  # (required) star detection threshold in robust sigmas
+  max_stars: 600
+  star_box_px: 15             # gpu finder: centroid window (odd); also the neighbor radius of the misalignment stars
+  centroid_iterations: 4      # gpu finder: windowed-centroid passes
+  match_radius_px: 8.0        # (required) target-template star match radius before refinement
+  verify_radius_px: 5.0       # (required) match radius for the residual check after refinement
+  xcorr_window_px: 512        # central window for the cross-correlation diagnostic
+
+subtract:                     # cuphoton.xpois.solve_constant_kernel_device (step 4-5)
+  kernel_height: 15           # (required, odd)
+  kernel_width: 15            # (required, odd)
+  basis_sigmas: [1.5, 3.0, 6.0]   # (required) Gaussian basis widths
+  basis_degrees: [2, 1, 0]        # (required) polynomial degree per basis
+  background_degree: 0
+  flux_conserve: false
+  template_bad_dilation_px: 0 # grow the template's bad mask (README "Known issues")
+  auto_stamp_mask: true       # restrict the kernel fit to compact sources
+  auto_stamp_size: 31
+  auto_stamp_count: 5
+  auto_peak_percentile: 99.5
+  auto_background_filter_size: 15
+  auto_peak_filter_size: 9
+  auto_compact_core_size: 3
+
+detect:                       # hotspot rule on the residual (step 6)
+  threshold_sigma: 5.0        # (required)
+  min_pixels: 3               # (required)
+
+stamps:                       # step 7; stamp_size also sets detect's edge margin and the classifier input size
+  stamp_size: 51              # (required, odd; must equal the checkpoint's image_size)
+
+xfit:                         # cuphoton.xfit.fit_dipoles_device with the Gaussian dipole model (step 8)
+  mode: difference
+  compute_dtype: float64
+  solver: {}                  # LMConfig fields: f_tol, x_tol, g_tol, max_evaluations, initial_damping,
+                              # damping_increase, damping_decrease; empty = library defaults
+  psf_sigma_px: null          # PSF standard deviation of the target image in pixels; null = measured from the
+                              # stars the refine stage matched (README "Configuration")
+
+uq:                           # the error budget behind <q>_err (step 8c; README "How the error bar is built")
+  enabled: true               # false: <q>_err equals <q>_err_fit and every other term is 0
+  kernel_fit: true            # the kernel fit's own uncertainty (kfit); one covariance per item over the fit pixels
+  measure_correlation: true   # measure the correlation factor at empty positions of each exposure; corr uses it
+                              # where it exceeds the closed form by over two standard errors
+  correlation_positions: 1000 # empty positions the factor is measured at (at least 20)
+  sky_astrometry_arcsec: null # external astrometric uncertainty per axis, written to sky_err_arcsec and never
+                              # added to the pixel columns
+  sky_astrometry_source: null # provenance of sky_astrometry_arcsec (e.g. the survey's astrometric summary)
+
+classify:                     # classifier inference through DLPack (step 9); checkpoint_dir comes from --checkpoint-dir
+  inference_policy: strict    # strict: float32, no autocast, no TF32; checkpoint: the policy saved with the checkpoint
+  apply_noise_match: true     # scale each stamp triplet so the search stamp's robust sigma equals noise_reference_sigma
+  noise_reference_sigma: 114.70530480194091   # a property of the CHECKPOINT, not the survey: the median robust sigma of
+                              # the search stamps it was trained on. Change it when you change checkpoints; set
+                              # apply_noise_match false to score unscaled stamps.
+  decision_threshold: 0.5
+  batch_size: 256

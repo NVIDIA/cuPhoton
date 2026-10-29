@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage operations for the GPU-resident Rubin chain.
+"""Stage operations for the GPU-resident chain, the same for every survey.
 
 Every function takes arrays from one array module (NumPy on the host for
 tests,

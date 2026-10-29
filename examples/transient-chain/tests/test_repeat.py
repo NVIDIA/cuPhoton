@@ -136,6 +136,8 @@ def _catalog(
                 )
         rows[f"{prefix}_xy_cov"] = np.zeros(n)
     rows["uq_valid"] = np.ones(n, bool)
+    rows["uq_window_masked"] = np.zeros(n, bool)
+    rows["uq_corr_measured"] = np.zeros(n, bool)
     rows["sky_err_arcsec"] = np.full(n, np.nan)
     rows["sky_err_source"] = np.array([None] * n, dtype=object)
     sky_int = w.all_pix2world(np.column_stack([ix, iy]).astype(float), 0)

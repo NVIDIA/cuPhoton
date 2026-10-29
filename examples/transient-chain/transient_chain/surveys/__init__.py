@@ -3,8 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Survey adapters: ``rubin`` (DP1 as shipped) and ``generic`` (any FITS pair
-by parameters).
+"""Survey adapters: ``rubin`` (one survey's layout as shipped) and ``generic``
+(any FITS pair by parameters). ``survey.name`` picks one; it has no default.
 """
 
 from __future__ import annotations
@@ -23,7 +23,11 @@ ADAPTERS: dict[str, type[SurveyAdapter]] = {
 
 
 def make_adapter(survey_cfg: Mapping[str, Any]) -> SurveyAdapter:
-    name = survey_cfg.get("name", "rubin")
+    name = survey_cfg.get("name")
+    if name is None:
+        raise ValueError(
+            f"config 'survey.name' is required; available: {sorted(ADAPTERS)}"
+        )
     if name not in ADAPTERS:
         raise ValueError(
             f"unknown survey '{name}'; available: {sorted(ADAPTERS)}"
