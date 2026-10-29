@@ -98,7 +98,7 @@ def test_damped_rl_weights_match_loss_derivative_with_finite_gradients(
     dtype,
 ) -> None:
     residual = torch.tensor(
-        [-1e6, -1.0, -0.5, -1e-3, 0.0, 1e-3, 0.5, 1.0, 1e6],
+        [-1e6, -1.0 - 1e-6, -0.5, -1e-3, 0.0, 1e-3, 0.5, 1.0 + 1e-6, 1e6],
         dtype=dtype,
         requires_grad=True,
     )

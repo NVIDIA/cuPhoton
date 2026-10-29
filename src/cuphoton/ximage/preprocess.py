@@ -7,8 +7,6 @@
 from __future__ import annotations
 
 import numpy as np
-from numpy.typing import DTypeLike
-from scipy.ndimage import maximum_filter
 
 from cuphoton.ximage.data import XImageBundle
 
@@ -22,67 +20,6 @@ def round_down_to_odd(n: float) -> int:
     if result < 1:
         raise ValueError(f"round_down_to_odd: no positive odd integer <= {n}")
     return result
-
-
-def create_object_masks(
-    object_masks: np.ndarray, df: int = 1, dtype: DTypeLike = np.uint8
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return good-pixel masks from the xImage twelve-plane mask schema.
-
-    The input shape is ``(batch, height, width, plane, exposure)``. Planes
-    0, 4, and 8 mark chip gaps and borders. Conservative masking additionally
-    excludes stripe planes 1, 7, and 9 and dilates large-source plane 10 by
-    a ``df``-pixel square. Other planes do not affect these mask policies.
-    """
-
-    object_dict = {
-        "chip_gap_border_1": 0,
-        "stripes_1": 1,
-        "chip_gap_border_2": 2,
-        "small_sources": 3,
-        "chip_gap_border_3": 4,
-        "various_sources": 5,
-        "null_1": 6,
-        "stripes_2": 7,
-        "chip_gap": 8,
-        "stripes_3": 9,
-        "large_sources": 10,
-        "null_2": 11,
-    }
-
-    exclusions_noncon = ["chip_gap_border_1", "chip_gap_border_3", "chip_gap"]
-    excluded_objects_noncon = object_masks[
-        :, :, :, object_dict[exclusions_noncon[0]], :
-    ]
-    for key in exclusions_noncon[1:]:
-        excluded_objects_noncon = np.logical_or(
-            excluded_objects_noncon,
-            object_masks[:, :, :, object_dict[key], :],
-        )
-    non_conservative = np.logical_not(excluded_objects_noncon).astype(dtype)
-
-    large_sources = np.array(
-        object_masks[:, :, :, object_dict["large_sources"], :], copy=True
-    )
-    for batch in range(large_sources.shape[0]):
-        for img in range(large_sources.shape[-1]):
-            large_sources[batch, :, :, img] = maximum_filter(
-                large_sources[batch, :, :, img].astype(dtype),
-                size=(df, df),
-                mode="constant",
-                cval=0,
-            )
-    excluded_objects_con = np.logical_or(
-        excluded_objects_noncon, large_sources
-    )
-
-    for key in ["stripes_1", "stripes_2", "stripes_3"]:
-        excluded_objects_con = np.logical_or(
-            excluded_objects_con,
-            object_masks[:, :, :, object_dict[key], :],
-        )
-    conservative = np.logical_not(excluded_objects_con).astype(dtype)
-    return conservative, non_conservative
 
 
 def _exposure_times(bundle: XImageBundle) -> np.ndarray:
@@ -100,40 +37,43 @@ def _exposure_times(bundle: XImageBundle) -> np.ndarray:
     return exp_times.reshape(1, 1, 1, -1)
 
 
+def _good_pixel_masks(
+    bundle: XImageBundle,
+    *,
+    slice_h: slice = slice(None),
+    slice_w: slice = slice(None),
+) -> np.ndarray:
+    masks = bundle.masks
+    if masks.shape != bundle.images.shape or masks.dtype != np.dtype(bool):
+        raise ValueError(
+            "Masks must be boolean with shape matching images "
+            "(batch, y, x, frame) and True for valid pixels"
+        )
+    return np.asarray(masks[:, slice_h, slice_w, :])
+
+
 def prepare_reconstruction_inputs(
-    bundle: XImageBundle, mask_mode: str, dilation_factor: int
+    bundle: XImageBundle, mask_mode: str = "provided"
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
-    if mask_mode not in ("none", "conservative", "non_conservative"):
+    if mask_mode not in ("none", "provided"):
         raise ValueError(f"Unsupported mask mode: {mask_mode}")
+    masks = _good_pixel_masks(bundle) if mask_mode == "provided" else None
     exp_times = _exposure_times(bundle)
     images = np.asarray(bundle.images) / exp_times
     variances = np.asarray(bundle.variances) / (exp_times**2)
 
-    if mask_mode == "none":
-        masks = None
-    else:
-        conservative, non_conservative = create_object_masks(
-            np.asarray(bundle.masks), df=dilation_factor
-        )
-        if mask_mode == "conservative":
-            masks = conservative
-        elif mask_mode == "non_conservative":
-            masks = non_conservative
-        else:
-            raise ValueError(f"Unsupported mask mode: {mask_mode}")
     return images, masks, variances
 
 
 def prepare_reconstruction_inputs_roi(
     bundle: XImageBundle,
     *,
-    mask_mode: str,
-    dilation_factor: int,
+    mask_mode: str = "provided",
     center_roi: tuple[int, int] | list[int] | None = None,
     height_roi: int | None = None,
     width_roi: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
-    if mask_mode not in ("none", "conservative", "non_conservative"):
+    if mask_mode not in ("none", "provided"):
         raise ValueError(f"Unsupported mask mode: {mask_mode}")
     slice_h, slice_w = spatial_roi_slices(
         (bundle.images.shape[1], bundle.images.shape[2]),
@@ -141,25 +81,17 @@ def prepare_reconstruction_inputs_roi(
         height_roi=height_roi,
         width_roi=width_roi,
     )
+    masks = (
+        _good_pixel_masks(bundle, slice_h=slice_h, slice_w=slice_w)
+        if mask_mode == "provided"
+        else None
+    )
     exp_times = _exposure_times(bundle)
     images = np.asarray(bundle.images[:, slice_h, slice_w, :]) / exp_times
     variances = np.asarray(bundle.variances[:, slice_h, slice_w, :]) / (
         exp_times**2
     )
 
-    if mask_mode == "none":
-        masks = None
-    else:
-        mask_roi = np.asarray(bundle.masks[:, slice_h, slice_w, :, :])
-        conservative, non_conservative = create_object_masks(
-            mask_roi, df=dilation_factor
-        )
-        if mask_mode == "conservative":
-            masks = conservative
-        elif mask_mode == "non_conservative":
-            masks = non_conservative
-        else:
-            raise ValueError(f"Unsupported mask mode: {mask_mode}")
     return images, masks, variances
 
 

@@ -13,7 +13,6 @@ import pytest
 import cuphoton.ximage.preprocess as preprocess
 from cuphoton.ximage.data import XImageBundle, validate_bundle
 from cuphoton.ximage.preprocess import (
-    create_object_masks,
     prepare_reconstruction_inputs_roi,
     round_down_to_odd,
 )
@@ -50,9 +49,7 @@ def test_prepare_reconstruction_inputs_validates_exposure_times(prepare):
         },
         metadata={},
     )
-    images, masks, variances = prepare(
-        bundle, mask_mode="none", dilation_factor=1
-    )
+    images, masks, variances = prepare(bundle, mask_mode="none")
     np.testing.assert_allclose(images[..., 0], 3.0)
     np.testing.assert_allclose(images[..., 1], 2.0)
     np.testing.assert_allclose(variances[..., 0], 9.0)
@@ -70,7 +67,7 @@ def test_prepare_reconstruction_inputs_validates_exposure_times(prepare):
     ):
         bundle.arrays["exp_times"] = np.asarray(invalid)
         with pytest.raises(ValueError, match="exposure times"):
-            prepare(bundle, mask_mode="none", dilation_factor=1)
+            prepare(bundle, mask_mode="none")
 
 
 @pytest.mark.parametrize(
@@ -85,7 +82,7 @@ def test_prepare_rejects_invalid_mask_mode_before_bundle_access(prepare):
         store_format="npy", store_path=Path("."), arrays={}, metadata={}
     )
     with pytest.raises(ValueError, match="Unsupported mask mode: invalid"):
-        prepare(bundle, mask_mode="invalid", dilation_factor=1)
+        prepare(bundle, mask_mode="invalid")
 
 
 def test_validate_bundle_rejects_wrong_rank() -> None:
@@ -94,7 +91,7 @@ def test_validate_bundle_rejects_wrong_rank() -> None:
         store_path=Path("."),
         arrays={
             "images": np.zeros((4, 4, 3), dtype=np.float64),
-            "masks": np.zeros((1, 4, 4, 12, 3), dtype=np.uint8),
+            "masks": np.ones((1, 4, 4, 3), dtype=bool),
             "sky": np.zeros((1, 4, 4, 3), dtype=np.uint8),
             "variances": np.zeros((1, 4, 4, 3), dtype=np.float64),
             "psfs": np.zeros((5, 5, 1, 3), dtype=np.float64),
@@ -107,17 +104,9 @@ def test_validate_bundle_rejects_wrong_rank() -> None:
     assert any("rank-4" in issue for issue in issues)
 
 
-def test_create_object_masks_does_not_mutate_input() -> None:
-    object_masks = np.zeros((1, 5, 5, 12, 1), dtype=np.uint8)
-    object_masks[0, 2, 2, 10, 0] = 1
-    before = object_masks.copy()
-    create_object_masks(object_masks, df=3)
-    assert np.array_equal(object_masks, before)
-
-
-def test_prepare_reconstruction_inputs_roi_crops_before_mask_dilation(
-    monkeypatch,
-) -> None:
+def test_prepare_reconstruction_inputs_roi_reads_only_requested_pixels() -> (
+    None
+):
     class SliceOnlyArray:
         def __init__(self, array):
             self.array = array
@@ -133,73 +122,61 @@ def test_prepare_reconstruction_inputs_roi_crops_before_mask_dilation(
             assert key[1:3] == (slice(3, 7), slice(3, 7))
             return self.array[key]
 
-    exposure_count = 2
-    images = np.ones((1, 10, 10, exposure_count), dtype=np.float64)
-    variances = np.ones_like(images)
-    masks = np.zeros((1, 10, 10, 12, exposure_count), dtype=np.uint8)
-    exp_times = np.ones((exposure_count,), dtype=np.float64)
+    images = np.ones((1, 10, 10, 2), dtype=np.float64)
+    masks = np.ones(images.shape, dtype=bool)
+    masks[:, 4, 4, 0] = False
     bundle = XImageBundle(
         store_format="npy",
         store_path=Path("."),
         arrays={
             "images": SliceOnlyArray(images),
             "masks": SliceOnlyArray(masks),
-            "sky": np.ones_like(images),
-            "variances": SliceOnlyArray(variances),
-            "psfs": np.zeros((3, 3, 1, exposure_count), dtype=np.float64),
-            "exp_times": exp_times,
-            "mcgauss": np.zeros((exposure_count, 3, 3), dtype=np.float64),
+            "variances": SliceOnlyArray(images),
+            "psfs": np.ones((3, 3, 1, 2)) / 9,
         },
         metadata={},
     )
-    seen_shapes: list[tuple[int, ...]] = []
-
-    def fake_create_object_masks(object_masks, df=1, dtype=np.uint8):
-        seen_shapes.append(tuple(object_masks.shape))
-        shape = object_masks.shape[:3] + (object_masks.shape[-1],)
-        conservative = np.zeros(shape, dtype=dtype)
-        non_conservative = np.ones(shape, dtype=dtype)
-        return conservative, non_conservative
-
-    monkeypatch.setattr(
-        preprocess,
-        "create_object_masks",
-        fake_create_object_masks,
-    )
-
     roi_images, roi_masks, roi_variances = prepare_reconstruction_inputs_roi(
-        bundle,
-        mask_mode="non_conservative",
-        dilation_factor=5,
-        center_roi=(5, 5),
-        height_roi=4,
-        width_roi=4,
+        bundle, center_roi=(5, 5), height_roi=4, width_roi=4
     )
-
-    assert seen_shapes == [(1, 4, 4, 12, exposure_count)]
-    assert roi_images.shape == (1, 4, 4, exposure_count)
-    assert roi_masks is not None
-    assert roi_masks.shape == (1, 4, 4, exposure_count)
-    assert roi_variances.shape == (1, 4, 4, exposure_count)
+    np.testing.assert_array_equal(roi_images, images[:, 3:7, 3:7])
+    np.testing.assert_array_equal(roi_masks, masks[:, 3:7, 3:7])
+    np.testing.assert_array_equal(roi_variances, images[:, 3:7, 3:7])
 
 
-@pytest.mark.parametrize("dilation", [1, 2, 3, 4])
-def test_conservative_dilation_covers_each_batch_and_exposure(
-    dilation,
-) -> None:
-    masks = np.zeros((2, 7, 7, 12, 2), dtype=np.uint8)
-    masks[:, 3, 3, 10, :] = 1
-    original = masks.copy()
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        preprocess.prepare_reconstruction_inputs,
+        prepare_reconstruction_inputs_roi,
+    ],
+)
+def test_prepare_minimal_bundle_and_provided_good_pixel_mask(prepare):
+    images = np.arange(48).reshape(1, 4, 6, 2)
+    variances = np.full_like(images, 4)
+    bundle = XImageBundle(
+        store_format="npy",
+        store_path=Path("."),
+        metadata={},
+        arrays={
+            "images": images,
+            "variances": variances,
+            "psfs": np.ones((3, 3, 1, 2)) / 9,
+        },
+    )
+    actual_images, masks, actual_variances = prepare(bundle)
+    np.testing.assert_array_equal(actual_images, images)
+    np.testing.assert_array_equal(actual_variances, variances)
+    assert masks.dtype == np.dtype(bool)
+    assert masks.all()
 
-    conservative, non_conservative = create_object_masks(masks, df=dilation)
-
-    expected = np.ones((2, 7, 7, 2), dtype=np.uint8)
-    start = 3 - (dilation - 1) // 2
-    stop = 4 + dilation // 2
-    expected[:, start:stop, start:stop, :] = 0
-    np.testing.assert_array_equal(conservative, expected)
-    np.testing.assert_array_equal(non_conservative, np.ones_like(expected))
-    np.testing.assert_array_equal(masks, original)
+    bundle.arrays["masks"] = images % 2 == 0
+    _, masks, _ = prepare(bundle)
+    np.testing.assert_array_equal(masks, bundle.masks)
+    assert prepare(bundle, mask_mode="none")[1] is None
+    bundle.arrays["masks"] = np.ones(images.shape, dtype=np.uint8)
+    with pytest.raises(ValueError, match="Masks must be boolean"):
+        prepare(bundle)
 
 
 @pytest.mark.parametrize("height,width", [(5, 7), (4, 6), (5, 6), (4, 7)])

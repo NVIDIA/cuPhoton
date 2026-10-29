@@ -48,14 +48,14 @@ class Artifact:
         Semantic axis names in storage order.
     spatial_dims
         Indices of the ``(y, x)`` axes, or ``None`` for non-spatial data.
-    exposure_dim
-        Exposure-axis index, or ``None`` when the artifact has no such axis.
+    frame_dim
+        Frame-axis index, or ``None`` when the artifact has no such axis.
     """
 
     key: str
     axes: tuple[str, ...]
     spatial_dims: tuple[int, int] | None
-    exposure_dim: int | None
+    frame_dim: int | None
 
     @property
     def npy_name(self) -> str:
@@ -67,47 +67,50 @@ class Artifact:
 ARTIFACTS: dict[str, Artifact] = {
     "images": Artifact(
         key="images",
-        axes=("batch", "y", "x", "exposure"),
+        axes=("batch", "y", "x", "frame"),
         spatial_dims=(1, 2),
-        exposure_dim=3,
+        frame_dim=3,
     ),
     "masks": Artifact(
         key="masks",
-        axes=("batch", "y", "x", "mask_class", "exposure"),
+        axes=("batch", "y", "x", "frame"),
         spatial_dims=(1, 2),
-        exposure_dim=4,
+        frame_dim=3,
     ),
     "sky": Artifact(
         key="sky",
-        axes=("batch", "y", "x", "exposure"),
+        axes=("batch", "y", "x", "frame"),
         spatial_dims=(1, 2),
-        exposure_dim=3,
+        frame_dim=3,
     ),
     "variances": Artifact(
         key="variances",
-        axes=("batch", "y", "x", "exposure"),
+        axes=("batch", "y", "x", "frame"),
         spatial_dims=(1, 2),
-        exposure_dim=3,
+        frame_dim=3,
     ),
     "psfs": Artifact(
         key="psfs",
-        axes=("psf_y", "psf_x", "channel", "exposure"),
+        axes=("psf_y", "psf_x", "channel", "frame"),
         spatial_dims=(0, 1),
-        exposure_dim=3,
+        frame_dim=3,
     ),
     "mcgauss": Artifact(
         key="mcgauss",
-        axes=("exposure", "kernel_y", "kernel_x"),
+        axes=("frame", "kernel_y", "kernel_x"),
         spatial_dims=(1, 2),
-        exposure_dim=0,
+        frame_dim=0,
     ),
     "exp_times": Artifact(
         key="exp_times",
-        axes=("exposure",),
+        axes=("frame",),
         spatial_dims=None,
-        exposure_dim=0,
+        frame_dim=0,
     ),
 }
+
+
+_REQUIRED_ARTIFACT_KEYS = ("images", "variances", "psfs")
 
 
 _RECONSTRUCTION_ARTIFACT_KEYS = (
@@ -127,6 +130,11 @@ STORE_PRIORITY = ("npy", "hdf5", "zarr")
 @dataclass
 class XImageBundle(Mapping[str, XImageArray]):
     """Collection of xImage arrays loaded from one supported store.
+
+    Images, variances, and PSFs are required. An optional boolean ``masks``
+    array matches the image shape and uses ``True`` for valid pixels.
+    Missing masks treat all pixels as valid; missing ``exp_times`` use one
+    per frame. ``sky`` and ``mcgauss`` are optional auxiliary arrays.
 
     HDF5 and Zarr arrays remain lazy proxies. Call :meth:`close` when the
     bundle is no longer needed, or use it as a context manager.
@@ -166,11 +174,13 @@ class XImageBundle(Mapping[str, XImageArray]):
 
     @property
     def masks(self) -> XImageArray:
-        return self.arrays["masks"]
+        if "masks" in self.arrays:
+            return self.arrays["masks"]
+        return np.broadcast_to(np.array(True), self.images.shape)
 
     @property
-    def sky(self) -> XImageArray:
-        return self.arrays["sky"]
+    def sky(self) -> XImageArray | None:
+        return self.arrays.get("sky")
 
     @property
     def variances(self) -> XImageArray:
@@ -181,12 +191,14 @@ class XImageBundle(Mapping[str, XImageArray]):
         return self.arrays["psfs"]
 
     @property
-    def mcgauss(self) -> XImageArray:
-        return self.arrays["mcgauss"]
+    def mcgauss(self) -> XImageArray | None:
+        return self.arrays.get("mcgauss")
 
     @property
     def exp_times(self) -> XImageArray:
-        return self.arrays["exp_times"]
+        if "exp_times" in self.arrays:
+            return self.arrays["exp_times"]
+        return np.ones(self.images.shape[3], dtype=np.float64)
 
     def axes(self, key: str) -> tuple[str, ...]:
         """Return semantic axis names for one loaded artifact."""
@@ -213,8 +225,8 @@ class XImageBundle(Mapping[str, XImageArray]):
             copy=copy,
         )
 
-    def reconstruction_inputs(self) -> tuple[XImageArray, ...]:
-        """Return arrays in the packaged reconstruction solver order."""
+    def reconstruction_inputs(self) -> tuple[XImageArray | None, ...]:
+        """Return solver arrays, using None for absent auxiliary data."""
 
         return (
             self.images,
@@ -234,11 +246,11 @@ class XImageBundle(Mapping[str, XImageArray]):
         arrays: dict[str, XImageArray] = {}
         for key, arr in self.arrays.items():
             artifact = ARTIFACTS[key]
-            if artifact.exposure_dim is None:
+            if artifact.frame_dim is None:
                 arrays[key] = arr
                 continue
             slicer: list[slice | list[int]] = [slice(None)] * arr.ndim
-            slicer[artifact.exposure_dim] = list(indices)
+            slicer[artifact.frame_dim] = list(indices)
             arrays[key] = arr[tuple(slicer)]
         metadata = dict(self.metadata)
         metadata["selected_exposures"] = list(indices)
@@ -357,13 +369,8 @@ def looks_like_zarr_store(path: Path) -> bool:
 
 
 def looks_like_npy_store(path: Path) -> bool:
-    return (
-        path.is_dir()
-        and (path / "metadata.json").exists()
-        and any(
-            (path / artifact.npy_name).exists()
-            for artifact in ARTIFACTS.values()
-        )
+    return path.is_dir() and any(
+        (path / artifact.npy_name).exists() for artifact in ARTIFACTS.values()
     )
 
 
@@ -385,8 +392,9 @@ def load_ximage_bundle(
     mmap_mode
         NumPy memory-map mode for ``.npy`` arrays, or ``None`` to load them.
     artifacts
-        Artifact keys to load; ``None`` loads the complete reconstruction
-        bundle in solver-input order.
+        Artifact keys to load. ``None`` or ``"all"`` loads images, variances,
+        and PSFs plus any available optional arrays in solver-input order.
+        An explicit selection requires each named array to exist.
 
     Returns
     -------
@@ -395,8 +403,9 @@ def load_ximage_bundle(
     """
 
     store_format, store_path = detect_ximage_store(base, prefer=prefer)
+    load_available = artifacts is None or artifacts == "all"
     keys = resolve_artifact_keys(
-        _RECONSTRUCTION_ARTIFACT_KEYS if artifacts is None else artifacts
+        _RECONSTRUCTION_ARTIFACT_KEYS if load_available else artifacts
     )
     resources: list[Any] = []
     try:
@@ -405,13 +414,25 @@ def load_ximage_bundle(
 
             handle = h5py.File(store_path, "r")
             resources.append(handle)
-            arrays = {key: handle[key] for key in keys}
+            arrays = {
+                key: handle[key]
+                for key in keys
+                if not load_available
+                or key in _REQUIRED_ARTIFACT_KEYS
+                or key in handle
+            }
         elif store_format == "zarr":
             import zarr
 
             group = zarr.open_group(str(store_path), mode="r")
             resources.append(group)
-            arrays = {key: group[key] for key in keys}
+            arrays = {
+                key: group[key]
+                for key in keys
+                if not load_available
+                or key in _REQUIRED_ARTIFACT_KEYS
+                or key in group
+            }
         else:
             arrays = {
                 key: load_artifact(
@@ -421,6 +442,9 @@ def load_ximage_bundle(
                     mmap_mode=mmap_mode,
                 )
                 for key in keys
+                if not load_available
+                or key in _REQUIRED_ARTIFACT_KEYS
+                or (store_path / ARTIFACTS[key].npy_name).exists()
             }
         metadata = load_store_metadata(store_format, store_path)
     except Exception:
@@ -443,7 +467,7 @@ def load_reconstruction_inputs(
     *,
     prefer: tuple[str, ...] = STORE_PRIORITY,
     mmap_mode: Literal["r+", "r", "w+", "c"] | None = "r",
-) -> tuple[np.ndarray, ...]:
+) -> tuple[np.ndarray | None, ...]:
     """Load reconstruction arrays in solver argument order.
 
     Parameters
@@ -459,7 +483,8 @@ def load_reconstruction_inputs(
     -------
     tuple
         Images, PSFs, masks, sky, variances, exposure times, and Gaussian
-        mixture kernels.
+        mixture kernels. Missing sky and Gaussian kernels remain ``None``;
+        masks and exposure times use their bundle defaults.
 
     Notes
     -----
@@ -469,11 +494,11 @@ def load_reconstruction_inputs(
     """
 
     bundle = load_ximage_bundle(base, prefer=prefer, mmap_mode=mmap_mode)
-    inputs = bundle.reconstruction_inputs()
-    if bundle.store_format not in {"hdf5", "zarr"}:
-        return tuple(np.asarray(array) for array in inputs)
     try:
-        return tuple(np.asarray(array) for array in inputs)
+        return tuple(
+            np.asarray(array) if array is not None else None
+            for array in bundle.reconstruction_inputs()
+        )
     finally:
         bundle.close()
 
@@ -543,47 +568,22 @@ def validate_bundle(bundle: XImageBundle) -> list[str]:
     """
 
     issues: list[str] = []
-    required = (
-        "images",
-        "masks",
-        "sky",
-        "variances",
-        "psfs",
-        "exp_times",
-        "mcgauss",
-    )
-    missing = [key for key in required if key not in bundle]
+    missing = [key for key in _REQUIRED_ARTIFACT_KEYS if key not in bundle]
     if missing:
         issues.append(f"Missing required artifacts: {', '.join(missing)}")
         return issues
 
-    images = bundle.images
-    masks = bundle.masks
-    sky = bundle.sky
-    variances = bundle.variances
-    psfs = bundle.psfs
-    exp_times = bundle.exp_times
-    mcgauss = bundle.mcgauss
-
-    exact_rank_checks = {
-        "images": images,
-        "masks": masks,
-        "sky": sky,
-        "variances": variances,
-        "psfs": psfs,
-        "mcgauss": mcgauss,
-        "exp_times": exp_times,
-    }
-    for key, arr in exact_rank_checks.items():
-        rank = expected_rank(ARTIFACTS[key])
+    for key, artifact in ARTIFACTS.items():
+        if key not in bundle:
+            continue
+        arr = bundle[key]
+        rank = expected_rank(artifact)
         if arr.ndim != rank:
             issues.append(f"{key} must be rank-{rank}, saw shape {arr.shape}")
             return issues
 
-    if masks.shape[3] != 12:
-        issues.append(
-            f"Masks must have exactly 12 planes, saw {masks.shape[3]}"
-        )
+    images = bundle.images
+    psfs = bundle.psfs
     if (
         psfs.shape[0] <= 0
         or psfs.shape[0] != psfs.shape[1]
@@ -593,49 +593,34 @@ def validate_bundle(bundle: XImageBundle) -> list[str]:
             "PSF kernels must have positive, square, odd spatial dimensions, "
             f"saw {psfs.shape[:2]}"
         )
-    exposure_times = np.asarray(exp_times)
+    exposure_times = np.asarray(bundle.exp_times)
     if exposure_times.dtype.kind not in "fiu" or not np.all(
         np.isfinite(exposure_times) & (exposure_times > 0)
     ):
         issues.append("Exposure times must be finite and strictly positive")
 
-    if images.shape != sky.shape:
+    for key in ("variances", "sky", "masks"):
+        if key in bundle and bundle[key].shape != images.shape:
+            issues.append(
+                f"{key} shape {bundle[key].shape} does not match "
+                f"images shape {images.shape}"
+            )
+    if "masks" in bundle and bundle.masks.dtype != np.dtype(bool):
         issues.append(
-            f"Sky shape {sky.shape} does not match "
-            f"images shape {images.shape}"
-        )
-    if images.shape != variances.shape:
-        issues.append(
-            f"Variance shape {variances.shape} does not match "
-            f"images shape {images.shape}"
-        )
-    if masks.shape[:3] != images.shape[:3]:
-        issues.append(
-            f"Mask spatial shape {masks.shape[:3]} does not match "
-            f"image shape {images.shape[:3]}"
+            "Masks must have boolean dtype with True for valid pixels"
         )
 
-    exposures = images.shape[3]
-    if masks.shape[4] != exposures:
-        issues.append(
-            f"Mask exposure count {masks.shape[4]} != "
-            f"image exposure count {exposures}"
-        )
-    if psfs.shape[3] != exposures:
-        issues.append(
-            f"PSF exposure count {psfs.shape[3]} != "
-            f"image exposure count {exposures}"
-        )
-    if mcgauss.shape[0] != exposures:
-        issues.append(
-            f"mcgauss exposure count {mcgauss.shape[0]} != "
-            f"image exposure count {exposures}"
-        )
-    if exp_times.shape[0] != exposures:
-        issues.append(
-            f"Exposure time count {exp_times.shape[0]} != "
-            f"image exposure count {exposures}"
-        )
+    frames = images.shape[3]
+    for key in ("psfs", "mcgauss", "exp_times"):
+        if key not in bundle:
+            continue
+        frame_dim = ARTIFACTS[key].frame_dim
+        assert frame_dim is not None
+        count = bundle[key].shape[frame_dim]
+        if count != frames:
+            issues.append(
+                f"{key} frame count {count} != image frame count {frames}"
+            )
     return issues
 
 
@@ -773,7 +758,7 @@ def slice_spatial_roi(
 def centered_bundle_rois(
     bundle: XImageBundle,
     *,
-    keys: tuple[str, ...] = ("images", "masks", "sky", "variances"),
+    keys: tuple[str, ...] | None = None,
     center: tuple[int, int] | None = None,
     height: int | None = None,
     width: int | None = None,
@@ -786,7 +771,8 @@ def centered_bundle_rois(
     bundle
         Source bundle.
     keys
-        Spatial artifact keys to extract.
+        Spatial artifact keys to extract. By default, extract whichever of
+        images, masks, sky, and variances are present in the store.
     center
         Optional ``(y, x)`` center shared by every artifact.
     height, width
@@ -800,6 +786,12 @@ def centered_bundle_rois(
         NumPy arrays keyed by artifact name.
     """
 
+    if keys is None:
+        keys = tuple(
+            key
+            for key in ("images", "masks", "sky", "variances")
+            if key in bundle
+        )
     missing = [key for key in keys if key not in bundle]
     if missing:
         loaded = ", ".join(bundle.keys())

@@ -21,7 +21,7 @@ from cuphoton.ximage.data.bundle import (
 def _bundle() -> XImageBundle:
     arrays = {
         "images": np.zeros((1, 8, 8, 3), dtype=np.float64),
-        "masks": np.zeros((1, 8, 8, 12, 3), dtype=np.uint8),
+        "masks": np.ones((1, 8, 8, 3), dtype=bool),
         "sky": np.zeros((1, 8, 8, 3), dtype=np.uint8),
         "variances": np.zeros((1, 8, 8, 3), dtype=np.float64),
         "psfs": np.zeros((5, 5, 1, 3), dtype=np.float64),
@@ -76,8 +76,9 @@ def test_select_exposures_subsets_all_exposure_axes() -> None:
     bundle = _bundle()
     subset = bundle.select_exposures([1])
     assert subset.images.shape == (1, 8, 8, 1)
-    assert subset.masks.shape == (1, 8, 8, 12, 1)
+    assert subset.masks.shape == (1, 8, 8, 1)
     assert subset.psfs.shape == (5, 5, 1, 1)
+    assert subset.mcgauss is not None
     assert subset.mcgauss.shape == (1, 3, 3)
     assert subset.exp_times.shape == (1,)
     assert subset.metadata["selected_exposures"] == [1]
@@ -219,12 +220,20 @@ def test_numeric_store_round_trip(tmp_path: Path, store_format: str) -> None:
         np.testing.assert_array_equal(bundle.images[:], images)
 
 
-@pytest.mark.parametrize("plane_count", [11, 13])
-def test_validation_rejects_wrong_mask_plane_count(plane_count: int) -> None:
+@pytest.mark.parametrize(
+    "masks,issue",
+    [
+        (np.zeros((1, 8, 8, 12, 3), dtype=bool), "rank-4"),
+        (np.ones((1, 8, 8, 3), dtype=np.uint8), "boolean dtype"),
+        (np.ones((1, 7, 8, 3), dtype=bool), "does not match"),
+        (np.ones((1, 8, 8, 2), dtype=bool), "does not match"),
+    ],
+)
+def test_validation_rejects_invalid_good_pixel_masks(masks, issue) -> None:
     bundle = _bundle()
-    bundle.arrays["masks"] = np.zeros((1, 8, 8, plane_count, 3))
+    bundle.arrays["masks"] = masks
     assert any(
-        "12 planes" in issue for issue in bundle_data.validate_bundle(bundle)
+        issue in found for found in bundle_data.validate_bundle(bundle)
     )
 
 
@@ -256,3 +265,65 @@ def test_bundle_validation_preserves_generic_batch_and_channel_axes() -> None:
         bundle.arrays[key] = np.repeat(bundle.arrays[key], 2, axis=0)
     bundle.arrays["psfs"] = np.repeat(bundle.psfs, 2, axis=2)
     assert bundle_data.validate_bundle(bundle) == []
+
+
+@pytest.mark.parametrize("store_format", ["npy", "hdf5", "zarr"])
+def test_minimal_bundle_loads_with_optional_defaults(tmp_path, store_format):
+    arrays = {
+        "images": np.arange(48, dtype=np.float32).reshape(1, 4, 6, 2),
+        "variances": np.ones((1, 4, 6, 2), dtype=np.float32),
+        "psfs": np.ones((3, 3, 1, 2), dtype=np.float32) / 9,
+    }
+    path = tmp_path / "minimal"
+    if store_format == "npy":
+        path.mkdir()
+        for key, values in arrays.items():
+            np.save(path / f"{key}.npy", values)
+    elif store_format == "hdf5":
+        h5py = pytest.importorskip("h5py")
+        path = path.with_suffix(".h5")
+        with h5py.File(path, "w") as store:
+            for key, values in arrays.items():
+                store.create_dataset(key, data=values)
+    else:
+        zarr = pytest.importorskip("zarr")
+        path = path.with_suffix(".zarr")
+        store = zarr.open_group(str(path), mode="w")
+        for key, values in arrays.items():
+            store.create_array(key, data=values)
+
+    with load_ximage_bundle(path) as bundle:
+        assert bundle_data.validate_bundle(bundle) == []
+        assert set(bundle) == set(arrays)
+        assert bundle.sky is None
+        assert bundle.mcgauss is None
+        rois = bundle_data.centered_bundle_rois(bundle, height=2, width=2)
+        assert set(rois) == {"images", "variances"}
+        np.testing.assert_array_equal(
+            rois["images"], arrays["images"][:, 1:3, 2:4]
+        )
+        assert bundle.masks.dtype == np.dtype(bool)
+        np.testing.assert_array_equal(
+            bundle.masks, np.ones_like(arrays["images"])
+        )
+        np.testing.assert_array_equal(bundle.exp_times, [1.0, 1.0])
+        assert bundle.axes("images") == ("batch", "y", "x", "frame")
+        assert bundle.axes("masks") == bundle.axes("images")
+        subset = bundle.select_exposures([1])
+        assert subset.masks.shape == (1, 4, 6, 1)
+        np.testing.assert_array_equal(subset.exp_times, [1.0])
+
+    inputs = bundle_data.load_reconstruction_inputs(path)
+    assert inputs[3] is None
+    assert inputs[6] is None
+    np.testing.assert_array_equal(inputs[0], arrays["images"])
+    np.testing.assert_array_equal(inputs[2], np.ones_like(arrays["images"]))
+
+
+@pytest.mark.parametrize("key", ["images", "variances", "psfs"])
+def test_validation_requires_core_arrays(key):
+    bundle = _bundle()
+    del bundle.arrays[key]
+    assert bundle_data.validate_bundle(bundle) == [
+        f"Missing required artifacts: {key}"
+    ]
