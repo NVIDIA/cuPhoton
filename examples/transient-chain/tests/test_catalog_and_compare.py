@@ -54,6 +54,13 @@ def _full_table(n, rng):
             "psf_flux_err",
         ):
             t[name] = rng.normal(size=n)
+    for name, (dtype, _, _) in catalog.BUDGET_COLUMNS.items():
+        if name.startswith("psf_flux"):
+            continue
+        t[name] = {
+            "bool": np.ones(n, bool),
+            "object": np.array(["survey"] * n, dtype=object),
+        }.get(dtype, rng.uniform(size=n))
     t["ra"] = rng.uniform(size=n)
     t["dec"] = rng.uniform(size=n)
     return t
@@ -97,6 +104,18 @@ def test_empty_and_full_items_share_one_schema_and_merge_without_promotion():
     )
     for q in ("center_x", "center_y", "positive_x", "positive_y", "psf_flux"):
         assert {f"{q}_err_fit", f"{q}_err"} <= set(full.columns)
+        assert {f"{q}_err_{t}" for t in catalog.BUDGET_TERMS} <= set(
+            full.columns
+        )
+    assert np.isnan(full["psf_flux_err_kfit"]).all()
+    assert full["uq_valid"].dtype == bool and empty["uq_valid"].dtype == bool
+    assert full["sky_err_arcsec"].dtype == np.float64
+    assert str(full["sky_err_source"].dtype) in ("object", "str")
+    assert full["sky_err_source"].iloc[0] == "survey"
+    # the columns #37 defined keep their order; the budget's follow them
+    names = list(full.columns)
+    assert names.index("psf_flux_err") < names.index("center_x_err_corr")
+    assert names.index("sky_err_source") < names.index("logit")
     merged = pd.concat([empty, full], ignore_index=True)
     assert (
         merged["x"].dtype == np.int64

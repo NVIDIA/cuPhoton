@@ -63,6 +63,23 @@ def _positive_finite_num(v, name):
     return v
 
 
+def _nonnegative_finite_num(v, name):
+    _num()(v, name)
+    try:
+        finite = math.isfinite(v)
+    except OverflowError:
+        finite = False
+    if not finite or v < 0:
+        raise ValueError(f"{name} must be finite and >= 0, got {v}")
+    return v
+
+
+def _nonempty_str(v, name):
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError(f"{name} must be a non-empty string, got {v!r}")
+    return v
+
+
 def _bool(v, name):
     if not isinstance(v, bool):
         raise ValueError(f"{name} must be true or false, got {v!r}")
@@ -175,6 +192,13 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "solver": ({}, _mapping),
         "psf_sigma_px": (None, _opt(_positive_finite_num)),
     },
+    "uq": {
+        "enabled": (True, _bool),
+        "kernel_fit": (True, _bool),
+        "max_lobe_reach_px": (32, _positive_finite_num),
+        "sky_astrometry_arcsec": (None, _opt(_nonnegative_finite_num)),
+        "sky_astrometry_source": (None, _opt(_nonempty_str)),
+    },
     "classify": {
         "inference_policy": ("strict", _choice(*INFERENCE_POLICIES)),
         "apply_noise_match": (True, _bool),
@@ -281,6 +305,15 @@ def validate_config(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "subtract.basis_sigmas and subtract.basis_degrees must have the "
             "same length"
+        )
+    u = cfg["uq"]
+    if (u["sky_astrometry_arcsec"] is None) != (
+        u["sky_astrometry_source"] is None
+    ):
+        raise ValueError(
+            "uq.sky_astrometry_arcsec and uq.sky_astrometry_source are set "
+            "together: the sky term is reported with its provenance or not "
+            "at all"
         )
     if (
         cfg["classify"]["apply_noise_match"]

@@ -557,7 +557,7 @@ def noise_match_factors(search_stamps, reference_sigma: float):
 # --- star measurements, misalignment and PSF width --------------------------
 
 
-def _patches(image, x, y, half):
+def patches(image, x, y, half):
     """(N, 2 half + 1, 2 half + 1) float64 windows of ``image`` centered on
     the pixels rint(x), rint(y); NaN where a window leaves the image.
     """
@@ -591,7 +591,7 @@ def _star_boxes(image, variance, xy, box, fwhm, smoothed=None):
     half = box // 2
     c = xp.asarray(xy, dtype=xp.float64).reshape(-1, 2)
     s = xp.nan_to_num(
-        _patches(smooth, c[:, 0], c[:, 1], half), nan=-xp.inf
+        patches(smooth, c[:, 0], c[:, 1], half), nan=-xp.inf
     ).reshape(len(c), -1)
     k = xp.argmax(s, axis=1)
     width = 2 * half + 1
@@ -601,8 +601,8 @@ def _star_boxes(image, variance, xy, box, fwhm, smoothed=None):
     wy = py[:, None, None] + off[None, :, None]
     wx = px[:, None, None] + off[None, None, :]
     return (
-        xp.nan_to_num(_patches(work, px, py, half)),
-        xp.nan_to_num(_patches(v, px, py, half)),
+        xp.nan_to_num(patches(work, px, py, half)),
+        xp.nan_to_num(patches(v, px, py, half)),
         wx - c[:, 0, None, None],
         wy - c[:, 1, None, None],
     )
@@ -919,7 +919,7 @@ def _misalignment_model(
     return Misalignment(A, b, cov(tau2), "rms", tau2, used, e, tuple(shape))
 
 
-def _chi2_median_scale(num, base, scale) -> float:
+def chi2_median_scale(num, base, scale) -> float:
     """t >= 0 with median(num / (base + t scale)) at the chi-square(1) median,
     0 when the median is already at or below it: the extra variance a sample
     of squared deviations asks for, which a few outliers do not set.
@@ -983,7 +983,7 @@ def fit_misalignment(
         # cannot hide itself
         t2 = np.array(
             [
-                _chi2_median_scale((e - p)[used, a] ** 2, base[used, a], 1.0)
+                chi2_median_scale((e - p)[used, a] ** 2, base[used, a], 1.0)
                 for a in (0, 1)
             ]
         )
@@ -1044,14 +1044,17 @@ def psf_width(widths, *, clip: float = 3.0, iterations: int = 5) -> PsfWidth:
 class MatchedStars:
     """What ``measure_matched_stars`` found: ``diagnostics`` (host scalars for
     the run summary), the ``misalignment`` model or None, the target's PSF
-    width from the kept stars or None when no width was finite, and the host
-    bytes of the two low-threshold peak lists (``control_bytes``).
+    width from the kept stars or None when no width was finite, the host
+    bytes of the two low-threshold peak lists (``control_bytes``) and the
+    target positions ``star_xy`` (N, 2) of the kept stars: the model's used
+    set when it was fitted, every neighbor-free finite pair otherwise.
     """
 
     diagnostics: dict[str, Any]
     misalignment: Misalignment | None
     psf: PsfWidth | None
     control_bytes: int
+    star_xy: np.ndarray
 
 
 def measure_matched_stars(
@@ -1091,7 +1094,7 @@ def measure_matched_stars(
     }
     if len(target_xy) < 3:
         diag["reason"] = "fewer than 3 matched stars"
-        return MatchedStars(diag, None, None, 0)
+        return MatchedStars(diag, None, None, 0, target_xy)
     peaks_t = find_stars(
         target, fwhm=fwhm, smoothed=target_smoothed, **NEIGHBOR_PEAKS
     )
@@ -1105,7 +1108,7 @@ def measure_matched_stars(
     diag["stars_neighbor_free"] = int(len(mv))
     if len(mv) < 3:
         diag["reason"] = "fewer than 3 neighbor-free stars"
-        return MatchedStars(diag, None, None, control_bytes)
+        return MatchedStars(diag, None, None, control_bytes, mv)
     tm = star_measurements(
         target, variance, mv, box=box, fwhm=fwhm, smoothed=target_smoothed
     )
@@ -1139,6 +1142,7 @@ def measure_matched_stars(
             center_sigma_px=np.sqrt(center).tolist(),
         )
         widths = widths[model.used]
+        mv = mv[model.used]
     psf = None
     if np.isfinite(widths).any():
         psf = psf_width(widths)
@@ -1149,4 +1153,4 @@ def measure_matched_stars(
             "n_used": psf.n_used,
             "n": psf.n,
         }
-    return MatchedStars(diag, model, psf, control_bytes)
+    return MatchedStars(diag, model, psf, control_bytes, mv)
