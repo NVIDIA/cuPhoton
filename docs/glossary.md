@@ -12,6 +12,16 @@
 : A detection or object selected for further investigation. A stable candidate
   ID connects its image cutouts, fitted measurements, scores, and review records.
 
+**Correlation factor**
+: The variance of a weighted sum of difference-image pixels, such as a PSF
+  flux, divided by the variance the diagonal variance plane predicts for it.
+  The template's noise, and the correlations that resampling and kernel
+  convolution add, usually make it larger than 1.
+
+**Coverage**
+: The fraction of measurements whose interval contains the true value. A
+  correct 95% interval contains the truth in 95% of repeated measurements.
+
 **Difference image**
 : An image formed by subtracting a PSF- and background-matched reference from
   a target/search image.
@@ -19,6 +29,17 @@
 **Dipole**
 : A positive lobe beside a negative lobe in a difference image. A positional
   mismatch or source motion can produce this pattern.
+
+**Error bar**
+: The standard uncertainty quoted with a measured quantity: one standard
+  deviation per axis for a position, and of the flux for a flux. The transient
+  chain writes it as `<q>_err`, the quadrature sum of the terms of its error
+  budget.
+
+**Error budget**
+: The separate sources of uncertainty that make up an error bar, each a
+  standard uncertainty in the quantity's units. See
+  [Uncertainty quantification](uncertainty-quantification.md#sources-of-uncertainty).
 
 **Exposure**
 : One detector image and its associated variance, mask, WCS, PSF, timing, and
@@ -45,6 +66,10 @@
   a weighted sum of neighboring input pixels. In GPU programming, a kernel is
   a function launched on the device.
 
+**Kernel mismatch**
+: Template flux that the subtraction kernel does not match and leaves in the
+  difference image at a static source.
+
 **LSST**
 : The Legacy Survey of Space and Time conducted by Vera C. Rubin Observatory.
   cuPhoton consumes caller-supplied local survey products.
@@ -69,6 +94,12 @@
 **Reference/template image**
 : The image convolved or otherwise matched to the target/search image before
   subtraction.
+
+**Repeat test**
+: A check of position error bars on repeated exposures of one detector: a
+  static source's scatter between exposures divided by its error bars gives a
+  chi-square per degree of freedom near 1 when the error bars are correct.
+  Survey pipelines call this repeatability.
 
 **Reprojection**
 : Resampling an image under a coordinate mapping so its output pixels refer to

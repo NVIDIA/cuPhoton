@@ -59,6 +59,8 @@ requirements.
   process.
 - [Data and artifact contracts](data-artifacts.md): shapes, files, metadata,
   and provenance.
+- [Uncertainty quantification](uncertainty-quantification.md): the error bars
+  of transient catalogs, their terms, configuration, and checks on your data.
 - [Troubleshooting](troubleshooting.md): environment, CUDA, data, and CLI
   failures.
 - [Glossary](glossary.md): project and astronomy terminology.
