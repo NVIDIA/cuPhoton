@@ -422,9 +422,10 @@ def test_masked_nonfinite_split_data_and_independent_row_convergence():
 
 
 @pytest.mark.parametrize("case", ["rank-deficient", "budget", "nonfinite"])
-def test_native_failure_statuses_and_diagnostics_match_cupy(case):
+@pytest.mark.parametrize("shape", [(11, 15), (51, 51)])
+def test_native_failure_statuses_and_diagnostics_match_cupy(case, shape):
     _require_native()
-    model, truth, images, initial = _fixture()
+    model, truth, images, initial = _fixture(shape=shape)
     config = LMConfig()
     if case == "rank-deficient":
         truth[:, 0] = 0
@@ -455,11 +456,14 @@ def test_native_failure_statuses_and_diagnostics_match_cupy(case):
     [(0,), (1,), (2,), (0, 1, 2)],
     ids=["first", "middle", "last", "all"],
 )
-def test_native_filters_nonfinite_jacobians_without_reordering_rows(bad_rows):
+@pytest.mark.parametrize("shape", [(11, 15), (51, 51)])
+def test_native_filters_nonfinite_jacobians_without_reordering_rows(
+    bad_rows, shape
+):
     cp = _require_native()
     from cuphoton.xfit._native import last_timings
 
-    model, truth, _, initial = _fixture()
+    model, truth, _, initial = _fixture(shape=shape)
     truth = np.concatenate((truth, truth[:1]))
     initial = np.concatenate((initial, initial[:1]))
     # Distinct amplitudes make a survivor-row permutation observable.
