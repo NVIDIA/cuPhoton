@@ -447,8 +447,13 @@ flux_error = np.sqrt(u_fit**2 + u_corr**2 + u_kfit**2)
 
 `residual_variance=target_variance` makes the factor relative to the variance
 that xFit used. The factor then includes the template noise as well as its
-correlations. For a position, replace the PSF weights with
-`psf_weights(..., derivative="x")` or `"y"`, normalized the same way.
+correlations. For a lobe position, replace the PSF with
+`psf_weights(..., derivative="x")` or `"y"`, normalize the weights as above,
+and divide them by the fitted lobe flux, which must be finite and nonzero.
+`kernel_fit_variance` then returns a variance in squared pixels. Set `u_fit`
+to xFit's corresponding lobe-position error when computing `u_corr` and the
+total error bar. The dipole center requires a weight stamp covering both lobes.
+
 `kernel_fit_covariance` uses one resampling stamp for every fit pixel. This
 approximation holds where the mapping is close to a translation.
 
