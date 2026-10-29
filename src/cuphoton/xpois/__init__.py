@@ -20,6 +20,7 @@ from .kernel_uncertainty import (
     kernel_fit_covariance,
     kernel_fit_variance,
 )
+from .measurement import empty_positions, forced_flux_at, kernel_centroid
 from .noise import (
     ConstantKernelNoiseResult,
     standardize_constant_kernel_residual,
@@ -42,6 +43,7 @@ from .ois import (
     solve_separable_kernel,
     triangular_degree_pairs,
 )
+from .review import identify_residual_hotspots, residual_hotspot_table
 from .spatial_als import (
     SpatialALSConfig,
     SpatialALSFitResult,
@@ -79,15 +81,20 @@ __all__ = [
     "build_gaussian_polynomial_basis",
     "correlation_factor",
     "empirical_correlation_factor",
+    "empty_positions",
     "evaluate_background_model",
     "extract_centered_stamp",
+    "forced_flux_at",
+    "identify_residual_hotspots",
     "inspect_hsc_data_tree",
+    "kernel_centroid",
     "kernel_fit_covariance",
     "kernel_fit_variance",
     "load_image_array",
     "make_stamp_mask",
     "psf_weights",
     "resampling_variance_factor",
+    "residual_hotspot_table",
     "resolve_backend",
     "simple_difference_stamp",
     "solve_constant_kernel",

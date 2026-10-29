@@ -29,6 +29,7 @@ def forced_psf_photometry(
     psf_sigma: float | ArrayLike,
     *,
     mask: ArrayLike | None = None,
+    psf: ArrayLike | None = None,
 ) -> ForcedPhotometryResult:
     """Fit the flux of a circular Gaussian PSF at fixed positions.
 
@@ -37,7 +38,11 @@ def forced_psf_photometry(
     coordinates, and ``psf_sigma`` is the PSF standard deviation in pixels,
     one value or one per stamp. The PSF is normalized to unit integral, so
     ``flux`` is the source's total flux, as ``2 pi |amplitude| sigma_x
-    sigma_y`` is for a Gaussian dipole lobe.
+    sigma_y`` is for a Gaussian dipole lobe. ``psf`` replaces the Gaussian
+    with ``(batch, y, x)`` model stamps already evaluated at ``positions``
+    (such as ``cuphoton.xpois.psf_weights`` with their offsets); the
+    estimator and pixel-validity rules are the same. ``psf_sigma`` is ignored
+    when ``psf`` is supplied.
 
     The model is linear in the flux, so the weighted least-squares solution
     and its standard error are exact: ``flux = sum(w P D) / sum(w P^2)`` and
@@ -67,22 +72,31 @@ def forced_psf_photometry(
     xy = xp.asarray(positions, dtype=xp.float64)
     if xy.shape != (batch, 2):
         raise ValueError("positions must have shape (batch, 2)")
-    sigma = xp.broadcast_to(xp.asarray(psf_sigma, dtype=xp.float64), (batch,))
     good = xp.isfinite(data) & xp.isfinite(var) & (var > 0)
     if mask is not None:
         good &= xp.asarray(mask, dtype=bool)
     weight = xp.where(good, 1.0 / xp.where(good, var, 1.0), 0.0)
 
-    x = xp.arange(width, dtype=xp.float64) - (width - 1) / 2
-    y = xp.arange(height, dtype=xp.float64) - (height - 1) / 2
-    positive = xp.isfinite(sigma) & (sigma > 0)
-    s2 = xp.where(positive, sigma**2, 1.0)[:, None, None]
-    r2 = (x[None, None, :] - xy[:, 0, None, None]) ** 2 + (
-        y[None, :, None] - xy[:, 1, None, None]
-    ) ** 2
-    psf = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
+    if psf is None:
+        sigma = xp.broadcast_to(
+            xp.asarray(psf_sigma, dtype=xp.float64), (batch,)
+        )
+        positive = xp.isfinite(sigma) & (sigma > 0)
+        x = xp.arange(width, dtype=xp.float64) - (width - 1) / 2
+        y = xp.arange(height, dtype=xp.float64) - (height - 1) / 2
+        s2 = xp.where(positive, sigma**2, 1.0)[:, None, None]
+        r2 = (x[None, None, :] - xy[:, 0, None, None]) ** 2 + (
+            y[None, :, None] - xy[:, 1, None, None]
+        ) ** 2
+        kernel = xp.exp(-0.5 * r2 / s2) / (2.0 * xp.pi * s2)
+    else:
+        positive = xp.ones(batch, dtype=bool)
+        kernel = xp.asarray(psf, dtype=xp.float64)
+        if kernel.shape != data.shape:
+            raise ValueError("psf must share the shape of images")
+        kernel = xp.where(good, kernel, 0.0)
 
-    information = (weight * psf * psf).sum(axis=(1, 2))
+    information = (weight * kernel * kernel).sum(axis=(1, 2))
     valid = (
         xp.isfinite(information)
         & (information > 0)
@@ -90,7 +104,8 @@ def forced_psf_photometry(
         & xp.isfinite(xy).all(axis=1)
     )
     safe = xp.where(valid, information, 1.0)
-    flux = (weight * psf * xp.where(good, data, 0.0)).sum(axis=(1, 2)) / safe
+    weighted = weight * kernel * xp.where(good, data, 0.0)
+    flux = weighted.sum(axis=(1, 2)) / safe
     return ForcedPhotometryResult(
         flux=xp.where(valid, flux, xp.nan),
         flux_error=xp.where(valid, 1.0 / xp.sqrt(safe), xp.nan),

@@ -322,6 +322,58 @@ def test_per_position_stamps_match_one_call_per_position():
     )
 
 
+def test_weights_axis_matches_one_call_per_weighting():
+    """``(N, q, s, s)`` weights on shared windows give the ``q`` separate
+    results as ``(N, q)``, with planes cut once and the position's mask,
+    rotation flag and all-zero stamp applied to every weighting."""
+
+    rng = np.random.default_rng(9)
+    height, width, size, n = 40, 50, 9, 6
+    kernel = _gaussian(7, 1.0)
+    target_plane = rng.uniform(1.0, 4.0, (height, width))
+    reference_plane = rng.uniform(1.0, 4.0, (height, width))
+    valid_plane = rng.uniform(size=(height, width)) > 0.1
+    positions = rng.uniform(8, 32, (n, 2))
+    offset = positions - np.rint(positions)
+    weights = np.stack(
+        [
+            psf_weights(1.5, size, offset=offset),
+            psf_weights(1.5, size, offset=offset, derivative="x"),
+            psf_weights(1.5, size, offset=offset, derivative="y"),
+        ],
+        axis=1,
+    )
+    stamps = np.stack(
+        [_lanczos_stamp(fx, fy) for fx, fy in rng.uniform(0, 1, (n, 2))]
+    )
+    stamps[-1] = 0.0
+    is_translation = np.array([True] * (n - 2) + [False, True])
+    common = dict(
+        kernel=kernel,
+        target_variance=target_plane,
+        reference_variance=reference_plane,
+        resampling_weights=stamps,
+        positions=positions,
+        is_translation=is_translation,
+        valid=valid_plane,
+    )
+    batch = correlation_factor(weights, **common)
+    assert batch.factor.shape == batch.pixel_ratio.shape == (n, 3)
+    assert batch.n_masked.shape == (n,) and batch.n_rotated == 1
+    for q in range(3):
+        each = correlation_factor(weights[:, q], **common)
+        np.testing.assert_allclose(
+            batch.factor[:, q], each.factor, rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            batch.pixel_ratio[:, q], each.pixel_ratio, rtol=1e-12
+        )
+        np.testing.assert_array_equal(batch.n_masked, each.n_masked)
+    assert np.isfinite(batch.factor[: n - 2]).all()
+    assert np.isnan(batch.factor[n - 2 :]).all()
+    assert np.std(batch.factor[: n - 2], axis=1).min() > 1e-6
+
+
 def test_chunk_boundary_is_seamless():
     n = 600
     kernel = _gaussian(7, 1.0)

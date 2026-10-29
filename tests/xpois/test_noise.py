@@ -616,3 +616,54 @@ def test_fortran_ordered_integer_inputs_are_accepted() -> None:
     ):
         assert value.dtype == np.float64
         assert value.flags.c_contiguous
+
+
+def test_device_inputs_match_the_host_result() -> None:
+    """CuPy planes run on the device (no host round trip) and reproduce the
+    NumPy result, masked footprint and overflow exclusion included."""
+
+    cp = pytest.importorskip("cupy")
+    try:
+        cp.cuda.runtime.getDeviceCount()
+    except Exception as exc:  # pragma: no cover - no CUDA runtime
+        pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+    rng = np.random.default_rng(3)
+    shape = (24, 27)
+    residual = rng.normal(size=shape)
+    residual[5, 6] = np.nan
+    kernel = rng.uniform(0.0, 1.0, (5, 3))
+    target_variance = rng.uniform(0.5, 2.0, shape)
+    target_variance[10, 10] = 0.0
+    reference_variance = rng.uniform(0.0, 3.0, shape)
+    reference_variance[15, 20] = np.nan
+    reference_variance[3, 22] = np.finfo(np.float64).max
+    valid_mask = np.ones(shape, dtype=np.int8)
+    valid_mask[:, 0:2] = 0
+    kwargs = dict(
+        kernel=kernel,
+        target_variance=target_variance,
+        reference_variance=reference_variance,
+        valid_mask=valid_mask,
+    )
+    host = standardize_constant_kernel_residual(residual, **kwargs)
+    device = standardize_constant_kernel_residual(
+        cp.asarray(residual), **{k: cp.asarray(v) for k, v in kwargs.items()}
+    )
+    for name in (
+        "propagated_reference_variance",
+        "marginal_residual_variance",
+        "standardized_residual",
+        "valid_mask",
+    ):
+        value = getattr(device, name)
+        assert type(value).__module__ == "cupy"
+        expected = getattr(host, name)
+        if name == "valid_mask":
+            np.testing.assert_array_equal(cp.asnumpy(value), expected)
+        else:
+            # The device sums the footprint in another order: equal to
+            # rounding, NaN where the host has NaN.
+            np.testing.assert_allclose(
+                cp.asnumpy(value), expected, rtol=1e-12, equal_nan=True
+            )
+    assert asdict(device)["variance_scope"] == "marginal_diagonal"

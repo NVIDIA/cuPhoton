@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
-from .ois import _coerce_boolean_mask, _default_fit_mask
+from .ois import _default_fit_mask_impl
+from .stamps import _array_module, _ndimage_module
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,8 @@ class ConstantKernelNoiseResult:
     """Marginal diagonal noise diagnostics for a fixed-kernel residual.
 
     The scope fields are fixed metadata: they are excluded from the
-    constructor and always carry the documented values.
+    constructor and always carry the documented values. The arrays are
+    NumPy or CuPy, following the inputs.
 
     Attributes
     ----------
@@ -47,10 +49,10 @@ class ConstantKernelNoiseResult:
         propagated.
     """
 
-    propagated_reference_variance: np.ndarray
-    marginal_residual_variance: np.ndarray
-    standardized_residual: np.ndarray
-    valid_mask: np.ndarray
+    propagated_reference_variance: Any
+    marginal_residual_variance: Any
+    standardized_residual: Any
+    valid_mask: Any
     variance_scope: Literal["marginal_diagonal"] = field(
         default="marginal_diagonal", init=False
     )
@@ -62,12 +64,12 @@ class ConstantKernelNoiseResult:
 
 
 def standardize_constant_kernel_residual(
-    residual: np.ndarray,
+    residual: Any,
     *,
-    kernel: np.ndarray,
-    target_variance: np.ndarray,
-    reference_variance: np.ndarray,
-    valid_mask: np.ndarray | None = None,
+    kernel: Any,
+    target_variance: Any,
+    reference_variance: Any,
+    valid_mask: Any | None = None,
 ) -> ConstantKernelNoiseResult:
     """Propagate diagonal noise through a fixed convolution kernel.
 
@@ -112,14 +114,25 @@ def standardize_constant_kernel_residual(
     Returns
     -------
     ConstantKernelNoiseResult
-        Full-sized read-only arrays and explicit statistical-scope metadata.
+        Full-sized arrays (read-only on NumPy) and explicit
+        statistical-scope metadata.
+
+    Notes
+    -----
+    The computation runs in CuPy when any plane or the kernel is a CuPy
+    array, and in NumPy otherwise, with no host round trip; NumPy inputs
+    are moved to the device in the first case. The convolutions are
+    ``scipy.ndimage`` or ``cupyx.scipy.ndimage`` direct sums.
     """
 
-    residual_arr = _real_2d_array("residual", residual)
-    kernel_arr = _real_2d_array("kernel", kernel)
-    target_variance_arr = _real_2d_array("target_variance", target_variance)
+    xp = _array_module(residual, kernel, target_variance, reference_variance)
+    residual_arr = _real_2d_array(xp, "residual", residual)
+    kernel_arr = _real_2d_array(xp, "kernel", kernel)
+    target_variance_arr = _real_2d_array(
+        xp, "target_variance", target_variance
+    )
     reference_variance_arr = _real_2d_array(
-        "reference_variance", reference_variance
+        xp, "reference_variance", reference_variance
     )
 
     if target_variance_arr.shape != residual_arr.shape:
@@ -135,68 +148,65 @@ def standardize_constant_kernel_residual(
         )
     ):
         raise ValueError("kernel must fit within the residual image")
-    if not np.isfinite(kernel_arr).all():
+    if not bool(xp.isfinite(kernel_arr).all()):
         raise ValueError("kernel must contain only finite values")
     with np.errstate(over="ignore", invalid="ignore"):
         kernel_squared = kernel_arr**2
-    if not np.isfinite(kernel_squared).all():
+    if not bool(xp.isfinite(kernel_squared).all()):
         raise ValueError("squared kernel values must remain finite")
-    finite_negative_reference = np.isfinite(reference_variance_arr) & (
+    finite_negative_reference = xp.isfinite(reference_variance_arr) & (
         reference_variance_arr < 0.0
     )
-    if np.any(finite_negative_reference):
+    if bool(xp.any(finite_negative_reference)):
         raise ValueError(
             "reference_variance must be nonnegative where finite"
         )
 
-    selected = _coerce_valid_mask(valid_mask, residual_arr.shape)
-    complete_footprint = _default_fit_mask(
-        residual_arr.shape, kernel_arr.shape
+    selected = _coerce_valid_mask(xp, valid_mask, residual_arr.shape)
+    complete_footprint = _default_fit_mask_impl(
+        xp, residual_arr.shape, kernel_arr.shape
     )
-    reference_finite = np.isfinite(reference_variance_arr)
+    reference_finite = xp.isfinite(reference_variance_arr)
     reference_footprint_valid = _footprint_all_true(
-        reference_finite, kernel_arr.shape
+        xp, reference_finite, kernel_arr.shape
     )
     output_valid = (
         selected
         & complete_footprint
         & reference_footprint_valid
-        & np.isfinite(residual_arr)
-        & np.isfinite(target_variance_arr)
+        & xp.isfinite(residual_arr)
+        & xp.isfinite(target_variance_arr)
         & (target_variance_arr > 0.0)
     )
 
-    reference_work = np.where(reference_finite, reference_variance_arr, 0.0)
-    propagated = _convolve_same(reference_work, kernel_squared)
-    propagated_finite = np.isfinite(propagated)
+    reference_work = xp.where(reference_finite, reference_variance_arr, 0.0)
+    propagated = _convolve_same(xp, reference_work, kernel_squared)
+    propagated_finite = xp.isfinite(propagated)
     with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
         marginal = target_variance_arr + propagated
-        standardized = residual_arr / np.sqrt(marginal)
+        standardized = residual_arr / xp.sqrt(marginal)
     output_valid &= propagated_finite
-    output_valid &= np.isfinite(marginal) & (marginal > 0.0)
-    output_valid &= np.isfinite(standardized)
-    if not np.any(output_valid):
+    output_valid &= xp.isfinite(marginal) & (marginal > 0.0)
+    output_valid &= xp.isfinite(standardized)
+    if not bool(xp.any(output_valid)):
         raise ValueError("no valid output pixels remain")
 
-    propagated_output = np.full(residual_arr.shape, np.nan, dtype=np.float64)
-    marginal_output = np.full(residual_arr.shape, np.nan, dtype=np.float64)
-    standardized_output = np.full(
-        residual_arr.shape, np.nan, dtype=np.float64
-    )
-    propagated_output[output_valid] = propagated[output_valid]
-    marginal_output[output_valid] = marginal[output_valid]
-    standardized_output[output_valid] = standardized[output_valid]
-
     return ConstantKernelNoiseResult(
-        propagated_reference_variance=_readonly(propagated_output),
-        marginal_residual_variance=_readonly(marginal_output),
-        standardized_residual=_readonly(standardized_output),
+        propagated_reference_variance=_readonly(
+            xp.where(output_valid, propagated, xp.nan)
+        ),
+        marginal_residual_variance=_readonly(
+            xp.where(output_valid, marginal, xp.nan)
+        ),
+        standardized_residual=_readonly(
+            xp.where(output_valid, standardized, xp.nan)
+        ),
         valid_mask=_readonly(output_valid),
     )
 
 
-def _real_2d_array(name: str, value: np.ndarray) -> np.ndarray:
-    array = np.asarray(value)
+def _real_2d_array(xp: Any, name: str, value: Any) -> Any:
+    array = xp.asarray(value)
     if array.ndim != 2:
         raise ValueError(f"{name} must be a two-dimensional array")
     if array.size == 0:
@@ -207,41 +217,51 @@ def _real_2d_array(name: str, value: np.ndarray) -> np.ndarray:
         or np.issubdtype(array.dtype, np.timedelta64)
     ):
         raise TypeError(f"{name} must be a real numeric array")
-    return np.asarray(array, dtype=np.float64)
+    return xp.asarray(array, dtype=xp.float64)
 
 
 def _coerce_valid_mask(
-    valid_mask: np.ndarray | None,
+    xp: Any,
+    valid_mask: Any | None,
     shape: tuple[int, int],
-) -> np.ndarray:
+) -> Any:
     if valid_mask is None:
-        return np.ones(shape, dtype=bool)
-    mask = np.asarray(valid_mask)
+        return xp.ones(shape, dtype=bool)
+    mask = xp.asarray(valid_mask)
     if mask.shape != shape:
         raise ValueError("valid_mask must match residual shape")
-    return _coerce_boolean_mask(mask, name="valid_mask").copy()
+    if mask.dtype == bool:
+        return mask.copy()
+    if not np.issubdtype(mask.dtype, np.number):
+        raise ValueError("valid_mask array must be boolean or binary numeric")
+    if not bool(xp.isfinite(mask).all()):
+        raise ValueError(
+            "valid_mask array must not contain NaN or inf values"
+        )
+    if not bool(xp.all((mask == 0) | (mask == 1))):
+        raise ValueError("valid_mask array must contain only 0/1 values")
+    return mask.astype(bool)
 
 
 def _footprint_all_true(
-    pixel_valid: np.ndarray,
+    xp: Any,
+    pixel_valid: Any,
     kernel_shape: tuple[int, int],
-) -> np.ndarray:
-    from scipy.ndimage import minimum_filter
-
-    if pixel_valid.all():
-        return _default_fit_mask(pixel_valid.shape, kernel_shape)
-    return np.asarray(
-        minimum_filter(
-            pixel_valid.astype(np.uint8),
+) -> Any:
+    if bool(pixel_valid.all()):
+        return _default_fit_mask_impl(xp, pixel_valid.shape, kernel_shape)
+    return (
+        _ndimage_module(xp).minimum_filter(
+            pixel_valid.astype(xp.uint8),
             size=kernel_shape,
             mode="constant",
             cval=0,
-        ),
-        dtype=bool,
+        )
+        > 0
     )
 
 
-def _convolve_same(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+def _convolve_same(xp: Any, image: Any, kernel: Any) -> Any:
     """Zero-padded true convolution by direct summation.
 
     FFT convolution spreads round-off proportional to the largest value in
@@ -250,13 +270,15 @@ def _convolve_same(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     contains it, and a sum of nonnegative terms stays nonnegative.
     """
 
-    from scipy.ndimage import convolve
-
-    return np.asarray(
-        convolve(image, kernel, mode="constant", cval=0.0), dtype=np.float64
+    return xp.asarray(
+        _ndimage_module(xp).convolve(
+            image, kernel, mode="constant", cval=0.0
+        ),
+        dtype=xp.float64,
     )
 
 
-def _readonly(value: np.ndarray) -> np.ndarray:
-    value.setflags(write=False)
+def _readonly(value: Any) -> Any:
+    if hasattr(value, "setflags"):
+        value.setflags(write=False)
     return value

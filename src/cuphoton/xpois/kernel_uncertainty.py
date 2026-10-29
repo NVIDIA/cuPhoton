@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 import numpy as np
 
+from cuphoton.core.arrays import array_module, fft_module
+
 from .ois import (
     _accumulate_normal_equations,
     _accumulate_normal_equations_cupy_device,
@@ -26,7 +28,7 @@ from .ois import (
     background_design,
     triangular_degree_pairs,
 )
-from .stamps import _array_module, window_stamps
+from .stamps import window_stamps
 
 __all__ = [
     "KernelFitCovariance",
@@ -167,7 +169,7 @@ def kernel_fit_covariance(
     device in the first case.
     """
 
-    xp = _array_module(fit.basis_kernels, fit.fit_mask, reference)
+    xp = array_module(fit.basis_kernels, fit.fit_mask, reference)
     reference_arr = _real_2d_array(xp, "reference", reference)
     variance_arr = _real_2d_array(xp, "target_variance", target_variance)
     if variance_arr.shape != reference_arr.shape:
@@ -309,6 +311,8 @@ def kernel_fit_variance(
     design terms. The added variance is ``gamma^T C gamma``. With
     ``weights`` it is the variance of the weighted sum of residual pixels
     around each position, ``g = sum_p w_p gamma_p`` and ``g^T C g``.
+    Several weightings of the same windows (a flux and the two position
+    derivatives, say) share one response: pass them on a weights axis.
 
     The response and the quadratic form are batched over positions. The
     basis convolutions run in chunks of positions whose spectra hold at
@@ -329,7 +333,8 @@ def kernel_fit_variance(
         ``(N, 2)`` array of ``(x, y)`` target pixel coordinates. Each stamp
         is centered on the nearest integer pixel.
     weights
-        Optional ``(N, s, s)`` or ``(s, s)`` odd-sized weight stamps. Without
+        Optional ``(N, s, s)`` or ``(s, s)`` odd-sized weight stamps, or
+        ``(N, q, s, s)`` for ``q`` weightings of the same windows. Without
         them the variance of the single residual pixel is returned.
     chunk_elements
         Element budget of one position chunk's response spectra, by default
@@ -339,12 +344,13 @@ def kernel_fit_variance(
     Returns
     -------
     ndarray
-        ``(N,)`` variances in squared target units; ``NaN`` where a stamp
-        and its kernel footprint leave the image. CuPy when ``cov`` or
-        ``reference`` holds CuPy arrays, NumPy otherwise.
+        ``(N,)`` variances in squared target units, ``(N, q)`` for
+        ``(N, q, s, s)`` weights; ``NaN`` where a stamp and its kernel
+        footprint leave the image. CuPy when ``cov`` or ``reference`` holds
+        CuPy arrays, NumPy otherwise.
     """
 
-    xp = _array_module(cov.covariance, cov.basis_kernels, reference)
+    xp = array_module(cov.covariance, cov.basis_kernels, reference)
     reference_arr = _real_2d_array(xp, "reference", reference)
     basis = xp.asarray(cov.basis_kernels, dtype=xp.float64)
     xy = xp.asarray(positions, dtype=xp.float64)
@@ -357,21 +363,26 @@ def kernel_fit_variance(
         stamps = xp.asarray(weights, dtype=xp.float64)
         if stamps.ndim == 2:
             stamps = xp.broadcast_to(stamps, (count,) + stamps.shape)
-        if (
-            stamps.ndim != 3
-            or stamps.shape[0] != count
-            or stamps.shape[1] != stamps.shape[2]
-            or stamps.shape[1] % 2 == 0
-        ):
-            raise ValueError(
-                "weights must be odd square stamps with shape (N, s, s)"
-            )
+    batched = stamps.ndim == 4
+    if not batched:
+        stamps = stamps[:, None]
+    if (
+        stamps.ndim != 4
+        or stamps.shape[0] != count
+        or stamps.shape[2] != stamps.shape[3]
+        or stamps.shape[2] % 2 == 0
+    ):
+        raise ValueError(
+            "weights must be odd square stamps with shape (N, s, s) or "
+            "(N, q, s, s)"
+        )
     covariance = xp.asarray(cov.covariance, dtype=xp.float64)
     n_terms = len(triangular_degree_pairs(cov.background_degree))
     if covariance.shape != (cov.basis_count + n_terms,) * 2:
         raise ValueError("covariance does not match basis_count and degree")
     if count == 0:
-        return xp.empty(0, dtype=xp.float64)
+        shape = (0, int(stamps.shape[1])) if batched else (0,)
+        return xp.empty(shape, dtype=xp.float64)
 
     side = int(stamps.shape[-1])
     reference_model = xp.where(xp.isfinite(reference_arr), reference_arr, 0.0)
@@ -392,7 +403,10 @@ def kernel_fit_variance(
         center[:, 1][:, None, None] + offsets[None, :, None],
         center[:, 0][:, None, None] + offsets[None, None, :],
     )
-    projected = xp.empty((count, int(covariance.shape[0])), dtype=xp.float64)
+    projected = xp.empty(
+        (count, int(stamps.shape[1]), int(covariance.shape[0])),
+        dtype=xp.float64,
+    )
     spectrum = (
         int(basis.shape[0])
         * (patches.shape[1] + basis.shape[1] - 1)
@@ -417,14 +431,15 @@ def kernel_fit_variance(
             mode="valid",
             axes=(2, 3),
         )
-        projected[start:stop, : basis.shape[0]] = xp.einsum(
-            "ncyx,nyx->nc", response[: stop - start], stamps[start:stop]
+        projected[start:stop, :, : basis.shape[0]] = xp.einsum(
+            "ncyx,nqyx->nqc", response[: stop - start], stamps[start:stop]
         )
-    projected[:, basis.shape[0] :] = xp.einsum(
-        "ncyx,nyx->nc", background, stamps
+    projected[:, :, basis.shape[0] :] = xp.einsum(
+        "ncyx,nqyx->nqc", background, stamps
     )
-    variance = xp.einsum("nc,cd,nd->n", projected, covariance, projected)
-    return xp.where(inside, variance, xp.nan)
+    variance = xp.einsum("nqc,cd,nqd->nq", projected, covariance, projected)
+    variance = xp.where(inside[:, None], variance, xp.nan)
+    return variance if batched else variance[:, 0]
 
 
 def _inverse(xp: Any, hessian: Any) -> Any:
@@ -534,8 +549,8 @@ def _spectrum(
     areas.
     """
 
-    xp = _array_module(k)
-    next_fast_len = _fft_module(xp).next_fast_len
+    xp = array_module(k)
+    next_fast_len = fft_module(xp).next_fast_len
     axes = tuple(range(len(a_shape))) if axes is None else tuple(axes)
     full = [a_shape[i] + k.shape[i] - 1 for i in axes]
     fast = [next_fast_len(n, True) for n in full]
@@ -556,7 +571,7 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     if not isinstance(a, _Spectrum) and not isinstance(k, _Spectrum):
         k = _spectrum(a.shape, k, axes)
     spec, other = (a, k) if isinstance(a, _Spectrum) else (k, a)
-    xp = _array_module(other)
+    xp = array_module(other)
     axes, full, fast = spec.axes, spec.full, spec.fast
     if [a.shape[i] + k.shape[i] - 1 for i in axes] != full:
         raise ValueError("spectrum was taken for another array shape")
@@ -574,16 +589,7 @@ def _fftconvolve(a: Any, k: Any, *, mode: str, axes: Any = None) -> Any:
     return out[tuple(crop)]
 
 
-def _fft_module(xp: Any) -> Any:
-    """``scipy.fft`` for NumPy, ``cupyx.scipy.fft`` for CuPy."""
-
-    if xp is np:
-        import scipy.fft
-
-        return scipy.fft
-    import cupyx.scipy.fft
-
-    return cupyx.scipy.fft
+_fft_module = fft_module
 
 
 def _real_2d_array(xp: Any, name: str, value: Any) -> Any:

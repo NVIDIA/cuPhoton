@@ -141,6 +141,38 @@ def test_research_solver_requires_module_qualified_import() -> None:
     assert not hasattr(xpois, "SpatialKernelDomain")
 
 
+def test_xpois_measurement_signatures_are_explicit() -> None:
+    assert {"empty_positions", "forced_flux_at", "kernel_centroid"} <= set(
+        xpois.__all__
+    )
+    assert list(inspect.signature(xpois.kernel_centroid).parameters) == [
+        "kernel"
+    ]
+    assert list(inspect.signature(xpois.empty_positions).parameters) == [
+        "valid",
+        "exclude_xy",
+        "window",
+        "count",
+        "loud",
+    ]
+    assert list(inspect.signature(xpois.forced_flux_at).parameters) == [
+        "plane",
+        "positions",
+        "psf_sigma",
+        "window",
+        "variance",
+        "local_sky",
+    ]
+    assert list(inspect.signature(xfit.forced_psf_photometry).parameters) == [
+        "images",
+        "variance",
+        "positions",
+        "psf_sigma",
+        "mask",
+        "psf",
+    ]
+
+
 def test_xpois_statistics_signature_is_explicit() -> None:
     assert list(
         inspect.signature(xpois.summarize_standardized_residuals).parameters
@@ -480,3 +512,61 @@ def test_xray_subcommands_have_descriptions(command: str) -> None:
     assert result.returncode == 0, result.stderr
     assert "\n\n" in result.stdout
     assert "usage:" in result.stdout
+
+
+def test_core_arrays_signatures_are_explicit() -> None:
+    from cuphoton.core import arrays
+    from cuphoton.xfit.backend import as_numpy
+
+    assert arrays.__all__ == [
+        "array_module",
+        "fft_module",
+        "ndimage_module",
+        "to_host",
+    ]
+    assert list(inspect.signature(arrays.array_module).parameters) == [
+        "arrays"
+    ]
+    assert list(inspect.signature(arrays.to_host).parameters) == ["array"]
+    assert list(inspect.signature(arrays.ndimage_module).parameters) == ["xp"]
+    assert list(inspect.signature(arrays.fft_module).parameters) == ["xp"]
+    assert list(inspect.signature(as_numpy).parameters) == ["value"]
+
+
+def test_xpois_review_selectors_are_exported_with_stable_signatures() -> None:
+    assert {"identify_residual_hotspots", "residual_hotspot_table"} <= set(
+        xpois.__all__
+    )
+    assert list(
+        inspect.signature(xpois.identify_residual_hotspots).parameters
+    ) == ["residual", "robust_sigma", "threshold_sigma", "max_regions"]
+    assert list(
+        inspect.signature(xpois.residual_hotspot_table).parameters
+    ) == ["residual", "robust_sigma", "threshold_sigma", "max_regions"]
+    assert (
+        inspect.signature(xpois.residual_hotspot_table)
+        .parameters["max_regions"]
+        .default
+        is None
+    )
+    assert list(
+        inspect.signature(xpois.build_compact_source_stamp_mask).parameters
+    ) == [
+        "image",
+        "variance",
+        "valid_mask",
+        "stamp_size",
+        "max_stamps",
+        "peak_percentile",
+        "background_filter_size",
+        "peak_filter_size",
+        "min_separation",
+        "compact_core_size",
+    ]
+
+
+def test_core_bulk_sanitize_json_is_exported() -> None:
+    from cuphoton.core import bulk
+
+    assert "sanitize_json" in bulk.__all__
+    assert list(inspect.signature(bulk.sanitize_json).parameters) == ["obj"]

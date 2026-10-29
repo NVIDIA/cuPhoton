@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -18,6 +19,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+
+import numpy as np
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _PCI_BUS_ID = re.compile(
@@ -210,6 +213,38 @@ def atomic_write_json(
     return encoded
 
 
+def sanitize_json(obj: Any) -> Any:
+    """Return ``obj`` as plain Python that strict JSON accepts.
+
+    Parameters
+    ----------
+    obj
+        Any nesting of mappings, lists, tuples, NumPy arrays and scalars,
+        and plain Python values.
+
+    Returns
+    -------
+    Any
+        Mappings become dicts with string keys, lists and tuples become
+        lists, NumPy arrays and scalars become Python lists and scalars, and
+        NaN and infinite floats become ``None``, so
+        ``json.dumps(result, allow_nan=False)`` succeeds whenever the
+        remaining leaves are JSON types. Other values pass through unchanged.
+    """
+
+    if isinstance(obj, Mapping):
+        return {str(key): sanitize_json(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_json(value) for value in obj]
+    if isinstance(obj, np.ndarray):
+        return sanitize_json(obj.tolist())
+    if isinstance(obj, np.generic):
+        obj = obj.item()
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
+
+
 def read_json_mapping(path: Path) -> dict[str, Any]:
     """Read one JSON object and reject other JSON value types."""
 
@@ -342,6 +377,7 @@ __all__ = [
     "numba_pci_bus_id",
     "partition_byte_balanced",
     "read_json_mapping",
+    "sanitize_json",
     "timestamp_utc",
     "validate_identifier",
 ]

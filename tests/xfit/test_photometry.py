@@ -67,6 +67,34 @@ def test_invalid_rows_return_nan():
     assert np.isnan(result.flux_error[1:]).all()
 
 
+@pytest.mark.parametrize("nonfinite", [np.nan, np.inf])
+@pytest.mark.parametrize("unusable", ["mask", "image", "variance"])
+def test_supplied_psf_nonfinite_pixels_follow_image_validity(
+    nonfinite, unusable
+):
+    images = np.full((2, 3, 3), 3.0)
+    variance = np.ones_like(images)
+    mask = np.ones_like(images, dtype=bool)
+    psf = np.ones_like(images)
+    psf[:, 0, 0] = nonfinite
+    if unusable == "mask":
+        mask[0, 0, 0] = False
+    elif unusable == "image":
+        images[0, 0, 0] = np.nan
+    else:
+        variance[0, 0, 0] = 0.0
+    with np.errstate(invalid="ignore"):
+        result = forced_psf_photometry(
+            images, variance, np.zeros((2, 2)), 1.0, mask=mask, psf=psf
+        )
+    # The second stamp's bad PSF pixel is usable, so it remains invalid.
+    assert result.valid.tolist() == [True, False]
+    assert result.flux[0] == pytest.approx(3.0)
+    assert result.flux_error[0] == pytest.approx(1.0 / np.sqrt(8))
+    assert np.isnan(result.flux[1])
+    assert np.isnan(result.flux_error[1])
+
+
 def test_shape_validation():
     images, variance, positions = _sources(2)
     with pytest.raises(ValueError, match="positions"):
@@ -90,3 +118,24 @@ def test_cupy_matches_numpy():
     assert isinstance(device.flux, cp.ndarray)
     np.testing.assert_allclose(cp.asnumpy(device.flux), host.flux)
     np.testing.assert_allclose(cp.asnumpy(device.flux_error), host.flux_error)
+
+
+@pytest.mark.parametrize("sigma", [1.8, 0.0, np.nan])
+def test_supplied_psf_stamps_replace_the_gaussian(sigma):
+    images, variance, positions = _sources(3, seed=5)
+    x = np.arange(SHAPE[1]) - (SHAPE[1] - 1) / 2
+    y = np.arange(SHAPE[0]) - (SHAPE[0] - 1) / 2
+    r2 = (x[None, None, :] - positions[:, 0, None, None]) ** 2 + (
+        y[None, :, None] - positions[:, 1, None, None]
+    ) ** 2
+    psf = np.exp(-0.5 * r2 / 1.8**2) / (2 * np.pi * 1.8**2)
+    built = forced_psf_photometry(images, variance, positions, 1.8)
+    given = forced_psf_photometry(images, variance, positions, sigma, psf=psf)
+    np.testing.assert_allclose(given.flux, built.flux, rtol=1e-12)
+    np.testing.assert_allclose(given.flux_error, built.flux_error, rtol=1e-12)
+    wider = forced_psf_photometry(
+        images, variance, positions, 1.8, psf=np.roll(psf, 3, axis=2)
+    )
+    assert not np.allclose(wider.flux, built.flux)
+    with pytest.raises(ValueError, match="psf"):
+        forced_psf_photometry(images, variance, positions, 1.8, psf=psf[:1])

@@ -9,6 +9,7 @@ import os
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from cuphoton.core.bulk import (
@@ -21,6 +22,7 @@ from cuphoton.core.bulk import (
     normalize_pci_bus_id,
     numba_pci_bus_id,
     partition_byte_balanced,
+    sanitize_json,
 )
 
 
@@ -404,3 +406,39 @@ def test_cupy_gpu_identity_preserves_uuid_on_pci_error(
     assert identity["identity_warnings"] == [
         "pci_bus_id: RuntimeError: pci unavailable"
     ]
+
+
+def test_sanitize_json_converts_numpy_and_non_finite_values() -> None:
+    payload = {
+        "count": np.int64(3),
+        "flag": np.bool_(True),
+        "ratio": np.float32("nan"),
+        "bounds": (np.float64("inf"), -float("inf"), 1.5),
+        "table": np.array([[1.0, np.nan], [2.0, 3.0]]),
+        5: {"name": "x", "nested": [np.uint8(7)]},
+        "untouched": "text",
+        "none": None,
+    }
+
+    result = sanitize_json(payload)
+
+    assert result == {
+        "count": 3,
+        "flag": True,
+        "ratio": None,
+        "bounds": [None, None, 1.5],
+        "table": [[1.0, None], [2.0, 3.0]],
+        "5": {"name": "x", "nested": [7]},
+        "untouched": "text",
+        "none": None,
+    }
+    assert type(result["count"]) is int
+    assert type(result["flag"]) is bool
+    json.dumps(result, allow_nan=False)
+
+
+def test_sanitize_json_leaves_unknown_leaves_for_the_encoder() -> None:
+    marker = object()
+    assert sanitize_json([marker])[0] is marker
+    assert sanitize_json(2.5) == 2.5
+    assert sanitize_json(np.float64(0.25)) == 0.25
