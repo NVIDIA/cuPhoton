@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+Retain a readable CFITSIO identity in the bundled shared library.
+CFITSIO 4.7.0 exposes its version only as a floating-point value. Export a
+cuPhoton-specific accessor so optimization and stripping retain the string,
+without changing the existing numeric API. Derive it from the upstream
+version macro. This downstream patch does not guarantee scanner recognition.
+
+--- a/fitscore.c
++++ b/fitscore.c
+@@ -70,2 +70,10 @@
++/* Identify the CFITSIO library bundled by cuPhoton. */
++#define CUPHOTON_STRINGIFY_INNER(value) #value
++#define CUPHOTON_STRINGIFY(value) CUPHOTON_STRINGIFY_INNER(value)
++const char *cuphoton_cfitsio_version_string(void)
++{
++    return "CFITSIO " CUPHOTON_STRINGIFY(CFITSIO_VERSION);
++}
++
+ /*--------------------------------------------------------------------------*/
+ float ffvers(float *version)  /* IO - version number */
+--- a/fitsio.h
++++ b/fitsio.h
+@@ -812,2 +812,3 @@
+ float CFITS_API ffvers(float *version);
++const char *CFITS_API cuphoton_cfitsio_version_string(void);
+ void CFITS_API ffupch(char *string);

@@ -32,6 +32,7 @@ SOURCES = {
     "src/cuphoton/xdr/src/io.cpp",
     "src/cuphoton/xdr/src/build.sh",
     "scripts/wheels/prepare_cfitsio.sh",
+    "scripts/wheels/patches/cfitsio-version-string.patch",
     "scripts/wheels/install_build_dependencies.sh",
     "scripts/wheels/build-requirements.txt",
     "scripts/wheels/repair_wheel.py",
@@ -137,6 +138,10 @@ def check_wheel(path):
         require(
             len(cfitsio) == 1,
             f"{path.name}: expected one renamed CFITSIO library",
+        )
+        require(
+            b"CFITSIO 4.7.0\0" in archive.read(next(iter(cfitsio))),
+            f"{path.name}: bundled CFITSIO is missing its 4.7.0 identity",
         )
         binaries = {name for name in files if BINARY.search(name)}
         require(
