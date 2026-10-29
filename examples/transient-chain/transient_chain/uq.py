@@ -647,7 +647,7 @@ def budget(
             )
         if "psf_flux" in quantities:
             window_ok["psf_flux"] = window_ok["psf_flux"] & valid_at["flux"]
-        lam, raw, t_ref, _ = sensitivity(
+        lam, raw, t_ref, _sensitivity_position = sensitivity(
             ctx, pos["flux"], cx, cy, single, field
         )
         capped = xp.abs(raw) > SENSITIVITY_CAP

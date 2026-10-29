@@ -24,6 +24,7 @@ transient_chain/uq.py          the error budget per candidate: the terms behind 
 transient_chain/catalog.py     the catalog column contract (same columns and dtypes for every item)
 transient_chain/workload.py    selections -> WorkItems -> WorkloadSpec; run_local, run_distributed
 compare_catalogs.py         match two catalogs by position and report differences
+repeat_catalogs.py          link one detector's detections across repeated exposures and test the error bars
 tests/                      host tests: ops against cuPhoton's reference code, config, adapters on synthetic FITS, catalog schema
 ```
 
@@ -336,10 +337,9 @@ center's stamp over both lobes).
 - `kfit` (`<q>_err_kfit`): the subtraction kernel's own uncertainty carried to the same weighted sum,
   `cuphoton.xpois.kernel_fit_covariance` once per item over the fit pixels (the sandwich form when a
   reference variance plane exists, else the plain form) and `kernel_fit_variance` per candidate.
-  Largest where a candidate sits on a bright reference source. The position terms are 0 where
-  the lobe flux is not usable. Without a target variance plane the term is excluded because its
-  noise scale is unknown.
-  `uq.kernel_fit: false` skips it.
+  Largest where a candidate sits on a bright reference source. Without a target variance plane
+  the term is excluded because its noise scale is unknown. The position terms are 0 where
+  the lobe flux is not usable. `uq.kernel_fit: false` skips it.
 - `kmatch` (`<q>_err_kmatch`, flux only): `eta` times the kernel-matched reference flux `T` at the
   photometry position. `eta` is the fraction of a static star's reference flux that the subtraction
   leaves in the residual beyond noise: at the stars the refine stage kept, the residual's forced
@@ -409,6 +409,64 @@ reference row counted once (duplicates are reported, not counted). Exact agreeme
 DAOStarFinder-aligned chain is not expected under the `gpu` star finder: the alignment differs
 at the sub-pixel level and the residual with it; `--set align.star_finder=daofind` matches
 that alignment.
+
+## Repeat test across repeated exposures
+
+```bash
+python examples/transient-chain/repeat_catalogs.py out/items/*/catalog.parquet --out repeat.json
+```
+
+Without a reference catalog, a source that does not move should land at the same place in every
+exposure of a detector, so its scatter divided by its error bars gives a chi-square per degree of
+freedom near 1 when the bars are right (survey pipelines call this repeatability). The script
+scores the chain against itself from the catalogs it wrote for a detector's repeated exposures;
+several detectors are linked separately and pooled.
+
+Positions reach the sky in two steps. The refine affine from the `summary.json` beside each
+per-item catalog (identity when there is none) moves each sub-pixel position into the reference
+frame. The catalog's own `ra`/`dec` at the integer candidate pixel then anchors it: per exposure
+an affine pixel-to-tangent-plane map is fitted to finite anchors (at least 10, with a centered,
+unit-scaled design condition number at most 1e3; exposures that fail are listed under
+`detectors.<id>.exposures_without_anchor_fit`),
+and a detection's sky position is its anchor's plus the linear part of that map applied to the
+offset from the integer pixel. The header WCS's distortion stays in the anchors, and dithers and
+rotations between exposures are not scatter. `detectors.<id>.anchors.<exposure>` records each
+exposure's detections, the transform applied (`identity`, `shift` or `affine`) and the anchor fit
+(anchors, residual rms in arcsec, arcsec per pixel).
+
+Detections are linked across exposures within `--link-px` (default 2) after duplicates within an
+exposure are dropped within `--duplicate-px` (default 1, keeping the highest `peak_abs_sigma`). A
+group seen in fewer than two exposures, or twice in one, is dropped.
+
+Two quantities are scored, each on the classes whose columns describe the source. The classes come
+from `quality_flags`, `converged` and `uncertainty_valid`: `resolved` (two supported lobes),
+`overlapping`, `single` (a brightening source: only the positive lobe supported), `fading` (only
+the negative lobe supported), `failed` (both lobes unsupported, width out of range, no lobe at the
+candidate, or a lobe outside the stamp) and
+`invalid` (no usable covariance). The dipole center (`center_*`) is scored on resolved and
+overlapping candidates; the source position (`positive_*`) on resolved and single ones. A fading
+single's source is its negative lobe, which the catalog does not carry as a position, so that class
+is in neither quantity.
+
+For each quantity, overall and per class, the report gives two statistics: the pooled chi-square
+per degree of freedom, and the median per-group ratio (the median over groups of chi-square over
+the chi-square median for the group's degrees of freedom, 1 for correct bars at any group size).
+Both are given for six arms: `<q>_err`, `<q>_err_fit` alone, and `<q>_err` with each of the corr,
+kfit, kmatch and mis terms removed in quadrature. All arms start with the rows whose `<q>_err`
+is finite and positive on both axes in groups that keep two detections. Each arm then drops rows
+with nonfinite or non-positive-definite covariance, so its group count and degrees of freedom can
+differ. Each arm's pixel covariance
+is transformed by the refine affine and the anchor map into the tangent plane. The fit's x-y
+covariance is included when available; other terms contribute their reported per-axis variances.
+The mean position and chi-square use the resulting full two-dimensional covariance. The JSON holds
+every number; the printed table shows quantity, class, groups, arm, chi-square per degree of
+freedom and the median ratio.
+
+What the test cannot see, stated in its output: the reference's noise is the same in every
+exposure of a detector and never scatters between them, so an arm that includes this noise can
+have a chi-square below 1 by that share even with correct error bars; and a bias common to all
+exposures (a reference position error, a systematic of the fit) moves every detection alike and
+passes unseen.
 
 ## Known issues
 
