@@ -159,17 +159,22 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
     "uq_valid": (
         "bool",
         "uq",
-        "every computed <q>_err of the row is defined (false when fewer than "
-        "half of a computed quantity's window pixels are usable, its "
-        "correlation factor is undefined, or its total uncertainty is "
-        "non-finite; other computed quantities' <q>_err stay defined; "
-        "unavailable PSF flux is excluded when photometry does not run)",
+        "with the budget enabled, every computed <q>_err of the row is "
+        "defined (false when fewer than half of a required window's pixels "
+        "are usable, its correlation factor is undefined, or its total "
+        "uncertainty is non-finite; the center requires both lobe windows "
+        "to pass separately; other computed quantities' <q>_err stay "
+        "defined; unavailable PSF flux is excluded when photometry does "
+        "not run). Always true with the budget disabled, which copies "
+        "the fit errors",
     ),
     "uq_window_masked": (
         "bool",
         "uq",
         "a valid quantity's window holds a masked pixel: its weighted sums "
-        "and correlation factor were taken over the usable pixels",
+        "and closed-form correlation factor use the usable pixels; an "
+        "exposure-measured factor can replace a quantity's closed form "
+        "(uq_corr_measured)",
     ),
     "uq_corr_measured": (
         "bool",
