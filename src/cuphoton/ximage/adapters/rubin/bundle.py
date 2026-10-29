@@ -23,15 +23,15 @@ import yaml
 from astropy.io import fits
 from scipy.ndimage import map_coordinates
 
+from cuphoton.ximage.adapters.rubin.image import (
+    RubinImageView,
+    open_rubin_image,
+    read_rubin_image_bounds,
+)
 from cuphoton.ximage.data.bundle import (
     ARTIFACTS,
     load_ximage_bundle,
     validate_bundle,
-)
-from cuphoton.ximage.data.rubin_image import (
-    RubinImageView,
-    open_rubin_image,
-    read_rubin_image_bounds,
 )
 
 _FITS_SUFFIXES = {".fit", ".fits", ".fz"}
@@ -1685,10 +1685,9 @@ def extract_exposure_summary(hdul: fits.HDUList) -> dict[str, Any] | None:
 
 
 def to_ximage_mask(bad_mask: np.ndarray) -> np.ndarray:
-    masks = np.zeros(bad_mask.shape + (12,), dtype=np.uint8)
-    # The reconstruction mask convention uses class 8 for excluded pixels.
-    masks[:, :, 8] = bad_mask.astype(np.uint8)
-    return masks
+    """Translate Rubin bad-pixel flags to the bundle good-pixel convention."""
+
+    return ~np.asarray(bad_mask, dtype=bool)
 
 
 def psfs_from_exposure_summaries(

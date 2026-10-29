@@ -10,15 +10,15 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-import cuphoton.ximage.data.rubin as rubin_module
-from cuphoton.ximage.data.bundle import load_ximage_bundle, validate_bundle
-from cuphoton.ximage.data.rubin import (
+import cuphoton.ximage.adapters.rubin.bundle as rubin_module
+from cuphoton.ximage.adapters.rubin.bundle import (
     build_rubin_manifest,
     build_rubin_store,
     parse_section,
     probe_fits_products,
     summarize_rubin_coadd_semantics,
 )
+from cuphoton.ximage.data.bundle import load_ximage_bundle, validate_bundle
 
 
 def _write_rubin_like_fits(
@@ -433,8 +433,9 @@ def test_build_rubin_store_writes_image_npy_contract(tmp_path) -> None:
     assert validate_bundle(bundle) == []
     assert bundle.images.shape == (1, 4, 5, 2)
     assert bundle.variances.shape == (1, 4, 5, 2)
-    assert bundle.masks.shape == (1, 4, 5, 12, 2)
-    assert bundle.masks[0, 0, 0, 8, :].tolist() == [1, 1]
+    assert bundle.masks.shape == (1, 4, 5, 2)
+    assert bundle.masks.dtype == np.bool_
+    assert bundle.masks[0, 0, 0, :].tolist() == [False, False]
     assert bundle.sky.dtype == np.float32
     assert bundle.sky.shape == (1, 4, 5, 2)
     assert np.count_nonzero(bundle.sky) == 0
@@ -712,7 +713,7 @@ def test_build_rubin_store_ignores_detected_mask_plane_by_default(
     )
 
     bundle = load_ximage_bundle(tmp_path / "rubin_npy")
-    assert bundle.masks[0, 0, 0, 8, 0] == 0
+    assert bundle.masks[0, 0, 0, 0]
     assert bundle.sky[0, 0, 0, 0] == 0
     assert bundle.metadata["rubin_files"][0]["bad_mask_fraction"] == 0.0
 

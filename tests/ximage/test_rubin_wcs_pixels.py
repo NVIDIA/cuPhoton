@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cuphoton.ximage.data import (
+from cuphoton.ximage.adapters.rubin import (
     RubinImageBounds,
     local_pixel_is_addressable,
     local_pixel_is_inside,

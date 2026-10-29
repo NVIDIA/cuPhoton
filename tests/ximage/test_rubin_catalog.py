@@ -8,7 +8,7 @@ import csv
 
 import pytest
 
-from cuphoton.ximage.data.rubin_catalog import (
+from cuphoton.ximage.adapters.rubin.catalog import (
     load_visit_file,
     parse_visit_text,
     required_columns_for_product,

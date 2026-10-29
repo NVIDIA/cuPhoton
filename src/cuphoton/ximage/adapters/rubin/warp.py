@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from .rubin_image import (
+from .image import (
     RubinImageBounds,
     RubinImageError,
     RubinImageFormatError,

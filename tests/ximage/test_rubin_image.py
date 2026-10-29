@@ -18,13 +18,14 @@ import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from cuphoton.ximage.data import rubin_image, rubin_warp
-from cuphoton.ximage.data.rubin import (
+from cuphoton.ximage.adapters.rubin import image as rubin_image
+from cuphoton.ximage.adapters.rubin import warp as rubin_warp
+from cuphoton.ximage.adapters.rubin.bundle import (
     build_rubin_store,
     read_manifest_stack,
     summarize_rubin_coadd_semantics,
 )
-from cuphoton.ximage.data.rubin_image import (
+from cuphoton.ximage.adapters.rubin.image import (
     RubinImageDependencyError,
     RubinImageFormatError,
     inspect_rubin_image_geometry,
@@ -1818,7 +1819,7 @@ def test_lsst_images_version_is_pinned_and_lazy(monkeypatch) -> None:
             "-c",
             (
                 "import sys; "
-                "import cuphoton.ximage.data.rubin_image; "
+                "import cuphoton.ximage.adapters.rubin.image; "
                 "assert 'lsst.images' not in sys.modules"
             ),
         ],
