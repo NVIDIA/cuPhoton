@@ -306,36 +306,36 @@ be regenerated.
 ## xImage reconstruction bundles
 
 xImage reads numeric arrays from an NPY directory (`images.npy`, etc.), an
-HDF5 file, or a Zarr store. Dataset names are the keys below. An NPY directory also requires
-`metadata.json`, which may contain an empty object (`{}`) or caller metadata;
-the arrays remain the solver inputs.
+HDF5 file, or a Zarr store. Dataset names are the keys below. Images,
+variances, and PSFs are required; all other arrays and `metadata.json` are
+optional.
 
 | Key | Shape | Meaning |
 | --- | --- | --- |
-| `images` | `(batch, y, x, exposure)` | Registered image pixels |
-| `variances` | `(batch, y, x, exposure)` | Input pixel variances |
-| `sky` | `(batch, y, x, exposure)` | Sky estimates retained with the bundle |
-| `masks` | `(batch, y, x, 12, exposure)` | Boolean exclusion planes |
-| `psfs` | `(psf_y, psf_x, channel, exposure)` | Per-exposure convolution kernels |
-| `exp_times` | `(exposure,)` | Positive exposure times |
-| `mcgauss` | `(exposure, kernel_y, kernel_x)` | Per-exposure Gaussian kernels retained with the bundle |
+| `images` | `(batch, y, x, frame)` | Registered image pixels |
+| `variances` | `(batch, y, x, frame)` | Input pixel variances |
+| `psfs` | `(psf_y, psf_x, channel, frame)` | Point-source images, including calibrated kernels |
+| `masks` | `(batch, y, x, frame)` | Optional boolean mask: `True` includes the pixel; absent means all pixels |
+| `exp_times` | `(frame,)` | Optional positive frame scales; absent means ones |
+| `sky` | `(batch, y, x, frame)` | Optional sky estimates retained with the bundle |
+| `mcgauss` | `(frame, kernel_y, kernel_x)` | Optional Gaussian kernels retained with the bundle |
 
 PSF calibration and reconstruction require one PSF channel. The evaluation
-workflow requires one image batch.
-All exposure axes must agree. It divides images by exposure time and
-variances by its square. Supply images with the intended sky/background
-convention: the `sky` array is retained metadata and is not automatically
-subtracted. `background_model: scalar_per_exposure` optionally fits a
-constant background for each exposure.
+workflow requires one image batch. All frame axes must agree. Reconstruction
+divides images by `exp_times` and variances by its square. Supply images
+with the intended background convention: `sky` is retained and is not
+automatically subtracted. The experimental
+`background_model: scalar_per_exposure` fits a constant background for each
+frame.
 
-Mask planes contain exclusions, with nonzero values meaning excluded.
-The non-conservative policy excludes planes 0, 4, and 8. The conservative
-policy additionally excludes planes 1, 7, 9, and 10; plane 10 is dilated by
-`mask.dilation_factor`. These planes describe chip gaps/borders, stripes, and
-large sources. Planes 2, 3, 5, 6, and 11 do not affect either policy.
-Translate an instrument's native bitmask into this schema
-before using it. `mask.mode: none` disables masking. Torch currently requires
-`dilation_factor: 1` for conservative masks.
+The default `mask.mode: provided` uses the bundle's good-pixel mask;
+`mask.mode: none` ignores it. Instrument-specific flags are converted by the
+adapter before constructing a bundle. The legacy twelve-plane camera schema
+can be converted with
+`cuphoton.ximage.adapters.legacy.legacy_masks_to_good_pixels`, whose
+`conservative` and `non_conservative` policies and `dilation_factor` apply
+only during that conversion. The Rubin adapter directly converts its bad
+pixel flags to boolean good-pixel masks.
 
 ROI centers are `(row, column)` in the source image. `VALID` padding requires
 real input pixels around the ROI: `ceil((psf_size // 2) / srf)` on each side.

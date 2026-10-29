@@ -17,33 +17,37 @@ import yaml
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from cuphoton.ximage.config import ReconstructionConfig
-from cuphoton.ximage.data import XImageBundle
-from cuphoton.ximage.evaluation import (
-    RestorationRun,
+from cuphoton.ximage.adapters.rubin.evaluation import (
     _load_catalog_table,
-    average_downsample,
     build_catalog_photometry_binned_rows,
     build_catalog_photometry_rows,
     build_rubin_coadd_reference_catalog,
     catalog_photometry_metrics,
-    center_crop,
-    crop_about_center,
-    evaluate_reconstruction_run,
-    fourier_sharpness,
     load_pipeline_coadd_roi,
     load_reference_catalog_csv_sources,
     match_detections_to_catalog,
-    project_restoration_to_observation_grid,
     project_rubin_catalog_sky_to_store_roi,
-    psnr,
     resolve_catalog_parquet,
     resolve_pipeline_coadd_fits,
     resolve_reference_catalog_csv,
+)
+from cuphoton.ximage.config import ReconstructionConfig
+from cuphoton.ximage.data import XImageBundle
+from cuphoton.ximage.evaluation import (
+    RestorationRun,
+    evaluate_reconstruction_run,
     resolve_saved_path,
+    write_evaluation_artifacts,
+)
+from cuphoton.ximage.metrics import (
+    average_downsample,
+    center_crop,
+    crop_about_center,
+    fourier_sharpness,
+    project_restoration_to_observation_grid,
+    psnr,
     sky_sigma,
     ssim,
-    write_evaluation_artifacts,
 )
 
 
@@ -385,7 +389,7 @@ def test_evaluate_reconstruction_run_reports_metrics(
     images = np.zeros((1, 8, 8, 2), dtype=np.float64)
     images[:, 3:5, 3:5, :] = 2.0
     variances = np.ones((1, 8, 8, 2), dtype=np.float64)
-    masks = np.ones((1, 8, 8, 12, 2), dtype=np.uint8)
+    masks = np.ones_like(images, dtype=bool)
     sky = np.zeros((1, 8, 8, 2), dtype=np.uint8)
     psfs = np.zeros((3, 3, 1, 2), dtype=np.float64)
     psfs[1, 1, 0, :] = 1.0
@@ -460,7 +464,7 @@ def test_evaluate_reconstruction_run_reports_metrics(
             "name": "example",
         },
         "roi": {"center": [4, 4], "height": 4, "width": 4},
-        "mask": {"mode": "none", "dilation_factor": 1},
+        "mask": {"mode": "provided"},
         "srf": 1,
         "x_initialization": "median",
         "ucf": 2.0,
@@ -1328,7 +1332,7 @@ def test_resolve_saved_path_does_not_fall_back_to_cwd(
 def test_photometry_metrics_degrades_on_measurement_error(
     monkeypatch,
 ) -> None:
-    import cuphoton.ximage.evaluation as evaluation
+    import cuphoton.ximage.adapters.rubin.evaluation as evaluation
 
     def boom(image):
         raise ArithmeticError("boom")
@@ -1348,7 +1352,7 @@ def test_photometry_metrics_degrades_on_measurement_error(
 def test_photometry_metrics_reraises_programming_errors(
     monkeypatch,
 ) -> None:
-    import cuphoton.ximage.evaluation as evaluation
+    import cuphoton.ximage.adapters.rubin.evaluation as evaluation
 
     def boom(image):
         raise AttributeError("bad-code")
@@ -1371,7 +1375,7 @@ def test_photometry_metrics_reraises_programming_errors(
 def test_photometry_metrics_degrades_when_photutils_unavailable(
     monkeypatch,
 ) -> None:
-    import cuphoton.ximage.evaluation as evaluation
+    import cuphoton.ximage.adapters.rubin.evaluation as evaluation
 
     def boom(*args, **kwargs):
         raise RuntimeError("photutils-missing")
@@ -1389,7 +1393,7 @@ def test_photometry_metrics_degrades_when_photutils_unavailable(
 
 
 def test_photometry_background_fallback_preserves_finite_pixels(monkeypatch):
-    import cuphoton.ximage.evaluation as evaluation
+    import cuphoton.ximage.adapters.rubin.evaluation as evaluation
 
     image = np.full((32, 32), 7.0, dtype=np.float32)
     image[0, 0] = np.nan

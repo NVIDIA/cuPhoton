@@ -214,7 +214,7 @@ def test_psf_config_rejects_invalid_kernel_geometry(
         {"learning_rate": 0},
         {"stop_tol": 0},
         {"roi": {"height": 0}},
-        {"mask": {"dilation_factor": 0}},
+        {"mask": {"mode": "conservative"}},
     ],
 )
 def test_reconstruction_config_rejects_nonpositive_controls(

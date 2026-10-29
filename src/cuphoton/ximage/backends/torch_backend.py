@@ -51,13 +51,11 @@ class TorchBackend:
     def to_torch_masks(self, masks: np.ndarray):
         torch = _load_torch()
         arr = np.asarray(masks)
-        if arr.ndim == 4:
-            return torch.from_numpy(arr).permute(3, 0, 1, 2).contiguous()
-        if arr.ndim == 5:
-            return torch.from_numpy(arr).permute(4, 3, 0, 1, 2).contiguous()
-        raise ValueError(
-            f"Unsupported mask rank for torch conversion: {arr.ndim}"
-        )
+        if arr.ndim != 4:
+            raise ValueError(
+                f"Expected a rank-4 good-pixel mask, saw rank {arr.ndim}"
+            )
+        return torch.from_numpy(arr).permute(3, 0, 1, 2).contiguous()
 
     def solve_psf(self, bundle: Any, config: Any) -> dict[str, Any]:
         torch = _load_torch()
@@ -191,8 +189,10 @@ class TorchBackend:
             trace_iterations.append(step)
             trace_loss.append(float(loss.detach().cpu().item()))
 
+        # Adam fits correlation kernels; public PSFs are point-source images.
         h_out = (
             h_param.detach()
+            .flip((-2, -1))
             .cpu()
             .squeeze(1)
             .permute(1, 2, 0)
@@ -717,6 +717,8 @@ def _solve_psf_mm(
         previous_previous_u = previous_u
         previous_u = update
 
+    # MM optimizes h as an image filtered by a symmetric Gaussian, so its
+    # orientation already matches the target point-source image.
     h_padded = (
         h.detach().cpu().squeeze(1).permute(1, 2, 0).unsqueeze(2).numpy()
     )
@@ -1026,7 +1028,6 @@ def _reconstruction_performance_summary(
             "roi_shape": [int(y_shape[2]), int(y_shape[3])],
             "psf_shape": list(f_shape),
             "mask_mode": config.mask.mode,
-            "dilation_factor": int(config.mask.dilation_factor),
             "srf": int(config.srf),
             "padding": config.padding,
             "background_model": config.background_model,

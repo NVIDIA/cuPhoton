@@ -46,7 +46,7 @@ def test_device_summary_preserves_unavailable_cudnn_benchmark_limit(
 def _bundle(psfs: np.ndarray) -> XImageBundle:
     images = np.zeros((1, 8, 8, psfs.shape[3]), dtype=np.float64)
     images[:, 3:5, 3:5, :] = 1.0
-    masks = np.ones((1, 8, 8, 12, psfs.shape[3]), dtype=np.uint8)
+    masks = np.ones((1, 8, 8, psfs.shape[3]), dtype=bool)
     sky = np.ones((1, 8, 8, psfs.shape[3]), dtype=np.uint8)
     variances = np.ones((1, 8, 8, psfs.shape[3]), dtype=np.float64)
     exp_times = np.full((psfs.shape[3],), 300.0, dtype=np.float64)
@@ -77,7 +77,7 @@ def _outlier_bundle(
     images[:, 4, 4, 0] = outlier
     if psfs.shape[3] > 1:
         images[:, 4, 4, 1:] = 1.0
-    masks = np.ones((1, 8, 8, 12, psfs.shape[3]), dtype=np.uint8)
+    masks = np.ones((1, 8, 8, psfs.shape[3]), dtype=bool)
     sky = np.ones((1, 8, 8, psfs.shape[3]), dtype=np.uint8)
     variances = np.full(
         (1, 8, 8, psfs.shape[3]),
@@ -106,7 +106,7 @@ def _offset_bundle(psfs: np.ndarray, offsets: np.ndarray) -> XImageBundle:
     images = np.zeros((1, 8, 8, psfs.shape[3]), dtype=np.float64)
     images[:, 3:5, 3:5, :] = 1.0
     images = images + offsets.reshape(1, 1, 1, -1)
-    masks = np.ones((1, 8, 8, 12, psfs.shape[3]), dtype=np.uint8)
+    masks = np.ones((1, 8, 8, psfs.shape[3]), dtype=bool)
     sky = np.ones((1, 8, 8, psfs.shape[3]), dtype=np.uint8)
     variances = np.ones((1, 8, 8, psfs.shape[3]), dtype=np.float64)
     exp_times = np.ones((psfs.shape[3],), dtype=np.float64)
@@ -165,7 +165,7 @@ def _reconstruct_config() -> ReconstructionConfig:
                 "overwrite": True,
             },
             "roi": {"center": [4, 4], "height": 4, "width": 4},
-            "mask": {"mode": "none", "dilation_factor": 1},
+            "mask": {"mode": "none"},
             "srf": 1,
             "x_initialization": "median",
             "ucf": 2.0,
@@ -262,6 +262,129 @@ def test_torch_psf_solve_mm_rejects_zero_initialization() -> None:
 
     with pytest.raises(ValueError, match="multiplicative updates"):
         backend.solve_psf(_bundle(psfs), config)
+
+
+@pytest.mark.parametrize("method", ["adam", "mm"])
+@pytest.mark.parametrize("padding", ["SAME", "VALID"])
+def test_psf_calibration_preserves_point_source_orientation(
+    method: str, padding: str, tmp_path: Path
+) -> None:
+    from scipy.signal import convolve2d
+
+    from cuphoton.ximage.psf import gaussian_psf
+
+    # This asymmetric point-source image fixes the expected orientation.
+    expected = np.zeros((7, 7))
+    expected[2, 4] = 0.8
+    expected[3, 5] = 0.2
+    gaussian = gaussian_psf(7, sigma=0.5)
+    target = convolve2d(expected, gaussian, mode="same")
+    config = _config().model_copy(
+        update={
+            "method": method,
+            "padding": padding,
+            "sigma_g": 0.5,
+            "h_initialization": "zeros" if method == "adam" else "ones",
+            "lr": 0.02,
+            "num_steps": 400,
+            "max_iter": 200,
+            "min_iter": 200,
+        }
+    )
+    result = TorchBackend().solve_psf(
+        _bundle(target[:, :, None, None]), config
+    )
+    calibrated = result["psfs"][:, :, 0, 0]
+    np.testing.assert_allclose(calibrated, expected, atol=0.006)
+    reblurred = convolve2d(calibrated, gaussian, mode="same")
+    assert np.linalg.norm(reblurred - target) < 0.01 * np.linalg.norm(target)
+
+    # Save and consume the calibrated point-source image just like psf-solve
+    # followed by reconstruction. The observation uses an independent model.
+    psf_path = tmp_path / "psfs.npy"
+    np.save(psf_path, result["psfs"])
+    size = 24
+    truth = np.full((size, size), 0.05)
+    truth[9:15, 5:18] = 1.0
+    truth[11, 12] = 20.0
+    observation = convolve2d(truth, expected, mode="same")
+    bundle = _bundle(target[:, :, None, None])
+    bundle.arrays.update(
+        images=observation[None, :, :, None],
+        variances=np.ones((1, size, size, 1)),
+        masks=np.ones((1, size, size, 1), dtype=bool),
+        exp_times=np.ones(1),
+    )
+    reconstruct_config = _reconstruct_config()
+    reconstruct_config = reconstruct_config.model_copy(
+        update={
+            "psf_path": psf_path,
+            "roi": reconstruct_config.roi.model_copy(
+                update={
+                    "center": [size // 2] * 2,
+                    "height": size,
+                    "width": size,
+                }
+            ),
+            "max_iter": 80,
+            "stop_tol": 1e-12,
+        }
+    )
+    image = TorchBackend().reconstruct(bundle, reconstruct_config)["image"]
+    image = image[0, :, :, 0]
+    inner = (slice(7, -7),) * 2
+    assert np.unravel_index(np.argmax(image), image.shape) == (11, 12)
+    assert np.linalg.norm(image[inner] - truth[inner]) < (
+        0.03 * np.linalg.norm(truth[inner])
+    )
+
+
+def test_torch_l2_recovers_scene_through_asymmetric_psfs() -> None:
+    from scipy.signal import fftconvolve
+
+    size, kernel_size, frame_count, noise = 48, 11, 4, 0.01
+    rng = np.random.default_rng(0)
+    truth = np.full((size, size), 0.05)
+    truth[14:34:4, 12:36] = 1.0
+    truth[22, 26] += 20.0
+    yy, xx = np.indices((kernel_size, kernel_size)) - kernel_size // 2
+    psfs = np.empty((kernel_size, kernel_size, 1, frame_count))
+    images = np.empty((1, size, size, frame_count))
+    for frame, (dy, dx) in enumerate(((0, 2), (2, 0), (0, -2), (-2, 0))):
+        psf = np.exp(-((yy - dy) ** 2 / 2.0 + (xx - dx) ** 2 / 4.5))
+        psfs[:, :, 0, frame] = psf / psf.sum()
+        images[0, :, :, frame] = fftconvolve(
+            truth, psfs[:, :, 0, frame], mode="same"
+        ) + rng.normal(0.0, noise, truth.shape)
+    bundle = _bundle(psfs)
+    bundle.arrays.update(
+        images=images,
+        variances=np.full_like(images, noise**2),
+        masks=np.ones((1, size, size, frame_count), dtype=bool),
+        exp_times=np.ones(frame_count),
+    )
+    config = _reconstruct_config()
+    config = config.model_copy(
+        update={
+            "roi": config.roi.model_copy(
+                update={
+                    "center": [size // 2] * 2,
+                    "height": size,
+                    "width": size,
+                }
+            ),
+            "max_iter": 100,
+            "stop_tol": 1e-9,
+        }
+    )
+    image = TorchBackend().reconstruct(bundle, config)["image"][0, :, :, 0]
+    inner = (slice(kernel_size, -kernel_size),) * 2
+    frame_mean = images[0].mean(axis=-1)
+
+    assert np.unravel_index(np.argmax(image), image.shape) == (22, 26)
+    assert np.linalg.norm(image[inner] - truth[inner]) < (
+        0.6 * np.linalg.norm(frame_mean[inner] - truth[inner])
+    )
 
 
 @pytest.mark.parametrize("algorithm", ["l2", "rho"])

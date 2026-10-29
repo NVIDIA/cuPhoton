@@ -12,7 +12,7 @@ structured run artifacts provide integration points for those workflows.
 | --- | --- | --- |
 | FITS files whose pixels you need on a GPU | [xDataReader](docs/components/xdr.md) | Decoded and scaled device arrays |
 | Images with different pixel-to-sky mappings | [xRep](docs/components/xrep.md) | Images resampled onto a common sky grid |
-| Aligned exposures with known blur and variance | [xImage](docs/components/ximage.md) | A reconstructed common scene and separate PSF calibration |
+| Registered frames with known blur and variance | [xImage](docs/components/ximage.md) | A reconstructed common scene and separate PSF calibration |
 | An aligned reference image and a new observation | [xPois](docs/components/xpois.md) | A matched reference and a difference image |
 | Small cutouts containing positive/negative residuals | [xFit](docs/components/xfit.md) | Fitted positions, amplitudes, shapes, uncertainties, and fit status |
 | Candidate cutouts to score, or reviewed examples to train on | [xScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
@@ -103,11 +103,13 @@ metadata.
 
 ### xImage
 
-xImage (`cuphoton.ximage`) estimates a common scene from aligned exposures,
-known per-exposure blur kernels, masks, and variance weights. It provides L2
-and robust reconstruction, plus separate PSF calibration with Adam or
-multiplicative updates. See the [xImage guide](docs/components/ximage.md) for
-input conventions, synthetic examples, and output limitations.
+xImage (`cuphoton.ximage`) estimates a common nonnegative scene from
+registered frames, known per-frame PSFs, good-pixel masks, and Gaussian
+noise variances. Each frame uses a spatially fixed PSF. It provides L2 and
+Huber reconstruction, experimental robust-loss extensions, and separate
+PSF calibration with Adam or multiplicative updates. See the
+[xImage guide](docs/components/ximage.md) for input conventions, synthetic
+examples, and a worked Rubin adapter.
 
 ### xPois: subtract a matched reference to reveal changes
 

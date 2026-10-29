@@ -89,13 +89,13 @@ def run_psf_solve(
             artifacts=(config.psf_artifact,),
         )
         bundle = loaded_bundle
-        exposure_dim = ARTIFACTS[config.psf_artifact].exposure_dim
-        if exposure_dim is None:
+        frame_dim = ARTIFACTS[config.psf_artifact].frame_dim
+        if frame_dim is None:
             raise ValueError("PSF artifact must have an exposure axis")
         indices = normalize_exposure_indices(
             config.data.exposure_indices,
             max_exposures=config.data.max_exposures,
-            total_exposures=bundle[config.psf_artifact].shape[exposure_dim],
+            total_exposures=bundle[config.psf_artifact].shape[frame_dim],
         )
         if indices is not None:
             bundle = bundle.select_exposures(indices)

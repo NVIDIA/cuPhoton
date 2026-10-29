@@ -27,14 +27,16 @@ torch = pytest.importorskip("torch")
 
 def _bundle() -> XImageBundle:
     images = np.arange(200, dtype=np.float64).reshape(1, 10, 10, 2)
-    masks = np.zeros((1, 10, 10, 12, 2), dtype=np.uint8)
-    masks[:, 1, 1, 8, 0] = 1
-    masks[:, 2, 2, 0, 1] = 1
-    masks[:, 3, 3, 10, 0] = 1
-    masks[:, 4, 4, 1, 1] = 1
+    masks = np.ones_like(images, dtype=bool)
+    masks[:, 1, 1, 0] = False
+    masks[:, 2, 2, 1] = False
+    masks[:, 3, 3, 0] = False
+    masks[:, 4, 4, 1] = False
     variances = np.ones((1, 10, 10, 2), dtype=np.float64)
     psfs = np.zeros((3, 3, 1, 2), dtype=np.float64)
-    psfs[1, 1, 0, :] = 1.0
+    psfs[1, 1, 0, :] = 0.8
+    psfs[0, 2, 0, 0] = 0.2
+    psfs[2, 1, 0, 1] = 0.2
     return XImageBundle(
         store_format="npy",
         store_path=Path("."),
@@ -51,9 +53,7 @@ def _bundle() -> XImageBundle:
     )
 
 
-def _config(
-    *, mask_mode: str = "non_conservative", dilation_factor: int = 1
-) -> ReconstructionConfig:
+def _config(*, mask_mode: str = "provided") -> ReconstructionConfig:
     return ReconstructionConfig.model_validate(
         {
             "backend": "torch",
@@ -61,10 +61,7 @@ def _config(
             "data": {"base": "data"},
             "output": {"root_dir": "runs", "overwrite": True},
             "roi": {"center": [5, 5], "height": 4, "width": 4},
-            "mask": {
-                "mode": mask_mode,
-                "dilation_factor": dilation_factor,
-            },
+            "mask": {"mode": mask_mode},
             "srf": 1,
             "x_initialization": "median",
             "max_iter": 1,
@@ -77,7 +74,6 @@ def _expected_inputs(bundle: XImageBundle, config: ReconstructionConfig):
     images, masks, variances = prepare_reconstruction_inputs(
         bundle,
         mask_mode=config.mask.mode,
-        dilation_factor=config.mask.dilation_factor,
     )
     y, m, v = select_cutout(
         images,
@@ -104,13 +100,11 @@ def _expected_inputs(bundle: XImageBundle, config: ReconstructionConfig):
         "m": np.transpose(m, (0, 3, 1, 2)),
         "v": np.transpose(v, (0, 3, 1, 2)),
         "w": np.transpose(m / np.maximum(v, 1e-30), (0, 3, 1, 2)),
-        "f": np.transpose(bundle.psfs, (3, 2, 0, 1)),
+        "f": np.transpose(bundle.psfs[::-1, ::-1], (3, 2, 0, 1)),
     }
 
 
-@pytest.mark.parametrize(
-    "mask_mode", ["none", "non_conservative", "conservative"]
-)
+@pytest.mark.parametrize("mask_mode", ["none", "provided"])
 @pytest.mark.parametrize(
     "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
 )
@@ -152,24 +146,34 @@ def test_torch_preprocess_matches_numpy_inputs(
     assert "unmasked_fraction" in actual.metadata["mask_summary"]
 
 
-def test_torch_preprocess_rejects_unsupported_conservative_dilation() -> None:
-    with pytest.raises(NotImplementedError, match="dilation_factor=1"):
-        prepare_torch_reconstruction_inputs(
-            _bundle(),
-            _config(mask_mode="conservative", dilation_factor=2),
-            device=torch.device("cpu"),
-            dtype=torch.float64,
-        )
-
-
-def test_torch_preprocess_accepts_default_conservative_dilation() -> None:
-    config = _config()
-    config.mask = type(config.mask)(mode="conservative")
+def test_torch_preprocess_masks_exclude_pixels_from_weights() -> None:
     prepared = prepare_torch_reconstruction_inputs(
-        _bundle(), config, device=torch.device("cpu"), dtype=torch.float64
+        _bundle(), _config(), device=torch.device("cpu"), dtype=torch.float64
     )
     assert prepared.m.shape == (1, 2, 4, 4)
     assert prepared.m[0, 0, 0, 0] == 0
+    assert prepared.w[0, 0, 0, 0] == 0
+    assert prepared.w[0, 1, 1, 1] == 0
+    assert prepared.metadata["mask_summary"]["zero_weight_pixel_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
+)
+def test_torch_preprocess_defaults_optional_masks_and_scales(device) -> None:
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    bundle = _bundle()
+    del bundle.arrays["masks"], bundle.arrays["exp_times"]
+    prepared = prepare_torch_reconstruction_inputs(
+        bundle, _config(), device=torch.device(device), dtype=torch.float64
+    )
+    np.testing.assert_array_equal(
+        prepared.y.cpu().numpy(),
+        np.transpose(bundle.images[:, 3:7, 3:7], (0, 3, 1, 2)),
+    )
+    np.testing.assert_array_equal(prepared.m.cpu().numpy(), 1)
+    np.testing.assert_array_equal(prepared.w.cpu().numpy(), 1)
 
 
 @pytest.mark.parametrize("center", [(1, 5), (9, 5), (5, 1), (5, 9)])

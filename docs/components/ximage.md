@@ -1,9 +1,21 @@
 # xImage
 
-`cuphoton.ximage` reconstructs a common scene from aligned astronomical
-exposures using supplied PSFs, variance planes, exposure times, and masks.
-It provides a squared-error solver and robust-loss variants, with PyTorch
-execution on CPU or CUDA 13 GPUs.
+`cuphoton.ximage` reconstructs a common nonnegative scene from registered
+frames using supplied per-frame point-spread functions (PSFs), noise
+variances, and good-pixel masks. It provides weighted least-squares and
+robust-loss reconstruction with PyTorch on CPU or CUDA 13 GPUs.
+
+The reconstruction model assumes:
+
+- Frames are already registered to a common pixel grid. Use
+  [xRep](xrep.md) when resampling is needed before reconstruction.
+- Each frame has one known PSF, fixed across the field. Reconstructing
+  separate tiles can approximate field variation when each tile is supplied
+  an appropriate local PSF; the solver does not fit a spatial PSF field.
+- The reconstructed intensity is nonnegative, as required by the
+  multiplicative update.
+- Noise is Gaussian with known pixel variances. The L2 solver minimizes
+  the corresponding variance-weighted squared error.
 
 xImage implements a PyTorch adaptation of the
 [ImageMM reconstruction approach](https://doi.org/10.3847/1538-3881/adfb72)
@@ -11,6 +23,10 @@ described by Sukurdeep et al. (2025). For publications using xImage
 reconstruction, cite both ImageMM and the cuPhoton version used; see the
 [citation guide](../../CITATION.md#ximage) and
 [scientific references](../references.md#image-restoration-and-super-resolution).
+The robust example uses the paper's Huber loss. The additional `cauchy`,
+`bisquare`, and `damped_rl` losses and the `scalar_per_exposure` background
+model are experimental extensions. Their use requires validation for the
+intended data and measurement.
 
 PSF calibration is a separate operation: Adam or multiplicative updates fit
 per-exposure kernels to supplied PSF stamps using a Gaussian reference.
@@ -46,11 +62,21 @@ supported; each run records the resolved device, precision, and timings.
 
 ## Inputs and reconstruction
 
-Bundles use NPY directories, HDF5, or Zarr stores. Image, variance, and sky
-arrays have axes `(batch, y, x, exposure)`; PSFs have axes
-`(psf_y, psf_x, channel, exposure)`. The current solvers require one PSF
-channel; evaluation supports one image batch. Exposures must describe the
-same registered sky region.
+Bundles use NPY directories, HDF5, or Zarr stores. Images and variances have
+axes `(batch, y, x, frame)`; PSFs have axes
+`(psf_y, psf_x, channel, frame)`. Each PSF is the image of a point source,
+including when loaded from a PSF calibration run. The current solvers
+require one PSF channel; evaluation supports one image batch. Frames must
+describe the same registered scene.
+
+An optional boolean `masks` array has the same shape as the images, with
+`True` selecting a good pixel. `mask.mode: provided` uses these masks and
+`mask.mode: none` ignores them. Missing masks admit all pixels. Supply finite image values and strictly
+positive finite variances. Optional `exp_times` defaults to
+ones; supplied values divide image intensities and their squares divide
+variances. The auxiliary `sky` and `mcgauss` arrays are optional.
+Convert legacy twelve-plane masks explicitly through
+`cuphoton.ximage.adapters.legacy` before using the generic bundle.
 See [Data and artifact contracts](../data-artifacts.md#ximage-reconstruction-bundles)
 for all arrays, mask conventions, and output fields.
 
@@ -91,8 +117,11 @@ cuphoton ximage benchmark-devices \
   --workflow reconstruct-l2 --devices cpu,cuda --warmup 1 --repeats 3
 ```
 
-Evaluation reports image similarity, background statistics, and aperture
-photometry against an equally weighted mean or median coadd of valid,
+Generic image similarity and background-statistic functions are available
+from `cuphoton.ximage.metrics`, including `psnr`, `ssim`,
+`fourier_sharpness`, and `image_metrics`. Run evaluation also supports the
+Rubin adapter's aperture photometry and catalog comparisons. It compares
+against an equally weighted mean or median coadd of valid,
 exposure-time-normalized pixels. Masked or invalid-variance samples are
 excluded; pixels with no valid contributors are zero. Supply
 `--pipeline-coadd-fits`, `--catalog-parquet`, or `--reference-catalog-csv`
@@ -109,9 +138,11 @@ and artifact writing, after the requested warmup runs. It records individual
 timings and hardware metadata. `--evaluate` adds reconstruction metrics;
 elementwise numerical parity requires a separate array comparison.
 
-## Local Rubin products
+## Worked adapter: local Rubin products
 
-The `rubin-*` commands inspect caller-supplied FITS and catalog files, build
+The `cuphoton.ximage.adapters.rubin` package converts local Rubin products
+to the generic frame, PSF, variance, and good-pixel-mask contract. Its
+`rubin-*` commands inspect caller-supplied FITS and catalog files, build
 manifests and assemble reconstruction bundles. `rubin-build-store` can align
 visit images using their WCS; inspect its mask and interpolation settings
 for the selected products. Inspect the

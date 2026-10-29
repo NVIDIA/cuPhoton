@@ -96,7 +96,7 @@ COMPONENTS = (
     ComponentSpec(
         "ximage",
         "cuphoton.ximage",
-        "Multi-exposure image reconstruction and PSF calibration.",
+        "Multi-frame image reconstruction and PSF calibration.",
     ),
     ComponentSpec(
         "xpois",

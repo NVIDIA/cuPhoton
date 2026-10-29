@@ -26,24 +26,24 @@ from cuphoton.core.cli import (
     StringInvariant,
 )
 
+from .adapters.rubin.bundle import (
+    build_rubin_manifest,
+    build_rubin_store,
+    probe_fits_products,
+    summarize_rubin_coadd_semantics,
+)
+from .adapters.rubin.catalog import (
+    load_visit_file,
+    parse_visit_text,
+    validate_rubin_catalog_export,
+)
+from .adapters.rubin.image import RUBIN_IMAGE_FORMATS
 from .data import (
     ARTIFACTS,
     load_ximage_bundle,
     summarize_bundle,
     validate_bundle,
 )
-from .data.rubin import (
-    build_rubin_manifest,
-    build_rubin_store,
-    probe_fits_products,
-    summarize_rubin_coadd_semantics,
-)
-from .data.rubin_catalog import (
-    load_visit_file,
-    parse_visit_text,
-    validate_rubin_catalog_export,
-)
-from .data.rubin_image import RUBIN_IMAGE_FORMATS
 from .tools.store import (
     benchmark_store,
     resolve_artifacts,
@@ -88,7 +88,7 @@ def build_rubin_coadd_reference_catalog(
 ) -> dict[str, Any]:
     """Lazy wrapper around evaluation helpers."""
 
-    from .evaluation import (
+    from .adapters.rubin.evaluation import (
         build_rubin_coadd_reference_catalog as _build_reference,
     )
 

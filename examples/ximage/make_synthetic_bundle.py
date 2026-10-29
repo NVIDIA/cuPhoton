@@ -41,11 +41,7 @@ def main() -> None:
     arrays = {
         "images": image_stack,
         "variances": np.full_like(image_stack, noise_sigma**2),
-        "masks": np.zeros((1, size, size, 12, count), dtype=np.uint8),
-        "sky": np.zeros_like(image_stack, dtype=np.uint8),
         "psfs": np.stack(psfs, axis=-1)[:, :, None, :],
-        "mcgauss": np.stack(psfs),
-        "exp_times": np.ones(count),
     }
     args.output.mkdir(parents=True)
     for name, array in arrays.items():
@@ -54,7 +50,7 @@ def main() -> None:
         json.dumps({"source": "synthetic", "seed": 0}) + "\n",
         encoding="utf-8",
     )
-    print(f"Created {count} synthetic exposures in {args.output}")
+    print(f"Created {count} synthetic frames in {args.output}")
 
 
 if __name__ == "__main__":

@@ -23,10 +23,9 @@ roi:
   height: 48
   width: 48
 mask:
-  # Synthetic inputs need no mask; choose a mask policy and dilation
-  # appropriate to the instrument when using observed data.
+  # Use mode: provided for boolean good-pixel masks. Convert instrument
+  # flags with an adapter before constructing the bundle.
   mode: none
-  dilation_factor: 1
 psf_path: null
 # A null psf_path uses the PSFs in the input bundle.
 srf: 1

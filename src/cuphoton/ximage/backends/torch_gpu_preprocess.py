@@ -12,7 +12,11 @@ from typing import Any
 
 import numpy as np
 
-from ..preprocess import spatial_roi_slices
+from ..preprocess import (
+    _exposure_times,
+    _good_pixel_masks,
+    spatial_roi_slices,
+)
 
 
 @dataclass
@@ -49,11 +53,16 @@ def prepare_torch_reconstruction_inputs(
     variances = _as_device_tensor(
         torch, bundle.variances, device=device, dtype=dtype
     )
-    object_masks = _as_device_tensor(
-        torch, bundle.masks, device=device, dtype=torch.uint8
-    )
+    if config.mask.mode == "provided":
+        masks = _as_device_tensor(
+            torch, _good_pixel_masks(bundle), device=device, dtype=dtype
+        )
+    elif config.mask.mode == "none":
+        masks = torch.ones_like(images)
+    else:
+        raise ValueError(f"Unsupported mask mode: {config.mask.mode}")
     exp_times = _as_device_tensor(
-        torch, bundle.exp_times, device=device, dtype=dtype
+        torch, _exposure_times(bundle), device=device, dtype=dtype
     )
     psf_values = bundle.psfs if psfs is None else psfs
     if len(psf_values.shape) != 4 or psf_values.shape[2] != 1:
@@ -76,13 +85,6 @@ def prepare_torch_reconstruction_inputs(
     exp_scale = exp_times.reshape(1, 1, 1, -1)
     images = images / exp_scale
     variances = variances / exp_scale.square()
-    masks = _create_object_masks_torch(
-        torch,
-        object_masks,
-        mask_mode=config.mask.mode,
-        dilation_factor=int(config.mask.dilation_factor),
-        dtype=dtype,
-    )
     center_roi = (
         list(config.roi.center) if config.roi.center is not None else None
     )
@@ -135,7 +137,8 @@ def prepare_torch_reconstruction_inputs(
     m = _bhwe_to_behw(m_cutout)
     v = _bhwe_to_behw(v_cutout)
     w = _bhwe_to_behw(weights_bhwe)
-    f = psfs_bhwc.permute(3, 2, 0, 1).contiguous()
+    # PSFs are point-source images; conv2d expects correlation kernels.
+    f = psfs_bhwc.permute(3, 2, 0, 1).flip((-2, -1)).contiguous()
 
     metadata = {
         "timings_sec": timings,
@@ -143,7 +146,7 @@ def prepare_torch_reconstruction_inputs(
         "dtype": str(dtype).replace("torch.", ""),
         "raw_shapes": {
             "images": list(images.shape),
-            "masks": list(object_masks.shape),
+            "masks": list(masks.shape),
             "variances": list(variances.shape),
             "psfs": list(psfs_bhwc.shape),
         },
@@ -201,61 +204,6 @@ def _stop_timer(torch: Any, device: Any, start: float) -> float:
 def _sync_if_cuda(torch: Any, device: Any) -> None:
     if getattr(device, "type", None) == "cuda":
         torch.cuda.synchronize(device)
-
-
-def _create_object_masks_torch(
-    torch: Any,
-    object_masks: Any,
-    *,
-    mask_mode: str,
-    dilation_factor: int,
-    dtype: Any,
-):
-    if mask_mode == "none":
-        shape = (
-            object_masks.shape[0],
-            object_masks.shape[1],
-            object_masks.shape[2],
-            object_masks.shape[4],
-        )
-        return torch.ones(shape, device=object_masks.device, dtype=dtype)
-
-    object_index = {
-        "chip_gap_border_1": 0,
-        "stripes_1": 1,
-        "chip_gap_border_2": 2,
-        "small_sources": 3,
-        "chip_gap_border_3": 4,
-        "various_sources": 5,
-        "null_1": 6,
-        "stripes_2": 7,
-        "chip_gap": 8,
-        "stripes_3": 9,
-        "large_sources": 10,
-        "null_2": 11,
-    }
-    mask_bool = object_masks.bool()
-    excluded_noncon = (
-        mask_bool[:, :, :, object_index["chip_gap_border_1"], :]
-        | mask_bool[:, :, :, object_index["chip_gap_border_3"], :]
-        | mask_bool[:, :, :, object_index["chip_gap"], :]
-    )
-    if mask_mode == "non_conservative":
-        return (~excluded_noncon).to(dtype=dtype)
-
-    if mask_mode != "conservative":
-        raise ValueError(f"Unsupported mask mode: {mask_mode}")
-    if dilation_factor != 1:
-        raise NotImplementedError(
-            "Torch conservative mask preprocessing currently supports "
-            "dilation_factor=1 only."
-        )
-
-    large_sources = mask_bool[:, :, :, object_index["large_sources"], :]
-    excluded_con = excluded_noncon | large_sources
-    for key in ("stripes_1", "stripes_2", "stripes_3"):
-        excluded_con = excluded_con | mask_bool[:, :, :, object_index[key], :]
-    return (~excluded_con).to(dtype=dtype)
 
 
 def _select_cutout(

@@ -56,12 +56,9 @@ class TilingConfig(Model):
 
 
 class MaskConfig(Model):
-    """Mask construction policy for reconstruction inputs."""
+    """Use the bundle good-pixel mask, or explicitly ignore it."""
 
-    mode: Literal["non_conservative", "conservative", "none"] = (
-        "non_conservative"
-    )
-    dilation_factor: int = Field(default=1, ge=1)
+    mode: Literal["provided", "none"] = "provided"
 
 
 class OutputConfig(Model):
@@ -145,7 +142,7 @@ class PsfSolveConfig(WorkflowConfig):
 
 
 class ReconstructionConfig(WorkflowConfig):
-    """Configuration for L2 or robust multi-exposure reconstruction."""
+    """Configuration for L2 or robust multi-frame reconstruction."""
 
     algorithm: Literal["l2", "rho"] | None = None
     roi: RoiConfig = Field(default_factory=RoiConfig)
