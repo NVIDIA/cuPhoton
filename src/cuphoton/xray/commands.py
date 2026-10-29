@@ -657,6 +657,16 @@ class LinearPredictionValidateCommand(_XRayCommand):
         _required = False
         _default = None
 
+    refine = False
+
+    class RefineArg(BoolInvariant):
+        _arg = "--refine"
+        _help = (
+            "Also run the sweep with nonlinear least-squares refinement "
+            "of the linear-prediction modes."
+        )
+        _required = False
+
     output_dir = None
 
     class OutputDirArg(PathValueInvariant):
@@ -672,6 +682,108 @@ class LinearPredictionValidateCommand(_XRayCommand):
     class JsonArg(BoolInvariant):
         _arg = "--json"
         _help = "Print the summary as JSON instead of the text report."
+        _required = False
+
+
+class LinearPredictionModesReviewCommand(_XRayCommand):
+    _description_ = (
+        "Write a visual comparison of synthetic modes and refinements."
+    )
+    _shortname_ = "lpmr"
+    _handler_name_ = "_linear_prediction_modes_review"
+
+    output_path = "xray_lp_modes_review.html"
+
+    class OutputPathArg(PathValueInvariant):
+        _arg = "--output"
+        _help = "Output HTML path (requires the viz extra)."
+        _required = False
+        _default = "xray_lp_modes_review.html"
+
+    snr_db = "40,20,10,5"
+
+    class SnrDbArg(StringInvariant):
+        _arg = "--snr-db"
+        _help = "Comma-separated signal-to-noise levels in dB."
+        _required = False
+        _default = "40,20,10,5"
+
+    distortion = None
+
+    class DistortionArg(StringInvariant):
+        _arg = "--distortion"
+        _help = "Model mismatch as kind:amount, for example chirp:0.05."
+        _required = False
+        _default = None
+
+    seed = 11
+
+    class SeedArg(IntegerInvariant):
+        _arg = "--seed"
+        _help = "Random seed for reproducible noise."
+        _required = False
+        _default = 11
+
+    samples = 96
+
+    class SamplesArg(PositiveIntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable artifact information."
+        _required = False
+
+
+class LinearPredictionRefineBenchmarkCommand(_XRayCommand):
+    _description_ = (
+        "Benchmark per-trace SciPy refinement against the batched "
+        "Levenberg-Marquardt solver on NumPy and CuPy."
+    )
+    _shortname_ = "lprb"
+    _handler_name_ = "_linear_prediction_refine_benchmark"
+
+    samples = 96
+
+    class SamplesArg(PositiveIntegerInvariant):
+        _arg = "--samples"
+        _help = "Number of synthetic trace samples."
+        _required = False
+        _default = 96
+
+    traces = 256
+
+    class TracesArg(PositiveIntegerInvariant):
+        _arg = "--traces"
+        _help = "Number of traces in the batch."
+        _required = False
+        _default = 256
+
+    repeat = 3
+
+    class RepeatArg(PositiveIntegerInvariant):
+        _arg = "--repeat"
+        _help = "Timed repetitions per path; the best time is reported."
+        _required = False
+        _default = 3
+
+    no_gpu = False
+
+    class NoGpuArg(BoolInvariant):
+        _arg = "--no-gpu"
+        _help = "Skip the CuPy comparison."
+        _required = False
+
+    json = False
+
+    class JsonArg(BoolInvariant):
+        _arg = "--json"
+        _help = "Emit machine-readable JSON."
         _required = False
 
 
@@ -4401,14 +4513,11 @@ def _linear_prediction_smoke(args):
     return 0
 
 
-def _linear_prediction_validate(args):
-    from .synthetic_validation import validate_linear_prediction
-
-    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+def _parse_validation_distortion(value):
     distortion = None
-    if args.distortion:
+    if value:
         try:
-            kind, amount = str(args.distortion).split(":", maxsplit=1)
+            kind, amount = str(value).split(":", maxsplit=1)
             if not kind.strip():
                 raise ValueError("missing distortion kind")
             distortion = (kind.strip(), float(amount))
@@ -4417,6 +4526,14 @@ def _linear_prediction_validate(args):
                 "--distortion must be kind:amount with a numeric amount "
                 "(for example chirp:0.05)"
             ) from exc
+    return distortion
+
+
+def _linear_prediction_validate(args):
+    from .synthetic_validation import validate_linear_prediction
+
+    snr = tuple(float(x) for x in str(args.snr_db).split(",") if x.strip())
+    distortion = _parse_validation_distortion(args.distortion)
     report = validate_linear_prediction(
         samples=args.samples,
         snr_db=snr,
@@ -4425,6 +4542,7 @@ def _linear_prediction_validate(args):
         seed=args.seed,
         distortion=distortion,
         output_dir=args.output_dir,
+        refine=args.refine,
     )
     args._out(
         json.dumps(
@@ -4432,6 +4550,47 @@ def _linear_prediction_validate(args):
         )
         if args.json
         else report
+    )
+    return 0
+
+
+def _linear_prediction_modes_review(args):
+    from .mode_refinement_viz import write_modes_review
+
+    report = write_modes_review(
+        args.output_path,
+        snr_db=tuple(
+            float(x) for x in str(args.snr_db).split(",") if x.strip()
+        ),
+        distortion=_parse_validation_distortion(args.distortion),
+        seed=args.seed,
+        samples=args.samples,
+    )
+    args._out(
+        json.dumps(
+            report.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else report
+    )
+    return 0
+
+
+def _linear_prediction_refine_benchmark(args):
+    from .mode_refinement_batched import benchmark_refinement
+
+    result = benchmark_refinement(
+        samples=args.samples,
+        traces=args.traces,
+        run_gpu=not args.no_gpu,
+        repeat=args.repeat,
+    )
+    args._out(
+        json.dumps(
+            result.to_dict(), indent=2, sort_keys=True, allow_nan=False
+        )
+        if args.json
+        else result
     )
     return 0
 
