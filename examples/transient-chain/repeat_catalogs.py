@@ -10,20 +10,27 @@ A source that does not move lands at the same place in every exposure, so
 the scatter of its linked detections divided by their error bars gives a
 chi-square per degree of freedom near 1 when the bars are right. The test
 links the chain's detections across the exposures of each detector, drops
-duplicates within an exposure, and scores two quantities: the dipole center
-(``center_*``) and the source position (``positive_*``). Each is scored
-overall and per class, for the full error bar ``<q>_err``, for
-``<q>_err_fit`` alone, and with each of the corr, kfit, kmatch and mis
-terms dropped in turn (``ARMS``).
+duplicates within an exposure, and scores three quantities: the dipole
+center (``center_*``), the source position (``positive_*``) and the source
+position of either lobe (``source_*``, the measured lobe whichever its
+sign). Each is scored overall and per class, for the full error bar
+``<q>_err``, for ``<q>_err_fit`` alone, and with each of the corr, kfit,
+kmatch and mis terms dropped in turn (``ARMS``).
 
-Classes come from ``quality_flags``, ``converged`` and ``uncertainty_valid``
-(``classify``): ``resolved`` (two supported lobes), ``overlapping``,
+Classes come from ``quality_flags``, ``converged``, ``uncertainty_valid``
+and ``fit_model`` (``classify``): ``resolved`` (two supported lobes),
+``overlapping``,
 ``single`` (a brightening source, only the positive lobe supported),
-``fading`` (only the negative lobe supported, so neither quantity's columns
-describe the source), ``failed`` (width out of range or no lobe at the
-candidate) and ``invalid`` (no usable covariance). The center is scored on
+``fading`` (only the negative lobe supported), ``failed`` (width out of
+range or no lobe at the candidate) and ``invalid`` (no usable covariance).
+After the dipole validity checks, ``fit_model = "single"`` classifies an
+accepted one-lobe row as ``single`` or ``fading``. The center is scored on
 resolved and overlapping candidates, the source position on resolved and
-single ones.
+single ones, and the either-lobe position on
+resolved, single and fading ones; a fading source with no applied one-lobe
+result (refit disabled, no variance plane, or invalid fit) has no
+``source_*`` error bar and is dropped with the other rows whose bar is
+undefined.
 
 Positions reach the sky in two steps. The refine stage's affine from the
 item's ``summary.json`` (read by ``load`` when it sits beside the catalog)
@@ -67,7 +74,14 @@ ARMS: dict[str, tuple[str, ...]] = {
 QUANTITIES = {
     "dipole center": ("center", ("resolved", "overlapping")),
     "source position": ("positive", ("resolved", "single")),
+    "source position (either lobe)": (
+        "source",
+        ("resolved", "single", "fading"),
+    ),
 }
+# the source_* columns copy the positive_* bar where it is defined, so their
+# arms read the positive_* terms
+TERM_PREFIX = {"source": "positive"}
 CLASSES = ("invalid", "failed", "overlapping", "fading", "single", "resolved")
 BLIND_SPOTS = (
     "The reference's noise is shared by every exposure of a detector and "
@@ -85,8 +99,9 @@ MAX_ANCHOR_CONDITION = 1e3
 
 
 def classify(df: pd.DataFrame) -> np.ndarray:
-    """One class per row (``CLASSES``) from ``quality_flags``, ``converged``
-    and ``uncertainty_valid``.
+    """One class per row (``CLASSES``) from ``quality_flags``, ``converged``,
+    ``uncertainty_valid`` and ``fit_model``. Accepted one-lobe rows override
+    dipole validity with their single/fading class.
     """
     from cuphoton.xfit import DipoleQualityFlag as F
 
@@ -115,6 +130,10 @@ def classify(df: pd.DataFrame) -> np.ndarray:
         bool
     )
     kind[~valid] = "invalid"
+    if "fit_model" in df:
+        accepted_single = df["fit_model"].to_numpy() == "single"
+        kind[accepted_single & neg & ~pos] = "single"
+        kind[accepted_single & pos & ~neg] = "fading"
     return kind
 
 
@@ -282,6 +301,8 @@ def arm_variance(df: pd.DataFrame, q: str, arm: str) -> np.ndarray:
     if arm not in ARMS:
         raise ValueError(f"unknown arm {arm!r}; one of {list(ARMS)}")
     var = df[f"{q}_err_fit"].to_numpy(float) ** 2
+    prefix, axis = q.rsplit("_", 1)
+    q = f"{TERM_PREFIX.get(prefix, prefix)}_{axis}"
     for t in ARMS[arm]:
         var = var + df[f"{q}_err_{t}"].to_numpy(float) ** 2
     return var
@@ -368,7 +389,8 @@ def score(linked: pd.DataFrame, prefix: str) -> dict:
         variance_x = arm_variance(t, f"{prefix}_x", arm)
         variance_y = arm_variance(t, f"{prefix}_y", arm)
         covariance_xy = t.get(
-            f"{prefix}_xy_cov", pd.Series(0.0, index=t.index)
+            f"{TERM_PREFIX.get(prefix, prefix)}_xy_cov",
+            pd.Series(0.0, index=t.index),
         )
         covariance_xy = covariance_xy.fillna(0.0).to_numpy(float)
         jacobian = t[
@@ -502,6 +524,13 @@ def repeat(
             "with load(), which adds each item's refine affine"
         )
     df = df.copy()
+    # Earlier catalogs have no measured-lobe columns. Keep their existing
+    # center/positive reports without inferring a fading source's position.
+    for axis in "xy":
+        for suffix in ("", "_err_fit", "_err"):
+            name = f"source_{axis}{suffix}"
+            if name not in df:
+                df[name] = np.nan
     df["class"] = classify(df)
     out: dict = {
         "link_px": link_px,

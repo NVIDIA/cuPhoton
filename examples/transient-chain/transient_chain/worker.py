@@ -203,7 +203,6 @@ class ChainWorker:
         half = size // 2
 
         from cuphoton.xfit import (
-            DipoleQualityFlag,
             derived_dipole_quantities,
             dipole_quality_flags,
             fit_dipoles_device,
@@ -561,25 +560,31 @@ class ChainWorker:
                         }
                     ),
                 )
-                derived = derived_dipole_quantities(xres)
-                photometry = None
-                positive = int(DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED)
-                negative = int(DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED)
+                dipole = derived_dipole_quantities(xres)
+                # single sources (one unsupported lobe) refit with the
+                # one-lobe model; positive_* then describe that lobe
+                singles = uq.single_source_fit(
+                    dipole,
+                    qflags,
+                    difference,
+                    fit_variance,
+                    mask=fit_valid,
+                    psf_sigma=psf_sigma,
+                    solver=self.lm_config,
+                    compute_dtype=self.compute_dtype.name,
+                    refit=bool(
+                        u_cfg["enabled"] and u_cfg["single_source_refit"]
+                    ),
+                )
+                derived = singles.derived
+                xfer["control_bytes"] += singles.diagnostics["control_bytes"]
+                photometry = source = None
+                brightening, fading = uq.single_sources(qflags)
                 # only with an independent PSF width: the fitted dipole
                 # width would make psf_flux_err far too small
                 if fit_variance is not None and psf_sigma is not None:
-                    fading = ((qflags & positive) != 0) & (
-                        (qflags & negative) == 0
-                    )
-                    source = cp.stack(
-                        [
-                            cp.where(fading, 2.0 * c - p, p)
-                            for c, p in (
-                                (derived.center_x, derived.positive_x),
-                                (derived.center_y, derived.positive_y),
-                            )
-                        ],
-                        axis=1,
+                    source = uq.supported_lobe_xy(
+                        derived, fading, singles.applied
                     )
                     photometry = forced_psf_photometry(
                         difference,
@@ -591,19 +596,22 @@ class ChainWorker:
             # 8c. the error budget: the terms beyond xFit's covariance per
             # candidate, combined into <q>_err (transient_chain.uq)
             with timer("uq"):
-                unsupported = ((qflags & positive) != 0) ^ (
-                    (qflags & negative) != 0
-                )
+                # the one-lobe flux stands in for psf_flux where forced
+                # photometry did not run
+                flux_in = uq.psf_flux_inputs(singles, photometry, source)
                 budget, uq_diag = uq.error_budget(
                     u_cfg,
                     cand_x=cand_x,
                     cand_y=cand_y,
                     derived=derived,
-                    single=unsupported,
-                    psf_flux_error=None
-                    if photometry is None
-                    else photometry.flux_error,
-                    photometry_xy=None if photometry is None else source,
+                    single=brightening | fading,
+                    psf_flux_error=flux_in.flux_error
+                    if flux_in.budget
+                    else None,
+                    photometry_xy=flux_in.position_xy
+                    if flux_in.budget
+                    else None,
+                    lobe_flux=singles.lobe_flux,
                     fit=fit,
                     kernel=fit.kernel,
                     reference=reference,
@@ -622,6 +630,13 @@ class ChainWorker:
                     else provider.resampling,
                 )
                 xfer["control_bytes"] += budget.control_bytes
+                uq_diag.update(
+                    {
+                        k: v
+                        for k, v in singles.diagnostics.items()
+                        if k != "control_bytes"
+                    }
+                )
             # 9. XScan through DLPack: the scaled stamps never leave the
             # device
             logits_t = probs_t = view = scaled = None
@@ -685,6 +700,7 @@ class ChainWorker:
                 ):
                     table[name] = ops.to_host(getattr(xres, name))
                 table["quality_flags"] = ops.to_host(qflags)
+                table["fit_model"] = singles.fit_model
                 for name in ("center", "positive"):
                     for axis in ("x", "y"):
                         table[f"{name}_{axis}"] = ops.to_host(
@@ -703,13 +719,17 @@ class ChainWorker:
                     table[f"{name}_err"] = ops.to_host(
                         getattr(derived, f"{name}_error")
                     )
-                if photometry is not None:
-                    table["psf_flux"] = ops.to_host(photometry.flux)
-                    err_fit = ops.to_host(photometry.flux_error)
-                    table["psf_flux_err_fit"] = err_fit
-                    table["psf_flux_err"] = err_fit
+                table["psf_flux"] = ops.to_host(flux_in.flux)
+                err_fit = ops.to_host(flux_in.flux_error)
+                table["psf_flux_err_fit"] = err_fit
+                table["psf_flux_err"] = err_fit
                 # the budget columns; <q>_err becomes the full error bar
                 table.update(budget.host_columns())
+                table.update(
+                    uq.source_position_columns(
+                        table, ops.to_host(fading), singles.applied
+                    )
+                )
                 table["sky_err_arcsec"] = np.full(
                     n_cand,
                     np.nan
@@ -734,6 +754,7 @@ class ChainWorker:
                     int(np.asarray(v).nbytes) for v in table.values()
                 )
                 del xres, stamps, difference, scaled, derived, photometry
+                del dipole, singles, flux_in
                 del budget
         else:
             uq_diag = None

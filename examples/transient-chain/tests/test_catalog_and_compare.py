@@ -111,6 +111,25 @@ def test_empty_and_full_items_share_one_schema_and_merge_without_promotion():
     assert full["uq_valid"].dtype == bool and empty["uq_valid"].dtype == bool
     assert full["sky_err_arcsec"].dtype == np.float64
     assert str(full["sky_err_source"].dtype) in ("object", "str")
+    # the source columns are appended at the end of the uq block
+    budget = list(catalog.BUDGET_COLUMNS)
+    start = budget.index("source_x")
+    assert start == budget.index("sky_err_source") + 1
+    assert budget[start : start + 6] == [
+        "source_x",
+        "source_y",
+        "source_x_err_fit",
+        "source_y_err_fit",
+        "source_x_err",
+        "source_y_err",
+    ]
+    assert full["source_x_err"].dtype == np.float64
+    uncertainty = list(catalog.UNCERTAINTY_COLUMNS)
+    assert uncertainty[-1] == "fit_model"
+    assert uncertainty[-2] == "psf_flux_err"
+    assert list(full.columns).index("source_y_err") + 1 == list(
+        full.columns
+    ).index("logit")
     assert full["sky_err_source"].iloc[0] == "survey"
     # the columns #37 defined keep their order; the budget's follow them
     names = list(full.columns)

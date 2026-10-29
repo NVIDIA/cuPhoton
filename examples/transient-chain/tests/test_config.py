@@ -208,6 +208,7 @@ def test_uq_block_defaults_and_sky_term_rule(raw):
         "max_lobe_reach_px": 32,
         "measure_correlation": True,
         "correlation_positions": 1000,
+        "single_source_refit": True,
         "sky_astrometry_arcsec": None,
         "sky_astrometry_source": None,
     }
@@ -254,3 +255,14 @@ def test_external_astrometric_uncertainty_rejects_overflow():
         config.load_config(
             HERE / "config.yaml", [f"uq.sky_astrometry_arcsec={10**400}"]
         )
+
+
+def test_single_source_refit_is_a_switch_under_uq():
+    cfg = config.load_config(HERE / "config.yaml")
+    assert cfg["uq"]["single_source_refit"] is True
+    cfg = config.load_config(
+        HERE / "config.yaml", ["uq.single_source_refit=false"]
+    )
+    assert cfg["uq"]["single_source_refit"] is False
+    with pytest.raises(ValueError, match="single_source_refit must be true"):
+        config.load_config(HERE / "config.yaml", ["uq.single_source_refit=1"])

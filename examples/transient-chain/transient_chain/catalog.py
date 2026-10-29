@@ -115,8 +115,10 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "psf_flux": (
         "float64",
         "xfit",
-        "forced PSF flux at the source (NaN without a variance plane or a "
-        "PSF width from xfit.psf_sigma_px or the refine stage's stars)",
+        "forced PSF flux at the source; without a PSF width from "
+        "xfit.psf_sigma_px or the refine stage's stars, the one-lobe fit's "
+        "flux where fit_model is single, NaN elsewhere and without a "
+        "variance plane",
     ),
     "psf_flux_err_fit": (
         "float64",
@@ -128,6 +130,13 @@ UNCERTAINTY_COLUMNS: dict[str, tuple[str, str, str]] = {
         "uq",
         "error bar of psf_flux to quote: every term in quadrature (NaN "
         "where its window is not valid)",
+    ),
+    "fit_model": (
+        "object",
+        "xfit",
+        '"dipole" (two lobes) or "single" (one lobe, for a candidate with '
+        "one unsupported lobe whose one-lobe fit is valid; positive_* then "
+        "describe that lobe)",
     ),
 }
 BUDGET_QUANTITIES = (
@@ -145,6 +154,8 @@ BUDGET_TERMS: dict[str, str] = {
     "0 for positions)",
     "mis": "residual misalignment (0 for psf_flux)",
 }
+# Column order is part of the catalog contract: a new column is appended at
+# the end of its block, never inserted, so older catalogs stay a prefix.
 BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
     **{
         f"{q}_err_{t}": (
@@ -196,6 +207,22 @@ BUDGET_COLUMNS: dict[str, tuple[str, str, str]] = {
         "provenance of sky_err_arcsec (uq.sky_astrometry_source; None when "
         "null)",
     ),
+    **{
+        f"source_{a}{suffix}": (
+            "float64",
+            "uq",
+            f"{what} of the measured lobe whichever its sign: the positive_*"
+            " value by default, including brightening sources without an "
+            "applied refit; the dipole's negative lobe for a fading "
+            "source the one-lobe fit did not replace (its error bars NaN)",
+        )
+        for suffix, what in (
+            ("", "position in pixels relative to (x, y)"),
+            ("_err_fit", "fit standard uncertainty"),
+            ("_err", "error bar to quote"),
+        )
+        for a in ("x", "y")
+    },
 }
 CLASSIFY_COLUMNS: dict[str, tuple[str, str, str]] = {
     "logit": (

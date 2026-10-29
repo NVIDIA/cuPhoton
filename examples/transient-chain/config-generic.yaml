@@ -93,6 +93,8 @@ uq:                           # the error budget behind <q>_err (step 8c; README
   sky_astrometry_arcsec: null # external astrometric uncertainty per axis, written to sky_err_arcsec and never
                               # added to the pixel columns
   sky_astrometry_source: null # provenance of sky_astrometry_arcsec (e.g. the survey's astrometric summary)
+  single_source_refit: true   # step 8b: refit a candidate with one unsupported lobe with the one-lobe model;
+                              # false (or enabled false) keeps the dipole values and fit_model "dipole"
 
 classify:                     # classifier inference through DLPack (step 9); checkpoint_dir comes from --checkpoint-dir
   inference_policy: strict    # strict: float32, no autocast, no TF32; checkpoint: the policy saved with the checkpoint

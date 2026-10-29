@@ -202,6 +202,7 @@ SCHEMA: dict[str, dict[str, tuple[Any, Any]]] = {
         "correlation_positions": (1000, _int(MIN_MEASURE_POSITIONS)),
         "sky_astrometry_arcsec": (None, _opt(_nonnegative_finite_num)),
         "sky_astrometry_source": (None, _opt(_nonempty_str)),
+        "single_source_refit": (True, _bool),
     },
     "classify": {
         "inference_policy": ("strict", _choice(*INFERENCE_POLICIES)),

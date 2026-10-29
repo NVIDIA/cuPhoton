@@ -41,6 +41,17 @@ pixel is masked, the factor from the same pixels) and the row is flagged
 ``uq_window_masked``; a quantity is invalid only where fewer than half of
 its window's pixels are usable.
 
+A candidate whose quality flags leave one lobe unsupported is a single
+source: the dipole's spare lobe sits on noise and the measured lobe's
+position inherits its freedom, so the dipole covariance overstates the
+position error. :func:`single_source_fit` (step 8b) refits those stamps
+with the one-lobe model (``cuphoton.xfit.fit_single_sources``) and, where
+that fit's covariance is valid, replaces ``positive_x``, ``positive_y``,
+their fit terms and cross term with the one-lobe values and marks the row
+``fit_model = "single"``; the terms above then use the one-lobe weights
+the budget already builds at the lobe position. Rows whose one-lobe fit is
+invalid keep the dipole values.
+
 Arrays follow one array module (NumPy or CuPy); only the misalignment model
 and the kernel-mismatch solve run on the host, on arrays with one row per
 candidate or per star. Device arrays cross to the host for the positions
@@ -58,6 +69,7 @@ from typing import Any
 
 import numpy as np
 
+from cuphoton.xfit import DipoleQualityFlag, fit_single_sources
 from cuphoton.xpois import (
     correlation_factor,
     empirical_correlation_factor,
@@ -653,6 +665,251 @@ def forced_flux(image, variance, x, y, psf_sigma, half, *, background=None):
     )
 
 
+# --- single sources ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SingleSourceResult:
+    """The dipole quantities with the single-source rows replaced by the
+    one-lobe fit; see :func:`single_source_fit`.
+
+    ``derived`` has the fields of
+    ``cuphoton.xfit.DerivedDipoleQuantities`` with ``positive_x``,
+    ``positive_y``, ``positive_x_error``, ``positive_y_error`` and
+    ``positive_xy_covariance`` replaced on the rows ``applied`` (host).
+    ``lobe_flux`` is the flux the budget divides a lobe's shift by: the
+    one-lobe flux on those rows, the dipole lobe flux elsewhere. ``flux``
+    and ``flux_error`` are the signed one-lobe flux and its error on those
+    rows and NaN elsewhere (the stand-in for ``psf_flux`` when forced
+    photometry did not run). ``fit_model`` is the catalog column,
+    ``"single"`` on the applied rows and ``"dipole"`` elsewhere.
+    """
+
+    derived: Any
+    lobe_flux: Any
+    flux: Any
+    flux_error: Any
+    applied: np.ndarray
+    fit_model: np.ndarray
+    diagnostics: dict[str, Any]
+
+
+def single_sources(flags):
+    """Brightening (``NEGATIVE_LOBE_UNSUPPORTED`` alone) and fading
+    (``POSITIVE_LOBE_UNSUPPORTED`` alone) rows of the quality ``flags``.
+    """
+    positive = (flags & int(DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED)) != 0
+    negative = (flags & int(DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED)) != 0
+    return negative & ~positive, positive & ~negative
+
+
+def single_source_fit(
+    derived,
+    flags,
+    stamps,
+    variance,
+    *,
+    mask=None,
+    psf_sigma: float | None = None,
+    solver=None,
+    compute_dtype="input",
+    refit: bool = True,
+) -> SingleSourceResult:
+    """Refit the single-source candidates with the one-lobe model.
+
+    ``derived`` is ``cuphoton.xfit.derived_dipole_quantities`` of the
+    dipole fit, ``flags`` the quality flags, ``stamps`` and ``variance``
+    the ``(N, size, size)`` difference stamps and variance stamps the dipole
+    fit used (``mask`` the pixels it fitted), ``psf_sigma`` the PSF width
+    when one is known independently of the fits (the lobe is then circular
+    at that width) else None (an elliptical lobe), ``solver`` and
+    ``compute_dtype`` as ``cuphoton.xfit.fit_single_sources`` takes them.
+
+    A brightening source (``NEGATIVE_LOBE_UNSUPPORTED`` alone) is fitted
+    with sign ``+1`` from the dipole's positive lobe, a fading one
+    (``POSITIVE_LOBE_UNSUPPORTED`` alone) with sign ``-1`` from its negative
+    lobe. Where the one-lobe fit's covariance is valid, the row's
+    ``positive_*`` describe that one lobe, whatever its sign; the other
+    rows, and the single rows whose one-lobe fit is invalid, keep the
+    dipole values unchanged. Without a variance plane the dipole covariance
+    is scaled by its reduced chi-square and the one-lobe fit would not be
+    comparable, so nothing is refit. With ``refit`` false
+    (``uq.single_source_refit`` off, or ``uq.enabled`` off) the candidates
+    are counted and nothing is refit either.
+    """
+    xp = ops.array_module(derived.positive_x)
+    n = int(derived.positive_x.shape[0])
+    brightening, fading = single_sources(xp.asarray(flags))
+    candidates = brightening | fading
+    nan = xp.full(n, xp.nan, dtype=xp.float64)
+    diag: dict[str, Any] = {
+        "single_candidates": int(candidates.sum()),
+        "single_fitted": 0,
+        "single_fallback": 0,
+        "single_model": None,
+        "control_bytes": 0,
+    }
+    fit_model = np.array(["dipole"] * n, dtype=object)
+    none = SingleSourceResult(
+        derived,
+        derived.lobe_flux,
+        nan,
+        nan,
+        np.zeros(n, dtype=bool),
+        fit_model,
+        diag,
+    )
+    if not refit or variance is None or not diag["single_candidates"]:
+        return none
+    idx = xp.flatnonzero(candidates)
+    sign = xp.where(brightening[idx], 1, -1).astype(np.int8)
+    start = xp.stack(
+        [
+            xp.where(
+                fading[idx],
+                2.0 * getattr(derived, f"center_{a}")[idx]
+                - getattr(derived, f"positive_{a}")[idx],
+                getattr(derived, f"positive_{a}")[idx],
+            )
+            for a in ("x", "y")
+        ],
+        axis=1,
+    )
+    # a candidate whose dipole gave no finite lobe starts at the stamp center
+    start = xp.where(xp.isfinite(start), start, 0.0)
+    res = fit_single_sources(
+        xp.asarray(stamps)[idx],
+        xp.asarray(variance)[idx],
+        start,
+        psf_sigma=psf_sigma,
+        mask=None if mask is None else xp.asarray(mask)[idx],
+        sign=sign,
+        solver=solver,
+        compute_dtype=compute_dtype,
+    )
+    ok = xp.asarray(res.uncertainty_valid, dtype=bool)
+    rows = idx[ok]
+    diag.update(
+        single_fitted=int(ok.sum()),
+        single_fallback=int((~ok).sum()),
+        single_model="circular" if psf_sigma is not None else "elliptical",
+    )
+    if not diag["single_fitted"]:
+        return none
+
+    def replaced(current, values):
+        out = xp.array(current, dtype=xp.float64, copy=True)
+        out[rows] = xp.asarray(values, dtype=xp.float64)[ok]
+        return out
+
+    fields = {
+        "positive_x": res.x,
+        "positive_y": res.y,
+        "positive_x_error": res.position_error_x,
+        "positive_y_error": res.position_error_y,
+        "positive_xy_covariance": res.position_xy_covariance,
+    }
+    new = dataclasses.replace(
+        derived,
+        **{k: replaced(getattr(derived, k), v) for k, v in fields.items()},
+    )
+    applied = np.zeros(n, dtype=bool)
+    host_rows = ops.to_host(rows)
+    applied[host_rows] = True
+    fit_model[applied] = "single"
+    diag["control_bytes"] = int(host_rows.nbytes)
+    return SingleSourceResult(
+        new,
+        replaced(derived.lobe_flux, res.flux),
+        replaced(nan, sign * res.flux),
+        replaced(nan, res.flux_error),
+        applied,
+        fit_model,
+        diag,
+    )
+
+
+def supported_lobe_xy(derived, fading, applied):
+    """Position (N, 2) of the lobe forced photometry measures: the
+    ``positive_*`` lobe, which the one-lobe fit replaced on the ``applied``
+    rows, or the dipole's negative lobe for a ``fading`` source the one-lobe
+    fit did not replace.
+    """
+    xp = ops.array_module(derived.positive_x)
+    unfit = xp.asarray(fading, dtype=bool) & ~xp.asarray(applied, dtype=bool)
+    return xp.stack(
+        [
+            xp.where(unfit, 2.0 * c - p, p)
+            for c, p in (
+                (derived.center_x, derived.positive_x),
+                (derived.center_y, derived.positive_y),
+            )
+        ],
+        axis=1,
+    )
+
+
+SOURCE_SUFFIXES = ("", "_err_fit", "_err")
+
+
+def source_position_columns(
+    table: Mapping[str, Any], fading, applied
+) -> dict[str, np.ndarray]:
+    """The ``source_x``, ``source_y`` columns with ``_err_fit`` and ``_err``:
+    the measured lobe whichever its sign, filled from the host ``table``
+    after the budget so no term is recomputed. Every row takes its
+    ``positive_*`` values, including brightening rows without an applied
+    refit. An accepted one-lobe fit's values describe its measured lobe of
+    either sign. A ``fading`` row the one-lobe fit did not replace
+    (``applied`` false) takes the dipole's
+    negative lobe, ``2 center - positive``, with NaN error bars, since the
+    budget was built for the positive lobe only.
+    """
+    other = np.asarray(fading, dtype=bool) & ~np.asarray(applied, dtype=bool)
+    out: dict[str, np.ndarray] = {}
+    for a in ("x", "y"):
+        pos = np.asarray(table[f"positive_{a}"], dtype=np.float64)
+        cen = np.asarray(table[f"center_{a}"], dtype=np.float64)
+        out[f"source_{a}"] = np.where(other, 2.0 * cen - pos, pos)
+        for suffix in SOURCE_SUFFIXES[1:]:
+            val = np.asarray(table[f"positive_{a}{suffix}"], dtype=np.float64)
+            out[f"source_{a}{suffix}"] = np.where(other, np.nan, val)
+    return out
+
+
+@dataclass(frozen=True)
+class PsfFluxInputs:
+    """The ``psf_flux`` columns and the budget's flux inputs; see
+    :func:`psf_flux_inputs`.
+    """
+
+    flux: Any
+    flux_error: Any
+    position_xy: Any
+    budget: bool  # whether the budget gets the flux at all
+
+
+def psf_flux_inputs(
+    singles: SingleSourceResult, photometry=None, photometry_xy=None
+) -> PsfFluxInputs:
+    """Choose what ``psf_flux`` holds: forced photometry (``flux``,
+    ``flux_error``) at ``photometry_xy`` where it ran, else the one-lobe
+    fit's flux and error at its position on the rows it replaced and NaN
+    elsewhere. The budget takes the flux only when photometry ran; the
+    stand-in keeps its fit-only error because no independent PSF width is
+    available for the additional flux terms.
+    """
+    if photometry is not None:
+        return PsfFluxInputs(
+            photometry.flux, photometry.flux_error, photometry_xy, True
+        )
+    xp = ops.array_module(singles.derived.positive_x)
+    xy = xp.stack(
+        [singles.derived.positive_x, singles.derived.positive_y], axis=1
+    )
+    return PsfFluxInputs(singles.flux, singles.flux_error, xy, False)
+
+
 # --- the misalignment model on the host -----------------------------------
 
 
@@ -1148,6 +1405,7 @@ def error_budget(
     single,
     psf_flux_error=None,
     photometry_xy=None,
+    lobe_flux=None,
     fit=None,
     **context,
 ) -> tuple[BudgetResult, dict[str, Any]]:
@@ -1155,9 +1413,12 @@ def error_budget(
 
     ``cand_x``, ``cand_y`` are the host candidate pixels; ``derived`` the
     dipole quantities (``center_x`` ... ``positive_y_error`` and
-    ``lobe_flux`` on the device); ``single`` marks candidates with one
+    ``lobe_flux`` on the device), with the single-source rows replaced by
+    :func:`single_source_fit`; ``single`` marks candidates with one
     supported lobe; ``psf_flux_error`` and ``photometry_xy`` come from
-    forced photometry (None without it); ``fit`` and ``context`` are
+    forced photometry (None without it); ``lobe_flux`` is the flux a lobe's
+    shift is divided by (``derived.lobe_flux`` when None); ``fit`` and
+    ``context`` are
     :func:`build_context`'s inputs, and ``uq.measure_correlation`` with
     ``uq.correlation_positions`` drive the measured correlation factor.
     With ``uq.enabled`` false the result is :func:`fit_only`. Returns the
@@ -1195,7 +1456,7 @@ def error_budget(
             for name in POSITIONS
         },
         err_fit=err_fit,
-        lobe_flux=derived.lobe_flux,
+        lobe_flux=derived.lobe_flux if lobe_flux is None else lobe_flux,
         single=single,
         max_lobe_reach_px=float(u_cfg["max_lobe_reach_px"]),
         photometry_xy=photometry_xy,

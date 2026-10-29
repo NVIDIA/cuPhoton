@@ -114,6 +114,7 @@ def _catalog(
         "evaluations": np.full(n, 10),
         "valid_pixel_count": np.full(n, 2601),
         "quality_flags": np.zeros(n, np.int64) if flags is None else flags,
+        "fit_model": np.array(["dipole"] * n, dtype=object),
     }
     for name in NAMES:
         rows[name] = np.ones(n)
@@ -135,6 +136,9 @@ def _catalog(
                     n, bar[j] * np.sqrt(s)
                 )
         rows[f"{prefix}_xy_cov"] = np.zeros(n)
+    for suffix in ("", "_err_fit", "_err"):
+        for ax in "xy":
+            rows[f"source_{ax}{suffix}"] = rows[f"positive_{ax}{suffix}"]
     rows["uq_valid"] = np.ones(n, bool)
     rows["uq_window_masked"] = np.zeros(n, bool)
     rows["uq_corr_measured"] = np.zeros(n, bool)
@@ -284,6 +288,25 @@ def test_unsupported_and_outside_lobes_are_not_scored():
         {"quality_flags": flags, "converged": True, "uncertainty_valid": True}
     )
     assert rc.classify(frame).tolist() == ["failed"] * len(flags)
+
+
+def test_accepted_single_refit_replaces_the_dipole_classification():
+    from cuphoton.xfit import DipoleQualityFlag
+
+    frame = pd.DataFrame(
+        {
+            "quality_flags": [
+                DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED
+                | DipoleQualityFlag.LOBE_OUTSIDE_STAMP,
+                DipoleQualityFlag.POSITIVE_LOBE_UNSUPPORTED,
+                DipoleQualityFlag.NEGATIVE_LOBE_UNSUPPORTED,
+            ],
+            "converged": False,
+            "uncertainty_valid": False,
+            "fit_model": ["single", "single", "dipole"],
+        }
+    )
+    assert rc.classify(frame).tolist() == ["single", "fading", "invalid"]
 
 
 def test_rotated_and_dithered_exposures_link_through_the_anchors():
@@ -455,9 +478,77 @@ def test_classes_select_the_quantity():
     assert source["class_counts"]["single"] == 60
     assert source["class_counts"]["resolved"] == 45
     assert source["n_groups"] == 35
-    # fading singles are in neither quantity
+    # fading singles are in neither of the first two quantities
     assert sum(center["class_counts"].values()) == 102
     assert sum(source["class_counts"].values()) == 105
+    # the either-lobe position adds them
+    either = rep["quantities"]["source position (either lobe)"]
+    assert set(either["by_class"]) == {"single", "resolved", "fading"}
+    assert either["class_counts"]["fading"] == 60
+    assert either["n_groups"] == 55
+    assert either["arms"]["full"]["chi2_per_dof"] == pytest.approx(
+        1.0, abs=0.2
+    )
+
+
+def test_a_fading_source_without_a_source_bar_is_dropped():
+    from cuphoton.xfit import DipoleQualityFlag as F
+
+    rng = np.random.default_rng(5)
+    sky = _sky(rng, n=40)
+    flags = np.full(40, int(F.POSITIVE_LOBE_UNSUPPORTED), np.int64)
+    df = _exposures(rng, sky, 3, flags=flags)
+    # the one-lobe fit fell back on ten sources: their bars are NaN
+    fallback = df.index[df.index % 40 < 10]
+    for ax in "xy":
+        df.loc[fallback, f"source_{ax}_err"] = np.nan
+    rep = rc.repeat(df)
+    assert rep["quantities"]["source position"] is None
+    either = rep["quantities"]["source position (either lobe)"]
+    assert either["n_groups"] == 30
+    assert either["n_dropped_undefined_error_bar"] == 30
+
+
+def test_source_arms_read_the_positive_terms():
+    rng = np.random.default_rng(6)
+    df = _exposures(rng, _sky(rng, n=10), 1, terms=(0.5, 0.0, 0.0, 0.0))
+    np.testing.assert_allclose(
+        rc.arm_variance(df, "source_x", "full"),
+        rc.arm_variance(df, "positive_x", "full"),
+    )
+    np.testing.assert_allclose(
+        rc.arm_variance(df, "source_x", "without corr"),
+        df["positive_x_err_fit"].to_numpy() ** 2,
+    )
+
+
+def test_source_arms_use_the_positive_cross_axis_covariance():
+    frame = pd.DataFrame(
+        {
+            "group": [0, 0],
+            "class": ["single", "single"],
+            "ex": [0.0, 1.0],
+            "ey": [0.0, 1.0],
+            "jacobian_xx": [1.0, 1.0],
+            "jacobian_xy": [0.0, 0.0],
+            "jacobian_yx": [0.0, 0.0],
+            "jacobian_yy": [1.0, 1.0],
+            "positive_xy_cov": [0.5, 0.5],
+            "uq_kmatch_flag": [False, False],
+        }
+    )
+    for prefix in ("positive", "source"):
+        for axis in ("x", "y"):
+            frame[f"{prefix}_{axis}_err_fit"] = 1.0
+            frame[f"{prefix}_{axis}_err"] = 1.0
+    for axis in ("x", "y"):
+        for term in rc.TERMS:
+            frame[f"positive_{axis}_err_{term}"] = 0.0
+    positive = rc.score(frame, "positive")
+    source = rc.score(frame, "source")
+    assert source["arms"] == positive["arms"]
+    for result in source["arms"].values():
+        assert result["chi2_per_dof"] == pytest.approx(1.0 / 3.0)
 
 
 def test_arm_variances_by_hand():
@@ -584,6 +675,24 @@ def test_repeat_needs_the_rows_load_returns():
     df = _catalog(rng, _sky(rng, n=12), 1).drop(columns=["affine_A"])
     with pytest.raises(ValueError, match="load"):
         rc.repeat(df)
+
+
+def test_repeat_reads_catalogs_from_before_the_source_columns(tmp_path):
+    rng = np.random.default_rng(21)
+    sky = _sky(rng, n=30)
+    frames = [_catalog(rng, sky, e) for e in (1, 2)]
+    expected = rc.repeat(pd.concat(frames, ignore_index=True))
+    paths = []
+    for e, df in enumerate(frames):
+        path = tmp_path / f"catalog{e}.parquet"
+        df.drop(
+            columns=df.filter(regex=r"^(source_|affine_)").columns
+        ).to_parquet(path, index=False)
+        paths.append(path)
+    actual = rc.repeat(rc.load(paths))
+    for name in ("dipole center", "source position"):
+        assert actual["quantities"][name] == expected["quantities"][name]
+    assert actual["quantities"]["source position (either lobe)"] is None
 
 
 def test_load_reads_the_affine_beside_each_catalog(tmp_path):
