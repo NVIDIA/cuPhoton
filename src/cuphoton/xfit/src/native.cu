@@ -312,14 +312,16 @@ __global__ void compact_rows(
     *count = size;
 }
 
-template <typename T>
+template <typename T, bool Pack = false>
 __global__ void evaluate_jacobian(Batch b, Work<T> w, T cube_exponent) {
-    int row = w.indices[blockIdx.x];
+    int slot = blockIdx.x;
+    int row = w.indices[slot];
     int observations = b.height * b.width * b.planes;
     std::size_t base = std::size_t(row) * observations;
     Gaussian<T> model(
         static_cast<const T*>(b.x) + row * parameters, cube_exponent);
     const T* weights = static_cast<const T*>(b.weights);
+    const T* residuals = static_cast<const T*>(b.residuals);
     int invalid = 0;
     for (std::size_t i = threadIdx.x; i < std::size_t(observations);
         i += blockDim.x) {
@@ -328,8 +330,22 @@ __global__ void evaluate_jacobian(Batch b, Work<T> w, T cube_exponent) {
         for (int p = 0; p < parameters; ++p) {
             T value = rn_mul(derivative[p], weights[base + i]);
             invalid |= !isfinite(value);
-            w.jacobian[(std::size_t(row) * parameters + p) * observations + i] =
-                value;
+            if constexpr (Pack) {
+                w.packed_jacobian
+                    [(std::size_t(slot) * parameters + p) * observations + i] =
+                    value;
+                w.transposed
+                    [(std::size_t(slot) * observations + i) * parameters + p] =
+                    value;
+            } else {
+                w.jacobian
+                    [(std::size_t(row) * parameters + p) * observations + i] =
+                    value;
+            }
+        }
+        if constexpr (Pack) {
+            w.compact_residual[std::size_t(slot) * observations + i] =
+                residuals[base + i];
         }
     }
     invalid = sum(invalid);
@@ -364,6 +380,31 @@ __global__ void pack_equations(Batch b, Work<T> w) {
                 value;
         }
     }
+}
+
+__global__ void hessian_small_fp64(
+    const double* jacobian, double* hessian, int count) {
+    constexpr int observations = 51 * 51;
+    int row = threadIdx.x / parameters;
+    int column = threadIdx.x % parameters;
+    const double* values = jacobian + blockIdx.x * parameters * observations;
+    double result = 0.0;
+    // Match the qualified SM121 small-batch GEMM accumulation, including its
+    // five-part singleton reduction. Preserve all 64 column-major entries.
+    int partitions = count == 1 ? 5 : 1;
+    for (int partition = 0; partition < partitions; ++partition) {
+        int begin = count == 1 ? partition * 522 : 0;
+        int end = count == 1 ? min(begin + 522, observations) : observations;
+        double partial = 0.0;
+        for (int i = begin; i < end; ++i) {
+            partial = __fma_rn(
+                values[row * observations + i],
+                values[column * observations + i],
+                partial);
+        }
+        result = count == 1 ? __dadd_rn(partial, result) : partial;
+    }
+    hessian[blockIdx.x * 64 + column * parameters + row] = result;
 }
 
 template <typename T>
@@ -551,6 +592,7 @@ __global__ void multiply_single_observation(
 struct Workspace::Impl {
     int device = 0;
     bool fused_jacobian = false;
+    bool small_hessian = false;
     cudaStream_t stream = nullptr;
     cublasHandle_t handle = nullptr;
     double cube_exponent = 3.0;
@@ -867,6 +909,17 @@ struct Workspace::Impl {
                     return;
                 }
                 packed = count == selected;
+            } else if (b.planes == 1 && b.height == 51 && b.width == 51) {
+                // Preserve the portable arithmetic while writing the two
+                // cuBLAS layouts directly for the primary stamp shape.
+                int selected = count;
+                evaluate_jacobian<T, true>
+                    <<<count, threads, 0, stream>>>(b, w, T(cube_exponent));
+                count = select_rows(b, s, w, timings);
+                if (!count) {
+                    return;
+                }
+                packed = count == selected;
             }
         }
         if (!packed) {
@@ -890,14 +943,26 @@ struct Workspace::Impl {
             8,
             observations,
             count);
-        matmul(
-            w.packed_jacobian,
-            w.transposed,
-            w.hessian,
-            8,
-            8,
-            observations,
-            count);
+        bool hessian_ready = false;
+        if constexpr (sizeof(T) == sizeof(double)) {
+            if (small_hessian && b.count <= 16 && b.planes == 1
+                && b.height == 51 && b.width == 51) {
+                hessian_small_fp64<<<count, 64, 0, stream>>>(
+                    w.packed_jacobian, w.hessian, count);
+                check(cudaGetLastError());
+                hessian_ready = true;
+            }
+        }
+        if (!hessian_ready) {
+            matmul(
+                w.packed_jacobian,
+                w.transposed,
+                w.hessian,
+                8,
+                8,
+                observations,
+                count);
+        }
         norms(w.compact_residual, w.residual_norm, count, observations);
         prepare_system<<<(count + threads - 1) / threads, threads, 0, stream>>>(
             b, s, w, count);
@@ -984,6 +1049,11 @@ Workspace::Workspace(int device)
     state->fused_jacobian = major == 10 && minor == 0 && clusters != 0;
     check(cudaStreamCreateWithFlags(&state->stream, cudaStreamNonBlocking));
     check(cublasCreate(&state->handle));
+    int cublas_version = 0;
+    check(cublasGetVersion(state->handle, &cublas_version));
+    // The ordered Hessian matches this provider's SM121 accumulation.
+    state->small_hessian =
+        major == 12 && minor == 1 && cublas_version == 130101;
     check(cublasSetStream(state->handle, state->stream));
     check(cudaEventCreateWithFlags(&state->dependency, cudaEventDisableTiming));
     check(cudaEventCreate(&state->start));
