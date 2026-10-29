@@ -733,10 +733,10 @@ viz = [
 ximage = [
     { name = "zarr" },
 ]
-xmon-inference = [
+xmonitor-inference = [
     { name = "httpx" },
 ]
-xmon-nooa = [
+xmonitor-nooa = [
     { name = "httpx" },
     { name = "nooa", marker = "python_full_version < '3.14'" },
     { name = "packaging" },
@@ -754,20 +754,20 @@ requires-dist = [
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=14,<15" },
     { name = "dragonhpc", marker = "extra == 'dragon'", specifier = ">=0.14.2,<0.15" },
     { name = "h5py", specifier = ">=3.10" },
-    { name = "httpx", marker = "extra == 'xmon-inference'", specifier = ">=0.28,<1" },
-    { name = "httpx", marker = "extra == 'xmon-nooa'", specifier = ">=0.28,<1" },
+    { name = "httpx", marker = "extra == 'xmonitor-inference'", specifier = ">=0.28,<1" },
+    { name = "httpx", marker = "extra == 'xmonitor-nooa'", specifier = ">=0.28,<1" },
     { name = "kvikio-cu13", marker = "sys_platform == 'linux' and extra == 'io'", specifier = "==26.6.*" },
     { name = "libkvikio-cu13", marker = "sys_platform == 'linux' and extra == 'io'", specifier = "==26.6.*" },
     { name = "mpi4py", marker = "extra == 'mpi'", specifier = ">=4.1.2,<5" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.19.1" },
-    { name = "nooa", marker = "python_full_version < '3.14' and sys_platform == 'linux' and extra == 'xmon-nooa'", specifier = "==0.0.10" },
+    { name = "nooa", marker = "python_full_version < '3.14' and sys_platform == 'linux' and extra == 'xmonitor-nooa'", specifier = "==0.0.10" },
     { name = "numba", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=0.61,<0.66" },
     { name = "numba-cuda", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=0.30,<0.31" },
     { name = "numexpr", specifier = ">=2.10" },
     { name = "numpy", specifier = ">=2.0,<2.6" },
     { name = "nvidia-libnvcomp-cu13", marker = "sys_platform == 'linux' and extra == 'io'", specifier = "==5.2.*" },
     { name = "nvidia-nvcomp-cu13", marker = "sys_platform == 'linux' and extra == 'io'", specifier = "==5.2.*" },
-    { name = "packaging", marker = "extra == 'xmon-nooa'", specifier = ">=23.0" },
+    { name = "packaging", marker = "extra == 'xmonitor-nooa'", specifier = ">=23.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "photutils", marker = "extra == 'photometry'", specifier = ">=3.0" },
     { name = "pillow", marker = "extra == 'viz'", specifier = ">=10.4" },
@@ -785,7 +785,7 @@ requires-dist = [
     { name = "virtualenv", marker = "extra == 'dev'", specifier = ">=21.7.12" },
     { name = "zarr", marker = "extra == 'ximage'", specifier = ">=3,<4" },
 ]
-provides-extras = ["ximage", "xmon-inference", "xmon-nooa", "photometry", "torch", "viz", "io", "gpu", "cutile", "mpi", "dragon", "dev"]
+provides-extras = ["ximage", "xmonitor-inference", "xmonitor-nooa", "photometry", "torch", "viz", "io", "gpu", "cutile", "mpi", "dragon", "dev"]
 
 [[package]]
 name = "cupy-cuda13x"

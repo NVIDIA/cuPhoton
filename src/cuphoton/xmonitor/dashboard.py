@@ -38,7 +38,7 @@ class Dashboard:
         self,
         monitor: Monitor,
         *,
-        title: str = "cuPhoton xMon",
+        title: str = "cuPhoton xMonitor",
         render_sample: Callable[[Sample], str] | None = None,
     ) -> None:
         self.monitor = monitor
@@ -137,7 +137,7 @@ class Dashboard:
                 f'<section class="domain" data-index="{index}" hidden>'
                 f"{fragment}</section>"
             )
-        resources = files("cuphoton.xmon").joinpath("assets")
+        resources = files("cuphoton.xmonitor").joinpath("assets")
         template = resources.joinpath("dashboard.html").read_text()
         if display["ui"].get("live"):
             template = template.replace(
@@ -306,7 +306,9 @@ def make_server(
                     {"error": "Cross-origin investigation is unavailable."},
                 )
                 return
-            if not session.authenticate(self.headers.get("X-XMon-Token", "")):
+            if not session.authenticate(
+                self.headers.get("X-XMonitor-Token", "")
+            ):
                 self._json(
                     401,
                     {"error": "Enter a valid investigation access token."},

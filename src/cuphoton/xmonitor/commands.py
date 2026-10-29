@@ -28,7 +28,7 @@ from .session import MonitorSession
 from .site import normalize_prefix, serve_site
 
 
-class _XMonCommand(InvariantAwareCommand):
+class _XMonitorCommand(InvariantAwareCommand):
     _log_level_ = False
     _quiet_ = False
     _verbose_ = False
@@ -44,7 +44,7 @@ class _XMonCommand(InvariantAwareCommand):
         raise NotImplementedError
 
 
-class QuickstartCommand(_XMonCommand):
+class QuickstartCommand(_XMonitorCommand):
     _description_ = "Generate invented measurements and an offline dashboard."
     output_dir: Path
 
@@ -57,12 +57,12 @@ class QuickstartCommand(_XMonCommand):
         quickstart(self.output_dir)
 
 
-class _StateCommand(_XMonCommand):
+class _StateCommand(_XMonitorCommand):
     state: Path
 
     class StateArg(PathValueInvariant):
         _arg = "--state"
-        _help = "Existing xMon state directory."
+        _help = "Existing xMonitor state directory."
         _required = True
 
 
@@ -81,7 +81,7 @@ class ExportCommand(_StateCommand):
         )
 
 
-class ServeCommand(_XMonCommand):
+class ServeCommand(_XMonitorCommand):
     _description_ = "Serve a saved monitor or installed application site."
     state: Path | None = None
     site: Path | None = None
@@ -94,11 +94,11 @@ class ServeCommand(_XMonCommand):
 
     class StateArg(PathValueInvariant):
         _arg = "--state"
-        _help = "Existing xMon state directory; use --state or --site."
+        _help = "Existing xMonitor state directory; use --state or --site."
 
     class SiteArg(PathValueInvariant):
         _arg = "--site"
-        _help = "Application directory or its trusted xmon-site.toml."
+        _help = "Application directory or its trusted xmonitor-site.toml."
 
     class PrefixArg(StringInvariant):
         _arg = "--prefix"

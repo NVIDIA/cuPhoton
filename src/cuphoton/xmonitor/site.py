@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load a trusted application's installed xMon site from a local manifest."""
+"""Load an installed xMonitor application from a trusted local manifest."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def serve_site(
     port: int = 8765,
     prefix: str | None = None,
 ) -> None:
-    """Serve an installed application named by ``xmon-site.toml``.
+    """Serve an installed application named by ``xmonitor-site.toml``.
 
     The manifest is trusted local configuration. Its ``site.application``
     names an installed ``module:callable``; the callable owns its server
@@ -38,7 +38,7 @@ def serve_site(
     """
     manifest = Path(path).resolve()
     if manifest.is_dir():
-        manifest /= "xmon-site.toml"
+        manifest /= "xmonitor-site.toml"
     with manifest.open("rb") as stream:
         config = tomllib.load(stream)
     site = config.get("site")

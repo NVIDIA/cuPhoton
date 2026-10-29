@@ -235,7 +235,7 @@ class Investigator:
             import httpx
         except ImportError as exc:
             raise InferenceError(
-                "install cuphoton[xmon-inference] to enable investigation"
+                "install cuphoton[xmonitor-inference] to enable investigation"
             ) from exc
         config = self.config
         allowed = {

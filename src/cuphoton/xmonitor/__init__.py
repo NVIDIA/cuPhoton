@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""cuPhoton xMon: deterministic scientific monitoring and evidence review."""
+"""cuPhoton xMonitor: scientific monitoring and evidence review."""
 
 from cuphoton import __version__
 

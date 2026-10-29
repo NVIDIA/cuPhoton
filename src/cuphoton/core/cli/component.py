@@ -122,11 +122,11 @@ COMPONENTS = (
         version_label="cuphoton xray",
     ),
     ComponentSpec(
-        "xmon",
-        "cuphoton.xmon",
-        "cuPhoton xMon: scientific monitoring and evidence review.",
+        "xmonitor",
+        "cuphoton.xmonitor",
+        "cuPhoton xMonitor: scientific monitoring and evidence review.",
         parser_style="argparse",
-        version_label="cuphoton xmon",
+        version_label="cuphoton xmonitor",
     ),
 )
 

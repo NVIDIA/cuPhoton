@@ -39,10 +39,10 @@ dependencies = [
 
 [project.optional-dependencies]
 ximage = ["zarr>=3,<4"]
-xmon-inference = [
+xmonitor-inference = [
   "httpx>=0.28,<1",
 ]
-xmon-nooa = [
+xmonitor-nooa = [
   "httpx>=0.28,<1",
   "nooa==0.0.10; python_version < '3.14' and platform_system == 'Linux'",
   "packaging>=23.0",
@@ -127,7 +127,7 @@ where = ["src"]
 include = ["cuphoton*"]
 
 [tool.setuptools.package-data]
-"cuphoton.xmon" = ["assets/*.html", "assets/*.css", "assets/*.js"]
+"cuphoton.xmonitor" = ["assets/*.html", "assets/*.css", "assets/*.js"]
 "cuphoton.xpois" = ["assets/*"]
 "cuphoton.xscan" = ["assets/*"]
 "cuphoton.xray" = ["templates/*.html"]

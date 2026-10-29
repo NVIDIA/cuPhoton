@@ -14,7 +14,7 @@ from dataclasses import replace
 
 import pytest
 
-from cuphoton.xmon import (
+from cuphoton.xmonitor import (
     Dashboard,
     Finding,
     InferenceConfig,
@@ -24,7 +24,7 @@ from cuphoton.xmon import (
     MonitorSession,
     Sample,
 )
-from cuphoton.xmon.dashboard import make_server
+from cuphoton.xmonitor.dashboard import make_server
 
 pytest.importorskip("httpx")
 
@@ -83,13 +83,13 @@ def test_http_question_access_progress_and_saved_export(
     tmp_path, monkeypatch, controlled, prefix
 ):
     token = "fixture-investigation-access-token"
-    monkeypatch.setenv("XMON_TEST_ACCESS", token)
+    monkeypatch.setenv("XMONITOR_TEST_ACCESS", token)
     monitor = Monitor(tmp_path / "run", run_id="interactive")
     monitor.publish(sample())
     session = MonitorSession(
         monitor,
         config=InferenceConfig("http://127.0.0.1:1/v1", "fixture"),
-        access_token_env="XMON_TEST_ACCESS",
+        access_token_env="XMONITOR_TEST_ACCESS",
     )
     dashboard = Dashboard(
         monitor, render_sample=lambda item: f"<p>revision {item.revision}</p>"
@@ -112,7 +112,7 @@ def test_http_question_access_progress_and_saved_export(
             ).encode(),
             headers={
                 "Content-Type": "application/json",
-                "X-XMon-Token": access,
+                "X-XMonitor-Token": access,
                 "Origin": origin,
             },
         )
