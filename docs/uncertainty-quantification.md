@@ -1,17 +1,22 @@
 # Uncertainty quantification for transient catalogs
 
 The [transient chain](../examples/transient-chain/README.md) reports an error
-bar with every position and flux it measures. This guide explains where each
-error bar comes from, how to configure the error propagation, how to read the
-catalog columns, how to use the underlying library functions without the
-chain, and how to check the error bars on your own data.
+bar with every position and flux it measures. This guide explains the
+following:
+
+- Where each error bar comes from
+- How to configure the error propagation
+- How to read the catalog columns
+- How to use the underlying library functions without the chain
+- How to check the error bars on your own data
 
 The error budget is experimental. Its column names, configuration keys and
 terms can change between releases.
 
 ## Overview
 
-The chain measures three quantities for each candidate:
+The chain measures three quantities for each candidate, listed in the
+following table.
 
 | Quantity | Columns | What it locates or measures |
 |---|---|---|
@@ -34,16 +39,18 @@ uncertainty in the quantity's units, and adds the terms in quadrature:
 <q>_err = sqrt(fit^2 + corr^2 + kfit^2 + kmatch^2 + mis^2)
 ```
 
-`<q>_err` is the error bar to quote: one standard deviation per axis for a
-position, and one standard deviation of the flux. Each term is also written to
-its own column, so you can rebuild the error bar with any term left out.
+`<q>_err` is the error bar to quote. For a position it is one standard
+deviation per axis, and for a flux it is one standard deviation of the flux.
+The chain also writes each term to its own column. You can rebuild the error
+bar with any term left out.
 
 The workflow has three steps:
 
-1. Run the chain with the `uq` configuration block enabled, the default.
+1. Run the chain with the `uq` configuration block enabled, which is the
+   default.
    Worker step 8c computes every term for every candidate and writes the terms
    and their sum to the catalog.
-2. Read `<q>_err` for the quantity you need and keep the rows where it is
+2. Read `<q>_err` for the quantity you need, and keep the rows where it is
    finite. Each item's `summary.json` records which terms went into the error
    bars and why any term was left out.
 3. Check the error bars on your data. The repeat test compares the scatter of
@@ -51,9 +58,10 @@ The workflow has three steps:
 
 ## Quick start
 
-Install cuPhoton with the `gpu` extra and the example from the root of the
-checkout, as the example's
-[prerequisites](../examples/transient-chain/README.md#prerequisites) describe:
+From the root of the checkout, install cuPhoton with the `gpu` extra and the
+example. The example's
+[prerequisites](../examples/transient-chain/README.md#prerequisites) give the
+details.
 
 ```bash
 uv pip install -e '.[gpu]' -e examples/transient-chain
@@ -61,10 +69,10 @@ uv pip install -e '.[gpu]' -e examples/transient-chain
 
 Run one detector-exposure on one GPU. `config-generic.yaml` describes a FITS
 target with an inverse-variance weight file and a template on its own pixel
-grid. Its template has no variance plane, so the corr term is left out until
-you add one ([Use your own survey data](#use-your-own-survey-data)). The
-[selections file](../examples/transient-chain/README.md#the-selections-file)
-lists the input files:
+grid. Its template has no variance plane. The corr term is left out until you
+add one, as described in [Use your own survey data](#use-your-own-survey-data).
+The [selections file](../examples/transient-chain/README.md#the-selections-file)
+lists the input files.
 
 ```bash
 python examples/transient-chain/launch.py --executor local \
@@ -72,8 +80,8 @@ python examples/transient-chain/launch.py --executor local \
     --selections sel.json --output-dir out --only N4/123456
 ```
 
-Without `--checkpoint-dir` the chain stops after xFit, which is enough for the
-error bars. Read the PSF flux with its error bar and its terms:
+Without `--checkpoint-dir` the chain stops after xFit. The error bars do not
+need the classifier. Read the PSF flux with its error bar and its terms:
 
 ```python
 import numpy as np
@@ -96,6 +104,9 @@ python examples/transient-chain/repeat_catalogs.py out/items/*/catalog.parquet \
 
 ## Sources of uncertainty
 
+The following table lists each term of the error budget, its cause, and the
+function that computes it.
+
 | Term | Column | Cause | Quantities | Computed with |
 |---|---|---|---|---|
 | fit | `<q>_err_fit` | pixel noise of the target image | all | `cuphoton.xfit` fit covariance and forced photometry |
@@ -110,29 +121,30 @@ A term that does not apply to a quantity is 0 in that quantity's column.
 ### Fit
 
 xFit weights each pixel by the target variance plane and propagates its
-parameter covariance to the derived quantities, cross terms included. See
-[Derived quantities and their uncertainties](components/xfit.md#derived-quantities-and-their-uncertainties)
-for the dipole center and source position and
-[Forced PSF photometry](components/xfit.md#forced-psf-photometry) for the
-flux. The flux error is conditional on the position and the PSF width, so the
-chain takes the width from `xfit.psf_sigma_px` or from the image's stars,
+parameter covariance to the derived quantities, cross terms included. For the
+dipole center and source position, refer to
+[Derived quantities and their uncertainties](components/xfit.md#derived-quantities-and-their-uncertainties).
+For the flux, refer to [Forced PSF photometry](components/xfit.md#forced-psf-photometry).
+The flux error is conditional on the position and the PSF width. The chain
+therefore takes the width from `xfit.psf_sigma_px` or from the image's stars,
 never from the candidate fits.
 
-A candidate whose difference stamp holds one source, a brightening or a fading
-one, has a lobe the data do not support. Step 8b refits it with the one-lobe
+A difference stamp can hold one source, such as a brightening or a fading
+source. The data then do not support one of the dipole's lobes. Step 8b refits it with the one-lobe
 model of [Single sources](components/xfit.md#single-sources) and marks the row
-`fit_model = "single"`. The refit matters because the dipole fit's spare
-lobe sits on noise and inflates the position covariance.
+`fit_model = "single"`. The dipole fit places its spare lobe on noise,
+which inflates the position covariance.
 
 Without a target variance plane, xFit scales the covariance by the fit's
-reduced chi-square and the terms that need the plane are left out.
+reduced chi-square. The terms that need the plane are left out.
 
 ### Correlation
 
-The template's noise is not in the target variance plane, and resampling and
-convolution correlate the template's pixels. Both make a weighted sum of
-difference pixels, such as a PSF flux, vary more than the diagonal variance
-predicts. The ratio is the correlation factor `f`, and the term is
+The template's noise is not in the target variance plane. Resampling and
+convolution also correlate the template's pixels. Both effects make a weighted
+sum of difference pixels, such as a PSF flux, vary more than the diagonal
+variance predicts. The ratio of the two variances is the correlation factor
+`f`. The term is the following:
 
 ```text
 <q>_err_corr = <q>_err_fit * sqrt(max(f, 1) - 1)
@@ -140,9 +152,9 @@ predicts. The ratio is the correlation factor `f`, and the term is
 
 The chain computes `f` in closed form at each candidate from the template's
 variance plane on the target grid, the subtraction kernel, and the resampling
-weights of the template build. See
+weights of the template build. For details, refer to
 [Correlation factor of weighted sums](components/xpois.md#correlation-factor-of-weighted-sums)
-and the resampling weights in the xRep [Python API](components/xrep.md#python-api).
+and to the resampling weights in the xRep [Python API](components/xrep.md#python-api).
 
 The closed form models resampling of independent template pixels through the
 kernel. A coadd's own pixel correlations escape it. The chain therefore also
@@ -155,33 +167,37 @@ Such rows carry `uq_corr_measured`.
 
 ### Kernel fit
 
-The subtraction kernel and background are fitted, and their uncertainty adds
+xPois fits the subtraction kernel and background. Their uncertainty adds
 variance to every difference pixel. The added variance is largest where a
 candidate sits on a bright template source.
 `cuphoton.xpois.kernel_fit_covariance` computes the covariance of the fit
-coefficients once per item, and `kernel_fit_variance` propagates it to each
-candidate's weighted sum. See
+coefficients once per item. `kernel_fit_variance` propagates it to each
+candidate's weighted sum. For details, refer to
 [Kernel-fit covariance and the variance it adds](components/xpois.md#kernel-fit-covariance-and-the-variance-it-adds).
 
 ### Kernel mismatch
 
 A kernel that does not match the template's PSF everywhere leaves part of a
-static star's flux in the difference image. At the stars the refine stage
-matched, the chain fits `eta`, the fraction of template flux left beyond the
-noise, and sets the flux term to `eta` times the kernel-matched template flux
-at the candidate. Positions get 0 for this term.
+static star's flux in the difference image. At the stars that the refine
+stage matched, the chain fits `eta`, the fraction of template flux left beyond
+the noise. The flux term is `eta` times the kernel-matched template flux at the
+candidate. Positions get 0 for this term.
 
 ### Misalignment
 
 The refine stage fits an affine map between the template and the target from
-matched stars, and its misalignment model gives the remaining position
-variance across the detector. The dipole center gets a quarter of it, because
-the center is the mean of two lobes that each move with their own image. The
-lobe of a resolved dipole gets the variance unscaled. The lobe of a single
-source gets it times `lambda^2`, with `lambda = (D + T) / D`, `D` the lobe's
-forced flux in the difference image and `T` the kernel-matched template's
-forced flux there: a faint change on a bright source moves with that source.
-Without a PSF width `lambda` is 1. `|lambda|` is capped at 10, and
+matched stars. Its misalignment model gives the remaining position variance
+across the detector. Each quantity gets a share of that variance:
+
+- The dipole center gets a quarter of it. The center is the mean of two lobes,
+  and each lobe moves with its own image.
+- The lobe of a resolved dipole gets the variance unscaled.
+- The lobe of a single source gets the variance times `lambda^2`, with
+  `lambda = (D + T) / D`. `D` is the lobe's forced flux in the difference image,
+  and `T` is the kernel-matched template's forced flux at the same position.
+  A faint change on a bright source moves with that source.
+
+Without a PSF width, `lambda` is 1. The chain caps `|lambda|` at 10, and
 `uq.sensitivity_capped` counts the capped rows.
 
 ### Sky astrometry
@@ -195,15 +211,16 @@ the pixel-frame error bars.
 
 A masked pixel near a candidate does not cost it the error bar. The weighted
 sums and the correlation factor run over the usable pixels of the window, and
-the row is flagged `uq_window_masked`. A quantity's `<q>_err` is NaN where
-fewer than half of its window's pixels are usable or its correlation factor is
-undefined, for example on a grid that rotates against the template's.
+the chain flags the row `uq_window_masked`. A quantity's `<q>_err` is NaN in
+two cases. The first is when fewer than half of its window's pixels are
+usable. The second is when its correlation factor is undefined, for example on
+a grid that rotates against the template's grid.
 `uq_valid` is true where every quantity of the row has a defined error bar.
 
 ## Catalog columns
 
-The error budget adds these columns to every item's catalog. The full column
-table is in the example's
+The error budget adds the columns in the following table to every item's
+catalog. For the full column table, refer to the example's
 [catalog columns](../examples/transient-chain/README.md#catalog-columns).
 
 | Column | Meaning |
@@ -219,12 +236,12 @@ table is in the example's
 
 `q` is one of `center_x`, `center_y`, `positive_x`, `positive_y` and
 `psf_flux`. `source_*_err_fit` and `source_*_err` copy the `positive_*`
-values, and there are no `source_*` term columns. A fading row without a
+values. There are no `source_*` term columns. A fading row without a
 one-lobe refit takes the negative lobe with NaN error bars.
 
-Rebuild an error bar with one term left out to see how much that term
-contributes. `q` is one of the five quantities above. The rebuilt value does
-not reapply the validity rule, so check `<q>_err` is finite first:
+To see how much a term contributes, rebuild an error bar with that term left
+out. `q` is one of the five quantities above. The rebuilt value does not
+reapply the validity rule. Use it only on rows where `<q>_err` is finite.
 
 ```python
 def error_without(catalog, q, term):
@@ -235,7 +252,7 @@ def error_without(catalog, q, term):
 ## Configuration
 
 The `uq` block of the chain configuration controls the error budget. The
-values below are the defaults:
+following block shows the defaults.
 
 ```yaml
 uq:
@@ -249,9 +266,9 @@ uq:
   single_source_refit: true   # refit single sources with the one-lobe model
 ```
 
-Each term also needs inputs from the survey and from earlier stages. A term
-without its inputs is left out, and `summary.json` lists it under
-`uq.excluded` with the reason:
+Each term also needs inputs from the survey and from earlier stages, listed
+in the following table. A term without its inputs is left out, and
+`summary.json` lists it under `uq.excluded` with the reason.
 
 | Term | Needs |
 |---|---|
@@ -259,20 +276,20 @@ without its inputs is left out, and `summary.json` lists it under
 | corr | target and template variance planes and a PSF width |
 | kfit | a target variance plane, a PSF width and `uq.kernel_fit: true` |
 | kmatch | a target variance plane, a PSF width and at least 5 stars matched by the refine stage |
-| mis | a misalignment model: `align.refine: true`, an affine refinement, a star finder other than `daofind`, and a template reprojected or mosaicked onto the target grid |
+| mis | a misalignment model, which needs `align.refine: true`, an affine refinement, a star finder other than `daofind`, and a template reprojected or mosaicked onto the target grid |
 
 The refine stage runs only on a template that the chain reprojects or
 mosaics onto the target grid (`on_target_grid: false`, or Rubin
-`template_coadds`). A template already on the target grid gives no stars, so
-kmatch and mis are left out. The PSF width comes from `xfit.psf_sigma_px`, or
-from the refine stage's stars when that key is null. Without a width, the `psf_flux` columns are NaN except
-on one-lobe rows.
+`template_coadds`). A template already on the target grid gives no stars.
+The chain then leaves out kmatch and mis. The PSF width comes from
+`xfit.psf_sigma_px`, or from the refine stage's stars when that key is null.
+Without a width, the `psf_flux` columns are NaN except on one-lobe rows.
 
 ## Use your own survey data
 
 The terms that use the template's noise need its variance plane. With the
-`generic` adapter, name the variance file or HDU of the target and the
-template:
+`generic` adapter, name the variance file or HDU of the target and of the
+template.
 
 ```yaml
 survey:
@@ -292,12 +309,13 @@ survey:
 
 Each selection entry then names the template variance file under the
 `template_variance` key. `pieces` sets how the variances of overlapping
-template pieces combine.
-Use `correlated` for patches cut from one coadd and `independent` for separate
-reference frames. The `rubin` adapter reads the variance HDU of the visit and,
-with `coadd_variance_hdu` set, of each coadd patch. A new adapter provides the
-template variance through its template provider. See
-[Other surveys](../examples/transient-chain/README.md#other-surveys).
+template pieces combine. Use `correlated` for patches cut from one coadd, and
+`independent` for separate reference frames.
+
+The `rubin` adapter reads the variance HDU of the visit. With
+`coadd_variance_hdu` set, it also reads the variance HDU of each coadd patch. A
+new adapter provides the template variance through its template provider. For
+details, refer to [Other surveys](../examples/transient-chain/README.md#other-surveys).
 
 ## Read the summary
 
@@ -313,20 +331,23 @@ summary["uq"]["correlation"]        # closed-form and measured factors, and whic
 summary["uq"]["kernel_mismatch"]    # eta and the number of stars it was fitted on
 ```
 
-`uq` is null for an item with no candidates. With `uq.enabled: false` it has
-no correlation, kernel-mismatch or window entries. Otherwise it also counts
-the rows with an invalid window (`invalid_window`), a masked window
-(`masked_window`), an undefined correlation factor (`undefined_factor`) and a
-capped sensitivity (`sensitivity_capped`), and records the single-source
-refits (`single_candidates`, `single_fitted`, `single_model`).
+`uq` is null for an item with no candidates. With `uq.enabled: false`, it has
+no correlation, kernel-mismatch, or window entries. Otherwise, it also records
+the following counts:
+
+- Rows with an invalid window (`invalid_window`)
+- Rows with a masked window (`masked_window`)
+- Rows with an undefined correlation factor (`undefined_factor`)
+- Rows with a capped sensitivity (`sensitivity_capped`)
+- Single-source refits (`single_candidates`, `single_fitted`, `single_model`)
 
 ## Use the components on their own
 
-The library functions behind the terms work without the chain. The example
-below builds the error bar of one PSF flux from a template, a target and their
-variance planes, all NumPy arrays of shape `(n, n)` on the CPU. The template
-maps to the target grid by a shift `(dx, dy)`, and `positions` holds the
-`(x, y)` target pixel of each source, shape `(N, 2)`.
+The library functions behind the terms work without the chain. The following
+example builds the error bar of one PSF flux from a template, a target, and
+their variance planes. All four are NumPy arrays of shape `(n, n)` on the CPU.
+The template maps to the target grid by a shift `(dx, dy)`. `positions` holds
+the `(x, y)` target pixel of each source, with shape `(N, 2)`.
 
 First, resample the template onto the target grid with xRep and read the
 resampling weights at the sources:
@@ -425,21 +446,21 @@ flux_error = np.sqrt(u_fit**2 + u_corr**2 + u_kfit**2)
 ```
 
 `residual_variance=target_variance` makes the factor relative to the variance
-xFit used, so it includes the template noise as well as its correlations. For a
-position, replace the PSF weights with `psf_weights(..., derivative="x")` or
-`"y"`, normalized the same way. `kernel_fit_covariance` uses one resampling
-stamp for every fit pixel, which holds where the mapping is close to a
-translation.
+that xFit used. The factor then includes the template noise as well as its
+correlations. For a position, replace the PSF weights with
+`psf_weights(..., derivative="x")` or `"y"`, normalized the same way.
+`kernel_fit_covariance` uses one resampling stamp for every fit pixel. This
+approximation holds where the mapping is close to a translation.
 
-Each component also works alone:
+You can also use each component alone:
 
-- xFit only: `derived_dipole_quantities`, `forced_psf_photometry` and
-  `fit_single_sources` give the fit term for stamps you cut yourself.
-- xPois only: `correlation_factor` and `kernel_fit_variance` apply to any
-  weighted sum of a difference image, and `empirical_correlation_factor`
-  checks whether a survey's variance plane already carries the correlation.
-- xRep only: `reproject_masked_array` propagates a diagonal variance plane,
-  and `resampling_weights_at` returns the weights a noise model needs.
+- In xFit, `derived_dipole_quantities`, `forced_psf_photometry`, and
+  `fit_single_sources` give the fit term for stamps that you cut yourself.
+- In xPois, `correlation_factor` and `kernel_fit_variance` apply to any
+  weighted sum of a difference image. `empirical_correlation_factor` tells
+  you whether a survey's variance plane already includes the correlation.
+- In xRep, `reproject_masked_array` propagates a diagonal variance plane.
+  `resampling_weights_at` returns the weights that a noise model needs.
 
 ## Check the error bars
 
@@ -449,38 +470,45 @@ A static source lands at the same sky position in every exposure of a
 detector. Its scatter divided by its error bars gives a chi-square per degree
 of freedom near 1 when the error bars are correct. Survey pipelines call this
 repeatability. `repeat_catalogs.py` links each detector's detections across
-its exposures and scores three positions: the dipole center (`center_*`),
-the positive lobe (`positive_*`) and the measured lobe of either sign
-(`source_*`), each on the classes of candidates whose columns describe it:
+its exposures. It then scores three positions, each on the classes of
+candidates whose columns describe it:
+
+- The dipole center (`center_*`)
+- The positive lobe (`positive_*`)
+- The measured lobe of either sign (`source_*`)
+
+Run it on the per-item catalogs:
 
 ```bash
 python examples/transient-chain/repeat_catalogs.py out/items/*/catalog.parquet \
     --out repeat.json --link-px 2 --duplicate-px 1
 ```
 
-For each quantity the report gives two statistics: the pooled chi-square per
-degree of freedom and the median per-group ratio, which is 1 for correct error
-bars at any group size. It computes both for six arms: `<q>_err`,
-`<q>_err_fit` alone, and `<q>_err` with each of the corr, kfit, kmatch and mis
-terms removed. Read the arms together:
+For each quantity, the report gives two statistics. The first is the pooled
+chi-square per degree of freedom. The second is the median per-group ratio,
+which is 1 for correct error bars at any group size. The report computes both
+statistics for six arms. An arm is one version of the error bar:
+`<q>_err`, `<q>_err_fit` alone, or `<q>_err` with one of the corr, kfit,
+kmatch, or mis terms removed. Read the arms together:
 
-- A statistic well above 1 means the error bars are too small. The removed
-  term whose removal raises the statistic most contributes most to the error bar.
+- A statistic well above 1 means the error bars are too small. The term whose
+  removal raises the statistic most contributes most to the error bar.
 - A statistic below 1 means the error bars are too large, or that a term
   describes noise shared by every exposure.
-- The template is the same in every exposure, so its noise never scatters
-  between them. An arm that includes the template noise can score below 1 by
+- The template is the same in every exposure. Its noise therefore never
+  scatters between them. An arm that includes the template noise can score below 1 by
   that share even with correct error bars.
 - A bias common to all exposures, such as a template position error, moves
   every detection alike and passes the test unseen.
 
-See [Repeat test across repeated exposures](../examples/transient-chain/README.md#repeat-test-across-repeated-exposures)
-for how positions reach the sky and how detections are linked and classified.
+For how positions reach the sky and how the script links and classifies
+detections, refer to
+[Repeat test across repeated exposures](../examples/transient-chain/README.md#repeat-test-across-repeated-exposures).
 
 ### Reference catalog
 
 `compare_catalogs.py` matches the chain's candidates to a reference catalog
-within 1.5 pixels and reports the differences:
+within 1.5 pixels and reports the differences.
 
 ```bash
 python examples/transient-chain/compare_catalogs.py --ours out/catalog.parquet \
@@ -494,25 +522,27 @@ errors.
 
 ### Coverage on injected sources
 
-If you inject sources of known position and flux into your images, measure
-coverage directly: the fraction of injected sources whose true value lies
-within `1.96 * <q>_err` of the measured value should be near 0.95, and the
-spread of `(measured - true) / <q>_err` near 1. Hold out some exposures from
-any tuning, and score coverage on those.
+If you inject sources of known position and flux into your images, you can
+measure coverage directly. Coverage is the fraction of injected sources whose
+true value lies within `1.96 * <q>_err` of the measured value. It is near 0.95
+for correct error bars, and the spread of `(measured - true) / <q>_err` is
+near 1. Hold out some exposures from any tuning, and score coverage on those
+exposures.
 
 ## Limits
 
 - The error bars are local and first order. They hold while the uncertainties
   are small compared with the PSF width and the lobe separation. For
-  overlapping lobes only the center and the product of amplitude and
-  separation are measured.
+  overlapping lobes, the fit measures only the center and the product of
+  amplitude and separation.
 - The fit term and the closed-form correlation factor assume the supplied
   variance planes describe the pixel noise.
 - The closed-form factor needs a grid mapping that is locally a translation.
-  On a rotated grid it is undefined and the quantity's `<q>_err` is NaN.
+  On a rotated grid, the factor is undefined and the quantity's `<q>_err` is
+  NaN.
 - The kernel mismatch term covers the PSF flux only. A candidate on template
-  light the kernel did not match can have a position scatter its error bars do
-  not include.
+  light that the kernel did not match can have a position scatter that its
+  error bars do not include.
 - The sky astrometry is an input. The chain does not measure it.
 - The repeat test cannot see noise or bias shared by every exposure of a
   detector.

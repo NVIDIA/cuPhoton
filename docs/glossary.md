@@ -31,14 +31,14 @@
   mismatch or source motion can produce this pattern.
 
 **Error bar**
-: The standard uncertainty quoted with a measured quantity: one standard
-  deviation per axis for a position, and of the flux for a flux. The transient
-  chain writes it as `<q>_err`, the quadrature sum of the terms of its error
-  budget.
+: The standard uncertainty quoted with a measured quantity. For a position it
+  is one standard deviation per axis, and for a flux it is one standard
+  deviation of the flux. The transient chain writes it as `<q>_err`, the
+  quadrature sum of the terms of its error budget.
 
 **Error budget**
 : The separate sources of uncertainty that make up an error bar, each a
-  standard uncertainty in the quantity's units. See
+  standard uncertainty in the quantity's units. For the terms, refer to
   [Uncertainty quantification](uncertainty-quantification.md#sources-of-uncertainty).
 
 **Exposure**
@@ -96,8 +96,8 @@
   subtraction.
 
 **Repeat test**
-: A check of position error bars on repeated exposures of one detector: a
-  static source's scatter between exposures divided by its error bars gives a
+: A check of position error bars on repeated exposures of one detector. A
+  static source's scatter between exposures, divided by its error bars, gives a
   chi-square per degree of freedom near 1 when the error bars are correct.
   Survey pipelines call this repeatability.
 
