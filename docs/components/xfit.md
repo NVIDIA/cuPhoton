@@ -97,7 +97,8 @@ solves. Sampled-stamp models, custom Gaussian subclasses, and finite-difference
 fitting require another backend.
 `auto` keeps its existing CuPy/NumPy selection.
 
-Build the optional extension from source on Linux with a CUDA 13 toolkit,
+The native Linux wheel and Conda recipes include this extension. For a source
+installation, build it on Linux with a CUDA 13 toolkit,
 cuBLAS 13, and a C++17 compiler. Select the CCCL headers bundled with the
 installed CuPy wheel to preserve its reduction order. This header lookup does
 not import CuPy or initialize CUDA. For example:

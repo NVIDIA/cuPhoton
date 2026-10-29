@@ -354,7 +354,7 @@ def test_record_keeps_tagged_source_and_workflow_identity_separate(
     with tarfile.open(sdist, "w:gz") as archive:
         for name in sorted(SOURCES | LICENSES | {"PKG-INFO"}):
             content = metadata if name == "PKG-INFO" else b"source\n"
-            if name == "THIRD_PARTY_NOTICES.md":
+            if name in LICENSES:
                 content = (SCRIPTS.parents[1] / name).read_bytes()
             member = tarfile.TarInfo(f"cuphoton-0.1.3/{name}")
             member.size = len(content)

@@ -13,8 +13,9 @@ and architecture combinations, as described below. Conda channel publication
 is not configured.
 Free-threaded Python, Windows, and macOS are outside both matrices.
 
-Each wheel contains `cuphoton.xdr._nvcomp_batch_ext` and a privately renamed,
-reentrant CFITSIO 4.7.0 shared library. CUDA, cuFile, KvikIO, and nvCOMP remain
+Each wheel contains `cuphoton.xdr._nvcomp_batch_ext`,
+`cuphoton.xfit._native_ext`, and a privately renamed, reentrant CFITSIO 4.7.0
+shared library. CUDA, cuBLAS, cuFile, KvikIO, and nvCOMP remain
 in their upstream wheels, installed through `cuphoton[io]`. `cuphoton[gpu]`
 also includes the photometry, PyTorch, and Numba backends. Installing Photutils
 from PyPI currently requires a source build, C compiler, and Python
@@ -78,9 +79,12 @@ CFITSIO's upstream tests run before installation. No host CUDA toolkit is
 used. Release builds must not set `CIBW_TEST_SKIP`.
 
 The default `make build` produces only the source archive. Plain source and
-editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` is
-set. See [xDR source installation](components/xdr.md#native-extension-availability)
-for the explicit native development build.
+editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` or
+`CUPHOTON_XFIT_BUILD_EXT=1` is set. See
+[xDR source installation](components/xdr.md#native-extension-availability) and
+[native xFit](components/xfit.md#optional-native-cuda-backend) for development
+builds. Native package builds select CCCL 3.1.2 headers from CuPy 14.1.1;
+their upstream license and copyright notices accompany both package formats.
 
 `make build` refreshes only the source archive. `make wheels` replaces cuPhoton
 wheels while preserving conda outputs; `make conda` replaces `dist/conda` while
@@ -104,10 +108,15 @@ results, distinct processes, and MPI collectives. They use small launcher
 probes; the cuPhoton batch-executor checks run with the GPU backend described
 below. JSON receipts are retained as CI artifacts.
 
+The artifact checker uses `readelf` from binutils to verify that native xFit
+links dynamically to CUDA 13 and cuBLAS 13. Neither library is bundled in the
+cuPhoton wheel.
+
 ## Build and install conda packages
 
-The `cuphoton` conda package includes the compiled xDR extension and depends on
-upstream conda packages for CFITSIO 4.7, CUDA 13, KvikIO 26.6, and nvCOMP 5.2.
+The `cuphoton` conda package includes the compiled xDR and xFit extensions and
+depends on upstream conda packages for CFITSIO 4.7, CUDA 13, cuBLAS 13,
+KvikIO 26.6, and nvCOMP 5.2.
 Conda installs those libraries into the environment; no manual CUDA paths
 are needed.
 Conda has no pip-style extras: this package provides the native I/O profile

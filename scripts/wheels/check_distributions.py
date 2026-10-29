@@ -10,14 +10,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import subprocess
 import tarfile
+import tempfile
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
 ABIS = ("cp312", "cp313", "cp314")
 ARCHITECTURES = ("x86_64", "aarch64")
-LICENSES = {"LICENSE", "THIRD_PARTY_NOTICES.md"}
+LICENSES = {"LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/CCCL-3.1.2.txt"}
+CCCL_LICENSE_SHA256 = (
+    "f96f51edda77fb9897de29d924d615e6bd153f4969db85fc6b7a22d7a624631e"
+)
 # Full upstream text: https://github.com/pybind/pybind11/blob/v3.0.4/LICENSE
 PYBIND11_LICENSE_SHA256 = (
     "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb"
@@ -37,6 +42,14 @@ SOURCES = {
     "scripts/wheels/repair_wheel.py",
     "scripts/wheels/test_installed.py",
     "scripts/wheels/check_distributions.py",
+    "src/cuphoton/xfit/setup_package.py",
+    "src/cuphoton/xfit/src/native_ext.cpp",
+    "src/cuphoton/xfit/src/native_api.h",
+    "src/cuphoton/xfit/src/native.cu",
+    "src/cuphoton/xfit/src/native_norm.cu",
+    "src/cuphoton/xfit/src/native_jacobian.h",
+    "src/cuphoton/xfit/src/native_jacobian.cu",
+    "src/cuphoton/xfit/src/native_jacobian_lean.cu",
 }
 BINARY = re.compile(r"\.(?:so(?:\.\d+)*|a|o|pyd|dll|dylib|whl|pyc|pyo)$")
 
@@ -56,6 +69,36 @@ def check_pybind11_notice(content, artifact):
             for block in blocks
         ),
         f"{artifact}: missing or altered full pybind11 license notice",
+    )
+
+
+def check_cccl_license(content, artifact):
+    require(
+        hashlib.sha256(content).hexdigest() == CCCL_LICENSE_SHA256,
+        f"{artifact}: missing or altered full CCCL license notice",
+    )
+
+
+def check_xfit_libraries(content, artifact):
+    """Require dynamic CUDA/cuBLAS linkage in the delivered xFit ELF."""
+    with tempfile.TemporaryDirectory(prefix="cuphoton-elf-") as directory:
+        extension = Path(directory) / "xfit.so"
+        extension.write_bytes(content)
+        result = subprocess.run(
+            ["readelf", "--dynamic", str(extension)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    require(result.returncode == 0, f"{artifact}: invalid xFit ELF library")
+    needed = set(re.findall(r"\(NEEDED\).*\[([^\]]+)\]", result.stdout))
+    require(
+        {"libcudart.so.13", "libcublas.so.13"} <= needed,
+        f"{artifact}: xFit must dynamically link CUDA 13 and cuBLAS 13",
+    )
+    require(
+        not any("/" in name for name in needed),
+        f"{artifact}: xFit contains an absolute library dependency",
     )
 
 
@@ -104,9 +147,10 @@ def check_wheel(path):
         "cuphoton/xdr/_nvcomp_batch_ext."
         f"cpython-{abi[2:]}-{arch}-linux-gnu.so"
     )
+    xfit = f"cuphoton/xfit/_native_ext.cpython-{abi[2:]}-{arch}-linux-gnu.so"
     with zipfile.ZipFile(path) as archive:
         files = set(archive.namelist())
-        required = {native, info + "METADATA", info + "WHEEL"}
+        required = {native, xfit, info + "METADATA", info + "WHEEL"}
         required.update(info + "licenses/" + name for name in LICENSES)
         require(
             required <= files,
@@ -116,7 +160,8 @@ def check_wheel(path):
             archive.read(info + "METADATA"),
             version,
             path.name,
-            "Apache-2.0 AND CFITSIO AND BSD-3-Clause",
+            "Apache-2.0 AND CFITSIO AND BSD-3-Clause"
+            " AND Apache-2.0 WITH LLVM-exception",
         )
         wheel = BytesParser().parsebytes(archive.read(info + "WHEEL"))
         require(
@@ -140,17 +185,22 @@ def check_wheel(path):
         )
         binaries = {name for name in files if BINARY.search(name)}
         require(
-            binaries == {native} | cfitsio,
+            binaries == {native, xfit} | cfitsio,
             f"{path.name}: unexpected bundled binaries: "
-            f"{sorted(binaries - {native} - cfitsio)}",
+            f"{sorted(binaries - {native, xfit} - cfitsio)}",
         )
         notices = archive.read(info + "licenses/THIRD_PARTY_NOTICES.md")
         check_pybind11_notice(notices, path.name)
+        check_cccl_license(
+            archive.read(info + "licenses/licenses/CCCL-3.1.2.txt"),
+            path.name,
+        )
         require(
             b"Permission to freely use, copy, modify, and distribute"
             in notices,
             f"{path.name}: missing CFITSIO notice",
         )
+        check_xfit_libraries(archive.read(xfit), path.name)
     return (abi, arch), version
 
 
@@ -177,6 +227,10 @@ def check_sdist(path):
         )
         check_pybind11_notice(
             archive.extractfile(prefix + "THIRD_PARTY_NOTICES.md").read(),
+            path.name,
+        )
+        check_cccl_license(
+            archive.extractfile(prefix + "licenses/CCCL-3.1.2.txt").read(),
             path.name,
         )
         check_metadata(

@@ -18,6 +18,7 @@ recursive-include scripts/wheels *.sh *.py *.txt
 recursive-include scripts/conda *.py
 recursive-include packaging/conda *.yaml *.sh
 include LICENSE
+include licenses/CCCL-3.1.2.txt
 include CITATION.cff
 include Makefile
 include pyproject.toml

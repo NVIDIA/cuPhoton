@@ -20,6 +20,8 @@ from pathlib import Path
 # These libraries are supplied by the I/O extra, not copied into cuPhoton.
 EXTERNAL_LIBRARIES = (
     "libcudart.so.13",
+    "libcublas.so.13",
+    "libcublasLt.so.13",
     "libnvcomp.so.5",
     "libkvikio.so",
     "librapids_logger.so",
@@ -76,7 +78,11 @@ def include_bundled_license(wheel: Path) -> None:
             )
         metadata.write_bytes(
             content.replace(
-                original, original + b" AND CFITSIO AND BSD-3-Clause", 1
+                original,
+                original
+                + b" AND CFITSIO AND BSD-3-Clause"
+                + b" AND Apache-2.0 WITH LLVM-exception",
+                1,
             )
         )
         subprocess.run(

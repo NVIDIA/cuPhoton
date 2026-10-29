@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import shutil
 from pathlib import Path
 
 from setuptools import Extension
@@ -40,7 +41,7 @@ class CUDAExtension(Extension):
     """An ordinary Python extension with separately compiled CUDA files."""
 
     def __init__(
-        self, cuda_home: Path, include: Path, libraries: Path, cccl: Path
+        self, nvcc: Path, include: Path, libraries: Path, cccl: Path
     ):
         super().__init__(
             name="cuphoton.xfit._native_ext",
@@ -63,6 +64,8 @@ class CUDAExtension(Extension):
                 str(include),
             ],
             library_dirs=[str(libraries)],
+            # NVIDIA's runtime wheels share this directory beside cuphoton.
+            runtime_library_dirs=["$ORIGIN/../../nvidia/cu13/lib"],
             # CUDA wheels ship SONAME files without unversioned symlinks.
             libraries=[":libcudart.so.13", ":libcublas.so.13"],
             extra_compile_args=[
@@ -73,7 +76,7 @@ class CUDAExtension(Extension):
             ],
             extra_link_args=["-pthread"],
         )
-        self.nvcc = str(cuda_home / "bin" / "nvcc")
+        self.nvcc = str(nvcc)
         self.architectures = _architectures()
 
 
@@ -154,7 +157,18 @@ def get_extensions():
             "Set CUDA_HOME to a CUDA 13 toolkit to build native xFit"
         )
     cuda_home = Path(value).resolve()
-    include = cuda_home / "include"
+    target = "sbsa" if platform.machine() == "aarch64" else platform.machine()
+    include = next(
+        (
+            directory
+            for directory in (
+                cuda_home / "include",
+                cuda_home / "targets" / f"{target}-linux" / "include",
+            )
+            if (directory / "cuda_runtime_api.h").is_file()
+        ),
+        cuda_home / "include",
+    )
     version_header = include / "cuda_runtime_api.h"
     if (
         not version_header.is_file()
@@ -168,8 +182,13 @@ def get_extensions():
     )
     if match is None or int(match.group(1)) // 1000 != 13:
         raise RuntimeError("Native xFit requires a CUDA 13 toolkit")
-    if not os.access(cuda_home / "bin" / "nvcc", os.X_OK):
-        raise RuntimeError(f"CUDA_HOME={cuda_home} lacks executable bin/nvcc")
+    nvcc_command = os.environ.get("CUDACXX", str(cuda_home / "bin" / "nvcc"))
+    nvcc = shutil.which(nvcc_command)
+    if nvcc is None:
+        raise RuntimeError(
+            f"CUDA compiler is not executable: {nvcc_command}. "
+            "Set CUDACXX or select a CUDA_HOME containing bin/nvcc."
+        )
     cublas_header = include / "cublas_api.h"
     if not (include / "cublas_v2.h").is_file() or not cublas_header.is_file():
         raise RuntimeError(f"CUDA_HOME={cuda_home} lacks cuBLAS headers")
@@ -219,4 +238,4 @@ def get_extensions():
             raise RuntimeError(
                 f"CUPHOTON_XFIT_CCCL_ROOT={cccl} lacks {header}"
             )
-    return [CUDAExtension(cuda_home, include, libraries, cccl)]
+    return [CUDAExtension(Path(nvcc), include, libraries, cccl)]

@@ -67,6 +67,7 @@ more than one license.
 | `dev` | `ruff>=0.15.12` | `0.15.20` | `MIT` | [Ruff](https://github.com/astral-sh/ruff) | `uv / PyPI` |
 | `dev` | `mypy==1.19.1` | `1.19.1` | `MIT` | [mypy](https://github.com/python/mypy) | `uv / PyPI` |
 | `dev` | `types-PyYAML>=6.0.12` | `6.0.12.20260906` | `Apache-2.0` | [typeshed](https://github.com/python/typeshed) | `uv / PyPI` |
+| `dev` | `coverage>=7.10.6,<8` | `7.16.2` | `Apache-2.0` | [Coverage.py](https://github.com/coveragepy/coveragepy/tree/7.16.2) | `uv / PyPI; development only` |
 
 ## Optional distributed runtime inventory
 
@@ -148,6 +149,15 @@ cuPhoton wheels.
 | --- | --- | --- | --- | --- | --- |
 | `CFITSIO` | The local wheel recipe bundles `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
 | `pybind11` | Native wheel builds use `3.0.4`. | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11/tree/v3.0.4) | C++ bindings for the xDR extension. | Header code is compiled into the native extension; its copyright and license notice follow below. No separate pybind11 runtime package is bundled. |
+| `CCCL` (CUB, Thrust, and libcu++) | `3.1.2`, supplied by the CuPy `14.1.1` build dependency. | `BSD-3-Clause` (CUB); `Apache-2.0` (Thrust); `Apache-2.0 WITH LLVM-exception` (libcu++). | [CCCL source selected by CuPy 14.1.1](https://github.com/NVIDIA/cccl/tree/4ee3a7b00256842ec7c638d78c6dbdbeb4845451) | CUB block reduction and its Thrust/libcu++ headers are compiled into native xFit. | Wheels and Conda packages include the compiled header code. The complete upstream license, including CUB copyright and disclaimer, is retained in [`licenses/CCCL-3.1.2.txt`](licenses/CCCL-3.1.2.txt). No CCCL source tree is bundled. |
+| CUDA Toolkit and cuBLAS | Native xFit builds use CUDA `13.0` and cuBLAS `13.1.1.3`. | NVIDIA CUDA Toolkit terms and component notices. | [CUDA Toolkit licensing](https://docs.nvidia.com/cuda/eula/index.html) | CUDA compilation and dynamically linked CUDA runtime and cuBLAS operations. | SDK inputs are build dependencies. CUDA and cuBLAS shared libraries are installed from upstream distributions; they are not copied into cuPhoton wheels or Conda packages. |
+
+Native xFit builds select the CCCL headers provided by the pinned CuPy build
+dependency rather than the toolkit's bundled header version. CuPy 14.1.1
+records the upstream CCCL revision
+`4ee3a7b00256842ec7c638d78c6dbdbeb4845451`. The reduction implementation
+references CuPy's reduction order; CuPy's Python package remains a separately
+installed runtime dependency.
 
 ### pybind11 copyright and license notice
 
@@ -258,10 +268,12 @@ For a CPU-only development environment, replace `gpu` with `torch`.
 
 `make build` creates a source distribution containing cuPhoton's extension
 sources and the pinned native build recipe. `make wheels` builds the native
-Linux wheels from that archive. Each wheel includes the xDR extension and a
-privately renamed CFITSIO shared library, plus compiled pybind11 binding code.
-The source archive and wheels include `LICENSE` and this notice file, including
-the CFITSIO and pybind11 notices above.
+Linux wheels from that archive. Each wheel includes the xDR and xFit
+extensions and a privately renamed CFITSIO shared library, plus compiled
+pybind11 and CCCL header code. The source archive and wheels include `LICENSE`,
+this notice file with the CFITSIO and pybind11 notices above, and the complete
+CCCL license. Conda packages include both extensions and their notices while
+CFITSIO is provided by a separate Conda package.
 
 DragonHPC, `mpi4py`, MPI, and CUDA runtime libraries are installed separately.
 A development source build links against the available CFITSIO and CUDA

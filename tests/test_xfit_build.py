@@ -200,6 +200,27 @@ def test_native_build_requires_explicit_complete_cccl(monkeypatch, tmp_path):
         _helpers().get_extensions()
 
 
+def test_conda_sdk_can_use_a_separate_build_compiler(monkeypatch, tmp_path):
+    helper = _helpers()
+    root = _toolkit(tmp_path)
+    target = "sbsa" if helper.platform.machine() == "aarch64" else "x86_64"
+    target_directory = root / "targets" / f"{target}-linux"
+    target_directory.mkdir(parents=True)
+    (root / "include").rename(target_directory / "include")
+    compiler = tmp_path / "build-nvcc"
+    (root / "bin/nvcc").rename(compiler)
+    monkeypatch.setenv("CUDA_HOME", str(root))
+    monkeypatch.setenv("CUDACXX", str(compiler))
+    monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
+
+    (extension,) = helper.get_extensions()
+    assert extension.nvcc == str(compiler)
+    assert str(target_directory / "include") in extension.include_dirs
+    compiler.unlink()
+    with pytest.raises(RuntimeError, match="build-nvcc"):
+        helper.get_extensions()
+
+
 @pytest.mark.parametrize("architectures", [None, "89", "100;120"])
 def test_cuda_targets_math_flags_and_relink_dependencies(
     monkeypatch, tmp_path, architectures

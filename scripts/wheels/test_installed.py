@@ -33,6 +33,7 @@ GPU_DISTRIBUTIONS = (
     "nvidia-nvcomp-cu13",
     "cuda-toolkit",
     "nvidia-cuda-runtime",
+    "nvidia-cublas",
     "nvidia-cuda-nvrtc",
     "nvidia-cufile",
     "nvidia-nvjitlink",
@@ -67,6 +68,7 @@ def module_path(distribution, name):
 def loaded_native_libraries():
     prefixes = (
         "libcudart",
+        "libcublas",
         "libcufile",
         "libcfitsio",
         "libnvcomp",
@@ -94,7 +96,7 @@ def check_install(mode, report):
     report["versions"] = {"cuphoton": distribution.version}
     report["paths"] = {
         name: str(module_path(distribution, name))
-        for name in ("cuphoton", "cuphoton.xdr")
+        for name in ("cuphoton", "cuphoton.xdr", "cuphoton.xfit")
     }
     for name in GPU_DISTRIBUTIONS:
         try:
@@ -194,6 +196,12 @@ def check_native(distribution, paths, report):
     report["extension_sha256"] = hashlib.sha256(
         extension.read_bytes()
     ).hexdigest()
+    xfit = module_path(distribution, "cuphoton.xfit._native_ext")
+    report["paths"]["xfit_extension"] = str(xfit)
+    report["xfit_extension_sha256"] = hashlib.sha256(
+        xfit.read_bytes()
+    ).hexdigest()
+    passed(report, "native_xfit_loads_without_initializing_cuda")
     report["loaded_native_libraries"] = loaded_native_libraries()
     plans = planner(
         [str(path) for path in paths],
