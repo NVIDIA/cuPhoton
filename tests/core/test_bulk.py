@@ -355,8 +355,10 @@ def test_numba_gpu_identity_fails_without_stable_identity(
     )
 
 
+@pytest.mark.parametrize("backend", ["cupy", "cutile", "numba-cuda-mlir"])
 def test_cupy_gpu_identity_uses_normalized_pci_address(
     monkeypatch: pytest.MonkeyPatch,
+    backend: str,
 ) -> None:
     runtime = SimpleNamespace(
         getDevice=lambda: 0,
@@ -372,8 +374,9 @@ def test_cupy_gpu_identity_uses_normalized_pci_address(
         SimpleNamespace(cuda=SimpleNamespace(runtime=runtime)),
     )
 
-    identity = collect_gpu_identity("cupy")
+    identity = collect_gpu_identity(backend)
 
+    assert identity["backend"] == "cupy"
     assert identity["pci_bus_id"] == "00000000:C1:00.0"
     assert identity["identity_warnings"] == []
 

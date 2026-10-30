@@ -151,7 +151,7 @@ class DeviceDipoleFitResult:
         init=False,
         default="levenberg-marquardt",
     )
-    backend: Literal["cupy", "cutile", "native"] = "cupy"
+    backend: Literal["cupy", "cutile", "native", "numba-cuda-mlir"] = "cupy"
     result_location: Literal["device"] = field(
         init=False,
         default="device",
@@ -159,10 +159,13 @@ class DeviceDipoleFitResult:
     covariance_factor: Any | None = None
 
     def __post_init__(self) -> None:
-        if self.backend not in {"cupy", "cutile", "native"}:
-            raise ValueError(
-                "device fit backend must be cupy, cutile or native"
-            )
+        if self.backend not in {
+            "cupy",
+            "cutile",
+            "native",
+            "numba-cuda-mlir",
+        }:
+            raise ValueError("unsupported device xFit backend")
         if self.backend == "cutile" and self.model != "gaussian":
             raise ValueError("backend='cutile' supports only Gaussian fits")
         if isinstance(self.device_id, bool) or not isinstance(
@@ -886,29 +889,45 @@ def _fit_dipoles_backend(
     else:
         residual_function = residual
 
-    problem = BatchedLeastSquaresProblem(
-        residual_function,
-        jacobian_function,
-        normal_equations=normal_equations,
-    )
-    if resolved.name == "native":
-        from ._native import fit_gaussian
+    execution: Any = nullcontext()
+    if resolved.name == "numba-cuda-mlir":
+        from ._numba_mlir import GaussianWorkspace as NumbaGaussianWorkspace
 
-        low_level = fit_gaussian(
-            problem,
-            solver_initial,
-            images_array,
-            weights,
-            image_shape=(height, width),
-            mode=mode,
-            config=config,
+        execution = NumbaGaussianWorkspace(
+            images_array, weights, image_shape=(height, width), mode=mode
         )
-    else:
-        low_level = batched_levenberg_marquardt(
-            problem,
-            solver_initial,
-            config=config,
+    with execution as numba_workspace:
+        problem = BatchedLeastSquaresProblem(
+            (
+                residual_function
+                if numba_workspace is None
+                else numba_workspace.residual
+            ),
+            jacobian_function,
+            normal_equations=(
+                normal_equations
+                if numba_workspace is None
+                else numba_workspace.normal_equations
+            ),
         )
+        if resolved.name == "native":
+            from ._native import fit_gaussian
+
+            low_level = fit_gaussian(
+                problem,
+                solver_initial,
+                images_array,
+                weights,
+                image_shape=(height, width),
+                mode=mode,
+                config=config,
+            )
+        else:
+            low_level = batched_levenberg_marquardt(
+                problem,
+                solver_initial,
+                config=config,
+            )
     parameters_backend = model_parameters(low_level.parameters)
     if gaussian_model:
         # An ellipse orientation is periodic modulo pi. Keep portable fit
@@ -1111,14 +1130,14 @@ def _validate_execution_options(
     config: LMConfig | None,
 ) -> None:
     if (
-        backend == "native"
+        backend in {"native", "numba-cuda-mlir"}
         and isinstance(model, GaussianDipoleModel)
         and type(model) is not GaussianDipoleModel
     ):
         raise ValueError(
-            "native xFit does not support custom Gaussian models"
+            f"{backend} xFit does not support custom Gaussian models"
         )
-    if backend in {"cutile", "native"}:
+    if backend in {"cutile", "native", "numba-cuda-mlir"}:
         if isinstance(model, StampDipoleModel) or model == "stamp":
             raise ValueError(
                 f"backend={backend!r} currently supports only "
@@ -1195,7 +1214,7 @@ def fit_dipoles_device(
     variance: ArrayLike | None = None,
     mode: FitMode = "difference",
     config: LMConfig | None = None,
-    backend: Literal["cupy", "cutile", "native"] = "cupy",
+    backend: Literal["cupy", "cutile", "native", "numba-cuda-mlir"] = "cupy",
     fusion: bool = False,
 ) -> DeviceDipoleFitResult:
     """Fit dipoles while keeping every result array on the active GPU.
@@ -1203,15 +1222,18 @@ def fit_dipoles_device(
     This experimental seam uses CuPy-owned buffers. The cuTile backend
     supports Gaussian analytic fits; ``fusion=True`` selects fused residual
     and analytic-Jacobian evaluation. The optional native
-    backend runs Gaussian LM iterations in CUDA C++. NumPy inputs are copied
-    to the active device. Existing CuPy inputs must already reside on that
-    device and are checked before any input conversion. Input arrays are
-    borrowed and are not mutated.
+    backend runs Gaussian LM iterations in CUDA C++. The optional
+    ``numba-cuda-mlir`` backend evaluates Gaussian residuals and the analytic
+    Jacobian in separate compiled kernels, then uses CuPy contractions for
+    the normal equations. NumPy inputs are copied to the active device.
+    Existing CuPy inputs must already reside on that device and are checked
+    before any input conversion. Input arrays are borrowed and are not
+    mutated.
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
     kernels for the requested CuPy or cuTile backend, while retaining the
     default CuPy normal-equation contractions.
-    Native fits, sampled stamps and finite differences require
-    ``fusion=False``.
+    Native and Numba-CUDA-MLIR fits, sampled stamps and finite differences
+    require ``fusion=False``.
 
     The solver may copy per-fit status, evaluation counts and boolean
     diagnostic masks to the host for control flow. Parameters, residuals,
@@ -1227,13 +1249,17 @@ def fit_dipoles_device(
 
     _validate_execution_options(model, backend, config)
     _validate_fusion(fusion, backend=backend, model=model, config=config)
-    if backend not in {"cupy", "cutile", "native"}:
-        raise ValueError("device fit backend must be cupy, cutile or native")
+    if backend not in {"cupy", "cutile", "native", "numba-cuda-mlir"}:
+        raise ValueError("unsupported device xFit backend")
     if backend == "native":
         from ._native import load_extension
 
         load_extension()
-    cp = _load_cupy()
+    cp = (
+        resolve_backend(backend).module
+        if backend == "numba-cuda-mlir"
+        else _load_cupy()
+    )
     active_device_id = _active_cupy_device_id(cp)
     for name, value in (
         ("images", images),

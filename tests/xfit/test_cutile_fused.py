@@ -134,10 +134,29 @@ def _fit_and_rank(cp, monkeypatch, **kwargs):
 def test_fused_fit_preserves_weighted_compacted_results(
     cutile_gpu, monkeypatch, mode, dtype
 ):
+    from cuphoton.xfit._cutile_fused import GaussianWorkspace
+
+    calls = {"residual": 0, "jacobian": 0}
+    original_residual = GaussianWorkspace.residual
+    original_jacobian = GaussianWorkspace.jacobian
+
+    def residual(self, *args, **kwargs):
+        calls["residual"] += 1
+        return original_residual(self, *args, **kwargs)
+
+    def jacobian(self, *args, **kwargs):
+        calls["jacobian"] += 1
+        return original_jacobian(self, *args, **kwargs)
+
+    monkeypatch.setattr(GaussianWorkspace, "residual", residual)
+    monkeypatch.setattr(GaussianWorkspace, "jacobian", jacobian)
+
     case = _case(mode, dtype)
     fused, fused_rank = _fit_and_rank(
         cutile_gpu, monkeypatch, **case, backend="cutile", fusion=True
     )
+    assert calls["residual"] > 0
+    assert calls["jacobian"] > 0
     assert fused.evaluations[0] == 1
     assert np.all(fused.evaluations[1:] > 1)
     assert fused.converged.all()
