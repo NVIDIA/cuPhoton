@@ -213,6 +213,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mode",
         "backend",
         "config",
+        "fusion",
     ]
     assert list(inspect.signature(xfit.fit_dipoles_device).parameters) == [
         "images",
@@ -223,6 +224,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "mode",
         "config",
         "backend",
+        "fusion",
     ]
     assert list(inspect.signature(xfit.fit_single_sources).parameters) == [
         "images",

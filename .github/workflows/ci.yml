@@ -149,7 +149,7 @@ jobs:
           assert float((tensor * tensor).sum().item()) == 1240.0
           print("CuPy and PyTorch CUDA kernels and DLPack passed")
           PY
-      - name: Run xFit GPU parity tests
+      - name: Run xFit GPU parity and device pipeline tests
         run: >-
           uv run --no-sync pytest -q -rs
           --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
@@ -163,6 +163,7 @@ jobs:
           tests/xfit/test_models.py::test_fp32_workspace_cast_preserves_subnormals_on_device
           tests/xfit/test_models.py::test_fp32_normal_equations_preserve_subnormal_contributions
           tests/xfit/test_models.py::test_fp32_solver_preserves_subnormal_curvature
+          tests/xscan/test_device_pipeline.py::test_persistent_context_pipeline_is_device_resident_and_deterministic
       - name: Require all selected tests to execute
         run: |
           uv run --no-sync python - <<'PY'
@@ -172,7 +173,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 18, len(cases)
+          assert len(cases) == 19, len(cases)
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
@@ -202,6 +203,119 @@ jobs:
         run: >-
           uv run --no-sync python examples/run_quickstarts.py
           --require-gpu --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
+      - name: Run cuTile xFit GPU coverage
+        run: |
+          # CPU Torch supports feature imports without its CUDA 13.0 pin.
+          cutile_env="${RUNNER_TEMP}/cuphoton-cutile"
+          uv venv --python 3.12 "$cutile_env"
+          uv pip install --python "$cutile_env/bin/python" \
+            --index https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          uv pip install --python "$cutile_env/bin/python" --editable '.[cutile]' \
+            'pytest==9.1.1' 'cupy-cuda13x[ctk]==14.1.1' \
+            'cuda-tile[tileiras]==1.6.0' \
+            'cuda-toolkit[nvcc,nvvm,tileiras]==13.2.2' 'nvidia-nvjitlink==13.2.86'
+          uv pip freeze --python "$cutile_env/bin/python" \
+            > "${RUNNER_TEMP}/cutile-packages.txt"
+          "$cutile_env/bin/python" - <<'PYCOMPILER' > "${RUNNER_TEMP}/cutile-compiler.txt" 2>&1
+          from pathlib import Path
+          import subprocess
+          import sysconfig
+
+          compiler = Path(sysconfig.get_path("purelib")) / "nvidia/cu13/bin"
+          for name in ("tileiras", "nvcc", "ptxas"):
+              executable = compiler / name
+              print(executable, flush=True)
+              subprocess.run([str(executable), "--version"], check=True)
+          PYCOMPILER
+          cat "${RUNNER_TEMP}/cutile-compiler.txt"
+          cutile_status=0
+          "$cutile_env/bin/python" -m pytest -q -s -rs \
+            --junitxml="${RUNNER_TEMP}/cutile-gpu.xml" \
+            tests/xfit/test_cutile_fused.py \
+            tests/xfit/test_models.py::test_cutile_gaussian_fit_matches_cupy \
+            tests/xfit/test_models.py::test_cutile_gaussian_normal_equations_match_noisy_float32 \
+            tests/xfit/test_models.py::test_cutile_weighting_and_compacted_indices_match_cupy \
+            tests/xfit/test_models.py::test_cutile_preserves_rank_and_budget_failure_semantics \
+            tests/xfit/test_models.py::test_cutile_device_results_survive_worker_reuse \
+            > "${RUNNER_TEMP}/cutile-gpu.log" 2>&1 || cutile_status=$?
+          cat "${RUNNER_TEMP}/cutile-gpu.log"
+          CUTILE_PYTEST_STATUS="$cutile_status" "$cutile_env/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          output = (root / "cutile-gpu.log").read_text()
+          lifecycle_error = re.compile(
+              r"CUDA_ERROR_|cudaError|CUDADriverError|CUDARuntimeError|CUDA error|CUDA driver error|"
+              r"CUDA runtime error|PytestUnraisableExceptionWarning|unraisable exception|"
+              r"Exception ignored in:|Exception ignored while|moduleUnload|Module\.__dealloc__",
+              re.IGNORECASE,
+          )
+          if lifecycle_error.search(output):
+              raise SystemExit("cuTile tests emitted CUDA or interpreter teardown errors")
+          if int(os.environ["CUTILE_PYTEST_STATUS"]) != 0:
+              raise SystemExit("cuTile pytest process failed")
+          report = ET.parse(root / "cutile-gpu.xml")
+          cases = report.findall(".//testcase")
+          if len(cases) != 48 or any(report.findall(".//" + tag) for tag in ("skipped", "failure", "error")):
+              raise SystemExit("Require all 48 selected cuTile tests without skips, failures or errors")
+          print("All 48 cuTile tests passed without skips or teardown errors")
+          PY
+      - name: Run real cuTile classifier pipeline
+        run: |
+          # Keep CUDA Torch's runtime pins; reuse the separate compiler tools.
+          uv pip install --python .venv/bin/python --no-deps 'cuda-tile==1.6.0'
+          CUTILE_COMPILER_ROOT="$(
+            "${RUNNER_TEMP}/cuphoton-cutile/bin/python" -c \
+              'import sysconfig; print(sysconfig.get_path("purelib") + "/nvidia/cu13")'
+          )"
+          export CUTILE_COMPILER_ROOT
+          export CUDA_HOME="$CUTILE_COMPILER_ROOT"
+          export PATH="$CUTILE_COMPILER_ROOT/bin:$PATH"
+          uv pip freeze --python .venv/bin/python \
+            > "${RUNNER_TEMP}/cutile-pipeline-packages.txt"
+          .venv/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+          from cuda.tile._compile import _find_compiler_bin
+
+          compiler = _find_compiler_bin()
+          expected = Path(os.environ["CUTILE_COMPILER_ROOT"]) / "bin/tileiras"
+          assert Path(compiler.path).resolve() == expected.resolve()
+          print(f"Pipeline tileiras: {compiler.path}")
+          PY
+          pipeline_status=0
+          .venv/bin/python -m pytest -q -s -rs \
+            --junitxml="${RUNNER_TEMP}/cutile-pipeline-gpu.xml" \
+            tests/xscan/test_cutile_pipeline.py \
+            > "${RUNNER_TEMP}/cutile-pipeline-gpu.log" 2>&1 || pipeline_status=$?
+          cat "${RUNNER_TEMP}/cutile-pipeline-gpu.log"
+          CUTILE_PIPELINE_STATUS="$pipeline_status" .venv/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          output = (root / "cutile-pipeline-gpu.log").read_text()
+          lifecycle_error = re.compile(
+              r"CUDA_ERROR_|cudaError|CUDADriverError|CUDARuntimeError|CUDA error|CUDA driver error|"
+              r"CUDA runtime error|PytestUnraisableExceptionWarning|unraisable exception|"
+              r"Exception ignored in:|Exception ignored while|moduleUnload|Module\.__dealloc__",
+              re.IGNORECASE,
+          )
+          if lifecycle_error.search(output):
+              raise SystemExit("cuTile pipeline emitted CUDA or interpreter teardown errors")
+          if int(os.environ["CUTILE_PIPELINE_STATUS"]) != 0:
+              raise SystemExit("cuTile pipeline pytest process failed")
+          report = ET.parse(root / "cutile-pipeline-gpu.xml")
+          cases = report.findall(".//testcase")
+          if len(cases) != 2 or any(report.findall(".//" + tag) for tag in ("skipped", "failure", "error")):
+              raise SystemExit("Require both real cuTile pipeline cases without skips, failures or errors")
+          print("Both real cuTile pipeline cases passed without skips or teardown errors")
+          PY
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -210,6 +324,13 @@ jobs:
           path: |
             ${{ runner.temp }}/xfit-gpu.xml
             ${{ runner.temp }}/xfit-native-gpu.xml
+            ${{ runner.temp }}/cutile-gpu.xml
+            ${{ runner.temp }}/cutile-gpu.log
+            ${{ runner.temp }}/cutile-packages.txt
+            ${{ runner.temp }}/cutile-compiler.txt
+            ${{ runner.temp }}/cutile-pipeline-gpu.xml
+            ${{ runner.temp }}/cutile-pipeline-gpu.log
+            ${{ runner.temp }}/cutile-pipeline-packages.txt
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
           if-no-files-found: error
           retention-days: 14
