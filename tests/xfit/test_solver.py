@@ -327,15 +327,24 @@ def test_specialized_normal_equations_preserve_final_diagnostics() -> None:
     (
         pytest.param(4, LMStatus.MAX_EVALUATIONS, id="max-evaluations"),
         pytest.param(None, LMStatus.NO_PROGRESS, id="no-progress"),
+        pytest.param(None, LMStatus.INVALID_RESIDUAL, id="invalid-trials"),
     ),
 )
 def test_specialized_normal_equations_report_non_converged_diagnostics(
     max_evaluations: int | None, expected_status: LMStatus
 ) -> None:
     # A wrong-signed Jacobian rejects every step, so the last analytic
-    # Jacobian stays current for rows that stop without converging.
+    # Jacobian stays current for rows that stop without converging. Invalid
+    # trials must discard it from final diagnostics in both solver paths.
+    invalid_trials = expected_status == LMStatus.INVALID_RESIDUAL
+    initial = np.zeros((2, 2)) if invalid_trials else np.ones((2, 2))
+
     def residual(x, *, indices):
         del indices
+        if invalid_trials:
+            value = x - 1.0
+            value[np.any(x != 0.0, axis=1)] = np.nan
+            return value
         return x.copy()
 
     def jacobian(x, *, indices):
@@ -352,7 +361,7 @@ def test_specialized_normal_equations_report_non_converged_diagnostics(
     config = LMConfig(max_evaluations=max_evaluations)
     plain = batched_levenberg_marquardt(
         BatchedLeastSquaresProblem(residual, jacobian),
-        np.ones((2, 2)),
+        initial,
         config=config,
     )
     specialized = batched_levenberg_marquardt(
@@ -361,7 +370,7 @@ def test_specialized_normal_equations_report_non_converged_diagnostics(
             jacobian,
             normal_equations=normal_equations,
         ),
-        np.ones((2, 2)),
+        initial,
         config=config,
     )
 
@@ -369,11 +378,29 @@ def test_specialized_normal_equations_report_non_converged_diagnostics(
     assert np.array_equal(specialized.status, plain.status)
     assert np.array_equal(specialized.evaluations, plain.evaluations)
     assert np.array_equal(specialized.parameters, plain.parameters)
-    assert plain.rank.tolist() == [2, 2]
+    assert np.all(plain.evaluations > 1)
+    np.testing.assert_array_equal(plain.parameters, initial)
+    np.testing.assert_array_equal(specialized.residuals, plain.residuals)
+    np.testing.assert_array_equal(
+        plain.residuals, -np.ones_like(initial) if invalid_trials else initial
+    )
+    assert plain.rank.tolist() == [-1 if invalid_trials else 2] * 2
     assert np.array_equal(specialized.rank, plain.rank)
-    for field in ("jacobian", "gradient", "gn_hessian", "covariance"):
-        assert np.isfinite(getattr(plain, field)).all()
-        assert np.allclose(getattr(specialized, field), getattr(plain, field))
+    for field in (
+        "jacobian",
+        "gradient",
+        "gn_hessian",
+        "covariance",
+        "covariance_factor",
+    ):
+        if invalid_trials:
+            assert np.isnan(getattr(plain, field)).all()
+            assert np.isnan(getattr(specialized, field)).all()
+        else:
+            assert np.isfinite(getattr(plain, field)).all()
+            assert np.allclose(
+                getattr(specialized, field), getattr(plain, field)
+            )
 
 
 @pytest.mark.parametrize(
