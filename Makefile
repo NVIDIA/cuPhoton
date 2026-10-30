@@ -4,7 +4,7 @@
 
 .PHONY: sync sync-gpu sync-cutile lock lock-check lint typecheck format test test-cpu test-core test-xdr test-xfit test-xfit-real test-xpois test-xscan test-xrep test-xray test-gpu test-cutile clean-dist build package-check wheels conda release-check ci-lint ci-test-cpu hooks
 
-CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry
+CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry --extra xmonitor-inference
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
 CORE_EXTRAS = --extra dev --extra photometry
 VIZ_EXTRAS = --extra dev --extra viz --extra photometry
@@ -81,6 +81,10 @@ test-xrep:
 
 test-xray:
 	$(UV_RUN) $(VIZ_EXTRAS) pytest tests/xray
+
+.PHONY: test-xmonitor
+test-xmonitor:
+	$(UV_RUN) --extra dev --extra xmonitor-inference pytest tests/xmonitor
 
 test-gpu:
 	$(UV_RUN) $(GPU_EXTRAS) pytest

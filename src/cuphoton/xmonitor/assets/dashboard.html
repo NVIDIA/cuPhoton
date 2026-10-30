@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-__SCRIPT_HASH__'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>__TITLE__</title>
+<style>__STYLE__</style>
+</head>
+<body>
+<a id="skip-link" class="skip-link" href="#workspace">Skip to measurements</a>
+<header>
+  <div class="section-head masthead"><div class="brand"><span class="brand-mark" aria-hidden="true"></span>cuPhoton <b>xMonitor</b></div><span id="connection" class="badge connection" role="status">Saved snapshot</span></div>
+  <a id="home-link" class="home-link" hidden>Back to site</a>
+  <p class="eyebrow">Scientific monitoring</p>
+  <h1>__TITLE__</h1>
+  <p id="description" class="description">Explore measurements, inspect findings and trace interpretations to recorded evidence.</p>
+</header>
+<main id="workspace" tabindex="-1">
+  <section class="overview" aria-label="Run status">
+    <div><small>RUN</small><strong id="run"></strong></div>
+    <div><small>SAMPLES</small><strong id="count"></strong></div>
+    <div><small>COLLECTOR</small><strong id="health"></strong></div>
+    <div><small>REVISIONS</small><strong id="history"></strong></div>
+  </section>
+  <div id="notice" role="status"></div>
+  <div class="workspace">
+    <aside>
+      <div class="section-head"><h2 class="sidebar-title">Samples</h2><span class="eyebrow">Explore</span></div>
+      <label for="filter">Filter samples</label><input id="filter" type="search" placeholder="Identity or finding">
+      <label for="category">Finding category</label>
+      <select id="category"><option value="">All samples</option><option value="scientific">Scientific interest</option><option value="data_quality">Data quality</option><option value="processing">Processing</option></select>
+      <nav id="timeline" aria-label="Sample timeline"></nav>
+    </aside>
+    <article>
+      <section class="card" aria-labelledby="trend-title">
+        <div class="section-head"><h2 id="trend-title">Measurement history</h2><span id="metric-count" class="muted"></span></div>
+        <div class="plot-controls">
+          <label>Horizontal axis<select id="axis"><option value="sequence">Sample sequence</option><option value="observed">Observation time</option></select></label>
+          <label>Value scale<select id="scale"><option value="linear">Linear</option><option value="log">Logarithmic</option></select></label>
+        </div>
+        <details class="metric-picker"><summary>Choose measurements</summary><fieldset id="metrics"><legend>Show up to six measurements</legend></fieldset></details>
+        <div id="trends"></div>
+        <p class="muted">Select a point to inspect its sample. Outlined points have findings. Missing or invalid measurements leave gaps; each chart retains its own unit.</p>
+      </section>
+      <section class="card" aria-labelledby="sample-title">
+        <div class="section-head"><h2 id="sample-title">Select a sample</h2><span id="revision" class="badge"></span></div>
+        <p id="times" class="muted"></p><div id="findings"></div>
+        <div class="table-wrap"><table><thead><tr><th>Measurement</th><th>Value</th><th>Unit</th><th>Status</th><th>Coverage</th></tr></thead><tbody id="measurements"></tbody></table></div>
+        <div id="domain-panels" aria-label="Application view">__PANELS__</div>
+        <details><summary>Configuration, provenance and artifacts</summary><pre id="provenance"></pre></details>
+      </section>
+      <section class="card" aria-labelledby="questions-title">
+        <div class="section-head"><h2 id="questions-title">Investigate this run</h2><span id="backend" class="badge"></span></div>
+        <p id="interaction-status" class="muted"></p>
+        <form id="question-form">
+          <div id="access-control" hidden><label for="access-token">Investigation access token</label><input id="access-token" type="password" autocomplete="off" spellcheck="false"><p class="muted">Use the monitor access token supplied by its operator. It stays in this page's memory.</p></div>
+          <label for="scope">Evidence scope</label><select id="scope"><option value="selected">Selected sample</option><option value="run">Current run</option></select>
+          <p id="scope-note" class="muted"></p>
+          <label for="question">Question</label><textarea id="question" rows="3" maxlength="4096" placeholder="Which measurements support these findings?" required></textarea>
+          <div class="question-actions"><button id="question-submit" class="primary" type="submit">Ask</button><span id="question-status" role="status"></span></div>
+        </form>
+        <p class="muted">Reports are advisory. Citations are checked against recorded values; this does not establish the correctness of an interpretation. Action messages describe work the investigator reports, not hidden model reasoning.</p>
+        <div class="section-head history-heading"><h3>Questions and investigations</h3><label class="inline-label"><input id="related-reports" type="checkbox"> Selected sample only</label></div>
+        <div id="reports" aria-label="Saved questions and investigations"></div>
+      </section>
+      <section class="card"><h2>Ingestion diagnostics</h2><div id="errors"></div></section>
+    </article>
+  </div>
+</main>
+<footer><div class="section-head"><span class="brand">cuPhoton <b>xMonitor</b></span><span id="footer-mode">Offline snapshot</span></div><p>Copyright © 2026 NVIDIA CORPORATION &amp; AFFILIATES. Apache License 2.0.</p></footer>
+<script id="state" type="application/json">__DATA__</script>
+<script>__SCRIPT__</script>
+</body>
+</html>

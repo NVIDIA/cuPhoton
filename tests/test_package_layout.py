@@ -25,6 +25,7 @@ COMPONENTS = (
     "xscan",
     "xrep",
     "xray",
+    "xmonitor",
 )
 
 
@@ -75,6 +76,8 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "torch",
         "viz",
         "ximage",
+        "xmonitor-inference",
+        "xmonitor-nooa",
     }
 
 
@@ -132,6 +135,12 @@ def test_packaged_assets_are_available() -> None:
         .joinpath("templates/report.html")
         .is_file()
     )
+    for name in ("dashboard.html", "dashboard.css", "dashboard.js"):
+        assert (
+            resources.files("cuphoton.xmonitor")
+            .joinpath("assets", name)
+            .is_file()
+        )
 
 
 @pytest.mark.parametrize(
@@ -144,6 +153,7 @@ def test_packaged_assets_are_available() -> None:
         ["xscan", "--help"],
         ["xrep", "--help"],
         ["xray", "--help"],
+        ["xmonitor", "--help"],
     ),
 )
 def test_cli_help_and_version_do_not_import_optional_gpu_packages(
@@ -156,6 +166,7 @@ import sys
 BLOCKED = (
     "cupy",
     "dragon",
+    "httpx",
     "kvikio",
     "mpi4py",
     "numba",

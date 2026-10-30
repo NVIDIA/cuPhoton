@@ -14,7 +14,15 @@ uv run cuphoton xpois help fit-kernel
 ```
 
 Access each component through the fixed command groups: `xdr`, `xfit`, `xpois`,
-`xscan`, `xrep`, and `xray`.
+`xscan`, `xrep`, `xray`, and `xmonitor`.
+
+`cuphoton xmonitor quickstart --output-dir xmonitor-demo` creates invented
+measurements and an offline dashboard. Its `serve`, `export`, and `ask` commands
+inspect saved runs and optionally print a detached investigation of selected
+evidence. `xmonitor ask` leaves the saved run unchanged; live-session questions
+save reports through the run's writer. See
+[cuPhoton xMonitor](components/xmonitor.md) for the Python contract and endpoint
+settings.
 
 FITS-consuming commands may expose `--fits-reader auto|astropy|xdr` separately
 from the compute backend. GPU workflows use `auto` to prefer xDR when the
