@@ -1227,7 +1227,8 @@ def fit_dipoles_device(
     Jacobian in separate compiled kernels, then uses CuPy contractions for
     the normal equations. NumPy inputs are copied to the active device.
     Existing CuPy inputs must already reside on that device and are checked
-    before any input conversion. Input arrays are borrowed and are not mutated.
+    before any input conversion. Input arrays are borrowed and are not
+    mutated.
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
     kernels for the requested CuPy or cuTile backend, while retaining the
     default CuPy normal-equation contractions.
