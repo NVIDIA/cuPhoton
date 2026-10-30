@@ -995,6 +995,61 @@ def test_f_tol_continues_after_poorly_predicted_nonlinear_progress() -> None:
     )
 
 
+def test_f_tol_rejects_underpredicted_nonlinear_progress() -> None:
+    def residual(x, *, indices):
+        del indices
+        return np.concatenate(
+            (x - 1 + 0.3 * x**2, np.full_like(x, 100.0), 0.3 * x**3),
+            axis=1,
+        )
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.stack((1 + 0.6 * x, 0 * x, 0.9 * x**2), axis=2)
+
+    # The first accepted step improves the objective by more than twice
+    # the linear prediction. Both reductions are small relative to the
+    # constant residual, but that model mismatch must prevent f_tol exit.
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.asarray([[-1.0]]),
+        config=LMConfig(f_tol=1e-3, max_evaluations=2),
+    )
+
+    assert result.status.tolist() == [LMStatus.MAX_EVALUATIONS]
+    assert result.evaluations.tolist() == [2]
+    assert -0.03 < result.parameters[0, 0] < -0.01
+
+
+def test_f_tol_requires_positive_prediction_when_products_underflow() -> None:
+    target = np.sqrt(np.finfo(np.float64).smallest_subnormal) * np.sqrt(1.6)
+
+    def residual(x, *, indices):
+        del indices
+        return x - target
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.ones((len(x), 1, 1))
+
+    # Rounding the squared residual produces a one-subnormal actual
+    # reduction, while the quadratic prediction and half that reduction
+    # underflow to zero. Zero prediction must not establish f_tol success.
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.zeros((1, 1)),
+        config=LMConfig(
+            initial_damping=10, f_tol=1, x_tol=0, g_tol=0, max_evaluations=2
+        ),
+    )
+
+    assert 0.5 * target**2 == np.finfo(np.float64).smallest_subnormal
+    assert 0.5 * result.residuals[0, 0] ** 2 == 0
+    assert 0 < result.parameters[0, 0] < target
+    assert result.status.tolist() == [LMStatus.MAX_EVALUATIONS]
+    assert result.evaluations.tolist() == [2]
+
+
 def test_f_tol_still_accepts_small_well_predicted_progress() -> None:
     def residual(x, *, indices):
         del indices

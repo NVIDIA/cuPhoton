@@ -283,13 +283,21 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
 
     class FTolArg(NonNegativeFloatInvariant):
         _arg = "--f-tol"
-        _help = "Optional relative residual tolerance."
+        _help = (
+            "Optional cost-reduction tolerance. Actual and predicted "
+            "reductions must be small; prediction must be positive and "
+            "at least half the actual reduction."
+        )
         _mandatory = False
         _default = None
 
     class XTolArg(NonNegativeFloatInvariant):
         _arg = "--x-tol"
-        _help = "Optional absolute Jacobian-scaled step-norm tolerance."
+        _help = (
+            "Optional Jacobian-scaled step-norm tolerance in weighted-"
+            "residual units. Independent of parameter units; rescaling "
+            "variance changes the stopping rule."
+        )
         _mandatory = False
         _default = None
 

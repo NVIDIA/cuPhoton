@@ -275,6 +275,12 @@ def test_chunks_preserve_numerics_broadcasting_and_order(
             executor._read_result(item, round_dir, options)[1]
             for item in items
         ]
+        for item in items:
+            with np.load(
+                round_dir / "items" / item.item_id / "result.npz",
+                allow_pickle=False,
+            ) as chunk:
+                assert "covariance_factor" not in chunk.files
         for field in fields(DipoleFitResult):
             if field.name not in executor._ARRAY_FIELDS:
                 continue

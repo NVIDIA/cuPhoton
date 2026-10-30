@@ -379,18 +379,21 @@ input archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
 `--max-evaluations`, and `--use-finite-difference`. Gaussian fits use their
 analytic Jacobian unless finite differences are requested; sampled-stamp
 fits always use finite differences and record that resolved choice in the
-effective configuration. `--x-tol` bounds the absolute step norm in
-Jacobian-scaled coordinates. The linear solve uses the same scaling, so
-changing parameter units preserves the optimization problem. The stopping
-threshold does not grow when a periodic parameter drifts to a large
-equivalent value.
+effective configuration. `--x-tol` bounds the norm of the Jacobian-scaled
+step in weighted-residual units (noise standard deviations when you pass
+`variance`). Changing parameter units preserves the stopping rule, but
+rescaling `variance` changes it. The absolute threshold is
+`x_tol * (x_tol + 1)`; it does not grow when a periodic parameter drifts to
+a large equivalent value. The linear solve uses the same Jacobian scaling.
 
 The shared NumPy/CuPy solver and native CUDA loop require both actual and
-predicted progress to be small for `--f-tol` termination. Their built-in
+predicted cost reductions to be at most `f_tol * max(1, cost)` for
+`--f-tol` termination. The prediction must also be finite and positive,
+and the actual reduction must not exceed twice the prediction. Their built-in
 float32 normal equations and linear solves use float64 intermediates before
 rounding back to float32. Model evaluation, stored solver state and rank
-thresholds retain the selected precision. A custom normal-equations callback,
-including the unfused cuTile kernel, controls its own accumulation precision.
+thresholds retain the selected precision. A custom normal-equations callback
+controls its own accumulation precision.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
 or `float64` to run the solver at an explicit precision while preserving the

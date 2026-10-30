@@ -458,9 +458,10 @@ __global__ void prepare_system(Batch b, Settings s, Work<T> w, int count) {
         w.scaled_step[row * parameters + p] = -gradient;
         scaled_gradient = maximum(scaled_gradient, abs(gradient));
     }
-    if (scaled_gradient <= rn_mul(
-            s.g_tol,
-            maximum(1.0, workspace_cast<double>(w.residual_norm[slot])))) {
+    // Match the shared solver's threshold in the residual dtype, including
+    // FP32 rounding before comparison with the widened scaled gradient.
+    if (scaled_gradient
+        <= rn_mul(T(s.g_tol), maximum(T(1), w.residual_norm[slot]))) {
         b.status[row] = g_converged;
         return;
     }
@@ -472,8 +473,8 @@ __global__ void prepare_system(Batch b, Settings s, Work<T> w, int count) {
                 rn_div(
                     workspace_cast<double>(
                         w.hessian[slot * 64 + column * parameters + line]),
-                    scale[column]),
-                scale[line]);
+                    scale[line]),
+                scale[column]);
             double damping = rn_mul(
                 workspace_cast<double>(w.damping[row]), double(line == column));
             w.system[row * 64 + column * parameters + line] =

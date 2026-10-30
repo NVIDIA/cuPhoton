@@ -33,6 +33,10 @@ from cuphoton.xfit import (
 def _require_native():
     # Missing optional builds must skip without initializing CUDA.
     pytest.importorskip("cuphoton.xfit._native_ext")
+    return _require_cupy()
+
+
+def _require_cupy():
     cp = pytest.importorskip("cupy")
     try:
         count = cp.cuda.runtime.getDeviceCount()
@@ -393,7 +397,7 @@ def test_native_fit_with_bright_overlapping_lobes(monkeypatch):
     assert expected.evaluations.tolist() == [2]
     assert np.max(np.abs(expected.parameters - initial)) > 1.0e-4
     actual = fit_dipoles(images, backend="native", **options)
-    _assert_fit_matches(actual, expected, compare_residuals=False)
+    _assert_fit_matches(actual, expected)
 
     # Check the damped step itself: tiny solve-rounding differences can move
     # bright-lobe residuals beyond their tolerance at different endpoints.
@@ -460,8 +464,12 @@ def test_native_fit_with_bright_overlapping_lobes(monkeypatch):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_native_gaussian_fit_is_independent_of_flux_units(dtype):
-    _require_native()
+@pytest.mark.parametrize("backend", ["numpy", "cupy", "native"])
+def test_native_gaussian_fit_is_independent_of_flux_units(dtype, backend):
+    if backend == "native":
+        _require_native()
+    elif backend == "cupy":
+        _require_cupy()
     exponent = 8 if dtype is np.float32 else 20
     units = np.asarray([10.0**-exponent, 1, 10.0**exponent], dtype=dtype)
     truth = np.tile(
@@ -482,7 +490,7 @@ def test_native_gaussian_fit_is_independent_of_flux_units(dtype):
         model=model,
         initial=initial,
         variance=variance,
-        backend="native",
+        backend=backend,
     )
 
     assert result.converged.all()
@@ -507,8 +515,42 @@ def test_native_gaussian_fit_is_independent_of_flux_units(dtype):
     )
 
 
-def test_native_f_tol_requires_small_predicted_progress():
-    _require_native()
+@pytest.mark.parametrize("backend", ["numpy", "cupy", "native"])
+def test_fp32_g_tol_rounds_in_residual_precision(backend):
+    if backend == "native":
+        _require_native()
+    elif backend == "cupy":
+        _require_cupy()
+    model = GaussianDipoleModel((11, 15), dtype=np.float32)
+    initial = np.asarray([[5, 1, 2, 0, -2, 0, 2, 0]], dtype=np.float32)
+    images = model.evaluate(initial)
+    images[0, 5, 7] += 0.25
+    # The initial scaled gradient is about 0.03821583012. These two
+    # tolerances straddle it in FP64, but round to the same FP32 threshold
+    # above it. The residual norm is 0.25, so its threshold factor is one.
+    tolerances = (0.0382158296, 0.038215832)
+    assert np.float32(tolerances[0]) == np.float32(tolerances[1])
+    for tolerance in tolerances:
+        result = fit_dipoles(
+            images,
+            model=model,
+            initial=initial,
+            backend=backend,
+            config=LMConfig(
+                g_tol=tolerance, f_tol=0, x_tol=0, max_evaluations=2
+            ),
+        )
+        assert result.status.tolist() == ["converged_g_tol"]
+        assert result.evaluations.tolist() == [1]
+        np.testing.assert_array_equal(result.parameters, initial)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "cupy", "native"])
+def test_native_f_tol_requires_small_predicted_progress(backend):
+    if backend == "native":
+        _require_native()
+    elif backend == "cupy":
+        _require_cupy()
     model = GaussianDipoleModel((11, 15))
     truth = np.asarray([[5, 1.3, 1.8, 0.25, -2, 0.5, 2.2, -0.7]])
     initial = np.asarray(
@@ -536,7 +578,7 @@ def test_native_f_tol_requires_small_predicted_progress():
         model=model,
         initial=initial,
         config=LMConfig(f_tol=0.05, max_evaluations=2),
-        backend="native",
+        backend=backend,
     )
 
     reduction = cost - 0.5 * np.sum(result.residuals**2)

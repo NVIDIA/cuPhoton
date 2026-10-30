@@ -689,7 +689,6 @@ def batched_levenberg_marquardt(
             continue
         x_active = x_active[unconverged_rows]
         residual_active = residual_active[unconverged_rows]
-        gradient = gradient[unconverged_rows]
         hessian = hessian[unconverged_rows]
         scale = scale[unconverged_rows]
         normalized_gradient = normalized_gradient[unconverged_rows]
