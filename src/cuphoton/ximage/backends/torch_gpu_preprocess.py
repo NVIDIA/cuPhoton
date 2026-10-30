@@ -38,7 +38,12 @@ def prepare_torch_reconstruction_inputs(
     dtype: Any,
     psfs: np.ndarray | None = None,
 ) -> TorchReconstructionInputs:
-    """Prepare xImage reconstruction tensors on the target Torch device."""
+    """Transfer the requested ROI and prepare reconstruction tensors.
+
+    VALID padding also transfers the surrounding source pixels required to
+    initialize the padded reconstruction. Coordinates and raw-shape metadata
+    refer to the original input bundle.
+    """
 
     if config.padding == "SAME" and config.srf != 1:
         raise ValueError("SAME padding requires srf=1 for reconstruction.")
@@ -47,23 +52,6 @@ def prepare_torch_reconstruction_inputs(
     timings: dict[str, float] = {}
 
     start = _start_timer(torch, device)
-    images = _as_device_tensor(
-        torch, bundle.images, device=device, dtype=dtype
-    )
-    variances = _as_device_tensor(
-        torch, bundle.variances, device=device, dtype=dtype
-    )
-    if config.mask.mode == "provided":
-        masks = _as_device_tensor(
-            torch, _good_pixel_masks(bundle), device=device, dtype=dtype
-        )
-    elif config.mask.mode == "none":
-        masks = torch.ones_like(images)
-    else:
-        raise ValueError(f"Unsupported mask mode: {config.mask.mode}")
-    exp_times = _as_device_tensor(
-        torch, _exposure_times(bundle), device=device, dtype=dtype
-    )
     psf_values = bundle.psfs if psfs is None else psfs
     if len(psf_values.shape) != 4 or psf_values.shape[2] != 1:
         raise ValueError(
@@ -76,6 +64,69 @@ def prepare_torch_reconstruction_inputs(
         or psf_values.shape[0] % 2 != 1
     ):
         raise ValueError("Reconstruction PSF kernels must be square and odd.")
+
+    image_shape = bundle.images.shape[1:3]
+    slice_h, slice_w = spatial_roi_slices(
+        image_shape,
+        center_roi=config.roi.center,
+        height_roi=config.roi.height,
+        width_roi=config.roi.width,
+    )
+    height_roi = slice_h.stop - slice_h.start
+    width_roi = slice_w.stop - slice_w.start
+    source_padding = 0
+    if config.padding == "VALID":
+        srf = int(config.srf)
+        if srf < 1:
+            raise ValueError("srf and psf_size must be positive")
+        source_padding = (psf_values.shape[0] // 2 + srf - 1) // srf
+        if (
+            slice_h.start < source_padding
+            or slice_w.start < source_padding
+            or slice_h.stop + source_padding > image_shape[0]
+            or slice_w.stop + source_padding > image_shape[1]
+        ):
+            raise ValueError(
+                "Padded ROI exceeds the input image bounds; "
+                f"the requested PSF and srf require {source_padding} "
+                "input pixels beyond each ROI edge."
+            )
+    source_h = slice(
+        slice_h.start - source_padding, slice_h.stop + source_padding
+    )
+    source_w = slice(
+        slice_w.start - source_padding, slice_w.stop + source_padding
+    )
+    center_roi = (
+        source_padding + height_roi // 2,
+        source_padding + width_roi // 2,
+    )
+    images = _as_device_tensor(
+        torch,
+        bundle.images[:, source_h, source_w, :],
+        device=device,
+        dtype=dtype,
+    )
+    variances = _as_device_tensor(
+        torch,
+        bundle.variances[:, source_h, source_w, :],
+        device=device,
+        dtype=dtype,
+    )
+    if config.mask.mode == "provided":
+        masks = _as_device_tensor(
+            torch,
+            _good_pixel_masks(bundle, slice_h=source_h, slice_w=source_w),
+            device=device,
+            dtype=dtype,
+        )
+    elif config.mask.mode == "none":
+        masks = torch.ones_like(images)
+    else:
+        raise ValueError(f"Unsupported mask mode: {config.mask.mode}")
+    exp_times = _as_device_tensor(
+        torch, _exposure_times(bundle), device=device, dtype=dtype
+    )
     psfs_bhwc = _as_device_tensor(
         torch, psf_values, device=device, dtype=dtype
     )
@@ -85,17 +136,14 @@ def prepare_torch_reconstruction_inputs(
     exp_scale = exp_times.reshape(1, 1, 1, -1)
     images = images / exp_scale
     variances = variances / exp_scale.square()
-    center_roi = (
-        list(config.roi.center) if config.roi.center is not None else None
-    )
     y_cutout, m_cutout, v_cutout = _select_cutout(
         torch,
         images,
         masks=masks,
         variances=variances,
         center_roi=center_roi,
-        height_roi=config.roi.height,
-        width_roi=config.roi.width,
+        height_roi=height_roi,
+        width_roi=width_roi,
     )
     if bool(torch.any(v_cutout <= 0).detach().cpu().item()):
         raise RuntimeError(
@@ -112,8 +160,8 @@ def prepare_torch_reconstruction_inputs(
             masks=masks,
             variances=variances,
             center_roi=center_roi,
-            height_roi=config.roi.height,
-            width_roi=config.roi.width,
+            height_roi=height_roi,
+            width_roi=width_roi,
             srf=int(config.srf),
             psf_size=int(psfs_bhwc.shape[0]),
         )
@@ -145,9 +193,9 @@ def prepare_torch_reconstruction_inputs(
         "device": str(device),
         "dtype": str(dtype).replace("torch.", ""),
         "raw_shapes": {
-            "images": list(images.shape),
-            "masks": list(masks.shape),
-            "variances": list(variances.shape),
+            "images": list(bundle.images.shape),
+            "masks": list(bundle.masks.shape),
+            "variances": list(bundle.variances.shape),
             "psfs": list(psfs_bhwc.shape),
         },
         "tensor_shapes": {
