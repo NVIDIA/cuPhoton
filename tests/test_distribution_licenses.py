@@ -45,10 +45,10 @@ def make_archive(
 ):
     version = "0.1.4"
     expression = expression or (
-        "Apache-2.0 AND CFITSIO AND BSD-3-Clause "
+        "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause "
         "AND Apache-2.0 WITH LLVM-exception"
         if kind == "wheel"
-        else "Apache-2.0"
+        else "Apache-2.0 AND MIT"
     )
     metadata = (
         f"Name: cuphoton\nVersion: {version}\n"
@@ -76,6 +76,11 @@ def make_archive(
                 "cuphoton/xfit/_native_ext.cpython-312-x86_64-linux-gnu.so"
             ): xfit_elf,
             "cuphoton.libs/libcfitsio-12345678.so.10.0.0": cfitsio,
+            (
+                "cuphoton/xray/_structured_ext."
+                "cpython-312-x86_64-linux-gnu.so"
+            ): b"",
+            "cuphoton/xray/src/structured_roots.cu": b"source\n",
         }
         with zipfile.ZipFile(path, "w") as archive:
             for name, content in files.items():
@@ -126,8 +131,8 @@ def test_archives_reject_incomplete_pybind11_notice(tmp_path, kind, removed):
 @pytest.mark.parametrize(
     "expression",
     [
-        "Apache-2.0 AND CFITSIO",
-        "Apache-2.0 AND CFITSIO AND BSD-3-Clause",
+        "Apache-2.0 AND MIT AND CFITSIO",
+        "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause",
     ],
 )
 def test_native_wheel_requires_header_license_expression(
@@ -273,4 +278,39 @@ def test_wheel_repair_requires_both_cuda_libraries(
 def test_native_wheel_requires_cfitsio_identity(tmp_path, cfitsio):
     path = make_archive(tmp_path, "wheel", NOTICES, cfitsio=cfitsio)
     with pytest.raises(ValueError, match="CFITSIO is missing its 4.7.0"):
+        distributions.check_wheel(path)
+
+
+@pytest.mark.parametrize("kind", ["wheel", "sdist"])
+def test_archives_require_mit_license_expression(tmp_path, kind):
+    expression = (
+        "Apache-2.0 AND CFITSIO AND BSD-3-Clause "
+        "AND Apache-2.0 WITH LLVM-exception"
+        if kind == "wheel"
+        else "Apache-2.0"
+    )
+    path = make_archive(tmp_path, kind, NOTICES, expression=expression)
+    with pytest.raises(ValueError, match="expected License-Expression"):
+        getattr(distributions, f"check_{kind}")(path)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "cuphoton/xray/_structured_ext.cpython-312-x86_64-linux-gnu.so",
+        "cuphoton/xray/src/structured_roots.cu",
+    ],
+)
+def test_native_wheel_requires_structured_backend(tmp_path, missing):
+    path = make_archive(tmp_path, "wheel", NOTICES)
+    with zipfile.ZipFile(path) as archive:
+        files = {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if name != missing
+        }
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    with pytest.raises(ValueError, match="missing .*xray/"):
         distributions.check_wheel(path)

@@ -67,6 +67,7 @@ tests:
         - cuphoton
         - cuphoton.xdr
         - cuphoton.xfit
+        - cuphoton.xray._structured_ext
       # Upstream GPU packages retain pip-only dependency names in METADATA.
       # Conda solves those dependencies; the next test loads the actual libs.
       pip_check: false
@@ -80,8 +81,8 @@ about:
   homepage: https://github.com/NVIDIA/cuPhoton
   repository: https://github.com/NVIDIA/cuPhoton
   documentation: https://github.com/NVIDIA/cuPhoton/blob/main/docs/packaging.md
-  summary: GPU-accelerated astronomy and imaging tools with native xDR and xFit
-  license: Apache-2.0 AND BSD-3-Clause AND Apache-2.0 WITH LLVM-exception
+  summary: GPU-accelerated astronomy and imaging tools with native xDR, xFit and xRay
+  license: Apache-2.0 AND MIT AND BSD-3-Clause AND Apache-2.0 WITH LLVM-exception
   license_file:
     - LICENSE
     - THIRD_PARTY_NOTICES.md

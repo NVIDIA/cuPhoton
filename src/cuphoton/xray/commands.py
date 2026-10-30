@@ -2701,6 +2701,57 @@ class DetectorArtifactsCommand(_XRayCommand):
         _default = "eigvals"
         _metavar = "{eigvals,roots}"
 
+    fit_backend = "cupy"
+
+    class FitBackendArg(SetInvariant):
+        _arg = "--fit-backend"
+        _help = (
+            "Detector fitter; structured CPU/GPU roots require "
+            "the optional native extension."
+        )
+        _required = False
+        _set = {"cupy", "structured-cpu", "structured-gpu"}
+        _default = "cupy"
+        _metavar = "{cupy,structured-cpu,structured-gpu}"
+
+    structured_host_workers = 8
+
+    class StructuredHostWorkersArg(IntegerInvariant):
+        _arg = "--structured-host-workers"
+        _help = (
+            "Host workers for structured P1, DD refinement and P2 (1..64)."
+        )
+        _required = False
+        _default = 8
+
+    structured_root_workers = 1
+
+    class StructuredRootWorkersArg(IntegerInvariant):
+        _arg = "--structured-root-workers"
+        _help = "Native CPU structured-root workers (1..64)."
+        _required = False
+        _default = 1
+
+    structured_batch_rows = 33024
+
+    class StructuredBatchRowsArg(IntegerInvariant):
+        _arg = "--structured-batch-rows"
+        _help = "Whole-tile structured batch target, 16..33024 active rows."
+        _required = False
+        _default = 33024
+
+    structured_schedule = "serial"
+
+    class StructuredScheduleArg(SetInvariant):
+        _arg = "--structured-schedule"
+        _help = (
+            "Overlap one GPU root batch with host preparation and fitting."
+        )
+        _required = False
+        _set = {"serial", "overlap"}
+        _default = "serial"
+        _metavar = "{serial,overlap}"
+
     savgol_window = 5
 
     class SavgolWindowArg(IntegerInvariant):
@@ -4011,6 +4062,11 @@ def _detector_artifacts(args):
         iterative_options=_iterative_options_from_args(args),
         p2_ridge_alpha=args.p2_ridge_alpha,
         roots_backend=args.roots_backend,
+        fit_backend=args.fit_backend,
+        structured_host_workers=args.structured_host_workers,
+        structured_root_workers=args.structured_root_workers,
+        structured_batch_rows=args.structured_batch_rows,
+        structured_schedule=args.structured_schedule,
         savgol_window=args.savgol_window,
         savgol_polyorder=args.savgol_polyorder,
         amp_threshold=args.amp_threshold,

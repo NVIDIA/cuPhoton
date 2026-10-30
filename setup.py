@@ -49,6 +49,8 @@ extensions = []
 commands = {}
 if _build_enabled("CUPHOTON_XDR_BUILD_EXT"):
     extensions.extend(_load_build_helpers("xdr").get_extensions())
+if _build_enabled("CUPHOTON_XRAY_BUILD_EXT"):
+    extensions.extend(_load_build_helpers("xray").get_extensions())
 if _build_enabled("CUPHOTON_XFIT_BUILD_EXT"):
     xfit = _load_build_helpers("xfit")
     extensions.extend(xfit.get_extensions())

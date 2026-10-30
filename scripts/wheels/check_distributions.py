@@ -53,6 +53,12 @@ SOURCES = {
     "src/cuphoton/xfit/src/native_jacobian.h",
     "src/cuphoton/xfit/src/native_jacobian.cu",
     "src/cuphoton/xfit/src/native_jacobian_lean.cu",
+    "src/cuphoton/xray/setup_package.py",
+    "src/cuphoton/xray/src/structured_api.h",
+    "src/cuphoton/xray/src/structured_ext.cpp",
+    "src/cuphoton/xray/src/structured_roots.cpp",
+    "src/cuphoton/xray/src/structured_refine.cpp",
+    "src/cuphoton/xray/src/structured_roots.cu",
     "scripts/wheels/prepare_cfitsio.sh",
     "scripts/wheels/patches/cfitsio-version-string.patch",
     "scripts/wheels/install_build_dependencies.sh",
@@ -157,11 +163,16 @@ def check_wheel(path):
         for component, module in (
             ("xdr", "_nvcomp_batch_ext"),
             ("xfit", "_native_ext"),
+            ("xray", "_structured_ext"),
         )
     }
     with zipfile.ZipFile(path) as archive:
         files = set(archive.namelist())
-        required = native | {info + "METADATA", info + "WHEEL"}
+        required = native | {
+            info + "METADATA",
+            info + "WHEEL",
+            "cuphoton/xray/src/structured_roots.cu",
+        }
         required.update(info + "licenses/" + name for name in LICENSES)
         require(
             required <= files,
@@ -171,7 +182,7 @@ def check_wheel(path):
             archive.read(info + "METADATA"),
             version,
             path.name,
-            "Apache-2.0 AND CFITSIO AND BSD-3-Clause "
+            "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause "
             "AND Apache-2.0 WITH LLVM-exception",
         )
         wheel = BytesParser().parsebytes(archive.read(info + "WHEEL"))
@@ -255,7 +266,7 @@ def check_sdist(path):
             archive.extractfile(prefix + "PKG-INFO").read(),
             version,
             path.name,
-            "Apache-2.0",
+            "Apache-2.0 AND MIT",
         )
     return version
 

@@ -1,6 +1,6 @@
 # Third-party notices
 
-cuPhoton does not intentionally vendor third-party source code. Python runtime,
+The xRay structured-root backend adapts AMRVW.jl as described below. Python runtime,
 optional-development, and build requirements are declared in
 [`pyproject.toml`](pyproject.toml). Optional distributed runtimes, native
 requirements, compiled header code, and the CFITSIO library bundled in Linux
@@ -26,6 +26,40 @@ indexes; some are governed by NVIDIA SDK terms rather than an open-source
 license. Consult each publisher's governing terms and the license and notice
 files included in the installed distribution; package metadata can be
 incomplete.
+
+## xRay structured-root backend
+
+`src/cuphoton/xray/src/structured_roots.cpp` and
+`src/cuphoton/xray/src/structured_roots.cu` adapt mathematical
+routines from [AMRVW.jl](https://github.com/jverzani/AMRVW.jl), revision
+`8cb7afc20abd9dff4216380faa3a149cce16421f`. These files carry `Apache-2.0 AND MIT`: the MIT notice
+applies to the adapted portions, and Apache-2.0 applies to the NVIDIA-authored
+validation, error handling and CUDA transport code. The separately authored
+double-double refinement is Apache-2.0. The CPU solver and refinement are
+compiled into the optional xRay extension. The CUDA source is included as a
+package resource and compiled when the structured GPU backend is selected.
+
+The MIT License (MIT)
+
+Copyright (c) 2019 John Verzani
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## Direct Python dependency inventory
 

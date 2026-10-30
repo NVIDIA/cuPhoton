@@ -26,6 +26,74 @@ uv run python examples/run_quickstarts.py --component xray --profile cpu \
 
 Choose a new output directory for each quickstart run.
 
+### Structured detector roots
+
+The opt-in structured detector backend computes prediction-polynomial roots
+on the CPU or GPU, then refines selected roots with host double-double
+arithmetic before the usual mode fit. Preparation, P1 and P2 use NumPy/SciPy.
+The existing CuPy fitter remains the default.
+
+Binary release wheels include the native structured extension. For a source
+or editable install, build it with a C++17 compiler:
+
+```bash
+CUPHOTON_XRAY_BUILD_EXT=1 uv sync --locked --extra dev --extra gpu \
+  --reinstall-package cuphoton
+```
+
+For an input with exactly 798 samples in the fitted window, append these
+options to `cuphoton xray detector-artifacts`:
+
+```text
+--fit-backend structured-gpu --structured-schedule overlap
+--components 30 --fit-diagnostics none --artifact-layout tile-rows
+```
+
+Use `--fit-backend structured-cpu --structured-schedule serial` for the host
+solver. Both paths require 30 components, zero P2 ridge, tiles at most 16 by
+16 pixels, and compact fitting without retained diagnostics. The fitted
+window produces a degree-597 polynomial and 200 singular values. Other
+dimensions and distributed shards are rejected. Both dense and tile-row
+output layouts retain the existing masks and publication behavior.
+
+`--structured-host-workers` controls P1, refinement and P2 workers;
+`--structured-root-workers` controls native CPU root workers. Set the BLAS
+thread count before launching the command to avoid nested oversubscription.
+The GPU overlap schedule keeps at most two host chunks and one device batch.
+`--structured-batch-rows` sets the active-row target (default 33,024);
+whole tiles stay together, so a batch can exceed its target by at most 15
+rows. The manifest records the solver, mandatory refinement and execution
+settings and distinguishes these results from dense-root artifacts.
+
+Use the CPU backend for small inputs or small batches. Each GPU thread solves
+one polynomial through all its iterations, so reducing the number of rows
+does not remove that per-polynomial cost. The GPU path benefits from thousands
+of active rows; its crossover with the CPU depends on the device, host worker
+count and input. Measure a representative batch before choosing the GPU for
+a small workload. The selected backend also handles the final short batch.
+
+Structured and dense roots can produce different results for ill-conditioned
+polynomials, especially near real roots and the unit circle. Refinement
+preserves the existing mode-selection rules and rejects changes in root
+classification, failed convergence and numerical-range failures. Noise-free
+traces with a constant offset can be rejected when refinement moves a real
+root across the unit circle, even by less than one binary64 ulp. A rounded
+zero decay is not clamped to keep the mode accepted.
+
+The current double-double refiner requires the magnitude of every nonzero
+intermediate to lie in `[2**-450, 2**451)`. Direct degree-597 Horner evaluation can exceed this
+range for roots with magnitude around 1.68 (`decay * sample_interval` around
+0.52); coefficients and intermediate cancellation also affect the limit.
+Repeated or insufficiently separated roots can fail the derivative or
+root-association checks, including linear trends and critically damped
+responses such as `t * exp(-a * t)`. Native refinement errors report the root
+index, iteration count and status: 1 for nonfinite arithmetic, 2 for range,
+3 for derivative failure, 4 for root association, 5 for the iteration limit,
+and 6 for invalid input or classification. These checks remain strict;
+there is no automatic dense fallback.
+Finite numerical validation does not establish physical-model accuracy for
+every acquisition.
+
 ## Command groups
 
 | Goal | Commands |
