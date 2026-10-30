@@ -29,7 +29,7 @@ dependencies = [
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version != '3.13.*'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6c/4c/bdccd81e9ee225b69c60e7766c9a5b05364f118f4d383713b89a682d772d/aiohttp-3.14.5.tar.gz", hash = "sha256:5558a7f5a05af9ecf744af91e5baefc436f93c9333e656c27ec253f9a6bbe178", size = 8078052, upload-time = "2026-10-11T01:05:12.408Z" }
@@ -97,7 +97,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version != '3.13.*'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -723,6 +723,7 @@ dragon = [
     { name = "dragonhpc" },
 ]
 gpu = [
+    { name = "cuda-bindings" },
     { name = "cuda-pathfinder" },
     { name = "cuda-toolkit", extra = ["cufile"] },
     { name = "cupy-cuda13x", extra = ["ctk"] },
@@ -736,6 +737,7 @@ gpu = [
     { name = "torch" },
 ]
 io = [
+    { name = "cuda-bindings" },
     { name = "cuda-pathfinder" },
     { name = "cuda-toolkit", extra = ["cufile"] },
     { name = "cupy-cuda13x", extra = ["ctk"] },
@@ -784,6 +786,7 @@ requires-dist = [
     { name = "astropy", specifier = ">=7.2.0" },
     { name = "bokeh", marker = "extra == 'viz'", specifier = ">=3.9" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.10.6,<8" },
+    { name = "cuda-bindings", marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=13,<14" },
     { name = "cuda-pathfinder", marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=1.5.6,<2" },
     { name = "cuda-tile", marker = "sys_platform == 'linux' and extra == 'cutile'", specifier = ">=1.6,<2" },
     { name = "cuda-toolkit", extras = ["cufile"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=13,<14" },

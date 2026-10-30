@@ -88,6 +88,7 @@ more than one license.
 | `viz` | `pillow>=10.4` | `12.3.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
 | `viz` | `tornado>=6.5.10` | `6.5.10` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
 | `io`, `gpu` | `cuda-pathfinder>=1.5.6,<2` | `1.5.6` | `Apache-2.0` | [CUDA Python](https://github.com/NVIDIA/cuda-python/tree/main/cuda_pathfinder) | `uv / PyPI; loaded separately for native xFit CUDA library discovery` |
+| `io`, `gpu` | `cuda-bindings>=13,<14` | `13.3.1` | `LicenseRef-NVIDIA-SOFTWARE-LICENSE` | [CUDA Python](https://github.com/NVIDIA/cuda-python) | `uv / PyPI` |
 | `io`, `gpu` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
 | `io`, `gpu` | `kvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
 | `io`, `gpu` | `libkvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |

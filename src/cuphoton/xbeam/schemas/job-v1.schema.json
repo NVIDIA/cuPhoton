@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/xbeam/job-v1.schema.json",
+  "title": "xbeam normalized job v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "start_time", "execution_duration_s",
+    "integration_duration_s", "subintegration_duration_s",
+    "fringe_approximation_order", "stations", "frequencies",
+    "datastreams", "baselines", "scans"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "start_time": {"$ref": "#/$defs/time"},
+    "execution_duration_s": {"$ref": "#/$defs/decimal"},
+    "integration_duration_s": {"$ref": "#/$defs/decimal"},
+    "subintegration_duration_s": {"$ref": "#/$defs/decimal"},
+    "fringe_approximation_order": {"enum": [0, 1, 2]},
+    "stations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/station"}},
+    "frequencies": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/frequency"}},
+    "datastreams": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/datastream"}},
+    "baselines": {"type": "array", "items": {"$ref": "#/$defs/baseline"}},
+    "scans": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/scan"}},
+    "write_autocorrelations": {"type": "boolean", "default": false},
+    "output": {"$ref": "#/$defs/output"},
+    "unsupported_features": {"$ref": "#/$defs/unsupported"},
+    "buffered_reader": {
+      "type": "object", "additionalProperties": false,
+      "required": ["buffer_factor", "data_segments", "buffered_ffts"],
+      "properties": {
+        "buffer_factor": {"type": "integer", "minimum": 1},
+        "data_segments": {"type": "integer", "minimum": 1},
+        "buffered_ffts": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "$defs": {
+    "decimal": {"type": ["string", "number"], "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+    "identifier": {"type": "integer", "minimum": 0},
+    "coefficients": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+    "time": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mjd", "seconds_of_day"],
+      "properties": {
+        "mjd": {"type": "integer", "minimum": 0},
+        "seconds_of_day": {"$ref": "#/$defs/decimal"}
+      }
+    },
+    "station": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "name", "clock"],
+      "properties": {
+        "identifier": {"$ref": "#/$defs/identifier"},
+        "name": {"type": "string", "minLength": 1},
+        "clock": {
+          "type": "object", "additionalProperties": false,
+          "required": ["epoch", "coefficients_s"],
+          "properties": {
+            "epoch": {"$ref": "#/$defs/time"},
+            "coefficients_s": {"$ref": "#/$defs/coefficients"}
+          }
+        }
+      }
+    },
+    "frequency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "band_edge_hz", "bandwidth_hz", "sideband", "channel_count"],
+      "properties": {
+        "identifier": {"$ref": "#/$defs/identifier"},
+        "band_edge_hz": {"type": "number", "minimum": 0},
+        "bandwidth_hz": {"type": "number", "exclusiveMinimum": 0},
+        "sideband": {"enum": ["USB", "LSB"]},
+        "channel_count": {"type": "integer", "minimum": 1},
+        "channels_to_average": {"type": "integer", "minimum": 1, "default": 1},
+        "oversampling": {"const": 1},
+        "decimation": {"const": 1}
+      }
+    },
+    "recorded_band": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "frequency_id", "polarization"],
+      "properties": {
+        "identifier": {"$ref": "#/$defs/identifier"},
+        "frequency_id": {"$ref": "#/$defs/identifier"},
+        "polarization": {"type": "string", "minLength": 1},
+        "thread_id": {"type": "integer", "minimum": 0, "default": 0},
+        "clock_offset_s": {"type": "number", "default": 0},
+        "lo_offset_hz": {"type": "number", "default": 0}
+      }
+    },
+    "zoom_band": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "parent_band_id", "output_frequency_id", "start_channel", "channel_count", "polarization"],
+      "properties": {
+        "identifier": {"$ref": "#/$defs/identifier"},
+        "parent_band_id": {"$ref": "#/$defs/identifier"},
+        "output_frequency_id": {"$ref": "#/$defs/identifier"},
+        "start_channel": {"type": "integer", "minimum": 0},
+        "channel_count": {"type": "integer", "minimum": 1},
+        "polarization": {"type": "string", "minLength": 1}
+      }
+    },
+    "datastream": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "station_id", "sampling", "quantization_bits", "frame_size_bytes", "source_files", "recorded_bands"],
+      "properties": {
+        "identifier": {"$ref": "#/$defs/identifier"},
+        "station_id": {"$ref": "#/$defs/identifier"},
+        "sampling": {"enum": ["real", "complex", "complex_dsb"]},
+        "quantization_bits": {"const": 2},
+        "frame_size_bytes": {"type": "integer", "minimum": 40},
+        "source_files": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "recorded_bands": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/recorded_band"}},
+        "zoom_bands": {"type": "array", "items": {"$ref": "#/$defs/zoom_band"}},
+        "sample_rate_hz": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "data_format": {"const": "VDIF"},
+        "data_source": {"const": "file"}
+      }
+    },
+    "product": {
+      "type": "object", "additionalProperties": false,
+      "required": ["band_a_id", "band_b_id", "output_frequency_id"],
+      "properties": {
+        "band_a_id": {"$ref": "#/$defs/identifier"},
+        "band_b_id": {"$ref": "#/$defs/identifier"},
+        "output_frequency_id": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "baseline": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "datastream_a_id", "datastream_b_id", "products"],
+      "properties": {
+        "identifier": {"$ref": "#/$defs/identifier"},
+        "datastream_a_id": {"$ref": "#/$defs/identifier"},
+        "datastream_b_id": {"$ref": "#/$defs/identifier"},
+        "products": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/product"}}
+      }
+    },
+    "model": {
+      "type": "object", "additionalProperties": false,
+      "required": ["station_id", "epoch_offset_s", "delay_coefficients_s", "u_coefficients_m", "v_coefficients_m", "w_coefficients_m"],
+      "properties": {
+        "station_id": {"$ref": "#/$defs/identifier"},
+        "epoch_offset_s": {"$ref": "#/$defs/decimal"},
+        "delay_coefficients_s": {"$ref": "#/$defs/coefficients"},
+        "u_coefficients_m": {"$ref": "#/$defs/coefficients"},
+        "v_coefficients_m": {"$ref": "#/$defs/coefficients"},
+        "w_coefficients_m": {"$ref": "#/$defs/coefficients"}
+      }
+    },
+    "scan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "start_offset_s", "duration_s", "source_id", "configuration_id", "station_models"],
+      "properties": {
+        "identifier": {"type": "string", "minLength": 1},
+        "start_offset_s": {"$ref": "#/$defs/decimal"},
+        "duration_s": {"$ref": "#/$defs/decimal"},
+        "source_id": {"type": "string", "minLength": 1},
+        "configuration_id": {"type": "string", "minLength": 1},
+        "station_models": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/model"}}
+      }
+    },
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "format": {"enum": ["xbeam-v1", "swin"], "default": "xbeam-v1"},
+        "spectral_placement": {"const": 0}
+      }
+    },
+    "unsupported": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "pulsar_binning": {"type": "boolean", "default": false},
+        "multiple_phase_centres": {"type": "boolean", "default": false},
+        "phased_array_output": {"type": "boolean", "default": false},
+        "phase_calibration": {"type": "boolean", "default": false},
+        "system_temperature_calibration": {"type": "boolean", "default": false},
+        "switched_power": {"type": "boolean", "default": false},
+        "polarization_conversion": {"type": "boolean", "default": false},
+        "output_band_stitching": {"type": "boolean", "default": false},
+        "spectral_kurtosis": {"type": "boolean", "default": false}
+      }
+    }
+  }
+}
