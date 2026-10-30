@@ -162,8 +162,9 @@ class LMResult:
     """Backend-native result arrays from a batched least-squares solve.
 
     ``evaluations`` counts residual evaluations per row, including finite
-    differences. ``rank`` is ``-1`` when no final Jacobian was available
-    within the configured evaluation budget.
+    differences. ``rank`` is ``-1`` when final derivative diagnostics are
+    unavailable. Rows with ``INVALID_RESIDUAL`` have NaN Jacobians,
+    gradients, Hessians, and covariance diagnostics.
 
     ``covariance_factor`` retains F with covariance F F.T so derived
     uncertainties can be computed without subtracting rounded covariance
@@ -858,6 +859,7 @@ def _finalize_lm(
     refresh_rows: list[int] = []
     for row in range(k):
         if int(status_host[row]) == int(LMStatus.INVALID_RESIDUAL):
+            jacobians[row] = ap.nan
             continue
         if bool(jacobian_current_host[row]):
             diagnostic_rows.append(row)
