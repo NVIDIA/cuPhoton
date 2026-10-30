@@ -130,7 +130,8 @@ exists after cleanup, including unreaped zombies, cleanup is conservatively mark
 incomplete and subsequent launches are skipped. SIGINT, SIGTERM or SIGHUP
 to the CLI also terminates that group, saves the interrupted launch receipt
 and stops without starting further launches. Repeated stop signals do not interrupt
-cleanup or receipt writes; the first signal determines the exit status.
+cleanup or receipt writes. If different stop signals arrive while blocked,
+the exit status reflects one of those signals.
 Receipt files are atomically replaced after flushing to disk. Stop signals are
 deferred across the launch receipt and `launches.json` update. SIGKILL can
 leave the previous complete aggregate and a newer per-launch receipt; inspect

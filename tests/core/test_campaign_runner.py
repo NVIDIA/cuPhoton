@@ -652,21 +652,21 @@ def test_stop_during_receipt_publication_retains_complete_json(
     path, _ = _manifest(tmp_path, blocks=3)
     output = tmp_path / "results"
     ready, release = tmp_path / "ready", tmp_path / "release"
-    # Stop the second launches.json update just before atomic replacement.
-    # No timing-sensitive large payload is necessary.
+    # Pause before serialization, outside the individual write's signal mask,
+    # to exercise the mask protecting both receipts as a pair.
     program = """
 import importlib.util, pathlib, sys, time
 spec = importlib.util.spec_from_file_location('runner', sys.argv[1])
 r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
-original = r.os.replace
+original = r._write
 ready, release = map(pathlib.Path, sys.argv[2:4])
-def replace(source, destination):
-    if destination.name == 'launches.json' and destination.exists():
+def write(path, value):
+    if path.name == 'launches.json' and path.exists():
         ready.touch()
         while not release.exists(): time.sleep(0.01)
-    original(source, destination)
-r.os.replace = replace
+    original(path, value)
+r._write = write
 raise SystemExit(r.main(sys.argv[4:]))
 """
     process = subprocess.Popen(
@@ -711,3 +711,38 @@ raise SystemExit(r.main(sys.argv[4:]))
         assert saved == row and row["status"] == "ok"
     assert not (output / "block-002").exists()
     assert not (output / "summary.json").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX umask")
+@pytest.mark.parametrize("mask", [0o022, 0o077])
+def test_campaign_receipts_follow_umask(tmp_path, mask):
+    path, _ = _manifest(tmp_path, blocks=2)
+    output = tmp_path / "results"
+    program = """
+import os, runpy, sys
+os.umask(int(sys.argv[1]))
+sys.argv = sys.argv[2:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            program,
+            str(mask),
+            str(_SCRIPT),
+            "--manifest",
+            str(path),
+            "--output-dir",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    receipts = list(output.rglob("*.json"))
+    assert output / "summary.json" in receipts
+    assert output / "launches.json" in receipts
+    assert all(
+        path.stat().st_mode & 0o777 == 0o666 & ~mask for path in receipts
+    )

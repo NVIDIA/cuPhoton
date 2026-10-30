@@ -20,8 +20,8 @@ import shutil
 import signal
 import statistics
 import subprocess
-import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -43,11 +43,12 @@ def _defer_stop_signals():
 def _write_bytes(path: Path, data: bytes) -> None:
     # Keep the previous complete receipt until the replacement is durable.
     with _defer_stop_signals():
-        fd, temporary = tempfile.mkstemp(
-            prefix=f".{path.name}.", dir=path.parent
+        temporary = path.with_name(
+            f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
         )
+        stream = temporary.open("xb")
         try:
-            with os.fdopen(fd, "wb") as stream:
+            with stream:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -58,7 +59,7 @@ def _write_bytes(path: Path, data: bytes) -> None:
             finally:
                 os.close(directory)
         finally:
-            Path(temporary).unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
 
 
 def _write(path: Path, value: Any) -> None:
