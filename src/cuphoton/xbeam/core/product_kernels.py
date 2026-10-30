@@ -28,8 +28,12 @@ def _visibility_kernel(double_precision: bool, averaging_mode: int) -> Any:
     )
 
 
-@lru_cache(maxsize=4)
-def _batched_visibility_kernel(averaging_mode: int) -> Any:
+@lru_cache(maxsize=16)
+def _batched_visibility_kernel(
+    averaging_mode: int,
+    double_precision: bool = False,
+    accumulate: bool = False,
+) -> Any:
     suffix = (
         "_avg1"
         if averaging_mode == 1
@@ -39,8 +43,13 @@ def _batched_visibility_kernel(averaging_mode: int) -> Any:
             else ("_avg32" if averaging_mode == 32 else "_generic")
         )
     )
+    definitions = "#define BATCHED_DOUBLE\n" if double_precision else ""
+    if accumulate:
+        definitions += "#define BATCHED_ACCUMULATE\n"
+    precision = "double" if double_precision else "float"
     return _raw_function(
-        _VISIBILITY_SOURCE, "batched_visibility_product_float" + suffix
+        definitions + _VISIBILITY_SOURCE,
+        "batched_visibility_product_" + precision + suffix,
     )
 
 

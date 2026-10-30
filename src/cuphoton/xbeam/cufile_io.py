@@ -318,12 +318,16 @@ class CuFileSession:
         pointer: int,
         size: int,
         file_offset: int,
+        *,
+        buffer_offset: int = 0,
     ) -> int:
         if not self._entered:
             raise RuntimeError("cuFile session is not open")
         try:
             received = int(
-                self._cufile.read(file.handle, pointer, size, file_offset, 0)
+                self._cufile.read(
+                    file.handle, pointer, size, file_offset, buffer_offset
+                )
             )
         except Exception as error:
             raise OSError(

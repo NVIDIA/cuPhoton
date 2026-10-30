@@ -68,7 +68,6 @@ from cuphoton.xbeam.gpu_output import (
     OutputPipeline,
 )
 from cuphoton.xbeam.ingest_scheduler import (
-    _MAX_VDIF_UPLOAD_WORKERS,
     _deduplicate_payload_plan_groups,
     _fail_frontier_tasks,
     _frontier_staging_plan,
@@ -101,10 +100,13 @@ from cuphoton.xbeam.runtime.backend import get_backend
 from cuphoton.xbeam.runtime.policy import (
     ExecutionPolicy,
     current_policy,
-    normalize_upload_workers,
     policy_records,
     resolve_execution_policy,
     submit_with_policy,
+)
+from cuphoton.xbeam.runtime.uploads import (
+    MAX_UPLOAD_WORKERS,
+    resolve_upload_workers,
 )
 from cuphoton.xbeam.runtime_tuning import (
     cufile_high_priority,
@@ -582,7 +584,7 @@ def _execute_correlation(
     subintegration_tiling: str,
     max_tile_subintegrations: int | None,
     tiling_manifest: dict[str, Any],
-    vdif_upload_workers: int | None = None,
+    upload_workers: int | None = None,
     ingest_manifest: dict[str, Any] | None = None,
     reservation_token: object | None = None,
     ingest_replay: dict[str, Any] | None = None,
@@ -635,7 +637,7 @@ def _execute_correlation(
                 representatives.setdefault(
                     source.batch_cache_key(datastream), datastream
                 )
-            worker_count = min(len(representatives), _MAX_VDIF_UPLOAD_WORKERS)
+            worker_count = min(len(representatives), MAX_UPLOAD_WORKERS)
             with ThreadPoolExecutor(
                 max_workers=worker_count,
                 thread_name_prefix="cuphoton-xbeam-vdif-plan",
@@ -827,7 +829,7 @@ def _execute_correlation(
             band_data,
             available_bytes,
             io_backend=vdif_io,
-            requested_workers=vdif_upload_workers,
+            requested_workers=upload_workers,
         )
         upload_footprints = [
             vdif_upload_staging_bytes(
@@ -877,7 +879,7 @@ def _execute_correlation(
                 band_data,
                 uncached_available_bytes,
                 io_backend=vdif_io,
-                requested_workers=vdif_upload_workers,
+                requested_workers=upload_workers,
             )
             upload_footprints = [
                 vdif_upload_staging_bytes(
@@ -1498,7 +1500,7 @@ class CorrelationRun:
     autocorrelation_mode: AutocorrelationMode = AutocorrelationMode.AVERAGE
     subintegration_tiling: str = "auto"
     max_tile_subintegrations: int | None = None
-    vdif_upload_workers: int | None = None
+    upload_workers: int | None = None
     estimated_read_bytes: int | None = None
     ingest_manifest: dict[str, Any] | None = None
     gpu_warmup: Future[None] | None = None
@@ -1507,6 +1509,11 @@ class CorrelationRun:
     recovery_plans: (
         Mapping[RecoveryPlanKey, GlobalFFTEligibilityPlan] | None
     ) = None
+
+    @property
+    def vdif_upload_workers(self) -> int | None:
+        """Compatibility accessor for the former radio-specific keyword."""
+        return self.upload_workers
 
     def records(self) -> Iterator[VisibilityRecord]:
         overlap_warmup = (
@@ -1533,7 +1540,7 @@ class CorrelationRun:
                 subintegration_tiling=self.subintegration_tiling,
                 max_tile_subintegrations=self.max_tile_subintegrations,
                 tiling_manifest=tiling_manifest,
-                vdif_upload_workers=self.vdif_upload_workers,
+                upload_workers=self.upload_workers,
                 ingest_manifest=self.ingest_manifest,
                 reservation_token=reservation_token,
                 gpu_warmup=self.gpu_warmup if overlap_warmup else None,
@@ -1812,6 +1819,7 @@ def prepare_correlation(
     max_tile_subintegrations: int | None = None,
     planning_cache: VdifPlanningCache | None = None,
     start_gpu_warmup: bool = True,
+    upload_workers: int | str | None = None,
     vdif_upload_workers: int | str | None = None,
     recovery_plans: Mapping[RecoveryPlanKey, GlobalFFTEligibilityPlan]
     | None = None,
@@ -1829,7 +1837,9 @@ def prepare_correlation(
             "vdif_io",
             "must be 'posix' or 'cufile'",
         )
-    vdif_upload_workers = normalize_upload_workers(vdif_upload_workers)
+    upload_workers = resolve_upload_workers(
+        upload_workers, alias=vdif_upload_workers
+    )
     try:
         autocorrelation_mode = AutocorrelationMode(autocorrelation_mode)
     except ValueError as exc:
@@ -2043,7 +2053,7 @@ def prepare_correlation(
             ],
         }
     execution_policy = resolve_execution_policy(
-        vdif_io, upload_workers=vdif_upload_workers
+        vdif_io, upload_workers=upload_workers
     )
     xp = get_backend(backend)
     if max_tile_subintegrations is not None and xp.__name__ != "cupy":
@@ -2183,7 +2193,7 @@ def prepare_correlation(
     }
     ingest_manifest["vdif_upload"] = {
         "requested_workers": (
-            "auto" if vdif_upload_workers is None else vdif_upload_workers
+            "auto" if upload_workers is None else upload_workers
         ),
         "effective_workers": None,
         "frontier_scheduling": False,
@@ -2211,7 +2221,7 @@ def prepare_correlation(
         autocorrelation_mode=autocorrelation_mode,
         subintegration_tiling=subintegration_tiling,
         max_tile_subintegrations=max_tile_subintegrations,
-        vdif_upload_workers=vdif_upload_workers,
+        upload_workers=upload_workers,
         source=source,
         timing_groups=tuple(timing_groups),
         xp=xp,
@@ -2241,6 +2251,7 @@ def correlate(
     ),
     subintegration_tiling: str = "auto",
     max_tile_subintegrations: int | None = None,
+    upload_workers: int | str | None = None,
     vdif_upload_workers: int | str | None = None,
     recovery_plans: Mapping[RecoveryPlanKey, GlobalFFTEligibilityPlan]
     | None = None,
@@ -2261,6 +2272,7 @@ def correlate(
         autocorrelation_mode=autocorrelation_mode,
         subintegration_tiling=subintegration_tiling,
         max_tile_subintegrations=max_tile_subintegrations,
+        upload_workers=upload_workers,
         vdif_upload_workers=vdif_upload_workers,
         recovery_plans=recovery_plans,
     ).records()

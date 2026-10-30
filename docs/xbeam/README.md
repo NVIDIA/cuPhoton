@@ -47,7 +47,7 @@ independently checked are in time order:
 ```bash
 uv run cuphoton xbeam correlate JOB --output OUTPUT --backend numpy
 uv run cuphoton xbeam correlate JOB --output OUTPUT --backend cupy \
-  --vdif-io posix
+  --vdif-io posix --upload-workers auto
 ```
 
 The output directory must be new. Native `xbeam-v1` output and SWIN output
@@ -122,3 +122,14 @@ The GDS examples read files supplied by the caller. Use
 `python -m examples.xbeam.benchmark_gds_ingest --help` to exercise the
 correlation input pipeline without writing visibilities. Both require the
 `io` extra and a working CUDA and GPUDirect Storage configuration.
+
+## Input workers
+
+Both `correlate` and `correlate-series` accept `--upload-workers auto` or a
+limit from 1 through 16. Radio workers read and upload file-backed inputs;
+HDF5 cuFile workers make blocking `cuFileRead` calls on host threads while
+CUDA events order buffer reuse and readiness. HDF5 POSIX workers prepare host
+batches, with asynchronous uploads for GPU execution. Automatic limits preserve
+the backend defaults.
+The radio command still accepts `--vdif-upload-workers` as an alias.
+See [time-series input](time-series.md) for HDF5 queue and worker bounds.

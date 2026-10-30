@@ -68,3 +68,72 @@ def test_hdf5_adapter_and_cli(tmp_path):
         output["b"].attrs["origin_seconds"] = 3
     with pytest.raises(ValueError, match="common sample grid"):
         Hdf5Source(path, {"a": "a", "b": "b"})
+
+
+@pytest.mark.parametrize(
+    "cli_workers, expected_workers", [(None, 2), ("3", "3"), ("auto", "auto")]
+)
+def test_shared_cli_forwards_io_options_and_tiles_results(
+    tmp_path, monkeypatch, cli_workers, expected_workers
+):
+    h5py = pytest.importorskip("h5py")
+    from cuphoton.core.cli import run_component
+    from cuphoton.xbeam.adapters import series_cli
+
+    path = tmp_path / "input.h5"
+    with h5py.File(path, "w") as output:
+        ds = output.create_dataset("a", data=np.arange(64, dtype=np.float32))
+        ds.attrs.update(sample_rate_hz=4.0, origin_seconds=2.0)
+    observed = []
+    original_source = series_cli.Hdf5Source
+
+    def source(*args, **kwargs):
+        observed.append(kwargs.copy())
+        return original_source(*args, **kwargs)
+
+    monkeypatch.setattr(series_cli, "Hdf5Source", source)
+    config = {
+        "input": "input.h5",
+        "datasets": {"a": "a"},
+        "io_backend": "posix",
+        "read_buffer_bytes": 4096,
+        "io_queue_depth": 3,
+        "upload_workers": 2,
+        "correlation": {
+            "pairs": [["a", "a"]],
+            "window_samples": 8,
+            "result_groups_per_tile": 3,
+        },
+    }
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+    output_path = tmp_path / "output.h5"
+    assert (
+        run_component(
+            "xbeam",
+            [
+                "correlate-series",
+                str(config_path),
+                "--output",
+                str(output_path),
+                *(
+                    []
+                    if cli_workers is None
+                    else ["--upload-workers", cli_workers]
+                ),
+            ],
+        )
+        == 0
+    )
+    assert observed == [
+        {
+            "validity_paths": None,
+            "io_backend": "posix",
+            "read_buffer_bytes": 4096,
+            "io_queue_depth": 3,
+            "upload_workers": expected_workers,
+        }
+    ]
+    with h5py.File(output_path) as output:
+        assert output.attrs["complete"]
+        assert set(output["results"]) == {str(i) for i in range(8)}

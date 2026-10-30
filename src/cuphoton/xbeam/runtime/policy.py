@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from functools import wraps
 from typing import Any
 
-from ..errors import ConfigurationError
+from .uploads import normalize_upload_workers
 
 _PREFIX = "CUPHOTON_XBEAM_"
 _active: ContextVar[ExecutionPolicy | None] = ContextVar(
@@ -87,28 +87,6 @@ class ExecutionPolicy:
             self.read_token_fds is not None
         )
         return result
-
-
-def normalize_upload_workers(value: int | str | None) -> int | None:
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text == "auto":
-            return None
-        try:
-            value = int(text)
-        except ValueError:
-            value = -1
-    if value is not None and (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or not 1 <= value <= 16
-    ):
-        raise ConfigurationError(
-            "correlate",
-            "vdif_upload_workers",
-            "must be 'auto' or an integer from 1 through 16",
-        )
-    return value
 
 
 def resolve_execution_policy(

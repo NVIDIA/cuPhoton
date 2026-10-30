@@ -1830,7 +1830,7 @@ def test_cufile_upload_staging_auto_scales_and_honours_override(
 def test_vdif_upload_worker_option_is_bounded(
     tmp_path: Path, value: str
 ) -> None:
-    with pytest.raises(ConfigurationError, match="vdif_upload_workers"):
+    with pytest.raises(ConfigurationError, match="upload_workers"):
         prepare_correlation(
             _job(tmp_path),
             backend="numpy",
@@ -2533,3 +2533,17 @@ def test_output_arena_oom_releases_failed_buffers_before_pool_retry(
         np.testing.assert_allclose(
             candidate.spectrum, reference.spectrum, rtol=3e-5, atol=3e-5
         )
+
+
+@pytest.mark.parametrize("keyword", ["upload_workers", "vdif_upload_workers"])
+def test_radio_upload_worker_keyword_and_alias_are_equivalent(
+    tmp_path, keyword
+):
+    run = prepare_correlation(_job(tmp_path), **{keyword: 4})
+    assert run.upload_workers == 4
+    assert run.ingest_manifest["vdif_upload"]["requested_workers"] == 4
+
+
+def test_conflicting_radio_worker_keywords_fail_before_reading():
+    with pytest.raises(ConfigurationError, match="conflicts"):
+        prepare_correlation(None, upload_workers=2, vdif_upload_workers=4)
