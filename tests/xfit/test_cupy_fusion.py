@@ -351,8 +351,29 @@ def test_cupy_fusion_extreme_widths_preserve_nonfinite_results(dtype):
 
 @pytest.mark.parametrize("mode", ["difference", "split"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_cupy_fusion_full_results_preserve_compacted_rows(mode, dtype):
+def test_cupy_fusion_full_results_preserve_compacted_rows(
+    monkeypatch, mode, dtype
+):
     _require_cupy()
+    from cuphoton.xfit._cupy_fused import GaussianFusedProblem
+
+    calls = {"residual": 0, "normal_equations": 0}
+    original_residual = GaussianFusedProblem.residual
+    original_normal_equations = GaussianFusedProblem.normal_equations
+
+    def residual(self, *args, **kwargs):
+        calls["residual"] += 1
+        return original_residual(self, *args, **kwargs)
+
+    def normal_equations(self, *args, **kwargs):
+        calls["normal_equations"] += 1
+        return original_normal_equations(self, *args, **kwargs)
+
+    monkeypatch.setattr(GaussianFusedProblem, "residual", residual)
+    monkeypatch.setattr(
+        GaussianFusedProblem, "normal_equations", normal_equations
+    )
+
     truth = _truth(dtype)
     model = GaussianDipoleModel(
         (11, 15), split_weights=(1.0, 0.25, 1.75), dtype=dtype
@@ -379,6 +400,8 @@ def test_cupy_fusion_full_results_preserve_compacted_rows(mode, dtype):
     )
     expected = fit_dipoles(images, **kwargs)
     actual = fit_dipoles(images, fusion=True, **kwargs)
+    assert calls["residual"] > 0
+    assert calls["normal_equations"] > 0
     assert expected.evaluations[0] == 1
     assert np.all(expected.evaluations[1:] > 1)
     assert expected.uncertainty_valid.all()
