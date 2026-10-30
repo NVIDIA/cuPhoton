@@ -107,9 +107,16 @@ solves. Sampled-stamp models, custom Gaussian subclasses, and finite-difference
 fitting require another backend.
 `auto` keeps its existing CuPy/NumPy selection.
 
+The [native wheel and Conda builds](../packaging.md) include this extension.
+Installing
+the wheel with `cuphoton[io]` supplies its runtime dependencies; no compiler
+or development toolkit is needed to run it. `cuda.pathfinder` locates and
+loads CUDA 13 and cuBLAS before the extension is imported.
+
 Build the optional extension from source on Linux with a CUDA 13 toolkit,
-cuBLAS 13, and a C++17 compiler. Select the CCCL headers bundled with the
-installed CuPy wheel to preserve its reduction order. This header lookup does
+cuBLAS 13, and a C++17 compiler. Select the CCCL 3.1.2 headers bundled with
+CuPy to preserve its reduction order. The build verifies their version and
+complete license against the shipped notice. This header lookup does
 not import CuPy or initialize CUDA. For example:
 
 ```bash
@@ -123,18 +130,26 @@ CUPHOTON_XFIT_BUILD_EXT=1 CUPHOTON_XFIT_CUDA_ARCHS=120 \
   uv build --wheel --python .venv/bin/python
 ```
 
-The architecture setting accepts comma-separated CUDA architecture numbers;
-`120` targets compute capability 12.0. The build also retains PTX for its
-highest selected architecture. Its default is `75`. Install the wheel into
+The architecture setting accepts CUDA targets separated by commas,
+semicolons, or spaces. `120` selects an ordinary cubin for compute capability
+12.0; `120a` selects an architecture-specific cubin that runs only on 12.0.
+Numeric requests keep their ordinary targets. The portable kernels separately
+compile ordinary compute 75 PTX and ordinary PTX for the highest selected
+capability: selecting `121a` retains compute 121 PTX. These provide driver JIT
+fallback when no compatible cubin is available. The default cubin target is
+`75`. Install the wheel into
 the matching Python environment together with CuPy for CUDA 13. FP64 fits
 on compute capability 10.0 with thread-block cluster support also use a fused
-Jacobian and equation-packing kernel, built separately for SM 100 with
-compute 100 PTX. Other devices and
-FP32 fits use the portable native kernels. The CUDA
+Jacobian and equation-packing kernel, built separately for SM 100a with
+ordinary compute 100 PTX. Other devices and
+FP32 fits use the portable native kernels. Pathfinder resolves the CUDA
 runtime and cuBLAS libraries (`libcudart.so.13`, `libcublas.so.13`, and
-`libcublasLt.so.13`) must be on the loader's library path, for
-example through `LD_LIBRARY_PATH="$CUDA_HOME/lib64"`. Ordinary and
-free-threaded CPython require separate wheels. Base installations and CPU
+`libcublasLt.so.13`) from installed NVIDIA packages or a system toolkit.
+If another CUDA version is installed, put the CUDA 13 toolkit's `lib64`
+directory first in `LD_LIBRARY_PATH` before starting Python. The loader
+rejects a discovered CUDA runtime or cuBLAS library with a different major
+version and reports its path.
+Ordinary and free-threaded CPython require separate wheels. Base installations and CPU
 imports do not require this extension or a CUDA toolkit.
 
 The public CUDA 13 compiler wheels provide another build option. Using the
@@ -150,7 +165,6 @@ export CUDA_HOME="$(
   .venv/bin/python -c \
     'import sysconfig; print(sysconfig.get_path("purelib") + "/nvidia/cu13")'
 )"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 CUPHOTON_XFIT_BUILD_EXT=1 CUPHOTON_XFIT_CUDA_ARCHS=120 \
   uv pip install --python .venv/bin/python --no-deps \
     --no-cache --reinstall -e .
@@ -161,8 +175,8 @@ capability 12.0. These compiler packages supplement the CUDA runtime installed
 by the GPU extra. They still require a system C++17 compiler. The build links
 the versioned runtime and cuBLAS libraries directly; unversioned symlinks are
 unnecessary.
-Keep the runtime library path set when running native fits. After this editable
-build, use `uv run --no-sync` to preserve the selected installation.
+After this editable build, use `uv run --no-sync` to preserve the selected
+installation.
 
 ```bash
 cuphoton xfit fit-dipoles \

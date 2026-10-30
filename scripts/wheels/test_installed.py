@@ -27,12 +27,14 @@ from pathlib import Path
 
 GPU_DISTRIBUTIONS = (
     "cupy-cuda13x",
+    "cuda-pathfinder",
     "kvikio-cu13",
     "libkvikio-cu13",
     "nvidia-libnvcomp-cu13",
     "nvidia-nvcomp-cu13",
     "cuda-toolkit",
     "nvidia-cuda-runtime",
+    "nvidia-cublas",
     "nvidia-cuda-nvrtc",
     "nvidia-cufile",
     "nvidia-nvjitlink",
@@ -67,6 +69,7 @@ def module_path(distribution, name):
 def loaded_native_libraries():
     prefixes = (
         "libcudart",
+        "libcublas",
         "libcufile",
         "libcfitsio",
         "libnvcomp",
@@ -80,7 +83,7 @@ def loaded_native_libraries():
     return sorted(paths)
 
 
-def check_install(mode, report):
+def check_install(mode, components, report):
     require(sys.flags.isolated, "Run this script with python -I")
     distribution = metadata.distribution("cuphoton")
     wheel = distribution.read_text("WHEEL") or ""
@@ -94,7 +97,7 @@ def check_install(mode, report):
     report["versions"] = {"cuphoton": distribution.version}
     report["paths"] = {
         name: str(module_path(distribution, name))
-        for name in ("cuphoton", "cuphoton.xdr")
+        for name in ("cuphoton", *(f"cuphoton.{name}" for name in components))
     }
     for name in GPU_DISTRIBUTIONS:
         try:
@@ -102,16 +105,24 @@ def check_install(mode, report):
         except metadata.PackageNotFoundError:
             continue
         require(mode != "base", f"Base environment includes {name}")
+    if "xfit" in components:
+        check_xfit_cpu(report)
     if mode == "base":
         require(
             not any(
                 name == prefix or name.startswith(prefix + ".")
                 for name in sys.modules
-                for prefix in ("cupy", "kvikio", "nvidia.nvcomp")
+                for prefix in (
+                    "cupy",
+                    "kvikio",
+                    "nvidia.nvcomp",
+                    "cuda.pathfinder",
+                    "cuphoton.xfit._native_ext",
+                )
             ),
             "Base imports loaded an optional GPU package",
         )
-    for argv in (["--version"], ["xdr", "--help"]):
+    for argv in (["--version"], *([name, "--help"] for name in components)):
         result = subprocess.run(
             [
                 sys.executable,
@@ -133,6 +144,111 @@ def check_install(mode, report):
             )
     passed(report, "installed_origin_and_base_imports")
     return distribution
+
+
+def xfit_fixture(dtype, mode="difference"):
+    import numpy as np
+
+    from cuphoton.xfit import GaussianDipoleModel
+
+    truth = np.asarray(
+        [
+            [5.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7],
+            [3.0, 1.6, 1.1, -0.3, -1.0, -1.0, 2.0, 1.0],
+        ],
+        dtype=dtype,
+    )
+    model = GaussianDipoleModel((11, 15), dtype=dtype)
+    initial = truth + np.asarray(
+        [0.2, 0.1, -0.1, 0.03, 0.1, -0.1, -0.1, 0.1], dtype=dtype
+    )
+    images = model.evaluate(truth, mode=mode)
+    return (
+        truth,
+        images,
+        {
+            "model": model,
+            "initial": initial,
+            "mode": mode,
+            "variance": np.full(images.shape, 0.5, dtype=dtype),
+        },
+    )
+
+
+def check_xfit_cpu(report):
+    import numpy as np
+
+    from cuphoton.xfit import fit_dipoles
+
+    truth, images, options = xfit_fixture(np.float64)
+    result = fit_dipoles(images, backend="numpy", **options)
+    require(result.converged.all(), "NumPy xFit did not converge")
+    np.testing.assert_allclose(result.parameters, truth, rtol=1e-7, atol=1e-7)
+    passed(report, "xfit_numpy_gaussian_fit")
+
+
+def check_xfit_native(distribution, report):
+    from cuphoton.xfit._native import load_extension
+
+    load_extension()
+    extension = module_path(distribution, "cuphoton.xfit._native_ext")
+    report["paths"]["xfit_native_extension"] = str(extension)
+    report["xfit_extension_sha256"] = hashlib.sha256(
+        extension.read_bytes()
+    ).hexdigest()
+    report["loaded_native_libraries"] = loaded_native_libraries()
+    passed(report, "xfit_native_extension_load")
+
+
+def check_xfit_gpu(report):
+    import cupy as cp
+    import numpy as np
+
+    from cuphoton.xfit import fit_dipoles
+    from cuphoton.xfit._native import release_workspace
+
+    require(cp.cuda.runtime.getDeviceCount() > 0, "A CUDA GPU is required")
+    properties = cp.cuda.runtime.getDeviceProperties(cp.cuda.Device().id)
+    report["gpu"] = {
+        "name": properties["name"].decode(),
+        "compute_capability": [properties["major"], properties["minor"]],
+    }
+    report["cupy_runtime_version"] = cp.cuda.runtime.runtimeGetVersion()
+    report["cuda_driver"] = cp.cuda.runtime.driverGetVersion()
+    for dtype in (np.float32, np.float64):
+        tolerance = 3e-5 if dtype is np.float32 else 5e-12
+        for mode in ("difference", "split"):
+            _, images, options = xfit_fixture(dtype, mode)
+            expected = fit_dipoles(images, backend="cupy", **options)
+            actual = fit_dipoles(images, backend="native", **options)
+            require(actual.backend == "native", "xFit fell back from native")
+            require(actual.converged.all(), "Native xFit did not converge")
+            require(
+                actual.uncertainty_valid.all(),
+                "Native xFit covariance is invalid",
+            )
+            for name in ("status", "evaluations", "converged"):
+                np.testing.assert_array_equal(
+                    getattr(actual, name), getattr(expected, name)
+                )
+            for name in (
+                "parameters",
+                "residuals",
+                "chi_square",
+                "covariance",
+                "standard_errors",
+            ):
+                np.testing.assert_allclose(
+                    getattr(actual, name),
+                    getattr(expected, name),
+                    rtol=tolerance,
+                    atol=tolerance,
+                    err_msg=f"native xFit {name}",
+                )
+            passed(
+                report, f"xfit_native_{np.dtype(dtype).name}_{mode}_parity"
+            )
+    release_workspace()
 
 
 def create_fits(directory):
@@ -347,6 +463,13 @@ def main():
     parser.add_argument(
         "--mode", choices=("base", "native", "gpu"), required=True
     )
+    parser.add_argument(
+        "--components",
+        choices=("xdr", "xfit"),
+        nargs="+",
+        default=["xdr", "xfit"],
+        help="Native components to qualify (default: xdr xfit)",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
@@ -354,6 +477,7 @@ def main():
     output = args.output.resolve() if args.output else None
     report = {
         "mode": args.mode,
+        "components": args.components,
         "python": sys.version,
         "architecture": platform.machine(),
         "checks": [],
@@ -362,7 +486,7 @@ def main():
     faulthandler.dump_traceback_later(args.timeout, exit=True)
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     try:
-        if args.mode == "gpu":
+        if args.mode == "gpu" and "xdr" in args.components:
             os.environ["KVIKIO_COMPAT_MODE"] = "ON"
             os.environ["KVIKIO_NTHREADS"] = "2"
         with tempfile.TemporaryDirectory(prefix="cuphoton-wheel-") as scratch:
@@ -371,13 +495,20 @@ def main():
                 os.environ["CUPY_CACHE_DIR"] = str(
                     Path(scratch) / "cupy-cache"
                 )
-            distribution = check_install(args.mode, report)
+            distribution = check_install(args.mode, args.components, report)
             if args.mode != "base":
-                paths = create_fits(Path(scratch))
-                report["versions"]["astropy"] = metadata.version("astropy")
-                check_native(distribution, paths, report)
-                if args.mode == "gpu":
-                    check_gpu(paths, report)
+                if "xfit" in args.components:
+                    check_xfit_native(distribution, report)
+                if "xdr" in args.components:
+                    paths = create_fits(Path(scratch))
+                    report["versions"]["astropy"] = metadata.version(
+                        "astropy"
+                    )
+                    check_native(distribution, paths, report)
+                    if args.mode == "gpu":
+                        check_gpu(paths, report)
+                if args.mode == "gpu" and "xfit" in args.components:
+                    check_xfit_gpu(report)
             report["ok"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"

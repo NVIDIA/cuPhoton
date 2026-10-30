@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import runpy
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,7 +52,9 @@ def _toolkit(tmp_path, version=13000, library_dir="lib64"):
     ):
         (root / name).touch()
     nvcc = root / "bin/nvcc"
-    nvcc.write_text("#!/bin/sh\nexit 1\n")
+    nvcc.write_text(
+        "#!/bin/sh\necho 'Cuda compilation tools, release 13.0, V13.0.88'\n"
+    )
     nvcc.chmod(0o755)
     return root
 
@@ -67,7 +71,18 @@ def _cccl(tmp_path):
         header = root / name
         header.parent.mkdir(parents=True, exist_ok=True)
         header.touch()
+    (root / "libcudacxx/cuda/std/__cccl/version.h").write_text(
+        "#define CCCL_VERSION 3001002\n"
+    )
+    (root / "LICENSE").write_bytes(
+        (_ROOT / "licenses/CCCL-3.1.2.txt").read_bytes()
+    )
     return root
+
+
+@pytest.fixture(autouse=True)
+def clear_inherited_compiler(monkeypatch):
+    monkeypatch.delenv("CUDACXX", raising=False)
 
 
 def test_default_build_does_not_discover_cuda(monkeypatch):
@@ -117,7 +132,7 @@ def test_native_build_is_enabled_independently(
     runpy.run_path(str(_ROOT / "setup.py"))
     (extension,) = captured["ext_modules"]
     assert extension.name == "cuphoton.xfit._native_ext"
-    assert extension.architectures == (100, 120)
+    assert extension.architectures == ("100", "120")
     assert extension.py_limited_api is False
     assert extension.library_dirs == [str(root / library_dir)]
     assert extension.libraries == [":libcudart.so.13", ":libcublas.so.13"]
@@ -200,9 +215,38 @@ def test_native_build_requires_explicit_complete_cccl(monkeypatch, tmp_path):
         _helpers().get_extensions()
 
 
-@pytest.mark.parametrize("architectures", [None, "89", "100;120"])
+@pytest.mark.parametrize(
+    ("architectures", "portable_targets", "portable_ptx"),
+    [
+        (None, {"75"}, {"75"}),
+        ("89", {"89"}, {"75", "89"}),
+        ("75;120", {"75", "120"}, {"75", "120"}),
+        ("100;120", {"100", "120"}, {"75", "120"}),
+        ("120a", {"120a"}, {"75", "120"}),
+        (
+            "120a,90a;100 120a 100a 075",
+            {"75", "90a", "100", "100a", "120a"},
+            {"75", "120"},
+        ),
+        (
+            "75,80,86,89,90a,100a,103a,120a,121a",
+            {
+                "75",
+                "80",
+                "86",
+                "89",
+                "90a",
+                "100a",
+                "103a",
+                "120a",
+                "121a",
+            },
+            {"75", "121"},
+        ),
+    ],
+)
 def test_cuda_targets_math_flags_and_relink_dependencies(
-    monkeypatch, tmp_path, architectures
+    monkeypatch, tmp_path, architectures, portable_targets, portable_ptx
 ):
     monkeypatch.setenv("CUDA_HOME", str(_toolkit(tmp_path)))
     monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
@@ -240,27 +284,28 @@ def test_cuda_targets_math_flags_and_relink_dependencies(
             "native_jacobian_lean.o",
         }
         assert all(path in linked.depends for path in linked.extra_objects)
-        portable_targets = {
-            None: {"75"},
-            "89": {"89"},
-            "100;120": {"100", "120"},
-        }[architectures]
         for source, arguments in compiled.items():
             specialized = source.startswith("native_jacobian")
-            targets = {"100"} if specialized else portable_targets
-            ptx_target = max(targets, key=int)
-            assert {
+            targets = {"100a"} if specialized else portable_targets
+            ptx_targets = {"100"} if specialized else portable_ptx
+            flags = [
                 flag
                 for flag in arguments
                 if flag.startswith("--generate-code=")
-            } == {
+            ]
+            expected_flags = {
                 *(
                     f"--generate-code=arch=compute_{target},code=sm_{target}"
                     for target in targets
                 ),
-                f"--generate-code=arch=compute_{ptx_target},"
-                f"code=compute_{ptx_target}",
+                *(
+                    f"--generate-code=arch=compute_{target},"
+                    f"code=compute_{target}"
+                    for target in ptx_targets
+                ),
             }
+            assert set(flags) == expected_flags
+            assert len(flags) == len(expected_flags)
             assert (
                 f"--fmad={str(source != 'native_norm.cu').lower()}"
                 in arguments
@@ -280,7 +325,18 @@ def test_cuda_targets_math_flags_and_relink_dependencies(
 
 
 @pytest.mark.parametrize(
-    "architectures", ["", "70", "120a", "120 --fast-math"]
+    "architectures",
+    [
+        "",
+        "70",
+        "75a",
+        "89a",
+        "120f",
+        "120A",
+        "120aa",
+        "sm_120a",
+        "120 --fast-math",
+    ],
 )
 def test_invalid_architectures_fail_before_compilation(
     monkeypatch, tmp_path, architectures
@@ -290,3 +346,84 @@ def test_invalid_architectures_fail_before_compilation(
     monkeypatch.setenv("CUPHOTON_XFIT_CUDA_ARCHS", architectures)
     with pytest.raises(RuntimeError, match="CUPHOTON_XFIT_CUDA_ARCHS"):
         _helpers().get_extensions()
+
+
+def test_conda_sdk_can_use_a_separate_build_compiler(monkeypatch, tmp_path):
+    helper = _helpers()
+    root = _toolkit(tmp_path)
+    target = "sbsa" if helper.platform.machine() == "aarch64" else "x86_64"
+    target_directory = root / "targets" / f"{target}-linux"
+    target_directory.mkdir(parents=True)
+    (root / "include").rename(target_directory / "include")
+    compiler = tmp_path / "build-nvcc"
+    (root / "bin/nvcc").rename(compiler)
+    monkeypatch.setenv("CUDA_HOME", str(root))
+    monkeypatch.setenv("CUDACXX", str(compiler))
+    monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
+
+    (extension,) = helper.get_extensions()
+    assert extension.nvcc == str(compiler)
+    assert str(target_directory / "include") in extension.include_dirs
+    compiler.unlink()
+    with pytest.raises(RuntimeError, match="build-nvcc"):
+        helper.get_extensions()
+
+
+@pytest.mark.parametrize(
+    "output, exit_code",
+    [
+        ("Cuda compilation tools, release 12.8, V12.8.93", 0),
+        ("unrecognized", 0),
+        ("", 1),
+    ],
+)
+def test_cuda_13_headers_reject_an_incompatible_compiler(
+    monkeypatch, tmp_path, output, exit_code
+):
+    root = _toolkit(tmp_path)
+    compiler = tmp_path / "inherited-nvcc"
+    compiler.write_text(f"#!/bin/sh\necho '{output}'\nexit {exit_code}\n")
+    compiler.chmod(0o755)
+    monkeypatch.setenv("CUDA_HOME", str(root))
+    monkeypatch.setenv("CUDACXX", str(compiler))
+    monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
+    with pytest.raises(RuntimeError, match="CUDA 13 toolkit.*inherited-nvcc"):
+        _helpers().get_extensions()
+
+
+@pytest.mark.parametrize(
+    "change", ["new-version", "missing-license", "truncated-license"]
+)
+def test_compiled_cccl_headers_must_match_shipped_notice(
+    monkeypatch, tmp_path, change
+):
+    monkeypatch.setenv("CUDA_HOME", str(_toolkit(tmp_path)))
+    cccl = _cccl(tmp_path)
+    monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(cccl))
+    if change == "new-version":
+        (cccl / "libcudacxx/cuda/std/__cccl/version.h").write_text(
+            "#define CCCL_VERSION 3002000\n"
+        )
+    elif change == "missing-license":
+        (cccl / "LICENSE").unlink()
+    else:
+        (cccl / "LICENSE").write_text("truncated license\n")
+    with pytest.raises(RuntimeError, match="CCCL 3.1.2"):
+        _helpers().get_extensions()
+
+
+def test_wheel_architectures_match_documented_cubin_targets(monkeypatch):
+    config = tomllib.loads((_ROOT / "pyproject.toml").read_text())
+    value = config["tool"]["cibuildwheel"]["linux"]["environment"][
+        "CUPHOTON_XFIT_CUDA_ARCHS"
+    ]
+    monkeypatch.setenv("CUPHOTON_XFIT_CUDA_ARCHS", value)
+    documented = re.search(
+        r"portable kernels include ordinary cubins for SM\s+(.+?)\.\n",
+        (_ROOT / "docs/packaging.md").read_text(),
+        re.DOTALL,
+    )
+    assert documented is not None
+    assert _helpers()._architectures() == tuple(
+        re.findall(r"\b\d+a?\b", documented.group(1))
+    )

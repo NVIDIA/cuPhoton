@@ -11,6 +11,7 @@ import argparse
 import importlib.util
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,8 @@ from pathlib import Path
 # These libraries are supplied by the I/O extra, not copied into cuPhoton.
 EXTERNAL_LIBRARIES = (
     "libcudart.so.13",
+    "libcublas.so.13",
+    "libcublasLt.so.13",
     "libnvcomp.so.5",
     "libkvikio.so",
     "librapids_logger.so",
@@ -76,7 +79,10 @@ def include_bundled_license(wheel: Path) -> None:
             )
         metadata.write_bytes(
             content.replace(
-                original, original + b" AND CFITSIO AND BSD-3-Clause", 1
+                original,
+                original + b" AND CFITSIO AND BSD-3-Clause "
+                b"AND Apache-2.0 WITH LLVM-exception",
+                1,
             )
         )
         subprocess.run(
@@ -92,6 +98,36 @@ def include_bundled_license(wheel: Path) -> None:
             check=True,
         )
         (Path(temporary) / wheel.name).replace(wheel)
+
+
+def check_xfit_linkage(wheel: Path) -> None:
+    """Require the CUDA 13 SONAMEs that the runtime loader supplies."""
+    with zipfile.ZipFile(wheel) as archive:
+        extensions = [
+            name
+            for name in archive.namelist()
+            if re.fullmatch(r"cuphoton/xfit/_native_ext\.[^/]+\.so", name)
+        ]
+        if len(extensions) != 1:
+            raise RuntimeError("Expected one native xFit extension")
+        with tempfile.TemporaryDirectory(
+            prefix="cuphoton-linkage-"
+        ) as scratch:
+            extension = Path(scratch) / Path(extensions[0]).name
+            extension.write_bytes(archive.read(extensions[0]))
+            result = subprocess.run(
+                ["readelf", "--dynamic", str(extension)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+    needed = set(re.findall(r"\(NEEDED\).*?\[(.*?)\]", result.stdout))
+    required = {"libcudart.so.13", "libcublas.so.13"}
+    if not required <= needed:
+        raise RuntimeError(
+            "Native xFit must link to external CUDA 13 libraries; "
+            f"missing {sorted(required - needed)} in {sorted(needed)}"
+        )
 
 
 def main() -> None:
@@ -139,6 +175,7 @@ def main() -> None:
             "Expected only a private CFITSIO library in the repaired wheel, "
             f"found: {bundled}"
         )
+    check_xfit_linkage(repaired[0])
     include_bundled_license(repaired[0])
 
 

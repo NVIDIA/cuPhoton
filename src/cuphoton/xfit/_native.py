@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import re
 import threading
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -28,12 +31,38 @@ _worker = threading.local()
 def load_extension() -> ModuleType:
     """Load the optional extension only for an explicitly selected backend."""
 
+    if importlib.util.find_spec("cuphoton.xfit._native_ext") is None:
+        raise RuntimeError(
+            "the native xFit extension is unavailable; install cuphoton[io] "
+            "from a native wheel, or build cuphoton with "
+            "CUPHOTON_XFIT_BUILD_EXT=1 and a CUDA 13 toolkit"
+        )
+    try:
+        from cuda.pathfinder import load_nvidia_dynamic_lib
+
+        for name in ("cudart", "cublas"):
+            # Pathfinder loads cuBLASLt before cuBLAS and retains the handles.
+            library = load_nvidia_dynamic_lib(name)
+            if not re.fullmatch(
+                rf"lib{name}\.so\.13(?:\.\d+)*", Path(library.abs_path).name
+            ):
+                raise RuntimeError(
+                    f"expected CUDA 13 lib{name}, found {library.abs_path}"
+                )
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise RuntimeError(
+            "native xFit requires the CUDA 13 runtime and cuBLAS libraries; "
+            "install cuphoton[io]. "
+            f"Library loading failed: {exc}"
+        ) from exc
     try:
         return importlib.import_module("cuphoton.xfit._native_ext")
     except ImportError as exc:
         raise RuntimeError(
-            "the native xFit extension is unavailable; build cuphoton with "
-            "CUPHOTON_XFIT_BUILD_EXT=1 and a CUDA 13 toolkit"
+            "the native xFit extension could not be loaded; install "
+            "cuphoton[io] from a native wheel, or build cuphoton with "
+            "CUPHOTON_XFIT_BUILD_EXT=1 and a CUDA 13 toolkit. "
+            f"Extension loading failed: {exc}"
         ) from exc
 
 
