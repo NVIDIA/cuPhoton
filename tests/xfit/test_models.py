@@ -923,11 +923,16 @@ def test_fit_dipoles_device_matches_portable_result_without_bulk_d2h(
     for name, value in (
         ("schema", "other"),
         ("solver", "other"),
-        ("backend", "numpy"),
         ("result_location", "host"),
     ):
-        with pytest.raises(ValueError):
+        with pytest.raises(
+            (TypeError, ValueError), match="declared with init=False"
+        ):
             replace(device, **{name: value})
+    with pytest.raises(
+        ValueError, match="device fit backend must be cupy or native"
+    ):
+        replace(device, backend="numpy")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="CUDA device"):
         replace(device, device_id=device.device_id + 1)
     with pytest.raises(TypeError, match=device.dtype):
