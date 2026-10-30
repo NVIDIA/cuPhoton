@@ -68,6 +68,13 @@ per-exposure kernels. It currently returns host arrays without propagated
 output variance or an effective output PSF; callers must qualify these
 quantities before using a reconstruction as an xPois reference.
 
+xBeam operates on sampled signals. Its array and HDF5 adapters produce
+cross-spectra or lag correlations on a shared time grid. Its radio adapter
+combines VDIF recordings with station clocks and delay models to produce
+visibility spectra. Bounded windows control memory use, and independent
+time shards can run on separate GPUs. See [xBeam](xbeam/README.md) for
+input and output contracts.
+
 ## What an exposure contains
 
 An optical exposure includes an image and the information needed to interpret
@@ -121,7 +128,7 @@ input validation and choose how to divide work among those executors.
 See the [distributed architecture](distributed.md) for process ownership,
 data movement and the Dragon/MPI worker lifecycles.
 
-xDataReader, xFit, xPois, and xRep expose a curated Python surface
+xDataReader, xFit, xPois, xRep, and xBeam expose a curated Python surface
 for embedding numerical operations. xScan and xRay are primarily
 CLI-first, with internal modules available as extension points for workflow
 authors.

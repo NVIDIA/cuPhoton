@@ -44,6 +44,8 @@ requirements.
   evaluation, and review.
 - [xRep (xReproject)](components/xrep.md): FITS/WCS reprojection.
 - [xRay](xray/README.md): X-ray trace and detector analysis.
+- [xBeam](xbeam/README.md): time-series correlation and radio visibilities,
+  with [array and HDF5 inputs](xbeam/time-series.md).
 
 ## Adapting and validating
 

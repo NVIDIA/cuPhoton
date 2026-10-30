@@ -1,8 +1,8 @@
 # cuPhoton
 
 cuPhoton is a collection of GPU-accelerated reference workflows for
-astronomical imaging and X-ray trace analysis. It is intended for research
-teams that want working implementations they can run, inspect, and adapt to
+astronomical imaging, signal correlation and X-ray trace analysis. Research
+teams can run, inspect, and adapt these implementations to
 their own instruments and data products. The curated Python exports and
 structured run artifacts provide integration points for those workflows.
 
@@ -17,11 +17,12 @@ structured run artifacts provide integration points for those workflows.
 | Small cutouts containing positive/negative residuals | [xFit](docs/components/xfit.md) | Fitted positions, amplitudes, shapes, uncertainties, and fit status |
 | Candidate cutouts to score, or reviewed examples to train on | [xScan](docs/components/xscan.md) | Real/bogus scores, evaluation metrics, and review material |
 | X-ray detector images sampled over experimental delay | [xRay](docs/xray/README.md) | Signal traces and maps of fitted oscillations |
+| Uniformly sampled signals or VDIF radio recordings | [xBeam](docs/xbeam/README.md) | Cross-spectra, lag correlations or radio visibilities |
 | Scientific measurements and findings to monitor | [cuPhoton xLens](docs/components/xlens.md) | Revision-aware evidence, dashboards and optional model reports |
 
 Each component can be used independently. An optical workflow can combine
-loading, reprojection, subtraction, and candidate analysis; xRay handles a
-separate kind of experimental data. See [how the components fit
+loading, reprojection, subtraction, and candidate analysis. xRay analyzes
+detector traces, while xBeam correlates sampled signals. See [how the components fit
 together](docs/architecture.md#how-the-science-components-fit-together) for
 the data flow and the adapters needed between stages.
 
@@ -153,6 +154,15 @@ prediction to estimate their oscillatory modes. Outputs include frequencies,
 amplitudes, fit diagnostics, and detector review maps. Interpreting those
 measurements requires the experiment's geometry and calibration.
 
+### xBeam: correlate sampled signals and radio recordings
+
+xBeam (`cuphoton.xbeam`) computes cross-spectra and lag correlations from
+uniformly sampled arrays or HDF5 signals. It also produces radio-interferometry
+visibilities from VDIF recordings, station clocks and delay models. Work runs
+in bounded windows using NumPy or CuPy, with explicit validity and coverage
+metadata. Start with the [synthetic signal example](docs/xbeam/README.md)
+or read the [time-series API](docs/xbeam/time-series.md).
+
 All Python code is in the `cuphoton.*` namespace. The shared
 [Core](docs/components/core.md) (`cuphoton.core`) provides command discovery,
 application context, logging, and invariant checks. Each science component
@@ -181,7 +191,7 @@ upstream release has no Python 3.14 wheel.
 | --- | --- |
 | `dev` | Tests, formatting, linting, and build tools |
 | `photometry` | Photutils source detection, backgrounds, and aperture measurements |
-| `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for xDR |
+| `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for xDR and xBeam |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
 | `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch and Numba-CUDA |
 | `cutile` | Experimental `cuda.tile` backend and CuPy |
@@ -228,6 +238,7 @@ from cuphoton.xdr import batch_to_device
 from cuphoton.xfit import GaussianDipoleModel, fit_dipoles
 from cuphoton.xpois import solve_separable_kernel
 from cuphoton.xrep import ReprojectionSpec, reproject_array
+from cuphoton.xbeam import ArraySource, CorrelationSpec, correlate_series
 ```
 
 cuPhoton provides one Python console entry point:

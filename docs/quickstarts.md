@@ -41,6 +41,20 @@ uv run python examples/run_quickstarts.py \
   --output-dir /tmp/cuphoton-quickstart
 ```
 
+## Correlate synthetic signals with xBeam
+
+The separate xBeam example creates two HDF5 signals with a seven-sample
+delay, writes their cross-spectrum and lag correlation, and prints the
+measured delay:
+
+```bash
+uv run python examples/xbeam/correlate_series.py /tmp/series-example
+```
+
+Use a new directory for each run. Add `--backend cupy` with the `io` or
+`gpu` extra for CUDA 13 execution. See [xBeam](xbeam/README.md) for the CLI
+and array interfaces.
+
 ## Run one component
 
 Pass `--component` one or more times:
