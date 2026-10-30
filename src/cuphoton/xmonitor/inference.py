@@ -12,6 +12,8 @@ parent broker. The configured endpoint controls its own retention.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -25,7 +27,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .monitor import Monitor, now
-from .nooa_backend import NooaError
+from .nooa_backend import NooaError, _command
 from .records import encode
 
 
@@ -82,6 +84,15 @@ class InferenceConfig:
             raise ValueError(
                 "bearer auth requires a secret environment reference"
             )
+        if self.auth == "bearer" and url.scheme != "https":
+            try:
+                loopback = ipaddress.ip_address(url.hostname).is_loopback
+            except ValueError:
+                loopback = url.hostname.lower() == "localhost"
+            if not loopback:
+                raise ValueError(
+                    "bearer authentication requires HTTPS outside loopback"
+                )
         if self.token_parameter not in {
             "max_tokens",
             "max_completion_tokens",
@@ -181,6 +192,15 @@ class Investigator:
     def __init__(self, config: InferenceConfig) -> None:
         self.config = config
         self._active = 0
+
+    def check_available(self) -> None:
+        """Check optional runtime requirements before creating a report."""
+        if importlib.util.find_spec("httpx") is None:
+            raise InferenceError(
+                "Install cuphoton[xmonitor-inference] for investigation."
+            )
+        if self.config.backend == "nooa":
+            _command()
 
     async def _request(
         self, evidence: dict[str, Any], question: str, instructions: str

@@ -190,3 +190,18 @@ def test_unchanged_collector_and_report_do_not_rewrite_state(
     returned = monitor.save_report(report)
     returned["evidence"].clear()
     assert monitor.snapshot()["reports"][0]["evidence"] == {"window-a": 1}
+
+
+def test_dashboard_csp_hash_matches_embedded_script(tmp_path):
+    import base64
+    import hashlib
+    import re
+
+    monitor = Monitor(tmp_path / "run", run_id="csp")
+    page = Dashboard(monitor).render()
+    script = re.search(r"<script>(.*?)</script>", page, re.DOTALL).group(1)
+    digest = base64.b64encode(
+        hashlib.sha256(script.encode()).digest()
+    ).decode()
+    assert f"script-src 'sha256-{digest}'" in page
+    assert "script-src 'unsafe-inline'" not in page

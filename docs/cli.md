@@ -18,7 +18,9 @@ Access each component through the fixed command groups: `xdr`, `xfit`, `xpois`,
 
 `cuphoton xmonitor quickstart --output-dir xmonitor-demo` creates invented
 measurements and an offline dashboard. Its `serve`, `export`, and `ask` commands
-inspect saved runs and optionally investigate selected evidence. See
+inspect saved runs and optionally print a detached investigation of selected
+evidence. `xmonitor ask` leaves the saved run unchanged; live-session questions
+save reports through the run's writer. See
 [cuPhoton xMonitor](components/xmonitor.md) for the Python contract and endpoint
 settings.
 

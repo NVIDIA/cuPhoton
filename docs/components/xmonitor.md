@@ -195,8 +195,10 @@ authentication, set `auth = "bearer"` and
 institution's secret-management procedure. The config contains the variable
 name, never the value. No-auth mode requires omitting `api_key_env` and ignores
 ambient credential variables. No endpoint, model, credential, model registry or
-tracing destination is selected implicitly. TLS uses normal Python trust,
-including `SSL_CERT_FILE`/`SSL_CERT_DIR`; xMonitor configuration cannot disable it.
+tracing destination is selected implicitly. Bearer authentication requires HTTPS
+for non-loopback endpoints; plain HTTP is accepted for loopback endpoints.
+HTTPS uses normal Python certificate verification, including
+`SSL_CERT_FILE`/`SSL_CERT_DIR`; xMonitor configuration cannot disable verification.
 Ambient proxies and HTTP redirects are disabled.
 
 ```bash
@@ -204,6 +206,11 @@ cuphoton xmonitor ask --state xmonitor-demo/state --config inference.toml \
   --sample sample-4 --sample sample-6 \
   --question "Which measurements need inspection, and why?"
 ```
+
+`ask` reads one saved-state snapshot, investigates an isolated temporary copy,
+and prints the report as JSON. It does not save reports or recover state in the
+source run, so it can inspect a run while its application writer remains active.
+Use the live session's question box to retain a report in that run.
 
 Applications can await
 `Investigator(config).investigate(monitor, sample_ids, question=..., instructions=...)`.
@@ -245,8 +252,9 @@ describes the wire format; compatibility depends on the actual server and model.
 
 NOOA runs its real CodeAct iteration loop and generated Python in a separate
 Linux process. Bubblewrap isolates its filesystem, process and network
-namespaces. The worker sees read-only Python runtime and declared NOOA
-dependency mounts, plus a 16 MiB temporary workspace. Unrelated installed application packages and the
+namespaces. The worker sees read-only Python runtime, declared NOOA dependencies,
+and host system libraries (`/usr/lib`, `/lib`, and `/lib64` when present),
+plus a 16 MiB temporary workspace. Unrelated installed application packages and the
 base interpreter's site-packages are hidden. Only installed `METADATA` files
 are exposed for distribution metadata; local install URLs and plugin entry
 points are excluded. Shared third-party namespace roots remain trusted runtime
@@ -286,7 +294,9 @@ session = MonitorSession(
 serve(Dashboard(monitor), session=session)
 ```
 
-Automatic investigation selects newly published warning/error findings.
+Automatic investigation covers each sample's current revision with a warning
+or error finding and no automatic report, including samples saved before the
+session started.
 Questions can target selected samples or the run, with progress and cancellation
 in the browser. Polling and deterministic analysis continue while a model
 request is running. Unavailable inference and bounded admission are visible
@@ -301,11 +311,23 @@ The configured server owns the state writer; stop any previous writer before
 starting it. A static export retains plots and reports but cannot start
 investigations.
 
-Shared interactive access requires an independent browser access token, supplied
+Shared investigation access requires an independent browser token, supplied
 with `access_token_env="XMONITOR_BROWSER_TOKEN"` or `--access-token-env` and at least
 24 characters. Enter that token in the browser's password field; it stays in
 page memory and is not embedded in the HTML export or bootstrap. It is distinct
-from the model API credential, which never goes to the browser. Use institutional
+from the model API credential, which never goes to the browser. The token
+protects asking and cancelling questions only. Anyone who can reach an allowed
+host name can read the dashboard, samples, and reports without that token.
+Use institutional
 TLS and access controls when sharing the service. Shared deployments run the
 lightweight HTTP viewer behind their reverse proxy and service manager;
 cuPhoton does not configure TLS, process supervision or public access policy.
+
+The built-in server rejects unknown `Host` authorities on every route and
+checks browser `Origin` against its trusted authorities. Loopback binds accept
+`127.0.0.1`, `localhost`, and `[::1]` with the actual listening port. For a
+proxy or LAN hostname, pass `allowed_hosts=["monitor.example"]` to
+`serve`/`make_server`, or repeat `--allowed-host monitor.example` with
+`serve --state`. Include the public port when it appears in the browser URL;
+omit it for a default-port URL. Site applications configure their own server's
+allowlist. These checks do not replace deployment access controls.

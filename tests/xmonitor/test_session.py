@@ -329,3 +329,213 @@ def test_idle_polling_does_not_copy_or_rewrite_full_state(
         assert (len(writes), len(snapshots)) == counts
     finally:
         session.close()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "headers", "body", "expected"),
+    [
+        ("GET", "/", {"Host": "attacker.example"}, None, 421),
+        ("GET", "/api/state", {"Host": "attacker.example"}, None, 421),
+        ("GET", "/health", {"Host": "user@localhost"}, None, 421),
+        (
+            "POST",
+            "/api/ask",
+            {
+                "Host": "attacker.example",
+                "Origin": "http://attacker.example",
+                "Sec-Fetch-Site": "same-origin",
+            },
+            b"{}",
+            421,
+        ),
+        ("POST", "/api/ask", {"Sec-Fetch-Site": "cross-site"}, b"{}", 403),
+        ("POST", "/api/ask", {"Sec-Fetch-Site": "same-site"}, b"{}", 403),
+        ("POST", "/api/ask", {"Content-Type": "text/plain"}, b"{}", 415),
+        ("POST", "/api/ask", {}, b" " * 16385, 400),
+        ("POST", "/api/ask", {}, b'{"unknown":true}', 400),
+    ],
+)
+def test_http_request_guards(
+    tmp_path, controlled, method, path, headers, body, expected
+):
+    import http.client
+
+    monitor = Monitor(tmp_path / "run", run_id="guards")
+    monitor.publish(sample())
+    session = MonitorSession(
+        monitor, config=InferenceConfig("http://localhost:1/v1", "fixture")
+    )
+    server = make_server(Dashboard(monitor), port=0, session=session)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+    try:
+        connection.request(
+            method,
+            path,
+            body,
+            {"Content-Type": "application/json", **headers},
+        )
+        response = connection.getresponse()
+        assert response.status == expected
+        response.read()
+        assert not controlled["calls"]
+        assert not reports(monitor)
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+        session.close()
+
+
+def test_explicit_host_allowlist_and_bound_loopback_port(tmp_path):
+    import http.client
+
+    monitor = Monitor(tmp_path / "run", run_id="hosts")
+    server = make_server(
+        Dashboard(monitor), port=0, allowed_hosts=["monitor.example:8443"]
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for host in (
+            f"localhost:{server.server_port}",
+            f"[::1]:{server.server_port}",
+            "monitor.example:8443",
+        ):
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_port
+            )
+            try:
+                connection.request("GET", "/health", headers={"Host": host})
+                response = connection.getresponse()
+                assert response.status == 200
+                response.read()
+            finally:
+                connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_remote_investigation_and_token_requirements(tmp_path, monkeypatch):
+    monitor = Monitor(tmp_path / "run", run_id="access")
+    config = InferenceConfig("http://localhost:1/v1", "fixture")
+    session = MonitorSession(monitor, config=config)
+    with pytest.raises(ValueError, match="non-loopback investigation"):
+        make_server(
+            Dashboard(monitor), host="0.0.0.0", port=0, session=session
+        )
+    monkeypatch.setenv("XMONITOR_SHORT_TOKEN", "x" * 23)
+    with pytest.raises(ValueError, match="at least 24"):
+        MonitorSession(
+            monitor, config=config, access_token_env="XMONITOR_SHORT_TOKEN"
+        )
+
+
+@pytest.mark.parametrize("prerequisite", ["available", "httpx", "nooa"])
+def test_ask_prints_detached_report_without_writing_run(
+    tmp_path, monkeypatch, capsys, controlled, prerequisite
+):
+    from cuphoton.core.cli import main
+    from cuphoton.xmonitor import inference
+    from cuphoton.xmonitor.nooa_backend import NooaError
+
+    monitor = Monitor(tmp_path / "run", run_id="owned")
+    monitor.publish(sample())
+    monitor._collector("watching")
+    before = (monitor.directory / "state.json").read_bytes()
+    config = tmp_path / "inference.toml"
+    config.write_text(
+        '[inference]\nbase_url="http://localhost:1/v1"\nmodel="fixture"\n'
+        + ('backend="nooa"\n' if prerequisite == "nooa" else "")
+    )
+    if prerequisite == "httpx":
+        monkeypatch.setattr(
+            inference.importlib.util, "find_spec", lambda name: None
+        )
+    elif prerequisite == "nooa":
+
+        def unavailable():
+            raise NooaError("NOOA requires Linux bubblewrap")
+
+        monkeypatch.setattr(inference, "_command", unavailable)
+    result = main(
+        [
+            "xmonitor",
+            "ask",
+            "--state",
+            str(monitor.directory),
+            "--config",
+            str(config),
+            "--sample",
+            "signal",
+            "--question",
+            "Explain lag",
+        ]
+    )
+    output = capsys.readouterr()
+    assert (monitor.directory / "state.json").read_bytes() == before
+    assert monitor.snapshot()["reports"] == []
+    assert list(
+        Monitor.load(monitor.directory, recover=False).snapshot()["samples"]
+    ) == ["signal"]
+    if prerequisite == "available":
+        assert result == 0
+        assert json.loads(output.out)["status"] == "completed"
+    else:
+        assert result != 0
+        assert not controlled["calls"]
+
+
+def test_ask_preserves_samples_published_during_inference(
+    tmp_path, monkeypatch, capsys
+):
+    from cuphoton.core.cli import main
+
+    writer = Monitor(tmp_path / "run", run_id="live")
+    writer.publish(sample())
+    config = tmp_path / "inference.toml"
+    config.write_text(
+        '[inference]\nbase_url="http://localhost:1/v1"\nmodel="fixture"\n'
+    )
+
+    async def request(self, evidence, question, instructions):
+        writer.publish(replace(sample(), id="arrived-during-ask"))
+        return {
+            "narrative": "Recorded lag.",
+            "citations": [
+                {
+                    "sample_id": "signal",
+                    "revision": 1,
+                    "measurement": "lag",
+                    "value": 8.0,
+                    "unit": "sample",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(Investigator, "_request", request)
+    assert (
+        main(
+            [
+                "xmonitor",
+                "ask",
+                "--state",
+                str(writer.directory),
+                "--config",
+                str(config),
+                "--sample",
+                "signal",
+                "--question",
+                "Explain lag",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
+    saved = Monitor.load(writer.directory, recover=False).snapshot()
+    assert set(saved["samples"]) == {"signal", "arrived-during-ask"}
+    assert saved["reports"] == []

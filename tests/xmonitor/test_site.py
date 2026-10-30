@@ -37,6 +37,8 @@ def test_serve_cli_retains_saved_state_viewer(tmp_path, monkeypatch):
                 str(monitor.directory),
                 "--prefix",
                 "/review",
+                "--allowed-host",
+                "monitor.example",
             ]
         )
         == 0
@@ -47,6 +49,7 @@ def test_serve_cli_retains_saved_state_viewer(tmp_path, monkeypatch):
         "port": 8765,
         "session": None,
         "prefix": "/review/",
+        "allowed_hosts": ["monitor.example"],
     }
 
 

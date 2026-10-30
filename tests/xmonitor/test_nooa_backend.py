@@ -22,7 +22,7 @@ try:
 except importlib.metadata.PackageNotFoundError:
     INSTALLED = False
 
-pytestmark = pytest.mark.skipif(
+requires_nooa = pytest.mark.skipif(
     not INSTALLED or sys.platform != "linux" or not shutil.which("bwrap"),
     reason="requires the optional NOOA profile and Linux bubblewrap",
 )
@@ -111,6 +111,7 @@ async def run(request, progress=lambda event: None, **kwargs):
     )
 
 
+@requires_nooa
 def test_real_iterative_queries_and_application_view(monkeypatch):
     monkeypatch.setenv("XMONITOR_PARENT_SECRET", "fixture-parent-only")
     calls, events, domain_calls = [], [], []
@@ -170,6 +171,7 @@ def test_real_iterative_queries_and_application_view(monkeypatch):
     assert reads[-1]["evidence"] == {"second": 1}
 
 
+@requires_nooa
 def test_sandbox_hides_host_files_environment_and_network(
     tmp_path, monkeypatch
 ):
@@ -203,6 +205,7 @@ def test_sandbox_hides_host_files_environment_and_network(
     assert all(path.startswith("/runtime/") for path in observed["paths"])
 
 
+@requires_nooa
 def test_iteration_and_domain_read_budgets():
     turns = []
 
@@ -235,6 +238,7 @@ def test_iteration_and_domain_read_budgets():
 
 
 @pytest.mark.parametrize("cancel", [False, True])
+@requires_nooa
 def test_deadline_and_cancel_reap_worker(monkeypatch, cancel):
     processes = []
     launch = asyncio.create_subprocess_exec
@@ -269,6 +273,7 @@ def test_deadline_and_cancel_reap_worker(monkeypatch, cancel):
     assert len(processes) == 1 and processes[0].returncode is not None
 
 
+@requires_nooa
 def test_missing_isolation_fails_before_model_call(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
 
@@ -277,3 +282,98 @@ def test_missing_isolation_fails_before_model_call(monkeypatch):
 
     with pytest.raises(backend.NooaError, match="bubblewrap"):
         asyncio.run(run(request))
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="parent broker uses POSIX process groups"
+)
+@pytest.mark.parametrize(
+    "probe",
+    [
+        "get_sample",
+        "unknown_query",
+        "query_bound",
+        "domain_allowlist",
+        "model_allowlist",
+        "iteration_limit",
+    ],
+)
+def test_parent_broker_with_stdio_worker(monkeypatch, probe):
+    # Exercise the real parent protocol without NOOA, bubblewrap, or a model.
+    frames = {
+        "get_sample": {
+            "kind": "query",
+            "name": "get_sample",
+            "args": {"sample_id": "second"},
+        },
+        "unknown_query": {
+            "kind": "query",
+            "name": "read_file",
+            "args": {"path": "/etc/passwd"},
+        },
+        "query_bound": {
+            "kind": "query",
+            "name": "recent_findings",
+            "args": {"limit": 21},
+        },
+        "domain_allowlist": {
+            "kind": "query",
+            "name": "domain_view",
+            "args": {"sample_id": "second", "query": "unlisted"},
+        },
+        "model_allowlist": {
+            "kind": "model",
+            "payload": {"messages": [], "tools": []},
+        },
+        "iteration_limit": {
+            "kind": "model",
+            "payload": {"messages": [], "tools": []},
+        },
+    }
+    script = "\n".join(
+        [
+            "import json,sys",
+            "json.loads(sys.stdin.readline())",
+            f"frame = {frames[probe]!r}",
+            f"for _ in range({3 if probe == 'iteration_limit' else 1}):",
+            "    print(json.dumps(frame), flush=True)",
+            "    reply = json.loads(sys.stdin.readline())",
+            "print(json.dumps({'kind':'result','answer':reply}), flush=True)",
+        ]
+    )
+    monkeypatch.setattr(
+        backend, "_command", lambda: [sys.executable, "-I", "-c", script]
+    )
+    domain_calls, requests = [], []
+
+    async def request(payload):
+        requests.append(payload)
+        return response(
+            "forbidden_tool"
+            if probe == "model_allowlist"
+            else "execute_python",
+            {"code": "pass"},
+        )
+
+    options = dict(
+        max_iterations=2,
+        domain_views={"residual": "Allowed view"},
+        domain_query=lambda *args: domain_calls.append(args),
+    )
+    if probe in {"model_allowlist", "iteration_limit"}:
+        with pytest.raises(
+            backend.NooaError,
+            match="invalid NOOA model response"
+            if probe == "model_allowlist"
+            else "iteration limit",
+        ):
+            asyncio.run(run(request, **options))
+        assert len(requests) == (1 if probe == "model_allowlist" else 2)
+    else:
+        result = asyncio.run(run(request, **options))
+        if probe == "get_sample":
+            assert result["value"]["id"] == "second"
+        else:
+            assert result == {"error": "unavailable evidence query"}
+        assert not requests
+    assert not domain_calls

@@ -6,13 +6,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
 import ipaddress
 import json
 import re
 import threading
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
@@ -149,12 +151,17 @@ class Dashboard:
             .replace(">", "\\u003e")
             .replace("&", "\\u0026")
         )
+        script = resources.joinpath("dashboard.js").read_text()
+        script_hash = base64.b64encode(
+            hashlib.sha256(script.encode()).digest()
+        ).decode()
         values = {
             "__TITLE__": html.escape(self.title),
             "__STYLE__": resources.joinpath("dashboard.css").read_text(),
             "__PANELS__": "".join(panels),
             "__DATA__": data,
-            "__SCRIPT__": resources.joinpath("dashboard.js").read_text(),
+            "__SCRIPT__": script,
+            "__SCRIPT_HASH__": script_hash,
         }
         return re.sub(
             "|".join(values), lambda match: values[match.group(0)], template
@@ -168,6 +175,34 @@ class Dashboard:
         return path
 
 
+def _authority(value: str) -> str:
+    """Validate an explicitly trusted HTTP Host authority."""
+    parsed = urlsplit("//" + value)
+    if (
+        not value
+        or any(character.isspace() for character in value)
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.hostname
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or value.endswith(":")
+    ):
+        raise ValueError(
+            "allowed hosts require a hostname or [IPv6], "
+            "optionally with a port"
+        )
+    # Accessing port also rejects malformed and out-of-range ports.
+    port = parsed.port
+    hostname = parsed.hostname.lower()
+    if ":" in hostname:
+        hostname = f"[{ipaddress.IPv6Address(hostname)}]"
+    elif not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", hostname):
+        raise ValueError("invalid allowed hostname")
+    return hostname if port is None else f"{hostname}:{port}"
+
+
 def make_server(
     dashboard: Dashboard,
     *,
@@ -175,9 +210,15 @@ def make_server(
     port: int = 8765,
     session: MonitorSession | None = None,
     prefix: str = "/",
+    allowed_hosts: Sequence[str] = (),
 ) -> ThreadingHTTPServer:
     """Construct a viewer with optional investigation actions."""
     prefix = normalize_prefix(prefix)
+    trusted_hosts = {_authority(value) for value in allowed_hosts}
+    _authority(
+        f"[{host}]" if ":" in host and not host.startswith("[") else host
+    )
+    trusted_origins: set[str] = set()
     if session is not None and session.monitor is not dashboard.monitor:
         raise ValueError("dashboard and session must share one monitor")
     try:
@@ -208,7 +249,22 @@ def make_server(
         )
 
     class Handler(BaseHTTPRequestHandler):
+        def _trusted_host(self) -> bool:
+            values = self.headers.get_all("Host", [])
+            try:
+                valid = (
+                    len(values) == 1
+                    and _authority(values[0]) in trusted_hosts
+                )
+            except ValueError:
+                valid = False
+            if not valid:
+                self.send_error(421, "Unrecognized monitor host")
+            return valid
+
         def do_GET(self) -> None:
+            if not self._trusted_host():
+                return
             parsed = urlsplit(self.path)
             if prefix != "/" and parsed.path == prefix.rstrip("/"):
                 self.send_response(308)
@@ -274,6 +330,8 @@ def make_server(
             self.wfile.write(body)
 
         def do_POST(self) -> None:
+            if not self._trusted_host():
+                return
             if self.path not in {prefix + "api/ask", prefix + "api/cancel"}:
                 self._json(404, {"error": "Unknown monitor action."})
                 return
@@ -288,10 +346,7 @@ def make_server(
                 )
                 return
             origin = self.headers.get("Origin")
-            if origin and origin not in {
-                "http://" + self.headers.get("Host", ""),
-                "https://" + self.headers.get("Host", ""),
-            }:
+            if origin and origin not in trusted_origins:
                 self._json(
                     403,
                     {"error": "Open the monitor page to investigate."},
@@ -352,7 +407,20 @@ def make_server(
             # Scientific identifiers and HTTP input need not enter logs.
             pass
 
-    return ThreadingHTTPServer((host, port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
+    addresses = {"127.0.0.1", "localhost", "[::1]"} if loopback else {host}
+    for address in addresses:
+        if ":" in address and not address.startswith("["):
+            address = f"[{address}]"
+        trusted_hosts.add(_authority(f"{address}:{server.server_port}"))
+        if server.server_port in {80, 443}:
+            trusted_hosts.add(_authority(address))
+    trusted_origins.update(
+        f"{scheme}://{authority}"
+        for authority in trusted_hosts
+        for scheme in ("http", "https")
+    )
+    return server
 
 
 def serve(
@@ -362,10 +430,16 @@ def serve(
     port: int = 8765,
     session: MonitorSession | None = None,
     prefix: str = "/",
+    allowed_hosts: Sequence[str] = (),
 ) -> None:
     """Serve until interrupted, owning the optional live session lifecycle."""
     with make_server(
-        dashboard, host=host, port=port, session=session, prefix=prefix
+        dashboard,
+        host=host,
+        port=port,
+        session=session,
+        prefix=prefix,
+        allowed_hosts=allowed_hosts,
     ) as server:
         try:
             if session:

@@ -301,3 +301,106 @@ def test_cancellation_admission_and_revised_inflight_evidence(
         assert (await task)["status"] == "stale"
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://inference.example/v1",
+        "http://192.0.2.1/v1",
+        "http://[2001:db8::1]/v1",
+    ],
+)
+def test_remote_bearer_requires_https(url):
+    with pytest.raises(ValueError, match="requires HTTPS"):
+        InferenceConfig(
+            url, "fixture", auth="bearer", api_key_env="FIXTURE_KEY"
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://inference.example/v1",
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://[::1]:8000/v1",
+    ],
+)
+def test_bearer_allows_https_or_loopback(url):
+    assert (
+        InferenceConfig(
+            url, "fixture", auth="bearer", api_key_env="FIXTURE_KEY"
+        ).base_url
+        == url
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "revision",
+        "unit",
+        "boolean",
+        "narrative",
+        "citations",
+        "finish_reason",
+        "tool_calls",
+    ],
+)
+def test_basic_response_contract_rejects_invalid_answers(
+    tmp_path, monkeypatch, invalid
+):
+    monitor = make_monitor(tmp_path)
+    # A unit-valued measurement makes bool/numeric equality otherwise pass.
+    monitor.publish(
+        Sample(
+            "observation", 3, {"flux": Measurement(1.0, "arb")}, revision=2
+        )
+    )
+    answer = {
+        "narrative": "Measured flux.",
+        "citations": [
+            {
+                "sample_id": "observation",
+                "revision": 2,
+                "measurement": "flux",
+                "value": 1.0,
+                "unit": "arb",
+            }
+        ],
+    }
+    if invalid == "revision":
+        answer["citations"][0]["revision"] = 1
+    elif invalid == "unit":
+        answer["citations"][0]["unit"] = "other"
+    elif invalid == "boolean":
+        answer["citations"][0]["value"] = True
+    elif invalid == "narrative":
+        answer["narrative"] = "x" * 8001
+    elif invalid == "citations":
+        answer["citations"] *= 65
+    message = {"content": json.dumps(answer)}
+    if invalid == "tool_calls":
+        message["tool_calls"] = [{"function": {"name": "unexpected"}}]
+
+    async def chat(self, payload):
+        return {
+            "choices": [
+                {
+                    "finish_reason": "length"
+                    if invalid == "finish_reason"
+                    else "stop",
+                    "message": message,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(Investigator, "_chat", chat)
+    report = asyncio.run(
+        Investigator(
+            InferenceConfig("http://localhost:1/v1", "fixture")
+        ).investigate(monitor, ["observation"])
+    )
+    assert report["status"] == "failed"
+    assert not report.get("answer")

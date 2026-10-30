@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from cuphoton.core.cli import (
     BoolInvariant,
@@ -21,9 +22,11 @@ from cuphoton.core.cli import (
 )
 
 from .dashboard import Dashboard, serve
-from .inference import InferenceConfig, Investigator
+from .inference import InferenceConfig, InferenceError, Investigator
 from .monitor import Monitor
+from .nooa_backend import NooaError
 from .quickstart import quickstart
+from .records import encode
 from .session import MonitorSession
 from .site import normalize_prefix, serve_site
 
@@ -91,6 +94,7 @@ class ServeCommand(_XMonitorCommand):
     inference_config: Path | None = None
     auto_investigate = False
     access_token_env: str | None = None
+    allowed_host: list[str] = []
 
     class StateArg(PathValueInvariant):
         _arg = "--state"
@@ -110,12 +114,23 @@ class ServeCommand(_XMonitorCommand):
 
     class AutoInvestigateArg(BoolInvariant):
         _arg = "--auto-investigate"
-        _help = "Automatically investigate new findings in this session."
+        _help = (
+            "Investigate current warning/error sample revisions without an "
+            "automatic report, including saved samples."
+        )
         _default = False
 
     class AccessTokenEnvArg(StringInvariant):
         _arg = "--access-token-env"
         _help = "Environment reference for remote investigation access."
+
+    class AllowedHostArg(SequenceInvariant):
+        _arg = "--allowed-host"
+        _help = (
+            "Additional trusted Host authority (name[:port]); repeat for "
+            "proxy or LAN names."
+        )
+        _item_type = str
 
     class HostArg(StringInvariant):
         _arg = "--host"
@@ -137,10 +152,11 @@ class ServeCommand(_XMonitorCommand):
                 self.inference_config
                 or self.auto_investigate
                 or self.access_token_env
+                or self.allowed_host
             ):
                 raise ValueError(
                     "site applications configure their own investigation; "
-                    "inference flags require --state"
+                    "inference and allowed-host flags require --state"
                 )
             serve_site(
                 self.site, host=self.host, port=self.port, prefix=self.prefix
@@ -174,12 +190,13 @@ class ServeCommand(_XMonitorCommand):
             port=self.port,
             session=session,
             prefix=prefix,
+            allowed_hosts=self.allowed_host,
         )
 
 
 class AskCommand(_StateCommand):
     _description_ = (
-        "Investigate selected scalar evidence with an explicit endpoint."
+        "Print an investigation of saved evidence without changing the run."
     )
     config: Path
     question: str
@@ -202,15 +219,26 @@ class AskCommand(_StateCommand):
         _item_type = str
 
     def execute(self) -> None:
-        report = asyncio.run(
-            Investigator(InferenceConfig.from_toml(self.config)).investigate(
-                Monitor.load(self.state),
-                self.sample,
-                question=self.question,
+        investigator = Investigator(InferenceConfig.from_toml(self.config))
+        try:
+            investigator.check_available()
+        except (InferenceError, NooaError) as exc:
+            raise CommandError(str(exc)) from exc
+        snapshot = Monitor.load(self.state, recover=False).snapshot()
+        snapshot.pop("storage_error")
+        # The live directory keeps its sole writer. Reports from this command
+        # exist only in the isolated copy and the JSON printed below.
+        with TemporaryDirectory(prefix="cuphoton-xmonitor-ask-") as directory:
+            Path(directory, "state.json").write_text(encode(snapshot))
+            report = asyncio.run(
+                investigator.investigate(
+                    Monitor.load(directory),
+                    self.sample,
+                    question=self.question,
+                )
             )
-        )
         print(json.dumps(report, indent=2, allow_nan=False))
         if report["status"] != "completed":
             raise CommandError(
-                "investigation did not complete; see saved report status"
+                "investigation did not complete; see printed report status"
             )
