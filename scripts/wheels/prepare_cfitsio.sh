@@ -6,6 +6,7 @@
 # Run once per cibuildwheel Linux container, before the Python builds.
 set -euo pipefail
 
+wheel_script_dir=$(cd "$(dirname "$0")" && pwd)
 cfitsio_prefix=${CUPHOTON_XDR_CFITSIO_ROOT:?Set the CFITSIO installation prefix}
 cfitsio_commit=d6d27653740864a0483e74cff23c53e34e1dceee # CFITSIO 4.7.0
 # GitHub may change archive compression; see "Stability of source code archives":
@@ -21,6 +22,8 @@ curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' \
 printf '%s  cfitsio.tar.gz\n' "$cfitsio_sha256" | sha256sum --check --strict
 tar -xzf cfitsio.tar.gz
 cd "cfitsio-${cfitsio_commit}"
+patch --batch --forward --fuzz=0 -p1 \
+  < "$wheel_script_dir/patches/cfitsio-version-string.patch"
 ./configure --prefix="$cfitsio_prefix" \
   --enable-reentrant --disable-curl --without-bzip2 \
   --disable-static --enable-shared

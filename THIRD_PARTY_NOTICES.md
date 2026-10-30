@@ -191,6 +191,9 @@ external contributions to this project including patches, pull requests, etc.
 
 ### CFITSIO copyright and license notice
 
+The bundled library includes a local patch that adds a readable version
+string. The patch is included in the cuPhoton source distribution.
+
 The following notice is reproduced from `licenses/License.txt` in the
 CFITSIO 4.7.0 distribution bundled by the local wheel recipe:
 

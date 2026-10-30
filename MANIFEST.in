@@ -14,7 +14,7 @@ prune .github
 prune .gitlab
 prune scripts
 include scripts/cuphoton-openmpi-rank-exec
-recursive-include scripts/wheels *.sh *.py *.txt
+recursive-include scripts/wheels *.sh *.py *.txt *.patch
 recursive-include scripts/conda *.py
 recursive-include packaging/conda *.yaml *.sh
 include LICENSE

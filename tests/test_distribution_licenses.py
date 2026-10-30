@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check license contents in the archives that distribution CI accepts."""
+"""Check bundled library identity and licenses in distribution archives."""
 
 from __future__ import annotations
 
@@ -30,7 +30,9 @@ PYBIND11_NOTICE = next(
 )
 
 
-def make_archive(tmp_path, kind, notices, expression=None):
+def make_archive(
+    tmp_path, kind, notices, expression=None, cfitsio=b"CFITSIO 4.7.0\0"
+):
     version = "0.1.4"
     expression = expression or (
         "Apache-2.0 AND CFITSIO AND BSD-3-Clause"
@@ -58,7 +60,7 @@ def make_archive(tmp_path, kind, notices, expression=None):
                 "cuphoton/xdr/_nvcomp_batch_ext."
                 "cpython-312-x86_64-linux-gnu.so"
             ): b"",
-            "cuphoton.libs/libcfitsio-12345678.so.10.0.0": b"",
+            "cuphoton.libs/libcfitsio-12345678.so.10.0.0": cfitsio,
         }
         with zipfile.ZipFile(path, "w") as archive:
             for name, content in files.items():
@@ -109,4 +111,11 @@ def test_native_wheel_requires_pybind11_license_expression(tmp_path):
         tmp_path, "wheel", NOTICES, expression="Apache-2.0 AND CFITSIO"
     )
     with pytest.raises(ValueError, match="expected License-Expression"):
+        distributions.check_wheel(path)
+
+
+@pytest.mark.parametrize("cfitsio", [b"", b"CFITSIO 4.6.4\0"])
+def test_native_wheel_requires_cfitsio_identity(tmp_path, cfitsio):
+    path = make_archive(tmp_path, "wheel", NOTICES, cfitsio=cfitsio)
+    with pytest.raises(ValueError, match="CFITSIO is missing its 4.7.0"):
         distributions.check_wheel(path)
