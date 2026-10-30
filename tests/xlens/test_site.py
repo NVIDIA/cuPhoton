@@ -16,22 +16,22 @@ import urllib.request
 import pytest
 
 from cuphoton.core.cli import main
-from cuphoton.xmonitor import Dashboard, Measurement, Monitor, Sample
-from cuphoton.xmonitor.dashboard import make_server
-from cuphoton.xmonitor.site import normalize_prefix, serve_site
+from cuphoton.xlens import Dashboard, Measurement, Monitor, Sample
+from cuphoton.xlens.dashboard import make_server
+from cuphoton.xlens.site import normalize_prefix, serve_site
 
 
 def test_serve_cli_retains_saved_state_viewer(tmp_path, monkeypatch):
     monitor = Monitor(tmp_path / "state", run_id="saved-viewer")
     calls = []
     monkeypatch.setattr(
-        "cuphoton.xmonitor.commands.serve",
+        "cuphoton.xlens.commands.serve",
         lambda dashboard, **kwargs: calls.append((dashboard, kwargs)),
     )
     assert (
         main(
             [
-                "xmonitor",
+                "xlens",
                 "serve",
                 "--state",
                 str(monitor.directory),
@@ -60,12 +60,12 @@ def test_site_cli_loads_installed_application_and_preserves_configuration(
     module = types.ModuleType("example_site")
     module.serve = lambda **kwargs: calls.append(kwargs)
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    manifest = tmp_path / "xmonitor-site.toml"
+    manifest = tmp_path / "xlens-site.toml"
     manifest.write_text(
         '[site]\napplication = "example_site:serve"\n'
         'prefix = "/observatory"\n[collection]\ntitle = "Measurements"\n'
     )
-    args = ["xmonitor", "serve", "--site", str(tmp_path)]
+    args = ["xlens", "serve", "--site", str(tmp_path)]
     assert main(args + ["--host", "0.0.0.0", "--port", "8910"]) == 0
     assert calls[0] == {
         "root": tmp_path,
@@ -90,7 +90,7 @@ def test_site_cli_loads_installed_application_and_preserves_configuration(
     ]:
         assert main(args + extra, err=io.StringIO()) != 0
     assert len(calls) == 2
-    assert main(["xmonitor", "serve"], err=io.StringIO()) != 0
+    assert main(["xlens", "serve"], err=io.StringIO()) != 0
 
 
 @pytest.mark.parametrize(
@@ -100,7 +100,7 @@ def test_site_cli_loads_installed_application_and_preserves_configuration(
         ('[site]\napplication = "missing"', "module:callable"),
         ('[site]\napplication = "example_site:"', "module:callable"),
         (
-            '[site]\napplication = "not_installed_xmonitor_site:serve"',
+            '[site]\napplication = "not_installed_xlens_site:serve"',
             "install",
         ),
     ],
@@ -108,7 +108,7 @@ def test_site_cli_loads_installed_application_and_preserves_configuration(
 def test_site_reports_actionable_configuration_errors(
     tmp_path, text, message
 ):
-    (tmp_path / "xmonitor-site.toml").write_text(text)
+    (tmp_path / "xlens-site.toml").write_text(text)
     with pytest.raises(ValueError, match=message):
         serve_site(tmp_path)
 
@@ -116,7 +116,7 @@ def test_site_reports_actionable_configuration_errors(
 def test_site_reports_the_cause_of_application_import_failure(
     tmp_path, monkeypatch
 ):
-    (tmp_path / "xmonitor-site.toml").write_text(
+    (tmp_path / "xlens-site.toml").write_text(
         '[site]\napplication = "example_site:serve"\n'
     )
 
@@ -124,7 +124,7 @@ def test_site_reports_the_cause_of_application_import_failure(
         raise ModuleNotFoundError("No module named 'application_dependency'")
 
     monkeypatch.setattr(
-        "cuphoton.xmonitor.site.importlib.import_module", unavailable
+        "cuphoton.xlens.site.importlib.import_module", unavailable
     )
     with pytest.raises(ValueError, match="application_dependency"):
         serve_site(tmp_path)

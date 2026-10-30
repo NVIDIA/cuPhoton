@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from cuphoton.xmonitor import (
+from cuphoton.xlens import (
     Dashboard,
     InferenceConfig,
     Investigator,
@@ -118,7 +118,7 @@ def test_portable_client_auth_model_and_report_separation(
     tmp_path, monkeypatch, endpoint, auth
 ):
     url, seen, _ = endpoint
-    monkeypatch.setenv("CUPHOTON_XMONITOR_API_KEY", "fixture-credential")
+    monkeypatch.setenv("CUPHOTON_XLENS_API_KEY", "fixture-credential")
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-credential")
     monitor = make_monitor(tmp_path)
     before = monitor.snapshot()["samples"]
@@ -126,7 +126,7 @@ def test_portable_client_auth_model_and_report_separation(
         url,
         "institution/exact-model-id",
         auth=auth,
-        api_key_env="CUPHOTON_XMONITOR_API_KEY" if auth == "bearer" else None,
+        api_key_env="CUPHOTON_XLENS_API_KEY" if auth == "bearer" else None,
     )
     report = asyncio.run(
         Investigator(config).investigate(monitor, ["observation"])
@@ -202,7 +202,7 @@ def test_nooa_invalid_answer_reports_validation_not_transport(
         return answer
 
     monkeypatch.setattr(
-        "cuphoton.xmonitor.nooa_backend.run_nooa", completed_nooa
+        "cuphoton.xlens.nooa_backend.run_nooa", completed_nooa
     )
     investigator = Investigator(
         InferenceConfig(
@@ -229,9 +229,9 @@ def test_bounds_missing_credentials_and_timeouts(
 ):
     url, seen, behavior = endpoint
     monitor = make_monitor(tmp_path)
-    monkeypatch.delenv("CUPHOTON_XMONITOR_API_KEY", raising=False)
+    monkeypatch.delenv("CUPHOTON_XLENS_API_KEY", raising=False)
     missing = InferenceConfig(
-        url, "custom", auth="bearer", api_key_env="CUPHOTON_XMONITOR_API_KEY"
+        url, "custom", auth="bearer", api_key_env="CUPHOTON_XLENS_API_KEY"
     )
     assert (
         asyncio.run(

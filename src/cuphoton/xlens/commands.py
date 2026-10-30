@@ -31,7 +31,7 @@ from .session import MonitorSession
 from .site import normalize_prefix, serve_site
 
 
-class _XMonitorCommand(InvariantAwareCommand):
+class _XLensCommand(InvariantAwareCommand):
     _log_level_ = False
     _quiet_ = False
     _verbose_ = False
@@ -47,7 +47,7 @@ class _XMonitorCommand(InvariantAwareCommand):
         raise NotImplementedError
 
 
-class QuickstartCommand(_XMonitorCommand):
+class QuickstartCommand(_XLensCommand):
     _description_ = "Generate invented measurements and an offline dashboard."
     output_dir: Path
 
@@ -60,12 +60,12 @@ class QuickstartCommand(_XMonitorCommand):
         quickstart(self.output_dir)
 
 
-class _StateCommand(_XMonitorCommand):
+class _StateCommand(_XLensCommand):
     state: Path
 
     class StateArg(PathValueInvariant):
         _arg = "--state"
-        _help = "Existing xMonitor state directory."
+        _help = "Existing xLens state directory."
         _required = True
 
 
@@ -84,7 +84,7 @@ class ExportCommand(_StateCommand):
         )
 
 
-class ServeCommand(_XMonitorCommand):
+class ServeCommand(_XLensCommand):
     _description_ = "Serve a saved monitor or installed application site."
     state: Path | None = None
     site: Path | None = None
@@ -98,11 +98,11 @@ class ServeCommand(_XMonitorCommand):
 
     class StateArg(PathValueInvariant):
         _arg = "--state"
-        _help = "Existing xMonitor state directory; use --state or --site."
+        _help = "Existing xLens state directory; use --state or --site."
 
     class SiteArg(PathValueInvariant):
         _arg = "--site"
-        _help = "Application directory or its trusted xmonitor-site.toml."
+        _help = "Application directory or its trusted xlens-site.toml."
 
     class PrefixArg(StringInvariant):
         _arg = "--prefix"
@@ -228,7 +228,7 @@ class AskCommand(_StateCommand):
         snapshot.pop("storage_error")
         # The live directory keeps its sole writer. Reports from this command
         # exist only in the isolated copy and the JSON printed below.
-        with TemporaryDirectory(prefix="cuphoton-xmonitor-ask-") as directory:
+        with TemporaryDirectory(prefix="cuphoton-xlens-ask-") as directory:
             Path(directory, "state.json").write_text(encode(snapshot))
             report = asyncio.run(
                 investigator.investigate(

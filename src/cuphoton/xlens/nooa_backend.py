@@ -102,7 +102,7 @@ def _command() -> list[str]:
     try:
         version = importlib.metadata.version("nooa")
     except importlib.metadata.PackageNotFoundError as exc:
-        raise NooaError("install cuphoton[xmonitor-nooa] for NOOA") from exc
+        raise NooaError("install cuphoton[xlens-nooa] for NOOA") from exc
     if version != "0.0.10":
         raise NooaError("the NOOA backend requires nooa==0.0.10")
     executable = shutil.which("bwrap")
@@ -151,7 +151,7 @@ def _command() -> list[str]:
         command.extend(_package_mounts())
     except (ImportError, importlib.metadata.PackageNotFoundError) as exc:
         raise NooaError(
-            "install the complete cuphoton[xmonitor-nooa] profile"
+            "install the complete cuphoton[xlens-nooa] profile"
         ) from exc
     command.extend(
         (

@@ -31,7 +31,7 @@ requirements.
 ## Workflow guides
 
 - [Core](components/core.md): shared CLI and configuration behavior.
-- [cuPhoton xMonitor](components/xmonitor.md): scientific monitoring, offline
+- [cuPhoton xLens](components/xlens.md): scientific monitoring, offline
   dashboards and optional evidence-based investigation through institution-hosted
   models.
 - [xDataReader](components/xdr.md): GPU FITS loading and the shared

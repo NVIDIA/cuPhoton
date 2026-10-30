@@ -1,6 +1,6 @@
-# cuPhoton xMonitor
+# cuPhoton xLens
 
-`cuphoton.xmonitor` collects scientific measurements, deterministic findings and
+`cuphoton.xlens` collects scientific measurements, deterministic findings and
 evidence references. It provides a dashboard, JSON API and standalone HTML
 export. Applications own input formats, scientific rules, units, thresholds
 and detailed views. Optional model investigation reads selected scalar evidence
@@ -13,11 +13,11 @@ From a current development checkout, install the base package:
 
 ```bash
 uv sync --locked
-uv run cuphoton xmonitor quickstart --output-dir xmonitor-demo
-uv run cuphoton xmonitor serve --state xmonitor-demo/state --port 8765
+uv run cuphoton xlens quickstart --output-dir xlens-demo
+uv run cuphoton xlens serve --state xlens-demo/state --port 8765
 ```
 
-Open `http://127.0.0.1:8765` or the generated `xmonitor-demo/report.html`.
+Open `http://127.0.0.1:8765` or the generated `xlens-demo/report.html`.
 
 The eight invented samples include a level change and a missing measurement.
 Their irregular observation times are independent of their sequence numbers.
@@ -35,7 +35,7 @@ contain no bundled third-party libraries or fonts.
 ## Serve an application site
 
 An installed application can provide a collection of monitors and its own
-landing page through a local `xmonitor-site.toml`:
+landing page through a local `xlens-site.toml`:
 
 ```toml
 [site]
@@ -50,7 +50,7 @@ Point the shared command at the directory containing that file, or at the
 manifest itself:
 
 ```sh
-cuphoton xmonitor serve --site ./observations --host 0.0.0.0 --port 8765
+cuphoton xlens serve --site ./observations --host 0.0.0.0 --port 8765
 ```
 
 The application package must be installed in the same environment as
@@ -77,7 +77,7 @@ The JSON and health routes also live beneath the mount, for example
 ## Connect an application
 
 ```python
-from cuphoton.xmonitor import Dashboard, Finding, Measurement, Monitor, Sample
+from cuphoton.xlens import Dashboard, Finding, Measurement, Monitor, Sample
 
 monitor = Monitor("observation-state", run_id="example-night")
 monitor.publish(Sample(
@@ -92,7 +92,7 @@ Dashboard(monitor, title="Example observations").export("observations.html")
 A `Sample` identifies one application subject, such as a window, exposure,
 candidate or reconstruction iteration. Multiple subjects may share a sequence.
 Sequence controls display order; physical/observation times and their unit/origin
-come from the adapter. xMonitor records processing time in UTC separately. Metadata
+come from the adapter. xLens records processing time in UTC separately. Metadata
 can describe a solver step, configuration or provenance without redefining time.
 
 `Measurement` has a scalar value, unit, status, optional coverage fraction and
@@ -113,7 +113,7 @@ application logs can retain additional details under their own disclosure policy
 Large arrays stay in application artifacts. `Artifact(name, path, sha256,
 media_type)` records a relative reference and digest. Applications can use
 `cuphoton.core.artifacts.file_sha256` to calculate it and verify it when reading.
-xMonitor records references without opening them. A sample is limited to 64 KiB,
+xLens records references without opening them. A sample is limited to 64 KiB,
 including at most 16 KiB of metadata and 128 measurements.
 
 Pass a trusted `render_sample(sample) -> str` callable to `Dashboard` for domain
@@ -158,12 +158,12 @@ endpoint configuration:
 
 | Profile | Installation | Execution |
 | --- | --- | --- |
-| Basic | `cuphoton[xmonitor-inference]` | One bounded scalar snapshot and response; Python 3.12–3.14 |
-| NOOA | `cuphoton[xmonitor-nooa]` | Iterative evidence queries and isolated Python; Linux, Python 3.12/3.13 |
+| Basic | `cuphoton[xlens-inference]` | One bounded scalar snapshot and response; Python 3.12–3.14 |
+| NOOA | `cuphoton[xlens-nooa]` | Iterative evidence queries and isolated Python; Linux, Python 3.12/3.13 |
 
 For NOOA, install your distribution's `bubblewrap` package and enable its
 supported unprivileged user-namespace configuration. From a checkout use
-`uv sync --locked --extra xmonitor-nooa`. The extra pins NOOA 0.0.10. The backend
+`uv sync --locked --extra xlens-nooa`. The extra pins NOOA 0.0.10. The backend
 fails visibly when the required interpreter, package or isolation is unavailable;
 it does not fall back to running generated code in the monitor process.
 The deterministic package and basic profile continue to support Python 3.14.
@@ -191,18 +191,18 @@ max_evidence_bytes = 8388608
 
 Use `backend = "basic"` for the single-request profile. For bearer
 authentication, set `auth = "bearer"` and
-`api_key_env = "CUPHOTON_XMONITOR_API_KEY"`, then inject the secret through your
+`api_key_env = "CUPHOTON_XLENS_API_KEY"`, then inject the secret through your
 institution's secret-management procedure. The config contains the variable
 name, never the value. No-auth mode requires omitting `api_key_env` and ignores
 ambient credential variables. No endpoint, model, credential, model registry or
 tracing destination is selected implicitly. Bearer authentication requires HTTPS
 for non-loopback endpoints; plain HTTP is accepted for loopback endpoints.
 HTTPS uses normal Python certificate verification, including
-`SSL_CERT_FILE`/`SSL_CERT_DIR`; xMonitor configuration cannot disable verification.
+`SSL_CERT_FILE`/`SSL_CERT_DIR`; xLens configuration cannot disable verification.
 Ambient proxies and HTTP redirects are disabled.
 
 ```bash
-cuphoton xmonitor ask --state xmonitor-demo/state --config inference.toml \
+cuphoton xlens ask --state xlens-demo/state --config inference.toml \
   --sample sample-4 --sample sample-6 \
   --question "Which measurements need inspection, and why?"
 ```
@@ -246,7 +246,7 @@ visibly without switching the configured destination or model.
 
 An institution's [vLLM OpenAI-compatible server](https://docs.vllm.ai/en/stable/serving/online_serving/openai_compatible_server/)
 can supply the endpoint when configured for the selected model and required
-chat/tool capabilities. xMonitor does not deploy a model server. The
+chat/tool capabilities. xLens does not deploy a model server. The
 [Chat Completions API](https://developers.openai.com/api/reference/resources/chat)
 describes the wire format; compatibility depends on the actual server and model.
 
@@ -281,7 +281,7 @@ in the same process as the monitor. Supply the application's ordinary polling
 callback and optional diagnostic catalog:
 
 ```python
-from cuphoton.xmonitor import InferenceConfig, MonitorSession, serve
+from cuphoton.xlens import InferenceConfig, MonitorSession, serve
 
 session = MonitorSession(
     monitor,
@@ -303,7 +303,7 @@ request is running. Unavailable inference and bounded admission are visible
 states; they do not turn incomplete input into valid measurements. Replaying an
 unchanged revision does not create another automatic investigation.
 
-For the generic saved-state viewer, use `cuphoton xmonitor serve --state ...`
+For the generic saved-state viewer, use `cuphoton xlens serve --state ...`
 with `--inference-config inference.toml` and, when desired,
 `--auto-investigate`. Applications supply polling and domain callbacks through
 `MonitorSession`; the generic viewer does not discover application input files.
@@ -312,7 +312,7 @@ starting it. A static export retains plots and reports but cannot start
 investigations.
 
 Shared investigation access requires an independent browser token, supplied
-with `access_token_env="XMONITOR_BROWSER_TOKEN"` or `--access-token-env` and at least
+with `access_token_env="XLENS_BROWSER_TOKEN"` or `--access-token-env` and at least
 24 characters. Enter that token in the browser's password field; it stays in
 page memory and is not embedded in the HTML export or bootstrap. It is distinct
 from the model API credential, which never goes to the browser. The token

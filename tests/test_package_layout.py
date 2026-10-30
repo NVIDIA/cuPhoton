@@ -25,7 +25,7 @@ COMPONENTS = (
     "xscan",
     "xrep",
     "xray",
-    "xmonitor",
+    "xlens",
 )
 
 
@@ -78,8 +78,8 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "viz",
         "ximage",
         "rubin",
-        "xmonitor-inference",
-        "xmonitor-nooa",
+        "xlens-inference",
+        "xlens-nooa",
     }
 
 
@@ -139,7 +139,7 @@ def test_packaged_assets_are_available() -> None:
     )
     for name in ("dashboard.html", "dashboard.css", "dashboard.js"):
         assert (
-            resources.files("cuphoton.xmonitor")
+            resources.files("cuphoton.xlens")
             .joinpath("assets", name)
             .is_file()
         )
@@ -156,7 +156,7 @@ def test_packaged_assets_are_available() -> None:
         ["xscan", "--help"],
         ["xrep", "--help"],
         ["xray", "--help"],
-        ["xmonitor", "--help"],
+        ["xlens", "--help"],
     ),
 )
 def test_cli_help_and_version_do_not_import_optional_gpu_packages(

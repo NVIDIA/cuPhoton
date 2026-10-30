@@ -12,9 +12,9 @@ from dataclasses import replace
 
 import pytest
 
-from cuphoton.xmonitor import Dashboard, Finding, Measurement, Monitor, Sample
-from cuphoton.xmonitor.dashboard import make_server
-from cuphoton.xmonitor.quickstart import quickstart
+from cuphoton.xlens import Dashboard, Finding, Measurement, Monitor, Sample
+from cuphoton.xlens.dashboard import make_server
+from cuphoton.xlens.quickstart import quickstart
 
 
 def sample(value=3.0, revision=1):
@@ -110,7 +110,7 @@ def test_storage_failure_preserves_previous_state(tmp_path, monkeypatch):
     def fail(*args):
         raise OSError("storage unavailable")
 
-    monkeypatch.setattr("cuphoton.xmonitor.monitor.os.fsync", fail)
+    monkeypatch.setattr("cuphoton.xlens.monitor.os.fsync", fail)
     with pytest.raises(OSError):
         monitor.publish(sample(4, 2))
     assert monitor.snapshot()["storage_error"]

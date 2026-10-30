@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from cuphoton.xmonitor import nooa_backend as backend
+from cuphoton.xlens import nooa_backend as backend
 
 try:
     INSTALLED = importlib.metadata.version("nooa") == "0.0.10"
@@ -113,7 +113,7 @@ async def run(request, progress=lambda event: None, **kwargs):
 
 @requires_nooa
 def test_real_iterative_queries_and_application_view(monkeypatch):
-    monkeypatch.setenv("XMONITOR_PARENT_SECRET", "fixture-parent-only")
+    monkeypatch.setenv("XLENS_PARENT_SECRET", "fixture-parent-only")
     calls, events, domain_calls = [], [], []
     original = evidence()
     unchanged = copy.deepcopy(original)
@@ -177,7 +177,7 @@ def test_sandbox_hides_host_files_environment_and_network(
 ):
     sentinel = tmp_path / "private.txt"
     sentinel.write_text("parent-only")
-    monkeypatch.setenv("XMONITOR_PARENT_SECRET", "fixture-parent-only")
+    monkeypatch.setenv("XLENS_PARENT_SECRET", "fixture-parent-only")
     host_network = os.readlink("/proc/self/ns/net")
     script = (
         "import json,os,pathlib,sys; "
@@ -200,7 +200,7 @@ def test_sandbox_hides_host_files_environment_and_network(
     observed = json.loads(completed.stdout)
     assert not observed["host_visible"]
     assert not observed["unrelated_package"]
-    assert "XMONITOR_PARENT_SECRET" not in observed["environment"]
+    assert "XLENS_PARENT_SECRET" not in observed["environment"]
     assert observed["network"] != host_network
     assert all(path.startswith("/runtime/") for path in observed["paths"])
 

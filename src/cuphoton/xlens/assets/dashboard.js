@@ -394,7 +394,7 @@
 
   async function post(path, payload) {
     const headers = {"Content-Type": "application/json"};
-    if (ui.authentication_required) headers["X-XMonitor-Token"] = byId("access-token").value;
+    if (ui.authentication_required) headers["X-XLens-Token"] = byId("access-token").value;
     const response = await fetch(path, {method: "POST", headers, body: JSON.stringify(payload), credentials: "same-origin", redirect: "error"});
     const body = await response.json();
     if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : "Request was not accepted.");
