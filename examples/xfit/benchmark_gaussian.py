@@ -219,7 +219,9 @@ def main() -> None:
         help="Per-round wait, including cold compilation (default: 180).",
     )
     parser.add_argument(
-        "--fusion", action="store_true", help="Use fused CuPy or cuTile Gaussian evaluation."
+        "--fusion",
+        action="store_true",
+        help="Use fused CuPy or cuTile Gaussian evaluation.",
     )
     args = parser.parse_args()
     if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
@@ -238,7 +240,8 @@ def main() -> None:
         ["cupy"] if args.fusion else ["cupy", "cutile"]
     )
     if args.fusion and (
-        args.compare_native or any(backend not in {"cupy", "cutile"} for backend in backends)
+        args.compare_native
+        or any(backend not in {"cupy", "cutile"} for backend in backends)
     ):
         parser.error("--fusion requires --backend cupy or cutile")
     batches = args.batch or [1, 16, 256, 4096]
@@ -261,7 +264,11 @@ def main() -> None:
     # Fused and native comparisons validate against independent CuPy fits.
     # Reference work is outside measurements.
     reference = (
-        "cupy-reference" if args.fusion else "cupy" if "native" in treatments else treatments[0]
+        "cupy-reference"
+        if args.fusion
+        else "cupy"
+        if "native" in treatments
+        else treatments[0]
     )
     dtype = np.dtype(args.dtype)
     context = multiprocessing.get_context("spawn")

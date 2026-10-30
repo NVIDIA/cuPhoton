@@ -1111,7 +1111,13 @@ def test_fit_dipoles_device_rejects_stamp_model_dtype_conversion(
     [
         ("auto", "gaussian", False, False, "device fit backend"),
         ("numpy", "gaussian", False, False, "device fit backend"),
-        ("cupy", "gaussian", False, True, "requires backend='cutile'"),
+        (
+            "native",
+            "gaussian",
+            False,
+            True,
+            "requires backend='cupy' or 'cutile'",
+        ),
         ("cutile", "stamp", False, False, "only the Gaussian model"),
         ("cutile", "gaussian", True, False, "finite-difference fitting"),
         ("cutile", "gaussian", False, 1, "must be a boolean"),
@@ -1268,9 +1274,27 @@ def test_cupy_stamp_fit_matches_numpy_when_cuda_is_available() -> None:
 @pytest.mark.parametrize(
     ("backend", "model_name", "finite_difference", "fusion", "message"),
     [
-        ("numpy", "gaussian", False, True, "requires backend='cutile'"),
-        ("cupy", "gaussian", False, True, "requires backend='cutile'"),
-        ("auto", "gaussian", False, True, "requires backend='cutile'"),
+        (
+            "numpy",
+            "gaussian",
+            False,
+            True,
+            "requires backend='cupy' or 'cutile'",
+        ),
+        (
+            "native",
+            "gaussian",
+            False,
+            True,
+            "requires backend='cupy' or 'cutile'",
+        ),
+        (
+            "auto",
+            "gaussian",
+            False,
+            True,
+            "requires backend='cupy' or 'cutile'",
+        ),
         ("cutile", "stamp", False, True, "only the Gaussian model"),
         ("cutile", "gaussian", True, True, "finite-difference fitting"),
         ("cutile", "gaussian", False, "yes", "must be a boolean"),
@@ -1318,7 +1342,7 @@ def test_fused_cutile_rejects_custom_gaussian_before_cuda(
         lambda: pytest.fail("custom fused model loaded CUDA"),
     )
     fit = fit_dipoles_device if device else fit_dipoles
-    with pytest.raises(ValueError, match="only the Gaussian model"):
+    with pytest.raises(ValueError, match="custom Gaussian models"):
         fit(
             np.zeros((1, 5, 7)),
             model=CustomGaussian((5, 7)),

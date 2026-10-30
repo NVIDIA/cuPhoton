@@ -668,7 +668,9 @@ class DeviceXFitPipelineConfig:
         if not isinstance(self.fusion, bool):
             raise TypeError("xfit fusion must be boolean")
         if self.fusion and self.backend not in {"cupy", "cutile"}:
-            raise ValueError("xfit fusion requires backend='cupy' or 'cutile'")
+            raise ValueError(
+                "xfit fusion requires backend='cupy' or 'cutile'"
+            )
         if self.fusion and self.use_finite_difference:
             raise ValueError("xfit fusion requires analytic derivatives")
         if self.backend == "cutile" and self.use_finite_difference:

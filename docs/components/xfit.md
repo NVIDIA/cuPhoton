@@ -87,8 +87,9 @@ uv run --locked --extra gpu python examples/xfit/benchmark_gaussian.py \
 
 Run the same command without `--fusion` for the default CuPy implementation.
 
-An explicit `backend="cutile"` uses one `cuda.tile` CTA per Gaussian fit to
-form its weighted 8-by-8 normal equations directly. Select this backend
+With the default `fusion=False`, an explicit `backend="cutile"` uses one
+`cuda.tile` CTA per Gaussian fit to form its weighted 8-by-8 normal equations
+directly. Select this backend
 explicitly and install the `cuphoton[cutile]` extra on Linux with Python
 3.12 through 3.14. Final rank and covariance diagnostics use the analytic
 Jacobian and a singular-value factorization. Sampled-stamp fits stay on the

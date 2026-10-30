@@ -649,7 +649,7 @@ def _validate_fusion(
     config: LMConfig | None,
 ) -> None:
     if not isinstance(fusion, bool):
-        raise TypeError("fusion must be boolean")
+        raise TypeError("fusion must be a boolean")
     if not fusion:
         return
     if backend not in {"cupy", "cutile"}:
@@ -659,8 +659,10 @@ def _validate_fusion(
         and type(model) is not GaussianDipoleModel
     ):
         raise ValueError("fusion does not support custom Gaussian models")
-    if isinstance(model, StampDipoleModel) or (
-        isinstance(model, str) and model != "gaussian"
+    if not (
+        model == "gaussian"
+        if isinstance(model, str)
+        else type(model) is GaussianDipoleModel
     ):
         raise ValueError("fusion supports only the Gaussian model")
     if config is not None and config.use_finite_difference:
@@ -1205,8 +1207,9 @@ def fit_dipoles_device(
     to the active device. Existing CuPy inputs must already reside on that
     device and are checked before any input conversion. Input arrays are
     borrowed and are not mutated.
-    ``fusion=True`` selects fused CuPy Gaussian residual and analytic-Jacobian
-    kernels while retaining the default CuPy normal-equation contractions.
+    ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
+    kernels for the requested CuPy or cuTile backend, while retaining the
+    default CuPy normal-equation contractions.
     Native fits, sampled stamps and finite differences require
     ``fusion=False``.
 

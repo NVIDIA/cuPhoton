@@ -1938,7 +1938,10 @@ def test_xfit_backend_defaults_preserve_legacy_payload_and_hash(
     [
         ({"backend": "numpy"}, "xfit backend"),
         ({"fusion": 1}, "fusion must be boolean"),
-        ({"fusion": True}, "fusion requires backend='cutile'"),
+        (
+            {"backend": "native", "fusion": True},
+            "fusion requires backend='cupy' or 'cutile'",
+        ),
         (
             {"backend": "cutile", "use_finite_difference": True},
             "does not support finite differences",
@@ -1997,7 +2000,14 @@ def test_xfit_fusion_validation_and_solver_settings_are_independent() -> None:
 
 
 @pytest.mark.parametrize(
-    "backend,fusion", [("cupy", False), ("cupy", True), ("native", False)]
+    "backend,fusion",
+    [
+        ("cupy", False),
+        ("cupy", True),
+        ("cutile", False),
+        ("cutile", True),
+        ("native", False),
+    ],
 )
 def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
     tmp_path: Path,

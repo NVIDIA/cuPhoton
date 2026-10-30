@@ -261,9 +261,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
 
     class FusionArg(BoolInvariant):
         _arg = "--fusion"
-        _help = (
-            "Fuse Gaussian evaluation; requires --backend cupy or cutile."
-        )
+        _help = "Fuse Gaussian evaluation; requires --backend cupy or cutile."
         _mandatory = False
         _default = False
 

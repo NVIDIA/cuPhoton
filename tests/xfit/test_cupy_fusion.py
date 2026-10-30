@@ -77,7 +77,7 @@ def _no_cuda(*args, **kwargs):
     pytest.fail("unsupported fusion settings reached CUDA/backend discovery")
 
 
-@pytest.mark.parametrize("backend", ["numpy", "auto", "cutile", "native"])
+@pytest.mark.parametrize("backend", ["numpy", "auto", "native"])
 def test_fusion_rejects_unsupported_backend_before_cuda(monkeypatch, backend):
     monkeypatch.setattr(xfit_api, "resolve_backend", _no_cuda)
     with pytest.raises(ValueError, match="fusion requires backend='cupy'"):
@@ -116,7 +116,7 @@ def test_fusion_rejects_unsupported_configuration_before_cuda(
     else:
         fusion = 1
         exception = TypeError
-        match = "fusion must be boolean"
+        match = "fusion must be a boolean"
     monkeypatch.setattr(xfit_api, "resolve_backend", _no_cuda)
     monkeypatch.setattr(xfit_api, "_load_cupy", _no_cuda)
     kwargs = {} if device else {"backend": "cupy"}
@@ -548,3 +548,40 @@ def test_cupy_fusion_cli_runs_selected_mode_and_persists_outputs(
         )
         _assert_numeric(result["residuals"], expected.residuals, np.float64)
         _assert_numeric(result["covariance"], expected.covariance, np.float64)
+
+
+def test_fused_benchmark_uses_an_unfused_cupy_reference(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    script = Path(__file__).parents[2] / "examples/xfit/benchmark_gaussian.py"
+    spec = importlib.util.spec_from_file_location("xfit_benchmark", script)
+    assert spec is not None and spec.loader is not None
+    benchmark = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(benchmark)
+    observed = []
+
+    def fit(*args, **kwargs):
+        observed.append((kwargs["backend"], kwargs["fusion"]))
+        return SimpleNamespace(backend=kwargs["backend"])
+
+    monkeypatch.setattr(benchmark, "fit_dipoles", fit)
+    monkeypatch.setattr(
+        benchmark,
+        "_worker",
+        SimpleNamespace(
+            barrier=SimpleNamespace(wait=lambda **kwargs: None),
+            stream=None,
+            pool=None,
+            images=None,
+            initial=None,
+            variance=None,
+            mode="difference",
+            fusion=True,
+            index=0,
+        ),
+    )
+    for treatment in ("cupy-reference", "cupy", "cutile"):
+        benchmark._run(treatment)
+    assert observed == [("cupy", False), ("cupy", True), ("cutile", True)]

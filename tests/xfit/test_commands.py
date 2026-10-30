@@ -568,7 +568,7 @@ def test_fit_dipoles_command_writes_complete_artifact_set(
 @pytest.mark.parametrize(
     ("backend", "model", "extra_args", "message"),
     [
-        ("cupy", "gaussian", [], "requires backend='cutile'"),
+        ("native", "gaussian", [], "requires backend='cupy' or 'cutile'"),
         ("cutile", "stamp", [], "only the Gaussian model"),
         (
             "cutile",
