@@ -9,6 +9,9 @@ from importlib import import_module
 from cuphoton import __version__
 
 _EXPORTS = {
+    "CorrelationRun": ("adapters.radio.engine", "CorrelationRun"),
+    "correlate": ("adapters.radio.engine", "correlate"),
+    "prepare_correlation": ("adapters.radio.engine", "prepare_correlation"),
     "BackendUnavailableError": ("errors", "BackendUnavailableError"),
     "ConfigurationError": ("errors", "ConfigurationError"),
     "JobLoadError": ("errors", "JobLoadError"),
@@ -48,7 +51,11 @@ _EXPORTS = {
     "job_to_dict": ("adapters.radio.models", "job_to_dict"),
     "load_job": ("adapters.radio.models", "load_job"),
     "load_job_schema": ("adapters.radio.models", "load_job_schema"),
+    "TimeShard": ("sharding", "TimeShard"),
+    "plan_time_shards": ("sharding", "plan_time_shards"),
+    "select_time_shard": ("sharding", "select_time_shard"),
     "validate_job": ("validation", "validate_job"),
+    "CorrelationWindow": ("windowing", "CorrelationWindow"),
     "CorrelationSpec": ("core.series", "CorrelationSpec"),
     "SeriesResult": ("core.series", "SeriesResult"),
     "SeriesShard": ("core.series", "SeriesShard"),
