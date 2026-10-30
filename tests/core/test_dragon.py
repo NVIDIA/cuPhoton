@@ -290,6 +290,7 @@ def test_shared_gpu_workers_remain_persistent_and_keep_disjoint_shards(
     monkeypatch, tmp_path
 ):
     state = _install_runtime(monkeypatch)
+    # Check shard ownership without a short filesystem deadline.
     result = _run(
         tmp_path,
         worker_count=None,
@@ -298,6 +299,7 @@ def test_shared_gpu_workers_remain_persistent_and_keep_disjoint_shards(
             WorkItem(f"item-{index}", {"value": index}) for index in range(5)
         ),
         benchmark=BenchmarkOptions(0, 2),
+        result_timeout=5.0,
     )
     assert result.status == "success", result.summary
     assert result.summary["worker_count"] == 4
@@ -594,7 +596,8 @@ def test_native_workers_keep_spawn_children_on_standard_multiprocessing(
 
 def test_ordinary_workload_retains_root_artifacts(monkeypatch, tmp_path):
     state = _install_runtime(monkeypatch)
-    result = _run(tmp_path)
+    # Check root artifact placement without a short filesystem deadline.
+    result = _run(tmp_path, result_timeout=5.0)
     assert result.status == "success", result.summary
     assert "benchmark" not in result.summary
     assert (result.run_dir / "records/one.json").is_file()
@@ -762,7 +765,8 @@ def test_fast_worker_waits_for_close_until_all_round_results_arrive(
     monkeypatch, tmp_path
 ):
     state = _install_runtime(monkeypatch, interleave_close=True)
-    result = _run(tmp_path)
+    # Events enforce receipt ordering; allow time for durable close artifacts.
+    result = _run(tmp_path, result_timeout=5.0)
 
     assert result.status == "success", result.summary
     assert state.fast_waiting_for_close.is_set()
