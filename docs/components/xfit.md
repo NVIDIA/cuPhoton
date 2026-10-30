@@ -165,8 +165,11 @@ fallback when no compatible cubin is available. The default cubin target is
 the matching Python environment together with CuPy for CUDA 13. FP64 fits
 on compute capability 10.0 with thread-block cluster support also use a fused
 Jacobian and equation-packing kernel, built separately for SM 100a with
-ordinary compute 100 PTX. Other devices and
-FP32 fits use the portable native kernels. Pathfinder resolves the CUDA
+ordinary compute 100 PTX. FP64 batches of at most 16 51×51 difference images
+use tiled Jacobian kernels on SM 120 and SM 121. SM 120 also fuses trial
+residuals; SM 121 uses specialized Hessian kernels only when the cuBLAS handle
+reports version `130101`. Other configurations use the portable native kernels.
+Pathfinder resolves the CUDA
 runtime and cuBLAS libraries (`libcudart.so.13`, `libcublas.so.13`, and
 `libcublasLt.so.13`) from installed NVIDIA packages or a system toolkit.
 If another CUDA version is installed, put the CUDA 13 toolkit's `lib64`

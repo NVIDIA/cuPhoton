@@ -41,9 +41,11 @@ ordinary compute 75 and compute 121 PTX provide driver JIT fallback for GPUs
 without a matching cubin, when the driver supports the emitted PTX version.
 The fused FP64 Jacobian kernels are built separately for SM 100a with ordinary
 compute 100 PTX and selected on compute capability 10.0 devices with
-thread-block cluster support. Including a GPU target in a wheel establishes
-code availability; numerical and performance qualification still requires
-execution on that GPU.
+thread-block cluster support. The
+[small-batch SM 120 and SM 121 paths](components/xfit.md) are included in the
+main native unit of the same extension. Including a GPU target in a wheel
+establishes code availability; numerical and performance qualification still
+requires execution on that GPU.
 
 ## Versions and release candidates
 
