@@ -59,6 +59,8 @@ The extras are composable:
 | `photometry` | Photutils background, detection, and aperture routines |
 | `io` | CuPy, KvikIO, cuFile, and nvCOMP for native xDR |
 | `torch` | CPU-capable PyTorch |
+| `ximage` | PyTorch, photometry, and Zarr bundle support for xImage |
+| `rubin` | Offline Rubin image archive reader |
 | `gpu` | `io`, `photometry`, CUDA 13 PyTorch, and Numba-CUDA |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `mpi` | mpi4py bindings; an MPI runtime and launcher are also required |

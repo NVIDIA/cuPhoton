@@ -72,23 +72,25 @@ def test_public_command_surface_counts_are_exact() -> None:
     assert per_group == [
         ("xdr", 1, 0, 17, 0),
         ("xfit", 3, 3, 39, 1),
+        ("ximage", 15, 0, 96, 1),
         ("xpois", 7, 7, 162, 1),
         ("xscan", 44, 44, 229, 1),
         ("xrep", 6, 6, 123, 1),
         ("xray", 34, 32, 405, 1),
         ("xmonitor", 4, 0, 16, 1),
     ]
-    assert len(per_group) == 7
-    assert sum(item[1] for item in per_group) == 99
-    assert sum(item[1] + item[4] for item in per_group) == 105
+    assert len(per_group) == 8
+    assert sum(item[1] for item in per_group) == 114
+    assert sum(item[1] + item[4] for item in per_group) == 121
     assert sum(item[2] for item in per_group) == 92
-    assert sum(item[3] for item in per_group) == 991
+    assert sum(item[3] for item in per_group) == 1087
 
 
 def test_public_registry_order_and_component_derivations() -> None:
     assert tuple(item.group for item in COMPONENTS) == (
         "xdr",
         "xfit",
+        "ximage",
         "xpois",
         "xscan",
         "xrep",
@@ -152,6 +154,7 @@ def test_root_streams_and_lazy_imports() -> None:
             (
                 "cuphoton.xdr",
                 "cuphoton.xfit",
+                "cuphoton.ximage",
                 "cuphoton.xpois",
                 "cuphoton.xscan",
                 "cuphoton.xrep",
@@ -170,6 +173,7 @@ def test_root_streams_and_lazy_imports() -> None:
             (
                 "cuphoton.xdr",
                 "cuphoton.xfit",
+                "cuphoton.ximage",
                 "cuphoton.xpois",
                 "cuphoton.xscan",
                 "cuphoton.xrep",

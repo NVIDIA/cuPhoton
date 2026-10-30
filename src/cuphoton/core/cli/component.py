@@ -94,6 +94,11 @@ COMPONENTS = (
         version_label="",
     ),
     ComponentSpec(
+        "ximage",
+        "cuphoton.ximage",
+        "Multi-frame image reconstruction and PSF calibration.",
+    ),
+    ComponentSpec(
         "xpois",
         "cuphoton.xpois",
         "Optimal image subtraction for astronomical images.",

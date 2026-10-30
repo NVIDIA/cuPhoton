@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cff-version: 1.2.0
-message: "If you use cuPhoton, please cite this software release."
+message: >-
+  If you use cuPhoton, please cite this software release. For xImage
+  reconstruction, also cite ImageMM; see CITATION.md.
 title: "cuPhoton: GPU-accelerated astronomy and imaging reference workflows"
 type: software
 authors:
@@ -12,3 +14,21 @@ version: 0.1.3
 license: Apache-2.0
 repository-code: "https://github.com/NVIDIA/cuPhoton"
 url: "https://github.com/NVIDIA/cuPhoton"
+references:
+  - type: article
+    title: "ImageMM: Joint Multi-frame Image Restoration and Super-resolution"
+    authors:
+      - family-names: Sukurdeep
+        given-names: Yashil
+      - family-names: Budavári
+        given-names: Tamás
+      - family-names: Connolly
+        given-names: Andrew J.
+      - family-names: Navarro
+        given-names: Fausto
+    journal: The Astronomical Journal
+    year: 2025
+    volume: 170
+    issue: 4
+    notes: "Article 233."
+    doi: 10.3847/1538-3881/adfb72

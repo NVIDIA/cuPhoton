@@ -33,13 +33,19 @@ dependencies = [
   "numpy>=2.0,<2.6",
   "pandas>=2.2",
   "pyarrow>=23.0",
+  "pydantic>=2.11,<3",
   "PyYAML>=6.0",
   "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
-rubin = ["lsst-images[https]==30.0.10"]
-ximage = ["zarr>=3,<4"]
+ximage = [
+  "cuphoton[torch,photometry]",
+  "zarr>=3,<4",
+]
+rubin = [
+  "lsst-images[https]==30.0.10",
+]
 xmonitor-inference = [
   "httpx>=0.28,<1",
 ]
@@ -190,6 +196,7 @@ ignore_missing_imports = true
 minversion = "8.0"
 addopts = ["--import-mode=importlib"]
 markers = [
+  "gpu: synthetic numerical checks that require a CUDA device",
   "real_data: opt-in tests that require caller-supplied observational data",
   "xray_gpu: structured xRay tests requiring CUDA 13 execution",
 ]
