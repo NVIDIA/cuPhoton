@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from ._types import FitMode
+from .solver import _normal_equations_from_jacobian
 
 _THREADS = 128
 _KERNEL_CACHE_SIZE = 16
@@ -368,10 +369,10 @@ class GaussianWorkspace:
         )
         jacobian = self._jacobian[: parameters.shape[0]]
         self._pending.append(((residuals, jacobian), ()))
-        gradient = self._cp.einsum("knm,km->kn", jacobian, residuals)
-        self._pending.append(((gradient,), ()))
-        hessian = self._cp.einsum("knm,kpm->knp", jacobian, jacobian)
-        self._pending.append(((hessian,), ()))
+        gradient, hessian = _normal_equations_from_jacobian(
+            jacobian, residuals, self._cp
+        )
+        self._pending.append(((gradient, hessian), ()))
         return gradient, hessian
 
     def close(self) -> None:

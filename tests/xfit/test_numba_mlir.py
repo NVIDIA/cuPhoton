@@ -218,6 +218,42 @@ def test_fused_boundary_preserves_weights_and_compacted_indices(
                 )
 
 
+def test_fp32_normal_equations_preserve_representable_tiny_sums(gpu):
+    from cuphoton.xfit._numba_mlir import GaussianWorkspace
+
+    cp = gpu
+    shape = (11, 15)
+    parameters = cp.asarray(_truth(np.float32)[:1])
+    parameters[:, 0] = 1
+    parameters[:, 1:3] = cp.log(parameters[:, 1:3])
+    images = cp.zeros((1, *shape), dtype=cp.float32)
+    weights = cp.full_like(images, 2.0**-75)
+    residuals = cp.full((1, 165), 2.0**-75, dtype=cp.float32)
+    indices = cp.asarray([0], dtype=cp.int64)
+
+    with GaussianWorkspace(
+        images, weights, image_shape=shape, mode="difference"
+    ) as workspace:
+        gradient, hessian = workspace.normal_equations(
+            parameters, residuals, indices=indices
+        )
+        # Use the actual kernel's rounded Jacobian, then form products in
+        # FP64: tiny FP32 products can vanish before a representable sum.
+        jacobian = cp.asnumpy(workspace._jacobian).astype(np.float64)
+        residual = cp.asnumpy(residuals).astype(np.float64)
+        expected_gradient = np.einsum("knm,km->kn", jacobian, residual)
+        expected_hessian = np.einsum("knm,kpm->knp", jacobian, jacobian)
+        assert np.any(expected_hessian.astype(np.float32) != 0)
+        for actual, expected in (
+            (gradient, expected_gradient),
+            (hessian, expected_hessian),
+        ):
+            assert actual.dtype == cp.float32
+            np.testing.assert_array_equal(
+                cp.asnumpy(actual), expected.astype(np.float32)
+            )
+
+
 def test_fused_boundary_preserves_cancelling_hessian_terms(gpu):
     from cuphoton.xfit._numba_mlir import GaussianWorkspace
 
