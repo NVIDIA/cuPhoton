@@ -11,7 +11,8 @@ fit call through NumPy result materialization. Validation is outside timing.
 Changing --workers also changes fit batch sizes, which can change numerical
 trajectories and evaluation counts. Backend comparisons at a fixed worker
 count use identical batches. Output records worker_batch_sizes in worker
-order.
+order. First-call timings share a worker pool with the reference and
+earlier treatments; they are not isolated cold-start measurements.
 Use --timeout-seconds to allow longer rounds when cold compilation needs it.
 """
 
@@ -303,14 +304,14 @@ def main() -> None:
             _round(pool, None, args.workers, args.timeout_seconds)
             startup = time.perf_counter() - start
             warmups, samples, last = {}, {t: [] for t in treatments}, {}
-            cold = {}
+            first_calls = {}
             try:
                 expected, reference_seconds = _round(
                     pool, reference, args.workers, args.timeout_seconds
                 )
                 for treatment in treatments:
                     if treatment == reference:
-                        cold[treatment] = 1e3 * reference_seconds
+                        first_calls[treatment] = 1e3 * reference_seconds
                     else:
                         results, seconds = _round(
                             pool,
@@ -318,7 +319,7 @@ def main() -> None:
                             args.workers,
                             args.timeout_seconds,
                         )
-                        cold[treatment] = 1e3 * seconds
+                        first_calls[treatment] = 1e3 * seconds
                         for actual, baseline in zip(
                             results, expected, strict=True
                         ):
@@ -384,7 +385,7 @@ def main() -> None:
                     {
                         "backend": treatment,
                         "fusion": args.fusion,
-                        "cold_milliseconds": cold[treatment],
+                        "first_call_milliseconds": first_calls[treatment],
                         "milliseconds_samples": wall_ms,
                         "execution": args.execution,
                         "workers": args.workers,

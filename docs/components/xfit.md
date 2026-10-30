@@ -77,8 +77,11 @@ Select it in the CLI with `--backend cupy --fusion`; the default is
 Sampled-stamp, custom Gaussian and finite-difference fits require
 `fusion=False`; requesting fusion for them raises `ValueError`.
 
-The public synthetic benchmark records the first call separately from every
-warmed sample, including input transfer and result materialization:
+The public synthetic benchmark records `first_call_milliseconds` separately
+from every warmed sample, including input transfer and result materialization.
+The reference fit runs first; each other treatment's first call follows it
+in the same workers. Shared operations may already be warm, so these values
+are not isolated cold-start comparisons:
 
 ```bash
 uv run --locked --extra gpu python examples/xfit/benchmark_gaussian.py \
