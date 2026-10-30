@@ -22,16 +22,21 @@ requirements:
   build:
     - ${{ compiler('cxx') }}
     - ${{ stdlib('c') }}
+    - cuda-nvcc ==13.0.88
   host:
     - python
     - pip
     - setuptools >=83
     - setuptools-scm ==10.3.4
     - wheel
-    - pybind11 >=3,<4
+    - pybind11 ==3.0.4
     - cuda-version ==13.0
     - cuda-cudart-dev
     - cuda-crt-dev_${{ target_platform }}
+    # Match the deliberate minimum cuBLAS build version used by wheels.
+    - libcublas-dev ==13.0.2.14
+    # Match the CuPy wheel's CCCL headers used by the native xFit recipe.
+    - cupy-core ==14.1.1
     - libcufile-dev
     - cfitsio >=4.7,<5
     - libkvikio >=26.06,<26.07
@@ -48,6 +53,8 @@ requirements:
     - pyyaml >=6
     - scipy >=1.13
     - cuda-version >=13,<14
+    - cuda-pathfinder >=1.5.6,<2
+    - libcublas >=13.0.2.14,<14
     - cupy >=14,<15
     - kvikio >=26.06,<26.07
     - libkvikio >=26.06,<26.07
@@ -59,6 +66,7 @@ tests:
       imports:
         - cuphoton
         - cuphoton.xdr
+        - cuphoton.xfit
       # Upstream GPU packages retain pip-only dependency names in METADATA.
       # Conda solves those dependencies; the next test loads the actual libs.
       pip_check: false
@@ -72,8 +80,9 @@ about:
   homepage: https://github.com/NVIDIA/cuPhoton
   repository: https://github.com/NVIDIA/cuPhoton
   documentation: https://github.com/NVIDIA/cuPhoton/blob/main/docs/packaging.md
-  summary: GPU-accelerated astronomy and imaging tools with native xDR I/O
-  license: Apache-2.0
+  summary: GPU-accelerated astronomy and imaging tools with native xDR and xFit
+  license: Apache-2.0 AND BSD-3-Clause AND Apache-2.0 WITH LLVM-exception
   license_file:
     - LICENSE
     - THIRD_PARTY_NOTICES.md
+    - licenses/CCCL-3.1.2.txt

@@ -127,11 +127,9 @@ jobs:
             .venv/bin/python -c \
               'from importlib.metadata import distribution; print(distribution("cupy-cuda13x").locate_file("cupy/_core/include/cupy/_cccl"))'
           )"
-          export LD_LIBRARY_PATH="$CUDA_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           "$CUDA_HOME/bin/nvcc" --version
           uv pip install --python .venv/bin/python --no-deps \
             --no-cache --reinstall -e .
-          printf '%s\n' "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
       - name: Require working CUDA 13 and GPU kernels
         run: |
           uv run --no-sync python - <<'PY'

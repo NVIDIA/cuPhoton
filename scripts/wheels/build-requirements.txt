@@ -11,9 +11,16 @@ pybind11==3.0.4
 libkvikio-cu13==26.6.0
 rapids-logger==0.2.3
 nvidia-libnvcomp-cu13==5.2.0.13
-# Build against the same CUDA 13.0 SDK floor used by runtime acceptance.
+# Keep the CUDA 13.0 SDK and cuBLAS 13.0.2.14 compatibility floor.
+# These component pins deliberately differ from the CUDA 13.0.3 bundle:
+# its newer cuBLAS 13.1.1.3 would raise the minimum cuBLAS version.
 nvidia-cuda-runtime==13.0.96
 nvidia-cuda-crt==13.0.88
+nvidia-cuda-nvcc==13.0.88
+nvidia-nvvm==13.0.88
+nvidia-cublas==13.0.2.14
+# xFit reductions use the same CCCL headers as the supported CuPy runtime.
+cupy-cuda13x==14.1.1
 nvidia-cufile==1.15.1.6
 auditwheel==6.8.2
 patchelf==0.19.1.0

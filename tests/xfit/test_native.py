@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gc
+import importlib.util
 import json
 import os
 import subprocess
@@ -30,9 +31,17 @@ from cuphoton.xfit import (
 )
 
 
-def _require_native():
+def _require_extension():
+    from cuphoton.xfit._native import load_extension
+
     # Missing optional builds must skip without initializing CUDA.
-    pytest.importorskip("cuphoton.xfit._native_ext")
+    if importlib.util.find_spec("cuphoton.xfit._native_ext") is None:
+        pytest.skip("native xFit extension is not built")
+    return load_extension()
+
+
+def _require_native():
+    _require_extension()
     return _require_cupy()
 
 
@@ -145,7 +154,10 @@ def test_import_and_numpy_fit_do_not_load_native_or_cupy():
 
         class BlockGPU(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path=None, target=None):
-                if fullname == "cupy" or fullname.endswith("._native_ext"):
+                if (
+                    fullname in {"cupy", "cuda.pathfinder"}
+                    or fullname.endswith("._native_ext")
+                ):
                     raise AssertionError(f"unexpected GPU import: {fullname}")
 
         sys.meta_path.insert(0, BlockGPU())
@@ -222,14 +234,7 @@ def test_unsupported_configuration_is_rejected_before_cuda(
 def test_missing_extension_reports_build_requirement_before_cuda(monkeypatch):
     from cuphoton.xfit import _native, backend
 
-    original_import = _native.importlib.import_module
-
-    def without_extension(name, *args, **kwargs):
-        if name == "cuphoton.xfit._native_ext":
-            raise ModuleNotFoundError(name)
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(_native.importlib, "import_module", without_extension)
+    monkeypatch.setattr(_native.importlib.util, "find_spec", lambda _: None)
     monkeypatch.setattr(
         backend, "_cupy_backend", lambda **k: pytest.fail("initialized CUDA")
     )
@@ -271,14 +276,14 @@ def test_cli_rejects_native_finite_differences_before_loading_fits(
 
 
 def test_extension_rejects_negative_stream_before_reading_buffers():
-    extension = pytest.importorskip("cuphoton.xfit._native_ext")
+    extension = _require_extension()
     with pytest.raises(OverflowError, match="negative.*unsigned"):
         extension.run(None, None, None, None, -1)
 
 
 @pytest.mark.parametrize("invalid", ["shape", "readonly"])
 def test_extension_rejects_unsafe_buffers_without_a_cuda_workspace(invalid):
-    extension = pytest.importorskip("cuphoton.xfit._native_ext")
+    extension = _require_extension()
     shapes = [(1, 8), (1, 63), (1, 63), (1, 63), (1,), (1,), (1,)]
     types = ["<f8"] * 4 + ["|i1", "<i4", "|b1"]
     arrays = tuple(

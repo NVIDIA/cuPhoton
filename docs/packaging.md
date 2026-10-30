@@ -13,9 +13,12 @@ and architecture combinations, as described below. Conda channel publication
 is not configured.
 Free-threaded Python, Windows, and macOS are outside both matrices.
 
-Each wheel contains `cuphoton.xdr._nvcomp_batch_ext` and a privately renamed,
-reentrant CFITSIO 4.7.0 shared library. CUDA, cuFile, KvikIO, and nvCOMP remain
-in their upstream wheels, installed through `cuphoton[io]`. `cuphoton[gpu]`
+Each wheel contains `cuphoton.xdr._nvcomp_batch_ext`,
+`cuphoton.xfit._native_ext`, and a privately renamed, reentrant CFITSIO 4.7.0
+shared library. CUDA, cuBLAS, cuFile, KvikIO, and nvCOMP remain in their
+upstream wheels, installed through `cuphoton[io]`. Native xFit uses
+`cuda.pathfinder` to load its CUDA runtime and cuBLAS dependencies.
+`cuphoton[gpu]`
 also includes the photometry, PyTorch, and Numba backends. Installing Photutils
 from PyPI currently requires a source build, C compiler, and Python
 development headers on ARM64;
@@ -26,6 +29,21 @@ The native KvikIO ABI is restricted to the 26.6 release family. nvCOMP is
 restricted to 5.2. Updating either family requires rebuilding and qualifying
 the native packages. The CUDA SDK build inputs are pinned to 13.0 so a newer
 build environment cannot silently raise the runtime floor.
+The component pins deliberately combine CUDA runtime 13.0.96 with
+cuBLAS 13.0.2.14, rather than selecting a complete toolkit bundle. Building
+against those older cuBLAS headers preserves the minimum supported cuBLAS
+version; CUDA 13.0.3 bundles the newer cuBLAS 13.1.1.3.
+
+In wheels, native xFit's portable kernels include ordinary cubins for SM 75, 80, 86,
+89 and architecture-specific cubins for SM 90a, 100a, 103a, 120a, and 121a.
+An `a` cubin runs only on its matching compute capability. Separately compiled
+ordinary compute 75 and compute 121 PTX provide driver JIT fallback for GPUs
+without a matching cubin, when the driver supports the emitted PTX version.
+The fused FP64 Jacobian kernels are built separately for SM 100a with ordinary
+compute 100 PTX and selected on compute capability 10.0 devices with
+thread-block cluster support. Including a GPU target in a wheel establishes
+code availability; numerical and performance qualification still requires
+execution on that GPU.
 
 ## Versions and release candidates
 
@@ -78,9 +96,11 @@ CFITSIO's upstream tests run before installation. No host CUDA toolkit is
 used. Release builds must not set `CIBW_TEST_SKIP`.
 
 The default `make build` produces only the source archive. Plain source and
-editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` is
-set. See [xDR source installation](components/xdr.md#native-extension-availability)
-for the explicit native development build.
+editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` or
+`CUPHOTON_XFIT_BUILD_EXT=1` is set. See
+[xDR source installation](components/xdr.md#native-extension-availability)
+and [native xFit](components/xfit.md#optional-native-cuda-backend) for explicit
+native development builds.
 
 `make build` refreshes only the source archive. `make wheels` replaces cuPhoton
 wheels while preserving conda outputs; `make conda` replaces `dist/conda` while
@@ -92,8 +112,12 @@ The reusable `wheels.yml` workflow builds from one source archive on native
 x86-64 and ARM64 runners. It checks base imports inside cibuildwheel, then
 installs each wheel and its `io` dependencies in a clean Python container
 with no compiler, system CFITSIO, or CUDA toolkit. Native loading and CFITSIO
-planning must work without a GPU. The final artifact check requires exactly
-six native wheels and one source archive; it rejects accidental pure wheels,
+planning and native xFit loading must work without a GPU. On pushes to
+`NVIDIA/cuPhoton`, CI also installs the CPython 3.12 x86-64 wheel on an L40G
+GPU, runs float32 and float64 Gaussian fits with native xFit, and requires
+all four difference/split comparisons with CuPy in the installed receipt.
+The final artifact check requires exactly six native wheels and one source
+archive; it rejects accidental pure wheels,
 missing native code or notices, and bundled GPU runtime libraries.
 
 The installed-wheel runtime matrix also requires cuTile imports and two real
@@ -106,10 +130,15 @@ below. JSON receipts are retained as CI artifacts.
 
 ## Build and install conda packages
 
-The `cuphoton` conda package includes the compiled xDR extension and depends on
-upstream conda packages for CFITSIO 4.7, CUDA 13, KvikIO 26.6, and nvCOMP 5.2.
+The `cuphoton` conda package includes the compiled xDR and xFit extensions
+and depends on
+upstream conda packages for CFITSIO 4.7, CUDA 13, cuBLAS 13, KvikIO 26.6,
+and nvCOMP 5.2.
 Conda installs those libraries into the environment; no manual CUDA paths
 are needed.
+Conda's portable xFit kernels use the source-build default: an SM 75 cubin
+and compute 75 PTX. Newer GPUs compile the PTX at first use. The fused FP64
+Jacobian kernels retain their separate SM 100a cubin and ordinary compute 100 PTX.
 Conda has no pip-style extras: this package provides the native I/O profile
 only and requires CUDA 13 libraries. It does not provide a CPU-only install;
 use the base pip package for that profile.
@@ -212,11 +241,13 @@ python -I /checks/test_installed.py --mode gpu --output /results/gpu.json
 ```
 
 `test_installed.py` lives under `scripts/wheels` in the source archive. The
-GPU check requires native loading and decoding, compares generated FITS
+GPU check compares native xFit Gaussian fits with CuPy in float32 and
+float64. It also requires native loading and decoding, compares generated FITS
 images with Astropy, and exercises ordering, ROI, streaming, caller-owned
 outputs, concurrency, and buffer release. Missing GPU/native capabilities
 fail the check. It forces KvikIO compatibility I/O, so it does not qualify
 GPUDirect Storage. Qualify GDS separately on suitable host/storage systems.
+Use `--mode gpu --components xfit` to run only the native xFit checks.
 
 Retain the source commit, artifact SHA256 values, container image, installed
 dependency versions, Python, GPU/driver details, and JSON test receipts. When
@@ -332,3 +363,8 @@ A retry first compares files already on the selected index with the retained
 artifacts. Matching files are omitted from the upload; a differing hash or
 unexpected filename fails. Publication never rebuilds artifacts or silently
 accepts different bytes. The upload job alone receives the OIDC permission.
+
+Native wheel and Conda builds include the complete CCCL 3.1.2 license
+selected by CuPy 14.1.1. The artifact checker uses `readelf` from binutils
+to check dynamic CUDA 13 and cuBLAS 13 linkage. Conda builds use a separate
+build-prefix CUDA compiler with target-prefix SDK headers and libraries.

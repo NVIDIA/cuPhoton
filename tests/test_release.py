@@ -10,13 +10,16 @@ import hashlib
 import importlib.util
 import io
 import json
+import shlex
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 
 import pytest
+import yaml
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts" / "wheels"
 SPEC = importlib.util.spec_from_file_location(
@@ -24,6 +27,43 @@ SPEC = importlib.util.spec_from_file_location(
 )
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
+
+
+@pytest.mark.parametrize(
+    "missing, ok",
+    [(None, True), (None, False)]
+    + [
+        (f"xfit_native_{dtype}_{mode}_parity", True)
+        for dtype in ("float32", "float64")
+        for mode in ("difference", "split")
+    ],
+)
+def test_installed_gpu_workflow_requires_complete_parity_receipt(
+    tmp_path, missing, ok
+):
+    workflow = yaml.safe_load(
+        (SCRIPTS.parents[1] / ".github/workflows/wheels.yml").read_text()
+    )
+    step = next(
+        step
+        for step in workflow["jobs"]["install-gpu"]["steps"]
+        if step.get("name")
+        == "Require all installed native xFit parity checks"
+    )
+    checks = {
+        f"xfit_native_{dtype}_{mode}_parity"
+        for dtype in ("float32", "float64")
+        for mode in ("difference", "split")
+    }
+    checks.discard(missing)
+    (tmp_path / "xfit-wheel-gpu.json").write_text(
+        json.dumps({"ok": ok, "checks": sorted(checks)})
+    )
+    command = shlex.split(step["run"])
+    result = subprocess.run(
+        [sys.executable, *command[1:]], cwd=tmp_path, capture_output=True
+    )
+    assert (result.returncode == 0) == (missing is None and ok), result.stderr
 
 
 @pytest.mark.parametrize(
@@ -354,7 +394,7 @@ def test_record_keeps_tagged_source_and_workflow_identity_separate(
     with tarfile.open(sdist, "w:gz") as archive:
         for name in sorted(SOURCES | LICENSES | {"PKG-INFO"}):
             content = metadata if name == "PKG-INFO" else b"source\n"
-            if name == "THIRD_PARTY_NOTICES.md":
+            if name in LICENSES:
                 content = (SCRIPTS.parents[1] / name).read_bytes()
             member = tarfile.TarInfo(f"cuphoton-0.1.3/{name}")
             member.size = len(content)

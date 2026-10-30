@@ -697,6 +697,7 @@ dragon = [
     { name = "dragonhpc" },
 ]
 gpu = [
+    { name = "cuda-pathfinder" },
     { name = "cuda-toolkit", extra = ["cufile"] },
     { name = "cupy-cuda13x", extra = ["ctk"] },
     { name = "kvikio-cu13" },
@@ -709,6 +710,7 @@ gpu = [
     { name = "torch" },
 ]
 io = [
+    { name = "cuda-pathfinder" },
     { name = "cuda-toolkit", extra = ["cufile"] },
     { name = "cupy-cuda13x", extra = ["ctk"] },
     { name = "kvikio-cu13" },
@@ -747,6 +749,7 @@ requires-dist = [
     { name = "astropy", specifier = ">=7.2.0" },
     { name = "bokeh", marker = "extra == 'viz'", specifier = ">=3.9" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.10.6,<8" },
+    { name = "cuda-pathfinder", marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=1.5.6,<2" },
     { name = "cuda-tile", marker = "sys_platform == 'linux' and extra == 'cutile'", specifier = ">=1.6,<2" },
     { name = "cuda-toolkit", extras = ["cufile"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=13,<14" },
     { name = "cuphoton", extras = ["io", "photometry"], marker = "extra == 'gpu'" },
