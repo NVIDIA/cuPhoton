@@ -36,6 +36,10 @@ SPEC.loader.exec_module(release)
         (f"xfit_native_{dtype}_{mode}_parity", True)
         for dtype in ("float32", "float64")
         for mode in ("difference", "split")
+    ]
+    + [
+        ("installed_xray_cpu_roots_and_dd_refinement", True),
+        ("installed_xray_gpu_roots", True),
     ],
 )
 def test_installed_gpu_workflow_requires_complete_parity_receipt(
@@ -48,13 +52,19 @@ def test_installed_gpu_workflow_requires_complete_parity_receipt(
         step
         for step in workflow["jobs"]["install-gpu"]["steps"]
         if step.get("name")
-        == "Require all installed native xFit parity checks"
+        == "Require all installed native xFit and xRay checks"
     )
     checks = {
         f"xfit_native_{dtype}_{mode}_parity"
         for dtype in ("float32", "float64")
         for mode in ("difference", "split")
     }
+    checks.update(
+        {
+            "installed_xray_cpu_roots_and_dd_refinement",
+            "installed_xray_gpu_roots",
+        }
+    )
     checks.discard(missing)
     (tmp_path / "xfit-wheel-gpu.json").write_text(
         json.dumps({"ok": ok, "checks": sorted(checks)})
