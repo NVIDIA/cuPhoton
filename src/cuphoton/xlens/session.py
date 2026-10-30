@@ -83,7 +83,7 @@ class MonitorSession:
             self.reason = ""
             if importlib.util.find_spec("httpx") is None:
                 self.reason = (
-                    "Install cuphoton[xmonitor-inference] for investigation."
+                    "Install cuphoton[xlens-inference] for investigation."
                 )
             elif config.backend == "nooa":
                 try:
@@ -134,7 +134,7 @@ class MonitorSession:
         if self._thread is not None:
             return
         self._thread = threading.Thread(
-            target=self._run, name="xmonitor-session", daemon=True
+            target=self._run, name="xlens-session", daemon=True
         )
         self._thread.start()
         if not self._ready.wait(timeout=10):

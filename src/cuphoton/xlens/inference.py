@@ -197,7 +197,7 @@ class Investigator:
         """Check optional runtime requirements before creating a report."""
         if importlib.util.find_spec("httpx") is None:
             raise InferenceError(
-                "Install cuphoton[xmonitor-inference] for investigation."
+                "Install cuphoton[xlens-inference] for investigation."
             )
         if self.config.backend == "nooa":
             _command()
@@ -255,7 +255,7 @@ class Investigator:
             import httpx
         except ImportError as exc:
             raise InferenceError(
-                "install cuphoton[xmonitor-inference] to enable investigation"
+                "install cuphoton[xlens-inference] to enable investigation"
             ) from exc
         config = self.config
         allowed = {

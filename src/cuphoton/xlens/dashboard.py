@@ -40,7 +40,7 @@ class Dashboard:
         self,
         monitor: Monitor,
         *,
-        title: str = "cuPhoton xMonitor",
+        title: str = "cuPhoton xLens",
         render_sample: Callable[[Sample], str] | None = None,
     ) -> None:
         self.monitor = monitor
@@ -139,7 +139,7 @@ class Dashboard:
                 f'<section class="domain" data-index="{index}" hidden>'
                 f"{fragment}</section>"
             )
-        resources = files("cuphoton.xmonitor").joinpath("assets")
+        resources = files("cuphoton.xlens").joinpath("assets")
         template = resources.joinpath("dashboard.html").read_text()
         if display["ui"].get("live"):
             template = template.replace(
@@ -362,7 +362,7 @@ def make_server(
                 )
                 return
             if not session.authenticate(
-                self.headers.get("X-XMonitor-Token", "")
+                self.headers.get("X-XLens-Token", "")
             ):
                 self._json(
                     401,

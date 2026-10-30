@@ -14,7 +14,7 @@ from dataclasses import replace
 
 import pytest
 
-from cuphoton.xmonitor import (
+from cuphoton.xlens import (
     Dashboard,
     Finding,
     InferenceConfig,
@@ -24,7 +24,7 @@ from cuphoton.xmonitor import (
     MonitorSession,
     Sample,
 )
-from cuphoton.xmonitor.dashboard import make_server
+from cuphoton.xlens.dashboard import make_server
 
 pytest.importorskip("httpx")
 
@@ -83,13 +83,13 @@ def test_http_question_access_progress_and_saved_export(
     tmp_path, monkeypatch, controlled, prefix
 ):
     token = "fixture-investigation-access-token"
-    monkeypatch.setenv("XMONITOR_TEST_ACCESS", token)
+    monkeypatch.setenv("XLENS_TEST_ACCESS", token)
     monitor = Monitor(tmp_path / "run", run_id="interactive")
     monitor.publish(sample())
     session = MonitorSession(
         monitor,
         config=InferenceConfig("http://127.0.0.1:1/v1", "fixture"),
-        access_token_env="XMONITOR_TEST_ACCESS",
+        access_token_env="XLENS_TEST_ACCESS",
     )
     dashboard = Dashboard(
         monitor, render_sample=lambda item: f"<p>revision {item.revision}</p>"
@@ -112,7 +112,7 @@ def test_http_question_access_progress_and_saved_export(
             ).encode(),
             headers={
                 "Content-Type": "application/json",
-                "X-XMonitor-Token": access,
+                "X-XLens-Token": access,
                 "Origin": origin,
             },
         )
@@ -433,10 +433,10 @@ def test_remote_investigation_and_token_requirements(tmp_path, monkeypatch):
         make_server(
             Dashboard(monitor), host="0.0.0.0", port=0, session=session
         )
-    monkeypatch.setenv("XMONITOR_SHORT_TOKEN", "x" * 23)
+    monkeypatch.setenv("XLENS_SHORT_TOKEN", "x" * 23)
     with pytest.raises(ValueError, match="at least 24"):
         MonitorSession(
-            monitor, config=config, access_token_env="XMONITOR_SHORT_TOKEN"
+            monitor, config=config, access_token_env="XLENS_SHORT_TOKEN"
         )
 
 
@@ -445,8 +445,8 @@ def test_ask_prints_detached_report_without_writing_run(
     tmp_path, monkeypatch, capsys, controlled, prerequisite
 ):
     from cuphoton.core.cli import main
-    from cuphoton.xmonitor import inference
-    from cuphoton.xmonitor.nooa_backend import NooaError
+    from cuphoton.xlens import inference
+    from cuphoton.xlens.nooa_backend import NooaError
 
     monitor = Monitor(tmp_path / "run", run_id="owned")
     monitor.publish(sample())
@@ -469,7 +469,7 @@ def test_ask_prints_detached_report_without_writing_run(
         monkeypatch.setattr(inference, "_command", unavailable)
     result = main(
         [
-            "xmonitor",
+            "xlens",
             "ask",
             "--state",
             str(monitor.directory),
@@ -526,7 +526,7 @@ def test_ask_preserves_samples_published_during_inference(
     assert (
         main(
             [
-                "xmonitor",
+                "xlens",
                 "ask",
                 "--state",
                 str(writer.directory),

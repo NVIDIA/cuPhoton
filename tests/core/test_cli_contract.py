@@ -77,7 +77,7 @@ def test_public_command_surface_counts_are_exact() -> None:
         ("xscan", 44, 44, 229, 1),
         ("xrep", 6, 6, 123, 1),
         ("xray", 34, 32, 405, 1),
-        ("xmonitor", 4, 0, 16, 1),
+        ("xlens", 4, 0, 16, 1),
     ]
     assert len(per_group) == 8
     assert sum(item[1] for item in per_group) == 114
@@ -95,7 +95,7 @@ def test_public_registry_order_and_component_derivations() -> None:
         "xscan",
         "xrep",
         "xray",
-        "xmonitor",
+        "xlens",
     )
     spec = get_component("xrep")
     assert spec.module_name == "cuphoton.xrep.commands"
