@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from math import fsum, sqrt
 
 import numpy as np
 import pytest
@@ -12,9 +13,11 @@ from scipy.optimize import least_squares
 
 from cuphoton.xfit import (
     BatchedLeastSquaresProblem,
+    GaussianDipoleModel,
     LMConfig,
     LMStatus,
     batched_levenberg_marquardt,
+    fit_dipoles,
 )
 
 
@@ -708,8 +711,10 @@ def test_failed_final_analytic_jacobian_isolates_the_failing_row() -> None:
     assert np.isnan(result.gradient[1]).all()
 
 
+@pytest.mark.parametrize("failing_row", [False, True])
 def test_final_diagnostics_fall_back_to_rows_when_batched_svd_fails(
     monkeypatch,
+    failing_row,
 ) -> None:
     target = np.asarray(
         [[1.0, -2.0], [-3.0, 4.0], [5.0, -6.0]], dtype=np.float64
@@ -738,21 +743,32 @@ def test_final_diagnostics_fall_back_to_rows_when_batched_svd_fails(
         seen_shapes.append(value.shape)
         if value.ndim == 3:
             raise RuntimeError("batched svd is unavailable")
+        if failing_row and len(seen_shapes) == 3:
+            raise RuntimeError("row 1 factorization failed")
         return original_svd(value, *args, **kwargs)
 
     monkeypatch.setattr(np.linalg, "svd", row_only_svd)
     result = batched_levenberg_marquardt(problem, target.copy())
 
-    assert seen_shapes == [(3, 2, 3), (2, 3), (2, 3), (2, 3)]
-    assert result.rank.tolist() == [2, 2, 2]
+    assert seen_shapes == [(3, 2, 3), *[(2, 3)] * 3]
+    assert result.rank.tolist() == ([2, -1, 2] if failing_row else [2, 2, 2])
     assert np.array_equal(result.status, expected.status)
-    for field in ("gradient", "gn_hessian", "covariance"):
+    for field in ("gradient", "gn_hessian"):
         assert np.allclose(
             getattr(result, field),
             getattr(expected, field),
             rtol=1.0e-12,
             atol=1.0e-12,
         )
+    if failing_row:
+        expected.covariance[1] = np.nan
+    np.testing.assert_allclose(
+        result.covariance,
+        expected.covariance,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+        equal_nan=True,
+    )
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -825,6 +841,8 @@ def test_solver_preserves_valid_directions_across_jacobian_scales() -> None:
 
     assert result.converged.all()
     assert np.allclose(result.parameters, truth)
+    assert result.rank.tolist() == [2]
+    np.testing.assert_allclose(result.covariance[0], np.diag([1e-24, 1.0]))
 
 
 def test_final_diagnostics_honor_the_residual_evaluation_limit() -> None:
@@ -940,3 +958,410 @@ def test_solver_validates_configuration() -> None:
             np.ones((1, 1)),
             config=LMConfig(max_evaluations=0),
         )
+
+
+def test_f_tol_continues_after_poorly_predicted_nonlinear_progress() -> None:
+    coefficient = 1.001 - 1.0e-8
+
+    def residual(x, *, indices):
+        del indices
+        return 1.0 - x + coefficient * x * x
+
+    def jacobian(x, *, indices):
+        del indices
+        return (-1.0 + 2.0 * coefficient * x)[:, :, None]
+
+    # The first damped step is almost one: actual cost improvement is about
+    # 1e-8, although the linear model predicts about 0.5. Small actual
+    # progress alone would stop far from this positive parabola's minimum.
+    problem = BatchedLeastSquaresProblem(residual, jacobian)
+    initial = np.zeros((1, 1))
+    limited = batched_levenberg_marquardt(
+        problem, initial, config=LMConfig(max_evaluations=2)
+    )
+    assert limited.status.tolist() == [LMStatus.MAX_EVALUATIONS]
+    assert limited.evaluations.tolist() == [2]
+    np.testing.assert_allclose(limited.parameters, 1.0 / 1.001)
+
+    result = batched_levenberg_marquardt(problem, initial)
+
+    assert result.converged.all()
+    assert result.evaluations[0] > 2
+    np.testing.assert_allclose(
+        result.parameters, 1.0 / (2.0 * coefficient), atol=5.0e-5, rtol=0
+    )
+    np.testing.assert_allclose(
+        result.residuals, 1.0 - 1.0 / (4.0 * coefficient), atol=1.0e-8
+    )
+
+
+def test_f_tol_rejects_underpredicted_nonlinear_progress() -> None:
+    def residual(x, *, indices):
+        del indices
+        return np.concatenate(
+            (x - 1 + 0.3 * x**2, np.full_like(x, 100.0), 0.3 * x**3),
+            axis=1,
+        )
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.stack((1 + 0.6 * x, 0 * x, 0.9 * x**2), axis=2)
+
+    # The first accepted step improves the objective by more than twice
+    # the linear prediction. Both reductions are small relative to the
+    # constant residual, but that model mismatch must prevent f_tol exit.
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.asarray([[-1.0]]),
+        config=LMConfig(f_tol=1e-3, max_evaluations=2),
+    )
+
+    assert result.status.tolist() == [LMStatus.MAX_EVALUATIONS]
+    assert result.evaluations.tolist() == [2]
+    assert -0.03 < result.parameters[0, 0] < -0.01
+
+
+def test_f_tol_requires_positive_prediction_when_products_underflow() -> None:
+    target = np.sqrt(np.finfo(np.float64).smallest_subnormal) * np.sqrt(1.6)
+
+    def residual(x, *, indices):
+        del indices
+        return x - target
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.ones((len(x), 1, 1))
+
+    # Rounding the squared residual produces a one-subnormal actual
+    # reduction, while the quadratic prediction and half that reduction
+    # underflow to zero. Zero prediction must not establish f_tol success.
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.zeros((1, 1)),
+        config=LMConfig(
+            initial_damping=10, f_tol=1, x_tol=0, g_tol=0, max_evaluations=2
+        ),
+    )
+
+    assert 0.5 * target**2 == np.finfo(np.float64).smallest_subnormal
+    assert 0.5 * result.residuals[0, 0] ** 2 == 0
+    assert 0 < result.parameters[0, 0] < target
+    assert result.status.tolist() == [LMStatus.MAX_EVALUATIONS]
+    assert result.evaluations.tolist() == [2]
+
+
+def test_f_tol_still_accepts_small_well_predicted_progress() -> None:
+    def residual(x, *, indices):
+        del indices
+        return np.concatenate((x, np.ones_like(x)), axis=1)
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(np.asarray([[[1.0, 0.0]]]), (len(x), 1, 2))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.asarray([[1.0e-5]]),
+    )
+
+    assert result.status.tolist() == [LMStatus.CONVERGED_F_TOL]
+    assert result.evaluations.tolist() == [2]
+    np.testing.assert_allclose(result.parameters, 1.0e-5 / 1001.0)
+
+
+def test_ill_scaled_covariance_and_rank_are_independent_of_units() -> None:
+    orthogonal = (
+        np.asarray(
+            [[1, 1, 1, 1], [1, -1, 1, -1], [1, 1, -1, -1], [1, -1, -1, 1]],
+            dtype=np.float64,
+        )
+        / 2
+    )
+    singular_values = np.asarray([1, 0.5, 0.25, 2.0**-8])
+    scales = np.asarray([2.0**-24, 1, 32, 2.0**-8])
+    factor = scales[:, None] * orthogonal * singular_values[None, :]
+    matrix = np.tile(factor, (1, 3))
+    matrices = np.stack((matrix, matrix.copy()))
+    # Changing one parameter's units leaves its independent direction intact.
+    matrices[1, 0] *= 2.0**-36
+    expected = (
+        ((orthogonal / singular_values**2) @ orthogonal.T)
+        / scales[:, None]
+        / scales[None, :]
+        / 3
+    )
+
+    def residual(x, *, indices):
+        return np.einsum("kn,knm->km", x, matrices[indices])
+
+    def jacobian(x, *, indices):
+        del x
+        return matrices[indices]
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian), np.zeros((2, 4))
+    )
+
+    assert result.rank.tolist() == [4, 4]
+    np.testing.assert_allclose(
+        result.covariance[0], expected, rtol=2.0e-8, atol=2.0e-8
+    )
+    converted = result.covariance[1].copy()
+    converted[0, :] *= 2.0**-36
+    converted[:, 0] *= 2.0**-36
+    np.testing.assert_allclose(converted, expected, rtol=2.0e-8, atol=2.0e-8)
+
+
+def test_covariance_factor_preserves_a_well_measured_parameter_combination():
+    # Independent unit-noise observations measure the mean directly and the
+    # difference very weakly. Var((x+y)/2) is exactly one, although rounding
+    # the ~2**60 covariance entries loses that information completely.
+    scale = 2.0**30
+    matrix = np.asarray([[0.5, 0.5 / scale], [0.5, -0.5 / scale]])
+
+    def residual(x, *, indices):
+        del indices
+        return x @ matrix
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(matrix, (len(x), 2, 2))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian), np.zeros((1, 2))
+    )
+
+    assert result.converged.all()
+    assert result.rank.tolist() == [2]
+    assert result.covariance_factor is not None
+    gradient = np.asarray([0.5, 0.5])
+    projected = gradient @ result.covariance_factor[0]
+    np.testing.assert_allclose(projected @ projected, 1.0, rtol=1.0e-12)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_gaussian_uncertainty_is_independent_of_flux_units(dtype) -> None:
+    model = GaussianDipoleModel((25, 25), dtype=dtype)
+    units = np.asarray([1.0e-8, 1.0, 1.0e8], dtype=dtype)
+    truth = np.tile(
+        np.asarray([1, 1.7, 1.1, 0.35, -1.8, 0.7, 2.2, -0.4], dtype=dtype),
+        (3, 1),
+    )
+    truth[:, 0] *= units
+    images = model.evaluate(truth)
+    variance = np.broadcast_to(units[:, None, None] ** 2, images.shape)
+    result = fit_dipoles(
+        images,
+        model=model,
+        initial=truth,
+        variance=variance,
+        backend="numpy",
+    )
+
+    assert result.converged.all()
+    assert result.uncertainty_valid.all()
+    assert result.covariance_factor is not None
+    np.testing.assert_allclose(
+        result.covariance_factor @ result.covariance_factor.swapaxes(-2, -1),
+        result.covariance,
+        rtol=2.0e-5 if dtype is np.float32 else 2.0e-12,
+        atol=0,
+    )
+    normalized_covariance = result.covariance.copy()
+    normalized_covariance[:, 0, :] /= units[:, None]
+    normalized_covariance[:, :, 0] /= units[:, None]
+    tolerance = 2.0e-5 if dtype is np.float32 else 2.0e-12
+    for row in (0, 2):
+        np.testing.assert_allclose(
+            normalized_covariance[row],
+            normalized_covariance[1],
+            rtol=tolerance,
+            atol=tolerance,
+        )
+
+
+def test_gaussian_equilibration_preserves_true_rank_deficiency() -> None:
+    model = GaussianDipoleModel((25, 25))
+    truth = np.asarray(
+        [
+            # A circular Gaussian has no identifiable orientation.
+            [1e20, 1.7, 1.7, 0, -1.8, 0.7, 2.2, -0.4],
+            # Coincident lobes cancel regardless of amplitude and shape.
+            [1e-20, 1.7, 1.1, 0.35, -1.8, 0.7, -1.8, 0.7],
+        ]
+    )
+    images = model.evaluate(truth)
+    variance = np.broadcast_to(truth[:, 0, None, None] ** 2, images.shape)
+    result = fit_dipoles(
+        images,
+        model=model,
+        initial=truth,
+        variance=variance,
+        backend="numpy",
+    )
+
+    assert result.converged.all()
+    assert not result.uncertainty_valid.any()
+    assert result.uncertainty_reason == ("rank-deficient Jacobian",) * 2
+    assert np.isnan(result.covariance).all()
+    assert result.covariance_factor is not None
+    assert np.isnan(result.covariance_factor).all()
+
+
+@pytest.mark.parametrize(
+    ("dtype", "exponent", "atol"),
+    [(np.float32, 15, 2.0e-6), (np.float64, 20, 1.0e-9)],
+)
+@pytest.mark.parametrize("specialized", [False, True])
+def test_solver_convergence_is_independent_of_parameter_units(
+    dtype, exponent, atol, specialized
+) -> None:
+    units = np.asarray([10.0**-exponent, 1, 10.0**exponent, 1], dtype=dtype)
+
+    def residual(x, *, indices):
+        value = x * units[indices, None] - 1
+        value[indices == 3] = np.nan
+        return value
+
+    def jacobian(x, *, indices):
+        del x
+        return units[indices, None, None]
+
+    def normal_equations(x, residuals, *, indices):
+        jac = jacobian(x, indices=indices)
+        return (
+            np.einsum("knm,km->kn", jac, residuals),
+            np.einsum("knm,kpm->knp", jac, jac),
+        )
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(
+            residual,
+            jacobian,
+            normal_equations=normal_equations if specialized else None,
+        ),
+        np.zeros((4, 1), dtype=dtype),
+    )
+
+    # Changing units must not turn the initial point into G_TOL, or the
+    # first damped step (residual about 1e-3) into X_TOL.
+    assert result.converged[:3].all()
+    np.testing.assert_allclose(result.residuals[:3], 0, atol=atol, rtol=0)
+    np.testing.assert_allclose(
+        result.parameters[:3, 0] * units[:3], 1, atol=atol, rtol=0
+    )
+    assert result.status[3] == LMStatus.INVALID_RESIDUAL
+    assert result.evaluations[3] == 1
+
+
+def test_solver_equilibrates_coupled_parameter_units() -> None:
+    # The three physical columns are well conditioned, but their units
+    # produce a normal system spanning sixty orders of magnitude.
+    physical_jacobian = np.asarray(
+        [[1, 2, -1, 0], [2, -1, 0, 1], [-1, 1, 2, 1]], dtype=np.float64
+    )
+    units = np.asarray([1.0e-15, 1.0, 1.0e15])
+    target = np.asarray([[1.0, -2.0, 0.5]])
+
+    def residual(x, *, indices):
+        return (x * units - target[indices]) @ physical_jacobian
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(
+            (units[:, None] * physical_jacobian)[None], (len(x), 3, 4)
+        )
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian), np.zeros((1, 3))
+    )
+
+    assert result.converged.all()
+    np.testing.assert_allclose(result.parameters * units, target, atol=1e-8)
+    np.testing.assert_allclose(result.residuals, 0, atol=1e-8)
+    assert result.rank.tolist() == [3]
+    np.testing.assert_allclose(
+        result.covariance[0] * units[:, None] * units[None, :],
+        np.linalg.inv(physical_jacobian @ physical_jacobian.T),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
+def test_zero_jacobian_column_does_not_set_the_step_tolerance() -> None:
+    def residual(x, *, indices):
+        del indices
+        return x[:, :1] - 1
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(np.asarray([[[1.0], [0.0]]]), (len(x), 2, 1))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.asarray([[0.0, 1.0e200]]),
+    )
+
+    assert result.converged.all()
+    np.testing.assert_allclose(result.residuals, 0, atol=1e-9)
+    assert result.parameters[0, 1] == 1.0e200
+    assert result.rank.tolist() == [1]
+    assert np.isnan(result.covariance).all()
+
+
+def test_large_parameter_does_not_hide_motion_in_other_coordinates() -> None:
+    target = np.asarray([[1.0e10, 1.0]])
+
+    def residual(x, *, indices):
+        return x - target[indices]
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(np.eye(2)[None], (len(x), 2, 2))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.asarray([[1.0e10, 0.0]]),
+    )
+
+    assert result.converged.all()
+    np.testing.assert_allclose(result.residuals, 0, atol=1e-9)
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_cupy_gradient_convergence_retains_small_residual_contributions(
+    count,
+):
+    ap = pytest.importorskip("cupy")
+    try:
+        if ap.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("CUDA device is unavailable")
+    except Exception:
+        pytest.skip("CUDA runtime is unavailable")
+    # The 164 small components collectively affect the stopping boundary.
+    # Exact summation supplies an independent reference for this linear fit.
+    row = np.full(165, 2.0**-27)
+    row[0] = 1.0
+    residual_norm = sqrt(fsum(float(value * value) for value in row))
+    template = ap.asarray(row)
+
+    def residual(x, *, indices):
+        del indices
+        value = ap.broadcast_to(template, (x.shape[0], row.size)).copy()
+        value[:, 0] += x[:, 0]
+        return value
+
+    def jacobian(x, *, indices):
+        del indices
+        value = ap.zeros((x.shape[0], 1, row.size))
+        value[:, 0, 0] = 1
+        return value
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        ap.zeros((count, 1)),
+        config=LMConfig(g_tol=1.0 / residual_norm, max_evaluations=2),
+    )
+    assert (result.status == int(LMStatus.CONVERGED_G_TOL)).all()
+    assert (result.evaluations == 1).all()
+    assert (result.parameters == 0).all()

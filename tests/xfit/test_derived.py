@@ -56,6 +56,58 @@ def test_negative_amplitude_selects_the_other_lobe():
     assert q.lobe_flux[0] == pytest.approx(2 * np.pi * 20.0 * 1.9 * 1.6)
 
 
+def test_midpoint_error_survives_large_anticorrelated_position_errors():
+    # x_pos = z1 + 2**30*z2, x_neg = z1 - 2**30*z2 for independent unit
+    # normal z1/z2. Their midpoint is z1, with exactly unit uncertainty.
+    factor = np.eye(8)[None, :, :]
+    factor[0, 4, 4] = factor[0, 6, 4] = 1.0
+    factor[0, 4, 6] = 2.0**30
+    factor[0, 6, 6] = -(2.0**30)
+    covariance = factor @ factor.swapaxes(-2, -1)
+    result = _result(TRUTH, covariance)
+    result.covariance_factor = factor
+
+    quantities = derived_dipole_quantities(result)
+
+    assert quantities.center_x_error[0] == pytest.approx(1.0)
+    assert quantities.center_y_error[0] == pytest.approx(np.sqrt(0.5))
+
+
+@pytest.mark.parametrize("supplied_variance", [False, True])
+def test_factor_propagation_uses_physical_units_and_fit_noise_scale(
+    supplied_variance,
+):
+    model = GaussianDipoleModel(SHAPE)
+    rng = np.random.default_rng(19)
+    images = model.evaluate(TRUTH[None, :]) + rng.normal(0, 0.3, (1, *SHAPE))
+    fit = fit_dipoles(
+        images,
+        model=model,
+        initial=TRUTH[None, :],
+        variance=np.full_like(images, 0.09) if supplied_variance else None,
+        backend="numpy",
+    )
+    assert fit.uncertainty_valid.all()
+    assert fit.covariance_factor is not None
+    # The optimizer uses log widths. Build the reference with derivatives
+    # in the physical units returned to the caller and the proper noise scale.
+    jacobian = model.jacobian(fit.parameters).reshape(1, 8, -1)[0]
+    noise_variance = 0.09 if supplied_variance else fit.reduced_chi_square[0]
+    reference = np.linalg.inv(jacobian @ jacobian.T) * noise_variance
+    factor = fit.covariance_factor[0]
+    np.testing.assert_allclose(
+        factor @ factor.T, reference, rtol=1e-9, atol=1e-12
+    )
+    gradient = np.zeros(8)
+    gradient[[4, 6]] = 0.5
+    quantities = derived_dipole_quantities(fit)
+    np.testing.assert_allclose(
+        quantities.center_x_error[0] ** 2,
+        gradient @ reference @ gradient,
+        rtol=1e-9,
+    )
+
+
 def test_uncertainties_match_monte_carlo_scatter():
     rng = np.random.default_rng(1)
     count = 400

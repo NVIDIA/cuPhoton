@@ -69,11 +69,14 @@ struct DeviceGuard {
 template <typename T>
 struct Work {
     T *jacobian, *packed_jacobian, *transposed, *compact_residual;
-    T *gradient, *hessian, *system, *matrix_packed, *step, *step_packed;
-    T *trial_x, *trial_residual, *damping, *cost, *trial_cost;
-    T *residual_norm, *step_norm;
+    T *gradient, *hessian, *step;
+    T *trial_x, *trial_residual, *damping, *cost, *trial_cost, *residual_norm;
+    double *system, *step_packed, *step_norm, *scale, *scaled_step, *prediction;
+    double *matrix_packed, *solve_packed;
+    double *wide_jacobian, *wide_transposed, *wide_residual;
+    double *wide_gradient, *wide_hessian;
     int *rejected, *indices, *accepted, *pivots, *factor_info;
-    T **matrix_ptrs, **rhs_ptrs;
+    double **matrix_ptrs, **rhs_ptrs;
 };
 
 template <typename T>
@@ -116,6 +119,32 @@ __device__ T rn_div(T a, T b) {
         return __ddiv_rn(a, b);
     } else {
         return __fdiv_rn(a, b);
+    }
+}
+
+// Explicit conversions preserve FP32 subnormals even in the model unit's
+// flush-to-zero build, matching the shared solver's linear algebra workspace.
+template <typename Output, typename Input>
+__device__ Output workspace_cast(Input value) {
+    if constexpr (sizeof(Output) == sizeof(Input)) {
+        return value;
+    } else if constexpr (sizeof(Output) == 8) {
+        double result;
+        asm("cvt.f64.f32 %0, %1;" : "=d"(result) : "f"(value));
+        return result;
+    } else {
+        float result;
+        asm("cvt.rn.f32.f64 %0, %1;" : "=f"(result) : "d"(value));
+        return result;
+    }
+}
+
+template <typename Input, typename Output>
+__global__ void convert_workspace(
+    const Input* input, Output* output, std::size_t count) {
+    std::size_t index = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < count) {
+        output[index] = workspace_cast<Output>(input[index]);
     }
 }
 
@@ -414,16 +443,23 @@ __global__ void prepare_system(Batch b, Settings s, Work<T> w, int count) {
         return;
     }
     int row = w.indices[slot];
-    constexpr T eps = T(sizeof(T) == 8 ? 0x1p-52 : 0x1p-23);
-    T diagonal[parameters];
-    T scaled_gradient = 0;
+    double scale[parameters];
+    double scaled_gradient = 0;
     for (int p = 0; p < parameters; ++p) {
-        diagonal[p] = maximum(w.hessian[slot * 64 + p * parameters + p], eps);
-        T gradient = w.gradient[slot * parameters + p];
-        w.step[row * parameters + p] = -gradient;
-        scaled_gradient =
-            maximum(scaled_gradient, rn_div(abs(gradient), sqrt(diagonal[p])));
+        // Widen before comparison or division: FP32 curvature can be
+        // subnormal even when the solution and covariance are representable.
+        double diagonal =
+            workspace_cast<double>(w.hessian[slot * 64 + p * parameters + p]);
+        scale[p] = sqrt(diagonal > 0.0 ? diagonal : 1.0);
+        w.scale[row * parameters + p] = scale[p];
+        double gradient = rn_div(
+            workspace_cast<double>(w.gradient[slot * parameters + p]),
+            scale[p]);
+        w.scaled_step[row * parameters + p] = -gradient;
+        scaled_gradient = maximum(scaled_gradient, abs(gradient));
     }
+    // Match the shared solver's threshold in the residual dtype, including
+    // FP32 rounding before comparison with the widened scaled gradient.
     if (scaled_gradient
         <= rn_mul(T(s.g_tol), maximum(T(1), w.residual_norm[slot]))) {
         b.status[row] = g_converged;
@@ -433,10 +469,16 @@ __global__ void prepare_system(Batch b, Settings s, Work<T> w, int count) {
     // output is therefore already column-major for the following LU copy.
     for (int column = 0; column < parameters; ++column) {
         for (int line = 0; line < parameters; ++line) {
-            T damping = rn_mul(
-                rn_mul(w.damping[row], T(line == column)), diagonal[column]);
-            w.system[row * 64 + column * parameters + line] = rn_add(
-                w.hessian[slot * 64 + column * parameters + line], damping);
+            double normalized = rn_div(
+                rn_div(
+                    workspace_cast<double>(
+                        w.hessian[slot * 64 + column * parameters + line]),
+                    scale[line]),
+                scale[column]);
+            double damping = rn_mul(
+                workspace_cast<double>(w.damping[row]), double(line == column));
+            w.system[row * 64 + column * parameters + line] =
+                rn_add(normalized, damping);
         }
     }
 }
@@ -452,10 +494,11 @@ __global__ void pack_systems(Work<T> w, int count) {
         w.matrix_packed[slot * 64 + p] = w.system[row * 64 + p];
     }
     for (int p = 0; p < parameters; ++p) {
-        w.step_packed[slot * parameters + p] = w.step[row * parameters + p];
+        w.solve_packed[slot * parameters + p] =
+            w.scaled_step[row * parameters + p];
     }
     w.matrix_ptrs[slot] = w.matrix_packed + slot * 64;
-    w.rhs_ptrs[slot] = w.step_packed + slot * parameters;
+    w.rhs_ptrs[slot] = w.solve_packed + slot * parameters;
 }
 
 template <typename T>
@@ -466,19 +509,29 @@ __global__ void scatter_step(Batch b, Work<T> w, int count) {
     }
     int row = w.indices[slot];
     bool valid = true;
-    for (int p = 0; p < parameters; ++p) {
-        valid &= isfinite(w.step_packed[slot * parameters + p]);
-    }
-    if (!valid) {
-        b.status[row] = singular;
-        return;
-    }
+    double prediction = 0;
     const T* x = static_cast<const T*>(b.x);
     for (int p = 0; p < parameters; ++p) {
-        T value = w.step_packed[slot * parameters + p];
+        double scaled_step = w.solve_packed[slot * parameters + p];
+        T value = workspace_cast<T>(
+            rn_div(scaled_step, w.scale[row * parameters + p]));
+        valid &= isfinite(value);
+        // scaled_step still holds the normalized right-hand side, -gradient.
+        prediction = rn_add(
+            prediction,
+            rn_mul(
+                scaled_step,
+                rn_add(
+                    rn_mul(workspace_cast<double>(w.damping[row]), scaled_step),
+                    w.scaled_step[row * parameters + p])));
+        w.scaled_step[row * parameters + p] = scaled_step;
         w.step[row * parameters + p] = value;
         w.trial_x[row * parameters + p] =
             rn_add(x[row * parameters + p], value);
+    }
+    w.prediction[row] = rn_mul(0.5, prediction);
+    if (!valid) {
+        b.status[row] = singular;
     }
 }
 
@@ -524,7 +577,11 @@ __global__ void classify_trial(Batch b, Settings s, Work<T> w) {
             w.damping[row] =
                 maximum(eps, rn_mul(w.damping[row], T(s.damping_decrease)));
             w.rejected[row] = 0;
-            if (reduction <= rn_mul(T(s.f_tol), maximum(T(1), cost))) {
+            T threshold = rn_mul(T(s.f_tol), maximum(T(1), cost));
+            double prediction = w.prediction[row];
+            if (reduction <= threshold && isfinite(prediction)
+                && prediction > T(0) && prediction <= threshold
+                && rn_mul(T(0.5), reduction) <= prediction) {
                 b.status[row] = f_converged;
             }
         } else {
@@ -557,7 +614,8 @@ __global__ void pack_accepted_steps(Work<T> w, int count) {
     }
     int row = w.indices[slot];
     for (int p = 0; p < parameters; ++p) {
-        w.step_packed[slot * parameters + p] = w.step[row * parameters + p];
+        w.step_packed[slot * parameters + p] =
+            w.scaled_step[row * parameters + p];
     }
 }
 
@@ -569,7 +627,7 @@ __global__ void finish_convergence(Batch b, Settings s, Work<T> w, int count) {
     }
     int row = w.indices[slot];
     if (b.status[row] == active
-        && w.step_norm[slot] <= T(rn_mul(s.x_tol, rn_add(s.x_tol, 1.0)))) {
+        && w.step_norm[slot] <= rn_mul(s.x_tol, rn_add(s.x_tol, 1.0))) {
         b.status[row] = x_converged;
     }
 }
@@ -639,14 +697,17 @@ struct Workspace::Impl {
     Work<T> workspace(const Batch& b) {
         std::size_t count = b.count;
         std::size_t observations = std::size_t(b.height) * b.width * b.planes;
-        std::size_t row_bytes = (229 + 26 * observations) * sizeof(T)
-            + 12 * sizeof(int) + 2 * sizeof(T*);
+        std::size_t row_bytes = (92 + 26 * observations) * sizeof(T)
+            + 162 * sizeof(double) + 12 * sizeof(int) + 2 * sizeof(double*);
+        if constexpr (sizeof(T) == 4) {
+            row_bytes += (72 + 17 * observations) * sizeof(double);
+        }
         // CuPy allocates separate aligned arrays. Preserve those base alignments
         // without changing per-row strides or the values sent to cuBLAS.
         constexpr std::size_t array_alignment = 256;
         constexpr std::size_t pointer_alignment = alignof(void*);
         constexpr std::size_t padding =
-            17 * (array_alignment - 1) + pointer_alignment;
+            26 * (array_alignment - 1) + pointer_alignment;
         if (count
             > (std::numeric_limits<std::size_t>::max() - padding) / row_bytes) {
             throw std::overflow_error("xFit native workspace is too large");
@@ -677,17 +738,35 @@ struct Workspace::Impl {
         w.compact_residual = take(count * observations);
         w.gradient = take(count * 8);
         w.hessian = take(count * 64);
-        w.system = take(count * 64);
-        w.matrix_packed = take(count * 64);
         w.step = take(count * 8);
-        w.step_packed = take(count * 8);
         w.trial_x = take(count * 8);
         w.trial_residual = take(count * observations);
         w.damping = take(count);
         w.cost = take(count);
         w.trial_cost = take(count);
         w.residual_norm = take(count);
-        w.step_norm = take(count);
+        auto take_double = [&cursor](std::size_t size) {
+            std::uintptr_t address = reinterpret_cast<std::uintptr_t>(cursor);
+            address = (address + array_alignment - 1) & ~(array_alignment - 1);
+            double* result = reinterpret_cast<double*>(address);
+            cursor = reinterpret_cast<T*>(result + size);
+            return result;
+        };
+        w.system = take_double(count * 64);
+        w.step_packed = take_double(count * 8);
+        w.step_norm = take_double(count);
+        w.scale = take_double(count * 8);
+        w.scaled_step = take_double(count * 8);
+        w.prediction = take_double(count);
+        w.matrix_packed = take_double(count * 64);
+        w.solve_packed = take_double(count * 8);
+        if constexpr (sizeof(T) == 4) {
+            w.wide_jacobian = take_double(count * 8 * observations);
+            w.wide_transposed = take_double(count * 8 * observations);
+            w.wide_residual = take_double(count * observations);
+            w.wide_gradient = take_double(count * 8);
+            w.wide_hessian = take_double(count * 64);
+        }
         int* integers = reinterpret_cast<int*>(cursor);
         w.rejected = integers;
         integers += count;
@@ -703,7 +782,7 @@ struct Workspace::Impl {
             reinterpret_cast<std::uintptr_t>(integers);
         pointer_address = (pointer_address + pointer_alignment - 1)
             & ~(pointer_alignment - 1);
-        w.matrix_ptrs = reinterpret_cast<T**>(pointer_address);
+        w.matrix_ptrs = reinterpret_cast<double**>(pointer_address);
         w.rhs_ptrs = w.matrix_ptrs + count;
         return w;
     }
@@ -832,42 +911,89 @@ struct Workspace::Impl {
     template <typename T>
     void library_solve(Work<T> w, int count) {
         int info = 0;
-        if constexpr (sizeof(T) == 8) {
-            check(cublasDgetrfBatched(
-                handle, 8, w.matrix_ptrs, 8, w.pivots, w.factor_info, count));
-            check(cublasDgetrsBatched(
-                handle,
-                CUBLAS_OP_N,
-                8,
-                1,
-                const_cast<const double* const*>(w.matrix_ptrs),
-                8,
-                w.pivots,
-                w.rhs_ptrs,
-                8,
-                &info,
-                count));
-        } else {
-            check(cublasSgetrfBatched(
-                handle, 8, w.matrix_ptrs, 8, w.pivots, w.factor_info, count));
-            check(cublasSgetrsBatched(
-                handle,
-                CUBLAS_OP_N,
-                8,
-                1,
-                const_cast<const float* const*>(w.matrix_ptrs),
-                8,
-                w.pivots,
-                w.rhs_ptrs,
-                8,
-                &info,
-                count));
-        }
+        check(cublasDgetrfBatched(
+            handle, 8, w.matrix_ptrs, 8, w.pivots, w.factor_info, count));
+        check(cublasDgetrsBatched(
+            handle,
+            CUBLAS_OP_N,
+            8,
+            1,
+            const_cast<const double* const*>(w.matrix_ptrs),
+            8,
+            w.pivots,
+            w.rhs_ptrs,
+            8,
+            &info,
+            count));
         // CuPy's default linalg error mode ignores per-matrix factor_info.
         // Nonfinite solutions are rejected by scatter_step, just as in Python.
         if (info != 0) {
             throw std::runtime_error(
                 "xFit getrsBatched info " + std::to_string(info));
+        }
+    }
+
+    template <typename Input, typename Output>
+    void convert(const Input* input, Output* output, std::size_t count) {
+        convert_workspace<<<
+            (count + threads - 1) / threads,
+            threads,
+            0,
+            stream>>>(input, output, count);
+        check(cudaGetLastError());
+    }
+
+    template <typename T>
+    void normal_equations(Batch b, Work<T> w, int count, int observations) {
+        if constexpr (sizeof(T) == 4) {
+            // Widen before multiplying, then retain FP32 solver state.
+            std::size_t values = std::size_t(count) * observations;
+            convert(w.packed_jacobian, w.wide_jacobian, values * 8);
+            convert(w.transposed, w.wide_transposed, values * 8);
+            convert(w.compact_residual, w.wide_residual, values);
+            matmul(
+                w.wide_residual,
+                w.wide_transposed,
+                w.wide_gradient,
+                1,
+                8,
+                observations,
+                count);
+            matmul(
+                w.wide_jacobian,
+                w.wide_transposed,
+                w.wide_hessian,
+                8,
+                8,
+                observations,
+                count);
+            convert(w.wide_gradient, w.gradient, std::size_t(count) * 8);
+            convert(w.wide_hessian, w.hessian, std::size_t(count) * 64);
+        } else {
+            // Reversed binary einsum operands: r[batch,1,m] @ JT[batch,m,8].
+            matmul(
+                w.compact_residual,
+                w.transposed,
+                w.gradient,
+                1,
+                8,
+                observations,
+                count);
+            if (small_hessian && b.count <= 16 && b.planes == 1
+                && b.height == 51 && b.width == 51) {
+                hessian_small_fp64<<<count, 64, 0, stream>>>(
+                    w.packed_jacobian, w.hessian, count);
+                check(cudaGetLastError());
+            } else {
+                matmul(
+                    w.packed_jacobian,
+                    w.transposed,
+                    w.hessian,
+                    8,
+                    8,
+                    observations,
+                    count);
+            }
         }
     }
 
@@ -934,35 +1060,7 @@ struct Workspace::Impl {
             pack_equations<<<count, threads, 0, stream>>>(b, w);
             check(cudaGetLastError());
         }
-        // Reversed binary einsum operands: r[batch,1,m] @ JT[batch,m,8].
-        matmul(
-            w.compact_residual,
-            w.transposed,
-            w.gradient,
-            1,
-            8,
-            observations,
-            count);
-        bool hessian_ready = false;
-        if constexpr (sizeof(T) == sizeof(double)) {
-            if (small_hessian && b.count <= 16 && b.planes == 1
-                && b.height == 51 && b.width == 51) {
-                hessian_small_fp64<<<count, 64, 0, stream>>>(
-                    w.packed_jacobian, w.hessian, count);
-                check(cudaGetLastError());
-                hessian_ready = true;
-            }
-        }
-        if (!hessian_ready) {
-            matmul(
-                w.packed_jacobian,
-                w.transposed,
-                w.hessian,
-                8,
-                8,
-                observations,
-                count);
-        }
+        normal_equations(b, w, count, observations);
         norms(w.compact_residual, w.residual_norm, count, observations);
         prepare_system<<<(count + threads - 1) / threads, threads, 0, stream>>>(
             b, s, w, count);
