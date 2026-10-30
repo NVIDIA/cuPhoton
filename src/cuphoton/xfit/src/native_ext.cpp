@@ -24,6 +24,7 @@
 namespace {
 
 using cuphoton::xfit::Batch;
+using cuphoton::xfit::KernelPolicy;
 using cuphoton::xfit::Settings;
 using cuphoton::xfit::Timings;
 using cuphoton::xfit::Workspace;
@@ -57,9 +58,9 @@ struct State {
     int device;
     std::atomic_flag busy = ATOMIC_FLAG_INIT;
     Workspace workspace;
-    explicit State(int id)
+    explicit State(int id, KernelPolicy policy = KernelPolicy::Automatic)
         : device(id),
-          workspace(id) {}
+          workspace(id, policy) {}
 };
 
 struct BusyGuard {
@@ -97,11 +98,21 @@ void destroy_workspace(PyObject* capsule) {
     delete state;
 }
 
-PyObject* create_workspace(PyObject*, PyObject* argument) {
-    long device = PyLong_AsLong(argument);
-    if (PyErr_Occurred()) {
-        return nullptr;
+constexpr const char* policy_names[] = {
+    "auto", "portable", "test_sm120", "test_sm121"};
+
+bool parse_policy(const char* name, KernelPolicy& policy) {
+    for (int i = 0; i < 4; ++i) {
+        if (std::strcmp(name, policy_names[i]) == 0) {
+            policy = static_cast<KernelPolicy>(i);
+            return true;
+        }
     }
+    PyErr_SetString(PyExc_ValueError, "unknown native xFit test kernel policy");
+    return false;
+}
+
+PyObject* make_workspace(long device, KernelPolicy policy) {
     if (device < 0 || device > INT_MAX) {
         PyErr_SetString(
             PyExc_ValueError, "device must be a nonnegative integer");
@@ -110,7 +121,7 @@ PyObject* create_workspace(PyObject*, PyObject* argument) {
     State* state = nullptr;
     try {
         Detached detached;
-        state = new State(static_cast<int>(device));
+        state = new State(static_cast<int>(device), policy);
     } catch (...) {
         return translate_exception();
     }
@@ -120,6 +131,56 @@ PyObject* create_workspace(PyObject*, PyObject* argument) {
         delete state;
     }
     return capsule;
+}
+
+PyObject* create_workspace(PyObject*, PyObject* argument) {
+    long device = PyLong_AsLong(argument);
+    if (PyErr_Occurred()) {
+        return nullptr;
+    }
+    return make_workspace(device, KernelPolicy::Automatic);
+}
+
+PyObject* create_test_workspace(PyObject*, PyObject* arguments) {
+    long device;
+    const char* name;
+    if (!PyArg_ParseTuple(
+            arguments, "ls:_create_test_workspace", &device, &name)) {
+        return nullptr;
+    }
+    KernelPolicy policy;
+    if (!parse_policy(name, policy)) {
+        return nullptr;
+    }
+    return make_workspace(device, policy);
+}
+
+PyObject* test_kernel_policy(PyObject*, PyObject* arguments) {
+    const char* name;
+    int major, minor, version;
+    if (!PyArg_ParseTuple(
+            arguments,
+            "siii:_test_kernel_policy",
+            &name,
+            &major,
+            &minor,
+            &version)) {
+        return nullptr;
+    }
+    KernelPolicy policy;
+    if (!parse_policy(name, policy)) {
+        return nullptr;
+    }
+    const auto selected =
+        cuphoton::xfit::select_kernels(policy, major, minor, version);
+    return Py_BuildValue(
+        "{s:O,s:O,s:O}",
+        "tiled_jacobian",
+        selected.tiled_jacobian ? Py_True : Py_False,
+        "fused_trial_residual",
+        selected.fused_trial_residual ? Py_True : Py_False,
+        "small_hessian",
+        selected.small_hessian ? Py_True : Py_False);
 }
 
 struct Array {
@@ -446,7 +507,7 @@ PyObject* run_impl(PyObject* arguments) {
         return nullptr;
     }
     return Py_BuildValue(
-        "{s:d,s:d,s:d,s:i}",
+        "{s:d,s:d,s:d,s:i,s:s,s:i,s:i,s:i,s:i,s:i}",
         "host_seconds",
         timings.host_seconds,
         "synchronize_seconds",
@@ -454,7 +515,19 @@ PyObject* run_impl(PyObject* arguments) {
         "gpu_milliseconds",
         static_cast<double>(timings.gpu_milliseconds),
         "iterations",
-        timings.iterations);
+        timings.iterations,
+        "kernel_policy",
+        policy_names[static_cast<int>(timings.kernel_policy)],
+        "cublas_version",
+        timings.cublas_version,
+        "tiled_jacobian_launches",
+        timings.tiled_jacobian_launches,
+        "fused_trial_residual_launches",
+        timings.fused_trial_residual_launches,
+        "hessian_single_launches",
+        timings.hessian_single_launches,
+        "hessian_batch_launches",
+        timings.hessian_batch_launches);
 }
 
 PyObject* run(PyObject*, PyObject* arguments) {
@@ -470,6 +543,14 @@ PyMethodDef methods[] = {
         create_workspace,
         METH_O,
         "Create one worker's CUDA workspace."},
+    {"_create_test_workspace",
+        create_test_workspace,
+        METH_VARARGS,
+        "Create an isolated test-policy workspace using the real CUDA provider."},
+    {"_test_kernel_policy",
+        test_kernel_policy,
+        METH_VARARGS,
+        "Inspect pure kernel eligibility for supplied architecture/version inputs."},
     {"run",
         run,
         METH_VARARGS,

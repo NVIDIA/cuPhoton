@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -20,6 +21,24 @@ extern "C" int xfit_library_norms(
     const void*, void*, int, int, bool, std::uintptr_t);
 
 namespace cuphoton::xfit {
+
+KernelSelection select_kernels(
+    KernelPolicy policy, int major, int minor, int cublas_version) {
+    if (policy == KernelPolicy::Portable) {
+        return {};
+    }
+    if (policy == KernelPolicy::TestSM120
+        || policy == KernelPolicy::TestSM121) {
+        major = 12;
+        minor = policy == KernelPolicy::TestSM121 ? 1 : 0;
+    }
+    return {
+        major == 12 && (minor == 0 || minor == 1),
+        major == 12 && minor == 0,
+        major == 12 && minor == 1 && cublas_version == 130101,
+    };
+}
+
 namespace {
 
 constexpr int threads = 128;
@@ -281,6 +300,193 @@ __global__ void residual(Batch b, const T* x, T* output, T cube_exponent) {
     }
 }
 
+// Fuse trial residual evaluation and packing for the RTX small-batch path.
+namespace fused_trial_residual_fp64 {
+
+constexpr int kThreads = 32;
+
+struct FastDiv {
+    uint32_t multiplier;
+    uint32_t shift;
+
+    __host__ explicit FastDiv(uint32_t divisor) {
+        uint32_t logarithm = 0;
+        while ((1ull << logarithm) < divisor) {
+            ++logarithm;
+        }
+        shift = 31 + logarithm;
+        multiplier =
+            static_cast<uint32_t>(((1ull << shift) + divisor - 1) / divisor);
+    }
+
+    __device__ __forceinline__ uint32_t div(uint32_t numerator) const {
+        return static_cast<uint32_t>(
+            (static_cast<uint64_t>(numerator) * multiplier) >> shift);
+    }
+};
+
+__device__ __forceinline__ double inverse_square_width(double logarithm) {
+    double width = exp(logarithm);
+    width = isfinite(width) && width > 0.0
+        ? width
+        : __longlong_as_double(0x7ff8000000000000ll);
+    return __ddiv_rn(1.0, __dmul_rn(width, width));
+}
+
+__device__ __forceinline__ double lobe_argument(
+    double coord_x,
+    double coord_y,
+    double position_x,
+    double position_y,
+    double cosine,
+    double sine,
+    double inverse_x,
+    double inverse_y) {
+    const double delta_x = __dsub_rn(coord_x, position_x);
+    const double delta_y = __dsub_rn(coord_y, position_y);
+    const double rotated_x =
+        __dadd_rn(__dmul_rn(cosine, delta_x), __dmul_rn(sine, delta_y));
+    const double rotated_y =
+        __dsub_rn(__dmul_rn(cosine, delta_y), __dmul_rn(sine, delta_x));
+    const double square = __dadd_rn(
+        __dmul_rn(__dmul_rn(rotated_x, rotated_x), inverse_x),
+        __dmul_rn(__dmul_rn(rotated_y, rotated_y), inverse_y));
+    return __dmul_rn(-0.5, square);
+}
+
+template <int Planes>
+__global__ void __launch_bounds__(kThreads) fused_residual(
+    const double* __restrict__ trial_x,
+    const double* __restrict__ weights,
+    const int32_t* __restrict__ indices,
+    const double* __restrict__ images,
+    const unsigned long long* __restrict__ current,
+    double* __restrict__ trial,
+    unsigned long long* __restrict__ compact_current,
+    double* __restrict__ compact_trial,
+    int selected,
+    int height,
+    int width,
+    int pixels,
+    FastDiv div_width) {
+    const int selection = blockIdx.y + static_cast<int>(blockIdx.z) * 65535;
+    if (selection >= selected) {
+        return;
+    }
+    const int pixel = blockIdx.x * kThreads + threadIdx.x;
+    const int lane = threadIdx.x & 31;
+    const bool active = pixel < pixels;
+    const int64_t source = __ldg(indices + selection);
+    const int64_t full_offset = source * (int64_t(Planes) * pixels) + pixel;
+    const int64_t compact_offset =
+        int64_t(selection) * (int64_t(Planes) * pixels) + pixel;
+    double data[Planes];
+    double weight[Planes];
+    unsigned long long previous[Planes];
+#pragma unroll
+    for (int plane = 0; plane < Planes; ++plane) {
+        data[plane] = active
+            ? __ldg(images + full_offset + int64_t(plane) * pixels)
+            : 0.0;
+        weight[plane] = active
+            ? __ldg(weights + full_offset + int64_t(plane) * pixels)
+            : 0.0;
+        previous[plane] =
+            active ? __ldg(current + full_offset + int64_t(plane) * pixels) : 0;
+    }
+
+    const double parameter = __ldg(trial_x + source * 8 + (lane & 7));
+    const double log_width =
+        __shfl_sync(0xffffffffu, parameter, 1 + (lane & 1));
+    const double angle = __shfl_sync(0xffffffffu, parameter, 3);
+    double inverse = 0.0;
+    double sine = 0.0;
+    double cosine = 0.0;
+    if (lane < 2) {
+        inverse = inverse_square_width(log_width);
+    }
+    if (lane == 2) {
+        sincos(angle, &sine, &cosine);
+    }
+    const double amplitude = __shfl_sync(0xffffffffu, parameter, 0);
+    const double positive_x = __shfl_sync(0xffffffffu, parameter, 4);
+    const double positive_y = __shfl_sync(0xffffffffu, parameter, 5);
+    const double negative_x = __shfl_sync(0xffffffffu, parameter, 6);
+    const double negative_y = __shfl_sync(0xffffffffu, parameter, 7);
+    const double inverse_x = __shfl_sync(0xffffffffu, inverse, 0);
+    const double inverse_y = __shfl_sync(0xffffffffu, inverse, 1);
+    sine = __shfl_sync(0xffffffffu, sine, 2);
+    cosine = __shfl_sync(0xffffffffu, cosine, 2);
+    if (!active) {
+        return;
+    }
+
+    const uint32_t row = div_width.div(static_cast<uint32_t>(pixel));
+    const uint32_t column = static_cast<uint32_t>(pixel) - row * width;
+    const double coord_x =
+        __dsub_rn(static_cast<double>(column), 0.5 * (width - 1));
+    const double coord_y =
+        __dsub_rn(static_cast<double>(row), 0.5 * (height - 1));
+    const double positive_argument = lobe_argument(
+        coord_x,
+        coord_y,
+        positive_x,
+        positive_y,
+        cosine,
+        sine,
+        inverse_x,
+        inverse_y);
+    const double negative_argument = lobe_argument(
+        coord_x,
+        coord_y,
+        negative_x,
+        negative_y,
+        cosine,
+        sine,
+        inverse_x,
+        inverse_y);
+    const double positive = __dmul_rn(amplitude, exp(positive_argument));
+    const double negative = __dmul_rn(amplitude, exp(negative_argument));
+    double result[Planes];
+    result[0] =
+        __dmul_rn(__dsub_rn(__dsub_rn(positive, negative), data[0]), weight[0]);
+    if constexpr (Planes == 3) {
+        result[1] = __dmul_rn(__dsub_rn(positive, data[1]), weight[1]);
+        result[2] = __dmul_rn(__dsub_rn(negative, data[2]), weight[2]);
+    }
+#pragma unroll
+    for (int plane = 0; plane < Planes; ++plane) {
+        const int64_t plane_offset = int64_t(plane) * pixels;
+        trial[full_offset + plane_offset] = result[plane];
+        compact_trial[compact_offset + plane_offset] = result[plane];
+        compact_current[compact_offset + plane_offset] = previous[plane];
+    }
+}
+
+void launch(const Batch& b, Work<double> w, int count, cudaStream_t stream) {
+    const int pixels = b.height * b.width;
+    const dim3 grid(
+        (uint64_t(pixels) + kThreads - 1) / kThreads,
+        count < 65535 ? count : 65535,
+        (uint64_t(count) + 65534) / 65535);
+    fused_residual<1><<<grid, kThreads, 0, stream>>>(
+        w.trial_x,
+        static_cast<const double*>(b.weights),
+        w.indices,
+        static_cast<const double*>(b.images),
+        static_cast<const unsigned long long*>(b.residuals),
+        w.trial_residual,
+        reinterpret_cast<unsigned long long*>(w.compact_residual),
+        w.transposed,
+        count,
+        b.height,
+        b.width,
+        pixels,
+        FastDiv(b.width));
+}
+
+}  // namespace fused_trial_residual_fp64
+
 template <typename T>
 __global__ void initial_status(Batch b, int* any_active) {
     int row = blockIdx.x;
@@ -340,6 +546,275 @@ __global__ void compact_rows(
     }
     *count = size;
 }
+
+// Spatially tiled FP64 Jacobian for the RTX primary small-batch path.
+// Per-row finite flags are consumed by the existing stable row selection.
+namespace tiled_jacobian_fp64 {
+
+constexpr int kHelperThreads =
+    96;  // three helper warps for the per-row scalars
+
+__device__ __forceinline__ bool nonfinite(double v) {
+    return (__double2hiint(v) & 0x7ff00000) == 0x7ff00000;
+}
+
+// Byte-sized, naturally aligned relaxed atomic store at device scope. Concurrent
+// clears of the same flag are morally strong (no data race) and never touch
+// neighbouring bytes, so any K is valid.
+__device__ __forceinline__ void atomic_clear_flag(bool* flag) {
+    const unsigned short zero = 0;
+    asm volatile("st.relaxed.gpu.u8 [%0], %1;" ::"l"(flag), "h"(zero)
+        : "memory");
+}
+
+struct StarPart {
+    double xr, yr, value, unit, angle, px, py;
+};
+
+// Everything in star() that does not need the pow() results.
+__device__ __forceinline__ void star_part(
+    double cx,
+    double cy,
+    double ox,
+    double oy,
+    double c,
+    double s,
+    double ix,
+    double iy,
+    double ixmiy,
+    double amp,
+    StarPart& o) {
+    const double dx = __dsub_rn(cx, ox);
+    const double dy = __dsub_rn(cy, oy);
+    const double xr = __dadd_rn(__dmul_rn(c, dx), __dmul_rn(s, dy));
+    const double yr = __dsub_rn(__dmul_rn(c, dy), __dmul_rn(s, dx));
+    const double q = __dadd_rn(
+        __dmul_rn(__dmul_rn(xr, xr), ix), __dmul_rn(__dmul_rn(yr, yr), iy));
+    const double unit = exp(__dmul_rn(-0.5, q));
+    const double value = __dmul_rn(amp, unit);
+    o.xr = xr;
+    o.yr = yr;
+    o.value = value;
+    o.unit = unit;
+    o.angle = __dmul_rn(__dmul_rn(__dmul_rn(-value, xr), yr), ixmiy);
+    o.px = __dmul_rn(
+        value,
+        __dsub_rn(
+            __dmul_rn(__dmul_rn(c, xr), ix), __dmul_rn(__dmul_rn(s, yr), iy)));
+    o.py = __dmul_rn(
+        value,
+        __dadd_rn(
+            __dmul_rn(__dmul_rn(s, xr), ix), __dmul_rn(__dmul_rn(c, yr), iy)));
+}
+
+// Writes one plane's 8 weighted derivatives to both layouts; returns nonfinite.
+__device__ __forceinline__ bool store8(
+    const double (&v)[8],
+    double w,
+    double* __restrict__ packed,
+    double* __restrict__ transposed,
+    long long k,
+    long long M,
+    long long m) {
+    double j[8];
+    bool bad = false;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        j[i] = __dmul_rn(v[i], w);
+        bad |= nonfinite(j[i]);
+    }
+    double* pk = packed + (k * 8) * M + m;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        pk[i * M] = j[i];
+    }
+    double2* tr = reinterpret_cast<double2*>(transposed + (k * M + m) * 8);
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        tr[i] = make_double2(j[2 * i], j[2 * i + 1]);
+    }
+    return bad;
+}
+
+// blockDim.x = pix_threads + kHelperThreads. Threads [0, pix_threads) own one
+// pixel (all planes) of a tile; the three helper warps compute the row scalars:
+// warp A lanes 0/1 run exp -> validity -> 1/(s*s) and then pow(s, exponent),
+// warps B/C run cos and sin, so the long scalar chains run concurrently and
+// pow overlaps the pixel exponentials.
+__global__ void __launch_bounds__(256 + kHelperThreads) jacobian_pack_kernel(
+    const double* __restrict__ x,
+    const double* __restrict__ weights,
+    const int* __restrict__ indices,
+    const double* __restrict__ residuals,
+    double* __restrict__ packed,
+    double* __restrict__ transposed,
+    double* __restrict__ compact,
+    bool* __restrict__ finite_row,
+    long long K,
+    int P,
+    int H,
+    int W,
+    int pix_threads,
+    long long tiles,
+    double exponent) {
+    __shared__ double sh[8];
+    const int t = threadIdx.x;
+    const int helper = t - pix_threads;
+    const long long HW = (long long)H * W;
+    const long long M = HW * P;
+    const long long total = K * tiles;
+    const double half_w = __dmul_rn((double)(W - 1), 0.5);
+    const double half_h = __dmul_rn((double)(H - 1), 0.5);
+
+    for (long long item = blockIdx.x; item < total; item += gridDim.x) {
+        const long long k = item / tiles;
+        const long long tile = item - k * tiles;
+        const long long r = indices[k];
+        const double* xrow = x + r * 8;
+
+        double s_self = 0.0;
+        if (helper == 0 || helper == 1) {
+            double s = exp(xrow[1 + helper]);
+            if (!(isfinite(s) && s > 0.0)) {
+                s = __longlong_as_double(0x7ff8000000000000LL);
+            }
+            s_self = s;
+            sh[helper] = s;
+            sh[2 + helper] = __ddiv_rn(1.0, __dmul_rn(s, s));
+        } else if (helper == 32) {
+            sh[6] = cos(xrow[3]);
+        } else if (helper == 64) {
+            sh[7] = sin(xrow[3]);
+        }
+        __syncthreads();
+
+        const long long pix = tile * pix_threads + t;
+        const bool active = helper < 0 && pix < HW;
+        StarPart a, b;
+        double w0 = 0.0, w1 = 0.0, w2 = 0.0;
+        if (helper == 0 || helper == 1) {
+            sh[4 + helper] = pow(s_self, exponent);
+        } else if (active) {
+            const double c = sh[6], s = sh[7], ix = sh[2], iy = sh[3];
+            const double ixmiy = __dsub_rn(ix, iy);
+            const double amp = xrow[0];
+            const int row = (int)(pix / W);
+            const int col = (int)(pix - (long long)row * W);
+            const double cx = __dsub_rn((double)col, half_w);
+            const double cy = __dsub_rn((double)row, half_h);
+            const double* wrow = weights + r * M + pix;
+            w0 = wrow[0];
+            if (P == 3) {
+                w1 = wrow[HW];
+                w2 = wrow[2 * HW];
+            }
+            star_part(cx, cy, xrow[4], xrow[5], c, s, ix, iy, ixmiy, amp, a);
+            star_part(cx, cy, xrow[6], xrow[7], c, s, ix, iy, ixmiy, amp, b);
+            const double* rrow = residuals + r * M + pix;
+            double* crow = compact + k * M + pix;
+            crow[0] = rrow[0];
+            if (P == 3) {
+                crow[HW] = rrow[HW];
+                crow[2 * HW] = rrow[2 * HW];
+            }
+        }
+        __syncthreads();
+
+        bool bad = false;
+        if (active) {
+            const double sx = sh[0], sy = sh[1], sxc = sh[4], syc = sh[5];
+            const double awx =
+                __ddiv_rn(__dmul_rn(__dmul_rn(a.value, a.xr), a.xr), sxc);
+            const double awy =
+                __ddiv_rn(__dmul_rn(__dmul_rn(a.value, a.yr), a.yr), syc);
+            const double bwx =
+                __ddiv_rn(__dmul_rn(__dmul_rn(b.value, b.xr), b.xr), sxc);
+            const double bwy =
+                __ddiv_rn(__dmul_rn(__dmul_rn(b.value, b.yr), b.yr), syc);
+            {
+                double v[8];
+                v[0] = __dsub_rn(a.unit, b.unit);
+                v[1] = __dmul_rn(__dsub_rn(awx, bwx), sx);
+                v[2] = __dmul_rn(__dsub_rn(awy, bwy), sy);
+                v[3] = __dsub_rn(a.angle, b.angle);
+                v[4] = a.px;
+                v[5] = a.py;
+                v[6] = -b.px;
+                v[7] = -b.py;
+                bad |= store8(v, w0, packed, transposed, k, M, pix);
+            }
+            if (P == 3) {
+                double v[8];
+                v[0] = a.unit;
+                v[1] = __dmul_rn(awx, sx);
+                v[2] = __dmul_rn(awy, sy);
+                v[3] = a.angle;
+                v[4] = a.px;
+                v[5] = a.py;
+                v[6] = 0.0;
+                v[7] = 0.0;
+                bad |= store8(v, w1, packed, transposed, k, M, HW + pix);
+                v[0] = b.unit;
+                v[1] = __dmul_rn(bwx, sx);
+                v[2] = __dmul_rn(bwy, sy);
+                v[3] = b.angle;
+                v[4] = 0.0;
+                v[5] = 0.0;
+                v[6] = b.px;
+                v[7] = b.py;
+                bad |= store8(v, w2, packed, transposed, k, M, 2 * HW + pix);
+            }
+        }
+        // finite_row[k] was preset to true in stream order before this launch.
+        // One thread per CTA clears it with a byte-sized atomic store when any
+        // weighted derivative in the tile is nonfinite. The barrier also protects
+        // sh[] before the next work item.
+        if (__syncthreads_or(bad) && t == 0) {
+            atomic_clear_flag(finite_row + k);
+        }
+    }
+}
+
+void launch(
+    const Batch& b,
+    Work<double> w,
+    int count,
+    int multiprocessors,
+    double exponent,
+    cudaStream_t stream) {
+    const long long HW = static_cast<long long>(b.height) * b.width;
+    int pix_threads = 32;
+    while (pix_threads < 256
+        && count * ((HW + pix_threads - 1) / pix_threads) > multiprocessors) {
+        pix_threads *= 2;
+    }
+    const long long tiles = (HW + pix_threads - 1) / pix_threads;
+    const long long total = count * tiles;
+    const long long max_grid = 1LL << 20;
+    const unsigned grid =
+        static_cast<unsigned>(total < max_grid ? total : max_grid);
+    auto* finite_row = reinterpret_cast<bool*>(w.factor_info);
+    check(cudaMemsetAsync(finite_row, 1, std::size_t(count), stream));
+    jacobian_pack_kernel<<<grid, pix_threads + kHelperThreads, 0, stream>>>(
+        static_cast<const double*>(b.x),
+        static_cast<const double*>(b.weights),
+        w.indices,
+        static_cast<const double*>(b.residuals),
+        w.packed_jacobian,
+        w.transposed,
+        w.compact_residual,
+        finite_row,
+        count,
+        b.planes,
+        b.height,
+        b.width,
+        pix_threads,
+        tiles,
+        exponent);
+    check(cudaGetLastError());
+}
+
+}  // namespace tiled_jacobian_fp64
 
 template <typename T, bool Pack = false>
 __global__ void evaluate_jacobian(Batch b, Work<T> w, T cube_exponent) {
@@ -411,29 +886,133 @@ __global__ void pack_equations(Batch b, Work<T> w) {
     }
 }
 
-__global__ void hessian_small_fp64(
-    const double* jacobian, double* hessian, int count) {
-    constexpr int observations = 51 * 51;
-    int row = threadIdx.x / parameters;
-    int column = threadIdx.x % parameters;
-    const double* values = jacobian + blockIdx.x * parameters * observations;
-    double result = 0.0;
-    // Match the qualified SM121 small-batch GEMM accumulation, including its
-    // five-part singleton reduction. Preserve all 64 column-major entries.
-    int partitions = count == 1 ? 5 : 1;
-    for (int partition = 0; partition < partitions; ++partition) {
-        int begin = count == 1 ? partition * 522 : 0;
-        int end = count == 1 ? min(begin + 522, observations) : observations;
-        double partial = 0.0;
-        for (int i = begin; i < end; ++i) {
-            partial = __fma_rn(
-                values[row * observations + i],
-                values[column * observations + i],
-                partial);
+__device__ __forceinline__ double hessian_chain_fp64(
+    const double* a, const double* b, int begin, int end, double result) {
+    constexpr int prefetch = 16;
+    int i = begin;
+    for (; i + prefetch <= end; i += prefetch) {
+        double av[prefetch], bv[prefetch];
+#pragma unroll
+        for (int j = 0; j < prefetch; ++j) {
+            av[j] = a[i + j];
+            bv[j] = b[i + j];
         }
-        result = count == 1 ? __dadd_rn(partial, result) : partial;
+#pragma unroll
+        for (int j = 0; j < prefetch; ++j) {
+            result = __fma_rn(av[j], bv[j], result);
+        }
     }
-    hessian[blockIdx.x * 64 + column * parameters + row] = result;
+    for (; i < end; ++i) {
+        result = __fma_rn(a[i], b[i], result);
+    }
+    return result;
+}
+
+__global__ __launch_bounds__(128) void hessian_single_fp64(
+    const double* __restrict__ jacobian, double* __restrict__ hessian) {
+    constexpr int observations = 51 * 51;
+    __shared__ double a[observations];
+    __shared__ double b[observations];
+    __shared__ double partials[5];
+    // One block owns each upper-triangular pair. The surviving Jacobian rows
+    // are finite, so swapping the two FMA multiplicands preserves the result.
+    int pair = blockIdx.x;
+    int row = 0;
+#pragma unroll
+    for (int width = parameters; width > 1; --width) {
+        if (pair >= width) {
+            pair -= width;
+            ++row;
+        } else {
+            break;
+        }
+    }
+    int column = row + pair;
+    int tid = threadIdx.x;
+    for (int i = tid; i < observations; i += threads) {
+        a[i] = jacobian[row * observations + i];
+    }
+    if (row != column) {
+        for (int i = tid; i < observations; i += threads) {
+            b[i] = jacobian[column * observations + i];
+        }
+    }
+    __syncthreads();
+    if (tid < 5) {
+        int begin = tid * 522;
+        int end = tid == 4 ? observations : begin + 522;
+        const double* staged_b = row == column ? a : b;
+        partials[tid] = hessian_chain_fp64(a, staged_b, begin, end, 0.0);
+    }
+    __syncthreads();
+    if (tid == 0) {
+        double result = 0.0;
+        // Parallelize the five chains while retaining their original order.
+#pragma unroll
+        for (int p = 0; p < 5; ++p) {
+            result = __dadd_rn(partials[p], result);
+        }
+        hessian[column * parameters + row] = result;
+        if (column != row) {
+            hessian[row * parameters + column] = result;
+        }
+    }
+}
+
+__global__ void hessian_small_fp64(
+    const double* __restrict__ jacobian, double* __restrict__ hessian) {
+    constexpr int observations = 51 * 51;
+    constexpr int tile_size = 256;
+    __shared__ double staged[4][tile_size];
+    // Ten upper-triangular 2x2 tiles cover the 36 independent matrix entries.
+    int tile = blockIdx.x;
+    int tile_row = 0;
+#pragma unroll
+    for (int width = parameters / 2; width > 1; --width) {
+        if (tile >= width) {
+            tile -= width;
+            ++tile_row;
+        } else {
+            break;
+        }
+    }
+    int tile_column = tile_row + tile;
+    bool diagonal = tile_row == tile_column;
+    int row = tile_row * 2 + (threadIdx.x & 1);
+    int column = tile_column * 2 + ((threadIdx.x >> 1) & 1);
+    bool owner = threadIdx.x < 4 && row <= column;
+    int a_column = threadIdx.x & 1;
+    int b_column = ((threadIdx.x >> 1) & 1) + (diagonal ? 0 : 2);
+    const double* values = jacobian + blockIdx.y * parameters * observations;
+    double result = 0.0;
+    for (int begin = 0; begin < observations; begin += tile_size) {
+        int size = min(tile_size, observations - begin);
+        int staged_columns = diagonal ? 2 : 4;
+        for (int j = threadIdx.x; j < staged_columns * tile_size;
+            j += blockDim.x) {
+            int c = j / tile_size;
+            int i = j % tile_size;
+            int input_column =
+                c < 2 ? tile_row * 2 + c : tile_column * 2 + c - 2;
+            if (i < size) {
+                staged[c][i] = values[input_column * observations + begin + i];
+            }
+        }
+        __syncthreads();
+        if (owner) {
+            // Carry the chain across tiles without restarting or regrouping it.
+            result = hessian_chain_fp64(
+                staged[a_column], staged[b_column], 0, size, result);
+        }
+        __syncthreads();
+    }
+    if (owner) {
+        double* output = hessian + blockIdx.y * 64;
+        output[column * parameters + row] = result;
+        if (row != column) {
+            output[row * parameters + column] = result;
+        }
+    }
 }
 
 template <typename T>
@@ -648,8 +1227,13 @@ __global__ void multiply_single_observation(
 }  // namespace
 
 struct Workspace::Impl {
+    KernelPolicy kernel_policy = KernelPolicy::Automatic;
+    int cublas_version = 0;
     int device = 0;
     bool fused_jacobian = false;
+    bool tiled_jacobian = false;
+    bool fused_trial_residual = false;
+    int jacobian_sms = 0;
     bool small_hessian = false;
     cudaStream_t stream = nullptr;
     cublasHandle_t handle = nullptr;
@@ -944,7 +1528,8 @@ struct Workspace::Impl {
     }
 
     template <typename T>
-    void normal_equations(Batch b, Work<T> w, int count, int observations) {
+    void normal_equations(
+        Batch b, Work<T> w, int count, int observations, Timings& timings) {
         if constexpr (sizeof(T) == 4) {
             // Widen before multiplying, then retain FP32 solver state.
             std::size_t values = std::size_t(count) * observations;
@@ -981,8 +1566,15 @@ struct Workspace::Impl {
                 count);
             if (small_hessian && b.count <= 16 && b.planes == 1
                 && b.height == 51 && b.width == 51) {
-                hessian_small_fp64<<<count, 64, 0, stream>>>(
-                    w.packed_jacobian, w.hessian, count);
+                if (count == 1) {
+                    hessian_single_fp64<<<36, 128, 0, stream>>>(
+                        w.packed_jacobian, w.hessian);
+                    ++timings.hessian_single_launches;
+                } else {
+                    hessian_small_fp64<<<dim3(10, count), 128, 0, stream>>>(
+                        w.packed_jacobian, w.hessian);
+                    ++timings.hessian_batch_launches;
+                }
                 check(cudaGetLastError());
             } else {
                 matmul(
@@ -1035,6 +1627,17 @@ struct Workspace::Impl {
                     return;
                 }
                 packed = count == selected;
+            } else if (tiled_jacobian && b.count <= 16 && b.planes == 1
+                && b.height == 51 && b.width == 51) {
+                int selected = count;
+                tiled_jacobian_fp64::launch(
+                    b, w, selected, jacobian_sms, cube_exponent, stream);
+                ++timings.tiled_jacobian_launches;
+                count = select_rows(b, s, w, timings, false, false, selected);
+                if (!count) {
+                    return;
+                }
+                packed = count == selected;
             } else if (b.planes == 1 && b.height == 51 && b.width == 51) {
                 // Preserve the portable arithmetic while writing the two
                 // cuBLAS layouts directly for the primary stamp shape.
@@ -1060,7 +1663,7 @@ struct Workspace::Impl {
             pack_equations<<<count, threads, 0, stream>>>(b, w);
             check(cudaGetLastError());
         }
-        normal_equations(b, w, count, observations);
+        normal_equations(b, w, count, observations, timings);
         norms(w.compact_residual, w.residual_norm, count, observations);
         prepare_system<<<(count + threads - 1) / threads, threads, 0, stream>>>(
             b, s, w, count);
@@ -1080,9 +1683,20 @@ struct Workspace::Impl {
         if (!count) {
             return;
         }
-        residual<T><<<b.count, threads, 0, stream>>>(
-            b, w.trial_x, w.trial_residual, T(cube_exponent));
-        pack_residuals<<<count, threads, 0, stream>>>(b, w);
+        bool trial_packed = false;
+        if constexpr (sizeof(T) == sizeof(double)) {
+            if (fused_trial_residual && b.count <= 16 && b.planes == 1
+                && b.height == 51 && b.width == 51) {
+                fused_trial_residual_fp64::launch(b, w, count, stream);
+                ++timings.fused_trial_residual_launches;
+                trial_packed = true;
+            }
+        }
+        if (!trial_packed) {
+            residual<T><<<b.count, threads, 0, stream>>>(
+                b, w.trial_x, w.trial_residual, T(cube_exponent));
+            pack_residuals<<<count, threads, 0, stream>>>(b, w);
+        }
         check(cudaGetLastError());
         matmul(
             w.compact_residual,
@@ -1129,12 +1743,13 @@ struct Workspace::Impl {
     }
 };
 
-Workspace::Workspace(int device)
+Workspace::Workspace(int device, KernelPolicy policy)
     : impl_(nullptr) {
     // Validate selection before creating an owner whose destructor uses it.
     DeviceGuard guard(device);
     auto state = std::make_unique<Impl>();
     state->device = device;
+    state->kernel_policy = policy;
     int major = 0, minor = 0, clusters = 0;
     check(cudaDeviceGetAttribute(
         &major, cudaDevAttrComputeCapabilityMajor, device));
@@ -1144,14 +1759,21 @@ Workspace::Workspace(int device)
         check(cudaDeviceGetAttribute(
             &clusters, cudaDevAttrClusterLaunch, device));
     }
-    state->fused_jacobian = major == 10 && minor == 0 && clusters != 0;
+    state->fused_jacobian = policy == KernelPolicy::Automatic && major == 10
+        && minor == 0 && clusters != 0;
     check(cudaStreamCreateWithFlags(&state->stream, cudaStreamNonBlocking));
     check(cublasCreate(&state->handle));
-    int cublas_version = 0;
-    check(cublasGetVersion(state->handle, &cublas_version));
-    // The ordered Hessian matches this provider's SM121 accumulation.
-    state->small_hessian =
-        major == 12 && minor == 1 && cublas_version == 130101;
+    check(cublasGetVersion(state->handle, &state->cublas_version));
+    const auto selected =
+        select_kernels(policy, major, minor, state->cublas_version);
+    state->tiled_jacobian = selected.tiled_jacobian;
+    state->fused_trial_residual = selected.fused_trial_residual;
+    state->small_hessian = selected.small_hessian;
+    if (state->tiled_jacobian) {
+        // Test policies still use the executing GPU's actual geometry.
+        check(cudaDeviceGetAttribute(
+            &state->jacobian_sms, cudaDevAttrMultiProcessorCount, device));
+    }
     check(cublasSetStream(state->handle, state->stream));
     check(cudaEventCreateWithFlags(&state->dependency, cudaEventDisableTiming));
     check(cudaEventCreate(&state->start));
@@ -1183,6 +1805,8 @@ Timings Workspace::run(
             "xFit native observation count exceeds int32");
     }
     Timings timings{};
+    timings.kernel_policy = impl_->kernel_policy;
+    timings.cublas_version = impl_->cublas_version;
     try {
         check(cudaEventRecord(
             impl_->dependency,

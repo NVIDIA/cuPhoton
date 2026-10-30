@@ -30,16 +30,37 @@ struct Batch {
     bool fp64;
 };
 
+// Test policies belong to one workspace; ordinary callers always use Automatic.
+enum class KernelPolicy { Automatic, Portable, TestSM120, TestSM121 };
+
+struct KernelSelection {
+    bool tiled_jacobian;
+    bool fused_trial_residual;
+    bool small_hessian;
+};
+
+// Pure selection also lets tests check version boundaries without a fake CUDA
+// provider. Workspace construction always supplies the actual cuBLAS version.
+KernelSelection select_kernels(
+    KernelPolicy policy, int major, int minor, int cublas_version);
+
 struct Timings {
     double host_seconds;
     double synchronize_seconds;
     float gpu_milliseconds;
     int iterations;
+    KernelPolicy kernel_policy;
+    int cublas_version;
+    int tiled_jacobian_launches;
+    int fused_trial_residual_launches;
+    int hessian_single_launches;
+    int hessian_batch_launches;
 };
 
 class Workspace {
 public:
-    explicit Workspace(int device);
+    explicit Workspace(
+        int device, KernelPolicy policy = KernelPolicy::Automatic);
     ~Workspace();
     Workspace(const Workspace&) = delete;
     Workspace& operator=(const Workspace&) = delete;

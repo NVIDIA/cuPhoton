@@ -336,17 +336,156 @@ def test_native_gaussian_fit_matches_cupy(dtype, mode):
     _assert_fit_matches(actual, expected, dtype)
 
 
+def _native_device_info(cp):
+    properties = cp.cuda.runtime.getDeviceProperties(cp.cuda.Device().id)
+    capability = (properties["major"], properties["minor"])
+    version = cp.cuda.cublas.getVersion(cp.cuda.device.get_cublas_handle())
+    return capability, version
+
+
+def _assert_native_dispatch(
+    timings, count, capability, version, policy="auto"
+):
+    """Check dispatch for FP64, one-plane, 51x51 inputs."""
+    assert timings["kernel_policy"] == policy
+    assert timings["cublas_version"] == version
+    tiled = count <= 16 and capability in ((12, 0), (12, 1))
+    fused = tiled and capability == (12, 0)
+    ordered = tiled and capability == (12, 1) and version == 130101
+    assert (timings["tiled_jacobian_launches"] > 0) == tiled
+    assert (timings["fused_trial_residual_launches"] > 0) == fused
+    if ordered:
+        kind = "single" if count == 1 else "batch"
+        assert timings[f"hessian_{kind}_launches"] > 0
+    else:
+        assert timings["hessian_single_launches"] == 0
+        assert timings["hessian_batch_launches"] == 0
+    if count == 1:
+        assert timings["hessian_batch_launches"] == 0
+
+
+def test_native_kernel_policy_preserves_cublas_version_gate():
+    extension = _require_extension()
+    # The same pure selector is used by real workspaces, which always pass
+    # their actual cuBLAS version. These queries never substitute a provider.
+    for policy, major, minor in (
+        ("auto", 12, 1),
+        ("test_sm121", 8, 9),
+    ):
+        for version in (130100, 130101, 130102, 130800):
+            selected = extension._test_kernel_policy(
+                policy, major, minor, version
+            )
+            assert selected == dict(
+                tiled_jacobian=True,
+                fused_trial_residual=False,
+                small_hessian=version == 130101,
+            )
+    for capability in ((8, 9), (12, 0)):
+        selected = extension._test_kernel_policy("auto", *capability, 130101)
+        assert not selected["small_hessian"]
+
+
+@pytest.mark.parametrize("count", [1, 16, 17])
+def test_native_specialized_kernels_match_portable_bits(count):
+    cp = _require_native()
+    extension = _require_extension()
+    capability, version = _native_device_info(cp)
+    if capability == (8, 9):
+        policies = (("test_sm120", (12, 0)), ("test_sm121", (12, 1)))
+    elif capability in ((12, 0), (12, 1)):
+        policies = (("auto", capability),)
+    else:
+        pytest.skip("kernel parity requires SM89, SM120 or SM121")
+
+    model, truth, _, initial = _fixture(shape=(51, 51))
+    repeats = ((count + 1) // 2, 1)
+    truth = np.tile(truth, repeats)[:count].copy()
+    initial = np.tile(initial, repeats)[:count].copy()
+    offsets = np.linspace(-0.125, 0.125, count)
+    for parameters in (truth, initial):
+        parameters[:, 0] += offsets
+        parameters[:, 4:] += offsets[:, None] * [1.0, -0.5, 0.25, -1.0]
+    images = model.evaluate(truth)
+    device = cp.cuda.Device().id
+    stream = cp.cuda.get_current_stream()
+
+    def run(workspace, inactive_first=False, evaluations=4):
+        x = cp.asarray(initial)
+        x[:, 1:3] = cp.log(x[:, 1:3])
+        data = cp.asarray(images).reshape(count, -1)
+        if inactive_first:
+            data[0, 0] = cp.nan
+        owners = (
+            x,
+            data,
+            cp.full_like(data, np.sqrt(2.0)),
+            cp.empty_like(data),
+            cp.empty(count, dtype=cp.int8),
+            cp.empty(count, dtype=cp.int32),
+            cp.empty(count, dtype=cp.bool_),
+        )
+        timings = extension.run(
+            workspace,
+            owners,
+            (0.0, 0.0, 0.0, 1e-3, 10.0, 0.3, evaluations),
+            (51, 51, 1),
+            stream.ptr,
+        )
+        # Compare final native state before covariance/SVD postprocessing.
+        outputs = tuple(cp.asnumpy(owners[i]) for i in (0, 3, 4, 5, 6))
+        return timings, outputs
+
+    portable = extension._create_test_workspace(device, "portable")
+    for policy, selected_capability in policies:
+        workspace = (
+            extension.create_workspace(device)
+            if policy == "auto"
+            else extension._create_test_workspace(device, policy)
+        )
+        for inactive_first in (False, True) if count == 17 else (False,):
+            expected_timings, expected = run(portable, inactive_first)
+            timings, actual = run(workspace, inactive_first)
+            _assert_native_dispatch(
+                expected_timings, count, None, version, "portable"
+            )
+            _assert_native_dispatch(
+                timings, count, selected_capability, version, policy
+            )
+            assert (actual[3][int(inactive_first) :] > 1).all()
+            if inactive_first:
+                # Original N remains 17 although only 16 rows remain active.
+                assert actual[3][0] == 1
+            for reference, result in zip(expected, actual, strict=True):
+                if reference.dtype == np.float64:
+                    reference = reference.view(np.uint64)
+                    result = result.view(np.uint64)
+                np.testing.assert_array_equal(result, reference)
+        # A reused workspace must not carry its launch counts into a run that
+        # exhausts its budget before the first Jacobian/Hessian/trial launch.
+        timings, _ = run(workspace, evaluations=1)
+        assert all(
+            value == 0
+            for name, value in timings.items()
+            if name.endswith("_launches")
+        )
+
+
 @pytest.mark.parametrize(
     "count,shape,mode",
     [
         (17, (5, 7), "difference"),
         (193, (33, 35), "difference"),
         (769, (17, 19), "split"),
+        (16, (51, 51), "difference"),
+        (17, (51, 51), "difference"),
         (193, (51, 51), "difference"),
     ],
 )
 def test_native_varied_gaussian_batches_match_cupy(count, shape, mode):
-    _require_native()
+    cp = _require_native()
+    from cuphoton.xfit._native import last_timings
+
     model, truth, _, initial = _fixture(shape=shape, mode=mode)
     repeats = ((count + 1) // 2, 1)
     truth = np.tile(truth, repeats)[:count].copy()
@@ -369,6 +508,9 @@ def test_native_varied_gaussian_batches_match_cupy(count, shape, mode):
     actual = fit_dipoles(images, backend="native", **options)
     assert (actual.evaluations > 1).all()
     _assert_fit_matches(actual, expected)
+    if count in (16, 17) and shape == (51, 51) and mode == "difference":
+        capability, version = _native_device_info(cp)
+        _assert_native_dispatch(last_timings(), count, capability, version)
 
 
 def test_native_fit_with_bright_overlapping_lobes(monkeypatch):
