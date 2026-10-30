@@ -1110,8 +1110,14 @@ def test_fit_dipoles_device_rejects_stamp_model_dtype_conversion(
 @pytest.mark.parametrize(
     ("backend", "model_name", "finite_difference", "fusion", "message"),
     [
-        ("auto", "gaussian", False, False, "device fit backend"),
-        ("numpy", "gaussian", False, False, "device fit backend"),
+        ("auto", "gaussian", False, False, "unsupported device xFit backend"),
+        (
+            "numpy",
+            "gaussian",
+            False,
+            False,
+            "unsupported device xFit backend",
+        ),
         (
             "native",
             "gaussian",
