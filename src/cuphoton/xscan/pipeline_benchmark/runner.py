@@ -432,6 +432,7 @@ def provenance() -> dict[str, Any]:
         "xfit/_cutile.py",
         "xfit/_cutile_fused.py",
         "xfit/models.py",
+        "xfit/_cupy_fused.py",
         "xfit/solver.py",
         "xscan/xfit_features.py",
         "xscan/training.py",

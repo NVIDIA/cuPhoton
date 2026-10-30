@@ -641,6 +641,34 @@ def _validate_cupy_stamp_model_dtype(
         )
 
 
+def _validate_fusion(
+    fusion: bool,
+    *,
+    backend: BackendRequest,
+    model: ModelName | GaussianDipoleModel | StampDipoleModel,
+    config: LMConfig | None,
+) -> None:
+    if not isinstance(fusion, bool):
+        raise TypeError("fusion must be a boolean")
+    if not fusion:
+        return
+    if backend not in {"cupy", "cutile"}:
+        raise ValueError("fusion requires backend='cupy' or 'cutile'")
+    if (
+        isinstance(model, GaussianDipoleModel)
+        and type(model) is not GaussianDipoleModel
+    ):
+        raise ValueError("fusion does not support custom Gaussian models")
+    if not (
+        model == "gaussian"
+        if isinstance(model, str)
+        else type(model) is GaussianDipoleModel
+    ):
+        raise ValueError("fusion supports only the Gaussian model")
+    if config is not None and config.use_finite_difference:
+        raise ValueError("fusion does not support finite-difference fitting")
+
+
 def _fit_dipoles_backend(
     images: ArrayLike,
     *,
@@ -785,7 +813,7 @@ def _fit_dipoles_backend(
         return selected_model.evaluate(parameters, mode=mode)
 
     workspace = None
-    if fusion:
+    if fusion and resolved.name == "cutile":
         from ._cutile_fused import GaussianWorkspace
 
         workspace = GaussianWorkspace(
@@ -843,8 +871,23 @@ def _fit_dipoles_backend(
                 mode=mode,
             )
 
+    if fusion and resolved.name == "cupy":
+        from ._cupy_fused import GaussianFusedProblem
+
+        fused = GaussianFusedProblem(
+            ap,
+            images_array,
+            weights,
+            image_shape=(height, width),
+            mode=mode,
+        )
+        residual_function = fused.residual
+        normal_equations = fused.normal_equations
+    else:
+        residual_function = residual
+
     problem = BatchedLeastSquaresProblem(
-        residual,
+        residual_function,
         jacobian_function,
         normal_equations=normal_equations,
     )
@@ -1088,25 +1131,6 @@ def _validate_execution_options(
             )
 
 
-def _validate_fusion(
-    fusion: bool,
-    *,
-    backend: BackendRequest,
-    gaussian_model: bool,
-    use_finite_difference: bool,
-) -> None:
-    if not isinstance(fusion, bool):
-        raise TypeError("fusion must be a boolean")
-    if not fusion:
-        return
-    if backend != "cutile":
-        raise ValueError("fusion requires backend='cutile'")
-    if not gaussian_model:
-        raise ValueError("fusion supports only the Gaussian model")
-    if use_finite_difference:
-        raise ValueError("fusion does not support finite-difference fitting")
-
-
 def fit_dipoles(
     images: ArrayLike,
     *,
@@ -1141,23 +1165,12 @@ def fit_dipoles(
     statistically calibrated for that dependence.
 
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
-    evaluation with ``backend="cutile"``. Normal equations retain CuPy's
-    contractions and the solver's convergence and diagnostics controls.
+    evaluation with ``backend="cupy"`` or ``backend="cutile"``. Both retain
+    CuPy normal-equation contractions and require analytic derivatives.
     """
 
     _validate_execution_options(model, backend, config)
-    _validate_fusion(
-        fusion,
-        backend=backend,
-        gaussian_model=(
-            model == "gaussian"
-            if isinstance(model, str)
-            else type(model) is GaussianDipoleModel
-        ),
-        use_finite_difference=(
-            config is not None and config.use_finite_difference
-        ),
-    )
+    _validate_fusion(fusion, backend=backend, model=model, config=config)
     resolved = resolve_backend(backend)
     backend_result = _fit_dipoles_backend(
         images,
@@ -1194,6 +1207,11 @@ def fit_dipoles_device(
     to the active device. Existing CuPy inputs must already reside on that
     device and are checked before any input conversion. Input arrays are
     borrowed and are not mutated.
+    ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
+    kernels for the requested CuPy or cuTile backend, while retaining the
+    default CuPy normal-equation contractions.
+    Native fits, sampled stamps and finite differences require
+    ``fusion=False``.
 
     The solver may copy per-fit status, evaluation counts and boolean
     diagnostic masks to the host for control flow. Parameters, residuals,
@@ -1208,18 +1226,7 @@ def fit_dipoles_device(
     """
 
     _validate_execution_options(model, backend, config)
-    _validate_fusion(
-        fusion,
-        backend=backend,
-        gaussian_model=(
-            model == "gaussian"
-            if isinstance(model, str)
-            else type(model) is GaussianDipoleModel
-        ),
-        use_finite_difference=(
-            config is not None and config.use_finite_difference
-        ),
-    )
+    _validate_fusion(fusion, backend=backend, model=model, config=config)
     if backend not in {"cupy", "cutile", "native"}:
         raise ValueError("device fit backend must be cupy, cutile or native")
     if backend == "native":

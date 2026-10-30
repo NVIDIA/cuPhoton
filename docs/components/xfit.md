@@ -66,6 +66,30 @@ applies one mask or variance plane to every channel of each candidate. If the
 batch size is three, `(3, y, x)` keeps that per-candidate meaning; use the
 explicit `(1, 3, y, x)` shape for per-plane values.
 
+With `backend="cupy"`, `fusion=True` evaluates Gaussian residuals and weighted
+analytic Jacobians in fused CuPy CUDA kernels. The Jacobian is materialized
+for the same CuPy normal-equation contractions used by the default solver.
+It supports float32 and float64, difference and split modes, masks, and
+variances. Final uncertainty diagnostics use the full analytic Jacobian.
+Each fit owns its buffers and runs on the current CuPy stream.
+Select it in the CLI with `--backend cupy --fusion`; the default is
+`fusion=False`. Device pipeline manifests select it with `xfit.fusion: true`.
+Sampled-stamp, custom Gaussian and finite-difference fits require
+`fusion=False`; requesting fusion for them raises `ValueError`.
+
+The public synthetic benchmark records `first_call_milliseconds` separately
+from every warmed sample, including input transfer and result materialization.
+The reference fit runs first; each other treatment's first call follows it
+in the same workers. Shared operations may already be warm, so these values
+are not isolated cold-start comparisons:
+
+```bash
+uv run --locked --extra gpu python examples/xfit/benchmark_gaussian.py \
+  --backend cupy --fusion --batch 16 --height 51 --width 51 --repeat 5
+```
+
+Run the same command without `--fusion` for the default CuPy implementation.
+
 With the default `fusion=False`, an explicit `backend="cutile"` uses one
 `cuda.tile` CTA per Gaussian fit to form its weighted 8-by-8 normal equations
 directly. Select this backend

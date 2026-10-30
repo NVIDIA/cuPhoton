@@ -112,8 +112,10 @@ def _plan_xfit_chunks(
     _validate_fusion(
         settings["fusion"],
         backend=settings["backend"],
-        gaussian_model=settings["model"] == "gaussian",
-        use_finite_difference=settings["use_finite_difference"],
+        model=settings["model"],
+        config=LMConfig(
+            use_finite_difference=settings["use_finite_difference"]
+        ),
     )
     if settings["compute_dtype"] not in {"input", "float32", "float64"}:
         raise ValueError("unsupported xFit compute dtype")
@@ -629,6 +631,14 @@ def prepare_xfit_workload(
 
     settings = {**_DEFAULTS, **fit_options}
     backend = settings["backend"]
+    _validate_fusion(
+        settings["fusion"],
+        backend=backend,
+        model=settings["model"],
+        config=LMConfig(
+            use_finite_difference=settings["use_finite_difference"]
+        ),
+    )
     if backend not in {"cupy", "cutile", "native"}:
         raise ValueError(
             "distributed xFit requires backend cupy, cutile, or native"

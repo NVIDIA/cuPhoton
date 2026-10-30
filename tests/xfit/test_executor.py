@@ -172,7 +172,7 @@ def test_preflight_accepts_analytic_gaussian_cutile(tmp_path, fusion):
 @pytest.mark.parametrize(
     ("backend", "fusion", "message"),
     [
-        ("cupy", True, "requires backend='cutile'"),
+        ("native", True, "requires backend='cupy' or 'cutile'"),
         ("cutile", "yes", "must be a boolean"),
     ],
 )
