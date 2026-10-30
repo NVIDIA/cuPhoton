@@ -63,7 +63,8 @@ class LinearPredictionResult:
     Attributes
     ----------
     backend
-        ``"cpu"`` or ``"gpu"`` implementation used for the fit.
+        Implementation used for the fit: ``"cpu"``, ``"gpu"``, or the
+        explicitly selected ``"structured-cpu"``/``"structured-gpu"`` path.
     time
         One-dimensional fitted sample coordinates in the input time units.
     time_components
@@ -132,6 +133,16 @@ class LinearPredictionModes:
     decay: Any
     angular_frequency: Any
     decaying_root_count: int
+
+
+@dataclass(frozen=True)
+class _LinearPredictionRootSelection:
+    modes: LinearPredictionModes
+    active_indices: Any
+    active_decay: Any
+    active_angular_frequency: Any
+    selected_indices: Any
+    zero_count: int
 
 
 @dataclass(frozen=True)
@@ -3479,6 +3490,22 @@ def _linear_prediction_modes_from_roots(
     roots,
     singular_value_count: int,
 ) -> LinearPredictionModes:
+    return _linear_prediction_root_selection(
+        xp,
+        time=time,
+        roots=roots,
+        singular_value_count=singular_value_count,
+    ).modes
+
+
+def _linear_prediction_root_selection(
+    xp,
+    *,
+    time,
+    roots,
+    singular_value_count: int,
+) -> _LinearPredictionRootSelection:
+    """Apply the production policy and retain the original root indices."""
     bins = xp.asarray(time, dtype=xp.float64)
     roots = xp.asarray(roots)
     if bins.ndim != 1:
@@ -3493,30 +3520,43 @@ def _linear_prediction_modes_from_roots(
     delta_t = bins[1] - bins[0]
     sorted_roots = xp.sort(roots)[::-1]
     active_roots = sorted_roots[: int(singular_value_count)]
-    decay = xp.log(xp.abs(active_roots)) / delta_t
+    active_indices = xp.argsort(roots)[::-1][: int(singular_value_count)]
+    # Preserve this negative-stride view: complex abs can round differently
+    # on a contiguous indexed copy of the same roots.
+    active_decay = xp.log(xp.abs(active_roots)) / delta_t
     # xRay's fitted components use exp(-decay * t), so nonnegative
     # fitted decay values are the decaying/stable candidates preserved by
     # the current root filter.
-    decaying_root_count = _scalar_int(xp.sum(decay >= 0))
-    angular_frequency = xp.angle(active_roots) / delta_t
-    order = angular_frequency.argsort()
-    angular_frequency = angular_frequency[order]
-    decay = decay[order]
+    decaying_root_count = _scalar_int(xp.sum(active_decay >= 0))
+    active_angular_frequency = xp.angle(active_roots) / delta_t
+    order = active_angular_frequency.argsort()
+    angular_frequency = active_angular_frequency[order]
+    decay = active_decay[order]
+    indices = active_indices[order]
 
     zero_count = _scalar_int(xp.sum(angular_frequency == 0))
     select_count = int((len(angular_frequency) - zero_count) / 2 + zero_count)
     angular_frequency = xp.abs(angular_frequency[:select_count])
     decay = decay[:select_count]
+    indices = indices[:select_count]
 
     keep = (angular_frequency >= 0) & (decay >= 0)
     angular_frequency = angular_frequency[keep]
     decay = decay[keep]
+    indices = indices[keep]
 
     order = (-decay).argsort()
-    return LinearPredictionModes(
-        decay=decay[order],
-        angular_frequency=angular_frequency[order],
-        decaying_root_count=decaying_root_count,
+    return _LinearPredictionRootSelection(
+        modes=LinearPredictionModes(
+            decay=decay[order],
+            angular_frequency=angular_frequency[order],
+            decaying_root_count=decaying_root_count,
+        ),
+        active_indices=active_indices,
+        active_decay=active_decay,
+        active_angular_frequency=active_angular_frequency,
+        selected_indices=indices[order],
+        zero_count=zero_count,
     )
 
 
@@ -3533,45 +3573,55 @@ def _linear_prediction_impl(
 ):
     p2_ridge_alpha = _validate_p2_ridge_alpha(p2_ridge_alpha)
     bins, signal = _validate_inputs(xp, time, trace, n_components)
-    nbins = bins.shape[0]
-    delta_t = bins[1] - bins[0]
-    n = nbins - 1
-    m = int(n * 0.75)
-    rows = n - m
-
-    if rows <= 0 or m <= 0:
-        raise ValueError("trace is too short for linear prediction")
-
-    hankel = xp.zeros((rows, m), dtype=signal.dtype)
-    for i in range(rows):
-        hankel[i, :] = signal[i + 1 : i + m + 1]
-
-    u, singular_values, vh = xp.linalg.svd(hankel, full_matrices=False)
-    selected_model_order = _component_count(
-        xp,
-        singular_values,
-        requested=n_components,
-        limit=min(rows, m),
+    p1 = _linear_prediction_p1_coefficients_impl(
+        xp=xp,
+        time=bins,
+        trace=signal,
+        n_components=n_components,
     )
-    inv_s = 1 / singular_values[:selected_model_order]
-    xvector = signal[:rows]
-    prediction_coeff = (
-        vh.conj().T[:, :selected_model_order]
-        * inv_s
-        @ (u.conj().T[:selected_model_order, :] @ xvector)
-    )
-
     roots_result = _prediction_roots_result(
         xp,
-        prediction_coeff,
+        p1.coefficients,
         backend=roots_backend,
     )
     modes = _linear_prediction_modes_from_roots(
         xp,
         time=bins,
         roots=roots_result.roots,
-        singular_value_count=len(singular_values),
+        singular_value_count=len(p1.singular_values),
     )
+    return _linear_prediction_result_from_modes(
+        xp=xp,
+        backend=backend,
+        time=bins,
+        trace=signal,
+        modes=modes,
+        singular_values=p1.singular_values,
+        selected_model_order=p1.selected_model_order,
+        roots_stats=roots_result.stats,
+        p2_ridge_alpha=p2_ridge_alpha,
+        fit_diagnostics=fit_diagnostics,
+    )
+
+
+def _linear_prediction_result_from_modes(
+    *,
+    xp,
+    backend,
+    time,
+    trace,
+    modes,
+    singular_values,
+    selected_model_order,
+    roots_stats,
+    p2_ridge_alpha=0.0,
+    fit_diagnostics=False,
+):
+    """Build the original P2 fit and outputs from already selected modes."""
+    bins = time
+    signal = trace
+    delta_t = bins[1] - bins[0]
+    n = bins.shape[0] - 1
     decay = modes.decay
     angular_frequency = modes.angular_frequency
 
@@ -3676,7 +3726,7 @@ def _linear_prediction_impl(
         selected_model_order=int(selected_model_order),
         decaying_root_count=modes.decaying_root_count,
         singular_values=singular_values_numpy,
-        roots_stats=roots_result.stats,
+        roots_stats=roots_stats,
         elapsed_s=0.0,
         diagnostics=diagnostics,
     )

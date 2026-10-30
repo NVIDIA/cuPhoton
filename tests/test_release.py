@@ -387,7 +387,8 @@ def test_record_keeps_tagged_source_and_workflow_identity_separate(
     dist.mkdir()
     sdist = dist / "cuphoton-0.1.3.tar.gz"
     metadata = (
-        b"Name: cuphoton\nVersion: 0.1.3\nLicense-Expression: Apache-2.0\n"
+        b"Name: cuphoton\nVersion: 0.1.3\n"
+        b"License-Expression: Apache-2.0 AND MIT\n"
         b"Requires-Python: >=3.12,<3.15\n"
         b"Provides-Extra: io\nProvides-Extra: gpu\n"
     )

@@ -76,6 +76,39 @@ jobs:
           uv sync --locked --python "${PYTHON_VERSION}"
           --extra dev --extra torch --extra viz --extra photometry
       - run: make ci-test-cpu
+      - name: Build native xRay CPU extension
+        if: matrix.name == 'linux-x64' && matrix.python == '3.12'
+        env:
+          CUPHOTON_XRAY_BUILD_EXT: "1"
+        run: >-
+          uv pip install --python .venv/bin/python --no-deps
+          --no-cache --reinstall -e .
+      - name: Run native xRay CPU tests
+        if: matrix.name == 'linux-x64' && matrix.python == '3.12'
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: >-
+          uv run --no-sync pytest -q -rs -m 'not xray_gpu'
+          --junitxml="${RUNNER_TEMP}/xray-native-cpu.xml"
+          tests/xray/test_structured_native.py
+      - name: Require native xRay CPU tests to execute
+        if: matrix.name == 'linux-x64' && matrix.python == '3.12'
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xray-native-cpu.xml")
+          cases = report.findall(".//testcase")
+          assert cases, "Native xRay CPU tests must execute"
+          assert not report.findall(".//skipped"), "Native xRay CPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print(f"All {len(cases)} native xRay CPU tests passed without skips")
+          PY
       - name: Run synthetic CPU quickstarts
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
         run: >-
@@ -84,7 +117,7 @@ jobs:
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
 
   test-gpu:
-    name: xFit and GPU quickstarts / L40G / py3.12
+    name: xFit, xRay and GPU quickstarts / L40G / py3.12
     # Only vetted copies and maintained branches may use self-hosted GPUs.
     if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     runs-on: linux-amd64-gpu-l40g-latest-1
@@ -110,9 +143,10 @@ jobs:
           enable-cache: false
       - run: uv python install 3.12
       - run: uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
-      - name: Build native xFit with CUDA 13 compiler wheels
+      - name: Build native xFit and xRay with CUDA 13 compiler wheels
         env:
           CUPHOTON_XFIT_BUILD_EXT: "1"
+          CUPHOTON_XRAY_BUILD_EXT: "1"
           CUPHOTON_XFIT_CUDA_ARCHS: "89"
         run: |
           uv pip install --python .venv/bin/python --no-deps \
@@ -196,6 +230,28 @@ jobs:
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
           print(f"All {len(cases)} native xFit tests passed without skips")
+          PY
+      - name: Run native xRay CPU and GPU parity tests
+        env:
+          CUPHOTON_XRAY_TEST_GPU: "1"
+        run: >-
+          uv run --no-sync pytest -q -rs
+          --junitxml="${RUNNER_TEMP}/xray-native-gpu.xml"
+          tests/xray/test_structured_native.py
+      - name: Require native xRay tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xray-native-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert cases, "Native xRay tests must execute"
+          assert not report.findall(".//skipped"), "Native xRay tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print(f"All {len(cases)} native xRay tests passed without skips")
           PY
       - name: Run synthetic GPU quickstarts
         run: >-
@@ -329,6 +385,7 @@ jobs:
             ${{ runner.temp }}/cutile-pipeline-gpu.xml
             ${{ runner.temp }}/cutile-pipeline-gpu.log
             ${{ runner.temp }}/cutile-pipeline-packages.txt
+            ${{ runner.temp }}/xray-native-gpu.xml
             ${{ runner.temp }}/cuphoton-quickstart/**/summary.json
           if-no-files-found: error
           retention-days: 14

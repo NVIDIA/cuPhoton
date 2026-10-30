@@ -216,7 +216,7 @@ jobs:
           if-no-files-found: error
 
   install-gpu:
-    name: installed native xFit wheel / L40G / py3.12
+    name: installed native xFit and xRay wheel / L40G / py3.12
     needs: wheels
     # Use the same vetted push boundary as the source GPU tests.
     if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
@@ -251,8 +251,8 @@ jobs:
           uv pip check --python .wheel-venv/bin/python
           env -u LD_LIBRARY_PATH -u CUDA_HOME -u CUDA_PATH \
             .wheel-venv/bin/python -I scripts/wheels/test_installed.py \
-            --mode gpu --components xfit --output xfit-wheel-gpu.json
-      - name: Require all installed native xFit parity checks
+            --mode gpu --components xfit xray --output xfit-wheel-gpu.json
+      - name: Require all installed native xFit and xRay checks
         run: |
           .wheel-venv/bin/python -c '
           import json
@@ -263,8 +263,12 @@ jobs:
               for dtype in ("float32", "float64")
               for mode in ("difference", "split")
           }
+          required.update({
+              "installed_xray_cpu_roots_and_dd_refinement",
+              "installed_xray_gpu_roots",
+          })
           if not report["ok"] or not required <= set(report["checks"]):
-              raise SystemExit("Installed native xFit parity checks are incomplete")
+              raise SystemExit("Installed native xFit and xRay checks are incomplete")
           '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

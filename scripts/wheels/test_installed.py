@@ -251,6 +251,63 @@ def check_xfit_gpu(report):
     release_workspace()
 
 
+def check_xray(distribution, report, *, gpu=False):
+    """Exercise installed native roots, DD refinement and packaged CUDA."""
+    import numpy as np
+
+    from cuphoton.xray import _structured_native as native
+
+    extension = module_path(distribution, "cuphoton.xray._structured_ext")
+    report["paths"]["xray_extension"] = str(extension)
+    kernel = "cuphoton/xray/src/structured_roots.cu"
+    require(
+        kernel in {str(path) for path in distribution.files or ()},
+        "Structured CUDA source is absent from wheel RECORD",
+    )
+    require(
+        Path(distribution.locate_file(kernel)).is_file(),
+        "Structured CUDA source is absent from the installation",
+    )
+    polynomial = np.zeros(598)
+    polynomial[0], polynomial[-1] = 1, -2
+    rows = polynomial[None, :]
+    roots, stats, _ = native.solve_roots(rows)
+    require(stats[0, :3].tolist() == [0, 597, 0], "xRay CPU roots failed")
+    require(np.isfinite(roots).all(), "xRay CPU roots are nonfinite")
+    expected = 2 ** (1 / 597)
+    np.testing.assert_allclose(np.abs(roots), expected, rtol=0, atol=2e-11)
+    index = int(np.argmin(np.abs(roots[0] - expected)))
+    seed = roots[0, index]
+    separation = np.array([np.min(np.abs(np.delete(roots[0], index) - seed))])
+    refined, _, status = native.refine_selected(
+        polynomial, np.array([[seed.real, seed.imag]]), separation
+    )
+    require(status[0, 0] == 0, "xRay DD refinement failed")
+    np.testing.assert_allclose(refined, [[expected, 0]], rtol=0, atol=2e-15)
+    passed(report, "installed_xray_cpu_roots_and_dd_refinement")
+    if gpu:
+        import cupy as cp
+
+        from cuphoton.xray._structured_gpu import StructuredRootsGPU
+
+        solver = StructuredRootsGPU(cp)
+        try:
+            gpu_roots, gpu_stats, _ = solver.solve(rows)
+        finally:
+            solver.close()
+        np.testing.assert_array_equal(gpu_stats[:, :3], stats[:, :3])
+        remaining = list(roots[0])
+        for root in gpu_roots[0]:
+            nearest = min(
+                range(len(remaining)), key=lambda i: abs(root - remaining[i])
+            )
+            require(
+                abs(root - remaining.pop(nearest)) <= 2e-11,
+                "Installed xRay GPU roots differ from CPU",
+            )
+        passed(report, "installed_xray_gpu_roots")
+
+
 def create_fits(directory):
     import numpy as np
     from astropy.io import fits
@@ -465,10 +522,10 @@ def main():
     )
     parser.add_argument(
         "--components",
-        choices=("xdr", "xfit"),
+        choices=("xdr", "xfit", "xray"),
         nargs="+",
-        default=["xdr", "xfit"],
-        help="Native components to qualify (default: xdr xfit)",
+        default=["xdr", "xfit", "xray"],
+        help="Native components to qualify (default: xdr xfit xray)",
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=int, default=300)
@@ -496,6 +553,8 @@ def main():
                     Path(scratch) / "cupy-cache"
                 )
             distribution = check_install(args.mode, args.components, report)
+            if "xray" in args.components:
+                check_xray(distribution, report, gpu=args.mode == "gpu")
             if args.mode != "base":
                 if "xfit" in args.components:
                     check_xfit_native(distribution, report)

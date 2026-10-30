@@ -12,7 +12,7 @@ dynamic = ["version"]
 description = "GPU-accelerated astronomy and imaging tools from NVIDIA."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-license = "Apache-2.0"
+license = "Apache-2.0 AND MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/CCCL-3.1.2.txt"]
 authors = [{ name = "NVIDIA Corporation" }]
 keywords = ["astronomy", "cuda", "gpu", "image-processing"]
@@ -131,7 +131,7 @@ include = ["cuphoton*"]
 "cuphoton.xmonitor" = ["assets/*.html", "assets/*.css", "assets/*.js"]
 "cuphoton.xpois" = ["assets/*"]
 "cuphoton.xscan" = ["assets/*"]
-"cuphoton.xray" = ["templates/*.html"]
+"cuphoton.xray" = ["templates/*.html", "src/*.cu"]
 
 [tool.uv]
 managed = true
@@ -186,6 +186,7 @@ minversion = "8.0"
 addopts = ["--import-mode=importlib"]
 markers = [
   "real_data: opt-in tests that require caller-supplied observational data",
+  "xray_gpu: structured xRay tests requiring CUDA 13 execution",
 ]
 pythonpath = ["src"]
 testpaths = ["tests"]
@@ -217,6 +218,7 @@ manylinux-aarch64-image = "quay.io/pypa/manylinux_2_28_aarch64@sha256:f2c063e4d4
 
 [tool.cibuildwheel.linux.environment]
 CUPHOTON_XDR_BUILD_EXT = "1"
+CUPHOTON_XRAY_BUILD_EXT = "1"
 CUPHOTON_XDR_CFITSIO_ROOT = "/opt/cuphoton-cfitsio"
 CUPHOTON_XFIT_BUILD_EXT = "1"
 CUPHOTON_XFIT_CUDA_ARCHS = "75,80,86,89,90a,100a,103a,120a,121a"

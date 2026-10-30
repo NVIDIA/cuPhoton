@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -307,6 +309,11 @@ def build_detector_artifacts_cupy(
     p2_ridge_alpha: float = 0.0,
     roots_backend: str = "eigvals",
     batch_rows: bool = True,
+    fit_backend: str = "cupy",
+    structured_host_workers: int = 8,
+    structured_root_workers: int = 1,
+    structured_batch_rows: int = 33024,
+    structured_schedule: str = "serial",
     savgol_window: int = 5,
     savgol_polyorder: int = 3,
     amp_threshold: float = 1.6,
@@ -322,7 +329,7 @@ def build_detector_artifacts_cupy(
     global_roi_lower: tuple[int, int] | None = None,
     global_roi_dim: tuple[int, int] | None = None,
 ) -> DetectorArtifactResult:
-    """Write detector-wide LPF arrays using HDF5 input and CuPy fitting.
+    """Write detector-wide LPF arrays using the selected fitter.
 
     The default dense arrays match the dumped reference-analysis contract:
     ``freq_all.npy``, ``amp_all.npy``, ``fft_all.npy``, ``fft_freq_all.npy``,
@@ -332,6 +339,13 @@ def build_detector_artifacts_cupy(
     spectrum once per tile in ``*.tile-rows.npy`` files. Use
     ``load_detector_array`` for pixel slices from either layout. Dense
     output retains compatibility with direct ``numpy.load`` consumers.
+
+    ``fit_backend="structured-cpu"`` or ``"structured-gpu"`` selects the
+    optional structured-root backend with NumPy/SciPy preparation and
+    mandatory host double-double refinement. It supports 798 fitted samples,
+    30 components, zero ridge and compact results without fit diagnostics.
+    GPU roots can overlap bounded host work with
+    ``structured_schedule="overlap"``.
 
     Set ``batch_rows=False`` to force the serial row loop for A/B checks
     and diagnostics. The default batches eligible rows and retains the
@@ -381,17 +395,42 @@ def build_detector_artifacts_cupy(
             "global_roi_lower and global_roi_dim must be provided together"
         )
 
-    try:
-        import cupy as cp
-        from cupyx.scipy.signal import savgol_filter as savgol_filter_cupy
-    except ImportError as exc:
-        raise RuntimeError(
-            "CuPy is required for detector artifacts; run "
-            "'uv sync --extra gpu' for development or install "
-            "'cuphoton[gpu]'"
-        ) from exc
+    structured_provenance: dict[str, Any] = {}
+    from ._detector_structured import validate_structured_options
 
-    _ensure_cuda_device(cp)
+    validate_structured_options(
+        fit_backend=fit_backend,
+        components=components,
+        fit_method=fit_method,
+        p2_ridge_alpha=p2_ridge_alpha,
+        roots_backend=roots_backend,
+        batch_rows=batch_rows,
+        fit_diagnostics=fit_diagnostics,
+        tile_shape=tile_shape,
+        host_workers=structured_host_workers,
+        root_workers=structured_root_workers,
+        batch_target=structured_batch_rows,
+        schedule=structured_schedule,
+        shard_index=shard_index,
+    )
+    if fit_backend == "cupy":
+        try:
+            import cupy as cp
+            from cupyx.scipy.signal import savgol_filter as savgol_filter_cupy
+        except ImportError as exc:
+            raise RuntimeError(
+                "CuPy is required for detector artifacts; run "
+                "'uv sync --extra gpu' for development or install "
+                "'cuphoton[gpu]'"
+            ) from exc
+        _ensure_cuda_device(cp)
+    else:
+        from scipy.signal import savgol_filter as savgol_filter_cupy
+
+        from ._structured_native import require_native
+
+        require_native()
+        cp = np
 
     try:
         import h5py
@@ -559,6 +598,14 @@ def build_detector_artifacts_cupy(
             if sample_count - fit_start - fit_trailing_drop < 16:
                 raise ValueError("fit sample window is too short")
 
+            if (
+                fit_backend != "cupy"
+                and sample_count - fit_start - fit_trailing_drop != 798
+            ):
+                raise ValueError(
+                    "structured fitting requires exactly 798 fitted samples"
+                )
+
             target_output.parent.mkdir(parents=True, exist_ok=True)
             staging_dir = tempfile.TemporaryDirectory(
                 prefix=f".{target_output.name}.tmp-",
@@ -596,203 +643,203 @@ def build_detector_artifacts_cupy(
                     else FIT_DIAGNOSTICS_SCHEMA_VERSION
                 ),
             )
-            fit_error_types = _fit_error_types(cp)
-            for tile_index, (x0, x1, y0, y1) in enumerate(
-                _iter_tiles(
-                    roi_x=roi_x,
-                    roi_y=roi_y,
-                    roi_width=roi_width,
-                    roi_height=roi_height,
-                    tile_width=tile_shape[0],
-                    tile_height=tile_shape[1],
+            if fit_backend == "cupy":
+                fit_tiles = _fit_detector_tiles
+            else:
+                from functools import partial
+
+                from ._detector_structured import fit_structured_tiles
+
+                fit_tiles = partial(
+                    fit_structured_tiles,
+                    root_device=fit_backend.removeprefix("structured-"),
+                    host_workers=structured_host_workers,
+                    root_workers=structured_root_workers,
+                    batch_target=structured_batch_rows,
+                    schedule=structured_schedule,
+                    provenance=structured_provenance,
                 )
-            ):
-                if max_tiles is not None and tile_index >= max_tiles:
-                    break
-                read_y0, read_y1 = _row_halo_bounds(
-                    y0,
-                    y1,
-                    detector_height=detector_height,
-                    pixels=integrate_pixels,
-                )
-                sig_diff = _load_tile_signal(
-                    block_reader,
-                    on_norm,
-                    off_norm,
-                    shift=normalization_shift,
-                    drop_leading=drop_leading,
-                    x0=x0,
-                    x1=x1,
-                    y0=read_y0,
-                    y1=read_y1,
-                )
-                skip_rows = excluded_row_mask(y0, y1, exclude_y)
-                _zero_excluded_signal_rows(
-                    sig_diff,
-                    y0=read_y0,
-                    y1=read_y1,
-                    exclude_y=exclude_y,
-                )
-                # Integrate the padded row block after masking excluded source
-                # rows, then skip excluded row predictions and outputs after
-                # cropping back to the tile.
-                padded_traces_gpu = _integrate_cupy(
-                    cp,
-                    cp.asarray(sig_diff, dtype=cp.float64),
-                    integrate_pixels,
-                )
-                crop_start = y0 - read_y0
-                crop_stop = crop_start + (y1 - y0)
-                traces_gpu = padded_traces_gpu[:, crop_start:crop_stop]
-                filtered_gpu = savgol_filter_cupy(
-                    traces_gpu,
-                    savgol_window,
-                    savgol_polyorder,
-                    axis=0,
-                )
-                fit_time_gpu = cp.asarray(
-                    delay[fit_start : sample_count - fit_trailing_drop],
-                    dtype=cp.float64,
-                )
-                active_local_rows = tuple(
-                    row for row, skip in enumerate(skip_rows) if not skip
-                )
-                batched_rows: dict[int, dict[str, Any] | None] = {}
-                if (
-                    batch_rows
-                    and fit_method == "linear-prediction"
-                    and fit_diagnostics == "none"
-                    and p2_ridge_alpha == 0.0
-                    and roots_backend == "eigvals"
-                    and len(active_local_rows) > 1
+
+            def prepared_tiles():
+                for tile_index, (x0, x1, y0, y1) in enumerate(
+                    _iter_tiles(
+                        roi_x=roi_x,
+                        roi_y=roi_y,
+                        roi_width=roi_width,
+                        roi_height=roi_height,
+                        tile_width=tile_shape[0],
+                        tile_height=tile_shape[1],
+                    )
                 ):
-                    active_indices_gpu = cp.asarray(
-                        active_local_rows,
-                        dtype=cp.int64,
+                    if max_tiles is not None and tile_index >= max_tiles:
+                        break
+                    read_y0, read_y1 = _row_halo_bounds(
+                        y0,
+                        y1,
+                        detector_height=detector_height,
+                        pixels=integrate_pixels,
                     )
-                    active_traces_gpu = cp.ascontiguousarray(
-                        filtered_gpu[
+                    sig_diff = _load_tile_signal(
+                        block_reader,
+                        on_norm,
+                        off_norm,
+                        shift=normalization_shift,
+                        drop_leading=drop_leading,
+                        x0=x0,
+                        x1=x1,
+                        y0=read_y0,
+                        y1=read_y1,
+                    )
+                    skip_rows = excluded_row_mask(y0, y1, exclude_y)
+                    _zero_excluded_signal_rows(
+                        sig_diff,
+                        y0=read_y0,
+                        y1=read_y1,
+                        exclude_y=exclude_y,
+                    )
+                    # Mask excluded source rows before integrating the halo;
+                    # skip their predictions after cropping back to the tile.
+                    padded_traces_gpu = _integrate_cupy(
+                        cp,
+                        cp.asarray(sig_diff, dtype=cp.float64),
+                        integrate_pixels,
+                    )
+                    crop_start = y0 - read_y0
+                    crop_stop = crop_start + (y1 - y0)
+                    traces_gpu = padded_traces_gpu[:, crop_start:crop_stop]
+                    filtered_gpu = savgol_filter_cupy(
+                        traces_gpu,
+                        savgol_window,
+                        savgol_polyorder,
+                        axis=0,
+                    )
+                    fit_time_gpu = cp.asarray(
+                        delay[fit_start : sample_count - fit_trailing_drop],
+                        dtype=cp.float64,
+                    )
+                    yield _PreparedDetectorTile(
+                        bounds=(x0, x1, y0, y1),
+                        skip_rows=skip_rows,
+                        traces_gpu=filtered_gpu[
                             fit_start : sample_count - fit_trailing_drop
-                        ].T[active_indices_gpu]
+                        ],
+                        time_gpu=fit_time_gpu,
                     )
-                    try:
-                        rows = _fit_detector_rows_batched(
-                            cp=cp,
-                            time_gpu=fit_time_gpu,
-                            traces_gpu=active_traces_gpu,
-                            components=components,
-                            padded_length=padded_length,
-                        )
-                    except fit_error_types:
-                        # Preserve row-local failure accounting when a tile
-                        # cannot use the optimized batch path.
-                        pass
-                    else:
-                        batched_rows = dict(
-                            zip(active_local_rows, rows, strict=True)
-                        )
-                        if any(
-                            row is not None for row in batched_rows.values()
+
+            fit_options = {
+                "batch_rows": batch_rows,
+                "components": components,
+                "fit_method": fit_method,
+                "iterative_options": iterative_options,
+                "p2_ridge_alpha": p2_ridge_alpha,
+                "roots_backend": roots_backend,
+                "padded_length": padded_length,
+                "fit_diagnostics": fit_diagnostics,
+            }
+            try:
+                with fit_tiles(
+                    cp=cp,
+                    tiles=prepared_tiles(),
+                    fit_options=fit_options,
+                ) as fitted_tiles:
+                    for tile in fitted_tiles:
+                        x0, x1, y0, y1 = tile.bounds
+                        stats.batched_tiles += int(tile.batched)
+                        for local_row, (skip, row) in enumerate(
+                            zip(tile.skip_rows, tile.rows, strict=True)
                         ):
-                            stats.batched_tiles += 1
-                for local_row, skip in enumerate(skip_rows):
-                    output_y = y0 + local_row - roi_y
-                    output_x = slice(x0 - roi_x, x1 - roi_x)
-                    if skip:
-                        fit_status[output_y, output_x] = FIT_STATUS_SKIPPED
-                        stats.skipped_fits += 1
-                        _append_non_ok_fit_diagnostic(
-                            diagnostics_writer,
-                            level=fit_diagnostics,
-                            fit_status=FIT_STATUS_SKIPPED,
-                            x0=x0,
-                            x1=x1,
-                            y0=y0,
-                            y1=y1,
-                            detector_y=y0 + local_row,
-                        )
-                        continue
-                    row = batched_rows.get(local_row)
-                    if row is None:
-                        trace_gpu = filtered_gpu[
-                            fit_start : sample_count - fit_trailing_drop,
-                            local_row,
-                        ]
-                        try:
-                            row = _fit_detector_row(
-                                cp=cp,
-                                time_gpu=fit_time_gpu,
-                                trace_gpu=trace_gpu,
-                                components=components,
-                                fit_method=fit_method,
-                                iterative_options=iterative_options,
-                                p2_ridge_alpha=p2_ridge_alpha,
-                                roots_backend=roots_backend,
-                                padded_length=padded_length,
-                                fit_diagnostics=fit_diagnostics,
-                            )
-                        except fit_error_types as exc:
-                            fit_status[output_y, output_x] = FIT_STATUS_FAILED
-                            stats.failures += 1
-                            _append_non_ok_fit_diagnostic(
-                                diagnostics_writer,
-                                level=fit_diagnostics,
-                                fit_status=FIT_STATUS_FAILED,
-                                iterative_result=getattr(
-                                    exc, "iterative_result", None
-                                ),
-                                x0=x0,
-                                x1=x1,
-                                y0=y0,
-                                y1=y1,
-                                detector_y=y0 + local_row,
-                            )
-                            if stats.failures > max_fit_failures:
-                                raise RuntimeError(
-                                    "detector artifact generation had "
-                                    f"{stats.failures} fit failures; allowed "
-                                    f"{max_fit_failures}"
-                                    + (
-                                        f"; last iterative fit: {exc}"
-                                        if fit_method == "iterative"
-                                        else ""
+                            output_y = y0 + local_row - roi_y
+                            output_x = slice(x0 - roi_x, x1 - roi_x)
+                            if skip:
+                                fit_status[output_y, output_x] = (
+                                    FIT_STATUS_SKIPPED
+                                )
+                                stats.skipped_fits += 1
+                                _append_non_ok_fit_diagnostic(
+                                    diagnostics_writer,
+                                    level=fit_diagnostics,
+                                    fit_status=FIT_STATUS_SKIPPED,
+                                    x0=x0,
+                                    x1=x1,
+                                    y0=y0,
+                                    y1=y1,
+                                    detector_y=y0 + local_row,
+                                )
+                                continue
+                            if isinstance(row, Exception):
+                                fit_status[output_y, output_x] = (
+                                    FIT_STATUS_FAILED
+                                )
+                                stats.failures += 1
+                                _append_non_ok_fit_diagnostic(
+                                    diagnostics_writer,
+                                    level=fit_diagnostics,
+                                    fit_status=FIT_STATUS_FAILED,
+                                    iterative_result=getattr(
+                                        row, "iterative_result", None
+                                    ),
+                                    x0=x0,
+                                    x1=x1,
+                                    y0=y0,
+                                    y1=y1,
+                                    detector_y=y0 + local_row,
+                                )
+                                if stats.failures > max_fit_failures:
+                                    raise RuntimeError(
+                                        "detector artifact generation had "
+                                        f"{stats.failures} fit failures; "
+                                        "allowed "
+                                        f"{max_fit_failures}"
+                                        + (
+                                            f"; last iterative fit: {row}"
+                                            if fit_method == "iterative"
+                                            else ""
+                                        )
+                                    ) from row
+                                continue
+                            assert row is not None
+                            _write_row_outputs(
+                                freq_all,
+                                amp_all,
+                                fft_all,
+                                fft_freq_all,
+                                output_y=output_y,
+                                output_x=(
+                                    slice(
+                                        (x0 - roi_x) // tile_shape[0],
+                                        (x0 - roi_x) // tile_shape[0] + 1,
                                     )
-                                ) from exc
-                            continue
-                    _write_row_outputs(
-                        freq_all,
-                        amp_all,
-                        fft_all,
-                        fft_freq_all,
-                        output_y=output_y,
-                        output_x=(
-                            slice(
-                                (x0 - roi_x) // tile_shape[0],
-                                (x0 - roi_x) // tile_shape[0] + 1,
+                                    if artifact_layout == "tile-rows"
+                                    else output_x
+                                ),
+                                row=row,
                             )
-                            if artifact_layout == "tile-rows"
-                            else output_x
-                        ),
-                        row=row,
-                    )
-                    fit_status[output_y, output_x] = FIT_STATUS_OK
-                    stats.raw_fits += 1
-                    if fit_diagnostics != "none":
-                        diagnostics_writer.append(
-                            {
-                                "tile_x_start": x0,
-                                "tile_x_stop": x1,
-                                "tile_y_start": y0,
-                                "tile_y_stop": y1,
-                                "detector_y": y0 + local_row,
-                                **row["diagnostics"],
-                            }
-                        )
-                    if np.any(
-                        (row["amp"] > amp_threshold) & (row["amp"] < 1e6)
-                    ):
-                        stats.filtered_fits += 1
-                stats.processed_tiles += 1
+                            fit_status[output_y, output_x] = FIT_STATUS_OK
+                            stats.raw_fits += 1
+                            if fit_diagnostics != "none":
+                                diagnostics_writer.append(
+                                    {
+                                        "tile_x_start": x0,
+                                        "tile_x_stop": x1,
+                                        "tile_y_start": y0,
+                                        "tile_y_stop": y1,
+                                        "detector_y": y0 + local_row,
+                                        **row["diagnostics"],
+                                    }
+                                )
+                            if np.any(
+                                (row["amp"] > amp_threshold)
+                                & (row["amp"] < 1e6)
+                            ):
+                                stats.filtered_fits += 1
+                        stats.processed_tiles += 1
+
+            except BaseException:
+                # Pool exit has drained all owned streams before staging is
+                # removed. Tracebacks may otherwise keep these files alive.
+                diagnostics_writer.close()
+                staging_dir.cleanup()
+                raise
 
             for array in (
                 freq_all,
@@ -826,7 +873,11 @@ def build_detector_artifacts_cupy(
             )
 
     elapsed = perf_counter() - start_time
-    runtime = runtime_metadata(backend="cupy", dtype="float64")
+    runtime = (
+        runtime_metadata(backend="cupy", dtype="float64")
+        if fit_backend == "cupy"
+        else structured_provenance["runtime"]
+    )
     manifest = {
         "kind": "xray-detector-artifacts",
         "manifest_schema_version": (
@@ -835,7 +886,7 @@ def build_detector_artifacts_cupy(
             else DETECTOR_ARTIFACT_MANIFEST_VERSION
         ),
         "package_version": runtime["package_version"],
-        "backend": "cupy",
+        "backend": fit_backend,
         "device": runtime["device"],
         "dtype": runtime["dtype"],
         "runtime": runtime,
@@ -865,7 +916,9 @@ def build_detector_artifacts_cupy(
         "integrate_pixels": int(integrate_pixels),
         "components": int(components),
         "p2_ridge_alpha": float(p2_ridge_alpha),
-        "roots_backend": roots_backend,
+        "roots_backend": roots_backend
+        if fit_backend == "cupy"
+        else "structured-rds",
         "batch_rows": bool(batch_rows),
         "savgol_window": int(savgol_window),
         "savgol_polyorder": int(savgol_polyorder),
@@ -904,6 +957,8 @@ def build_detector_artifacts_cupy(
             else f"{name}.npy"
             for name in DETECTOR_ARRAYS
         ] + [FIT_STATUS_FILE]
+    if fit_backend != "cupy":
+        manifest["structured"] = structured_provenance
     if fit_method == "iterative":
         assert iterative_options is not None
         manifest["fit_method"] = fit_method
@@ -2109,6 +2164,108 @@ def _read_hdf5_block(
     with h5py.File(path, "r") as h5:
         read_input = hdf5_input_reader(h5, self_contained=self_contained)
         return np.asarray(read_input(dataset)[selection], dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class _PreparedDetectorTile:
+    bounds: tuple[int, int, int, int]
+    skip_rows: np.ndarray
+    traces_gpu: Any
+    time_gpu: Any
+
+
+@dataclass(frozen=True)
+class _FittedDetectorTile:
+    bounds: tuple[int, int, int, int]
+    skip_rows: np.ndarray
+    rows: Iterable[dict[str, Any] | Exception | None]
+    batched: bool
+
+
+def _fit_detector_tile(
+    *,
+    cp,
+    tile: _PreparedDetectorTile,
+    fit_options: dict[str, Any],
+    eager: bool = True,
+) -> _FittedDetectorTile:
+    fit_error_types = _fit_error_types(cp)
+    active_rows = tuple(
+        row for row, skip in enumerate(tile.skip_rows) if not skip
+    )
+    batched_rows: dict[int, dict[str, Any] | None] = {}
+    if (
+        fit_options["batch_rows"]
+        and fit_options["fit_method"] == "linear-prediction"
+        and fit_options["fit_diagnostics"] == "none"
+        and fit_options["p2_ridge_alpha"] == 0.0
+        and fit_options["roots_backend"] == "eigvals"
+        and len(active_rows) > 1
+    ):
+        indices_gpu = cp.asarray(active_rows, dtype=cp.int64)
+        traces_gpu = cp.ascontiguousarray(tile.traces_gpu.T[indices_gpu])
+        try:
+            rows = _fit_detector_rows_batched(
+                cp=cp,
+                time_gpu=tile.time_gpu,
+                traces_gpu=traces_gpu,
+                components=fit_options["components"],
+                padded_length=fit_options["padded_length"],
+            )
+        except fit_error_types:
+            # A failed batch retains the existing row-local retry semantics.
+            pass
+        else:
+            batched_rows = dict(zip(active_rows, rows, strict=True))
+    row_options = {
+        key: value
+        for key, value in fit_options.items()
+        if key != "batch_rows"
+    }
+
+    def fit_rows():
+        for local_row, skip in enumerate(tile.skip_rows):
+            if skip:
+                yield None
+                continue
+            row = batched_rows.get(local_row)
+            if row is None:
+                try:
+                    row = _fit_detector_row(
+                        cp=cp,
+                        time_gpu=tile.time_gpu,
+                        trace_gpu=tile.traces_gpu[:, local_row],
+                        **row_options,
+                    )
+                except fit_error_types as exc:
+                    # Keep the row error without retaining solver frames and
+                    # GPU buffers in a completed worker result.
+                    yield exc.with_traceback(None)
+                    continue
+            yield row
+
+    return _FittedDetectorTile(
+        bounds=tile.bounds,
+        skip_rows=tile.skip_rows,
+        # Serial execution stays lazy so its failure limit still stops fitting
+        # at the first disallowed row, before later rows in the same tile.
+        rows=tuple(fit_rows()) if eager else fit_rows(),
+        batched=any(row is not None for row in batched_rows.values()),
+    )
+
+
+@contextmanager
+def _fit_detector_tiles(*, cp, tiles, fit_options):
+    results = (
+        _fit_detector_tile(
+            cp=cp, tile=tile, fit_options=fit_options, eager=False
+        )
+        for tile in tiles
+    )
+    try:
+        yield results
+    finally:
+        results.close()
 
 
 def _fit_error_types(cp) -> tuple[type[BaseException], ...]:
@@ -3533,6 +3690,12 @@ def _detector_artifact_stable_manifest_keys(
         "max_tiles",
     )
     payload = {key: manifest.get(key) for key in keys}
+    if "structured" in manifest:
+        payload["structured"] = {
+            key: value
+            for key, value in manifest["structured"].items()
+            if key not in {"runtime", "batches"}
+        }
     if manifest.get("artifact_layout", "dense") != "dense":
         payload["artifact_layout"] = manifest["artifact_layout"]
     # Omitted or enabled batching retains the pre-opt-out identity.
@@ -3633,6 +3796,12 @@ def detector_artifact_resume_identity(manifest: dict[str, Any]) -> str:
         "shard",
     )
     payload = {key: manifest.get(key) for key in keys}
+    if "structured" in manifest:
+        payload["structured"] = {
+            key: value
+            for key, value in manifest["structured"].items()
+            if key not in {"runtime", "batches"}
+        }
     if manifest.get("artifact_layout", "dense") != "dense":
         payload["artifact_layout"] = manifest["artifact_layout"]
     # Omitted or enabled batching retains the pre-opt-out identity.

@@ -72,10 +72,10 @@ def include_bundled_license(wheel: Path) -> None:
             raise RuntimeError("Expected one wheel METADATA file")
         metadata = metadata_files[0]
         content = metadata.read_bytes()
-        original = b"License-Expression: Apache-2.0"
+        original = b"License-Expression: Apache-2.0 AND MIT"
         if content.partition(b"\n\n")[0].splitlines().count(original) != 1:
             raise RuntimeError(
-                "Expected Apache-2.0 license before adding native licenses"
+                "Expected Apache-2.0 AND MIT before adding native licenses"
             )
         metadata.write_bytes(
             content.replace(
