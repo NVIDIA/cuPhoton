@@ -652,22 +652,29 @@ def test_stop_during_receipt_publication_retains_complete_json(
     path, _ = _manifest(tmp_path, blocks=3)
     output = tmp_path / "results"
     ready, release = tmp_path / "ready", tmp_path / "release"
-    # Pause before serialization, outside the individual write's signal mask,
-    # to exercise the mask protecting both receipts as a pair.
+    # SIGTERM exercises the pair mask before serialization; SIGKILL exercises
+    # atomic publication after the temporary file is durable.
     program = """
 import importlib.util, pathlib, sys, time
 spec = importlib.util.spec_from_file_location('runner', sys.argv[1])
 r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
-original = r._write
+original_write, original_replace = r._write, r.os.replace
 ready, release = map(pathlib.Path, sys.argv[2:4])
-def write(path, value):
+signum = int(sys.argv[4])
+def barrier(path):
     if path.name == 'launches.json' and path.exists():
         ready.touch()
         while not release.exists(): time.sleep(0.01)
-    original(path, value)
+def write(path, value):
+    if signum == r.signal.SIGTERM: barrier(path)
+    original_write(path, value)
+def replace(source, destination):
+    if signum == r.signal.SIGKILL: barrier(destination)
+    original_replace(source, destination)
 r._write = write
-raise SystemExit(r.main(sys.argv[4:]))
+r.os.replace = replace
+raise SystemExit(r.main(sys.argv[5:]))
 """
     process = subprocess.Popen(
         [
@@ -677,6 +684,7 @@ raise SystemExit(r.main(sys.argv[4:]))
             str(_SCRIPT),
             str(ready),
             str(release),
+            str(signum),
             "--manifest",
             str(path),
             "--output-dir",
@@ -719,10 +727,18 @@ def test_campaign_receipts_follow_umask(tmp_path, mask):
     path, _ = _manifest(tmp_path, blocks=2)
     output = tmp_path / "results"
     program = """
-import os, runpy, sys
+import importlib.util, os, pathlib, sys
 os.umask(int(sys.argv[1]))
 sys.argv = sys.argv[2:]
-runpy.run_path(sys.argv[0], run_name='__main__')
+spec = importlib.util.spec_from_file_location('runner', sys.argv[0])
+r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+status = r.main(sys.argv[1:])
+if status == 0:
+    for path in pathlib.Path(sys.argv[-1]).rglob('*.json'):
+        with path.with_name(f'.{path.name}.mode-control').open('xb'):
+            pass
+raise SystemExit(status)
 """
     subprocess.run(
         [
@@ -743,6 +759,6 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     receipts = list(output.rglob("*.json"))
     assert output / "summary.json" in receipts
     assert output / "launches.json" in receipts
-    assert all(
-        path.stat().st_mode & 0o777 == 0o666 & ~mask for path in receipts
-    )
+    for path in receipts:
+        control = path.with_name(f".{path.name}.mode-control")
+        assert path.stat().st_mode & 0o777 == control.stat().st_mode & 0o777
