@@ -29,6 +29,7 @@ def _write_rubin_like_fits(
     image_bunit="nJy",
     mask=None,
     mask_header=None,
+    psf_moments=(1.0, 0.0, 1.0),
 ) -> None:
     if image is None:
         image = np.arange(100, dtype=np.float32).reshape(10, 10)
@@ -52,16 +53,16 @@ def _write_rubin_like_fits(
     if image_bunit is not None:
         variance_header["BUNIT"] = f"{image_bunit}**2"
     summary_payload = (
-        b"expTime: 30.0\n"
-        b"psfArea: 6.283185307179586\n"
-        b"psfIxx: 1.0\n"
-        b"psfIxy: 0.0\n"
-        b"psfIyy: 1.0\n"
-        b"psfSigma: 1.0\n"
-        b"skyBg: 12.5\n"
-        b"skyNoise: 1.25\n"
-        b"zeroPoint: 32.0\n"
-    )
+        "expTime: 30.0\n"
+        "psfArea: 6.283185307179586\n"
+        f"psfIxx: {psf_moments[0]}\n"
+        f"psfIxy: {psf_moments[1]}\n"
+        f"psfIyy: {psf_moments[2]}\n"
+        "psfSigma: 1.0\n"
+        "skyBg: 12.5\n"
+        "skyNoise: 1.25\n"
+        "zeroPoint: 32.0\n"
+    ).encode()
     summary_bytes = np.frombuffer(summary_payload, dtype=np.uint8)
     summary = fits.BinTableHDU.from_columns(
         [
@@ -805,6 +806,72 @@ def test_bilinear_variance_uses_squared_interpolation_weights() -> None:
     expected = np.sum(weights**2 * variance.ravel())
     assert result[0, 0] == pytest.approx(expected)
     assert np.isnan(result[0, 1])
+
+
+@pytest.mark.parametrize(
+    "angle,scale,roi,moments",
+    [
+        (90.0, 1.0, "8:23,8:23", (1.0, 0.0, 4.0)),
+        (45.0, 1.0, "8:23,8:23", (2.5, 1.5, 2.5)),
+        (90.0, 2.0, "8:23,8:23", (4.0, 0.0, 16.0)),
+        (90.0, 1.0, "15:16,15:16", (1.0, 0.0, 4.0)),
+    ],
+)
+def test_wcs_alignment_transforms_psf_moments(
+    tmp_path, angle, scale, roi, moments
+) -> None:
+    image = np.ones((31, 31), dtype=np.float32)
+    reference_header = _simple_wcs_header(crpix1=16.0, crpix2=16.0)
+    target_header = reference_header.copy()
+    cosine, sine = np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))
+    target_header["CD1_1"] = target_header["CD2_2"] = scale * cosine * 1.0e-3
+    target_header["CD1_2"] = -scale * sine * 1.0e-3
+    target_header["CD2_1"] = scale * sine * 1.0e-3
+    _write_rubin_like_fits(
+        tmp_path / "reference.fits",
+        image=image,
+        image_header=reference_header,
+    )
+    _write_rubin_like_fits(
+        tmp_path / "target.fits",
+        image=image,
+        image_header=target_header,
+        psf_moments=(4.0, 0.0, 1.0),
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(_manifest(tmp_path, "reference.fits", "target.fits"))
+    )
+    build_rubin_store(
+        manifest_path=manifest,
+        input_root=tmp_path,
+        output_dir=tmp_path / "store",
+        group="stack",
+        roi=roi,
+        align_wcs=True,
+    )
+    expected = rubin_module.psf_kernel_from_summary(
+        25,
+        {
+            "psfIxx": moments[0],
+            "psfIxy": moments[1],
+            "psfIyy": moments[2],
+            "psfSigma": scale,
+        },
+    )
+    with load_ximage_bundle(tmp_path / "store") as bundle:
+        assert np.allclose(
+            bundle.psfs[:, :, 0, 1], expected, rtol=1e-6, atol=1e-9
+        )
+        assert np.allclose(bundle.mcgauss[1], expected, rtol=1e-6, atol=1e-9)
+        summary = bundle.metadata["rubin_files"][1]
+        assert summary["exposure_summary"]["psfIxx"] == 4.0
+        assert summary["psf_sigma"] == pytest.approx(np.sqrt(2.0) * scale)
+        assert np.allclose(
+            summary["alignment"]["reference_to_target_jacobian"],
+            [[cosine / scale, sine / scale], [-sine / scale, cosine / scale]],
+            atol=1e-7,
+        )
 
 
 def test_bilinear_mask_combines_every_contributing_pixel() -> None:

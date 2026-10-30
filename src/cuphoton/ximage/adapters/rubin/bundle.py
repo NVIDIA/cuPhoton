@@ -222,7 +222,8 @@ def build_rubin_store(
 
     Existing stores survive input, write, or validation failures, including
     when ``overwrite=True``. Symlink and non-directory destinations are
-    rejected.
+    rejected. Omitting ``roi`` selects a centered crop capped at 512 pixels
+    per axis; each input's selected section is recorded in ``rubin_files``.
     """
 
     if product not in _RUBIN_PRODUCTS:
@@ -574,6 +575,12 @@ def read_manifest_stack(
         )
         photo_calib = view.photo_calib
         exposure_summary = view.exposure_summary
+        psf_summary = exposure_summary
+        if wcs_summary is not None:
+            psf_summary = _psf_summary_in_reference_frame(
+                exposure_summary,
+                np.asarray(wcs_summary["reference_to_target_jacobian"]),
+            )
 
         if reference_shape is None:
             reference_shape = tuple(image.shape)
@@ -606,12 +613,12 @@ def read_manifest_stack(
         images.append(image)
         variances.append(variance)
         exp_times.append(normalization_exp_time)
-        psf_metrics.append(exposure_summary)
+        psf_metrics.append(psf_summary)
         psf_kernel = view.sample_psf_kernel(psf_size)
         psf_kernels.append(psf_kernel)
         if psf_kernel is not None:
             psf_source = "lsst.images.CellCoadd.psf"
-        elif psf_metrics_to_kernel_inputs(exposure_summary) is not None:
+        elif psf_metrics_to_kernel_inputs(psf_summary) is not None:
             psf_source = "ExposureSummaryStats"
         else:
             psf_source = "delta_fallback"
@@ -656,8 +663,8 @@ def read_manifest_stack(
                 ),
                 "psf_sigma": (
                     None
-                    if exposure_summary is None
-                    else exposure_summary.get("psfSigma")
+                    if psf_summary is None
+                    else psf_summary.get("psfSigma")
                 ),
                 "raw_mask_nonzero_fraction": (view.mask_nonzero_fraction),
                 "mask_plane_names": list(view.mask_plane_names),
@@ -732,6 +739,27 @@ def read_wcs_aligned_views(
         raise ValueError("Rubin image WCS is not two-dimensional.")
     target_x = np.asarray(target_pixels[0], dtype=np.float64)
     target_y = np.asarray(target_pixels[1], dtype=np.float64)
+    # A local derivative also works for a one-pixel reference section.
+    center_x, center_y = (width - 1) / 2.0, (height - 1) / 2.0
+    local_world = reference.wcs.pixel_to_world_values(
+        center_x + np.array([0.5, -0.5, 0.0, 0.0]),
+        center_y + np.array([0.0, 0.0, 0.5, -0.5]),
+    )
+    if not isinstance(local_world, tuple):
+        local_world = (local_world,)
+    local_pixels = np.asarray(
+        target.wcs.world_to_pixel_values(*local_world), dtype=np.float64
+    )
+    jacobian = np.column_stack(
+        (
+            local_pixels[:, 0] - local_pixels[:, 1],
+            local_pixels[:, 2] - local_pixels[:, 3],
+        )
+    )
+    if not np.all(np.isfinite(jacobian)) or np.linalg.det(jacobian) == 0:
+        raise ValueError(
+            "WCS alignment requires a finite invertible pixel mapping."
+        )
     target_height, target_width = target.image.shape
     valid = (
         np.isfinite(target_x)
@@ -774,6 +802,8 @@ def read_wcs_aligned_views(
     finite_y = target_y[valid]
     summary = {
         "reference_bounds": reference.bounds.to_dict(),
+        "reference_to_target_jacobian": jacobian.tolist(),
+        "psf_moment_mapping": "local-affine-at-reference-center",
         "target_valid_fraction": float(np.count_nonzero(valid) / valid.size),
         "variance_resampling": "bilinear-independent-squared-weights",
         "resampling_covariance": "not-represented",
@@ -1688,6 +1718,31 @@ def to_ximage_mask(bad_mask: np.ndarray) -> np.ndarray:
     """Translate Rubin bad-pixel flags to the bundle good-pixel convention."""
 
     return ~np.asarray(bad_mask, dtype=bool)
+
+
+def _psf_summary_in_reference_frame(
+    summary: dict[str, Any] | None, jacobian: np.ndarray
+) -> dict[str, Any] | None:
+    """Map the Gaussian moment model into the aligned image's pixel frame."""
+    inputs = psf_metrics_to_kernel_inputs(summary)
+    if inputs is None or summary is None:
+        return summary
+    ixx, ixy, iyy, sigma = inputs
+    moments = np.array([[ixx, ixy], [ixy, iyy]])
+    if not np.all(np.isfinite(moments)) or np.linalg.det(moments) <= 0:
+        # Match psf_kernel_from_summary's circular fallback before mapping.
+        if not math.isfinite(sigma):
+            return summary
+        moments = np.eye(2) * sigma**2
+    inverse = np.linalg.inv(jacobian)
+    mapped = inverse @ moments @ inverse.T
+    return {
+        **summary,
+        "psfIxx": float(mapped[0, 0]),
+        "psfIxy": float(mapped[0, 1]),
+        "psfIyy": float(mapped[1, 1]),
+        "psfSigma": float(np.linalg.det(mapped) ** 0.25),
+    }
 
 
 def psfs_from_exposure_summaries(
