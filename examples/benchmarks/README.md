@@ -11,14 +11,17 @@ python examples/benchmarks/run_campaign.py --manifest campaign.json --output-dir
 
 Dry-run validates declarations and prints the resolved schedule, original
 manifest SHA256 and resolved plan SHA256 without running commands or creating
-output. Execution saves that plan and refuses an existing output directory.
+output. Execution saves that plan plus the original manifest bytes as
+`manifest.json`, verifies their SHA256 against the plan, and refuses an existing
+output directory or a manifest changed since preparation.
 Each block rotates treatment order; successive complete cycles reverse it.
 Every treatment occupies each position once per complete cycle. A trailing
 partial cycle is not completely balanced; `summary.json` reports the realized
 treatment-position counts.
-Six fresh blocks are the default and minimum for explicit `headline` runs.
-An omitted `experiment_kind` defaults to `pilot`; pilots may use fewer blocks
-and are never headline-eligible.
+Six fresh blocks and a 3600-second launch timeout are the defaults for both
+pilots and headline runs. Headline runs require at least six blocks.
+An omitted `experiment_kind` defaults to `pilot`; pilots may explicitly request
+fewer blocks and are never headline-eligible.
 
 A manifest contains:
 
@@ -50,6 +53,9 @@ A manifest contains:
 ```
 
 `environment`, `input_hashes`, `config` and treatment `env` are optional.
+Unknown top-level and treatment keys are rejected. The workload object accepts
+`name` and optional `measured_rounds`; put additional workload metadata in
+`config`. Other declaration objects accept application-specific keys.
 Relative `cwd` resolves from the manifest directory. Commands are argv lists,
 never shell expressions; only literal `{launch_dir}` substitution occurs.
 The current environment is inherited, and only declared overrides are saved.
@@ -88,7 +94,19 @@ completed-work unit explicitly in `output_contract`; failed work must remain
 in its denominator.
 
 Adapters own warmup and persistent measured rounds; existing cuPhoton
-`BenchmarkOptions` can provide those rounds. `warm_rounds` contains measured
+`BenchmarkOptions` can provide those rounds. Its receipts need this explicit
+mapping (retain only measured rounds and map `batch_wall_sec` to the adapter's
+`elapsed_seconds`):
+
+```python
+warm_rounds = [
+    {"phase": "measure", "elapsed_seconds": row["batch_wall_sec"]}
+    for row in benchmark_receipts
+    if row["phase"] == "measure"
+]
+```
+
+`warm_rounds` contains measured
 rounds only (optional `phase` must equal `measure`). It may be empty for a
 single-shot application. If any round supplies `completed_work`, every round
 must supply a positive integer and their sum must match the launch total.
@@ -113,12 +131,22 @@ incomplete and subsequent launches are skipped. SIGINT, SIGTERM or SIGHUP
 to the CLI also terminates that group, saves the interrupted launch receipt
 and stops without starting further launches. Repeated stop signals do not interrupt
 cleanup or receipt writes; the first signal determines the exit status.
+Receipt files are atomically replaced after flushing to disk. Stop signals are
+deferred across the launch receipt and `launches.json` update. SIGKILL can
+leave the previous complete aggregate and a newer per-launch receipt; inspect
+both when recovering an abruptly killed run.
 Adapters must keep children in that group and close their output;
 they must not daemonize, resume old results or skip measured work.
 
-`launches.json` is updated after every attempt; `summary.json` retains planned,
-attempted, failed and skipped counts, realized treatment-position counts, and
-per-launch identities. A treatment with any failed or skipped launch gets no
+`launches.json` is updated after every attempt. On normal completion,
+`summary.json` retains `planned_launches`, `accepted_launches`,
+`failed_launches` and `skipped_launches` per treatment, realized position counts,
+and full launch receipts. Attempted count is accepted plus failed.
+An interrupted run exits with `128 + signal` and normally has no summary; use
+its saved launch receipts. A stop after the summary has been written can leave
+a complete summary. CLI exit codes are 0 for a successful campaign or dry-run,
+1 for a completed campaign with rejected/skipped launches, and 2 for invalid
+arguments, preparation failures or runner I/O errors. A treatment with any failed or skipped launch gets no
 accepted wall median. Successful pilots remain pilots.
 Reported medians are descriptive; no confidence interval or significance
 estimate is inferred from a small cohort. Complete numerical and disclosure

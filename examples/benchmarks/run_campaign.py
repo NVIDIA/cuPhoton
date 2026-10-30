@@ -20,16 +20,51 @@ import shutil
 import signal
 import statistics
 import subprocess
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 _TERMINATE_GRACE_SECONDS = 2.0
 _NORMAL_EXIT_GRACE_SECONDS = 0.25
+_STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
+@contextmanager
+def _defer_stop_signals():
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    # Keep the previous complete receipt until the replacement is durable.
+    with _defer_stop_signals():
+        fd, temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def _write(path: Path, value: Any) -> None:
-    path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    _write_bytes(
+        path, (json.dumps(value, indent=2, allow_nan=False) + "\n").encode()
+    )
 
 
 def _read(path: Path, raw: bytes | None = None) -> dict[str, Any]:
@@ -62,10 +97,37 @@ def _object(value: Any, name: str) -> None:
         raise ValueError(f"{name} must be a nonempty object")
 
 
+def _known_keys(value: dict, allowed: set[str], name: str) -> None:
+    unknown = value.keys() - allowed
+    if unknown:
+        raise ValueError(
+            f"{name}: unknown keys: {', '.join(sorted(unknown))}"
+        )
+
+
 def prepare(manifest_path: Path, output_dir: Path) -> dict[str, Any]:
     """Validate declarations and freeze a plan without running it."""
     raw = manifest_path.read_bytes()
     manifest = _read(manifest_path, raw)
+    _known_keys(
+        manifest,
+        {
+            "schema_version",
+            "experiment_kind",
+            "blocks",
+            "timeout_seconds",
+            "comparison",
+            "workload",
+            "output_contract",
+            "cache",
+            "disclosure",
+            "environment",
+            "input_hashes",
+            "config",
+            "treatments",
+        },
+        "manifest",
+    )
     if (
         type(manifest.get("schema_version")) is not int
         or manifest["schema_version"] != 1
@@ -94,6 +156,7 @@ def prepare(manifest_path: Path, output_dir: Path) -> dict[str, Any]:
     for key in ("environment", "input_hashes", "config"):
         if key in manifest and not isinstance(manifest[key], dict):
             raise ValueError(f"{key} must be an object")
+    _known_keys(manifest["workload"], {"name", "measured_rounds"}, "workload")
     if "measured_rounds" in manifest["workload"]:
         _positive_integer(
             manifest["workload"]["measured_rounds"], "measured_rounds"
@@ -105,6 +168,20 @@ def prepare(manifest_path: Path, output_dir: Path) -> dict[str, Any]:
     for treatment in treatments:
         if not isinstance(treatment, dict):
             raise ValueError("each treatment must be an object")
+        _known_keys(
+            treatment,
+            {
+                "name",
+                "cwd",
+                "argv",
+                "validation_argv",
+                "source_sha",
+                "backend",
+                "expected_completed_work",
+                "env",
+            },
+            "treatment",
+        )
         name = treatment.get("name")
         if not isinstance(name, str) or not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9_-]*", name
@@ -186,6 +263,7 @@ def prepare(manifest_path: Path, output_dir: Path) -> dict[str, Any]:
             )
     plan = {
         "manifest": manifest,
+        "manifest_path": str(manifest_path.resolve()),
         "output_dir": str(output_dir),
         "schedule": schedule,
     }
@@ -352,7 +430,9 @@ def validate(
     ):
         if result.get(actual) != treatment[expected]:
             raise ValueError(
-                f"result.json: {actual} does not match treatment"
+                f"result.json: {actual} does not match treatment: "
+                f"found {result.get(actual)!r}, "
+                f"expected {treatment[expected]!r}"
             )
     _positive_integer(result.get("completed_work"), "completed_work")
     if result["completed_work"] != treatment["expected_completed_work"]:
@@ -411,8 +491,13 @@ def validate(
 def execute(plan: dict[str, Any]) -> dict[str, Any]:
     """Execute a plan, retaining every planned launch in the summary."""
     root = Path(plan["output_dir"])
+    raw_manifest = Path(plan["manifest_path"]).read_bytes()
+    if hashlib.sha256(raw_manifest).hexdigest() != plan["manifest_sha256"]:
+        raise ValueError("manifest changed after preparation")
     root.mkdir(parents=True, exist_ok=False)
-    _write(root / "plan.json", plan)
+    with _defer_stop_signals():
+        _write_bytes(root / "manifest.json", raw_manifest)
+        _write(root / "plan.json", plan)
     manifest = plan["manifest"]
     treatments = {item["name"]: item for item in manifest["treatments"]}
     rows = []
@@ -455,7 +540,12 @@ def execute(plan: dict[str, Any]) -> dict[str, Any]:
                     or row[stage]["returncode"] != 0
                     or row[stage]["leaked_children"]
                 ):
-                    raise ValueError(f"{stage} failed or timed out")
+                    raise ValueError(
+                        f"{stage} failed: "
+                        f"returncode={row[stage]['returncode']}, "
+                        f"timed_out={row[stage]['timed_out']}, "
+                        f"leaked_children={row[stage]['leaked_children']}"
+                    )
                 result_digest = hashlib.sha256(
                     (launch / "result.json").read_bytes()
                 ).hexdigest()
@@ -489,7 +579,7 @@ def execute(plan: dict[str, Any]) -> dict[str, Any]:
                     item["elapsed_seconds"] for item in rounds
                 )
             row["status"] = "ok"
-        except (OSError, ValueError, TypeError) as exc:
+        except Exception as exc:
             row["errors"].append(f"{type(exc).__name__}: {exc}")
         except BaseException as exc:
             row["status"] = "interrupted"
@@ -500,9 +590,10 @@ def execute(plan: dict[str, Any]) -> dict[str, Any]:
             raise
         finally:
             row["launch_wall_seconds"] = time.perf_counter() - started
-            _write(launch / "launch-result.json", row)
-            rows.append(row)
-            _write(root / "launches.json", rows)
+            with _defer_stop_signals():
+                _write(launch / "launch-result.json", row)
+                rows.append(row)
+                _write(root / "launches.json", rows)
         if halt_reason is not None:
             break
     summaries = {}
@@ -584,8 +675,7 @@ def main(argv: list[str] | None = None) -> int:
         # Repeated stop requests must not interrupt cleanup or receipt writes.
 
     previous_handlers = {
-        signum: signal.signal(signum, terminate)
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        signum: signal.signal(signum, terminate) for signum in _STOP_SIGNALS
     }
     try:
         plan = prepare(args.manifest, args.output_dir)
@@ -608,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0 if report["status"] == "ok" else 1
-    except (OSError, ValueError, TypeError) as exc:
+    except Exception as exc:
         parser.exit(2, f"{type(exc).__name__}: {exc}\n")
     finally:
         for signum, handler in previous_handlers.items():

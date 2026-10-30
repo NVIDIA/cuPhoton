@@ -32,6 +32,10 @@ if stage == 'validate':
     assert (p / 'output.json').read_text() == '[1, 4, 9]'
     value = {'status': 'ok', 'quality_checks': [
         {'name': 'squares', 'passed': True}]}
+    if mode == 'validation-failed': value['status'] = 'failed'
+    if mode == 'validation-empty': value['quality_checks'] = []
+    if mode == 'validation-check':
+        value['quality_checks'][0]['passed'] = False
     if mode == 'validation-source': value['source_sha'] = 'b' * 40
     if mode == 'validation-count': value['completed_work'] = 2
     if mode == 'validation-bool': value['completed_work'] = True
@@ -64,6 +68,8 @@ else:
     if mode == 'failed-check': value['quality_checks'][0]['passed'] = False
     if mode == 'nan':
         value['warm_rounds'][0]['elapsed_seconds'] = float('nan')
+    if mode == 'overflow':
+        value['warm_rounds'][0]['elapsed_seconds'] = 10 ** 400
     if mode == 'negative': value['warm_rounds'][0]['elapsed_seconds'] = -1
     if mode == 'zero': value['warm_rounds'][0]['elapsed_seconds'] = 0
     if mode == 'single-shot': value['warm_rounds'] = []
@@ -193,6 +199,10 @@ def test_dry_run_rotation_fresh_launches_and_nested_rounds(tmp_path):
         "failed-check",
         "nan",
         "negative",
+        "overflow",
+        "validation-failed",
+        "validation-empty",
+        "validation-check",
         "zero",
         "validation-source",
         "validation-count",
@@ -212,6 +222,26 @@ def test_bad_launch_retained_and_other_treatment_still_runs(tmp_path, mode):
     bad, good = report["launches"]
     assert bad["status"] == "failed" and bad["errors"]
     assert good["status"] == "ok"
+    expected_errors = {
+        "fail": (
+            "workload failed: returncode=7, timed_out=False, "
+            "leaked_children=False"
+        ),
+        "backend": (
+            "actual_backend does not match treatment: "
+            "found 'unexpected', expected 'cpu'"
+        ),
+        "overflow": "OverflowError:",
+        "validation-failed": "validation.json: status is not ok",
+        "validation-empty": (
+            "validation.json: independent science checks are missing"
+        ),
+        "validation-check": (
+            "validation.json: duplicate or failed check squares"
+        ),
+    }
+    if mode in expected_errors:
+        assert expected_errors[mode] in bad["errors"][0]
     if mode == "validation-mutate":
         assert "validation modified result.json" in bad["errors"][0]
         assert bad["result_sha256"] != bad["result_sha256_after_validation"]
@@ -535,3 +565,149 @@ def test_interrupt_preserves_receipt_and_stops_before_next_launch(
     assert row["workload"]["interrupted"]
     assert row["workload"]["timed_out"] == during_timeout
     assert not (output / "block-001").exists()
+
+
+def test_cli_dry_run_preserves_manifest_and_creates_no_output(tmp_path):
+    path, _ = _manifest(tmp_path)
+    raw = path.read_bytes() + b"\n  "
+    path.write_bytes(raw)
+    output = tmp_path / "results"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--manifest",
+            str(path),
+            "--output-dir",
+            str(output),
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    plan = json.loads(result.stdout)
+    assert not output.exists()
+    assert plan["manifest_sha256"] == hashlib.sha256(raw).hexdigest()
+    runner.execute(plan)
+    assert (output / "manifest.json").read_bytes() == raw
+
+
+def test_changed_manifest_refused_before_execution(tmp_path):
+    path, _ = _manifest(tmp_path)
+    output = tmp_path / "results"
+    plan = runner.prepare(path, output)
+    path.write_bytes(path.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="manifest changed"):
+        runner.execute(plan)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "section,key",
+    [
+        (None, "block"),
+        ("workload", "measured_round"),
+        ("treatments", "expected_work"),
+    ],
+)
+def test_unknown_runner_keys_rejected_before_execution(
+    tmp_path, section, key
+):
+    path, manifest = _manifest(tmp_path)
+    target = manifest if section is None else manifest[section]
+    if section == "treatments":
+        target = target[0]
+    target[key] = 1
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match=f"unknown keys: {key}"):
+        runner.prepare(path, tmp_path / "results")
+    assert not (tmp_path / "results").exists()
+
+
+def test_ordinary_validation_exception_keeps_failure_and_continues(
+    tmp_path, monkeypatch
+):
+    path, _ = _manifest(tmp_path, modes=("ok", "ok"))
+    original = runner.validate
+
+    def validate(launch, treatment, expected_rounds):
+        if treatment["name"] == "treatment-0":
+            raise RecursionError("nested adapter receipt")
+        return original(launch, treatment, expected_rounds)
+
+    monkeypatch.setattr(runner, "validate", validate)
+    report = runner.execute(runner.prepare(path, tmp_path / "results"))
+    bad, good = report["launches"]
+    assert bad["status"] == "failed"
+    assert bad["errors"] == ["RecursionError: nested adapter receipt"]
+    assert good["status"] == "ok"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX stop signals")
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGKILL])
+def test_stop_during_receipt_publication_retains_complete_json(
+    tmp_path, signum
+):
+    path, _ = _manifest(tmp_path, blocks=3)
+    output = tmp_path / "results"
+    ready, release = tmp_path / "ready", tmp_path / "release"
+    # Stop the second launches.json update just before atomic replacement.
+    # No timing-sensitive large payload is necessary.
+    program = """
+import importlib.util, pathlib, sys, time
+spec = importlib.util.spec_from_file_location('runner', sys.argv[1])
+r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+original = r.os.replace
+ready, release = map(pathlib.Path, sys.argv[2:4])
+def replace(source, destination):
+    if destination.name == 'launches.json' and destination.exists():
+        ready.touch()
+        while not release.exists(): time.sleep(0.01)
+    original(source, destination)
+r.os.replace = replace
+raise SystemExit(r.main(sys.argv[4:]))
+"""
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            program,
+            str(_SCRIPT),
+            str(ready),
+            str(release),
+            "--manifest",
+            str(path),
+            "--output-dir",
+            str(output),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and process.poll() is None:
+            assert time.monotonic() < deadline, "receipt barrier not reached"
+            time.sleep(0.01)
+        assert ready.exists()
+        process.send_signal(signum)
+        if signum == signal.SIGTERM:
+            release.touch()
+        assert process.wait(timeout=5) == (
+            128 + signum if signum == signal.SIGTERM else -signum
+        )
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        process.stderr.close()
+    rows = json.loads((output / "launches.json").read_text())
+    assert len(rows) == (2 if signum == signal.SIGTERM else 1)
+    for row in rows:
+        saved = json.loads(
+            (Path(row["directory"]) / "launch-result.json").read_text()
+        )
+        assert saved == row and row["status"] == "ok"
+    assert not (output / "block-002").exists()
+    assert not (output / "summary.json").exists()
