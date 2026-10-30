@@ -25,13 +25,11 @@ from cuphoton.ximage.adapters.rubin.evaluation import (
 from cuphoton.ximage.config import ReconstructionConfig, load_config
 from cuphoton.ximage.data import XImageBundle, load_ximage_bundle
 from cuphoton.ximage.metrics import (
+    _evaluate_metric_group,
     build_background_mask,
-    image_metrics,
     project_restoration_to_observation_grid,
-    psnr,
     squeeze_exposure_stack,
     squeeze_single_image,
-    ssim,
 )
 from cuphoton.ximage.preprocess import (
     coadd,
@@ -84,6 +82,7 @@ def evaluate_reconstruction_run(
     photometry_threshold: float = 0.1,
     photometry_minarea: int = 5,
     write_artifacts: bool = False,
+    metrics_backend: str = "auto",
 ) -> dict[str, Any]:
     run = load_reconstruction_run(run_dir)
     data_base = (
@@ -109,6 +108,7 @@ def evaluate_reconstruction_run(
             photometry_threshold=photometry_threshold,
             photometry_minarea=photometry_minarea,
             write_artifacts=write_artifacts,
+            metrics_backend=metrics_backend,
         )
     finally:
         loaded_bundle.close()
@@ -128,6 +128,7 @@ def _evaluate_reconstruction_bundle(
     photometry_threshold: float,
     photometry_minarea: int,
     write_artifacts: bool,
+    metrics_backend: str = "auto",
 ) -> dict[str, Any]:
     selected = run.summary.get("selected_exposures")
     if selected:
@@ -168,41 +169,14 @@ def _evaluate_reconstruction_bundle(
         m_roi, min_fraction=background_min_fraction
     )
 
-    result = {
-        "run_dir": str(run.run_dir),
-        "image_path": str(run.image_path),
-        "backend": run.summary.get("backend"),
-        "algorithm": run.summary.get("algorithm"),
-        "selected_exposures": selected,
-        "projection_shape": list(projected.shape),
-        "background_fraction": float(np.mean(background_mask)),
-        "restoration": image_metrics(projected, background_mask),
-        "synthetic_coadd": {
-            "method": coadd_method,
-            **image_metrics(synthetic_2d, background_mask),
-            "psnr_vs_restoration": psnr(projected, synthetic_2d),
-            "ssim_vs_restoration": ssim(projected, synthetic_2d),
-        },
-        "exposures": {
-            "count": int(exposures.shape[0]),
-            "avg_psnr_vs_restoration": float(
-                np.mean([psnr(projected, exposure) for exposure in exposures])
-            ),
-            "avg_ssim_vs_restoration": float(
-                np.mean([ssim(projected, exposure) for exposure in exposures])
-            ),
-        },
-    }
-
     coadd_path = resolve_pipeline_coadd_fits(
-        explicit_path=pipeline_coadd_fits,
+        explicit_path=pipeline_coadd_fits
     )
-    catalog_path = resolve_catalog_parquet(
-        explicit_path=catalog_parquet,
-    )
+    catalog_path = resolve_catalog_parquet(explicit_path=catalog_parquet)
     reference_catalog_path = resolve_reference_catalog_csv(
         explicit_path=reference_catalog_csv,
     )
+    metric_images = [projected, synthetic_2d]
     if coadd_path is not None:
         pipeline_coadd = load_pipeline_coadd_roi(
             coadd_path,
@@ -211,14 +185,49 @@ def _evaluate_reconstruction_bundle(
             width=target_shape[1],
             bundle_metadata=bundle.metadata,
         )
+        metric_images.append(pipeline_coadd)
+    metrics = _evaluate_metric_group(
+        metric_images,
+        background_mask=background_mask,
+        exposures=exposures,
+        backend=metrics_backend,
+    )
+    result = {
+        "run_dir": str(run.run_dir),
+        "image_path": str(run.image_path),
+        "backend": run.summary.get("backend"),
+        "metrics_backend": metrics["backend"],
+        "algorithm": run.summary.get("algorithm"),
+        "selected_exposures": selected,
+        "projection_shape": list(projected.shape),
+        "background_fraction": float(np.mean(background_mask)),
+        "restoration": metrics["images"][0],
+        "synthetic_coadd": {
+            "method": coadd_method,
+            **metrics["images"][1],
+            "psnr_vs_restoration": metrics["comparisons"][0]["psnr"],
+            "ssim_vs_restoration": metrics["comparisons"][0]["ssim"],
+        },
+        "exposures": {
+            "count": int(exposures.shape[0]),
+            "avg_psnr_vs_restoration": float(
+                np.mean([item["psnr"] for item in metrics["exposures"]])
+            ),
+            "avg_ssim_vs_restoration": float(
+                np.mean([item["ssim"] for item in metrics["exposures"]])
+            ),
+        },
+    }
+
+    if coadd_path is not None:
         result["pipeline_coadd"] = {
             "path": str(coadd_path),
-            **image_metrics(pipeline_coadd, background_mask),
-            "comparison_valid_fraction": float(
-                np.mean(np.isfinite(projected) & np.isfinite(pipeline_coadd))
-            ),
-            "psnr_vs_restoration": psnr(projected, pipeline_coadd),
-            "ssim_vs_restoration": ssim(projected, pipeline_coadd),
+            **metrics["images"][2],
+            "comparison_valid_fraction": metrics["comparisons"][1][
+                "comparison_valid_fraction"
+            ],
+            "psnr_vs_restoration": metrics["comparisons"][1]["psnr"],
+            "ssim_vs_restoration": metrics["comparisons"][1]["ssim"],
         }
 
     photometry_baseline_name = (

@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -132,6 +134,7 @@ def test_benchmark_devices_can_attach_reconstruction_evaluation(
         return WorkflowResult(output_root / device_override, {})
 
     def fake_evaluate(*args, **kwargs) -> dict[str, object]:
+        assert kwargs["metrics_backend"] == "cpu"
         return {
             "run_dir": "temporary",
             "image_path": "temporary.npy",
@@ -165,6 +168,7 @@ def test_benchmark_devices_can_attach_reconstruction_evaluation(
         repeats=1,
         warmup=0,
         evaluate=True,
+        metrics_backend="cpu",
     )
 
     evaluation = result["results"]["cpu"]["evaluation"]
@@ -190,6 +194,56 @@ def test_benchmark_comparison_preserves_unavailable_sharpness() -> None:
     )
     assert result["restoration_sharpness_delta"] is None
     assert result["restoration_sky_sigma_delta"] == 0.0
+
+
+@pytest.mark.parametrize("selected_backend", ["cpu", "cupy"])
+def test_benchmark_releases_cupy_cache_before_next_reconstruction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    selected_backend: str,
+) -> None:
+    calls: list[str] = []
+
+    def fake_run(config_path, *, output_root, **kwargs):
+        calls.append("reconstruct")
+        return WorkflowResult(output_root, {})
+
+    def fake_evaluate(*args, **kwargs):
+        assert kwargs["metrics_backend"] == "auto"
+        calls.append("evaluate")
+        return {"metrics_backend": selected_backend}
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "cupy":
+            assert selected_backend == "cupy", "CPU path imported CuPy"
+            pool = SimpleNamespace(
+                free_all_blocks=lambda: calls.append("release")
+            )
+            return SimpleNamespace(get_default_memory_pool=lambda: pool)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(benchmark, "_device_environment", lambda device: {})
+    monkeypatch.setattr(benchmark, "run_reconstruction", fake_run)
+    monkeypatch.setattr(
+        benchmark, "evaluate_reconstruction_run", fake_evaluate
+    )
+    benchmark.benchmark_devices(
+        workflow="reconstruct-l2",
+        config_path=tmp_path / "config.yaml",
+        devices=["cpu"],
+        repeats=2,
+        warmup=0,
+        evaluate=True,
+        metrics_backend="auto",
+    )
+
+    expected = ["reconstruct", "evaluate"]
+    if selected_backend == "cupy":
+        expected.append("release")
+    assert calls == [*expected, "reconstruct"]
 
 
 def test_benchmark_devices_rejects_invalid_requests(tmp_path: Path) -> None:

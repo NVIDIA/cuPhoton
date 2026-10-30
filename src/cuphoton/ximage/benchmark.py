@@ -39,6 +39,7 @@ def benchmark_devices(
     output_root: Path | None = None,
     cuda_visible_devices: str | None = None,
     evaluate: bool = False,
+    metrics_backend: str = "auto",
     coadd_method: str = "median",
     pipeline_coadd_fits: Path | None = None,
     catalog_parquet: Path | None = None,
@@ -70,6 +71,8 @@ def benchmark_devices(
         raise ValueError(
             "Evaluation is only supported for reconstruction workflows."
         )
+    if metrics_backend not in {"auto", "cpu", "cupy"}:
+        raise ValueError("metrics_backend must be 'auto', 'cpu', or 'cupy'")
     if coadd_method not in {"median", "mean"}:
         raise ValueError("coadd_method must be 'median' or 'mean'")
     if background_min_fraction <= 0.0 or background_min_fraction > 1.0:
@@ -115,6 +118,7 @@ def benchmark_devices(
                     evaluation = _finalize_evaluation_result(
                         evaluate_reconstruction_run(
                             result.run_dir,
+                            metrics_backend=metrics_backend,
                             coadd_method=coadd_method,
                             pipeline_coadd_fits=pipeline_coadd_fits,
                             catalog_parquet=catalog_parquet,
@@ -128,6 +132,11 @@ def benchmark_devices(
                         ),
                         keep_artifacts=keep_artifacts,
                     )
+                    if evaluation.get("metrics_backend") == "cupy":
+                        import cupy as cp
+
+                        # Later Torch runs cannot reuse CuPy's cached blocks.
+                        cp.get_default_memory_pool().free_all_blocks()
                 run_dirs.append(str(result.run_dir))
                 if idx >= warmup:
                     timings.append(dt)

@@ -47,6 +47,56 @@ def test_registered_component_uses_canonical_namespace() -> None:
     assert get_component("ximage").import_name == "cuphoton.ximage"
 
 
+@pytest.mark.parametrize(
+    ("command", "options", "function"),
+    [
+        (
+            "evaluate-reconstruction",
+            ["--run-dir", "run"],
+            "evaluate_reconstruction_run",
+        ),
+        (
+            "benchmark-devices",
+            [
+                "--config",
+                "config.yaml",
+                "--workflow",
+                "reconstruct-l2",
+                "--evaluate",
+            ],
+            "benchmark_devices",
+        ),
+    ],
+)
+def test_metric_backend_cli_selection_reaches_evaluator(
+    monkeypatch,
+    command,
+    options,
+    function,
+) -> None:
+    from cuphoton.ximage import commands
+
+    captured = {}
+
+    def run(*args, **kwargs):
+        captured.update(kwargs)
+        return {"metrics_backend": kwargs["metrics_backend"]}
+
+    monkeypatch.setattr(commands, function, run)
+    output, error = StringIO(), StringIO()
+    assert (
+        _run_cli(
+            [command, *options, "--metrics-backend", "cupy"],
+            out=output,
+            err=error,
+        )
+        == 0
+    )
+    assert captured["metrics_backend"] == "cupy"
+    assert json.loads(output.getvalue()) == {"metrics_backend": "cupy"}
+    assert error.getvalue() == ""
+
+
 def test_cli_uses_shared_component_command_discovery() -> None:
     cli = build_component_cli(get_component("ximage"))
 

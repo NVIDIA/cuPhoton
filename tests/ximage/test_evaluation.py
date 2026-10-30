@@ -43,12 +43,171 @@ from cuphoton.ximage.metrics import (
     average_downsample,
     center_crop,
     crop_about_center,
+    evaluate_image_metrics,
     fourier_sharpness,
     project_restoration_to_observation_grid,
     psnr,
     sky_sigma,
     ssim,
 )
+
+
+def test_image_metric_group_cpu_does_not_import_cupy(monkeypatch) -> None:
+    import builtins
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "cupy" or name.startswith(("cupy.", "cupyx")):
+            raise AssertionError("CPU metrics imported CuPy")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    reference = np.arange(35, dtype=np.float32).reshape(5, 7)
+    candidate = reference + 0.5
+    result = evaluate_image_metrics(reference, candidate, backend="cpu")
+    assert result["backend"] == "cpu"
+    assert result["psnr"] == psnr(reference, candidate)
+    assert result["ssim"] == ssim(reference, candidate)
+    assert result["reference"]["sharpness_sf"] == fourier_sharpness(reference)
+    assert result["candidate"]["sky_sigma"] == sky_sigma(candidate)
+
+
+def test_image_metric_backend_availability_and_computation_errors(
+    monkeypatch,
+) -> None:
+    import cuphoton.ximage._metrics_cupy as gpu_metrics
+
+    image = np.ones((3, 4))
+
+    def unavailable():
+        raise RuntimeError("CuPy evaluation requires a usable CUDA device")
+
+    monkeypatch.setattr(gpu_metrics, "load_cupy", unavailable)
+    assert evaluate_image_metrics(image, image)["backend"] == "cpu"
+    with pytest.raises(RuntimeError, match="usable CUDA device"):
+        evaluate_image_metrics(image, image, backend="cupy")
+
+    monkeypatch.setattr(gpu_metrics, "load_cupy", lambda: (None, None))
+
+    def failed_kernel(*args):
+        raise RuntimeError("metric kernel failed")
+
+    monkeypatch.setattr(gpu_metrics, "compute_metrics", failed_kernel)
+    with pytest.raises(RuntimeError, match="metric kernel failed"):
+        evaluate_image_metrics(image, image, backend="auto")
+
+
+@pytest.mark.parametrize(
+    "candidate", [np.ones((3, 4)), np.ones((2, 3, 1)), np.ones((0, 3))]
+)
+def test_image_metric_group_rejects_incompatible_shapes(candidate) -> None:
+    with pytest.raises(ValueError, match="2-D arrays of equal shape"):
+        evaluate_image_metrics(np.ones((2, 3)), candidate, backend="cpu")
+
+
+def test_image_metric_group_rejects_invalid_selection_and_mask() -> None:
+    image = np.ones((3, 4))
+    with pytest.raises(ValueError, match="metrics backend"):
+        evaluate_image_metrics(image, image, backend="unknown")
+    with pytest.raises(ValueError, match="background_mask"):
+        evaluate_image_metrics(
+            image, image, background_mask=np.ones((4, 3)), backend="cpu"
+        )
+
+
+def _require_cupy() -> None:
+    from cuphoton.ximage._metrics_cupy import load_cupy
+
+    try:
+        load_cupy()
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    "case",
+    [
+        "finite",
+        "sparse-spectrum",
+        "partial",
+        "constant",
+        "empty-background",
+        "nonfinite",
+        "disjoint",
+        "zero-mad",
+    ],
+)
+def test_cupy_metric_group_matches_cpu_finite_support(case: str) -> None:
+    _require_cupy()
+    yy, xx = np.indices((31, 35))
+    reference = 30.0 + 2 * np.sin(xx / 5) + np.cos(yy / 7)
+    if case in {"finite", "empty-background"}:
+        reference += np.random.default_rng(7).normal(
+            0.0, 0.03, reference.shape
+        )
+    candidate = reference + 0.2 * np.cos(xx / 3 + yy / 2)
+    mask = np.ones(reference.shape, dtype=bool)
+    mask[-3:] = False
+    if case == "finite":
+        mask = None
+    elif case == "partial":
+        reference[3:12, 4:9] = np.nan
+        candidate[:5, :8] = np.inf
+    elif case == "constant":
+        reference[:] = candidate[:] = 2.0
+    elif case == "empty-background":
+        mask[:] = False
+    elif case == "nonfinite":
+        reference[:] = np.nan
+        candidate[:] = np.inf
+    elif case == "disjoint":
+        reference[:16] = np.nan
+        candidate[16:] = np.nan
+    elif case == "zero-mad":
+        reference[:] = candidate[:] = 2.0
+        reference[0, 0] = 3.0
+    cpu = evaluate_image_metrics(
+        reference, candidate, background_mask=mask, backend="cpu"
+    )
+    gpu = evaluate_image_metrics(
+        reference, candidate, background_mask=mask, backend="cupy"
+    )
+    assert gpu["backend"] == "cupy"
+    for name in ("reference", "candidate"):
+        for key, expected in cpu[name].items():
+            if expected is None or isinstance(expected, str):
+                assert gpu[name][key] == expected
+            elif key == "sharpness_sf" and case in {
+                "constant",
+                "sparse-spectrum",
+                "zero-mad",
+            }:
+                # Log magnitude amplifies FFT roundoff in zero spectral bins.
+                # These cases qualify the other metrics with strict parity.
+                assert np.isfinite(gpu[name][key])
+            else:
+                np.testing.assert_allclose(
+                    gpu[name][key], expected, rtol=1e-9, atol=1e-10
+                )
+    for key in ("psnr", "ssim", "comparison_valid_fraction"):
+        np.testing.assert_allclose(gpu[key], cpu[key], rtol=1e-9, atol=1e-10)
+
+
+@pytest.mark.gpu
+def test_cupy_constant_image_sharpness_matches_analytic_spectrum() -> None:
+    _require_cupy()
+    # Power-of-two dimensions and this constant have exact FFT cancellations.
+    image = np.full((32, 32), 2.0)
+    expected = (
+        np.log(2.0 * image.size + 1e-12) + (image.size - 1) * np.log(1e-12)
+    ) / image.size
+    for backend in ("cpu", "cupy"):
+        result = evaluate_image_metrics(image, image, backend=backend)
+        assert result["reference"]["sharpness_sf"] == pytest.approx(
+            expected, abs=1e-12, rel=1e-14
+        )
 
 
 def test_psnr_and_ssim_identity_cases() -> None:
@@ -360,12 +519,19 @@ def test_resolve_saved_path_handles_relative_artifacts(
 
 
 @pytest.mark.parametrize("incomplete_coadd", [False, True])
+@pytest.mark.parametrize(
+    "metrics_backend", ["cpu", pytest.param("cupy", marks=pytest.mark.gpu)]
+)
 def test_evaluate_reconstruction_run_reports_metrics(
     tmp_path: Path,
     monkeypatch,
     incomplete_coadd: bool,
+    metrics_backend: str,
 ) -> None:
     import cuphoton.ximage.evaluation as evaluation
+
+    if metrics_backend == "cupy":
+        _require_cupy()
 
     original_load = evaluation.load_ximage_bundle
     closed: list[bool] = []
@@ -493,10 +659,20 @@ def test_evaluate_reconstruction_run_reports_metrics(
         pipeline_coadd_fits=coadd_path,
         catalog_parquet=catalog_path,
         write_artifacts=True,
+        metrics_backend=metrics_backend,
     )
+    assert result["backend"] == "torch"
+    assert result["metrics_backend"] == metrics_backend
     assert np.isfinite(result["restoration"]["sharpness_sf"])
     assert result["synthetic_coadd"]["method"] == "median"
     assert result["exposures"]["count"] == 2
+    exposure = images[0, 2:6, 2:6, 0]
+    assert result["exposures"]["avg_psnr_vs_restoration"] == pytest.approx(
+        psnr(np.ones((4, 4)), exposure)
+    )
+    assert result["exposures"]["avg_ssim_vs_restoration"] == pytest.approx(
+        ssim(np.ones((4, 4)), exposure)
+    )
     assert "pipeline_coadd" in result
     pipeline = result["pipeline_coadd"]
     expected_fraction = 15 / 16 if incomplete_coadd else 1.0
@@ -600,6 +776,7 @@ def test_evaluator_resolves_default_store_center_for_catalogs_and_coadd(
         tmp_path,
         pipeline_coadd_fits=coadd_path,
         reference_catalog_csv=catalog_path,
+        metrics_backend="cpu",
     )
     catalog = result["photometry"]
     assert catalog["crop_origin_yx"] == [3, 3]
