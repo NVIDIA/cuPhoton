@@ -408,7 +408,9 @@ def make_server(
             pass
 
     server = ThreadingHTTPServer((host, port), Handler)
-    addresses = {"127.0.0.1", "localhost", "[::1]"} if loopback else {host}
+    addresses = {host}
+    if loopback:
+        addresses |= {"127.0.0.1", "localhost", "[::1]"}
     for address in addresses:
         if ":" in address and not address.startswith("["):
             address = f"[{address}]"

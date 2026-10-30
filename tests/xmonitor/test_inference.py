@@ -339,6 +339,7 @@ def test_bearer_allows_https_or_loopback(url):
 @pytest.mark.parametrize(
     "invalid",
     [
+        "valid",
         "revision",
         "unit",
         "boolean",
@@ -348,7 +349,7 @@ def test_bearer_allows_https_or_loopback(url):
         "tool_calls",
     ],
 )
-def test_basic_response_contract_rejects_invalid_answers(
+def test_basic_response_contract_validates_answers(
     tmp_path, monkeypatch, invalid
 ):
     monitor = make_monitor(tmp_path)
@@ -402,5 +403,11 @@ def test_basic_response_contract_rejects_invalid_answers(
             InferenceConfig("http://localhost:1/v1", "fixture")
         ).investigate(monitor, ["observation"])
     )
-    assert report["status"] == "failed"
-    assert not report.get("answer")
+    if invalid == "valid":
+        assert report["status"] == "completed"
+        assert report["narrative"] == answer["narrative"]
+        assert report["citations"] == answer["citations"]
+    else:
+        assert report["status"] == "failed"
+        assert "narrative" not in report
+        assert "citations" not in report

@@ -389,23 +389,28 @@ def test_http_request_guards(
         session.close()
 
 
-def test_explicit_host_allowlist_and_bound_loopback_port(tmp_path):
+@pytest.mark.parametrize("bind_host", ["127.0.0.1", "127.0.0.2"])
+def test_explicit_host_allowlist_and_bound_loopback_port(tmp_path, bind_host):
     import http.client
 
     monitor = Monitor(tmp_path / "run", run_id="hosts")
     server = make_server(
-        Dashboard(monitor), port=0, allowed_hosts=["monitor.example:8443"]
+        Dashboard(monitor),
+        host=bind_host,
+        port=0,
+        allowed_hosts=["monitor.example:8443"],
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         for host in (
+            f"{bind_host}:{server.server_port}",
             f"localhost:{server.server_port}",
             f"[::1]:{server.server_port}",
             "monitor.example:8443",
         ):
             connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port
+                bind_host, server.server_port
             )
             try:
                 connection.request("GET", "/health", headers={"Host": host})
