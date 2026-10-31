@@ -5,15 +5,16 @@ record the exact commit in the methods or software-availability section.
 For a development checkout, include the full version reported by
 `cuphoton --version` and the output of `git rev-parse HEAD`.
 
-Suggested citation for the 0.1.3 release:
+Use this citation template with the version and year you used:
 
 > NVIDIA Corporation. *cuPhoton: GPU-accelerated astronomy and imaging
-> reference workflows*. Version 0.1.3, 2026.
+> reference workflows*. Version [installed version], [year].
 > https://github.com/NVIDIA/cuPhoton
 
 The repository also contains machine-readable citation metadata in
 [`CITATION.cff`](CITATION.cff). GitHub can export that record in common
-bibliography formats.
+bibliography formats. The record describes the project; add the version and
+commit used to the exported citation.
 
 The current citation metadata does not include an archived DOI. If the
 release you use publishes one, prefer its DOI while retaining the exact

@@ -233,7 +233,7 @@ reader by default.
 
 ## Install
 
-Version 0.1.3 is a source-only release. Start with a
+For development, start with a
 [source checkout](../getting-started.md#clone-and-select-a-profile) and build
 the native extension as shown below. The `io` extra installs CuPy, KvikIO,
 cuFile, and nvCOMP; `gpu` also includes these dependencies.

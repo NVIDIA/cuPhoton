@@ -1,9 +1,9 @@
 # Native packages
 
-Version 0.1.3 is a source-only release. It does not include binary wheels or
-PyPI packages. Follow the [source checkout instructions](getting-started.md#clone-and-select-a-profile)
-to install it. The procedures below describe local package build and
-qualification tooling.
+These procedures describe building and qualifying packages from a
+[source checkout](getting-started.md#clone-and-select-a-profile).
+For packages available with a published version, see its
+[release notes](https://github.com/NVIDIA/cuPhoton/releases).
 
 The wheel build produces six Linux wheels (CPython 3.12, 3.13, and 3.14 on
 x86-64 and ARM64) plus one source archive. Wheels target glibc 2.28 or later.
@@ -53,9 +53,8 @@ The build derives the package version from Git tags using `setuptools-scm`:
 
 | Tag | Installed version |
 | --- | --- |
-| `v0.1.3rc0` | `0.1.3rc0` |
-| `v0.1.3rc1` | `0.1.3rc1` |
-| `v0.1.3` | `0.1.3` |
+| `vX.Y.ZrcN` | `X.Y.ZrcN` |
+| `vX.Y.Z` | `X.Y.Z` |
 
 Use exactly `vX.Y.Z` or `vX.Y.ZrcN`. A checkout after a release tag receives
 a development version. There is no version constant to bump: builds generate
@@ -65,12 +64,11 @@ Git. An unbuilt source checkout reports `0.0.0.dev0` until installed or built;
 a Git-free copy without archive metadata cannot produce a release.
 
 On `main` and topic branches, development builds target the next minor
-release: commits after `v0.1.3` produce `0.2.0.devN+gHASH`. Detached
-development checkouts use the same policy. A matching `X.Y.x` maintenance
-branch instead advances the patch or release-candidate version, so commits
-after `v0.1.3` on `0.1.x` produce `0.1.4.devN+gHASH`. The existing `0.1.x`
-branch retains its patch-based version configuration, including for detached
-builds. Exact release and release-candidate tags retain their tagged versions.
+release and include a `.devN+gHASH` suffix. Detached development checkouts
+use the same policy. A matching `X.Y.x` maintenance branch instead advances
+the patch or release-candidate version. The existing `0.1.x` branch retains
+its patch-based version configuration, including for detached builds.
+Exact release and release-candidate tags retain their tagged versions.
 
 Release CI explicitly selects the triggering tag's version. This also works
 when an RC tag and a final tag refer to the same commit. A final release needs
@@ -308,8 +306,8 @@ Retain these JSON receipts with the wheel hashes and native xDR receipts.
 
 ## PyPI publication for future releases
 
-This procedure describes the available publication workflow for a future
-release that includes PyPI packages. It does not apply to 0.1.3.
+This procedure describes the publication workflow for releases that include
+PyPI packages.
 
 Configure these Trusted Publishers in the respective package-index accounts:
 

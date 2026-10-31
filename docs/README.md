@@ -11,8 +11,9 @@ and [what an exposure contains](architecture.md#what-an-exposure-contains).
 Then run a synthetic quickstart and read the contract for the component you
 intend to adapt.
 
-The [0.1.3 changelog](../CHANGELOG.md) summarizes the changes and migration
-requirements.
+The [changelog](../CHANGELOG.md) records release history and migration
+requirements. [Releases](https://github.com/NVIDIA/cuPhoton/releases)
+provides installation notes for published versions.
 
 ## First run
 
