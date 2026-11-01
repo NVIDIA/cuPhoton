@@ -200,7 +200,7 @@ markers = [
   "real_data: opt-in tests that require caller-supplied observational data",
   "xray_gpu: structured xRay tests requiring CUDA 13 execution",
 ]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [tool.coverage.run]
