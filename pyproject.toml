@@ -67,6 +67,7 @@ viz = [
 ]
 io = [
   "cuda-pathfinder>=1.5.6,<2; platform_system == 'Linux'",
+  "cuda-bindings>=13,<14; platform_system == 'Linux'",
   "cupy-cuda13x[ctk]>=14,<15; platform_system == 'Linux'",
   "cuda-toolkit[cufile]>=13,<14; platform_system == 'Linux'",
   "kvikio-cu13==26.6.*; platform_system == 'Linux'",
@@ -139,6 +140,7 @@ where = ["src"]
 include = ["cuphoton*"]
 
 [tool.setuptools.package-data]
+"cuphoton.xbeam" = ["schemas/*.json"]
 "cuphoton.xlens" = ["assets/*.html", "assets/*.css", "assets/*.js"]
 "cuphoton.xpois" = ["assets/*"]
 "cuphoton.xscan" = ["assets/*"]
