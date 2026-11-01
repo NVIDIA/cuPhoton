@@ -32,6 +32,83 @@ from cuphoton.xbeam.adapters.radio.models import (
 @pytest.mark.parametrize(
     "backend", ["numpy", pytest.param("cupy", marks=pytest.mark.gpu)]
 )
+@pytest.mark.parametrize("fringe_order", [0, 1, 2])
+def test_single_channel_complex_fringe_matches_analytic_visibility(
+    backend, fringe_order
+):
+    if backend == "cupy":
+        cupy = pytest.importorskip("cupy")
+        if cupy.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA device")
+    epoch = MJDTime(58849, Decimal(0))
+    rate, edge = 8.0, 100.0
+    delays = (0.0, 1.0 / (4.0 * edge))
+    amplitudes = (1.0 + 2.0j, 3.0 - 1.0j)
+    job = Job(
+        epoch,
+        Decimal(1),
+        Decimal(1),
+        Decimal(1),
+        fringe_order,
+        tuple(
+            Station(i, f"S{i}", ClockPolynomial(epoch, (0.0,)))
+            for i in range(2)
+        ),
+        (Frequency(0, edge, rate, Sideband.USB, 1),),
+        tuple(
+            Datastream(
+                i,
+                i,
+                SamplingKind.COMPLEX,
+                2,
+                40,
+                ("unused.vdif",),
+                (RecordedBand(0, 0, "R"),),
+                sample_rate_hz=rate,
+            )
+            for i in range(2)
+        ),
+        (Baseline(0, 0, 1, (BaselineProduct(0, 0, 0),)),),
+        (
+            Scan(
+                "s",
+                Decimal(0),
+                Decimal(1),
+                "0",
+                "0",
+                tuple(
+                    DelayCoordinateModel(
+                        i, Decimal(0), (delays[i],), (0.0,), (0.0,), (0.0,)
+                    )
+                    for i in range(2)
+                ),
+            ),
+        ),
+    )
+
+    class Source:
+        def batches(self, stream):
+            i = stream.identifier
+            samples = np.full(
+                8,
+                amplitudes[i] * np.exp(2j * np.pi * edge * delays[i]),
+                dtype=np.complex64,
+            )
+            yield VoltageBatch(
+                samples, epoch, rate, 0, "R", np.ones(samples.size, bool)
+            )
+
+    (record,) = correlate(job, backend=backend, recording_source=Source())
+    # One-sample FFTs have constant delay for every approximation order.
+    # Complex I/Q normalization contributes a factor of two.
+    expected = amplitudes[0] * np.conj(amplitudes[1]) / 2.0
+    np.testing.assert_allclose(record.spectrum, [expected], atol=1e-6)
+    assert record.weight == 1.0
+
+
+@pytest.mark.parametrize(
+    "backend", ["numpy", pytest.param("cupy", marks=pytest.mark.gpu)]
+)
 @pytest.mark.parametrize("lo_offset", [0.0, 5.0])
 def test_conjugated_lsb_and_usb_match_with_band_edge_and_fractional_delay(
     backend, lo_offset

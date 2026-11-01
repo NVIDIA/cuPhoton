@@ -270,7 +270,7 @@ def _approximated_delay(
     offsets = xp.arange(fft_length, dtype=xp.float64) / xp.float64(
         sample_rate_hz
     )
-    if order == 0:
+    if order == 0 or fft_length == 1:
         centre = starts + xp.float64(
             (fft_length - 1) / (2.0 * sample_rate_hz)
         )

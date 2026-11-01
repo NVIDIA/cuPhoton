@@ -462,7 +462,7 @@ def _station_blocks(
             data.device_validity = xp.ascontiguousarray(
                 xp.asarray(data.validity, dtype=xp.uint8)
             )
-        if job.fringe_approximation_order == 0:
+        if job.fringe_approximation_order == 0 or fft_length == 1:
             delay_zero = centre_delay
             delay_step = np.zeros_like(centre_delay)
             delay_quadratic = np.zeros_like(centre_delay)
