@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### xBeam
+
+- Correlate uniformly sampled signals from arrays or HDF5 with NumPy or
+  CuPy, producing cross-spectra and lag correlations.
+- Compute radio visibilities from two-bit, non-legacy VDIF files with
+  bounded input windows, GPU execution, time sharding and validated output
+  assembly.
+- Use the shared `cuphoton xbeam` CLI for correlation, VDIF inspection,
+  sidecar creation and radio shard merging. See the
+  [xBeam guide](docs/xbeam/README.md) for installation and examples.
+
 ## 0.1.3
 
 These changes are relative to 0.1.2. Version 0.1.3 is a source-only release;

@@ -14,6 +14,13 @@ Read [How cuPhoton uses Dragon](dragon.md) or [How cuPhoton uses MPI](mpi.md)
 for the process and message details. The [distributed launch guide](distributed-execution.md)
 contains environment setup, manifests and Slurm/SSH commands.
 
+xBeam radio correlation has its own time-shard coordinator: `--devices`
+launches local GPU workers, while an external scheduler can assign shards
+with `--shard-count` and `--shard-index`. See
+[xBeam multi-GPU execution](xbeam/README.md#use-multiple-gpus) for the required
+scan window and output merge. Time-series applications coordinate their own
+[result shards](xbeam/time-series.md#batches-and-independent-shards).
+
 ## Units of work
 
 The optical workflows divide a batch into independent items:

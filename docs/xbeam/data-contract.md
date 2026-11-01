@@ -5,6 +5,13 @@ objects in `cuphoton.xbeam.adapters.radio.models`. JSON jobs must match the
 [job schema](../../src/cuphoton/xbeam/schemas/job-v1.schema.json); unknown fields and malformed scalar values are
 rejected.
 
+Radio jobs accept file-backed, non-legacy VDIF recordings with two-bit
+quantization. Set frequency oversampling and decimation factors to one.
+These constraints apply to both JSON jobs and imported DiFX metadata;
+validation checks the job before recording I/O begins. The
+[compatibility profiles](conformance.md) describe supported sampling and
+timing combinations.
+
 A job declares:
 
 - UTC-like time as MJD plus decimal seconds of day;

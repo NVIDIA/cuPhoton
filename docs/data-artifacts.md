@@ -296,6 +296,21 @@ identifies its schema: version 1 describes linear-prediction matrices;
 version 2 describes iterative convergence and residuals. A merge requires
 matching methods and controls as well as matching data and preprocessing.
 
+## xBeam signals and radio visibilities
+
+Time-series inputs are aligned, uniformly sampled vectors from arrays or
+HDF5 datasets. Results contain cross-spectra, lag correlations, or both,
+with sample-grid and validity metadata. See the
+[time-series contract](xbeam/time-series.md) for dataset layout, lag
+conventions and independent result shards.
+
+Radio jobs describe station clocks, spectral bands, baselines and scan delay
+models. They read two-bit, non-legacy VDIF files and write native `xbeam-v1`
+or SWIN visibilities. Preserve timestamps, weights, baseline metadata and
+integrity records when moving or merging outputs. See the
+[radio data contract](xbeam/data-contract.md) and
+[sidecar guide](xbeam/sidecars.md).
+
 ## Run-directory hygiene
 
 Store generated run directories outside the checkout when practical and keep

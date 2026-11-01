@@ -7,7 +7,14 @@ Both workflows support NumPy on CPU and CuPy on CUDA 13. The CLI group is
 
 ## Install and try it
 
-Run a synthetic HDF5 example from the cuPhoton checkout:
+Use the current development sources for xBeam:
+
+```bash
+git clone https://github.com/NVIDIA/cuPhoton.git
+cd cuPhoton
+```
+
+Run a synthetic HDF5 example from that checkout:
 
 ```bash
 uv sync --locked --extra dev
@@ -30,8 +37,9 @@ lag conventions, validity masks and independent result shards.
 ## Correlate radio recordings
 
 A radio job describes station clocks, spectral bands, baseline products,
-scans and their delay models. Pass a normalized JSON job or supported DiFX
-`.input` metadata. Correlation reads each recording through a header index
+scans and their delay models. The radio adapter reads two-bit, non-legacy
+VDIF files. Pass a normalized JSON job or supported DiFX `.input` metadata.
+Correlation reads each recording through a header index
 (a sidecar). Build a sidecar for every recording first with
 `build-vdif-sidecar`, or pass `--assume-ordered` for recordings you have
 independently checked are in time order:
@@ -67,14 +75,26 @@ describes the optional reader policy and its additional input requirements.
 
 ## Use multiple GPUs
 
-Add `--devices 0,1` to a CuPy radio correlation command to divide its scan
-selection into contiguous time shards. Device numbers refer to the inherited
+Select a scan and integration window, then use `--devices` to divide that
+window into contiguous time shards:
+
+```bash
+uv run cuphoton xbeam correlate JOB --output OUTPUT --backend cupy \
+  --index-dir SIDECARS --scan SCAN --first-integration 0 \
+  --integration-count 100 --ingest-window-integrations 10 \
+  --max-read-bytes 1073741824 --devices 0,1
+```
+
+Time sharding requires `--scan`, `--first-integration` and
+`--integration-count` together. Device numbers refer to the inherited
 `CUDA_VISIBLE_DEVICES` allocation. Each worker enforces its own read limit.
 The coordinator validates and merges the completed parts; individual parts
 remain under `OUTPUT/shards/`.
 
-An external scheduler can launch tasks with `--shard-count` and
-`--shard-index`, then assemble their outputs with:
+An external scheduler can launch tasks with the same scan and integration
+window, a common `--shard-count`, and a different `--shard-index` and output
+directory for each task. Indices run from zero to `--shard-count - 1`.
+Assemble the completed outputs with:
 
 ```bash
 uv run cuphoton xbeam merge-shards JOB /shared/run/shard-* \
