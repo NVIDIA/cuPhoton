@@ -133,6 +133,12 @@ COMPONENTS = (
         parser_style="argparse",
         version_label="cuphoton xlens",
     ),
+    ComponentSpec(
+        "xbeam",
+        "cuphoton.xbeam",
+        "xBeam: Time-series correlation and VLBI visibility generation.",
+        version_label="cuphoton xbeam",
+    ),
 )
 
 COMPONENT_REGISTRY = {component.group: component for component in COMPONENTS}

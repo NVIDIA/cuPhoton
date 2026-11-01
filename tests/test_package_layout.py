@@ -26,6 +26,7 @@ COMPONENTS = (
     "xrep",
     "xray",
     "xlens",
+    "xbeam",
 )
 
 
@@ -54,6 +55,22 @@ def test_distribution_has_single_top_level_package() -> None:
 
 def test_distribution_and_package_share_version() -> None:
     assert metadata.version("cuphoton") == cuphoton.__version__
+
+
+def test_xbeam_umbrella_command_uses_shared_version(tmp_path: Path) -> None:
+    from cuphoton import xbeam
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-m", "cuphoton", "xbeam", "--version"],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert xbeam.__version__ == cuphoton.__version__
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"cuphoton xbeam {cuphoton.__version__}\n"
 
 
 def test_distribution_metadata_declares_supported_profiles() -> None:
@@ -123,6 +140,11 @@ def test_distribution_exposes_only_the_umbrella_console_script() -> None:
 
 def test_packaged_assets_are_available() -> None:
     assert (
+        resources.files("cuphoton.xbeam")
+        .joinpath("schemas/job-v1.schema.json")
+        .is_file()
+    )
+    assert (
         resources.files("cuphoton.xpois")
         .joinpath("assets/cuphoton-logo.png")
         .is_file()
@@ -157,6 +179,8 @@ def test_packaged_assets_are_available() -> None:
         ["xrep", "--help"],
         ["xray", "--help"],
         ["xlens", "--help"],
+        ["xbeam", "--help"],
+        ["xbeam", "--version"],
     ),
 )
 def test_cli_help_and_version_do_not_import_optional_gpu_packages(

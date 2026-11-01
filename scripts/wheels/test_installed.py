@@ -22,7 +22,7 @@ import sys
 import tempfile
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from importlib import metadata
+from importlib import metadata, resources
 from pathlib import Path
 
 GPU_DISTRIBUTIONS = (
@@ -100,9 +100,17 @@ def check_install(mode, components, report):
         for name in (
             "cuphoton",
             "cuphoton.ximage",
+            "cuphoton.xbeam",
             *(f"cuphoton.{name}" for name in components),
         )
     }
+    schema = resources.files("cuphoton.xbeam").joinpath(
+        "schemas/job-v1.schema.json"
+    )
+    require(
+        json.loads(schema.read_text())["title"],
+        "The xBeam job schema is missing or empty",
+    )
     for name in GPU_DISTRIBUTIONS:
         try:
             report["versions"][name] = metadata.version(name)
@@ -129,6 +137,8 @@ def check_install(mode, components, report):
     for argv in (
         ["--version"],
         ["ximage", "--help"],
+        ["xbeam", "--help"],
+        ["xbeam", "--version"],
         *([name, "--help"] for name in components),
     ):
         result = subprocess.run(

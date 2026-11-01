@@ -28,6 +28,7 @@ GROUPS = (
     "xrep",
     "xray",
     "xlens",
+    "xbeam",
 )
 PUBLIC_NAMESPACES = (
     "cuphoton.core",
@@ -39,6 +40,7 @@ PUBLIC_NAMESPACES = (
     "cuphoton.xrep",
     "cuphoton.xray",
     "cuphoton.xlens",
+    "cuphoton.xbeam",
 )
 
 

@@ -13,8 +13,8 @@ uv run cuphoton xpois --help
 uv run cuphoton xpois help fit-kernel
 ```
 
-Access each component through the fixed command groups: `xdr`, `xfit`, `ximage`, `xpois`,
-`xscan`, `xrep`, `xray`, and `xlens`.
+Access each component through the fixed command groups: `xdr`, `xfit`,
+`ximage`, `xpois`, `xscan`, `xrep`, `xray`, `xlens`, and `xbeam`.
 
 `cuphoton xlens quickstart --output-dir xlens-demo` creates invented
 measurements and an offline dashboard. Its `serve`, `export`, and `ask` commands
@@ -168,6 +168,21 @@ uv run cuphoton xray help detector-artifact-distributed
 ```
 
 See [xRay](xray/README.md).
+
+## xBeam: `cuphoton xbeam`
+
+`correlate-series` computes cross-spectra and lag correlations from HDF5
+signals described by a JSON configuration. `correlate` processes a radio
+job and its recordings; `inspect-vdif` and `build-vdif-sidecar` inspect and
+index recording headers. `merge-shards` validates and assembles radio
+outputs from independent time shards.
+
+```bash
+uv run cuphoton xbeam --help
+uv run cuphoton xbeam help correlate-series
+```
+
+See [xBeam](xbeam/README.md) for synthetic examples and input contracts.
 
 ## Configuration and output roots
 
