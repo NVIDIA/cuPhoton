@@ -910,6 +910,58 @@ def test_upload_workspace_cleanup_drains_streams_before_reraising(
     assert events == ["copy", "strip", ("release", workspace)]
 
 
+def test_posix_workspace_growth_failure_releases_its_lease_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Stream:
+        calls = 0
+
+        def synchronize(self) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("copy synchronization failed")
+
+    stream = Stream()
+    workspace = upload_resources._VdifUploadWorkspace(
+        0, 8, (None, None), (None, None), stream
+    )
+    spare = upload_resources._VdifUploadWorkspace(
+        0, 16, (None, None), (None, None), stream
+    )
+    monkeypatch.setattr(upload_resources, "_upload_workspaces", {0: [spare]})
+    monkeypatch.setattr(
+        upload_resources,
+        "_cached_upload_workspace_bytes",
+        spare.retained_bytes,
+    )
+    session = upload_resources._VdifPosixUploadState(
+        0, workspace=workspace, strip_events=[object(), None], chunk_index=3
+    )
+    xp = SimpleNamespace(
+        cuda=SimpleNamespace(Device=lambda: SimpleNamespace(id=0))
+    )
+
+    with pytest.raises(RuntimeError, match="copy synchronization failed"):
+        try:
+            upload_resources._prepare_posix_upload_session(
+                session, xp, 16, None
+            )
+        finally:
+            upload_resources._close_vdif_posix_upload_state(session)
+
+    cached = tuple(upload_resources._upload_workspaces[0])
+    cached_bytes = upload_resources._cached_upload_workspace_bytes
+    first = upload_resources._acquire_upload_workspace(xp, 0, 8)
+    second = upload_resources._acquire_upload_workspace(xp, 0, 8)
+    assert first is workspace
+    assert second is not first
+    assert sum(item is workspace for item in cached) == 1
+    assert cached_bytes == workspace.retained_bytes + spare.retained_bytes
+    assert session.workspace is None
+    assert session.strip_events is None
+    assert session.chunk_index == 0
+
+
 def test_vdif_ingest_reservation_blocks_independent_loaders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

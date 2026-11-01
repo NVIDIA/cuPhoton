@@ -955,15 +955,15 @@ def _prepare_posix_upload_session(
         raise RuntimeError("POSIX upload session belongs to another device")
     workspace = session.workspace
     if workspace is not None and workspace.capacity < required_bytes:
+        session.workspace = None
+        session.strip_events = None
+        session.chunk_index = 0
         _drain_and_release_upload_workspace(
             workspace,
             workspace.copy_stream,
             workspace.copy_stream,
         )
         workspace = None
-        session.workspace = None
-        session.strip_events = None
-        session.chunk_index = 0
     if workspace is None:
         workspace = _acquire_upload_workspace(
             xp,
