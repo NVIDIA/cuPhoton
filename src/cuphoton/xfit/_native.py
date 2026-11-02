@@ -110,6 +110,13 @@ def fit_gaussian_pipeline(
     images_array = cp.asarray(images)
     batch, height, width = _validate_images(images_array, mode)
     dtype = _floating_dtype(images_array)
+    if isinstance(model, StampDipoleModel) or (
+        isinstance(model, str) and model == "stamp"
+    ):
+        raise ValueError(
+            "native xFit does not support sampled-stamp models; "
+            "use backend='cupy'"
+        )
     if isinstance(model, str):
         if model != "gaussian":
             raise ValueError(

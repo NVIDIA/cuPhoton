@@ -77,12 +77,24 @@ def test_native_gzip_header_probe_handles_optional_fields(
 def test_native_deflate_alignment_preserves_payloads(
     native_cupy, monkeypatch
 ):
+    from cuphoton.core._native_imaging import extension
+
     cp = native_cupy
-    originals = [b"first payload" * 23, bytes(range(256)) * 3]
+    originals = [
+        b"first payload" * (tile + 1)
+        if tile % 2
+        else bytes(range(256)) * (tile + 1)
+        for tile in range(67)
+    ]
     payloads = [zlib.compress(value, wbits=-15) for value in originals]
-    offsets = np.asarray([1, len(payloads[0]) + 2], dtype=np.int64)
+    offsets = np.cumsum([1] + [len(value) + 1 for value in payloads[:-1]])
     raw = np.frombuffer(b"!" + b"!".join(payloads), dtype=np.uint8)
     lengths = np.asarray([len(value) for value in payloads], dtype=np.int64)
+
+    def forbid_per_tile_copy(*_args):
+        pytest.fail("native DEFLATE alignment must copy the batch together")
+
+    monkeypatch.setattr(extension(), "copy_array", forbid_per_tile_copy)
     stream = cp.cuda.Stream(non_blocking=True)
     with stream:
         device_raw = cp.asarray(raw)

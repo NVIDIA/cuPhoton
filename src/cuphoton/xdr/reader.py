@@ -715,9 +715,10 @@ class GpuCompImageReader:
             kvikio `CompatModeManager` setup per HDU). If `None`, a fresh
             loader is created for this call. Closure is deferred if
             failure leaves its I/O completion unknown.
-        postprocess : {"auto", "fused", "separate"}
+        postprocess : {"auto", "fused", "separate", "native"}
             ``auto`` (default) and ``fused`` restore FITS pixels in one
             kernel; ``separate`` uses individual restoration kernels.
+            ``native`` uses ahead-of-time CUDA pixel restoration.
         gzip_decoder : {"auto", "gzip", "deflate"}
             ``auto`` prefers native Gzip with aligned DEFLATE fallback.
             ``gzip`` requires native Gzip support; ``deflate`` selects

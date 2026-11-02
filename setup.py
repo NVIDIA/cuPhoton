@@ -64,7 +64,7 @@ if build_xfit or build_imaging:
     if build_imaging:
         # Use the same selected SDK, architectures and licensed CCCL headers
         # for the independent imaging extension.
-        imaging = xfit.get_extensions()[0]
+        imaging = xfit.get_extensions(require_cufft=True)[0]
         source = Path("src/cuphoton/core/src")
         imaging.name = "cuphoton.core._imaging_ext"
         imaging.sources = [str(source / "imaging_ext.cpp")]
@@ -83,8 +83,9 @@ if build_xfit or build_imaging:
             *(str(source / f"{unit}.cu") for unit in units),
         ]
         highest = int(imaging.architectures[-1].removesuffix("a"))
+        portable_ptx = tuple(sorted({75, highest}))
         imaging.cuda_units = tuple(
-            (unit, False, False, imaging.architectures, (75, highest))
+            (unit, False, False, imaging.architectures, portable_ptx)
             for unit in units
         )
         extensions.append(imaging)

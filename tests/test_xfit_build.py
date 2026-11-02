@@ -192,6 +192,37 @@ def test_native_and_xdr_builds_can_be_enabled_together(monkeypatch):
     assert captured["cmdclass"] == {"build_ext": build_command}
 
 
+@pytest.mark.parametrize("with_xfit", [False, True])
+def test_imaging_build_checks_cufft_and_default_ptx(
+    monkeypatch, tmp_path, with_xfit
+):
+    root = _toolkit(tmp_path)
+    captured = {}
+    monkeypatch.setenv("CUDA_HOME", str(root))
+    monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
+    monkeypatch.setenv("CUPHOTON_XDR_BUILD_EXT", "0")
+    monkeypatch.setenv("CUPHOTON_XRAY_BUILD_EXT", "0")
+    monkeypatch.setenv("CUPHOTON_XFIT_BUILD_EXT", str(int(with_xfit)))
+    monkeypatch.delenv("CUPHOTON_XFIT_CUDA_ARCHS", raising=False)
+    if with_xfit:
+        monkeypatch.delenv("CUPHOTON_IMAGING_BUILD_EXT", raising=False)
+    else:
+        monkeypatch.setenv("CUPHOTON_IMAGING_BUILD_EXT", "1")
+    monkeypatch.setattr(setuptools, "setup", lambda **kw: captured.update(kw))
+    with pytest.raises(RuntimeError, match="lacks cuFFT headers"):
+        runpy.run_path(str(_ROOT / "setup.py"))
+    (root / "include/cufft.h").touch()
+    with pytest.raises(RuntimeError, match=r"libcufft\.so\.12"):
+        runpy.run_path(str(_ROOT / "setup.py"))
+    (root / "lib64/libcufft.so.12").touch()
+    runpy.run_path(str(_ROOT / "setup.py"))
+    imaging = captured["ext_modules"][-1]
+    assert imaging.name == "cuphoton.core._imaging_ext"
+    assert ":libcufft.so.12" in imaging.libraries
+    assert len(captured["ext_modules"]) == 1 + with_xfit
+    assert all(unit[4] == (75,) for unit in imaging.cuda_units)
+
+
 def test_native_build_requires_versioned_runtime(monkeypatch, tmp_path):
     root = _toolkit(tmp_path)
     (root / "lib64/libcudart.so.13").unlink()

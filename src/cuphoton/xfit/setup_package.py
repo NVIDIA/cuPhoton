@@ -185,7 +185,7 @@ class CUDABuildExt(build_ext):
             extension.depends = previous_depends
 
 
-def get_extensions():
+def get_extensions(*, require_cufft=False):
     """Validate the SDK without loading CUDA or initializing a device."""
     if platform.system() != "Linux":
         raise RuntimeError("The native xFit extension supports Linux only")
@@ -258,11 +258,14 @@ def get_extensions():
         raise RuntimeError("Native xFit requires cuBLAS 13")
     if not (include / "cusolverDn.h").is_file():
         raise RuntimeError(f"CUDA_HOME={cuda_home} lacks cuSOLVER headers")
+    if require_cufft and not (include / "cufft.h").is_file():
+        raise RuntimeError(f"CUDA_HOME={cuda_home} lacks cuFFT headers")
     library_names = (
         "libcusolver.so.12",
         "libcudart.so.13",
         "libcublas.so.13",
         "libcublasLt.so.13",
+        *(("libcufft.so.12",) if require_cufft else ()),
     )
     libraries = next(
         (

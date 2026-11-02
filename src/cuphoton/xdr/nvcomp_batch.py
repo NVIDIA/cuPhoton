@@ -805,27 +805,8 @@ def _align_deflate_inputs(
         raise ValueError("aligned DEFLATE size exceeds the int64 range")
     aligned_offsets, total = _checked_output_offsets((lengths + 3) & ~3)
     packed = cp.empty(total, dtype=cp.uint8)
-    if native_preprocessing:
-        from cuphoton.core._native_imaging import extension
-
-        copy_array = extension().copy_array
-        stream = cp.cuda.get_current_stream()
-        try:
-            for source, destination, length in zip(
-                offsets, aligned_offsets, lengths, strict=True
-            ):
-                copy_array(
-                    d_concat[source : source + length],
-                    packed[destination : destination + length],
-                    stream.ptr,
-                )
-        except Exception:
-            stream.synchronize()
-            raise
-        return packed, aligned_offsets, (d_concat, packed)
-
     global _REPACK_DEFLATE_KERNEL
-    if _REPACK_DEFLATE_KERNEL is None:
+    if not native_preprocessing and _REPACK_DEFLATE_KERNEL is None:
         _REPACK_DEFLATE_KERNEL = cp.RawKernel(
             r"""
             extern "C" __global__ void align_deflate(
@@ -845,9 +826,17 @@ def _align_deflate_inputs(
     try:
         for table in (offsets, lengths, aligned_offsets):
             tables.append(cp.asarray(table))
-        _REPACK_DEFLATE_KERNEL(
-            (len(offsets),), (256,), (d_concat, *tables, packed)
-        )
+        if native_preprocessing:
+            from cuphoton.core._native_imaging import extension
+
+            extension().align_deflate(
+                d_concat, *tables, packed, cp.cuda.get_current_stream().ptr
+            )
+        else:
+            assert _REPACK_DEFLATE_KERNEL is not None
+            _REPACK_DEFLATE_KERNEL(
+                (len(offsets),), (256,), (d_concat, *tables, packed)
+            )
     except Exception:
         # Keep the input and metadata alive through any queued copies.
         cp.cuda.get_current_stream().synchronize()

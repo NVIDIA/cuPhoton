@@ -274,6 +274,7 @@ inline PyObject* translate_exception() {
 
 PyObject* copy_array(PyObject*, PyObject*);
 PyObject* gather_bytes(PyObject*, PyObject*);
+PyObject* align_deflate(PyObject*, PyObject*);
 PyObject* validate_mask(PyObject*, PyObject*);
 PyObject* selection_image(PyObject*, PyObject*);
 PyObject* selection_candidates(PyObject*, PyObject*);

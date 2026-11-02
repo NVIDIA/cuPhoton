@@ -251,7 +251,7 @@ def read_fits_images(
     rejects unsupported semantics or unavailable dependencies before reading
     pixels. All returned device arrays are ready on return.
 
-    ``xdr_options`` accepts ``postprocess`` (auto/fused/separate),
+    ``xdr_options`` accepts ``postprocess`` (auto/fused/separate/native),
     ``gzip_decoder`` (auto/gzip/deflate), and ``decompression_backend``
     (auto/cuda). Omitted choices use xDR's ``auto`` defaults. For example,
     ``xdr_options={"decompression_backend": "cuda"}`` requests CUDA kernels

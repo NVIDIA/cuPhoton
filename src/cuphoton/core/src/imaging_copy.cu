@@ -139,7 +139,99 @@ __global__ void selection_mean(
             : CUDART_NAN;
     }
 }
+
+__global__ void align_deflate_kernel(
+    const unsigned char* input,
+    const long long* offsets,
+    const long long* lengths,
+    const long long* output_offsets,
+    unsigned char* output,
+    long long input_size,
+    long long output_size,
+    int* invalid) {
+    const auto tile = blockIdx.x;
+    const long long source = offsets[tile];
+    const long long destination = output_offsets[tile];
+    const long long length = lengths[tile];
+    if (source < 0 || destination < 0 || length < 0 || source > input_size
+        || destination > output_size || length > input_size - source
+        || length > output_size - destination) {
+        if (threadIdx.x == 0) {
+            atomicOr(invalid, 1);
+        }
+        return;
+    }
+    for (long long index = threadIdx.x; index < length; index += blockDim.x) {
+        output[destination + index] = input[source + index];
+    }
+}
 }  // namespace
+
+PyObject* align_deflate(PyObject*, PyObject* arguments) {
+    PyObject *input_object, *offsets_object, *lengths_object,
+        *output_offsets_object, *output_object;
+    unsigned long long stream_value;
+    if (!PyArg_ParseTuple(
+            arguments,
+            "OOOOOK:align_deflate",
+            &input_object,
+            &offsets_object,
+            &lengths_object,
+            &output_offsets_object,
+            &output_object,
+            &stream_value)) {
+        return nullptr;
+    }
+    try {
+        Array input(input_object), offsets(offsets_object),
+            lengths(lengths_object), output_offsets(output_offsets_object),
+            output(output_object);
+        input.require('u', 1, 1);
+        offsets.require('i', 8, 1);
+        lengths.require('i', 8, 1);
+        output_offsets.require('i', 8, 1);
+        output.require('u', 1, 1, true);
+        if (offsets.size != lengths.size || offsets.size != output_offsets.size
+            || offsets.size > std::numeric_limits<int>::max()) {
+            throw std::invalid_argument("invalid DEFLATE alignment tables");
+        }
+        int invalid = 0;
+        if (offsets.size) {
+            Detached detached;
+            StreamGuard stream(stream_value);
+            input.wait(stream.stream);
+            offsets.wait(stream.stream);
+            lengths.wait(stream.stream);
+            output_offsets.wait(stream.stream);
+            output.wait(stream.stream);
+            DeviceBuffer<int> status(1);
+            check(cudaMemsetAsync(status.get(), 0, sizeof(int), stream.stream));
+            align_deflate_kernel<<<offsets.size, 256, 0, stream.stream>>>(
+                input.data<unsigned char>(),
+                offsets.data<long long>(),
+                lengths.data<long long>(),
+                output_offsets.data<long long>(),
+                output.data<unsigned char>(),
+                input.size,
+                output.size,
+                status.get());
+            check(cudaGetLastError());
+            check(cudaMemcpyAsync(
+                &invalid,
+                status.get(),
+                sizeof(int),
+                cudaMemcpyDeviceToHost,
+                stream.stream));
+            stream.finish();
+        }
+        if (invalid) {
+            throw std::invalid_argument("DEFLATE payload exceeds its buffer");
+        }
+        Py_RETURN_NONE;
+    } catch (...) {
+        return translate_exception();
+    }
+}
 
 PyObject* gather_bytes(PyObject*, PyObject* arguments) {
     PyObject *input_object, *indices_object, *output_object;
