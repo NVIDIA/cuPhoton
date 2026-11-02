@@ -140,6 +140,110 @@ def _fixture(cp, layout, authoritative):
     )
 
 
+def _record_front_launches(monkeypatch, *, execute):
+    calls = []
+
+    def install(name):
+        original = getattr(gpu_kernels, name)
+
+        def factory(*factory_args):
+            kernel = original(*factory_args) if execute else None
+
+            def launch(grid, block, arguments):
+                calls.append((name, factory_args, grid, block, arguments))
+                if execute:
+                    return kernel(grid, block, arguments)
+
+            return launch
+
+        monkeypatch.setattr(gpu_kernels, name, factory)
+
+    for name in (
+        "_front_kernel",
+        "_front_chunked_kernel",
+        "_front_packed_real_bands_kernel",
+        "_front_chunked_real_bands_kernel",
+        "_front_weight_kernel",
+    ):
+        install(name)
+    return calls
+
+
+def _assert_front_dispatch(calls, layout, scratch_oom, rotated, weights):
+    bands, rows = (2 if layout == "bands" else 1), 8
+    if scratch_oom:
+        name = (
+            "_front_packed_real_bands_kernel"
+            if layout == "bands"
+            else "_front_kernel"
+        )
+        assert len(calls) == 1
+        assert calls[0][0] == name
+        assert calls[0][2] == (
+            (rows, bands) if layout == "bands" else (rows,)
+        )
+        assert calls[0][3] == (256,)
+        assert calls[0][4][-1] is weights
+    else:
+        name = (
+            "_front_chunked_real_bands_kernel"
+            if layout == "bands"
+            else "_front_chunked_kernel"
+        )
+        assert [call[0] for call in calls] == [name, "_front_weight_kernel"]
+        assert calls[0][2:4] == ((rows, bands, 64), (256,))
+        counts = calls[0][4][-1]
+        assert counts.shape == (bands, rows, 64)
+        assert counts.dtype == np.dtype(np.uint32)
+        assert calls[1][2:4] == ((rows * bands,), (64,))
+        assert calls[1][4][0] is counts
+        assert tuple(int(value) for value in calls[1][4][1:3]) == (
+            64,
+            262144,
+        )
+        assert calls[1][4][-1] is weights
+    if layout != "bands":
+        assert calls[0][1] == (
+            (False, layout == "packed")
+            if scratch_oom
+            else (layout == "packed",)
+        )
+    assert calls[0][4][-2] is rotated
+
+
+@pytest.mark.parametrize(
+    ("layout", "authoritative"),
+    [
+        ("decoded", False),
+        ("decoded", True),
+        ("packed", False),
+        ("packed", True),
+        ("bands", False),
+    ],
+)
+@pytest.mark.parametrize("scratch_oom", [False, True])
+def test_front_dispatch_launches_chunked_kernels_and_weight_reducer_on_cpu(
+    monkeypatch, layout, authoritative, scratch_oom
+):
+    class Backend:
+        cuda = SimpleNamespace(
+            memory=SimpleNamespace(OutOfMemoryError=MemoryError)
+        )
+
+        def __getattr__(self, name):
+            return getattr(np, name)
+
+        def empty(self, shape, *, dtype):
+            if scratch_oom and dtype == np.uint32:
+                raise MemoryError("chunk count allocation failed")
+            return np.empty(shape, dtype=dtype)
+
+    fixture = _fixture(Backend(), layout, authoritative)
+    calls = _record_front_launches(monkeypatch, execute=False)
+    rotated, weights = fixture.invoke(**fixture.kwargs)
+    _assert_front_dispatch(calls, layout, scratch_oom, rotated, weights)
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize(
     ("layout", "authoritative"),
@@ -173,7 +277,9 @@ def test_chunked_front_preserves_bits_and_validity(
             return empty(shape, *args, **kwargs)
 
         monkeypatch.setattr(cp, "empty", fail_counts)
+    calls = _record_front_launches(monkeypatch, execute=True)
     actual, weights = fixture.invoke(**fixture.kwargs)
+    _assert_front_dispatch(calls, layout, scratch_oom, actual, weights)
     np.testing.assert_array_equal(
         cp.asnumpy(actual).view(np.uint32),
         cp.asnumpy(expected).view(np.uint32),
