@@ -30,12 +30,19 @@ def test_device_block_splits_into_exact_requested_tiles_on_cpu(rows):
 
     class Event:
         def record(self, stream):
-            pass
+            self.stream = stream
 
         def synchronize(self):
             pass
 
-    stream = SimpleNamespace(wait_event=lambda _: None)
+    class Stream:
+        def __init__(self):
+            self.waited = []
+
+        def wait_event(self, event):
+            self.waited.append(event)
+
+    stream = Stream()
     xp = SimpleNamespace(
         cuda=SimpleNamespace(
             Device=lambda _: nullcontext(),
@@ -55,9 +62,11 @@ def test_device_block_splits_into_exact_requested_tiles_on_cpu(rows):
     reader.pending = deque([owner])
     reader.requests = iter(())
     start = 0
-    for count in rows:
+    for index, count in enumerate(rows):
         tile = next(reader)
+        consumer = stream = Stream()
         tile.wait()
+        assert consumer.waited == [owner.ready]
         assert (tile.start, tile.stop) == (start, start + count)
         np.testing.assert_array_equal(
             tile["a"][0], values[start : start + count]
@@ -69,9 +78,18 @@ def test_device_block_splits_into_exact_requested_tiles_on_cpu(rows):
             tile["b"][0], -values[start : start + count]
         )
         assert tile["b"][1] is None
+        stream = Stream()
         tile.release()
         tile.release()
         assert tile.released
+        assert len(owner.tile_events) == index + 1
+        assert owner.tile_events[-1].stream is consumer
+        assert owner.remaining_tiles == len(rows) - index - 1
+        if owner.remaining_tiles:
+            assert owner.consumed is None
+        else:
+            assert stream.waited == owner.tile_events
+            assert owner.consumed.stream is stream
         start += count
     assert owner.remaining_tiles == 0
     assert owner.consumed is not None

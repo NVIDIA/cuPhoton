@@ -334,7 +334,7 @@ def test_read_error_drains_other_writers_before_return(tmp_path, monkeypatch):
     thread.start()
     try:
         assert failed.wait(3)
-        assert not finished.is_set()
+        assert not finished.wait(0.5)
     finally:
         release.set()
         thread.join(3)

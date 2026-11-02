@@ -180,6 +180,52 @@ def test_cufile_rejects_non_descriptor_driver_before_cuda(
         Hdf5Source(file, {"a": "a"}, io_backend="cufile")
 
 
+@pytest.mark.parametrize("replace_source", [False, True])
+def test_cufile_checks_source_identity_before_reads_on_cpu(
+    tmp_path, monkeypatch, replace_source
+):
+    from cuphoton.xbeam.runtime import transports
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def open(self, path):
+            self.fd = os.open(path, os.O_RDONLY)
+            return SimpleNamespace(fd=self.fd)
+
+        def __exit__(self, *args):
+            os.close(self.fd)
+
+        def read(self, *args, **kwargs):
+            pytest.fail("opening a source must not submit cuFile reads")
+
+    path, replacement = tmp_path / "root.h5", tmp_path / "replacement.h5"
+    path.write_bytes(b"original")
+    replacement.write_bytes(b"replacement")
+    stat = path.stat()
+    monkeypatch.setattr(transports, "CuFileSession", Session)
+    reader = CuFileBatches(
+        path, {}, {}, (), 4096, source_identity=(stat.st_dev, stat.st_ino)
+    )
+    reader.xp = SimpleNamespace(
+        cuda=SimpleNamespace(Device=lambda _: nullcontext())
+    )
+    reader.device = 0
+    if replace_source:
+        os.replace(replacement, path)
+    try:
+        expectation = (
+            pytest.raises(OSError, match="source changed before cuFile")
+            if replace_source
+            else nullcontext()
+        )
+        with expectation:
+            reader._open()
+    finally:
+        reader.close()
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize("prefetch", [False, True])
 def test_cufile_rejects_path_replacement_before_reading(
