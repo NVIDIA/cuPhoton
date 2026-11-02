@@ -274,3 +274,33 @@ def test_auto_requires_native_planner_before_reading(tmp_path, monkeypatch):
     result = fits_io.read_fits_images(path, [1], reader="auto")
     assert result.reader == "astropy"
     assert "unavailable" in result.fallback_reason
+
+
+@pytest.mark.parametrize("reader", ["xdr", "auto"])
+def test_native_postprocess_dependencies_checked_before_pixels(
+    tmp_path, monkeypatch, reader
+):
+    from cuphoton.core import _native_imaging
+
+    data = np.ones((7, 9), dtype="f4")
+    path = _write(tmp_path, data, compression="GZIP_2")
+    monkeypatch.setattr(fits_io, "_xdr_available", lambda: True)
+
+    def unavailable():
+        raise RuntimeError("libcufft.so.12: cannot open shared object file")
+
+    monkeypatch.setattr(_native_imaging, "extension", unavailable)
+    monkeypatch.setattr(
+        fits_io,
+        "_read_xdr",
+        lambda *a, **kw: pytest.fail("pixels read before dependency check"),
+    )
+    options = dict(reader=reader, xdr_options={"postprocess": "native"})
+    if reader == "xdr":
+        with pytest.raises(ValueError, match="Cannot use xDR: libcufft"):
+            fits_io.read_fits_images(path, [1], **options)
+    else:
+        result = fits_io.read_fits_images(path, [1], **options)
+        assert result.reader == "astropy"
+        assert "libcufft" in result.fallback_reason
+        np.testing.assert_array_equal(result.arrays[0], data)

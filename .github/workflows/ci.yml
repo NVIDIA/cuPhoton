@@ -232,7 +232,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xpois-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 6, len(cases)
+          assert len(cases) == 9, len(cases)
           assert not report.findall(".//skipped"), "xPois GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
@@ -288,6 +288,7 @@ jobs:
           tests/xfit/test_native.py
           tests/xpois/test_native_constant_kernel.py
           tests/xpois/test_native_selection.py
+          tests/xpois/test_native_workspace.py
           tests/xrep/test_native_backend.py
           tests/xdr/test_native_postprocess.py
       - name: Require native tests to execute

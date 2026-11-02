@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 import setuptools
+from setuptools.command.build_ext import build_ext
 
 _ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(
@@ -193,8 +194,9 @@ def test_native_and_xdr_builds_can_be_enabled_together(monkeypatch):
 
 
 @pytest.mark.parametrize("with_xfit", [False, True])
-def test_imaging_build_checks_cufft_and_default_ptx(
-    monkeypatch, tmp_path, with_xfit
+@pytest.mark.parametrize("architectures", [None, "100;120a"])
+def test_imaging_build_checks_cufft_targets_and_math_flags(
+    monkeypatch, tmp_path, with_xfit, architectures
 ):
     root = _toolkit(tmp_path)
     captured = {}
@@ -203,7 +205,10 @@ def test_imaging_build_checks_cufft_and_default_ptx(
     monkeypatch.setenv("CUPHOTON_XDR_BUILD_EXT", "0")
     monkeypatch.setenv("CUPHOTON_XRAY_BUILD_EXT", "0")
     monkeypatch.setenv("CUPHOTON_XFIT_BUILD_EXT", str(int(with_xfit)))
-    monkeypatch.delenv("CUPHOTON_XFIT_CUDA_ARCHS", raising=False)
+    if architectures is None:
+        monkeypatch.delenv("CUPHOTON_XFIT_CUDA_ARCHS", raising=False)
+    else:
+        monkeypatch.setenv("CUPHOTON_XFIT_CUDA_ARCHS", architectures)
     if with_xfit:
         monkeypatch.delenv("CUPHOTON_IMAGING_BUILD_EXT", raising=False)
     else:
@@ -220,7 +225,31 @@ def test_imaging_build_checks_cufft_and_default_ptx(
     assert imaging.name == "cuphoton.core._imaging_ext"
     assert ":libcufft.so.12" in imaging.libraries
     assert len(captured["ext_modules"]) == 1 + with_xfit
-    assert all(unit[4] == (75,) for unit in imaging.cuda_units)
+    command = captured["cmdclass"]["build_ext"](setuptools.Distribution())
+    command.build_temp = str(tmp_path / "build")
+    compiled = []
+    monkeypatch.setattr(command, "spawn", compiled.append)
+    monkeypatch.setattr(build_ext, "build_extension", lambda *_: None)
+    command.build_extension(imaging)
+    cubins = ("75",) if architectures is None else ("100", "120a")
+    ptx = ("75",) if architectures is None else ("75", "120")
+    expected = {
+        *(
+            f"--generate-code=arch=compute_{arch},code=sm_{arch}"
+            for arch in cubins
+        ),
+        *(
+            f"--generate-code=arch=compute_{arch},code=compute_{arch}"
+            for arch in ptx
+        ),
+    }
+    assert len(compiled) == 5
+    for arguments in compiled:
+        assert {
+            flag for flag in arguments if flag.startswith("--generate-code=")
+        } == expected
+        assert "--fmad=false" in arguments
+        assert "--ftz=false" in arguments
 
 
 def test_native_build_requires_versioned_runtime(monkeypatch, tmp_path):

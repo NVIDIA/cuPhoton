@@ -36,6 +36,12 @@ from .mapping import (
 
 def _backend_unavailable_message(backend: str) -> str:
     if backend == "native":
+        from cuphoton.core._native_imaging import extension
+
+        try:
+            extension()
+        except (ImportError, OSError, RuntimeError) as exc:
+            return str(exc)
         return (
             "Native imaging requires CuPy buffer support and an installation "
             "built with CUPHOTON_IMAGING_BUILD_EXT=1 and a CUDA 13 toolkit."

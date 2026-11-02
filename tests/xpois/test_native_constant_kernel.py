@@ -16,6 +16,7 @@ from scipy.signal import fftconvolve
 from cuphoton.xpois.ois import (
     GaussianBasisComponent,
     build_gaussian_polynomial_basis,
+    solve_constant_kernel,
     solve_constant_kernel_device,
 )
 
@@ -125,14 +126,14 @@ def test_native_constant_kernel_matches_cupy_with_chunk_tail(
     np.testing.assert_array_equal(cp.asnumpy(device_variance), variance)
 
 
+@pytest.mark.parametrize("kernel_shape", [(7, 9), (9, 5)])
 def test_native_convolution_matches_cupy_for_identical_kernel(
-    native_cupy: Any, monkeypatch: pytest.MonkeyPatch
+    native_cupy: Any, monkeypatch: pytest.MonkeyPatch, kernel_shape
 ) -> None:
     from cupyx.scipy.signal import fftconvolve as cupy_fftconvolve
 
     cp = native_cupy
     reference = np.random.default_rng(83).normal(size=(37, 43))
-    kernel_shape = (7, 9)
     components = [GaussianBasisComponent(1.3, 1)]
     basis, _ = build_gaussian_polynomial_basis(kernel_shape, components)
     # An asymmetric kernel exercises both products of the imaginary FFT
@@ -165,6 +166,8 @@ def test_native_convolution_matches_cupy_for_identical_kernel(
     boundary[margin_y:-margin_y, margin_x:-margin_x] = False
     expected_matched[boundary] = np.nan
     expected_residual[boundary] = np.nan
+    assert np.isfinite(cp.asnumpy(actual.matched)[~boundary]).all()
+    assert np.isnan(cp.asnumpy(actual.matched)[boundary]).all()
     assert actual.backend == "native"
     np.testing.assert_array_equal(
         cp.asnumpy(actual.matched), expected_matched
@@ -178,6 +181,7 @@ def test_native_convolution_matches_cupy_for_identical_kernel(
     "case,message",
     [
         ("variance", "variance must be strictly positive"),
+        ("zero_variance", "variance must be strictly positive"),
         ("nonbinary", "fit_mask array must contain only 0/1 values"),
         ("nonfinite", "fit_mask array must not contain NaN or inf values"),
         ("empty", "fit_mask must select at least one interior pixel"),
@@ -196,6 +200,8 @@ def test_native_constant_kernel_preserves_validation(
     mask = np.ones((25, 27))
     if case == "variance":
         variance[5, 5] = -1.0
+    elif case == "zero_variance":
+        variance[5, 5] = 0.0
     elif case == "nonbinary":
         mask[5, 5] = 0.5
     elif case == "nonfinite":
@@ -216,6 +222,26 @@ def test_native_constant_kernel_preserves_validation(
             fit_mask=mask_device,
             backend="native",
         )
+
+
+def test_host_native_constant_kernel_matches_cupy(native_cupy):
+    reference = np.random.default_rng(7).normal(size=(41, 43))
+    target = 1.1 * reference + 0.2
+    components = [GaussianBasisComponent(1.3, 0)]
+    expected = solve_constant_kernel(
+        reference, target, components, kernel_shape=(5, 5), backend="cupy"
+    )
+    actual = solve_constant_kernel(
+        reference, target, components, kernel_shape=(5, 5), backend="native"
+    )
+    assert actual.backend == "native"
+    assert isinstance(actual.kernel, np.ndarray)
+    np.testing.assert_allclose(
+        actual.kernel, expected.kernel, rtol=5e-12, atol=5e-12
+    )
+    np.testing.assert_allclose(
+        actual.residual, expected.residual, rtol=5e-12, atol=5e-12
+    )
 
 
 @pytest.mark.parametrize("kernel_shape", [(1, 1), (1, 3), (3, 1)])

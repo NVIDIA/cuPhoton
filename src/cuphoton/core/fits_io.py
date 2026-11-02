@@ -285,6 +285,17 @@ def read_fits_images(
     if reader != "astropy":
         if reason is None and not _xdr_available():
             reason = "xDR GPU dependencies or a CUDA device are unavailable"
+        if (
+            reason is None
+            and xdr_options.get("postprocess") == "native"
+            and any(info.compression is not None for info in infos)
+        ):
+            from cuphoton.core._native_imaging import extension
+
+            try:
+                extension()
+            except (ImportError, OSError, RuntimeError) as exc:
+                reason = str(exc)
         if reason is not None:
             if reader == "xdr":
                 raise ValueError(f"Cannot use xDR: {reason}")

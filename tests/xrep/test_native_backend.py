@@ -4,6 +4,11 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
+
 import numpy as np
 import pytest
 
@@ -42,6 +47,63 @@ def _disable_runtime_compilation(monkeypatch):
         "ReductionKernel",
     ):
         monkeypatch.setattr(cp, name, forbidden)
+
+
+def test_native_reprojection_without_compilation_in_fresh_process(tmp_path):
+    source = textwrap.dedent("""
+        import numpy as np
+        import cupy as cp
+        from cupy._core import core
+        from cupy.cuda import compiler
+        from cuphoton.xrep import (
+            BBox, ReprojectionSpec, prepare_reprojection,
+            reproject_array_device, reproject_masked_array,
+        )
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("CuPy runtime compilation attempted")
+
+        core.compile_with_cache = forbidden
+        compiler._compile_module_with_cache = forbidden
+        compiler.compile_using_nvrtc = forbidden
+        compiler.compile_using_nvcc = forbidden
+        compiler.nvrtc.compileProgram = forbidden
+        image = np.arange(13 * 15, dtype=np.float64).reshape(13, 15)
+        variance = np.ones_like(image)
+        mask = np.zeros_like(image, dtype=np.uint32)
+        mask[4, 4] = 8
+        for interpolation in ("bilinear", "lanczos3"):
+            spec = ReprojectionSpec(
+                mapping=lambda xy: xy + np.array([0.2, -0.3]),
+                output_bbox=BBox(0, 0, 15, 13), mapping_grid_step=4,
+                interpolation=interpolation,
+            )
+            prepared = prepare_reprojection(
+                spec, source_shape=image.shape, backend="native"
+            )
+            result = reproject_array_device(
+                cp.asarray(image), spec, source_variance=cp.asarray(variance),
+                source_mask=cp.asarray(mask), prepared=prepared,
+                backend="native",
+            )
+            assert result.backend == "native"
+            assert np.isfinite(cp.asnumpy(result.image)[3:-3, 3:-3]).all()
+            host = reproject_masked_array(
+                image, variance, mask, spec, backend="native"
+            )
+            assert host.image.shape == image.shape
+    """)
+    environment = os.environ.copy()
+    environment["CUPY_CACHE_DIR"] = str(tmp_path / "cupy-empty")
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not list((tmp_path / "cupy-empty").glob("**/*.cubin"))
 
 
 def test_native_mapping_preserves_cupy_rounding_without_compilation(

@@ -92,6 +92,30 @@ def _native_arguments(cp, stream):
     return owners, (1e-8, 1e-8, 1e-8, 1e-3, 10.0, 0.3, 100), (11, 15, 1)
 
 
+def _native_fit_arguments(cp, stream):
+    """Retain production inputs and outputs for direct capsule calls."""
+    from cuphoton.xfit import _native_ext as extension
+
+    model, _, images, initial = _fixture()
+    original = extension.fit
+    captured = []
+
+    def capture(*arguments):
+        captured.append(arguments[1:-1])
+        return original(*arguments)
+
+    with pytest.MonkeyPatch.context() as patch, stream:
+        patch.setattr(extension, "fit", capture)
+        fit_dipoles_device(
+            cp.asarray(images),
+            model=model,
+            initial=cp.asarray(initial),
+            backend="native",
+        )
+    (arguments,) = captured
+    return arguments
+
+
 def _gate_producer(stream):
     release, entered, expired = Event(), Event(), Event()
 
@@ -1096,6 +1120,76 @@ def test_repeated_calls_own_outputs_and_recover_after_invalid_configuration():
         release_workspace()
 
 
+@pytest.mark.parametrize("backend", ["cupy", "native"])
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        ("images", "images must be finite on included pixels"),
+        (
+            "variance",
+            "variance must be finite and positive on included pixels",
+        ),
+        ("mask", "mask must contain only finite values"),
+    ],
+)
+def test_native_rejects_invalid_inputs_like_cupy(backend, case, message):
+    _require_native()
+    model, _, images, initial = _fixture()
+    arrays = {
+        "images": images.copy(),
+        "variance": np.ones_like(images),
+        "mask": np.ones_like(images),
+    }
+    arrays[case][0, 3, 4] = 0.0 if case == "variance" else np.nan
+    with pytest.raises(ValueError) as error:
+        fit_dipoles(**arrays, model=model, initial=initial, backend=backend)
+    assert str(error.value) == message
+
+
+@pytest.mark.parametrize("overlap", ["outputs", "input"])
+def test_native_fit_rejects_overlapping_buffers(overlap):
+    cp = _require_native()
+    from cuphoton.xfit import _native_ext as extension
+
+    stream = cp.cuda.Stream(non_blocking=True)
+    inputs, outputs, settings, dimensions, split = _native_fit_arguments(
+        cp, stream
+    )
+    invalid_outputs = list(outputs)
+    if overlap == "outputs":
+        invalid_outputs[1] = outputs[2]
+        message = "native fit output buffers must not overlap"
+    else:
+        invalid_outputs[1] = inputs[0].reshape(dimensions[0], -1)
+        message = "native fit outputs must not overlap inputs"
+    # These pointers are valid, but aliasing must fail before capsule access.
+    with stream, pytest.raises(ValueError, match=message):
+        extension.fit(
+            None,
+            inputs,
+            tuple(invalid_outputs),
+            settings,
+            dimensions,
+            split,
+            stream.ptr,
+        )
+
+
+@pytest.mark.parametrize("weight", [-1.0, np.nan, np.inf])
+def test_native_fit_rejects_invalid_split_weights(weight):
+    extension = _require_extension()
+    with pytest.raises(ValueError, match="invalid native split weights"):
+        extension.fit(
+            None,
+            (None,) * 4,
+            (None,) * 29,
+            (1e-8, 1e-8, 1e-8, 1e-3, 10.0, 0.3, 100),
+            (1, 11, 15, 3),
+            (1.0, weight, 1.0),
+            0,
+        )
+
+
 def test_invalid_cuda_device_does_not_poison_the_next_native_fit():
     cp = _require_native()
     from cuphoton.xfit import _native_ext as extension
@@ -1104,19 +1198,19 @@ def test_invalid_cuda_device_does_not_poison_the_next_native_fit():
     stream = cp.cuda.Stream(non_blocking=True)
     workspace = extension.create_workspace(device)
     with stream:
-        baseline = _native_arguments(cp, stream)
-        retry = _native_arguments(cp, stream)
-        extension.run(workspace, *baseline, stream.ptr)
+        baseline = _native_fit_arguments(cp, stream)
+        retry = _native_fit_arguments(cp, stream)
+        extension.fit(workspace, *baseline, stream.ptr)
         expected = [
-            cp.asnumpy(baseline[0][index]) for index in (0, 3, 4, 5, 6)
+            cp.asnumpy(baseline[1][index]) for index in (8, 9, 4, 11, 10)
         ]
         with pytest.raises(RuntimeError, match="invalid device ordinal"):
             extension.create_workspace(2**31 - 1)
         # No intervening CuPy allocation/copy or last-error query may clear
         # the consumed runtime error before this immediate retry.
-        extension.run(workspace, *retry, stream.ptr)
-        for index, reference in zip((0, 3, 4, 5, 6), expected, strict=True):
-            actual = cp.asnumpy(retry[0][index])
+        extension.fit(workspace, *retry, stream.ptr)
+        for index, reference in zip((8, 9, 4, 11, 10), expected, strict=True):
+            actual = cp.asnumpy(retry[1][index])
             assert actual.dtype == reference.dtype
             assert actual.shape == reference.shape
             assert actual.tobytes() == reference.tobytes()
@@ -1184,10 +1278,10 @@ def test_shared_workspace_rejects_collision_and_can_be_reused():
 
     def run(arguments):
         with cp.cuda.Device(device), stream:
-            return extension.run(workspace, *arguments, stream.ptr)
+            return extension.fit(workspace, *arguments, stream.ptr)
 
-    run(_native_arguments(cp, stream))
-    arguments = [_native_arguments(cp, stream) for _ in range(2)]
+    run(_native_fit_arguments(cp, stream))
+    arguments = [_native_fit_arguments(cp, stream) for _ in range(2)]
     with ThreadPoolExecutor(max_workers=2) as executor:
         release, entered, expired = _gate_producer(stream)
         try:
@@ -1207,13 +1301,13 @@ def test_shared_workspace_rejects_collision_and_can_be_reused():
         winner = next(iter(pending))
         assert winner.result(timeout=30)["iterations"] > 0
     assert not expired.is_set()
-    successful = arguments[futures.index(winner)][0]
-    retry = _native_arguments(cp, stream)
+    successful = arguments[futures.index(winner)][1]
+    retry = _native_fit_arguments(cp, stream)
     run(retry)
     np.testing.assert_array_equal(
-        cp.asnumpy(retry[0][0]), cp.asnumpy(successful[0])
+        cp.asnumpy(retry[1][8]), cp.asnumpy(successful[8])
     )
-    assert bool(cp.isin(retry[0][4], cp.asarray([1, 2, 3])).all().item())
+    assert bool(cp.isin(retry[1][4], cp.asarray([1, 2, 3])).all().item())
 
 
 def _exercise_native_sigint():
@@ -1226,13 +1320,13 @@ def _exercise_native_sigint():
     device = int(cp.cuda.Device().id)
     stream = cp.cuda.Stream(non_blocking=True)
     workspace = extension.create_workspace(device)
-    warmup = _native_arguments(cp, stream)
+    warmup = _native_fit_arguments(cp, stream)
     with stream:
-        extension.run(workspace, *warmup, stream.ptr)
+        extension.fit(workspace, *warmup, stream.ptr)
     # If the sender wins the capsule race, release it and retry. A signal is
     # sent only after busy rejection proves the main thread owns native work.
     for _ in range(8):
-        arguments = [_native_arguments(cp, stream) for _ in range(2)]
+        arguments = [_native_fit_arguments(cp, stream) for _ in range(2)]
         release, entered, expired = _gate_producer(stream)
         begin, sent = Event(), Event()
         errors = []
@@ -1241,7 +1335,7 @@ def _exercise_native_sigint():
             try:
                 assert begin.wait(timeout=10)
                 with cp.cuda.Device(device), stream:
-                    extension.run(workspace, *other_arguments, stream.ptr)
+                    extension.fit(workspace, *other_arguments, stream.ptr)
             except RuntimeError as exc:
                 if "already in use" not in str(exc):
                     errors.append(exc)
@@ -1270,7 +1364,7 @@ def _exercise_native_sigint():
             with stream:
                 begin.set()
                 try:
-                    extension.run(workspace, *arguments[0], stream.ptr)
+                    extension.fit(workspace, *arguments[0], stream.ptr)
                 except KeyboardInterrupt:
                     interrupted = True
                 except RuntimeError as exc:
@@ -1285,13 +1379,13 @@ def _exercise_native_sigint():
         assert not errors, errors
         if interrupted:
             assert sent.is_set()
-            first = cp.asnumpy(arguments[0][0][0])
-            retry = _native_arguments(cp, stream)
+            first = cp.asnumpy(arguments[0][1][8])
+            retry = _native_fit_arguments(cp, stream)
             with stream:
-                extension.run(workspace, *retry, stream.ptr)
-            np.testing.assert_array_equal(cp.asnumpy(retry[0][0]), first)
+                extension.fit(workspace, *retry, stream.ptr)
+            np.testing.assert_array_equal(cp.asnumpy(retry[1][8]), first)
             assert bool(
-                cp.isin(retry[0][4], cp.asarray([1, 2, 3])).all().item()
+                cp.isin(retry[1][4], cp.asarray([1, 2, 3])).all().item()
             )
             return
     raise AssertionError("main thread never acquired the shared workspace")

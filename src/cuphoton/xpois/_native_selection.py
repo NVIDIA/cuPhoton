@@ -93,7 +93,7 @@ def build_mask(
     boxes = cp.asarray(np.asarray(stamps, dtype=np.int64))
     extension().stamp_mask(boxes, output, cp.cuda.get_current_stream().ptr)
     return AutoStampMaskResult(
-        mask=output,
+        mask=output if isinstance(image, cp.ndarray) else cp.asnumpy(output),
         centers=tuple((int(row.y), int(row.x)) for row in selected),
         stamps=stamps,
         scores=tuple(float(row.score) for row in selected),

@@ -18,14 +18,14 @@ def extension() -> Any:
     """Load the optional native imaging implementation."""
     from cuda.pathfinder import load_nvidia_dynamic_lib
 
-    for name in ("cudart", "cublas", "cusolver", "cufft"):
-        load_nvidia_dynamic_lib(name)
     try:
+        for name in ("cudart", "cublas", "cusolver", "cufft"):
+            load_nvidia_dynamic_lib(name)
         return importlib.import_module("cuphoton.core._imaging_ext")
-    except ImportError as exc:
+    except (ImportError, OSError, RuntimeError) as exc:
         raise RuntimeError(
             "Native imaging requires an installation built with "
-            "CUPHOTON_IMAGING_BUILD_EXT=1 and a CUDA 13 toolkit."
+            f"CUPHOTON_IMAGING_BUILD_EXT=1 and a CUDA 13 toolkit. {exc}"
         ) from exc
 
 

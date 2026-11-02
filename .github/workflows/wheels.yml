@@ -254,7 +254,7 @@ jobs:
         run: |
           env -u LD_LIBRARY_PATH -u CUDA_HOME -u CUDA_PATH \
             .wheel-venv/bin/python -I scripts/wheels/test_installed.py \
-            --mode gpu --components xfit xray --output xfit-wheel-gpu.json
+            --mode gpu --components xdr xfit xray --output xfit-wheel-gpu.json
       - name: Require all installed native xFit, imaging and xRay checks
         run: |
           .wheel-venv/bin/python -c '
@@ -270,6 +270,14 @@ jobs:
               "installed_xray_cpu_roots_and_dd_refinement",
               "installed_xray_gpu_roots",
               "native_imaging_without_cupy_compilation",
+              "forced_cpp_gzip_decompression",
+              "native_image_gzip1_gzip2_order_and_dtype",
+              "native_postprocess_gzip1_gzip2_order_and_dtype",
+              "nondefault_stream_outputs_and_retained_arrays",
+              "compressed_edge_tiles_and_roi",
+              "python_prefetch_with_native_planning",
+              "two_concurrent_native_readers",
+              "native_buffer_release",
           })
           if not report["ok"] or not required <= set(report["checks"]):
               raise SystemExit("Installed native xFit, imaging and xRay checks are incomplete")

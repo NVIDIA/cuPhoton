@@ -24,11 +24,11 @@ def _gpu():
 
 
 @pytest.mark.parametrize(
-    "max_stamps,dtype",
-    [(5, np.float64), (10000, np.float64), (5, np.float16)],
+    "max_stamps,dtype,background_filter_size",
+    [(5, np.float64, 7), (10000, np.float64, 13), (5, np.float16, 15)],
 )
 def test_native_selection_preserves_masks_order_and_scores(
-    max_stamps, dtype, monkeypatch
+    max_stamps, dtype, background_filter_size, monkeypatch
 ):
     cp = _gpu()
     rng = np.random.default_rng(823)
@@ -48,7 +48,7 @@ def test_native_selection_preserves_masks_order_and_scores(
     options = dict(
         stamp_size=11,
         max_stamps=max_stamps,
-        background_filter_size=7,
+        background_filter_size=background_filter_size,
         peak_filter_size=5,
         peak_percentile=97.0,
         min_separation=14,
@@ -99,3 +99,50 @@ def test_native_selection_rejects_nonbinary_masks():
         build_compact_source_stamp_mask(
             image, valid_mask=cp.asarray(mask), backend="native"
         )
+
+
+@pytest.mark.parametrize("device_input", [False, True])
+def test_native_selection_preserves_ties_and_input_array_module(device_input):
+    cp = _gpu()
+    image = np.zeros((41, 61))
+    image[20, 20] = image[20, 26] = 100.0
+    # Both secondary metrics round to ties, so the larger x wins.
+    image[20, 28] = 1e-8
+    options = dict(
+        stamp_size=5,
+        max_stamps=1,
+        background_filter_size=3,
+        peak_filter_size=3,
+    )
+    expected = build_compact_source_stamp_mask(cp.asarray(image), **options)
+    actual = build_compact_source_stamp_mask(
+        cp.asarray(image) if device_input else image,
+        backend="native",
+        **options,
+    )
+    assert actual.centers == expected.centers == ((20, 26),)
+    assert actual.min_separation == expected.min_separation == 2
+    assert isinstance(actual.mask, cp.ndarray if device_input else np.ndarray)
+    np.testing.assert_array_equal(
+        cp.asnumpy(actual.mask), cp.asnumpy(expected.mask)
+    )
+
+
+def test_native_selection_excludes_zero_variance_stamps():
+    cp = _gpu()
+    image = np.zeros((41, 61))
+    image[20, 20], image[20, 40] = 200.0, 100.0
+    variance = np.ones_like(image)
+    variance[20, 20] = 0.0
+    options = dict(
+        variance=cp.asarray(variance),
+        stamp_size=5,
+        max_stamps=1,
+        background_filter_size=3,
+        peak_filter_size=3,
+    )
+    expected = build_compact_source_stamp_mask(cp.asarray(image), **options)
+    actual = build_compact_source_stamp_mask(
+        cp.asarray(image), backend="native", **options
+    )
+    assert actual.centers == expected.centers == ((20, 40),)
