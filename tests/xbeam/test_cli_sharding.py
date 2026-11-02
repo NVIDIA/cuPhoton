@@ -94,6 +94,7 @@ def test_local_device_parser_and_worker_contract(tmp_path: Path) -> None:
 
     command = SimpleNamespace(
         max_read_bytes=1234,
+        upload_workers=4,
         vdif_io="posix",
         batch_blocks=32,
         ingest_window_integrations=5,
@@ -114,6 +115,8 @@ def test_local_device_parser_and_worker_contract(tmp_path: Path) -> None:
     assert "--shard-count=4" in arguments
     assert "--shard-index=2" in arguments
     assert "--integration-count=20" in arguments
+    assert "--upload-workers=4" in arguments
+    assert not any(a.startswith("--vdif-upload-workers") for a in arguments)
     assert "--assume-ordered" in arguments
 
 

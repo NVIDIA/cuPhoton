@@ -271,11 +271,16 @@ def batched_visibility_product(
     weight_b: Any = None,
     xp: Any,
     _validate_ranges: bool = True,
+    accumulate: bool = False,
 ) -> None:
     """Accumulate many complete integration groups in one GPU launch."""
 
-    if spectrum_a.dtype != xp.complex64 or spectrum_b.dtype != xp.complex64:
-        raise TypeError("batched visibility spectra must be complex64")
+    if spectrum_a.dtype not in (xp.complex64, xp.complex128) or (
+        spectrum_b.dtype != spectrum_a.dtype
+    ):
+        raise TypeError(
+            "batched visibility spectra must have matching complex dtypes"
+        )
     if spectrum_a.shape != spectrum_b.shape or spectrum_a.ndim != 2:
         raise ValueError(
             "batched visibility spectra must have matching matrices"
@@ -342,9 +347,9 @@ def batched_visibility_product(
             ("weight_offsets", weight_offsets, xp.int64),
         )
     }
-    if output.dtype != xp.complex64 or output.ndim != 1:
+    if output.dtype != spectrum_a.dtype or output.ndim != 1:
         raise TypeError(
-            "batched visibility output must be a complex64 vector"
+            "batched visibility output must be a vector matching the spectra"
         )
     if weight_sum.dtype != xp.float64 or weight_sum.ndim != 1:
         raise TypeError(
@@ -387,7 +392,9 @@ def batched_visibility_product(
     else:
         channel_tiles = (output_channels + threads - 1) // threads
         averaging_args = (np.int32(channels_to_average),)
-    _batched_visibility_kernel(averaging_mode)(
+    _batched_visibility_kernel(
+        averaging_mode, spectrum_a.dtype == xp.complex128, accumulate
+    )(
         (channel_tiles, group_count),
         (threads,),
         (
@@ -408,6 +415,91 @@ def batched_visibility_product(
             output,
             weight_sum,
         ),
+    )
+
+
+def accumulate_grouped_cross_power(
+    spectrum_a: Any,
+    spectrum_b: Any,
+    output: Any,
+    pair_index: int,
+    *,
+    cache: dict[Any, Any],
+    xp: Any,
+) -> None:
+    """Adapt grouped series spectra to the shared batched XMAC kernel.
+
+    Spectral normalization and sample-exposure semantics stay with callers.
+    Only the unnormalized cross-product sum is accumulated here.
+    """
+    if spectrum_a.ndim != 3 or spectrum_b.shape != spectrum_a.shape:
+        raise ValueError("grouped spectra must have matching 3D shapes")
+    groups, width, channels = map(int, spectrum_a.shape)
+    if min(groups, width, channels) <= 0:
+        raise ValueError("grouped spectra dimensions must be positive")
+    if (
+        output.ndim != 3
+        or output.shape[0] != groups
+        or output.shape[2] != channels
+        or not 0 <= pair_index < output.shape[1]
+        or not output.flags.c_contiguous
+    ):
+        raise ValueError("grouped output does not match spectra and pair")
+    if groups > 65_535:
+        for first in range(0, groups, 65_535):
+            stop = first + 65_535
+            accumulate_grouped_cross_power(
+                spectrum_a[first:stop],
+                spectrum_b[first:stop],
+                output[first:stop],
+                pair_index,
+                cache=cache,
+                xp=xp,
+            )
+        return
+    pair_count = int(output.shape[1])
+    key = (
+        int(xp.cuda.Device().id),
+        groups,
+        width,
+        channels,
+        pair_count,
+        pair_index,
+    )
+    if key not in cache:
+        starts = np.arange(groups, dtype=np.int64) * width
+        lengths = np.full(groups, width, dtype=np.int64)
+        offsets = (
+            np.arange(groups, dtype=np.int64) * pair_count + pair_index
+        ) * channels
+        cache[key] = (
+            prepare_visibility_index(starts, device_dtype=xp.int32, xp=xp),
+            prepare_visibility_index(lengths, device_dtype=xp.int32, xp=xp),
+            prepare_visibility_index(offsets, device_dtype=xp.int64, xp=xp),
+            prepare_visibility_index(
+                np.arange(groups, dtype=np.int64),
+                device_dtype=xp.int64,
+                xp=xp,
+            ),
+            xp.ones(groups * width, dtype=xp.float64),
+            xp.empty(groups, dtype=xp.float64),
+        )
+    starts, lengths, offsets, weight_offsets, weights, weight_sum = cache[key]
+    batched_visibility_product(
+        xp.ascontiguousarray(spectrum_a.reshape(groups * width, channels)),
+        xp.ascontiguousarray(spectrum_b.reshape(groups * width, channels)),
+        normalization=1.0,
+        channels_to_average=1,
+        weight_a=weights,
+        group_starts=starts,
+        group_lengths=lengths,
+        output_offsets=offsets,
+        weight_offsets=weight_offsets,
+        output=output.reshape(-1),
+        weight_sum=weight_sum,
+        xp=xp,
+        _validate_ranges=False,
+        accumulate=True,
     )
 
 

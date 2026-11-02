@@ -116,7 +116,7 @@ def _replay(run: Any, mode: str) -> dict[str, Any]:
                 subintegration_tiling=run.subintegration_tiling,
                 max_tile_subintegrations=run.max_tile_subintegrations,
                 tiling_manifest={},
-                vdif_upload_workers=run.vdif_upload_workers,
+                upload_workers=run.upload_workers,
                 ingest_manifest=run.ingest_manifest,
                 reservation_token=token,
                 ingest_replay=replay,
@@ -341,7 +341,7 @@ def _worker_body(
                         else None,
                         vdif_io="cufile",
                         start_gpu_warmup=False,
-                        vdif_upload_workers=arguments.workers_per_gpu,
+                        upload_workers=arguments.workers_per_gpu,
                         planning_cache=planning_cache,
                     )
                 with _phase(window_phases, "replay"):

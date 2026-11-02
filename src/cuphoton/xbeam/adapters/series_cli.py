@@ -11,7 +11,9 @@ from ..core.series import CorrelationSpec, correlate_series
 from .hdf5 import Hdf5Source, write_series_hdf5
 
 
-def run_series_config(config_path, output_path, backend="numpy"):
+def run_series_config(
+    config_path, output_path, backend="numpy", *, upload_workers=None
+):
     config_path = Path(config_path)
     config = json.loads(config_path.read_text())
     if not isinstance(config, dict):
@@ -23,7 +25,16 @@ def run_series_config(config_path, output_path, backend="numpy"):
         )
     if not isinstance(config["correlation"], dict):
         raise ValueError("correlation must be a JSON object")
-    unknown = set(config) - {"input", "datasets", "validity", "correlation"}
+    unknown = set(config) - {
+        "input",
+        "datasets",
+        "validity",
+        "correlation",
+        "io_backend",
+        "read_buffer_bytes",
+        "io_queue_depth",
+        "upload_workers",
+    }
     if unknown:
         raise ValueError(
             f"unknown series configuration keys: {sorted(unknown)}"
@@ -40,6 +51,16 @@ def run_series_config(config_path, output_path, backend="numpy"):
         source_path = config_path.parent / source_path
     spec = CorrelationSpec(**config["correlation"], backend=backend)
     with Hdf5Source(
-        source_path, config["datasets"], validity_paths=validity
+        source_path,
+        config["datasets"],
+        validity_paths=validity,
+        io_backend=config.get("io_backend", "posix"),
+        read_buffer_bytes=config.get("read_buffer_bytes", 64 * 1024**2),
+        io_queue_depth=config.get("io_queue_depth", 2),
+        upload_workers=(
+            config.get("upload_workers", "auto")
+            if upload_workers is None
+            else upload_workers
+        ),
     ) as source:
         write_series_hdf5(output_path, correlate_series(source, spec))

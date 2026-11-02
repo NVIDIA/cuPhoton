@@ -922,10 +922,10 @@ def test_posix_workspace_growth_failure_releases_its_lease_once(
                 raise RuntimeError("copy synchronization failed")
 
     stream = Stream()
-    workspace = upload_resources._VdifUploadWorkspace(
+    workspace = upload_resources.PinnedWorkspace(
         0, 8, (None, None), (None, None), stream
     )
-    spare = upload_resources._VdifUploadWorkspace(
+    spare = upload_resources.PinnedWorkspace(
         0, 16, (None, None), (None, None), stream
     )
     monkeypatch.setattr(upload_resources, "_upload_workspaces", {0: [spare]})

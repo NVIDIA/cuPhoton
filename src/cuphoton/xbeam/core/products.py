@@ -33,6 +33,28 @@ def cross_power(spectrum_a: Any, spectrum_b: Any, xp: Any) -> Any:
     return xp.asarray(spectrum_a) * xp.conj(xp.asarray(spectrum_b))
 
 
+def accumulate_cross_power(
+    spectrum_a: Any,
+    spectrum_b: Any,
+    output: Any,
+    pair_index: int,
+    *,
+    xp: Any,
+    cache: dict[Any, Any],
+) -> None:
+    """Sum windowed cross spectra through the shared backend primitives."""
+    if xp.__name__ == "cupy":
+        from .gpu_products import accumulate_grouped_cross_power
+
+        accumulate_grouped_cross_power(
+            spectrum_a, spectrum_b, output, pair_index, cache=cache, xp=xp
+        )
+    else:
+        output[:, pair_index] += xp.sum(
+            cross_power(spectrum_a, spectrum_b, xp), axis=1
+        )
+
+
 def accumulate_products(
     products: Any, block_weights: Any, xp: Any
 ) -> tuple[Any, Any]:

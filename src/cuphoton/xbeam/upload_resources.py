@@ -36,6 +36,22 @@ from .kernel_compilation import (
     _vdif_ingest_kernel,
 )
 from .profiling import host_timing_enabled, nvtx_range, record_host_interval
+from .runtime.buffers import (
+    CUFILE_DEVICE_ALIGNMENT,
+    PinnedWorkspace,
+    RegisteredWorkspace,
+    aligned_device_buffer,
+    copy_bytes,
+    pinned_bytes,
+)
+from .runtime.completion import (
+    join_submissions as _join_cufile_submissions,
+)
+from .runtime.completion import (
+    record_completion,
+    wait_for_host,
+)
+from .runtime.posix_io import ShortReadError, read_exact_into
 from .runtime_tuning import cufile_strip_stream, vdif_upload_staging_slots
 
 VDIF_TRANSFER_CHUNK_BYTES = 64 * 1024 * 1024
@@ -43,7 +59,7 @@ _PINNED_WORKSPACE_GRANULARITY = 4 * 1024 * 1024
 
 
 # Keep registered addresses, read ranges, and footprint accounting aligned.
-_CUFILE_IO_ALIGNMENT = 64 * 1024
+_CUFILE_IO_ALIGNMENT = CUFILE_DEVICE_ALIGNMENT
 _MAX_PINNED_UPLOAD_SLOT_BYTES = 64 * 1024 * 1024
 _MAX_CUFILE_UPLOAD_SLOT_BYTES = 64 * 1024 * 1024
 _MAX_CACHED_UPLOAD_WORKSPACE_BYTES = 1 * 1024 * 1024 * 1024
@@ -81,24 +97,10 @@ def _global_cufile_read_token() -> Iterator[None]:
         os.write(return_fd, token)
 
 
-@dataclass(slots=True)
-class _VdifUploadWorkspace:
-    device_identifier: int
-    capacity: int
-    pinned: tuple[Any, Any]
-    staging: tuple[Any, Any]
-    copy_stream: Any
-
-    @property
-    def retained_bytes(self) -> int:
-        # Two host and two device buffers.
-        return 4 * self.capacity
-
-
 _upload_workspace_lock = Lock()
 
 
-_upload_workspaces: dict[int, list[_VdifUploadWorkspace]] = {}
+_upload_workspaces: dict[int, list[PinnedWorkspace]] = {}
 
 
 _cached_upload_workspace_bytes = 0
@@ -109,22 +111,9 @@ class _VdifPosixUploadState:
     """One call's double-buffered POSIX upload state."""
 
     device_identifier: int
-    workspace: _VdifUploadWorkspace | None = None
+    workspace: PinnedWorkspace | None = None
     strip_events: list[Any | None] | None = None
     chunk_index: int = 0
-
-
-@dataclass(slots=True)
-class _CuFileRegisteredWorkspace:
-    device_identifier: int
-    capacity: int
-    allocations: tuple[Any, ...]
-    buffers: tuple[Any, ...]
-    session: CuFileSession
-
-    @property
-    def retained_bytes(self) -> int:
-        return sum(int(allocation.nbytes) for allocation in self.allocations)
 
 
 @dataclass(slots=True)
@@ -132,7 +121,7 @@ class _VdifCuFileUploadState:
     """Persistent registered resources for one cuFile upload worker."""
 
     device_identifier: int
-    workspace: _CuFileRegisteredWorkspace | None = None
+    workspace: RegisteredWorkspace | None = None
     pinned_mappings: tuple[Any, ...] | None = None
     device_mappings: tuple[Any, ...] | None = None
     mapping_capacity: int = 0
@@ -149,47 +138,6 @@ class _VdifCuFileUploadState:
     defer_task_completion: bool = False
     task_completion: Future[None] | None = None
     read_only: bool = False
-
-
-def _join_cufile_submissions(submissions: list[Any]) -> Future[None]:
-    """Complete after every host submission, retaining the first failure.
-
-    No callback waits: it may run on the only CUDA submission thread.
-    GPU buffer lifetime is separately protected by the raw-slot events.
-    """
-
-    result: Future[None] = Future()
-    remaining = len(submissions)
-    lock = Lock()
-    error: BaseException | None = None
-    if not remaining:
-        result.set_result(None)
-        return result
-
-    def completed(submission: Any) -> None:
-        nonlocal remaining, error
-        failure: BaseException | None
-        try:
-            submission.result()
-        except BaseException as exc:
-            failure = exc
-        else:
-            failure = None
-        with lock:
-            if error is None:
-                error = failure
-            remaining -= 1
-            last = remaining == 0
-        # User callbacks can take other locks; never invoke them under ours.
-        if last:
-            if error is None:
-                result.set_result(None)
-            else:
-                result.set_exception(error)
-
-    for submission in submissions:
-        submission.add_done_callback(completed)
-    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +248,7 @@ _unreserved_vdif_ingest_users: dict[int, int] = {}
 _cufile_workspace_lock = Lock()
 
 
-_cufile_workspaces: dict[int, list[_CuFileRegisteredWorkspace]] = {}
+_cufile_workspaces: dict[int, list[RegisteredWorkspace]] = {}
 
 
 _cached_cufile_workspace_bytes = 0
@@ -330,7 +278,7 @@ def clear_cached_vdif_upload_workspaces(device_identifier: int) -> None:
 
 
 def _close_cufile_workspace(
-    workspace: _CuFileRegisteredWorkspace, *, best_effort: bool = False
+    workspace: RegisteredWorkspace, *, best_effort: bool = False
 ) -> None:
     try:
         with workspace.buffers[0].device:
@@ -385,8 +333,8 @@ def _retain_exact_cufile_workspaces(
     """Retain exact-size idle workspaces and return resident bytes."""
 
     global _cached_cufile_workspace_bytes
-    kept: list[_CuFileRegisteredWorkspace] = []
-    removed: list[_CuFileRegisteredWorkspace] = []
+    kept: list[RegisteredWorkspace] = []
+    removed: list[RegisteredWorkspace] = []
     with _cufile_workspace_lock:
         for workspace in _cufile_workspaces.get(device_identifier, []):
             if (
@@ -633,22 +581,12 @@ def _align_up(value: int, alignment: int) -> int:
     return -(-value // alignment) * alignment
 
 
-def _aligned_device_buffer(
-    xp: Any, size: int, alignment: int
-) -> tuple[Any, Any]:
-    """Return an allocation plus an aligned contiguous byte view."""
-
-    allocation = xp.empty(size + alignment - 1, dtype=xp.uint8)
-    offset = (-int(allocation.data.ptr)) % alignment
-    return allocation, allocation[offset : offset + size]
-
-
 def _acquire_cufile_workspace(
     xp: Any,
     device_identifier: int,
     required_bytes: int,
     slot_count: int,
-) -> _CuFileRegisteredWorkspace:
+) -> RegisteredWorkspace:
     """Lease persistent buffers and their synchronous cuFile session."""
 
     global _cached_cufile_workspace_bytes
@@ -672,7 +610,7 @@ def _acquire_cufile_workspace(
     with nvtx_range("xbeam:vdif-cufile-workspace-create"):
         with nvtx_range("xbeam:cufile-workspace-buffer-allocate"):
             allocations_and_buffers = [
-                _aligned_device_buffer(
+                aligned_device_buffer(
                     xp, required_bytes, _CUFILE_IO_ALIGNMENT
                 )
                 for _ in range(slot_count)
@@ -690,7 +628,7 @@ def _acquire_cufile_workspace(
         except BaseException:
             session.close()
             raise
-    return _CuFileRegisteredWorkspace(
+    return RegisteredWorkspace(
         device_identifier=device_identifier,
         capacity=required_bytes,
         allocations=allocations,
@@ -700,7 +638,7 @@ def _acquire_cufile_workspace(
 
 
 def _release_cufile_workspace(
-    workspace: _CuFileRegisteredWorkspace,
+    workspace: RegisteredWorkspace,
     *,
     reusable: bool,
     best_effort: bool = False,
@@ -775,11 +713,8 @@ def _prepare_cufile_upload_state(
             state.stream.synchronize()
             if state.mapping_stream is not None:
                 state.mapping_stream.synchronize()
-        import cupyx
-
         state.pinned_mappings = tuple(
-            cupyx.empty_pinned(mapping_bytes, dtype=np.uint8)
-            for _ in range(slot_count)
+            pinned_bytes(mapping_bytes) for _ in range(slot_count)
         )
         state.device_mappings = tuple(
             xp.empty(mapping_bytes, dtype=xp.uint8) for _ in range(slot_count)
@@ -859,7 +794,7 @@ def _acquire_upload_workspace(
     xp: Any,
     device_identifier: int,
     required_bytes: int,
-) -> _VdifUploadWorkspace:
+) -> PinnedWorkspace:
     """Lease reusable pinned/device buffers and a nonblocking copy stream."""
 
     global _cached_upload_workspace_bytes
@@ -879,18 +814,16 @@ def _acquire_upload_workspace(
             _cached_upload_workspace_bytes -= workspace.retained_bytes
             return workspace
 
-    import cupyx
-
     capacity = _align_up(required_bytes, _PINNED_WORKSPACE_GRANULARITY)
     pinned = (
-        cupyx.empty_pinned(capacity, dtype=np.uint8),
-        cupyx.empty_pinned(capacity, dtype=np.uint8),
+        pinned_bytes(capacity),
+        pinned_bytes(capacity),
     )
     staging = (
         xp.empty(capacity, dtype=xp.uint8),
         xp.empty(capacity, dtype=xp.uint8),
     )
-    return _VdifUploadWorkspace(
+    return PinnedWorkspace(
         device_identifier=device_identifier,
         capacity=capacity,
         pinned=pinned,
@@ -899,7 +832,7 @@ def _acquire_upload_workspace(
     )
 
 
-def _release_upload_workspace(workspace: _VdifUploadWorkspace) -> None:
+def _release_upload_workspace(workspace: PinnedWorkspace) -> None:
     global _cached_upload_workspace_bytes
     with _upload_workspace_lock:
         candidates = _upload_workspaces.setdefault(
@@ -916,7 +849,7 @@ def _release_upload_workspace(workspace: _VdifUploadWorkspace) -> None:
 
 
 def _drain_and_release_upload_workspace(
-    workspace: _VdifUploadWorkspace,
+    workspace: PinnedWorkspace,
     copy_stream: Any,
     strip_stream: Any,
 ) -> None:
@@ -947,7 +880,7 @@ def _prepare_posix_upload_session(
     xp: Any,
     required_bytes: int,
     ready_event: Any,
-) -> _VdifUploadWorkspace:
+) -> PinnedWorkspace:
     """Ensure a persistent worker session can stage the next task."""
 
     device_identifier = int(xp.cuda.Device().id)
@@ -1076,11 +1009,10 @@ def _copy_cufile_mapping_to_device(
 
     with xp.cuda.Device(device_identifier), stream:
         with nvtx_range("xbeam:vdif-cufile-mapping-h2d"):
-            device_mapping[:mapping_bytes].set(
-                host_mapping[:mapping_bytes], stream=stream
+            copy_bytes(
+                xp, device_mapping, host_mapping, mapping_bytes, stream
             )
-        completed = xp.cuda.Event(disable_timing=True)
-        completed.record(stream)
+        completed = record_completion(xp, stream)
     return completed
 
 
@@ -1181,8 +1113,7 @@ def _submit_cufile_strip(
                             output,
                         ),
                     )
-        completed = xp.cuda.Event(disable_timing=True)
-        completed.record(stream)
+        completed = record_completion(xp, stream)
     if progresses is not None:
         for progress, destinations in zip(
             progresses, published_destinations, strict=True
@@ -2418,7 +2349,6 @@ def _load_vdif_payload_plans(
                         "VDIF source changed after ingest planning: "
                         f"{path_text}"
                     )
-                stream_file.seek((first_frame + read_start) * frame_size)
                 while frame_cursor < read_stop:
                     frame_stop = min(read_stop, frame_cursor + chunk_frames)
                     frame_count = frame_stop - frame_cursor
@@ -2427,17 +2357,21 @@ def _load_vdif_payload_plans(
                     host_reuse_event = strip_events[slot]
                     if host_reuse_event is not None:
                         with nvtx_range("xbeam:vdif-upload-slot-reuse-wait"):
-                            host_reuse_event.synchronize()
+                            wait_for_host(host_reuse_event)
                     host_buffer = pinned[slot]
-                    view = memoryview(host_buffer)[:raw_bytes]
                     with nvtx_range("xbeam:vdif-posix-read"):
-                        received = stream_file.readinto(view)
-                    if received != raw_bytes:
-                        raise OSError(
-                            "VDIF file changed during GPU ingest: "
-                            f"expected {raw_bytes} bytes, got {received}"
-                        )
-                    del view
+                        try:
+                            read_exact_into(
+                                stream_file.fileno(),
+                                memoryview(host_buffer)[:raw_bytes],
+                                (first_frame + frame_cursor) * frame_size,
+                            )
+                        except ShortReadError as error:
+                            raise OSError(
+                                "VDIF file changed during GPU ingest: "
+                                f"expected {raw_bytes} bytes, "
+                                f"got {error.received}"
+                            ) from error
                     streaming_mapping = (
                         _streaming_vdif_mappings(
                             plans,
@@ -2513,8 +2447,12 @@ def _load_vdif_payload_plans(
                         # The host buffer is free after this copy, but the
                         # device staging slot is not free until its preceding
                         # strip/scatter kernels have stopped reading it.
-                        staging[slot][:transfer_bytes].set(
-                            host_buffer[:transfer_bytes], stream=copy_stream
+                        copy_bytes(
+                            xp,
+                            staging[slot],
+                            host_buffer,
+                            transfer_bytes,
+                            copy_stream,
                         )
                     with strip_stream:
                         payload_words = payload_bytes // 8

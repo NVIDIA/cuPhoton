@@ -213,6 +213,13 @@ class XBeamCommand(InvariantAwareCommand):
         self._out(json.dumps(payload, indent=2, sort_keys=True))
 
 
+class _UploadWorkersArg(StringInvariant):
+    _arg: str | tuple[str, ...] = "--upload-workers"
+    _help = "Maximum input read/upload workers: auto or 1 through 16."
+    _mandatory = False
+    _default: str | None = None
+
+
 class CorrelateCommand(XBeamCommand):
     """Correlate a normalized JSON or supported DiFX job."""
 
@@ -235,7 +242,7 @@ class CorrelateCommand(XBeamCommand):
     autocorrelation_mode = AutocorrelationMode.AVERAGE.value
     subintegration_tiling = "auto"
     max_tile_subintegrations: int | None = None
-    vdif_upload_workers = "auto"
+    upload_workers = "auto"
 
     class JobArg(ExistingPathInvariant):
         _help = "Normalized JSON job or supported .input job."
@@ -364,13 +371,8 @@ class CorrelateCommand(XBeamCommand):
         _mandatory = False
         _default = None
 
-    class VdifUploadWorkersArg(StringInvariant):
-        _arg = "--vdif-upload-workers"
-        _help = (
-            "Concurrent VDIF file upload workers: auto or 1 through 16. "
-            "[default: %default]"
-        )
-        _mandatory = False
+    class UploadWorkersArg(_UploadWorkersArg):
+        _arg = ("--upload-workers", "--vdif-upload-workers")
         _default = "auto"
 
     def run(self) -> None:
@@ -378,7 +380,7 @@ class CorrelateCommand(XBeamCommand):
 
     def _run_correlation(self) -> None:
         resolve_execution_policy(
-            self.vdif_io, upload_workers=self.vdif_upload_workers
+            self.vdif_io, upload_workers=self.upload_workers
         )
         job_path = Path(self.job).expanduser()
         output = self.output_path.expanduser()
@@ -475,7 +477,7 @@ class CorrelateCommand(XBeamCommand):
             autocorrelation_mode=self.autocorrelation_mode,
             subintegration_tiling=self.subintegration_tiling,
             max_tile_subintegrations=self.max_tile_subintegrations,
-            vdif_upload_workers=self.vdif_upload_workers,
+            upload_workers=self.upload_workers,
             planning_cache=planning_cache,
             recovery_plan_window=(window if len(windows) > 1 else None),
         )
@@ -490,7 +492,7 @@ class CorrelateCommand(XBeamCommand):
             "profile": profile,
             "vdif_io": self.vdif_io,
             "autocorrelation_mode": self.autocorrelation_mode,
-            "vdif_upload_workers": self.vdif_upload_workers,
+            "upload_workers": self.upload_workers,
             "window": (
                 {
                     "scan_id": window.scan_id,
@@ -533,7 +535,7 @@ class CorrelateCommand(XBeamCommand):
                 autocorrelation_mode=self.autocorrelation_mode,
                 subintegration_tiling=self.subintegration_tiling,
                 max_tile_subintegrations=self.max_tile_subintegrations,
-                vdif_upload_workers=self.vdif_upload_workers,
+                upload_workers=self.upload_workers,
                 planning_cache=planning_cache,
                 # The first preparation compiles recovery across the parent
                 # shard. Every bounded ingest window can therefore reuse the
@@ -717,8 +719,7 @@ def _local_worker_argv(
         ),
         "--subintegration-tiling="
         + getattr(command, "subintegration_tiling", "auto"),
-        "--vdif-upload-workers="
-        + str(getattr(command, "vdif_upload_workers", "auto")),
+        "--upload-workers=" + str(getattr(command, "upload_workers", "auto")),
     ]
     if command.batch_blocks is not None:
         arguments.append(f"--batch-blocks={command.batch_blocks}")
@@ -867,7 +868,7 @@ def _run_local_shards(
         raise FileExistsError(f"output directory already exists: {output}")
     policy = resolve_execution_policy(
         command.vdif_io,
-        upload_workers=getattr(command, "vdif_upload_workers", None),
+        upload_workers=getattr(command, "upload_workers", None),
     )
     _prepare_local_shard_indexes(command, job)
     parts = output / "shards"
@@ -889,9 +890,7 @@ def _run_local_shards(
             "autocorrelation_mode",
             AutocorrelationMode.AVERAGE.value,
         ),
-        "vdif_upload_workers": getattr(
-            command, "vdif_upload_workers", "auto"
-        ),
+        "upload_workers": getattr(command, "upload_workers", "auto"),
         "shard": (
             distributed_shard.to_dict()
             if distributed_shard is not None
@@ -1028,6 +1027,7 @@ class CorrelateSeriesCommand(XBeamCommand):
     config: str
     output_path: Path
     backend = "numpy"
+    upload_workers: str | None = None
 
     class ConfigArg(ExistingPathInvariant):
         _help = "Series JSON configuration."
@@ -1045,11 +1045,18 @@ class CorrelateSeriesCommand(XBeamCommand):
         _mandatory = False
         _default = "numpy"
 
+    class UploadWorkersArg(_UploadWorkersArg):
+        pass
+
     def run(self):
         from .adapters.series_cli import run_series_config
 
         self._call(
-            run_series_config, self.config, self.output_path, self.backend
+            run_series_config,
+            self.config,
+            self.output_path,
+            self.backend,
+            upload_workers=self.upload_workers,
         )
 
 

@@ -21,7 +21,9 @@ from cuphoton.xbeam.adapters.vdif.recording import (
     VdifPayloadFilePlan,
     VdifPayloadPlan,
 )
+from cuphoton.xbeam.runtime.batches import WorkQueue
 from cuphoton.xbeam.runtime.policy import current_policy
+from cuphoton.xbeam.runtime.uploads import bounded_upload_workers
 
 from .frontier_planning import gpu_frontier_bounds
 from .profiling import nvtx_range
@@ -49,9 +51,6 @@ from .upload_resources import (
 )
 
 _DEFAULT_VDIF_UPLOAD_WORKERS = 4
-
-
-_MAX_VDIF_UPLOAD_WORKERS = 16
 
 
 _PAYLOAD_PROGRESS_WATCHDOG_SECONDS = 0.001
@@ -243,51 +242,14 @@ def _frontier_staging_plan(
     return workers, raw, mapping, device, pinned
 
 
-class _FrontierUploadQueue:
-    """Dynamically balance a frontier-prioritized upload sequence."""
+class _FrontierUploadQueue(WorkQueue[_FrontierUploadTask]):
+    """Apply frame-frontier admission ordering to generic task dispatch."""
 
     def __init__(self, tasks: Sequence[_FrontierUploadTask]) -> None:
         indices = [task.frontier_index for task in tasks]
         if indices != sorted(indices):
             raise ValueError("upload tasks must be ordered by frontier")
-        self._tasks = deque(tasks)
-        self._lock = Lock()
-        self._active = 0
-        self._failed = False
-
-    def take(self) -> _FrontierUploadTask | None:
-        with self._lock:
-            if self._failed or not self._tasks:
-                return None
-            self._active += 1
-            return self._tasks.popleft()
-
-    def finish(
-        self, error: BaseException | None
-    ) -> list[_FrontierUploadTask]:
-        with self._lock:
-            if self._active <= 0:
-                raise RuntimeError(
-                    "frontier upload queue completion underflow"
-                )
-            self._active -= 1
-            pending: list[_FrontierUploadTask] = []
-            if error is not None and not self._failed:
-                self._failed = True
-                pending.extend(self._tasks)
-                self._tasks.clear()
-            return pending
-
-    def abort(self, error: BaseException) -> list[_FrontierUploadTask]:
-        """Stop handing out work and return tasks that never started."""
-
-        with self._lock:
-            if self._failed:
-                return []
-            self._failed = True
-            pending = list(self._tasks)
-            self._tasks.clear()
-            return pending
+        super().__init__(tasks)
 
 
 def _fail_frontier_tasks(
@@ -1149,9 +1111,10 @@ def _payload_upload_staging_plan(
         if io_backend == "cufile"
         else _DEFAULT_VDIF_UPLOAD_WORKERS
     )
-    worker_count = min(
-        len(plan_groups),
-        automatic_workers if requested_workers is None else requested_workers,
+    worker_count = bounded_upload_workers(
+        requested_workers,
+        automatic=automatic_workers,
+        available=len(plan_groups),
     )
     chunks = [
         _payload_group_chunk_bytes(

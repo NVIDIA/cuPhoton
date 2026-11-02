@@ -276,3 +276,25 @@ def test_timed_cleanup_keeps_first_error_and_closes_remaining_resources(
     assert "xbeam:cufile-driver-release" in labels
     session.close()
     assert len(operations) == 5
+
+
+def test_registered_reads_support_device_offsets(tmp_path):
+    calls = []
+    session = CuFileSession.__new__(CuFileSession)
+    session._entered = True
+    session._cufile = SimpleNamespace(
+        read=lambda *args: calls.append(args) or 4096,
+    )
+    handle = CuFileHandle(tmp_path / "raw.bin", 3, 17)
+    assert session.read(handle, 65536, 4096, 8192) == 4096
+    assert (
+        session.read(handle, 65536, 4096, 12288, buffer_offset=4096) == 4096
+    )
+    assert calls == [
+        (17, 65536, 4096, 8192, 0),
+        (17, 65536, 4096, 12288, 4096),
+    ]
+    session._entered = False
+    with pytest.raises(RuntimeError, match="not open"):
+        session.read(handle, 65536, 4096, 8192)
+    assert len(calls) == 2

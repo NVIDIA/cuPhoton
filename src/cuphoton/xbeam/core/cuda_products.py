@@ -346,10 +346,33 @@ extern "C" __global__ void visibility_product_double_generic(
     );
 }
 
+#ifdef BATCHED_DOUBLE
+using BatchedComplex = double2;
+using BatchedScalar = double;
+#define BATCHED_VISIBILITY_ENTRY(suffix) \
+    batched_visibility_product_double_##suffix
+#else
+using BatchedComplex = float2;
+using BatchedScalar = float;
+#define BATCHED_VISIBILITY_ENTRY(suffix) \
+    batched_visibility_product_float_##suffix
+#endif
+
+__device__ __forceinline__ void store_batched_visibility(
+    BatchedComplex* output, long long index, double real, double imag
+) {
+    BatchedComplex value = make_visibility_output<BatchedComplex>(real, imag);
+#ifdef BATCHED_ACCUMULATE
+    value.x += output[index].x;
+    value.y += output[index].y;
+#endif
+    output[index] = value;
+}
+
 template <int CHANNELS_TO_AVERAGE>
-__device__ __forceinline__ void batched_visibility_tiled_float_impl(
-    const float2* spectrum_a,
-    const float2* spectrum_b,
+__device__ __forceinline__ void batched_visibility_tiled_impl(
+    const BatchedComplex* spectrum_a,
+    const BatchedComplex* spectrum_b,
     long long spectrum_a_stride,
     long long spectrum_b_stride,
     const double* weight_a,
@@ -361,7 +384,7 @@ __device__ __forceinline__ void batched_visibility_tiled_float_impl(
     const long long* weight_offsets,
     int input_channel_count,
     double inverse_spectral_normalization,
-    float2* output,
+    BatchedComplex* output,
     double* weight_sum
 ) {
     const int group = (int)blockIdx.y;
@@ -371,15 +394,15 @@ __device__ __forceinline__ void batched_visibility_tiled_float_impl(
     const int channel = tile * 32 + lane;
     const int group_start = group_starts[group];
     const int group_length = group_lengths[group];
-    float real_sum = 0.0f;
-    float imag_sum = 0.0f;
+    BatchedScalar real_sum = 0.0f;
+    BatchedScalar imag_sum = 0.0f;
     if (channel < input_channel_count) {
         const int group_stop = group_start + group_length;
         for (int block = group_start + warp; block < group_stop; block += 8) {
-            const float2 a = spectrum_a[
+            const BatchedComplex a = spectrum_a[
                 (long long)block * spectrum_a_stride + channel
             ];
-            const float2 b = spectrum_b[
+            const BatchedComplex b = spectrum_b[
                 (long long)block * spectrum_b_stride + channel
             ];
             real_sum += a.x * b.x + a.y * b.y;
@@ -387,8 +410,8 @@ __device__ __forceinline__ void batched_visibility_tiled_float_impl(
         }
     }
 
-    __shared__ float real_parts[8][32];
-    __shared__ float imag_parts[8][32];
+    __shared__ BatchedScalar real_parts[8][32];
+    __shared__ BatchedScalar imag_parts[8][32];
     real_parts[warp][lane] = real_sum;
     imag_parts[warp][lane] = imag_sum;
     __syncthreads();
@@ -425,9 +448,8 @@ __device__ __forceinline__ void batched_visibility_tiled_float_impl(
                 + channel / CHANNELS_TO_AVERAGE;
             const double scale = inverse_spectral_normalization
                 / CHANNELS_TO_AVERAGE;
-            output[output_channel] = make_float2(
-                (float)(real_sum * scale),
-                (float)(imag_sum * scale)
+            store_batched_visibility(
+                output, output_channel, real_sum * scale, imag_sum * scale
             );
         }
     }
@@ -445,9 +467,9 @@ __device__ __forceinline__ void batched_visibility_tiled_float_impl(
     }
 }
 
-__device__ __forceinline__ void batched_visibility_generic_float_impl(
-    const float2* spectrum_a,
-    const float2* spectrum_b,
+__device__ __forceinline__ void batched_visibility_generic_impl(
+    const BatchedComplex* spectrum_a,
+    const BatchedComplex* spectrum_b,
     long long spectrum_a_stride,
     long long spectrum_b_stride,
     const double* weight_a,
@@ -460,7 +482,7 @@ __device__ __forceinline__ void batched_visibility_generic_float_impl(
     int input_channel_count,
     int channels_to_average,
     double inverse_spectral_normalization,
-    float2* output,
+    BatchedComplex* output,
     double* weight_sum
 ) {
     const int group = (int)blockIdx.y;
@@ -471,17 +493,17 @@ __device__ __forceinline__ void batched_visibility_generic_float_impl(
     const int group_length = group_lengths[group];
     if (output_channel < output_channel_count) {
         const int first_channel = output_channel * channels_to_average;
-        float real_sum = 0.0f;
-        float imag_sum = 0.0f;
+        BatchedScalar real_sum = 0.0f;
+        BatchedScalar imag_sum = 0.0f;
         for (int relative_block = 0; relative_block < group_length;
             ++relative_block) {
             const long long block = group_start + relative_block;
             for (int offset = 0; offset < channels_to_average; ++offset) {
                 const int channel = first_channel + offset;
-                const float2 a = spectrum_a[
+                const BatchedComplex a = spectrum_a[
                     block * spectrum_a_stride + channel
                 ];
-                const float2 b = spectrum_b[
+                const BatchedComplex b = spectrum_b[
                     block * spectrum_b_stride + channel
                 ];
                 real_sum += a.x * b.x + a.y * b.y;
@@ -490,9 +512,9 @@ __device__ __forceinline__ void batched_visibility_generic_float_impl(
         }
         const double scale = inverse_spectral_normalization
             / channels_to_average;
-        output[output_offsets[group] + output_channel] = make_float2(
-            (float)(real_sum * scale),
-            (float)(imag_sum * scale)
+        store_batched_visibility(
+            output, output_offsets[group] + output_channel,
+            real_sum * scale, imag_sum * scale
         );
     }
     if (blockIdx.x == 0) {
@@ -508,9 +530,9 @@ __device__ __forceinline__ void batched_visibility_generic_float_impl(
     }
 }
 
-extern "C" __global__ void batched_visibility_product_float_avg1(
-    const float2* spectrum_a,
-    const float2* spectrum_b,
+extern "C" __global__ void BATCHED_VISIBILITY_ENTRY(avg1)(
+    const BatchedComplex* spectrum_a,
+    const BatchedComplex* spectrum_b,
     long long spectrum_a_stride,
     long long spectrum_b_stride,
     const double* weight_a,
@@ -522,10 +544,10 @@ extern "C" __global__ void batched_visibility_product_float_avg1(
     const long long* weight_offsets,
     int input_channel_count,
     double inverse_spectral_normalization,
-    float2* output,
+    BatchedComplex* output,
     double* weight_sum
 ) {
-    batched_visibility_tiled_float_impl<1>(
+    batched_visibility_tiled_impl<1>(
         spectrum_a, spectrum_b, spectrum_a_stride, spectrum_b_stride,
         weight_a, weight_b, multiply_weights,
         group_starts, group_lengths, output_offsets, weight_offsets,
@@ -534,9 +556,9 @@ extern "C" __global__ void batched_visibility_product_float_avg1(
     );
 }
 
-extern "C" __global__ void batched_visibility_product_float_avg4(
-    const float2* spectrum_a,
-    const float2* spectrum_b,
+extern "C" __global__ void BATCHED_VISIBILITY_ENTRY(avg4)(
+    const BatchedComplex* spectrum_a,
+    const BatchedComplex* spectrum_b,
     long long spectrum_a_stride,
     long long spectrum_b_stride,
     const double* weight_a,
@@ -548,10 +570,10 @@ extern "C" __global__ void batched_visibility_product_float_avg4(
     const long long* weight_offsets,
     int input_channel_count,
     double inverse_spectral_normalization,
-    float2* output,
+    BatchedComplex* output,
     double* weight_sum
 ) {
-    batched_visibility_tiled_float_impl<4>(
+    batched_visibility_tiled_impl<4>(
         spectrum_a, spectrum_b, spectrum_a_stride, spectrum_b_stride,
         weight_a, weight_b, multiply_weights,
         group_starts, group_lengths, output_offsets, weight_offsets,
@@ -560,9 +582,9 @@ extern "C" __global__ void batched_visibility_product_float_avg4(
     );
 }
 
-extern "C" __global__ void batched_visibility_product_float_avg32(
-    const float2* spectrum_a,
-    const float2* spectrum_b,
+extern "C" __global__ void BATCHED_VISIBILITY_ENTRY(avg32)(
+    const BatchedComplex* spectrum_a,
+    const BatchedComplex* spectrum_b,
     long long spectrum_a_stride,
     long long spectrum_b_stride,
     const double* weight_a,
@@ -574,10 +596,10 @@ extern "C" __global__ void batched_visibility_product_float_avg32(
     const long long* weight_offsets,
     int input_channel_count,
     double inverse_spectral_normalization,
-    float2* output,
+    BatchedComplex* output,
     double* weight_sum
 ) {
-    batched_visibility_tiled_float_impl<32>(
+    batched_visibility_tiled_impl<32>(
         spectrum_a, spectrum_b, spectrum_a_stride, spectrum_b_stride,
         weight_a, weight_b, multiply_weights,
         group_starts, group_lengths, output_offsets, weight_offsets,
@@ -586,9 +608,9 @@ extern "C" __global__ void batched_visibility_product_float_avg32(
     );
 }
 
-extern "C" __global__ void batched_visibility_product_float_generic(
-    const float2* spectrum_a,
-    const float2* spectrum_b,
+extern "C" __global__ void BATCHED_VISIBILITY_ENTRY(generic)(
+    const BatchedComplex* spectrum_a,
+    const BatchedComplex* spectrum_b,
     long long spectrum_a_stride,
     long long spectrum_b_stride,
     const double* weight_a,
@@ -601,10 +623,10 @@ extern "C" __global__ void batched_visibility_product_float_generic(
     int input_channel_count,
     int channels_to_average,
     double inverse_spectral_normalization,
-    float2* output,
+    BatchedComplex* output,
     double* weight_sum
 ) {
-    batched_visibility_generic_float_impl(
+    batched_visibility_generic_impl(
         spectrum_a, spectrum_b, spectrum_a_stride, spectrum_b_stride,
         weight_a, weight_b, multiply_weights,
         group_starts, group_lengths, output_offsets, weight_offsets,
