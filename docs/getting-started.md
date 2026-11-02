@@ -14,10 +14,11 @@ also available for integration into an existing environment.
 
 ## Install a release
 
-Version 0.1.3 is a source-only release. Use the
-[checkout instructions](#clone-and-select-a-profile) below, then select the
-extras needed for your workflow. Native FITS loading requires an explicit
-[xDR source build](components/xdr.md#install).
+Choose a published version from
+[Releases](https://github.com/NVIDIA/cuPhoton/releases) and follow its
+installation notes for available packages or a source checkout. For current
+development sources, use the checkout instructions below. Native FITS loading
+from a checkout requires an explicit [xDR source build](components/xdr.md#install).
 
 Select the `photometry` extra for source detection, background estimation,
 and aperture photometry. It uses Photutils, which currently requires a C
@@ -27,11 +28,13 @@ includes `io` and `photometry`.
 ## Clone and select a profile
 
 ```bash
-git clone --branch v0.1.3 https://github.com/NVIDIA/cuPhoton.git
+git clone https://github.com/NVIDIA/cuPhoton.git
 cd cuPhoton
 ```
 
-Omit `--branch v0.1.3` to work with the current development sources.
+This selects the development branch. To use a particular release, add
+`--branch TAG` to the clone command, replacing `TAG` with its release tag.
+Use the documentation in that checkout for the selected version.
 
 For CUDA 13 development and visualization:
 

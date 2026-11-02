@@ -26,33 +26,22 @@ detector traces, while xBeam correlates sampled signals. See [how the components
 together](docs/architecture.md#how-the-science-components-fit-together) for
 the data flow and the adapters needed between stages.
 
-## 0.1.3
-
-Changes in 0.1.3 include:
-
-- Shared FITS reading across the imaging workflows, including candidate
-  manifests for xFit and direct FITS inference through xScan's Python API.
-- A reusable GPU context connecting xPois, xFit, and xScan, with persistent
-  Dragon or MPI workers for supported batch workflows.
-- Spatially varying image matching, optional cuTile fitting, and expanded
-  xRay fitting and diagnostics.
-
-Version 0.1.3 is a source-only release. Install from the checkout as shown
-below; see the [changelog](CHANGELOG.md) for migration details.
-
 ## Start here
+
+These instructions follow the development branch. For a published version,
+select a tag from [Releases](https://github.com/NVIDIA/cuPhoton/releases)
+and follow its installation notes. See the [changelog](CHANGELOG.md) for
+release history and migration details.
 
 [uv](https://docs.astral.sh/uv/) manages the supported development
 environments and lock file. On a Linux system with a CUDA 13-capable driver:
 
 ```bash
-git clone --branch v0.1.3 https://github.com/NVIDIA/cuPhoton.git
+git clone https://github.com/NVIDIA/cuPhoton.git
 cd cuPhoton
 uv sync --locked --extra dev --extra gpu --extra viz
 uv run python examples/run_quickstarts.py
 ```
-
-Omit `--branch v0.1.3` to work with the current development sources.
 
 The quickstart creates synthetic inputs for xRep, xPois, xFit, xScan, and
 xRay, then writes results to `quickstart-output/`. xDataReader has a separate
