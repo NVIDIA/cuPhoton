@@ -238,6 +238,29 @@ jobs:
           assert not report.findall(".//error")
           print(f"All {len(cases)} xPois GPU tests passed without skips")
           PY
+      - name: Run xBeam async correlation and frontend GPU tests
+        run: >-
+          uv run --no-sync pytest -q -rs
+          --junitxml="${RUNNER_TEMP}/xbeam-gpu.xml"
+          tests/xbeam/test_hdf5_pipeline.py::test_posix_gpu_uses_common_device_slots_and_preserves_cpu_results
+          tests/xbeam/test_hdf5_pipeline.py::test_posix_gpu_read_failure_is_not_published
+          tests/xbeam/test_series_tiles.py::test_device_results_cross_stream_retention_and_serialization
+          tests/xbeam/test_gpu_front_chunks.py::test_chunked_front_preserves_bits_and_validity
+      - name: Require xBeam GPU tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xbeam-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert len(cases) == 17, len(cases)
+          assert not report.findall(".//skipped"), "xBeam GPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print(f"All {len(cases)} selected xBeam GPU tests passed without skips")
+          PY
       - name: Run xImage GPU parity tests
         run: >-
           uv run --no-sync pytest -q -rs -m gpu
@@ -446,6 +469,7 @@ jobs:
             ${{ runner.temp }}/xpois-gpu.xml
             ${{ runner.temp }}/xfit-native-gpu.xml
             ${{ runner.temp }}/ximage-gpu.xml
+            ${{ runner.temp }}/xbeam-gpu.xml
             ${{ runner.temp }}/xfit-numba-mlir.xml
             ${{ runner.temp }}/cutile-gpu.xml
             ${{ runner.temp }}/cutile-gpu.log
