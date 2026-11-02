@@ -1134,8 +1134,8 @@ def solve_constant_kernel_device(
 ) -> DeviceConstantKernelFitResult:
     """Fit a constant kernel while keeping array results on the GPU.
 
-    Parameters match :func:`solve_constant_kernel`, except this experimental
-    seam is explicitly CuPy-only and therefore has no backend selector.
+    Parameters match :func:`solve_constant_kernel`; the backend selects
+    CuPy execution or ahead-of-time native CUDA execution.
     NumPy inputs are accepted and copied to the active CUDA device; CuPy
     inputs already on that device are reused when their dtype permits.
 

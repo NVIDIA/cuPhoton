@@ -40,6 +40,7 @@ SPEC.loader.exec_module(release)
     + [
         ("installed_xray_cpu_roots_and_dd_refinement", True),
         ("installed_xray_gpu_roots", True),
+        ("native_imaging_without_cupy_compilation", True),
     ],
 )
 def test_installed_gpu_workflow_requires_complete_parity_receipt(
@@ -52,7 +53,7 @@ def test_installed_gpu_workflow_requires_complete_parity_receipt(
         step
         for step in workflow["jobs"]["install-gpu"]["steps"]
         if step.get("name")
-        == "Require all installed native xFit and xRay checks"
+        == "Require all installed native xFit, imaging and xRay checks"
     )
     checks = {
         f"xfit_native_{dtype}_{mode}_parity"
@@ -63,6 +64,7 @@ def test_installed_gpu_workflow_requires_complete_parity_receipt(
         {
             "installed_xray_cpu_roots_and_dd_refinement",
             "installed_xray_gpu_roots",
+            "native_imaging_without_cupy_compilation",
         }
     )
     checks.discard(missing)
