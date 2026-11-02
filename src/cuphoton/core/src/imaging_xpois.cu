@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <climits>
+#include <map>
 #include <memory>
 
 namespace cuphoton::imaging {
@@ -91,6 +92,97 @@ struct FftPlan {
         cufftDestroy(handle);
     }
 };
+
+template <class T>
+struct Scratch {
+    std::unique_ptr<DeviceBuffer<T>> allocation;
+    std::size_t count = 0;
+
+    Scratch& resize(std::size_t size) {
+        if (!allocation || allocation->count < size) {
+            allocation = std::make_unique<DeviceBuffer<T>>(size);
+        }
+        count = size;
+        return *this;
+    }
+
+    T* get() const {
+        return allocation->get();
+    }
+};
+
+struct SolveWorkspace {
+    struct State {
+        Libraries libraries;
+        std::unique_ptr<FftPlan> forward, inverse;
+        int fft_height = 0, fft_width = 0;
+        Scratch<double> reference_clean, target_clean, reversed, backgrounds;
+        Scratch<double> patches, projected, design, weighted_target;
+        Scratch<double> gram, partial_gram, partial_rhs, matrix,
+            singular_values;
+        Scratch<double> svd_workspace, lu_workspace, padded, convolution;
+        Scratch<double> chi2_values, chi2_sum;
+        Scratch<int> counters, selected, selected_count, info, pivots;
+        Scratch<unsigned char> invalid, invalid_x, output_invalid;
+        Scratch<unsigned char> select_workspace, reduction_workspace;
+        Scratch<cufftDoubleComplex> reference_spectrum, kernel_spectrum;
+
+        explicit State(cudaStream_t stream)
+            : libraries(stream) {}
+
+        void set_stream(cudaStream_t stream) {
+            blas_check(cublasSetStream(libraries.blas, stream));
+            solver_check(cusolverDnSetStream(libraries.solver, stream));
+        }
+
+        void fft_plans(int height, int width, cudaStream_t stream) {
+            if (height != fft_height || width != fft_width) {
+                // Retain only the latest shape, so varying images do not
+                // accumulate cuFFT workspaces for every shape ever seen.
+                auto next_forward =
+                    std::make_unique<FftPlan>(height, width, CUFFT_D2Z, stream);
+                auto next_inverse =
+                    std::make_unique<FftPlan>(height, width, CUFFT_Z2D, stream);
+                forward = std::move(next_forward);
+                inverse = std::move(next_inverse);
+                fft_height = height;
+                fft_width = width;
+            } else {
+                fft_check(cufftSetStream(forward->handle, stream));
+                fft_check(cufftSetStream(inverse->handle, stream));
+            }
+        }
+    };
+
+    int device;
+    std::unique_ptr<State> state;
+    SolveWorkspace(int owning_device, cudaStream_t stream)
+        : device(owning_device),
+          state(std::make_unique<State>(stream)) {}
+
+    ~SolveWorkspace() {
+        // Thread exit may occur with another device selected or during CUDA
+        // teardown. Keep cleanup non-throwing and free on the owning device.
+        int previous = device;
+        cudaGetDevice(&previous);
+        cudaSetDevice(device);
+        state.reset();
+        cudaSetDevice(previous);
+    }
+};
+
+SolveWorkspace::State& workspace_for(int device, cudaStream_t stream) {
+    // Calls finish their stream before returning, including on error. A
+    // thread's buffers and plans can therefore be rebound to its next stream.
+    // Other threads and devices never share mutable library or scratch state.
+    thread_local std::map<int, std::unique_ptr<SolveWorkspace>> workspaces;
+    auto& workspace = workspaces[device];
+    if (!workspace) {
+        workspace = std::make_unique<SolveWorkspace>(device, stream);
+    }
+    workspace->state->set_stream(stream);
+    return *workspace->state;
+}
 
 // Match the FP64 cuBLAS GEMM path used by the CuPy matrix operations, including
 // its explicit zero-beta products. Chunk accumulation is a separate operation.
@@ -563,10 +655,15 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 variance ? variance->data<double>() : nullptr;
             const void* mask_data = input_mask ? input_mask->pointer : nullptr;
             const bool boolean_mask = input_mask && input_mask->kind == 'b';
-            DeviceBuffer<double> reference_clean(pixels), target_clean(pixels);
-            DeviceBuffer<unsigned char> invalid(pixels), invalid_x(pixels),
-                output_invalid(pixels);
-            DeviceBuffer<int> counters(4), selected(pixels), selected_count(1);
+            auto& workspace = workspace_for(device, stream.stream);
+            auto& reference_clean = workspace.reference_clean.resize(pixels);
+            auto& target_clean = workspace.target_clean.resize(pixels);
+            auto& invalid = workspace.invalid.resize(pixels);
+            auto& invalid_x = workspace.invalid_x.resize(pixels);
+            auto& output_invalid = workspace.output_invalid.resize(pixels);
+            auto& counters = workspace.counters.resize(4);
+            auto& selected = workspace.selected.resize(pixels);
+            auto& selected_count = workspace.selected_count.resize(1);
             check(cudaMemsetAsync(
                 counters.get(), 0, 4 * sizeof(int), stream.stream));
             clean_inputs<<<blocks(pixels), threads, 0, stream.stream>>>(
@@ -613,7 +710,8 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                     selected_count.get(),
                     pixels,
                     stream.stream));
-            DeviceBuffer<unsigned char> select_workspace(select_bytes);
+            auto& select_workspace =
+                workspace.select_workspace.resize(select_bytes);
             check(
                 cub::DeviceSelect::Flagged(
                     select_workspace.get(),
@@ -664,9 +762,9 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                     + std::to_string(row_count) + " equations for "
                     + std::to_string(columns) + " coefficients");
             }
-            Libraries libraries(stream.stream);
-            DeviceBuffer<double> reversed(basis.size);
-            DeviceBuffer<double> backgrounds(
+            auto& libraries = workspace.libraries;
+            auto& reversed = workspace.reversed.resize(basis.size);
+            auto& backgrounds = workspace.backgrounds.resize(
                 static_cast<std::size_t>(pixels) * background_count);
             reverse_basis<<<blocks(basis.size), threads, 0, stream.stream>>>(
                 basis.data<double>(),
@@ -680,16 +778,18 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 stream.stream>>>(
                 backgrounds.get(), height, width, degree, background_count);
             const int chunk_rows = std::min(row_count, fit_chunk_size);
-            DeviceBuffer<double> patches(
+            auto& patches = workspace.patches.resize(
                 static_cast<std::size_t>(chunk_rows) * kernel_pixels);
-            DeviceBuffer<double> projected(
+            auto& projected = workspace.projected.resize(
                 static_cast<std::size_t>(chunk_rows) * basis_count);
-            DeviceBuffer<double> design(
+            auto& design = workspace.design.resize(
                 static_cast<std::size_t>(chunk_rows) * columns);
-            DeviceBuffer<double> weighted_target(chunk_rows);
-            DeviceBuffer<double> gram(
+            auto& weighted_target =
+                workspace.weighted_target.resize(chunk_rows);
+            auto& gram = workspace.gram.resize(
                 static_cast<std::size_t>(columns) * columns);
-            DeviceBuffer<double> partial_gram(gram.count), partial_rhs(columns);
+            auto& partial_gram = workspace.partial_gram.resize(gram.count);
+            auto& partial_rhs = workspace.partial_rhs.resize(columns);
             check(cudaMemsetAsync(
                 gram.get(), 0, gram.count * sizeof(double), stream.stream));
             check(cudaMemsetAsync(
@@ -767,8 +867,10 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 accumulate<<<blocks(columns), threads, 0, stream.stream>>>(
                     coefficients.data<double>(), partial_rhs.get(), columns);
             }
-            DeviceBuffer<double> matrix(gram.count), singular_values(columns);
-            DeviceBuffer<int> info(1), pivots(columns);
+            auto& matrix = workspace.matrix.resize(gram.count);
+            auto& singular_values = workspace.singular_values.resize(columns);
+            auto& info = workspace.info.resize(1);
+            auto& pivots = workspace.pivots.resize(columns);
             check(cudaMemcpyAsync(
                 matrix.get(),
                 gram.get(),
@@ -778,7 +880,8 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
             int svd_workspace_size = 0;
             solver_check(cusolverDnDgesvd_bufferSize(
                 libraries.solver, columns, columns, &svd_workspace_size));
-            DeviceBuffer<double> svd_workspace(svd_workspace_size);
+            auto& svd_workspace =
+                workspace.svd_workspace.resize(svd_workspace_size);
             solver_check(cusolverDnDgesvd(
                 libraries.solver,
                 'N',
@@ -836,7 +939,8 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 matrix.get(),
                 columns,
                 &lu_workspace_size));
-            DeviceBuffer<double> lu_workspace(lu_workspace_size);
+            auto& lu_workspace =
+                workspace.lu_workspace.resize(lu_workspace_size);
             solver_check(cusolverDnDgetrf(
                 libraries.solver,
                 columns,
@@ -909,12 +1013,15 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 static_cast<std::size_t>(fft_height) * fft_width;
             const std::size_t spectrum_pixels =
                 static_cast<std::size_t>(fft_height) * (fft_width / 2 + 1);
-            FftPlan forward(fft_height, fft_width, CUFFT_D2Z, stream.stream);
-            FftPlan inverse(fft_height, fft_width, CUFFT_Z2D, stream.stream);
-            DeviceBuffer<double> padded(fft_pixels), convolution(fft_pixels);
-            DeviceBuffer<cufftDoubleComplex> reference_spectrum(
-                spectrum_pixels),
-                kernel_spectrum(spectrum_pixels);
+            workspace.fft_plans(fft_height, fft_width, stream.stream);
+            auto& forward = *workspace.forward;
+            auto& inverse = *workspace.inverse;
+            auto& padded = workspace.padded.resize(fft_pixels);
+            auto& convolution = workspace.convolution.resize(fft_pixels);
+            auto& reference_spectrum =
+                workspace.reference_spectrum.resize(spectrum_pixels);
+            auto& kernel_spectrum =
+                workspace.kernel_spectrum.resize(spectrum_pixels);
             pad_fft<<<blocks(fft_pixels), threads, 0, stream.stream>>>(
                 reference_clean.get(),
                 padded.get(),
@@ -957,7 +1064,8 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 fft_width,
                 kernel_height / 2,
                 kernel_width / 2);
-            DeviceBuffer<double> chi2_values(row_count), chi2_sum(1);
+            auto& chi2_values = workspace.chi2_values.resize(row_count);
+            auto& chi2_sum = workspace.chi2_sum.resize(1);
             residual_squares<<<blocks(row_count), threads, 0, stream.stream>>>(
                 residual.data<double>(),
                 variance_data,
@@ -974,7 +1082,8 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                     chi2_sum.get(),
                     row_count,
                     stream.stream));
-            DeviceBuffer<unsigned char> reduction_workspace(reduction_bytes);
+            auto& reduction_workspace =
+                workspace.reduction_workspace.resize(reduction_bytes);
             check(
                 cub::DeviceReduce::Sum(
                     reduction_workspace.get(),

@@ -76,6 +76,31 @@ __device__ double median(double* values, int size) {
     return values[middle];
 }
 
+// Large per-pixel windows benefit from Shell sort's regular access pattern.
+// Keep quickselect for the smaller windows and the per-candidate score median.
+__device__ double highpass_median(double* values, int size) {
+    if (size < 13 * 13) {
+        return median(values, size);
+    }
+    int gap = 1;
+    while (gap < size) {
+        gap = 3 * gap + 1;
+    }
+    while (gap > 1) {
+        gap /= 3;
+        for (int i = gap; i < size; ++i) {
+            const double value = values[i];
+            int j = i - gap;
+            while (j >= 0 && values[j] > value) {
+                values[j + gap] = values[j];
+                j -= gap;
+            }
+            values[j + gap] = value;
+        }
+    }
+    return values[size / 2];
+}
+
 template <int Capacity>
 __global__ void highpass_kernel(
     const double* image,
@@ -110,7 +135,7 @@ __global__ void highpass_kernel(
             window[at++] = valid[source] ? image[source] : fill;
         }
     }
-    highpass[i] = image[i] - median(window, filter * filter);
+    highpass[i] = image[i] - highpass_median(window, filter * filter);
     sortable[i] = highpass[i];
 }
 
