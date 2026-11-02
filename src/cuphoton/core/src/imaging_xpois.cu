@@ -363,7 +363,8 @@ __global__ void pad_fft(
 __global__ void multiply_spectra(
     cufftDoubleComplex* left,
     const cufftDoubleComplex* right,
-    std::int64_t count) {
+    std::int64_t count,
+    bool pre_blackwell) {
     const std::int64_t index =
         static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (index >= count) {
@@ -373,11 +374,10 @@ __global__ void multiply_spectra(
     const cufftDoubleComplex b = right[index];
     // Explicit fused products match the complex multiplication used by CuPy's
     // default NVRTC build even when the surrounding scalar kernels disable FMA.
-#if __CUDA_ARCH__ < 1000
-    left[index] = {fma(a.x, b.x, -a.y * b.y), fma(a.x, b.y, a.y * b.x)};
-#else
-    left[index] = {fma(a.x, b.x, -a.y * b.y), fma(a.y, b.x, a.x * b.y)};
-#endif
+    // Select using the executing device, including when it loads older PTX.
+    const double imaginary =
+        pre_blackwell ? fma(a.x, b.y, a.y * b.x) : fma(a.y, b.x, a.x * b.y);
+    left[index] = {fma(a.x, b.x, -a.y * b.y), imaginary};
 }
 
 __global__ void image_outputs(
@@ -537,6 +537,11 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
         {
             Detached detached;
             StreamGuard stream(stream_value);
+            int device = 0;
+            int compute_major = 0;
+            check(cudaGetDevice(&device));
+            check(cudaDeviceGetAttribute(
+                &compute_major, cudaDevAttrComputeCapabilityMajor, device));
             for (const Array* array : {&reference,
                      &target,
                      &basis,
@@ -935,7 +940,8 @@ PyObject* solve_constant_kernel(PyObject*, PyObject* arguments) {
                 stream.stream>>>(
                 reference_spectrum.get(),
                 kernel_spectrum.get(),
-                spectrum_pixels);
+                spectrum_pixels,
+                compute_major < 10);
             fft_check(cufftExecZ2D(
                 inverse.handle, reference_spectrum.get(), convolution.get()));
             image_outputs<<<blocks(pixels), threads, 0, stream.stream>>>(
