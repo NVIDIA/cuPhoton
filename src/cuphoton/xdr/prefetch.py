@@ -750,6 +750,7 @@ def _consume_comp_batch(
                 decompression_backend=decompression_backend,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
+                native_preprocessing=postprocess == "native",
                 **decode_options,
             )
         )

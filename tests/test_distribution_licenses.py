@@ -75,6 +75,9 @@ def make_archive(
             (
                 "cuphoton/xfit/_native_ext.cpython-312-x86_64-linux-gnu.so"
             ): xfit_elf,
+            (
+                "cuphoton/core/_imaging_ext.cpython-312-x86_64-linux-gnu.so"
+            ): b"",
             "cuphoton.libs/libcfitsio-12345678.so.10.0.0": cfitsio,
             (
                 "cuphoton/xray/_structured_ext."
@@ -297,11 +300,12 @@ def test_archives_require_mit_license_expression(tmp_path, kind):
 @pytest.mark.parametrize(
     "missing",
     [
+        "cuphoton/core/_imaging_ext.cpython-312-x86_64-linux-gnu.so",
         "cuphoton/xray/_structured_ext.cpython-312-x86_64-linux-gnu.so",
         "cuphoton/xray/src/structured_roots.cu",
     ],
 )
-def test_native_wheel_requires_structured_backend(tmp_path, missing):
+def test_native_wheel_requires_compiled_components(tmp_path, missing):
     path = make_archive(tmp_path, "wheel", NOTICES)
     with zipfile.ZipFile(path) as archive:
         files = {
@@ -312,5 +316,5 @@ def test_native_wheel_requires_structured_backend(tmp_path, missing):
     with zipfile.ZipFile(path, "w") as archive:
         for name, content in files.items():
             archive.writestr(name, content)
-    with pytest.raises(ValueError, match="missing .*xray/"):
+    with pytest.raises(ValueError, match="missing .*" + re.escape(missing)):
         distributions.check_wheel(path)

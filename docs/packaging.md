@@ -14,10 +14,11 @@ is not configured.
 Free-threaded Python, Windows, and macOS are outside both matrices.
 
 Each wheel contains `cuphoton.xdr._nvcomp_batch_ext`,
-`cuphoton.xfit._native_ext`, and a privately renamed, reentrant CFITSIO 4.7.0
-shared library. CUDA, cuBLAS, cuFile, KvikIO, and nvCOMP remain in their
-upstream wheels, installed through `cuphoton[io]`. Native xFit uses
-`cuda.pathfinder` to load its CUDA runtime and cuBLAS dependencies.
+`cuphoton.xfit._native_ext`, `cuphoton.core._imaging_ext`,
+`cuphoton.xray._structured_ext`, and a privately renamed, reentrant CFITSIO
+4.7.0 shared library. CUDA, cuBLAS, cuSOLVER, cuFFT, cuFile, KvikIO, and nvCOMP
+remain in their upstream wheels, installed through `cuphoton[io]`.
+Native xFit and imaging use `cuda.pathfinder` to load their CUDA libraries.
 `cuphoton[gpu]`
 also includes the photometry, PyTorch, and Numba backends. Installing Photutils
 from PyPI currently requires a source build, C compiler, and Python
@@ -33,15 +34,19 @@ The component pins deliberately combine CUDA runtime 13.0.96 with
 cuBLAS 13.0.2.14, rather than selecting a complete toolkit bundle. Building
 against those older cuBLAS headers preserves the minimum supported cuBLAS
 version; CUDA 13.0.3 bundles the newer cuBLAS 13.1.1.3.
+The solver and FFT build pins are the CUDA 13.0 GA components, cuSOLVER
+12.0.3.29 and cuFFT 12.0.0.15. Their cuSPARSE and nvJitLink dependencies are
+also pinned in the wheel build requirements.
 
 In wheels, native xFit's portable kernels include ordinary cubins for SM 75, 80, 86,
 89 and architecture-specific cubins for SM 90a, 100a, 103a, 120a, and 121a.
 An `a` cubin runs only on its matching compute capability. Separately compiled
 ordinary compute 75 and compute 121 PTX provide driver JIT fallback for GPUs
 without a matching cubin, when the driver supports the emitted PTX version.
-The fused FP64 Jacobian kernels are built separately for SM 100a with ordinary
-compute 100 PTX and selected on compute capability 10.0 devices with
-thread-block cluster support. The
+The fused FP64 Jacobian units include cubins for every requested target at
+SM 100 or newer, plus ordinary compute 100 PTX. Their cluster path is selected
+on compute capability 10.0 devices with thread-block cluster support. Native
+imaging uses the same requested cubin targets as the portable xFit kernels. The
 [small-batch SM 120 and SM 121 paths](components/xfit.md) are included in the
 main native unit of the same extension. Including a GPU target in a wheel
 establishes code availability; numerical and performance qualification still
@@ -97,7 +102,10 @@ used. Release builds must not set `CIBW_TEST_SKIP`.
 
 The default `make build` produces only the source archive. Plain source and
 editable installs remain Python-only unless `CUPHOTON_XDR_BUILD_EXT=1` or
-`CUPHOTON_XFIT_BUILD_EXT=1` is set. See
+`CUPHOTON_XFIT_BUILD_EXT=1` is set. Native xFit builds also enable the native
+imaging extension. Set `CUPHOTON_IMAGING_BUILD_EXT=0` to omit imaging, or set
+it to `1` to build imaging independently. Both use the selected CUDA toolkit,
+CCCL headers, and `CUPHOTON_XFIT_CUDA_ARCHS` targets. See
 [xDR source installation](components/xdr.md#native-extension-availability)
 and [native xFit](components/xfit.md#optional-native-cuda-backend) for explicit
 native development builds.
@@ -112,10 +120,13 @@ The reusable `wheels.yml` workflow builds from one source archive on native
 x86-64 and ARM64 runners. It checks base imports inside cibuildwheel, then
 installs each wheel and its `io` dependencies in a clean Python container
 with no compiler, system CFITSIO, or CUDA toolkit. Native loading and CFITSIO
-planning and native xFit loading must work without a GPU. On pushes to
+planning, native xFit loading, and native imaging loading must work without a
+GPU. On pushes to
 `NVIDIA/cuPhoton`, CI also installs the CPython 3.12 x86-64 wheel on an L40G
 GPU, runs float32 and float64 Gaussian fits with native xFit, and requires
 all four difference/split comparisons with CuPy in the installed receipt.
+The same job runs native compressed-FITS restoration, reprojection, source
+selection and constant-kernel subtraction with CuPy compilation disabled.
 The final artifact check requires exactly six native wheels and one source
 archive; it rejects accidental pure wheels,
 missing native code or notices, and bundled GPU runtime libraries.
@@ -130,15 +141,16 @@ below. JSON receipts are retained as CI artifacts.
 
 ## Build and install conda packages
 
-The `cuphoton` conda package includes the compiled xDR and xFit extensions
-and depends on
-upstream conda packages for CFITSIO 4.7, CUDA 13, cuBLAS 13, KvikIO 26.6,
-and nvCOMP 5.2.
+The `cuphoton` conda package includes the compiled xDR, xFit, imaging and xRay
+extensions and depends on upstream conda packages for CFITSIO 4.7, CUDA 13,
+cuBLAS 13, cuSOLVER 12, cuFFT 12, KvikIO 26.6, and nvCOMP 5.2.
 Conda installs those libraries into the environment; no manual CUDA paths
 are needed.
-Conda's portable xFit kernels use the source-build default: an SM 75 cubin
-and compute 75 PTX. Newer GPUs compile the PTX at first use. The fused FP64
-Jacobian kernels retain their separate SM 100a cubin and ordinary compute 100 PTX.
+Conda builds use the same cubin targets as wheels for xFit and imaging,
+including SM 103a, 120a and 121a. Ordinary compute 75 and compute 121 PTX
+provide fallback on other compatible devices. The separate fused FP64
+Jacobian units include each requested target at SM 100 or newer and ordinary
+compute 100 PTX.
 Conda has no pip-style extras: this package provides the native I/O profile
 only and requires CUDA 13 libraries. It does not provide a CPU-only install;
 use the base pip package for that profile.
@@ -247,7 +259,7 @@ images with Astropy, and exercises ordering, ROI, streaming, caller-owned
 outputs, concurrency, and buffer release. Missing GPU/native capabilities
 fail the check. It forces KvikIO compatibility I/O, so it does not qualify
 GPUDirect Storage. Qualify GDS separately on suitable host/storage systems.
-Use `--mode gpu --components xfit` to run only the native xFit checks.
+Use `--mode gpu --components xfit` to run the native xFit and imaging checks.
 
 Retain the source commit, artifact SHA256 values, container image, installed
 dependency versions, Python, GPU/driver details, and JSON test receipts. When

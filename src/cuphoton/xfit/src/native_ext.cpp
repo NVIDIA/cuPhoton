@@ -58,6 +58,7 @@ struct State {
     int device;
     std::atomic_flag busy = ATOMIC_FLAG_INIT;
     Workspace workspace;
+    std::unique_ptr<cuphoton::xfit::GaussianPipeline> pipeline;
     explicit State(int id, KernelPolicy policy = KernelPolicy::Automatic)
         : device(id),
           workspace(id, policy) {}
@@ -190,11 +191,16 @@ struct Array {
     char kind = 0;
     bool writable = false;
     std::vector<Py_ssize_t> shape;
+    std::vector<Py_ssize_t> strides;
 };
 
 // The interface dictionary is copied under CPython's dictionary lock. All
 // remaining borrowed items belong to that private snapshot or immutable tuples.
-bool read_array(PyObject* owner, Array& result, std::uintptr_t producer) {
+bool read_array(
+    PyObject* owner,
+    Array& result,
+    std::uintptr_t producer,
+    bool strided = false) {
     PythonOwner interface(
         PyObject_GetAttrString(owner, "__cuda_array_interface__"));
     if (interface.value == nullptr) {
@@ -237,20 +243,30 @@ bool read_array(PyObject* owner, Array& result, std::uintptr_t producer) {
     if (dtype == nullptr) {
         return false;
     }
-    if (std::strlen(dtype) != 3
-        || !(
-            (dtype[0] == '<' && (dtype[1] == 'f' || dtype[1] == 'i'))
-            || (dtype[0] == '|' && (dtype[1] == 'i' || dtype[1] == 'b')))) {
+    int length = int(std::strlen(dtype));
+    if ((length != 3 && length != 4) || (dtype[0] != '<' && dtype[0] != '|')) {
         PyErr_SetString(
             PyExc_ValueError, "unsupported CUDA array dtype or byte order");
         return false;
     }
     result.kind = dtype[1];
-    result.itemsize = dtype[2] - '0';
-    if (!((result.kind == 'f' && (result.itemsize == 4 || result.itemsize == 8))
-            || (result.kind == 'i'
-                && (result.itemsize == 1 || result.itemsize == 4))
-            || (result.kind == 'b' && result.itemsize == 1))) {
+    result.itemsize =
+        length == 4 ? 10 * (dtype[2] - '0') + dtype[3] - '0' : dtype[2] - '0';
+    bool supported =
+        (result.kind == 'f' && (result.itemsize == 4 || result.itemsize == 8))
+        || (result.kind == 'i'
+            && (result.itemsize == 1 || result.itemsize == 4
+                || result.itemsize == 8))
+        || (result.kind == 'b' && result.itemsize == 1);
+    if (strided) {
+        supported = supported || (result.kind == 'f' && result.itemsize == 2)
+            || ((result.kind == 'i' || result.kind == 'u')
+                && (result.itemsize == 1 || result.itemsize == 2
+                    || result.itemsize == 4 || result.itemsize == 8))
+            || (result.kind == 'c'
+                && (result.itemsize == 8 || result.itemsize == 16));
+    }
+    if (!supported) {
         PyErr_SetString(PyExc_ValueError, "unsupported CUDA array dtype");
         return false;
     }
@@ -298,6 +314,12 @@ bool read_array(PyObject* owner, Array& result, std::uintptr_t producer) {
             PyExc_ValueError, "invalid or unaligned CUDA array pointer");
         return false;
     }
+    result.strides.resize(result.shape.size());
+    Py_ssize_t contiguous_stride = result.itemsize;
+    for (std::size_t i = result.shape.size(); i-- > 0;) {
+        result.strides[i] = contiguous_stride;
+        contiguous_stride *= result.shape[i];
+    }
     PyObject* strides = get("strides");
     if (strides != nullptr && strides != Py_None) {
         if (!PyTuple_Check(strides)
@@ -311,7 +333,8 @@ bool read_array(PyObject* owner, Array& result, std::uintptr_t producer) {
             if (PyErr_Occurred()) {
                 return false;
             }
-            if (result.shape[i] > 1
+            result.strides[i] = stride;
+            if (!strided && result.shape[i] > 1
                 && (stride < 0
                     || static_cast<std::size_t>(stride) != expected)) {
                 PyErr_SetString(
@@ -538,7 +561,288 @@ PyObject* run(PyObject*, PyObject* arguments) {
     }
 }
 
+PyObject* fit_impl(PyObject* arguments) {
+    PyObject *capsule, *inputs, *outputs, *configuration, *dimensions, *split,
+        *producer_object;
+    if (!PyArg_ParseTuple(
+            arguments,
+            "OOOOOOO:fit",
+            &capsule,
+            &inputs,
+            &outputs,
+            &configuration,
+            &dimensions,
+            &split,
+            &producer_object)) {
+        return nullptr;
+    }
+    auto producer = PyLong_AsUnsignedLongLong(producer_object);
+    if (PyErr_Occurred()) {
+        return nullptr;
+    }
+    if (!PyTuple_Check(inputs) || PyTuple_GET_SIZE(inputs) != 4
+        || !PyTuple_Check(outputs) || PyTuple_GET_SIZE(outputs) != 29
+        || !PyTuple_Check(configuration) || !PyTuple_Check(dimensions)
+        || !PyTuple_Check(split)) {
+        PyErr_SetString(
+            PyExc_TypeError,
+            "fit expects four inputs, 29 outputs and settings tuples");
+        return nullptr;
+    }
+    cuphoton::xfit::GaussianFit fit{};
+    Settings settings{};
+    if (!PyArg_ParseTuple(
+            configuration,
+            "ddddddi",
+            &settings.f_tol,
+            &settings.x_tol,
+            &settings.g_tol,
+            &settings.initial_damping,
+            &settings.damping_increase,
+            &settings.damping_decrease,
+            &settings.max_evaluations)
+        || !PyArg_ParseTuple(
+            dimensions,
+            "iiii",
+            &fit.count,
+            &fit.height,
+            &fit.width,
+            &fit.planes)
+        || !PyArg_ParseTuple(
+            split,
+            "ddd",
+            &fit.split_weights[0],
+            &fit.split_weights[1],
+            &fit.split_weights[2])) {
+        return nullptr;
+    }
+    if (fit.count < 1 || fit.count > INT_MAX / 64 || fit.height < 1
+        || fit.width < 1 || (fit.planes != 1 && fit.planes != 3)
+        || fit.height > INT_MAX / fit.width / fit.planes) {
+        PyErr_SetString(PyExc_ValueError, "invalid native image dimensions");
+        return nullptr;
+    }
+    if (!std::isfinite(settings.f_tol) || settings.f_tol < 0
+        || !std::isfinite(settings.x_tol) || settings.x_tol < 0
+        || !std::isfinite(settings.g_tol) || settings.g_tol < 0
+        || !std::isfinite(settings.initial_damping)
+        || settings.initial_damping <= 0
+        || !std::isfinite(settings.damping_increase)
+        || settings.damping_increase <= 1
+        || !std::isfinite(settings.damping_decrease)
+        || settings.damping_decrease <= 0 || settings.damping_decrease >= 1
+        || settings.max_evaluations < 1) {
+        PyErr_SetString(PyExc_ValueError, "invalid native LM settings");
+        return nullptr;
+    }
+    for (double weight : fit.split_weights) {
+        if (!std::isfinite(weight) || weight < 0) {
+            PyErr_SetString(PyExc_ValueError, "invalid native split weights");
+            return nullptr;
+        }
+    }
+    std::array<Array, 4> input_arrays;
+    cuphoton::xfit::Input* descriptors[] = {
+        &fit.images, &fit.mask, &fit.variance, &fit.initial};
+    for (int i = 0; i < 4; ++i) {
+        PyObject* value = PyTuple_GET_ITEM(inputs, i);
+        if (value == Py_None && i > 0) {
+            continue;
+        }
+        if (!read_array(value, input_arrays[i], producer, true)) {
+            return nullptr;
+        }
+        auto& array = input_arrays[i];
+        if (array.shape.size() != 4) {
+            PyErr_SetString(
+                PyExc_ValueError,
+                "native inputs require four-dimensional broadcast views");
+            return nullptr;
+        }
+        int expected[] = {fit.count, fit.planes, fit.height, fit.width};
+        if (i == 3) {
+            expected[1] = expected[2] = 1;
+            expected[3] = 8;
+        }
+        for (int axis = 0; axis < 4; ++axis) {
+            if (array.shape[axis] != 1 && array.shape[axis] != expected[axis]) {
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "native input broadcast shape does not match batch");
+                return nullptr;
+            }
+            descriptors[i]->shape[axis] = int(array.shape[axis]);
+            descriptors[i]->strides[axis] = array.strides[axis];
+        }
+        descriptors[i]->data = reinterpret_cast<const void*>(array.pointer);
+        descriptors[i]->kind = array.kind;
+        descriptors[i]->itemsize = array.itemsize;
+    }
+    std::array<Array, 29> arrays;
+    int m = fit.height * fit.width * fit.planes;
+    for (int i = 0; i < 29; ++i) {
+        if (!read_array(PyTuple_GET_ITEM(outputs, i), arrays[i], producer)) {
+            return nullptr;
+        }
+        auto& array = arrays[i];
+        if (i == 0) {
+            if (array.kind != 'f'
+                || (array.itemsize != 4 && array.itemsize != 8)) {
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "native fit outputs require float32 or float64");
+                return nullptr;
+            }
+            fit.fp64 = array.itemsize == 8;
+        }
+        char kind = 'f';
+        int itemsize = fit.fp64 ? 8 : 4;
+        if (i == 4 || i == 25) {
+            kind = 'i';
+            itemsize = 1;
+        }
+        if (i == 5 || i == 28) {
+            kind = 'i';
+            itemsize = 4;
+        }
+        if (i == 6 || i == 7 || i == 10 || i == 24) {
+            kind = 'b';
+            itemsize = 1;
+        }
+        if (i == 11 || i == 14 || i == 19) {
+            kind = 'i';
+            itemsize = 8;
+        }
+        if (i == 15 || i == 18 || i == 20) {
+            itemsize = 8;
+        }
+        bool shape = same_shape(array, {fit.count});
+        if (i == 0 || i == 8 || i == 23 || i == 26) {
+            shape = same_shape(array, {fit.count, 8});
+        }
+        if (i == 1 || i == 2 || i == 3 || i == 7 || i == 9) {
+            shape = same_shape(array, {fit.count, m});
+        }
+        if (i == 21 || i == 22 || i == 27) {
+            shape = same_shape(array, {fit.count, 8, 8});
+        }
+        if (!shape || array.kind != kind || array.itemsize != itemsize
+            || !array.writable) {
+            PyErr_SetString(
+                PyExc_ValueError,
+                "native fit output shape, dtype or writeability mismatch");
+            return nullptr;
+        }
+        fit.outputs[i] = reinterpret_cast<void*>(array.pointer);
+    }
+    for (int i = 0; i < 29; ++i) {
+        for (int j = i + 1; j < 29; ++j) {
+            if (arrays[i].pointer < arrays[j].pointer + arrays[j].bytes
+                && arrays[j].pointer < arrays[i].pointer + arrays[i].bytes) {
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "native fit output buffers must not overlap");
+                return nullptr;
+            }
+        }
+    }
+    for (const auto& input : input_arrays) {
+        if (!input.pointer) {
+            continue;
+        }
+        std::int64_t low = 0, high = 0;
+        for (std::size_t axis = 0; axis < input.shape.size(); ++axis) {
+            auto span = (input.shape[axis] - 1) * input.strides[axis];
+            if (span < 0) {
+                low += span;
+            } else {
+                high += span;
+            }
+        }
+        auto first = input.pointer + low;
+        auto last = input.pointer + high + input.itemsize;
+        for (const auto& output : arrays) {
+            if (output.pointer < last
+                && first < output.pointer + output.bytes) {
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "native fit outputs must not overlap inputs");
+                return nullptr;
+            }
+        }
+    }
+    auto* state =
+        static_cast<State*>(PyCapsule_GetPointer(capsule, capsule_name));
+    if (!state) {
+        return nullptr;
+    }
+    if (state->busy.test_and_set(std::memory_order_acquire)) {
+        PyErr_SetString(
+            PyExc_RuntimeError, "native xFit workspace is already in use");
+        return nullptr;
+    }
+    BusyGuard guard{state};
+    Timings timings{};
+    {
+        Detached detached;
+        for (const auto& array : input_arrays) {
+            if (array.pointer) {
+                check_device(array, state->device);
+            }
+        }
+        for (const auto& array : arrays) {
+            check_device(array, state->device);
+        }
+        if (!state->pipeline) {
+            state->pipeline =
+                std::make_unique<cuphoton::xfit::GaussianPipeline>(
+                    state->device);
+        }
+        timings =
+            state->pipeline->run(state->workspace, fit, settings, producer);
+    }
+    if (PyErr_CheckSignals() < 0) {
+        return nullptr;
+    }
+    return Py_BuildValue(
+        "{s:d,s:d,s:d,s:i,s:s,s:i,s:i,s:i,s:i,s:i,s:O}",
+        "host_seconds",
+        timings.host_seconds,
+        "synchronize_seconds",
+        timings.synchronize_seconds,
+        "gpu_milliseconds",
+        double(timings.gpu_milliseconds),
+        "iterations",
+        timings.iterations,
+        "kernel_policy",
+        policy_names[int(timings.kernel_policy)],
+        "cublas_version",
+        timings.cublas_version,
+        "tiled_jacobian_launches",
+        timings.tiled_jacobian_launches,
+        "fused_trial_residual_launches",
+        timings.fused_trial_residual_launches,
+        "hessian_single_launches",
+        timings.hessian_single_launches,
+        "hessian_batch_launches",
+        timings.hessian_batch_launches,
+        "native_pipeline",
+        Py_True);
+}
+
+PyObject* fit(PyObject*, PyObject* arguments) {
+    try {
+        return fit_impl(arguments);
+    } catch (...) {
+        return translate_exception();
+    }
+}
+
 PyMethodDef methods[] = {
+    {"fit",
+        fit,
+        METH_VARARGS,
+        "Prepare, solve and finalize a Gaussian fit with precompiled CUDA."},
     {"create_workspace",
         create_workspace,
         METH_O,

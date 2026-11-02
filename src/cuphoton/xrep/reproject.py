@@ -35,6 +35,11 @@ from .mapping import (
 
 
 def _backend_unavailable_message(backend: str) -> str:
+    if backend == "native":
+        return (
+            "Native imaging requires CuPy buffer support and an installation "
+            "built with CUPHOTON_IMAGING_BUILD_EXT=1 and a CUDA 13 toolkit."
+        )
     extra = "gpu" if backend == "cupy" else "torch"
     return (
         f"Requested backend is unavailable: {backend}. Run "
@@ -84,8 +89,8 @@ def reproject_array(
     source_mask
         Optional source mask propagated to the output.
     backend
-        ``cupy``, ``torch``, or ``cpu``. ``None`` selects the first available
-        backend in that order.
+        ``native``, ``cupy``, ``torch``, or ``cpu``. ``None`` selects the
+        first available backend: CuPy, CUDA-backed Torch, then CPU.
 
     Returns
     -------
@@ -101,6 +106,7 @@ def reproject_array(
         spec,
         source_shape=source.shape,
         xp=_prepare_array_module(backend),
+        backend="native" if backend == "native" else None,
     )
     return backend_impl.reproject(
         source,
@@ -141,8 +147,8 @@ def reproject_masked_array(
     spec
         Destination mapping and interpolation settings.
     backend
-        ``cupy``, ``torch``, or ``cpu``. ``None`` selects the first available
-        backend in that order.
+        ``native``, ``cupy``, ``torch``, or ``cpu``. ``None`` selects the
+        first available backend: CuPy, CUDA-backed Torch, then CPU.
     prepared
         Optional reusable mapping prepared for ``spec`` and the source shape.
         As with :func:`reproject_array_device`, callers supplying a prepared
@@ -182,6 +188,7 @@ def reproject_masked_array(
             spec,
             source_shape=source_shape,
             xp=_prepare_array_module(backend),
+            backend="native" if backend == "native" else None,
         )
     elif prepared.output_shape != spec.output_bbox.shape:
         raise ValueError("prepared output shape must match spec output bbox")
@@ -240,7 +247,7 @@ def reproject_array_device(
     source_mask
         Optional backend-native source mask.
     backend
-        Device backend. Only ``cupy`` is currently supported.
+        Device backend: ``native`` or ``cupy``.
     prepared
         Reusable dense mapping for repeated reprojections with identical
         geometry.
@@ -273,9 +280,9 @@ def reproject_array_device(
             raise TypeError("source_variance must have a real numeric dtype")
 
     backend = resolve_backend(backend)
-    if backend != "cupy":
+    if backend not in {"native", "cupy"}:
         raise NotImplementedError(
-            "device-resident reprojections currently require the cupy backend"
+            "device-resident reprojections require the native or cupy backend"
         )
     backend_impl = get_backend(backend)
     if not backend_impl.is_available():
@@ -285,6 +292,7 @@ def reproject_array_device(
             spec,
             source_shape=(int(source.shape[0]), int(source.shape[1])),
             xp=_prepare_array_module(backend),
+            backend="native" if backend == "native" else None,
         )
     if not hasattr(backend_impl, "reproject_device"):
         raise RuntimeError(
@@ -332,7 +340,7 @@ def reproject_fits(
     interpolation
         ``lanczos3`` or ``bilinear``.
     backend
-        ``cupy``, ``torch``, or ``cpu``. ``None`` auto-selects.
+        ``native``, ``cupy``, ``torch``, or ``cpu``. ``None`` auto-selects.
     mapping_grid_step
         Coarse WCS mapping interval in output pixels.
     area_scaling
@@ -359,7 +367,7 @@ def reproject_fits(
         hdu=hdu,
         fits_reader=reader,
         xdr_options=xdr_options,
-        device=backend == "cupy",
+        device=backend in {"native", "cupy"},
         read_metadata=fits_reads,
     )
     if grid is None:
@@ -379,7 +387,7 @@ def reproject_fits(
             hdu=mask_hdu,
             fits_reader=reader,
             xdr_options=xdr_options,
-            device=backend == "cupy",
+            device=backend in {"native", "cupy"},
             read_metadata=fits_reads,
         )
     spec = ReprojectionSpec(
@@ -427,7 +435,7 @@ def reproject_stack(
     source_masks
         Optional masks in source order.
     backend
-        ``cupy``, ``torch``, or ``cpu``. ``None`` auto-selects.
+        ``native``, ``cupy``, ``torch``, or ``cpu``. ``None`` auto-selects.
 
     Returns
     -------

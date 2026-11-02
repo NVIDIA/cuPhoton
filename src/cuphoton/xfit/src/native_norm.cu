@@ -8,8 +8,12 @@
 // Singleton fallback reference: cupy/_core/_reduction.pyx at the same tag.
 #include <cmath>
 #include <cstdint>
+#include <climits>
 #include <cub/block/block_reduce.cuh>
+#include <cub/device/device_segmented_reduce.cuh>
 #include <cuda_runtime.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 
 template <typename T>
 struct Add {
@@ -164,4 +168,84 @@ extern "C" int xfit_library_norms(
     }
     // The owning Workspace drains this stream on both success and failure.
     return cudaGetLastError();
+}
+
+template <typename Offset>
+struct RowOffset {
+    int observations;
+    __host__ __device__ Offset operator()(int row) const {
+        return Offset(row) * observations;
+    }
+};
+
+template <typename T, typename Offset>
+cudaError_t sum_rows(
+    const void* input,
+    void* output,
+    int count,
+    int observations,
+    void* workspace,
+    std::size_t& workspace_bytes,
+    cudaStream_t stream) {
+    auto offsets = thrust::make_transform_iterator(
+        thrust::make_counting_iterator<int>(0),
+        RowOffset<Offset>{observations});
+    return cub::DeviceSegmentedReduce::Sum(
+        workspace,
+        workspace_bytes,
+        static_cast<const T*>(input),
+        static_cast<T*>(output),
+        count,
+        offsets,
+        offsets + 1,
+        stream);
+}
+
+// Public chi-square diagnostics use CuPy's contiguous segmented sum, unlike
+// the scaled LM norms above. Matching that reduction order matters when two
+// large chi-squares nearly cancel in the reported null-model improvement.
+extern "C" int xfit_library_sums(
+    const void* input,
+    void* output,
+    int count,
+    int observations,
+    bool fp64,
+    void* workspace,
+    std::size_t* workspace_bytes,
+    std::uintptr_t stream_ptr) {
+    auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+    if (std::int64_t(count) * observations <= INT_MAX) {
+        return fp64 ? sum_rows<double, int>(
+                          input,
+                          output,
+                          count,
+                          observations,
+                          workspace,
+                          *workspace_bytes,
+                          stream)
+                    : sum_rows<float, int>(
+                          input,
+                          output,
+                          count,
+                          observations,
+                          workspace,
+                          *workspace_bytes,
+                          stream);
+    }
+    return fp64 ? sum_rows<double, std::int64_t>(
+                      input,
+                      output,
+                      count,
+                      observations,
+                      workspace,
+                      *workspace_bytes,
+                      stream)
+                : sum_rows<float, std::int64_t>(
+                      input,
+                      output,
+                      count,
+                      observations,
+                      workspace,
+                      *workspace_bytes,
+                      stream);
 }

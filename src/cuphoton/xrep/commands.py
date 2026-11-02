@@ -68,11 +68,11 @@ class CsvPathInvariant(StringInvariant):
 
 
 class BackendInvariant(SetInvariant):
-    _set = {"cpu", "torch", "cupy"}
+    _set = {"cpu", "torch", "cupy", "native"}
 
 
 class AutoBackendInvariant(SetInvariant):
-    _set = {"auto", "cpu", "torch", "cupy"}
+    _set = {"auto", "cpu", "torch", "cupy", "native"}
 
 
 class BackendListInvariant(StringInvariant):
@@ -97,7 +97,7 @@ class MaskCaseListInvariant(StringInvariant):
 
 
 class BackendVariantInvariant(SetInvariant):
-    _set = {"cpu", "torch", "cupy", "cupy-elementwise", "cupy-raw"}
+    _set = {"cpu", "torch", "cupy", "native", "cupy-elementwise", "cupy-raw"}
 
 
 class InterpolationInvariant(SetInvariant):

@@ -22,6 +22,10 @@ uv run python examples/run_quickstarts.py \
 Automatic selection prefers CuPy, then CUDA PyTorch, then CPU. The resolved
 backend and timings are written to `summary.json`. Explicit `--backend torch`
 can also run on a CPU-only host; `--backend cpu` selects the NumPy reference.
+Explicit `--backend native` uses the [native imaging extension](../packaging.md)
+for mapping expansion and bilinear or Lanczos-3 reprojection, including mask
+and variance propagation. CuPy owns device arrays; the native path uses
+precompiled CUDA kernels. WCS evaluation on the coarse grid remains on the CPU.
 
 ## FITS reading
 

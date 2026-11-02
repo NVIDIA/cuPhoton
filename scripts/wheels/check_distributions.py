@@ -49,10 +49,18 @@ SOURCES = {
     "src/cuphoton/xfit/src/native_ext.cpp",
     "src/cuphoton/xfit/src/native_api.h",
     "src/cuphoton/xfit/src/native.cu",
+    "src/cuphoton/xfit/src/native_pipeline.cuh",
     "src/cuphoton/xfit/src/native_norm.cu",
     "src/cuphoton/xfit/src/native_jacobian.h",
     "src/cuphoton/xfit/src/native_jacobian.cu",
     "src/cuphoton/xfit/src/native_jacobian_lean.cu",
+    "src/cuphoton/core/src/imaging_ext.cpp",
+    "src/cuphoton/core/src/imaging_api.h",
+    "src/cuphoton/core/src/imaging_copy.cu",
+    "src/cuphoton/core/src/imaging_selection.cu",
+    "src/cuphoton/core/src/imaging_reproject.cu",
+    "src/cuphoton/core/src/imaging_xpois.cu",
+    "src/cuphoton/core/src/imaging_fits.cu",
     "src/cuphoton/xray/setup_package.py",
     "src/cuphoton/xray/src/structured_api.h",
     "src/cuphoton/xray/src/structured_ext.cpp",
@@ -163,6 +171,7 @@ def check_wheel(path):
         for component, module in (
             ("xdr", "_nvcomp_batch_ext"),
             ("xfit", "_native_ext"),
+            ("core", "_imaging_ext"),
             ("xray", "_structured_ext"),
         )
     }

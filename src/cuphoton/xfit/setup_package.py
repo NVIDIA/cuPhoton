@@ -58,6 +58,7 @@ class CUDAExtension(Extension):
             depends=[
                 str(_SOURCE / "native_api.h"),
                 str(_SOURCE / "native.cu"),
+                str(_SOURCE / "native_pipeline.cuh"),
                 str(_SOURCE / "native_norm.cu"),
                 str(_SOURCE / "native_jacobian.h"),
                 str(_SOURCE / "native_jacobian.cu"),
@@ -74,7 +75,11 @@ class CUDAExtension(Extension):
             ],
             library_dirs=[str(libraries)],
             # CUDA wheels ship SONAME files without unversioned symlinks.
-            libraries=[":libcudart.so.13", ":libcublas.so.13"],
+            libraries=[
+                ":libcudart.so.13",
+                ":libcublas.so.13",
+                ":libcusolver.so.12",
+            ],
             extra_compile_args=[
                 "-O3",
                 "-std=c++17",
@@ -85,6 +90,35 @@ class CUDAExtension(Extension):
         )
         self.nvcc = str(nvcc)
         self.architectures = _architectures()
+        self.cuda_source_directory = _SOURCE
+        highest = int(self.architectures[-1].removesuffix("a"))
+        portable_ptx = tuple(sorted({75, highest}))
+        # Cluster-specialized units require SM 100 or newer. Every requested
+        # target in that range receives machine code, even when dispatch uses
+        # the portable implementation on that device.
+        jacobian_archs = tuple(
+            arch
+            for arch in self.architectures
+            if int(arch.removesuffix("a")) >= 100
+        ) or ("100a",)
+        self.cuda_units = (
+            (
+                "native",
+                _MAIN_FMAD,
+                _MAIN_FTZ,
+                self.architectures,
+                portable_ptx,
+            ),
+            (
+                "native_norm",
+                _NORM_FMAD,
+                True,
+                self.architectures,
+                portable_ptx,
+            ),
+            ("native_jacobian", True, False, jacobian_archs, (100,)),
+            ("native_jacobian_lean", True, False, jacobian_archs, (100,)),
+        )
 
 
 class CUDABuildExt(build_ext):
@@ -105,32 +139,13 @@ class CUDABuildExt(build_ext):
         for include in extension.include_dirs:
             command.extend(("-I", include))
         objects = []
-        # Compile ordinary PTX independently of architecture-specific cubins.
-        # Retain both the baseline and the highest selected capability.
-        highest_architecture = int(
-            extension.architectures[-1].removesuffix("a")
-        )
-        portable_ptx = tuple(sorted({75, highest_architecture}))
-        for name, fmad, ftz, architectures, ptx_architectures in (
-            (
-                "native",
-                _MAIN_FMAD,
-                _MAIN_FTZ,
-                extension.architectures,
-                portable_ptx,
-            ),
-            (
-                "native_norm",
-                _NORM_FMAD,
-                True,
-                extension.architectures,
-                portable_ptx,
-            ),
-            # Match native transcendental contraction; explicit RN intrinsics
-            # preserve the Jacobian's individual arithmetic boundaries.
-            ("native_jacobian", True, False, ("100a",), (100,)),
-            ("native_jacobian_lean", True, False, ("100a",), (100,)),
-        ):
+        for (
+            name,
+            fmad,
+            ftz,
+            architectures,
+            ptx_architectures,
+        ) in extension.cuda_units:
             architecture_flags = [
                 f"--generate-code=arch=compute_{architecture},"
                 f"code=sm_{architecture}"
@@ -146,7 +161,7 @@ class CUDABuildExt(build_ext):
                 *command,
                 *architecture_flags,
                 "-c",
-                str(_SOURCE / f"{name}.cu"),
+                str(extension.cuda_source_directory / f"{name}.cu"),
                 "-o",
                 str(object_path),
                 f"--fmad={str(fmad).lower()}",
@@ -241,7 +256,10 @@ def get_extensions():
     )
     if cublas_version is None or int(cublas_version.group(1)) != 13:
         raise RuntimeError("Native xFit requires cuBLAS 13")
+    if not (include / "cusolverDn.h").is_file():
+        raise RuntimeError(f"CUDA_HOME={cuda_home} lacks cuSOLVER headers")
     library_names = (
+        "libcusolver.so.12",
         "libcudart.so.13",
         "libcublas.so.13",
         "libcublasLt.so.13",

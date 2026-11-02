@@ -999,6 +999,7 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
         assert all(
             any(value is uploaded for uploaded in uploads) for value in inputs
         )
+        assert kwargs.pop("backend", "cupy") == "cupy"
         return replace(
             workflows.solve_constant_kernel(
                 reference, target, *args, backend="cpu", **kwargs

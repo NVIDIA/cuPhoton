@@ -586,9 +586,16 @@ def test_native_fit_with_bright_overlapping_lobes(monkeypatch):
         "batched_levenberg_marquardt",
         capture(api.batched_levenberg_marquardt),
     )
-    monkeypatch.setattr(
-        _native, "fit_gaussian", capture(_native.fit_gaussian)
-    )
+    extension = _native.load_extension()
+    original_fit = extension.fit
+
+    def capture_native(*args):
+        result = original_fit(*args)
+        outputs = args[2]
+        captured.append((cp.asnumpy(outputs[0]), cp.asnumpy(outputs[3])))
+        return result
+
+    monkeypatch.setattr(extension, "fit", capture_native)
     for endpoint in (actual.parameters, expected.parameters):
         captured.clear()
         for backend in ("cupy", "native"):
@@ -793,6 +800,195 @@ def test_native_failure_statuses_and_diagnostics_match_cupy(case, shape):
         assert actual.evaluations.tolist() == [1, 1]
     elif case == "nonfinite":
         assert actual.status.tolist() == ["invalid_residual"] * 2
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("mode", ["difference", "split"])
+def test_native_final_diagnostics_preserve_mixed_row_failures(
+    dtype, mode, monkeypatch
+):
+    cp = _require_native()
+    from cuphoton.xfit import _native
+    from cuphoton.xfit.solver import _factorize_jacobians
+
+    model, truth, _, _ = _fixture(dtype, shape=(7, 9), mode=mode)
+    model = GaussianDipoleModel(
+        model.image_shape, dtype=dtype, split_weights=(1.0, 0.25, 1.75)
+    )
+    initial = np.concatenate((truth, truth)).copy()
+    initial[1, 0] = 0  # Finite, converged, rank-deficient Jacobian.
+    images = model.evaluate(initial, mode=mode)
+    initial[2, 1:3] = np.finfo(dtype).tiny
+    initial[2, 3:8] = 0  # Nonfinite model, between two healthy rows.
+    options = dict(
+        model=model,
+        initial=initial,
+        mode=mode,
+        variance=np.full(images.shape, 0.5, dtype=dtype),
+    )
+    expected = fit_dipoles(images, backend="cupy", **options)
+    extension = _native.load_extension()
+    original = extension.fit
+    captured = []
+
+    def capture(workspace, inputs, outputs, *arguments):
+        result = original(workspace, inputs, outputs, *arguments)
+        captured.append(outputs)
+        return result
+
+    monkeypatch.setattr(extension, "fit", capture)
+    actual = fit_dipoles(images, backend="native", **options)
+    _assert_fit_matches(actual, expected, dtype)
+    np.testing.assert_array_equal(
+        actual.uncertainty_valid, [True, False, False, True]
+    )
+    assert actual.uncertainty_reason[1] == "rank-deficient Jacobian"
+    assert actual.status[2] == "invalid_residual"
+    outputs = captured[0]
+    physical = outputs[0].copy()
+    physical[:, 1:3] = cp.exp(physical[:, 1:3])
+    reference_model = model.to_backend("cupy")
+    jacobian = reference_model._jacobian_positive_unchecked(
+        physical, mode=mode
+    )
+    chain_shape = (len(initial), 2) + (1,) * (jacobian.ndim - 2)
+    jacobian[:, 1:3] *= physical[:, 1:3].reshape(chain_shape)
+    jacobian = jacobian.reshape(len(initial), 8, -1)
+    jacobian *= outputs[2][:, None, :]
+    finite = cp.isfinite(jacobian).all(axis=(1, 2))
+    selected = jacobian[finite]
+    expected_gradient = cp.einsum("knm,km->kn", selected, outputs[3][finite])
+    expected_hessian = cp.einsum("knm,kpm->knp", selected, selected)
+    _, singular, _ = _factorize_jacobians(selected, cp)
+    threshold = (
+        max(jacobian.shape[1:]) * np.finfo(dtype).eps * singular.max(axis=1)
+    )
+    expected_rank = cp.sum(singular > threshold[:, None], axis=1)
+    tolerance = 3.0e-5 if dtype is np.float32 else 5.0e-12
+    for index, reference in ((26, expected_gradient), (27, expected_hessian)):
+        np.testing.assert_allclose(
+            cp.asnumpy(outputs[index][finite]),
+            cp.asnumpy(reference),
+            rtol=tolerance,
+            atol=tolerance,
+        )
+        assert bool(cp.isnan(outputs[index][~finite]).all())
+    np.testing.assert_array_equal(
+        cp.asnumpy(outputs[28][finite]), cp.asnumpy(expected_rank)
+    )
+    np.testing.assert_array_equal(cp.asnumpy(outputs[28][~finite]), [-1])
+    # Singular vector signs are arbitrary. Propagated variance must agree
+    # without subtracting rounded entries of the dense covariance.
+    gradient = np.asarray([0.5, -1, 2, 0.25, -1, 0, 1, 0], dtype=dtype)
+    for result in (actual, expected):
+        assert np.isnan(
+            result.covariance_factor[~result.uncertainty_valid]
+        ).all()
+    np.testing.assert_allclose(
+        np.sum((gradient @ actual.covariance_factor) ** 2, axis=1),
+        np.sum((gradient @ expected.covariance_factor) ** 2, axis=1),
+        rtol=tolerance,
+        atol=tolerance,
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("count", [1, 3])
+def test_native_null_improvement_preserves_cancelling_chi_squares(
+    dtype, count
+):
+    cp = _require_native()
+    rng = np.random.default_rng(813)
+    images = rng.normal(125, 5, (count, 51, 51)).astype(dtype)
+    variance = rng.uniform(1, 2, images.shape).astype(dtype)
+    initial = np.tile(
+        np.asarray([10, 1e30, 1e5, 0.5, 50, 10, -50, 20], dtype=dtype),
+        (count, 1),
+    )
+    actual = fit_dipoles(
+        images,
+        model=GaussianDipoleModel((51, 51), dtype=dtype),
+        initial=initial,
+        variance=variance,
+        backend="native",
+        config=LMConfig(max_evaluations=1),
+    )
+    weights = 1 / cp.sqrt(cp.asarray(variance))
+    weighted_residuals = cp.asarray(actual.residuals) * weights
+    weighted_null = cp.asarray(images) * weights
+    chi = cp.asnumpy(
+        cp.sum(weighted_residuals * weighted_residuals, axis=(1, 2))
+    )
+    null_chi = cp.asnumpy(cp.sum(weighted_null * weighted_null, axis=(1, 2)))
+    # The broad dipole is nearly zero. An ULP in either large sum becomes a
+    # material error in their small difference, so match the current-device
+    # reduction before comparing the cancellation-sensitive public diagnostic.
+    np.testing.assert_array_equal(actual.chi_square, chi)
+    np.testing.assert_array_equal(actual.null_chi_square, null_chi)
+    np.testing.assert_allclose(
+        actual.delta_chi_square,
+        null_chi - chi,
+        rtol=5e-12,
+        atol=5e-12,
+    )
+
+
+@pytest.mark.parametrize("count", [1, 3])
+def test_native_final_gradient_preserves_cancelling_products(
+    count, monkeypatch
+):
+    cp = _require_native()
+    from cuphoton.xfit import _native
+
+    model, truth, _, _ = _fixture(shape=(51, 51))
+    initial = np.tile(truth[:1], (count, 1))
+    initial[:, 0] *= 1e6
+    jacobian = model.jacobian(initial).reshape(count, 8, -1)
+    noise = np.random.default_rng(431).normal(0, 10, (count, 51 * 51))
+    for row in range(count):
+        orthogonal, _ = np.linalg.qr(jacobian[row].T)
+        noise[row] -= orthogonal @ (orthogonal.T @ noise[row])
+    images = model.evaluate(initial) + noise.reshape(count, 51, 51)
+    if count > 1:
+        initial[1, 1:3] = np.finfo(np.float64).tiny
+        initial[1, 3:8] = 0
+
+    extension = _native.load_extension()
+    original = extension.fit
+    captured = []
+
+    def capture(workspace, inputs, outputs, *arguments):
+        result = original(workspace, inputs, outputs, *arguments)
+        captured.append(outputs)
+        return result
+
+    monkeypatch.setattr(extension, "fit", capture)
+    fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="native",
+        config=LMConfig(max_evaluations=2, g_tol=1),
+    )
+    outputs = captured[0]
+    physical = outputs[0].copy()
+    physical[:, 1:3] = cp.exp(physical[:, 1:3])
+    jacobian = model.to_backend("cupy")._jacobian_positive_unchecked(physical)
+    jacobian[:, 1:3] *= physical[:, 1:3, None, None]
+    jacobian = jacobian.reshape(count, 8, -1) * outputs[2][:, None, :]
+    finite = cp.isfinite(jacobian).all(axis=(1, 2))
+    assert int(finite.sum()) == (count if count == 1 else count - 1)
+    expected = cp.einsum("knm,km->kn", jacobian[finite], outputs[3][finite])
+    # Orthogonal noise makes the final gradient cancellation-sensitive despite
+    # large individual Jacobian/residual products. Operand layout matters.
+    np.testing.assert_allclose(
+        cp.asnumpy(outputs[26][finite]),
+        cp.asnumpy(expected),
+        rtol=5e-12,
+        atol=5e-12,
+    )
+    assert bool(cp.isnan(outputs[26][~finite]).all())
 
 
 @pytest.mark.parametrize(
@@ -1157,3 +1353,87 @@ def test_cli_runs_native_fit_and_records_selected_backend(tmp_path, capsys):
     with np.load(output_dir / "fit-arrays.npz", allow_pickle=False) as arrays:
         assert np.isfinite(arrays["covariance"]).all()
         assert arrays["residuals"].shape == images.shape
+
+
+def test_native_public_pipeline_disables_cupy_compilation_in_fresh_process(
+    tmp_path,
+):
+    """No on-disk or process-local CuPy kernel cache can hide a dependency."""
+    _require_native()
+    source = textwrap.dedent(
+        """
+        import numpy as np
+        import cupy as cp
+        import cupy.cuda.compiler as compiler
+        from cuphoton.xfit import (
+            GaussianDipoleModel, fit_dipoles, fit_dipoles_device,
+        )
+        from cuphoton.xfit._native import last_timings
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("CuPy runtime compilation attempted")
+
+        compiler._compile_module_with_cache = forbidden
+        compiler.compile_using_nvrtc = forbidden
+        compiler.compile_using_nvcc = forbidden
+        for dtype in (np.float32, np.float64):
+            truth = np.asarray([
+                [5, 1.3, 1.8, .25, -2, .5, 2.2, -.7],
+                [3, 1.6, 1.1, -.3, -1, -1, 2, 1],
+            ], dtype=dtype)
+            model = GaussianDipoleModel((11, 15), dtype=dtype)
+            for mode in ("difference", "split"):
+                images = model.evaluate(truth, mode=mode)
+                for device_result in (False, True):
+                    fit = fit_dipoles_device if device_result else fit_dipoles
+                    result = fit(
+                        images, model=model, initial=truth, mode=mode,
+                        variance=np.ones((11, 15), dtype=dtype),
+                        backend="native",
+                    )
+                    assert result.backend == "native"
+                    assert last_timings()["native_pipeline"] is True
+                    converged = (
+                        cp.asnumpy(result.converged) if device_result
+                        else result.converged
+                    )
+                    assert converged.all()
+                    assert result.covariance.shape == (2, 8, 8)
+                # Exercise native reductions and default initial estimation.
+                result = fit_dipoles(
+                    images, model=model, mode=mode, backend="native",
+                    mask=np.ones((11, 15), dtype=np.uint8),
+                )
+                assert result.parameters.shape == (2, 8)
+        """
+    )
+    environment = os.environ.copy()
+    environment["CUPY_CACHE_DIR"] = str(tmp_path / "cupy-empty")
+    environment["CUDA_CACHE_PATH"] = str(tmp_path / "cuda-empty")
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not list((tmp_path / "cupy-empty").glob("**/*.cubin"))
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("mode", ["difference", "split"])
+def test_native_initial_estimate_and_strided_broadcast_inputs_match_cupy(
+    dtype, mode
+):
+    cp = _require_native()
+    model, _, images, _ = _fixture(dtype, mode=mode)
+    # Reverse spatial axes without materializing a contiguous GPU copy.
+    images = cp.asarray(images)[..., ::-1, ::-1]
+    mask = np.ones(model.image_shape, dtype=np.uint8)
+    mask[0, :3] = 0
+    variance = np.full(model.image_shape, 0.5, dtype=dtype)
+    options = dict(model=model, mask=mask, variance=variance, mode=mode)
+    expected = fit_dipoles(images, backend="cupy", **options)
+    actual = fit_dipoles(images, backend="native", **options)
+    _assert_fit_matches(actual, expected, dtype)

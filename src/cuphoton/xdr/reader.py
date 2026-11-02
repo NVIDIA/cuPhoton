@@ -440,6 +440,7 @@ class GpuCompImageReader:
         _decode_checks=None,
         gzip_decoder: str = "auto",
         decompression_backend: str = "auto",
+        native_preprocessing: bool = False,
     ):
         """Run batched nvCOMP inflate for gzip tiles resident on the device.
 
@@ -469,6 +470,7 @@ class GpuCompImageReader:
                 gzip_decoder=gzip_decoder,
                 decompression_backend=decompression_backend,
                 use_native_pool=keepalive is not None,
+                native_preprocessing=native_preprocessing,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
                 **(
@@ -585,6 +587,20 @@ class GpuCompImageReader:
             )
             if postprocess == "separate":
                 scatter_native_tiles_2d(*scatter_args)
+            elif postprocess == "native":
+                from cuphoton.core._native_imaging import extension
+
+                extension().restore_fits_tiles(
+                    (
+                        *scatter_args[:3],
+                        d_tile_byte_lengths,
+                        *scatter_args[3:-1],
+                    ),
+                    scatter_itemsize,
+                    shuffled,
+                    decode_guard,
+                    cp.cuda.get_current_stream().ptr,
+                )
             else:
                 scatter_tiles_2d(
                     *scatter_args[:3],
@@ -600,7 +616,7 @@ class GpuCompImageReader:
                 d_sel_zzero = cp.asarray(plan["sel_zzero"])
                 if keepalive is not None:
                     keepalive.extend([d_sel_zscale, d_sel_zzero])
-                dequantize_int_to_float(
+                dequantize_args = (
                     d_scatter_target,
                     out,
                     d_origins_r,
@@ -609,8 +625,17 @@ class GpuCompImageReader:
                     d_widths,
                     d_sel_zscale,
                     d_sel_zzero,
-                    decode_guard=decode_guard,
                 )
+                if postprocess == "native":
+                    extension().dequantize_fits_tiles(
+                        dequantize_args,
+                        decode_guard,
+                        cp.cuda.get_current_stream().ptr,
+                    )
+                else:
+                    dequantize_int_to_float(
+                        *dequantize_args, decode_guard=decode_guard
+                    )
 
         return out
 
@@ -655,6 +680,7 @@ class GpuCompImageReader:
                 gzip_decoder=gzip_decoder,
                 decompression_backend=decompression_backend,
                 keepalive=keepalive,
+                native_preprocessing=postprocess == "native",
             )
         )
         if keepalive is not None:

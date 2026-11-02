@@ -7,6 +7,10 @@
 #include "native_jacobian.h"
 
 #include <cublas_v2.h>
+#include <cusolverDn.h>
+#include <cuda_fp16.h>
+#include <vector>
+#include <algorithm>
 #include <cuda_runtime.h>
 
 #include <chrono>
@@ -19,6 +23,8 @@
 
 extern "C" int xfit_library_norms(
     const void*, void*, int, int, bool, std::uintptr_t);
+extern "C" int xfit_library_sums(
+    const void*, void*, int, int, bool, void*, std::size_t*, std::uintptr_t);
 
 namespace cuphoton::xfit {
 
@@ -1833,5 +1839,7 @@ Timings Workspace::run(
         - timings.synchronize_seconds;
     return timings;
 }
+
+#include "native_pipeline.cuh"
 
 }  // namespace cuphoton::xfit

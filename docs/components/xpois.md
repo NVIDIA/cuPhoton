@@ -27,6 +27,18 @@ uses the CPU reference implementation. Explicit `cupy` selection requires a
 usable CuPy runtime and raises an error when that requirement is unmet. The
 spatial Gaussian-polynomial research API follows the spatial-ALS rule.
 
+For real images and constant two-dimensional kernels, explicit
+`backend="native"` uses the [native imaging extension](../packaging.md)
+for preparation, weighted fitting,
+FFT convolution and diagnostics. `solve_constant_kernel_device` retains its
+results in CuPy-owned buffers without compiling CuPy kernels. Native kernels
+must have both dimensions greater than one; use `backend="cupy"` for
+length-one kernels. Boolean and real binary fit masks are supported.
+The native background polynomial degree must be between 0 and 31.
+`build_compact_source_stamp_mask(..., backend="native")` also performs source
+filtering and scoring in precompiled CUDA, while retaining ordered host
+selection. Automatic backend selection is unchanged.
+
 ## Input and output contract
 
 The reference and target are same-shaped 2D FITS or NPY images. The optional

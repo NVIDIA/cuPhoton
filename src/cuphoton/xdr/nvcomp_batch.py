@@ -610,6 +610,7 @@ def _compute_header_sizes_from_device(
     rel_offsets: np.ndarray,
     lengths: np.ndarray,
     *,
+    native_preprocessing: bool = False,
     _ranges_validated: bool = False,
 ) -> np.ndarray:
     """Parse the gzip header length for each tile.
@@ -645,7 +646,20 @@ def _compute_header_sizes_from_device(
         )
         probe_indices = np.repeat(starts - segment_starts, probe_lengths)
         probe_indices += np.arange(total, dtype=np.int64)
-        return cp.asnumpy(d_concat[cp.asarray(probe_indices)]).tobytes()
+        device_indices = cp.asarray(probe_indices)
+        if native_preprocessing:
+            from cuphoton.core._native_imaging import extension
+
+            prefixes = cp.empty(total, dtype=cp.uint8)
+            extension().gather_bytes(
+                d_concat,
+                device_indices,
+                prefixes,
+                cp.cuda.get_current_stream().ptr,
+            )
+        else:
+            prefixes = d_concat[device_indices]
+        return cp.asnumpy(prefixes).tobytes()
 
     def bounded_groups(probe_lengths):
         """Yield slices whose aggregate gather stays within the byte cap."""
@@ -664,7 +678,7 @@ def _compute_header_sizes_from_device(
             start = stop
 
     # Gather each fixed RFC 1952 prefix into bounded contiguous host buffers.
-    # Indexing by a CuPy index array is one kernel launch + D2H per group.
+    # Each group uses one device gather followed by a bounded D2H transfer.
     peek_len = 10
     header_sizes = np.empty(n, dtype=np.int64)
     pending: list[int] = []
@@ -776,7 +790,9 @@ def _checked_output_offsets(
     return offsets, total
 
 
-def _align_deflate_inputs(d_concat, offsets, lengths):
+def _align_deflate_inputs(
+    d_concat, offsets, lengths, *, native_preprocessing: bool = False
+):
     """Pack raw DEFLATE payloads at nvCOMP's required four-byte alignment."""
     offsets = np.asarray(offsets, dtype=np.int64)
     lengths = np.asarray(lengths, dtype=np.int64)
@@ -784,6 +800,29 @@ def _align_deflate_inputs(d_concat, offsets, lengths):
         return d_concat, offsets, ()
 
     import cupy as cp
+
+    if np.any(lengths > np.iinfo(np.int64).max - 3):
+        raise ValueError("aligned DEFLATE size exceeds the int64 range")
+    aligned_offsets, total = _checked_output_offsets((lengths + 3) & ~3)
+    packed = cp.empty(total, dtype=cp.uint8)
+    if native_preprocessing:
+        from cuphoton.core._native_imaging import extension
+
+        copy_array = extension().copy_array
+        stream = cp.cuda.get_current_stream()
+        try:
+            for source, destination, length in zip(
+                offsets, aligned_offsets, lengths, strict=True
+            ):
+                copy_array(
+                    d_concat[source : source + length],
+                    packed[destination : destination + length],
+                    stream.ptr,
+                )
+        except Exception:
+            stream.synchronize()
+            raise
+        return packed, aligned_offsets, (d_concat, packed)
 
     global _REPACK_DEFLATE_KERNEL
     if _REPACK_DEFLATE_KERNEL is None:
@@ -802,10 +841,6 @@ def _align_deflate_inputs(d_concat, offsets, lengths):
             """,
             "align_deflate",
         )
-    if np.any(lengths > np.iinfo(np.int64).max - 3):
-        raise ValueError("aligned DEFLATE size exceeds the int64 range")
-    aligned_offsets, total = _checked_output_offsets((lengths + 3) & ~3)
-    packed = cp.empty(total, dtype=cp.uint8)
     tables = []
     try:
         for table in (offsets, lengths, aligned_offsets):
@@ -848,6 +883,7 @@ def gpu_gzip_decompress_batch(
     decompression_backend: str = "auto",
     use_cpp_helper: str | bool = "auto",
     use_native_pool: bool = False,
+    native_preprocessing: bool = False,
     keepalive: list | None = None,
     header_sizes=None,
     _decode_checks: list | None = None,
@@ -880,6 +916,9 @@ def gpu_gzip_decompress_batch(
     use_native_pool : bool
         If True and the rebuilt C++ helper is available, allocate the decoded
         tile buffer and native nvCOMP scratch from the native device pool.
+    native_preprocessing : bool
+        Use ahead-of-time device kernels for gzip header probes and DEFLATE
+        alignment. Requires the native imaging extension.
     keepalive : list or None
         Optional owner list that keeps pooled scratch alive until the caller's
         stream event says the decode/scatter work has completed.
@@ -945,6 +984,11 @@ def gpu_gzip_decompress_batch(
                 d_concat,
                 offset_array,
                 length_array,
+                **(
+                    {"native_preprocessing": True}
+                    if native_preprocessing
+                    else {}
+                ),
                 _ranges_validated=True,
             )
         header_sizes = _validate_gzip_header_sizes(header_sizes, length_array)
@@ -1014,7 +1058,12 @@ def gpu_gzip_decompress_batch(
     aligned_owners = ()
     if not use_gzip:
         d_concat, deflate_offsets, aligned_owners = _align_deflate_inputs(
-            d_concat, deflate_offsets, deflate_lengths
+            d_concat,
+            deflate_offsets,
+            deflate_lengths,
+            **(
+                {"native_preprocessing": True} if native_preprocessing else {}
+            ),
         )
         if keepalive is not None:
             keepalive.extend(aligned_owners)

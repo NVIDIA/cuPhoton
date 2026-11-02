@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-SUPPORTED_BACKENDS = {"cpu", "torch", "cupy"}
+SUPPORTED_BACKENDS = {"cpu", "torch", "cupy", "native"}
 
 # Order in which the "auto" default backend is resolved: prefer the fused
 # CuPy GPU path, then CUDA-backed Torch, then the NumPy reference.
@@ -62,6 +62,10 @@ def get_backend(name: str | None):
         from .torch_backend import TorchBackend
 
         return TorchBackend()
+    if name == "native":
+        from .native_backend import NativeBackend
+
+        return NativeBackend()
     if name == "cupy":
         from .cupy_backend import CupyBackend
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import sysconfig
 from pathlib import Path
 
 from setuptools import setup
@@ -31,8 +32,8 @@ def _load_build_helpers(component):
     return module
 
 
-def _build_enabled(variable):
-    mode = os.environ.get(variable, "0").strip().lower()
+def _build_enabled(variable, *, default=False):
+    mode = os.environ.get(variable, "1" if default else "0").strip().lower()
     if mode in _FALSE_VALUES:
         return False
 
@@ -51,9 +52,41 @@ if _build_enabled("CUPHOTON_XDR_BUILD_EXT"):
     extensions.extend(_load_build_helpers("xdr").get_extensions())
 if _build_enabled("CUPHOTON_XRAY_BUILD_EXT"):
     extensions.extend(_load_build_helpers("xray").get_extensions())
-if _build_enabled("CUPHOTON_XFIT_BUILD_EXT"):
+build_xfit = _build_enabled("CUPHOTON_XFIT_BUILD_EXT")
+build_imaging = _build_enabled(
+    "CUPHOTON_IMAGING_BUILD_EXT", default=build_xfit
+)
+if build_xfit or build_imaging:
     xfit = _load_build_helpers("xfit")
-    extensions.extend(xfit.get_extensions())
     commands["build_ext"] = xfit.CUDABuildExt
+    if build_xfit:
+        extensions.extend(xfit.get_extensions())
+    if build_imaging:
+        # Use the same selected SDK, architectures and licensed CCCL headers
+        # for the independent imaging extension.
+        imaging = xfit.get_extensions()[0]
+        source = Path("src/cuphoton/core/src")
+        imaging.name = "cuphoton.core._imaging_ext"
+        imaging.sources = [str(source / "imaging_ext.cpp")]
+        imaging.cuda_source_directory = source
+        imaging.include_dirs.append(sysconfig.get_path("include"))
+        imaging.libraries.append(":libcufft.so.12")
+        units = (
+            "imaging_copy",
+            "imaging_selection",
+            "imaging_reproject",
+            "imaging_xpois",
+            "imaging_fits",
+        )
+        imaging.depends = [
+            str(source / "imaging_api.h"),
+            *(str(source / f"{unit}.cu") for unit in units),
+        ]
+        highest = int(imaging.architectures[-1].removesuffix("a"))
+        imaging.cuda_units = tuple(
+            (unit, False, False, imaging.architectures, (75, highest))
+            for unit in units
+        )
+        extensions.append(imaging)
 
 setup(ext_modules=extensions, cmdclass=commands)

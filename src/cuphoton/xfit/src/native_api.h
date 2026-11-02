@@ -77,4 +77,40 @@ private:
     Impl* impl_;
 };
 
+// Strides describe broadcast views; inputs are borrowed and never mutated.
+struct Input {
+    const void* data = nullptr;
+    std::int64_t strides[4]{};
+    int shape[4]{1, 1, 1, 1};
+    char kind = 0;
+    int itemsize = 0;
+};
+
+// Output order is shared with _native.fit_gaussian_pipeline. The first seven
+// arrays retain the low-level LM boundary; the rest own public result fields.
+struct GaussianFit {
+    Input images, mask, variance, initial;
+    void* outputs[29]{};
+    int count, height, width, planes;
+    bool fp64;
+    double split_weights[3];
+};
+
+class GaussianPipeline {
+public:
+    explicit GaussianPipeline(int device);
+    ~GaussianPipeline();
+    GaussianPipeline(const GaussianPipeline&) = delete;
+    GaussianPipeline& operator=(const GaussianPipeline&) = delete;
+    Timings run(
+        Workspace&,
+        const GaussianFit&,
+        const Settings&,
+        std::uintptr_t producer_stream);
+
+private:
+    struct Impl;
+    Impl* impl_;
+};
+
 }  // namespace cuphoton::xfit

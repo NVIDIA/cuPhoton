@@ -142,6 +142,7 @@ def _prepare_kernel_inputs(
     auto_peak_percentile: float,
     kernel_shape: tuple[int, int],
     device_arrays: bool = False,
+    native_arrays: bool = False,
     fit_positions_path: Path | None = None,
     review: bool = False,
     fits_reader: str = "astropy",
@@ -364,27 +365,39 @@ def _prepare_kernel_inputs(
         fit_mask_kind = "explicit_positions"
     if device_arrays:
         cp, _ = _load_cupy()
+        convert = cp.asarray
+        if native_arrays:
+            from cuphoton.core._native_imaging import asarray
 
-        reference = cp.asarray(reference, dtype=cp.float64)
-        target = cp.asarray(target, dtype=cp.float64)
+            convert = asarray
+        reference = convert(reference, dtype=cp.float64)
+        target = convert(target, dtype=cp.float64)
         if variance is not None:
-            variance = cp.asarray(variance, dtype=cp.float64)
+            variance = convert(variance, dtype=cp.float64)
         if fit_mask is not None:
-            fit_mask = cp.asarray(fit_mask, dtype=cp.bool_)
+            fit_mask = convert(fit_mask, dtype=cp.bool_)
 
     if auto_stamp_mask:
         xp = array_module(reference)
-        selection_image = xp.where(
-            xp.isfinite(reference) & xp.isfinite(target),
-            0.5 * (reference + target),
-            xp.nan,
-        )
+        if native_arrays:
+            from cuphoton.core._native_imaging import (
+                selection_image as native_selection_image,
+            )
+
+            selection_image = native_selection_image(reference, target)
+        else:
+            selection_image = xp.where(
+                xp.isfinite(reference) & xp.isfinite(target),
+                0.5 * (reference + target),
+                xp.nan,
+            )
         auto_mask = build_compact_source_stamp_mask(
             selection_image,
             variance=variance,
             stamp_size=auto_stamp_size,
             max_stamps=auto_stamp_count,
             peak_percentile=auto_peak_percentile,
+            backend="native" if native_arrays else "auto",
         )
         fit_mask = auto_mask.mask
         fit_mask_kind = "auto_stamp_mask"
@@ -505,10 +518,10 @@ def run_constant_kernel_fit(
 
     Notes
     -----
-    Constant fits resolved to CuPy retain their uploaded inputs through
+    Constant fits resolved to CuPy or native CUDA retain their inputs through
     automatic source selection and the device solve. Results are materialized
-    on the host for saved artifacts and review. The device solve uses CuPy
-    linear algebra, so floating-point results may differ from host solves.
+    on the host for saved artifacts and review. Device linear algebra may
+    produce floating-point results that differ from host solves.
     """
 
     if solver not in {"constant", "spatial-als"}:
@@ -569,14 +582,15 @@ def run_constant_kernel_fit(
             auto_stamp_count=auto_stamp_count,
             auto_peak_percentile=auto_peak_percentile,
             kernel_shape=kernel_shape,
-            device_arrays=constant_backend == "cupy",
+            device_arrays=constant_backend in {"cupy", "native"},
+            native_arrays=constant_backend == "native",
             review=review,
             fit_positions_path=fit_positions_path,
             xdr_options=xdr_options,
         )
         solve_start = time.perf_counter()
         result: ConstantKernelFitResult | SpatialALSFitResult
-        if constant_backend == "cupy":
+        if constant_backend in {"cupy", "native"}:
             result = _constant_kernel_result_to_host(
                 solve_constant_kernel_device(
                     prepared.reference,
@@ -587,6 +601,9 @@ def run_constant_kernel_fit(
                     fit_mask=prepared.fit_mask,
                     background_degree=background_degree,
                     flux_conserve=flux_conserve,
+                    backend="native"
+                    if constant_backend == "native"
+                    else "cupy",
                 )
             )
         elif solver == "constant":

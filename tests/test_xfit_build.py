@@ -46,9 +46,11 @@ def _toolkit(tmp_path, version=13000, library_dir="lib64"):
     for name in (
         "include/cuda_runtime.h",
         "include/cublas_v2.h",
+        "include/cusolverDn.h",
         f"{library_dir}/libcudart.so.13",
         f"{library_dir}/libcublas.so.13",
         f"{library_dir}/libcublasLt.so.13",
+        f"{library_dir}/libcusolver.so.12",
     ):
         (root / name).touch()
     nvcc = root / "bin/nvcc"
@@ -83,12 +85,14 @@ def _cccl(tmp_path):
 @pytest.fixture(autouse=True)
 def clear_inherited_compiler(monkeypatch):
     monkeypatch.delenv("CUDACXX", raising=False)
+    monkeypatch.setenv("CUPHOTON_IMAGING_BUILD_EXT", "0")
 
 
 def test_default_build_does_not_discover_cuda(monkeypatch):
     captured = {}
     monkeypatch.delenv("CUPHOTON_XDR_BUILD_EXT", raising=False)
     monkeypatch.delenv("CUPHOTON_XFIT_BUILD_EXT", raising=False)
+    monkeypatch.delenv("CUPHOTON_IMAGING_BUILD_EXT", raising=False)
     monkeypatch.setenv("CUDA_HOME", "/not/a/toolkit")
     monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", "/not/cccl")
     monkeypatch.setattr(setuptools, "setup", lambda **kw: captured.update(kw))
@@ -135,7 +139,11 @@ def test_native_build_is_enabled_independently(
     assert extension.architectures == ("100", "120")
     assert extension.py_limited_api is False
     assert extension.library_dirs == [str(root / library_dir)]
-    assert extension.libraries == [":libcudart.so.13", ":libcublas.so.13"]
+    assert extension.libraries == [
+        ":libcudart.so.13",
+        ":libcublas.so.13",
+        ":libcusolver.so.12",
+    ]
     assert extension.include_dirs == [
         str(cccl / "cub"),
         str(cccl / "libcudacxx"),
@@ -222,6 +230,7 @@ def test_native_build_requires_explicit_complete_cccl(monkeypatch, tmp_path):
         ("89", {"89"}, {"75", "89"}),
         ("75;120", {"75", "120"}, {"75", "120"}),
         ("100;120", {"100", "120"}, {"75", "120"}),
+        ("103;120;121", {"103", "120", "121"}, {"75", "121"}),
         ("120a", {"120a"}, {"75", "120"}),
         (
             "120a,90a;100 120a 100a 075",
@@ -286,7 +295,18 @@ def test_cuda_targets_math_flags_and_relink_dependencies(
         assert all(path in linked.depends for path in linked.extra_objects)
         for source, arguments in compiled.items():
             specialized = source.startswith("native_jacobian")
-            targets = {"100a"} if specialized else portable_targets
+            targets = (
+                (
+                    {
+                        target
+                        for target in portable_targets
+                        if int(target.removesuffix("a")) >= 100
+                    }
+                    or {"100a"}
+                )
+                if specialized
+                else portable_targets
+            )
             ptx_targets = {"100"} if specialized else portable_ptx
             flags = [
                 flag

@@ -123,11 +123,12 @@ uv run --locked --python 3.12 --extra gpu --extra cutile \
 
 ### Optional native CUDA backend
 
-`backend="native"` runs Gaussian LM iterations in CUDA C++ and keeps input
-preparation and final rank/covariance diagnostics on the existing CuPy path.
+`backend="native"` runs Gaussian input preparation, LM iterations and final
+rank/covariance diagnostics in ahead-of-time CUDA C++.
 It supports float32 and float64 images in difference and split modes, with
-analytic derivatives. It uses cuBLAS for normal equations and pivoted linear
-solves. Sampled-stamp models, custom Gaussian subclasses, and finite-difference
+analytic derivatives. It uses cuBLAS and cuSOLVER for linear algebra. CuPy
+arrays own the device buffers; this path does not compile CuPy kernels.
+Sampled-stamp models, custom Gaussian subclasses, and finite-difference
 fitting require another backend.
 `auto` keeps its existing CuPy/NumPy selection.
 
@@ -135,10 +136,14 @@ The [native wheel and Conda builds](../packaging.md) include this extension.
 Installing
 the wheel with `cuphoton[io]` supplies its runtime dependencies; no compiler
 or development toolkit is needed to run it. `cuda.pathfinder` locates and
-loads CUDA 13 and cuBLAS before the extension is imported.
+loads CUDA 13, cuBLAS and cuSOLVER before the extension is imported.
 
 Build the optional extension from source on Linux with a CUDA 13 toolkit,
-cuBLAS 13, and a C++17 compiler. Select the CCCL 3.1.2 headers bundled with
+cuBLAS 13, cuSOLVER 12, cuFFT 12, and a C++17 compiler. Native xFit builds also
+include the imaging extension, which provides reprojection, source selection,
+constant-kernel subtraction and compressed-FITS restoration. Set
+`CUPHOTON_IMAGING_BUILD_EXT=0` to build xFit alone without the cuFFT requirement.
+Select the CCCL 3.1.2 headers bundled with
 CuPy to preserve its reduction order. The build verifies their version and
 complete license against the shipped notice. This header lookup does
 not import CuPy or initialize CUDA. For example:
@@ -164,14 +169,16 @@ fallback when no compatible cubin is available. The default cubin target is
 `75`. Install the wheel into
 the matching Python environment together with CuPy for CUDA 13. FP64 fits
 on compute capability 10.0 with thread-block cluster support also use a fused
-Jacobian and equation-packing kernel, built separately for SM 100a with
-ordinary compute 100 PTX. FP64 batches of at most 16 51×51 difference images
+Jacobian and equation-packing kernel, built separately for each requested
+target at SM 100 or newer with ordinary compute 100 PTX. FP64 batches of at most
+16 51×51 difference images
 use tiled Jacobian kernels on SM 120 and SM 121. SM 120 also fuses trial
 residuals; SM 121 uses specialized Hessian kernels only when the cuBLAS handle
 reports version `130101`. Other configurations use the portable native kernels.
 Pathfinder resolves the CUDA
-runtime and cuBLAS libraries (`libcudart.so.13`, `libcublas.so.13`, and
-`libcublasLt.so.13`) from installed NVIDIA packages or a system toolkit.
+runtime, cuBLAS and cuSOLVER libraries (`libcudart.so.13`, `libcublas.so.13`,
+`libcublasLt.so.13`, and `libcusolver.so.12`) from installed NVIDIA packages
+or a system toolkit. Native imaging also loads `libcufft.so.12`.
 If another CUDA version is installed, put the CUDA 13 toolkit's `lib64`
 directory first in `LD_LIBRARY_PATH` before starting Python. The loader
 rejects a discovered CUDA runtime or cuBLAS library with a different major
@@ -200,7 +207,7 @@ CUPHOTON_XFIT_BUILD_EXT=1 CUPHOTON_XFIT_CUDA_ARCHS=120 \
 Select an architecture supported by your GPU; this example targets compute
 capability 12.0. These compiler packages supplement the CUDA runtime installed
 by the GPU extra. They still require a system C++17 compiler. The build links
-the versioned runtime and cuBLAS libraries directly; unversioned symlinks are
+the versioned CUDA libraries directly; unversioned symlinks are
 unnecessary.
 After this editable build, use `uv run --no-sync` to preserve the selected
 installation.
