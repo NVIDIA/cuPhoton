@@ -430,7 +430,8 @@ __global__ void physical_parameters(GaussianFit fit) {
 }
 
 template <typename T>
-__global__ void public_residuals(GaussianFit fit, T* squared, T cube_exponent) {
+__global__ void public_residuals(
+    GaussianFit fit, T* squared, std::size_t null_offset, T cube_exponent) {
     int row = blockIdx.x, m = fit.height * fit.width * fit.planes;
     T parameters[8];
     for (int p = 0; p < 8; ++p) {
@@ -452,8 +453,7 @@ __global__ void public_residuals(GaussianFit fit, T* squared, T cube_exponent) {
         T weighted = rn_mul(residual, weight);
         T null_value = rn_mul(static_cast<const T*>(fit.outputs[1])[i], weight);
         squared[i] = rn_mul(weighted, weighted);
-        squared[std::size_t(fit.count) * m + i] =
-            rn_mul(null_value, null_value);
+        squared[null_offset + i] = rn_mul(null_value, null_value);
     }
 }
 
@@ -1021,8 +1021,15 @@ struct GaussianPipeline::Impl {
             initialize_diagnostics<T><<<1, 1, 0, stream>>>(fit, ranks, false);
         }
         physical_parameters<T><<<(count + 127) / 128, 128, 0, stream>>>(fit);
-        T* squared = squared_residuals.get<T>(std::size_t(count) * m * 2);
-        public_residuals<T><<<count, threads, 0, stream>>>(fit, squared, T(3));
+        const std::size_t elements = std::size_t(count) * m;
+        // Match separate CuPy allocations: CUB's vectorized reduction changes
+        // its summation order when the input base is unaligned.
+        const std::size_t alignment = 256 / sizeof(T);
+        const std::size_t null_offset =
+            ((elements + alignment - 1) / alignment) * alignment;
+        T* squared = squared_residuals.get<T>(null_offset + elements);
+        public_residuals<T>
+            <<<count, threads, 0, stream>>>(fit, squared, null_offset, T(3));
         std::size_t reduction_bytes = 0;
         check(
             static_cast<cudaError_t>(xfit_library_sums(
@@ -1038,7 +1045,7 @@ struct GaussianPipeline::Impl {
         for (int component = 0; component < 2; ++component) {
             check(
                 static_cast<cudaError_t>(xfit_library_sums(
-                    squared + std::size_t(component) * count * m,
+                    squared + (component ? null_offset : 0),
                     fit.outputs[component ? 16 : 13],
                     count,
                     m,

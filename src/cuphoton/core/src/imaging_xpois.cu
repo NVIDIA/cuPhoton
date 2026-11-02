@@ -373,7 +373,11 @@ __global__ void multiply_spectra(
     const cufftDoubleComplex b = right[index];
     // Explicit fused products match the complex multiplication used by CuPy's
     // default NVRTC build even when the surrounding scalar kernels disable FMA.
+#if __CUDA_ARCH__ < 1000
+    left[index] = {fma(a.x, b.x, -a.y * b.y), fma(a.x, b.y, a.y * b.x)};
+#else
     left[index] = {fma(a.x, b.x, -a.y * b.y), fma(a.y, b.x, a.x * b.y)};
+#endif
 }
 
 __global__ void image_outputs(
