@@ -81,7 +81,16 @@ def _reference_compact_source_stamp_mask(
         candidates.append(
             (score, compact_fraction, -radial_moment, y, x, (y0, y1, x0, x1))
         )
-    candidates.sort(reverse=True)
+    candidates.sort(
+        key=lambda row: (
+            row[0],
+            np.round(row[1], 9),
+            np.round(row[2], 6),
+            row[3],
+            row[4],
+        ),
+        reverse=True,
+    )
     selected: list[tuple] = []
     for candidate in candidates:
         _, _, _, y, x, _ = candidate
@@ -232,6 +241,25 @@ def test_near_tie_keeps_higher_score_ahead_of_compactness():
     assert reference["centers"] == ((50, 50),)
     result = build_compact_source_stamp_mask(image, **options)
     _assert_matches_reference(result, reference)
+
+
+def test_equal_scores_use_rounded_secondary_metrics_before_coordinates():
+    image = np.zeros((41, 61))
+    image[20, 20] = image[20, 26] = 100.0
+    # This tail changes raw compactness/radius below their ranking precision.
+    image[20, 28] = 1e-8
+    options = dict(
+        stamp_size=5,
+        max_stamps=1,
+        background_filter_size=3,
+        peak_filter_size=3,
+        min_separation=7,
+    )
+    result = build_compact_source_stamp_mask(image, **options)
+    assert result.centers == ((20, 26),)
+    _assert_matches_reference(
+        result, _reference_compact_source_stamp_mask(image, **options)
+    )
 
 
 @pytest.mark.parametrize("masked", [False, True])
