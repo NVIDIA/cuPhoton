@@ -558,7 +558,9 @@ struct GaussianPipeline::Impl {
     explicit Impl(int id)
         : device(id) {}
     ~Impl() {
-        DeviceGuard guard(device);
+        int previous = device;
+        cudaGetDevice(&previous);
+        cudaSetDevice(device);
         if (svd_info) {
             cusolverDnDestroyGesvdjInfo(svd_info);
         }
@@ -568,6 +570,7 @@ struct GaussianPipeline::Impl {
         if (blas) {
             cublasDestroy(blas);
         }
+        cudaSetDevice(previous);
     }
 
     template <typename T>
@@ -1144,8 +1147,13 @@ GaussianPipeline::GaussianPipeline(int device)
 }
 
 GaussianPipeline::~GaussianPipeline() {
-    DeviceGuard guard(impl_->device);
+    // Keep the owning device active through the buffer member destructors.
+    // Cleanup must not throw after a CUDA fault or during runtime teardown.
+    int previous = impl_->device;
+    cudaGetDevice(&previous);
+    cudaSetDevice(impl_->device);
     delete impl_;
+    cudaSetDevice(previous);
 }
 
 Timings GaussianPipeline::run(

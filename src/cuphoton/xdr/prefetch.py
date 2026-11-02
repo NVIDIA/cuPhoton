@@ -1764,6 +1764,8 @@ def batch_to_device_stream(
     postprocess
         "auto" (default) and "fused" restore FITS pixel order in one kernel.
         "separate" uses individual unshuffle, byteswap and scatter kernels.
+        "native" uses ahead-of-time CUDA kernels and requires the native
+        imaging extension.
     gzip_decoder
         "auto" uses native Gzip when available, otherwise aligned DEFLATE.
         "gzip" requires native Gzip support; "deflate" selects raw DEFLATE.

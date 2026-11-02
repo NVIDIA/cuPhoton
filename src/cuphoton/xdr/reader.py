@@ -499,6 +499,8 @@ class GpuCompImageReader:
         and an extra decoded-buffer allocation; GZIP_1 also requires a copy.
         This comparison mode preserves the input, unlike the former in-place
         GZIP_1 path, so its timings are not an exact historical baseline.
+        ``native`` uses ahead-of-time CUDA kernels and requires the native
+        imaging extension.
         """
         normalize_xdr_options({"postprocess": postprocess})
         import cupy as cp
