@@ -35,6 +35,7 @@ from .ois import (
     ConstantKernelFitResult,
     DeviceConstantKernelFitResult,
     GaussianBasisComponent,
+    _load_cupy,
     build_compact_source_stamp_mask,
     resolve_backend,
     solve_constant_kernel,
@@ -362,7 +363,7 @@ def _prepare_kernel_inputs(
             input_read_sec += time.perf_counter() - input_read_start
         fit_mask_kind = "explicit_positions"
     if device_arrays:
-        import cupy as cp
+        cp, _ = _load_cupy()
 
         reference = cp.asarray(reference, dtype=cp.float64)
         target = cp.asarray(target, dtype=cp.float64)

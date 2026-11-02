@@ -214,6 +214,28 @@ jobs:
           assert not report.findall(".//error")
           print(f"All {len(cases)} selected tests passed without skips")
           PY
+      - name: Run xPois GPU workflow and source-selection tests
+        run: >-
+          uv run --no-sync pytest -q -rs -m gpu
+          --junitxml="${RUNNER_TEMP}/xpois-gpu.xml"
+          tests/xpois/test_workflows.py::test_run_constant_kernel_fit_auto_stamp_mask_records_metadata
+          tests/xpois/test_workflows.py::test_run_constant_kernel_fit_device_solve_preserves_host_artifacts
+          tests/xpois/test_compact_stamp_mask.py::test_cupy_input_returns_device_mask_and_host_diagnostics
+      - name: Require xPois GPU tests to execute
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xpois-gpu.xml")
+          cases = report.findall(".//testcase")
+          assert len(cases) == 6, len(cases)
+          assert not report.findall(".//skipped"), "xPois GPU tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          print(f"All {len(cases)} xPois GPU tests passed without skips")
+          PY
       - name: Run xImage GPU parity tests
         run: >-
           uv run --no-sync pytest -q -rs -m gpu
@@ -419,6 +441,7 @@ jobs:
           name: gpu-l40g-${{ github.sha }}
           path: |
             ${{ runner.temp }}/xfit-gpu.xml
+            ${{ runner.temp }}/xpois-gpu.xml
             ${{ runner.temp }}/xfit-native-gpu.xml
             ${{ runner.temp }}/ximage-gpu.xml
             ${{ runner.temp }}/xfit-numba-mlir.xml

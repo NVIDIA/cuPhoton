@@ -210,8 +210,9 @@ checks in separate fresh containers. Image pulls have bounded retries;
 installation and test failures fail the job without retrying.
 
 The GPU job uses one L40G with Python 3.12 and the locked CUDA 13 dependencies.
-It checks CuPy/PyTorch execution, runs 60 xFit GPU and pipeline cases, and runs
-all five synthetic quickstarts with `--require-gpu`. Missing CUDA support or
+It checks CuPy/PyTorch execution, runs 60 xFit GPU and pipeline cases,
+six xPois workflow and source-selection cases, and all five synthetic
+quickstarts with `--require-gpu`. Missing CUDA support or
 skipped parity cases fail the job. JUnit results and quickstart summaries are
 uploaded with the tested commit SHA. GPU jobs run one at a time; a new
 revision cancels the previous workflow for the same branch.

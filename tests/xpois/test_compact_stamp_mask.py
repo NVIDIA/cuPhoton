@@ -251,6 +251,7 @@ def test_rejected_stamps_report_no_valid_sources(masked):
         )
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("max_stamps", [4, 10_000])
 def test_cupy_input_returns_device_mask_and_host_diagnostics(
     monkeypatch, max_stamps
@@ -326,7 +327,7 @@ def test_spatial_grid_preserves_strict_greedy_order(reverse, limit):
 def test_separation_preserves_numpy_arithmetic_and_limits(
     shape, distance, limit
 ):
-    coordinates = [(1, 1), (1, 1), (30_001, 40_001), (50_001, 1)]
+    coordinates = [(1, 1), (1, 1), (2, 2), (30_001, 40_001), (50_001, 1)]
     coordinates.extend((row, 60_001) for row in range(1, 31, 3))
     if shape[0] > 100_001:
         coordinates.append((shape[0] - 1, 1))
