@@ -168,7 +168,8 @@ def test_valid_mask_and_small_stamps_match_reference_scan():
     _assert_matches_reference(result, reference)
 
 
-def test_many_candidates_use_bounded_stamp_batches(monkeypatch):
+@pytest.mark.parametrize("max_stamps", [5, 161 * 161])
+def test_many_candidates_use_bounded_stamp_batches(monkeypatch, max_stamps):
     image = np.zeros((161, 161))
     image[8:153:8, 8:153:8] = np.arange(1, 362).reshape(19, 19)
     valid_mask = np.ones(image.shape, dtype=bool)
@@ -176,7 +177,7 @@ def test_many_candidates_use_bounded_stamp_batches(monkeypatch):
     options = dict(
         valid_mask=valid_mask,
         stamp_size=7,
-        max_stamps=5,
+        max_stamps=max_stamps,
         peak_percentile=90.0,
         background_filter_size=3,
         peak_filter_size=3,
@@ -250,22 +251,94 @@ def test_rejected_stamps_report_no_valid_sources(masked):
         )
 
 
-def test_cupy_input_returns_device_mask_and_host_diagnostics(monkeypatch):
+@pytest.mark.gpu
+@pytest.mark.parametrize("max_stamps", [4, 10_000])
+def test_cupy_input_returns_device_mask_and_host_diagnostics(
+    monkeypatch, max_stamps
+):
     cupy = pytest.importorskip("cupy")
     monkeypatch.setattr(ois, "_STAMP_CHUNK_ELEMENTS", 3 * 21 * 21)
     image = _scene(shape=(300, 400), count=60)
     variance = np.full(image.shape, 9.0)
     host = build_compact_source_stamp_mask(
-        image, variance=variance, stamp_size=21, max_stamps=4
+        image, variance=variance, stamp_size=21, max_stamps=max_stamps
     )
     device = build_compact_source_stamp_mask(
         cupy.asarray(image),
         variance=cupy.asarray(variance),
         stamp_size=21,
-        max_stamps=4,
+        max_stamps=max_stamps,
     )
     assert type(device.mask).__module__.startswith("cupy")
     assert device.centers == host.centers
     assert device.threshold == pytest.approx(host.threshold)
     assert device.scores == pytest.approx(host.scores, rel=1e-10)
     assert np.array_equal(device.mask.get(), host.mask)
+
+
+def _legacy_separated_indices(ordered, distance, limit):
+    selected = []
+    distance_squared = distance * distance
+    for index, candidate in enumerate(ordered):
+        if any(
+            (candidate.y - ordered[other].y) ** 2
+            + (candidate.x - ordered[other].x) ** 2
+            < distance_squared
+            for other in selected
+        ):
+            continue
+        selected.append(index)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("limit", [6, 10_000])
+def test_spatial_grid_preserves_strict_greedy_order(reverse, limit):
+    # Duplicates, exact-radius pairs, adjacent bins and a greedy chain.
+    coordinates = [(8, 8), (8, 8), (11, 12), (8, 12), (8, 16), (13, 8)]
+    rng = np.random.default_rng(24)
+    coordinates.extend(map(tuple, rng.integers(0, 64, size=(240, 2))))
+    if reverse:
+        coordinates.reverse()
+    ordered = np.rec.fromarrays(
+        np.asarray(coordinates, dtype=np.int64).T, names="y,x"
+    )
+    expected = _legacy_separated_indices(ordered, 5, limit)
+    actual = ois._select_separated_sources(ordered, (64, 64), 5, limit)
+    assert np.array_equal(
+        np.asarray(actual, dtype=ordered.dtype), ordered[expected]
+    )
+
+
+@pytest.mark.parametrize(
+    "shape,distance,limit",
+    [
+        ((100_001, 100_001), np.int64(50_000), 100),
+        ((100_001, 100_001), np.int32(50_000), 100),
+        ((100_001, 100_001), 1.5, 100),
+        ((100_001, 100_001), 5, 5),
+        ((100_001, 100_001), 5, 6.5),
+        ((100_001, 100_001), np.int64(2**32), 100),
+        ((2**32, 100_001), 5, 100),
+    ],
+)
+def test_separation_preserves_numpy_arithmetic_and_limits(
+    shape, distance, limit
+):
+    coordinates = [(1, 1), (1, 1), (2, 2), (30_001, 40_001), (50_001, 1)]
+    coordinates.extend((row, 60_001) for row in range(1, 31, 3))
+    if shape[0] > 100_001:
+        coordinates.append((shape[0] - 1, 1))
+    ordered = np.rec.fromarrays(
+        np.asarray(coordinates, dtype=np.int64).T, names="y,x"
+    )
+    with np.errstate(over="ignore"):
+        expected = _legacy_separated_indices(ordered, distance, limit)
+        actual = ois._select_separated_sources(
+            ordered, shape, distance, limit
+        )
+    assert np.array_equal(
+        np.asarray(actual, dtype=ordered.dtype), ordered[expected]
+    )

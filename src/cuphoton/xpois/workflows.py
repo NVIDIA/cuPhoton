@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from cuphoton import __version__
+from cuphoton.core.arrays import array_module, to_host
 from cuphoton.core.runtime import runtime_metadata
 
 from .data import (
@@ -32,9 +33,13 @@ from .data import (
 from .ois import (
     EXPLICIT_BACKENDS,
     ConstantKernelFitResult,
+    DeviceConstantKernelFitResult,
     GaussianBasisComponent,
+    _load_cupy,
     build_compact_source_stamp_mask,
+    resolve_backend,
     solve_constant_kernel,
+    solve_constant_kernel_device,
 )
 from .review import identify_residual_hotspots, write_review_metadata
 from .review_bokeh import write_interactive_review_artifact
@@ -89,9 +94,9 @@ _HSC_MASKLITE_PLANES = (
 
 @dataclass
 class _PreparedKernelInputs:
-    reference: np.ndarray
-    target: np.ndarray
-    variance: np.ndarray | None
+    reference: Any
+    target: Any
+    variance: Any | None
     raw_reference: np.ndarray | None
     raw_target: np.ndarray | None
     reference_mask: np.ndarray | None
@@ -104,7 +109,7 @@ class _PreparedKernelInputs:
     crop_metadata: dict[str, int] | None
     normalized_mask_policy: str
     preprocessing_metadata: dict[str, Any]
-    fit_mask: np.ndarray | None
+    fit_mask: Any | None
     fit_positions: np.ndarray | None
     fit_mask_kind: str | None
     fit_mask_metadata: dict[str, Any] | None
@@ -136,6 +141,7 @@ def _prepare_kernel_inputs(
     auto_stamp_count: int,
     auto_peak_percentile: float,
     kernel_shape: tuple[int, int],
+    device_arrays: bool = False,
     fit_positions_path: Path | None = None,
     review: bool = False,
     fits_reader: str = "astropy",
@@ -356,11 +362,22 @@ def _prepare_kernel_inputs(
         finally:
             input_read_sec += time.perf_counter() - input_read_start
         fit_mask_kind = "explicit_positions"
-    elif auto_stamp_mask:
-        selection_image = np.where(
-            np.isfinite(reference) & np.isfinite(target),
+    if device_arrays:
+        cp, _ = _load_cupy()
+
+        reference = cp.asarray(reference, dtype=cp.float64)
+        target = cp.asarray(target, dtype=cp.float64)
+        if variance is not None:
+            variance = cp.asarray(variance, dtype=cp.float64)
+        if fit_mask is not None:
+            fit_mask = cp.asarray(fit_mask, dtype=cp.bool_)
+
+    if auto_stamp_mask:
+        xp = array_module(reference)
+        selection_image = xp.where(
+            xp.isfinite(reference) & xp.isfinite(target),
             0.5 * (reference + target),
-            np.nan,
+            xp.nan,
         )
         auto_mask = build_compact_source_stamp_mask(
             selection_image,
@@ -398,6 +415,28 @@ def _prepare_kernel_inputs(
         input_read_sec=input_read_sec,
         fits_reads=fits_reads,
         preprocess_sec=preprocess_sec,
+    )
+
+
+def _constant_kernel_result_to_host(
+    result: DeviceConstantKernelFitResult,
+) -> ConstantKernelFitResult:
+    """Materialize device fit arrays before writing host artifacts."""
+    return ConstantKernelFitResult(
+        kernel=to_host(result.kernel),
+        matched=to_host(result.matched),
+        residual=to_host(result.residual),
+        fit_mask=to_host(result.fit_mask),
+        background=to_host(result.background),
+        kernel_coefficients=to_host(result.kernel_coefficients),
+        background_coefficients=to_host(result.background_coefficients),
+        basis_kernels=to_host(result.basis_kernels),
+        basis_terms=result.basis_terms,
+        chi2=result.chi2,
+        dof=result.dof,
+        fit_pixel_count=result.fit_pixel_count,
+        flux_conserve=result.flux_conserve,
+        backend=result.backend,
     )
 
 
@@ -463,6 +502,13 @@ def run_constant_kernel_fit(
     -------
     WorkflowResult
         Run directory and JSON-compatible summary of saved artifacts.
+
+    Notes
+    -----
+    Constant fits resolved to CuPy retain their uploaded inputs through
+    automatic source selection and the device solve. Results are materialized
+    on the host for saved artifacts and review. The device solve uses CuPy
+    linear algebra, so floating-point results may differ from host solves.
     """
 
     if solver not in {"constant", "spatial-als"}:
@@ -490,9 +536,12 @@ def run_constant_kernel_fit(
     run_dir.mkdir(parents=True, exist_ok=False)
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir()
-    run_setup_sec = time.perf_counter() - run_setup_start
 
     try:
+        constant_backend = (
+            resolve_backend(backend) if solver == "constant" else None
+        )
+        run_setup_sec = time.perf_counter() - run_setup_start
         prepared = _prepare_kernel_inputs(
             fits_reader=(
                 "astropy"
@@ -520,13 +569,27 @@ def run_constant_kernel_fit(
             auto_stamp_count=auto_stamp_count,
             auto_peak_percentile=auto_peak_percentile,
             kernel_shape=kernel_shape,
+            device_arrays=constant_backend == "cupy",
             review=review,
             fit_positions_path=fit_positions_path,
             xdr_options=xdr_options,
         )
         solve_start = time.perf_counter()
         result: ConstantKernelFitResult | SpatialALSFitResult
-        if solver == "constant":
+        if constant_backend == "cupy":
+            result = _constant_kernel_result_to_host(
+                solve_constant_kernel_device(
+                    prepared.reference,
+                    prepared.target,
+                    components,
+                    kernel_shape=kernel_shape,
+                    variance=prepared.variance,
+                    fit_mask=prepared.fit_mask,
+                    background_degree=background_degree,
+                    flux_conserve=flux_conserve,
+                )
+            )
+        elif solver == "constant":
             result = solve_constant_kernel(
                 prepared.reference,
                 prepared.target,
@@ -536,7 +599,7 @@ def run_constant_kernel_fit(
                 fit_mask=prepared.fit_mask,
                 background_degree=background_degree,
                 flux_conserve=flux_conserve,
-                backend=backend,
+                backend=constant_backend or backend,
             )
         else:
             result = solve_spatial_als(

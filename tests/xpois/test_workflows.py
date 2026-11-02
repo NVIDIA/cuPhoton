@@ -11,6 +11,7 @@ import logging
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -161,6 +162,38 @@ def test_run_constant_kernel_fit_rejects_spatial_als_unsupported_backend(
         )
 
     assert not (tmp_path / "runs" / "spatial-gpu-run").exists()
+
+
+def test_run_constant_kernel_fit_reports_cupy_install_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_import = builtins.__import__
+
+    def without_cupy(name, *args, **kwargs):
+        if name == "cupy":
+            raise ModuleNotFoundError("No module named 'cupy'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_cupy)
+    reference, target = _write_spatial_als_inputs(tmp_path)
+    with pytest.raises(ImportError, match="uv sync --extra gpu"):
+        workflows.run_constant_kernel_fit(
+            reference_path=reference,
+            target_path=target,
+            reference_hdu=None,
+            target_hdu=None,
+            output_root=tmp_path,
+            name="missing-cupy",
+            kernel_shape=(5, 5),
+            components=[GaussianBasisComponent(sigma=0.9, degree=0)],
+            variance_path=None,
+            fit_mask_path=None,
+            background_degree=0,
+            flux_conserve=False,
+            backend="cupy",
+            review=False,
+        )
+    assert not (tmp_path / "missing-cupy").exists()
 
 
 @pytest.mark.parametrize(
@@ -377,11 +410,31 @@ def test_run_spatial_als_cleans_failed_run_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("review_enabled", [False, True])
+@pytest.mark.parametrize("backend", ["auto", "cupy"])
 def test_run_spatial_als_writes_solver_specific_artifacts(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     review_enabled: bool,
+    backend: str,
 ) -> None:
     reference, target = _write_spatial_als_inputs(tmp_path)
+    if backend == "cupy":
+        # Check dispatch on CPU; real GPU parity is tested separately.
+        spatial_solver = workflows.solve_spatial_als
+
+        def cpu_spatial_solver(*args, **kwargs):
+            assert kwargs.pop("backend") == "cupy"
+            return spatial_solver(*args, backend="cpu", **kwargs)
+
+        def unexpected_device_preparation():
+            pytest.fail("spatial ALS must retain its own preparation path")
+
+        monkeypatch.setattr(
+            workflows, "solve_spatial_als", cpu_spatial_solver
+        )
+        monkeypatch.setattr(
+            workflows, "_load_cupy", unexpected_device_preparation
+        )
 
     result = workflows.run_constant_kernel_fit(
         reference_path=reference,
@@ -397,7 +450,7 @@ def test_run_spatial_als_writes_solver_specific_artifacts(
         fit_mask_path=None,
         background_degree=0,
         flux_conserve=True,
-        backend="auto",
+        backend=backend,
         solver="spatial-als",
         spatial_degree=1,
         als_iterations=12,
@@ -406,7 +459,7 @@ def test_run_spatial_als_writes_solver_specific_artifacts(
     )
 
     assert result.summary["solver"] == "spatial-als"
-    assert result.summary["requested_backend"] == "auto"
+    assert result.summary["requested_backend"] == backend
     assert result.summary["backend"] == "cpu"
     assert result.summary["kernel_sum_center"] == pytest.approx(
         result.summary["spatial_als"]["flux_scale"],
@@ -707,9 +760,39 @@ def test_benchmark_spatial_als_cupy_matches_cpu(tmp_path: Path) -> None:
     assert summary["solver_facts"]["cupy"]["design_chunk_size"] > 0
 
 
+@pytest.mark.parametrize(
+    ("backend", "selection_backend"),
+    [
+        ("cpu", "cpu"),
+        ("auto", "cpu"),
+        pytest.param("cupy", "cupy", marks=pytest.mark.gpu),
+        pytest.param("auto", "cupy", marks=pytest.mark.gpu),
+    ],
+)
 def test_run_constant_kernel_fit_auto_stamp_mask_records_metadata(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    selection_backend: str,
 ) -> None:
+    if selection_backend == "cupy":
+        cp = pytest.importorskip("cupy")
+        try:
+            device_count = int(cp.cuda.runtime.getDeviceCount())
+        except Exception as exc:
+            pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+        if device_count < 1:
+            pytest.skip("CuPy CUDA runtime has no visible device")
+        monkeypatch.setattr(
+            "cuphoton.xpois.ois._backend_available",
+            lambda candidate: candidate in {"cpu", "cupy"},
+        )
+    elif backend == "auto":
+        # Exercise CPU fallback independently of installed GPU extras.
+        monkeypatch.setattr(
+            "cuphoton.xpois.ois._backend_available", lambda backend: False
+        )
+
     reference = tmp_path / "reference.npy"
     target = tmp_path / "target.npy"
     variance = tmp_path / "variance.npy"
@@ -717,6 +800,48 @@ def test_run_constant_kernel_fit_auto_stamp_mask_records_metadata(
     np.save(reference, arr, allow_pickle=False)
     np.save(target, arr, allow_pickle=False)
     np.save(variance, np.ones_like(arr, dtype=np.float64), allow_pickle=False)
+    selector = workflows.build_compact_source_stamp_mask
+    expected_mask = selector(
+        cp.asarray(arr) if selection_backend == "cupy" else arr,
+        variance=(
+            cp.asarray(np.ones_like(arr))
+            if selection_backend == "cupy"
+            else np.ones_like(arr)
+        ),
+        stamp_size=15,
+        max_stamps=2,
+        peak_percentile=98.0,
+    )
+    expected_mask = replace(
+        expected_mask, mask=workflows.to_host(expected_mask.mask)
+    )
+    selector_calls = []
+    selected_inputs = {}
+    device_solve_calls = []
+    device_solver = workflows.solve_constant_kernel_device
+
+    def tracked_selector(image, **kwargs):
+        selector_calls.append(type(image).__module__.split(".")[0])
+        selected = selector(image, **kwargs)
+        selected_inputs.update(
+            variance=kwargs["variance"], mask=selected.mask
+        )
+        return selected
+
+    def tracked_device_solver(reference, target, *args, **kwargs):
+        assert isinstance(reference, cp.ndarray)
+        assert isinstance(target, cp.ndarray)
+        assert kwargs["variance"] is selected_inputs["variance"]
+        assert kwargs["fit_mask"] is selected_inputs["mask"]
+        device_solve_calls.append(True)
+        return device_solver(reference, target, *args, **kwargs)
+
+    monkeypatch.setattr(
+        workflows, "build_compact_source_stamp_mask", tracked_selector
+    )
+    monkeypatch.setattr(
+        workflows, "solve_constant_kernel_device", tracked_device_solver
+    )
 
     result = workflows.run_constant_kernel_fit(
         reference_path=reference,
@@ -736,17 +861,193 @@ def test_run_constant_kernel_fit_auto_stamp_mask_records_metadata(
         auto_peak_percentile=98.0,
         background_degree=0,
         flux_conserve=False,
+        backend=backend,
+        review=False,
     )
 
+    assert selector_calls == [
+        "cupy" if selection_backend == "cupy" else "numpy"
+    ]
+    assert device_solve_calls == (
+        [True] if selection_backend == "cupy" else []
+    )
+    expected = workflows.solve_constant_kernel(
+        arr,
+        arr,
+        [GaussianBasisComponent(sigma=1.5, degree=0)],
+        kernel_shape=(9, 9),
+        variance=np.ones_like(arr),
+        fit_mask=expected_mask.mask,
+        backend=selection_backend,
+    )
+    for name in ("fit_mask", "kernel", "matched", "residual", "background"):
+        actual = np.load(result.run_dir / result.summary["saved"][name])
+        if selection_backend == "cupy" and name != "fit_mask":
+            np.testing.assert_allclose(
+                actual, getattr(expected, name), rtol=1e-9, atol=1e-8
+            )
+        else:
+            np.testing.assert_array_equal(actual, getattr(expected, name))
+    assert result.summary["fit_pixel_count"] == expected.fit_pixel_count
+    assert result.summary["dof"] == expected.dof
+    assert result.summary["chi2"] == pytest.approx(
+        expected.chi2, rel=1e-9, abs=1e-8
+    )
     fit_region = result.summary["fit_region"]
     assert fit_region["kind"] == "auto_stamp_mask"
     assert fit_region["selected_count"] == 2
     assert fit_region["stamp_size"] == 15
+    assert (
+        fit_region["centers_yx"] == expected_mask.to_metadata()["centers_yx"]
+    )
     assert "fit_mask_metadata" in result.summary["saved"]
     metadata_path = (
         result.run_dir / result.summary["saved"]["fit_mask_metadata"]
     )
-    assert metadata_path.exists()
+    assert (
+        json.loads(metadata_path.read_text()) == expected_mask.to_metadata()
+    )
+
+
+@pytest.mark.parametrize(
+    ("backend", "explicit_mask", "use_gpu"),
+    [
+        pytest.param("cupy", True, True, marks=pytest.mark.gpu),
+        pytest.param("auto", False, True, marks=pytest.mark.gpu),
+        pytest.param("cupy", True, False, id="cpu-dispatch"),
+    ],
+)
+def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    explicit_mask: bool,
+    use_gpu: bool,
+) -> None:
+    if use_gpu:
+        cp = pytest.importorskip("cupy")
+        try:
+            device_count = int(cp.cuda.runtime.getDeviceCount())
+        except Exception as exc:
+            pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
+        if device_count < 1:
+            pytest.skip("CuPy CUDA runtime has no visible device")
+    else:
+        # Exercise preparation, dispatch and artifacts in CPU CI as well.
+        uploads = []
+
+        def record_upload(value, dtype):
+            uploaded = np.array(value, dtype=dtype, copy=True)
+            uploads.append(uploaded)
+            return uploaded
+
+        cp = SimpleNamespace(
+            asarray=record_upload, float64=np.float64, bool_=np.bool_
+        )
+        monkeypatch.setattr(workflows, "_load_cupy", lambda: (cp, None))
+    monkeypatch.setattr(
+        "cuphoton.xpois.ois._backend_available",
+        lambda candidate: candidate in {"cpu", "cupy"},
+    )
+
+    reference = _compact_source_image((64, 64))
+    y, x = np.indices(reference.shape, dtype=np.float64)
+    target = 1.05 * reference + 0.01 * x + 0.02 * y
+    reference_path, target_path = (
+        tmp_path / "reference.npy",
+        tmp_path / "target.npy",
+    )
+    np.save(reference_path, reference)
+    np.save(target_path, target)
+    variance = np.ones_like(reference)
+    variance_path = tmp_path / "variance.npy"
+    np.save(variance_path, variance)
+    mask, mask_path = None, None
+    if explicit_mask:
+        mask = np.zeros(reference.shape, dtype=bool)
+        mask[6:-6, 6:-6] = True
+        mask_path = tmp_path / "mask.npy"
+        np.save(mask_path, mask.astype(np.uint8))
+    components = [GaussianBasisComponent(sigma=1.5, degree=0)]
+    options = dict(
+        kernel_shape=(9, 9),
+        background_degree=1,
+        flux_conserve=True,
+    )
+    expected = workflows.solve_constant_kernel(
+        reference,
+        target,
+        components,
+        variance=variance,
+        fit_mask=mask,
+        backend="cupy" if use_gpu else "cpu",
+        **options,
+    )
+    device_solver = workflows.solve_constant_kernel_device
+    device_calls = []
+
+    def checked_device_solver(reference, target, *args, **kwargs):
+        inputs = [reference, target, kwargs["variance"]]
+        assert all(value.dtype == np.float64 for value in inputs)
+        if kwargs["fit_mask"] is not None:
+            assert kwargs["fit_mask"].dtype == np.bool_
+            inputs.append(kwargs["fit_mask"])
+        device_calls.append(True)
+        if use_gpu:
+            assert all(isinstance(value, cp.ndarray) for value in inputs)
+            return device_solver(reference, target, *args, **kwargs)
+        assert all(
+            any(value is uploaded for uploaded in uploads) for value in inputs
+        )
+        return replace(
+            workflows.solve_constant_kernel(
+                reference, target, *args, backend="cpu", **kwargs
+            ),
+            backend="cupy",
+        )
+
+    monkeypatch.setattr(
+        workflows, "solve_constant_kernel_device", checked_device_solver
+    )
+    fitted = workflows.run_constant_kernel_fit(
+        reference_path=reference_path,
+        target_path=target_path,
+        reference_hdu=None,
+        target_hdu=None,
+        output_root=tmp_path,
+        name="device-fit-run",
+        components=components,
+        variance_path=variance_path,
+        fit_mask_path=mask_path,
+        backend=backend,
+        review=False,
+        **options,
+    )
+
+    assert device_calls == [True]
+    assert fitted.summary["backend"] == "cupy"
+    assert fitted.summary["fit_pixel_count"] == expected.fit_pixel_count
+    assert fitted.summary["dof"] == expected.dof
+    assert fitted.summary["chi2"] == pytest.approx(
+        expected.chi2, rel=1e-9, abs=1e-8
+    )
+    assert fitted.summary["fit_region"]["kind"] == (
+        "explicit_mask" if explicit_mask else "interior_box"
+    )
+    for name in ("kernel", "matched", "residual", "background", "fit_mask"):
+        actual = np.load(fitted.run_dir / fitted.summary["saved"][name])
+        assert actual.dtype == getattr(expected, name).dtype
+        if name == "fit_mask":
+            np.testing.assert_array_equal(actual, expected.fit_mask)
+        else:
+            np.testing.assert_array_equal(
+                np.isnan(actual), np.isnan(getattr(expected, name))
+            )
+            np.testing.assert_allclose(
+                actual, getattr(expected, name), rtol=1e-9, atol=1e-8
+            )
+    evaluated = workflows.evaluate_subtraction_run(fitted.run_dir)
+    assert evaluated["fit_region_pixel_count"] == expected.fit_pixel_count
 
 
 def test_run_constant_kernel_fit_writes_interactive_and_numeric_review(

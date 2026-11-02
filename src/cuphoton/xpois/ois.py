@@ -470,6 +470,68 @@ def make_stamp_mask(
     return mask
 
 
+def _select_separated_sources(
+    ordered: Any,
+    shape: tuple[int, int],
+    min_distance: int,
+    max_stamps: int,
+) -> list[Any]:
+    """Separate ranked, in-image int64 coordinates with the strict rule."""
+    selected: list[Any] = []
+    int64_max = np.iinfo(np.int64).max
+    if (
+        type(min_distance) not in (int, np.int64)
+        or not isinstance(max_stamps, Integral)
+        or max_stamps <= 5
+        or min_distance <= 0
+        or int(min_distance) ** 2 > int64_max
+        or (shape[0] - 1) ** 2 + (shape[1] - 1) ** 2 > int64_max
+    ):
+        # Keep the small-cap path and unsupported NumPy scalar arithmetic.
+        min_distance_sq = min_distance * min_distance
+        for candidate in ordered:
+            if any(
+                (candidate.y - other.y) ** 2 + (candidate.x - other.x) ** 2
+                < min_distance_sq
+                for other in selected
+            ):
+                continue
+            selected.append(candidate)
+            if len(selected) >= max_stamps:
+                break
+        return selected
+
+    distance = int(min_distance)
+    distance_squared = distance * distance
+    cells: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    # Both backends already ranked these host records. Convert only the
+    # coordinates examined before reaching the requested number of sources.
+    ys, xs = ordered.y, ordered.x
+    for index, (source_y, source_x) in enumerate(zip(ys, xs, strict=True)):
+        y, x = int(source_y), int(source_x)
+        row, column = y // distance, x // distance
+        rejected = False
+        for by in range(row - 1, row + 2):
+            for bx in range(column - 1, column + 2):
+                for other_y, other_x in cells.get((by, bx), ()):
+                    if (y - other_y) ** 2 + (x - other_x) ** 2 < (
+                        distance_squared
+                    ):
+                        rejected = True
+                        break
+                if rejected:
+                    break
+            if rejected:
+                break
+        if rejected:
+            continue
+        selected.append(ordered[index])
+        cells.setdefault((row, column), []).append((y, x))
+        if len(selected) >= max_stamps:
+            break
+    return selected
+
+
 def build_compact_source_stamp_mask(
     image: Any,
     *,
@@ -683,18 +745,9 @@ def build_compact_source_stamp_mask(
         )
     ]
 
-    selected: list[Any] = []
-    min_distance_sq = min_distance * min_distance
-    for candidate in ordered:
-        if any(
-            (candidate.y - other.y) ** 2 + (candidate.x - other.x) ** 2
-            < min_distance_sq
-            for other in selected
-        ):
-            continue
-        selected.append(candidate)
-        if len(selected) >= max_stamps:
-            break
+    selected = _select_separated_sources(
+        ordered, array.shape, min_distance, max_stamps
+    )
 
     if not selected:
         raise ValueError(
