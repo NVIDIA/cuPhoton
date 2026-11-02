@@ -934,7 +934,7 @@ def test_native_null_improvement_preserves_cancelling_chi_squares(
     )
 
 
-@pytest.mark.parametrize("count", [1, 3])
+@pytest.mark.parametrize("count", [1, 41])
 def test_native_final_gradient_preserves_cancelling_products(
     count, monkeypatch
 ):

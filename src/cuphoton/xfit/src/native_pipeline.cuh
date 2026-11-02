@@ -248,6 +248,37 @@ __global__ void final_jacobians(
 }
 
 template <typename T>
+__global__ void pack_gradient_operands(
+    const T* jacobian,
+    const T* residual,
+    const int* indices,
+    T* transposed,
+    T* compact_residual,
+    int count,
+    int m) {
+    std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= std::size_t(count) * 8 * m) {
+        return;
+    }
+    int slot = i / (8 * m), pixel = (i / 8) % m, p = i % 8;
+    int row = indices[slot];
+    transposed[i] = jacobian[(std::size_t(row) * 8 + p) * m + pixel];
+    if (p == 0) {
+        compact_residual[std::size_t(slot) * m + pixel] =
+            residual[std::size_t(row) * m + pixel];
+    }
+}
+
+template <typename T>
+__global__ void publish_gradients(
+    const T* compact, const int* indices, T* gradient, int count) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < count * 8) {
+        gradient[indices[i / 8] * 8 + i % 8] = compact[i];
+    }
+}
+
+template <typename T>
 __global__ void normalize_jacobians(
     const T* jacobian,
     const T* scale,
@@ -520,6 +551,7 @@ struct GaussianPipeline::Impl {
     PipelineBuffer reduced, vectors, right_vectors, singular_values, tau;
     PipelineBuffer workspace, info, factors, covariance;
     PipelineBuffer squared_residuals, reduction_workspace;
+    PipelineBuffer gradient_workspace;
     explicit Impl(int id)
         : device(id) {}
     ~Impl() {
@@ -559,6 +591,15 @@ struct GaussianPipeline::Impl {
         }
         int selected = int(rows.size());
         try {
+            int* index = indices.get<int>(selected);
+            if (selected) {
+                check(cudaMemcpyAsync(
+                    index,
+                    rows.data(),
+                    selected * sizeof(int),
+                    cudaMemcpyHostToDevice,
+                    stream));
+            }
             // Retain the final gradient and Gauss--Newton Hessian diagnostics
             // in solver coordinates, independently of covariance validity.
             T alpha = 1, beta = 0;
@@ -570,35 +611,86 @@ struct GaussianPipeline::Impl {
                     threads,
                     0,
                     stream>>>(j, residual, gradient, 8, 1, count);
-            } else {
-                // CuPy einsum forms a row-major matrix product, then swaps
-                // operands for cuBLAS. The equivalent T,N product rounds
-                // differently when the final gradient nearly cancels.
+            } else if (selected == 1) {
+                // A singleton einsum squeezes its batch axis and uses dot,
+                // which retains the parameter-major Jacobian's transpose.
+                int row = rows[0];
+                cudaDataType type = sizeof(T) == 8 ? CUDA_R_64F : CUDA_R_32F;
+                check(cublasGemmEx(
+                    blas,
+                    CUBLAS_OP_T,
+                    CUBLAS_OP_N,
+                    8,
+                    1,
+                    m,
+                    &alpha,
+                    j + std::size_t(row) * 8 * m,
+                    type,
+                    m,
+                    residual + std::size_t(row) * m,
+                    type,
+                    m,
+                    &beta,
+                    gradient + row * 8,
+                    type,
+                    8,
+                    type,
+                    CUBLAS_GEMM_DEFAULT));
+            } else if (selected > 1) {
+                // Batched einsum reverses its operands, then matmul makes
+                // the transposed Jacobian C-contiguous. Preserve that layout
+                // and cuBLAS reduction order for cancelling gradients.
+                T* transposed =
+                    normalized.get<T>(std::size_t(selected) * 8 * m);
+                constexpr std::size_t alignment = 256 / sizeof(T);
+                std::size_t residual_values =
+                    (std::size_t(selected) * m + alignment - 1) / alignment
+                    * alignment;
+                T* compact_residual = gradient_workspace.get<T>(
+                    residual_values + std::size_t(selected) * 8);
+                T* compact_gradient = compact_residual + residual_values;
+                pack_gradient_operands<<<
+                    (std::size_t(selected) * 8 * m + 255) / 256,
+                    256,
+                    0,
+                    stream>>>(
+                    j,
+                    residual,
+                    index,
+                    transposed,
+                    compact_residual,
+                    selected,
+                    m);
                 cudaDataType type = sizeof(T) == 8 ? CUDA_R_64F : CUDA_R_32F;
                 check(cublasGemmStridedBatchedEx(
                     blas,
                     CUBLAS_OP_N,
                     CUBLAS_OP_N,
-                    1,
                     8,
+                    1,
                     m,
                     &alpha,
-                    residual,
+                    transposed,
                     type,
-                    1,
-                    m,
-                    j,
-                    type,
-                    m,
-                    8LL * m,
-                    &beta,
-                    gradient,
-                    type,
-                    1,
                     8,
-                    count,
+                    8LL * m,
+                    compact_residual,
+                    type,
+                    m,
+                    m,
+                    &beta,
+                    compact_gradient,
+                    type,
+                    8,
+                    8,
+                    selected,
                     type,
                     CUBLAS_GEMM_DEFAULT));
+                publish_gradients<<<
+                    (selected * 8 + 255) / 256,
+                    256,
+                    0,
+                    stream>>>(compact_gradient, index, gradient, selected);
             }
             if constexpr (sizeof(T) == 8) {
                 check(cublasDgemmStridedBatched(
@@ -644,13 +736,6 @@ struct GaussianPipeline::Impl {
             mask_normal_diagnostics<T>
                 <<<(count + 127) / 128, 128, 0, stream>>>(fit, valid);
             if (selected) {
-                int* index = indices.get<int>(selected);
-                check(cudaMemcpyAsync(
-                    index,
-                    rows.data(),
-                    selected * sizeof(int),
-                    cudaMemcpyHostToDevice,
-                    stream));
                 bool qr = selected > 1 && m > 16;
                 bool jacobi = qr || m <= 32;
                 T* a = normalized.get<T>(std::size_t(selected) * 8 * m);
