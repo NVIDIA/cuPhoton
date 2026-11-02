@@ -989,6 +989,16 @@ def test_native_final_gradient_preserves_cancelling_products(
         atol=5e-12,
     )
     assert bool(cp.isnan(outputs[26][~finite]).all())
+    expected_hessian = cp.einsum(
+        "knm,kpm->knp", jacobian[finite], jacobian[finite]
+    )
+    np.testing.assert_allclose(
+        cp.asnumpy(outputs[27][finite]),
+        cp.asnumpy(expected_hessian),
+        rtol=5e-12,
+        atol=5e-12,
+    )
+    assert bool(cp.isnan(outputs[27][~finite]).all())
 
 
 @pytest.mark.parametrize(

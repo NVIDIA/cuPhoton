@@ -248,12 +248,13 @@ __global__ void final_jacobians(
 }
 
 template <typename T>
-__global__ void pack_gradient_operands(
+__global__ void pack_normal_operands(
     const T* jacobian,
     const T* residual,
     const int* indices,
     T* transposed,
     T* compact_residual,
+    T* compact_jacobian,
     int count,
     int m) {
     std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -262,7 +263,9 @@ __global__ void pack_gradient_operands(
     }
     int slot = i / (8 * m), pixel = (i / 8) % m, p = i % 8;
     int row = indices[slot];
-    transposed[i] = jacobian[(std::size_t(row) * 8 + p) * m + pixel];
+    T value = jacobian[(std::size_t(row) * 8 + p) * m + pixel];
+    transposed[i] = value;
+    compact_jacobian[(std::size_t(slot) * 8 + p) * m + pixel] = value;
     if (p == 0) {
         compact_residual[std::size_t(slot) * m + pixel] =
             residual[std::size_t(row) * m + pixel];
@@ -270,11 +273,11 @@ __global__ void pack_gradient_operands(
 }
 
 template <typename T>
-__global__ void publish_gradients(
-    const T* compact, const int* indices, T* gradient, int count) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < count * 8) {
-        gradient[indices[i / 8] * 8 + i % 8] = compact[i];
+__global__ void publish_normal_diagnostics(
+    const T* compact, const int* indices, T* output, int count, int columns) {
+    std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < std::size_t(count) * columns) {
+        output[indices[i / columns] * columns + i % columns] = compact[i];
     }
 }
 
@@ -605,12 +608,18 @@ struct GaussianPipeline::Impl {
             T alpha = 1, beta = 0;
             const T* residual = static_cast<const T*>(fit.outputs[3]);
             T* gradient = static_cast<T*>(fit.outputs[26]);
+            T* hessian = static_cast<T*>(fit.outputs[27]);
             if (m == 1) {
                 multiply_single_observation<<<
                     (count * 8 + threads - 1) / threads,
                     threads,
                     0,
                     stream>>>(j, residual, gradient, 8, 1, count);
+                multiply_single_observation<<<
+                    (std::size_t(count) * 64 + threads - 1) / threads,
+                    threads,
+                    0,
+                    stream>>>(j, j, hessian, 8, 8, count);
             } else if (selected == 1) {
                 // A singleton einsum squeezes its batch axis and uses dot,
                 // which retains the parameter-major Jacobian's transpose.
@@ -636,20 +645,49 @@ struct GaussianPipeline::Impl {
                     8,
                     type,
                     CUBLAS_GEMM_DEFAULT));
+                check(cublasGemmEx(
+                    blas,
+                    CUBLAS_OP_T,
+                    CUBLAS_OP_N,
+                    8,
+                    8,
+                    m,
+                    &alpha,
+                    j + std::size_t(row) * 8 * m,
+                    type,
+                    m,
+                    j + std::size_t(row) * 8 * m,
+                    type,
+                    m,
+                    &beta,
+                    hessian + row * 64,
+                    type,
+                    8,
+                    type,
+                    CUBLAS_GEMM_DEFAULT));
             } else if (selected > 1) {
                 // Batched einsum reverses its operands, then matmul makes
                 // the transposed Jacobian C-contiguous. Preserve that layout
-                // and cuBLAS reduction order for cancelling gradients.
-                T* transposed =
-                    normalized.get<T>(std::size_t(selected) * 8 * m);
+                // and cuBLAS reduction order for cancelling gradient and
+                // Hessian entries.
                 constexpr std::size_t alignment = 256 / sizeof(T);
+                std::size_t jacobian_values =
+                    (std::size_t(selected) * 8 * m + alignment - 1) / alignment
+                    * alignment;
+                T* transposed = normalized.get<T>(2 * jacobian_values);
+                T* compact_jacobian = transposed + jacobian_values;
                 std::size_t residual_values =
                     (std::size_t(selected) * m + alignment - 1) / alignment
                     * alignment;
+                std::size_t gradient_values =
+                    (std::size_t(selected) * 8 + alignment - 1) / alignment
+                    * alignment;
                 T* compact_residual = gradient_workspace.get<T>(
-                    residual_values + std::size_t(selected) * 8);
+                    residual_values + gradient_values
+                    + std::size_t(selected) * 64);
                 T* compact_gradient = compact_residual + residual_values;
-                pack_gradient_operands<<<
+                T* compact_hessian = compact_gradient + gradient_values;
+                pack_normal_operands<<<
                     (std::size_t(selected) * 8 * m + 255) / 256,
                     256,
                     0,
@@ -659,6 +697,7 @@ struct GaussianPipeline::Impl {
                     index,
                     transposed,
                     compact_residual,
+                    compact_jacobian,
                     selected,
                     m);
                 cudaDataType type = sizeof(T) == 8 ? CUDA_R_64F : CUDA_R_32F;
@@ -686,52 +725,42 @@ struct GaussianPipeline::Impl {
                     selected,
                     type,
                     CUBLAS_GEMM_DEFAULT));
-                publish_gradients<<<
+                publish_normal_diagnostics<<<
                     (selected * 8 + 255) / 256,
                     256,
                     0,
-                    stream>>>(compact_gradient, index, gradient, selected);
-            }
-            if constexpr (sizeof(T) == 8) {
-                check(cublasDgemmStridedBatched(
+                    stream>>>(compact_gradient, index, gradient, selected, 8);
+                // CuPy matmul makes its transposed operand contiguous before
+                // GEMM. Preserve that reduction layout for cancelling entries.
+                check(cublasGemmStridedBatchedEx(
                     blas,
-                    CUBLAS_OP_T,
+                    CUBLAS_OP_N,
                     CUBLAS_OP_N,
                     8,
                     8,
                     m,
                     &alpha,
-                    j,
-                    m,
-                    8LL * m,
-                    j,
-                    m,
-                    8LL * m,
-                    &beta,
-                    static_cast<T*>(fit.outputs[27]),
+                    transposed,
+                    type,
                     8,
-                    64,
-                    count));
-            } else {
-                check(cublasSgemmStridedBatched(
-                    blas,
-                    CUBLAS_OP_T,
-                    CUBLAS_OP_N,
-                    8,
-                    8,
-                    m,
-                    &alpha,
-                    j,
-                    m,
                     8LL * m,
-                    j,
+                    compact_jacobian,
+                    type,
                     m,
                     8LL * m,
                     &beta,
-                    static_cast<T*>(fit.outputs[27]),
+                    compact_hessian,
+                    type,
                     8,
                     64,
-                    count));
+                    selected,
+                    type,
+                    CUBLAS_GEMM_DEFAULT));
+                publish_normal_diagnostics<<<
+                    (std::size_t(selected) * 64 + 255) / 256,
+                    256,
+                    0,
+                    stream>>>(compact_hessian, index, hessian, selected, 64);
             }
             mask_normal_diagnostics<T>
                 <<<(count + 127) / 128, 128, 0, stream>>>(fit, valid);
