@@ -77,3 +77,26 @@ def test_native_loader_error_reaches_public_api(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="undefined symbol: cufftExecD2Z"):
         reproject_array(np.ones((3, 3)), spec, backend="native")
+
+
+def test_native_backend_reports_missing_device(monkeypatch):
+    from cuphoton.core import _native_imaging
+    from cuphoton.xrep import BBox, ReprojectionSpec, reproject_array
+    from cuphoton.xrep.backends import native_backend
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cupy",
+        SimpleNamespace(
+            cuda=SimpleNamespace(
+                runtime=SimpleNamespace(getDeviceCount=lambda: 0)
+            )
+        ),
+    )
+    monkeypatch.setattr(_native_imaging, "extension", lambda: object())
+    monkeypatch.setattr(native_backend, "extension", lambda: object())
+    spec = ReprojectionSpec(
+        mapping=lambda xy: xy, output_bbox=BBox(0, 0, 3, 3)
+    )
+    with pytest.raises(RuntimeError, match="visible CUDA device"):
+        reproject_array(np.ones((3, 3)), spec, backend="native")

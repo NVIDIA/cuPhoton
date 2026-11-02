@@ -43,7 +43,8 @@ def _backend_unavailable_message(backend: str) -> str:
         except (ImportError, OSError, RuntimeError) as exc:
             return str(exc)
         return (
-            "Native imaging requires CuPy buffer support and an installation "
+            "Native imaging requires CuPy buffer support, a visible CUDA "
+            "device, and an installation "
             "built with CUPHOTON_IMAGING_BUILD_EXT=1 and a CUDA 13 toolkit."
         )
     extra = "gpu" if backend == "cupy" else "torch"

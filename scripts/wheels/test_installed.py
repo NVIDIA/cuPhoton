@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -255,34 +256,54 @@ def forbid_cupy_compilation():
         yield
 
 
-def run_native_probe(probe, report):
+def run_native_probe(probe, report, *, deadline):
     """Keep each guarded case clear of earlier CuPy reference kernels."""
+    # Leave time for the parent to report a failure before its hard timeout.
+    timeout = min(180, deadline - time.monotonic() - 10)
+    require(
+        timeout >= 6,
+        f"Fresh native probe {probe} has insufficient time remaining",
+    )
     with tempfile.TemporaryDirectory(prefix="cuphoton-native-probe-") as tmp:
         output = Path(tmp) / "report.json"
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                str(Path(__file__).resolve()),
-                "--mode",
-                "gpu",
-                "--components",
-                "xfit",
-                "--native-probe",
-                probe,
-                "--output",
-                str(output),
-            ],
-            cwd=tmp,
-            env={
-                **os.environ,
-                "CUPY_CACHE_DIR": str(Path(tmp) / "cupy-cache"),
-                "CUDA_CACHE_PATH": str(Path(tmp) / "cuda-cache"),
-            },
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(Path(__file__).resolve()),
+                    "--mode",
+                    "gpu",
+                    "--components",
+                    "xfit",
+                    "--native-probe",
+                    probe,
+                    "--output",
+                    str(output),
+                    "--timeout",
+                    str(int(timeout) - 5),
+                ],
+                cwd=tmp,
+                env={
+                    **os.environ,
+                    "CUPY_CACHE_DIR": str(Path(tmp) / "cupy-cache"),
+                    "CUDA_CACHE_PATH": str(Path(tmp) / "cuda-cache"),
+                },
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            raise RuntimeError(
+                f"Fresh native probe {probe} timed out after {timeout:g}s:\n"
+                f"{stdout}\n{stderr}"
+            ) from exc
         require(
             result.returncode == 0,
             f"Fresh native probe {probe} failed:\n"
@@ -790,6 +811,7 @@ def main():
         "checks": [],
         "ok": False,
     }
+    deadline = time.monotonic() + args.timeout
     faulthandler.dump_traceback_later(args.timeout, exit=True)
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     try:
@@ -828,10 +850,14 @@ def main():
                     if args.mode == "gpu":
                         check_gpu(paths, report)
                 if args.mode == "gpu" and "xfit" in args.components:
-                    run_native_probe("imaging", report)
+                    run_native_probe("imaging", report, deadline=deadline)
                     for dtype in ("float32", "float64"):
                         for mode in ("difference", "split"):
-                            run_native_probe(f"xfit-{dtype}-{mode}", report)
+                            run_native_probe(
+                                f"xfit-{dtype}-{mode}",
+                                report,
+                                deadline=deadline,
+                            )
             report["ok"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
