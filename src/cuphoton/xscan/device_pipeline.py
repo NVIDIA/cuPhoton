@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from functools import partial
 from pathlib import Path
-from typing import Any, Final, Literal, SupportsIndex
+from typing import TYPE_CHECKING, Any, Final, Literal, SupportsIndex
 
 import numpy as np
 
@@ -36,6 +36,9 @@ from cuphoton.core.fits_options import (
     merge_xdr_options,
     normalize_xdr_options,
 )
+
+if TYPE_CHECKING:
+    from cuphoton.xfit import SolverVersion
 
 DEVICE_PIPELINE_CONFIG_SCHEMA: Final = (
     "cuphoton.xscan.device-pipeline.config/v2"
@@ -653,8 +656,12 @@ class DeviceXFitPipelineConfig:
     use_finite_difference: bool = False
     backend: Literal["cupy", "cutile", "native", "numba-cuda-mlir"] = "cupy"
     fusion: bool = False
+    solver_version: SolverVersion = "v0.2"
 
     def __post_init__(self) -> None:
+        from cuphoton.xfit.solver import _validate_solver_version
+
+        _validate_solver_version(self.solver_version)
         if self.model != "gaussian":
             raise ValueError("xfit model must be 'gaussian'")
         if self.mode != "difference":
@@ -742,6 +749,8 @@ class DeviceXFitPipelineConfig:
             del payload["backend"]
         if not self.fusion:
             del payload["fusion"]
+        if self.solver_version == "v0.2":
+            del payload["solver_version"]
         return payload
 
     def execution_payload(self) -> dict[str, Any]:
@@ -762,6 +771,7 @@ class DeviceXFitPipelineConfig:
         del payload["mode"]
         payload.pop("backend", None)
         payload.pop("fusion", None)
+        payload["solver_version"] = self.solver_version
         return payload
 
     @classmethod
@@ -774,6 +784,7 @@ class DeviceXFitPipelineConfig:
         values = json_mapping(payload, field="device pipeline xfit config")
         values.setdefault("backend", "cupy")
         values.setdefault("fusion", False)
+        values.setdefault("solver_version", "v0.2")
         values = _require_exact_fields(
             values,
             expected=expected,

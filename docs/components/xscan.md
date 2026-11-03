@@ -370,6 +370,17 @@ outputs, and merging and validation occur after the timed worker phase.
 
 ## Persistent xPois, xFit and xScan pipeline
 
+The xFit numerical policy is selected independently of the execution backend.
+For example, pass
+`xfit=DeviceXFitPipelineConfig(backend="native", solver_version="v0.1.3")`
+to `DevicePipelineConfig`, importing `DeviceXFitPipelineConfig` from
+`cuphoton.xscan.device_pipeline`. In JSON manifests, set
+`configuration.xfit.solver_version` to `"v0.1.3"`. Worker processes and
+pipeline stage benchmarks preserve this setting. Omitted values use `"v0.2"`
+and retain existing configuration hashes. See
+[Choosing the solver version](xfit.md#choosing-the-solver-version) for the
+numerical differences.
+
 For a complete launch walkthrough with a generated workload, JSON template,
 Slurm allocation and MPI/Dragon host files, see
 [distributed execution](../distributed-execution.md).

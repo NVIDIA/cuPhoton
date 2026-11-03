@@ -1406,9 +1406,11 @@ def test_candidate_preflight_includes_stamp_and_kernel_margin(
         _validate_item_contract(item, config=_config(checkpoint_dir))
 
 
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
 def test_persistent_context_pipeline_is_device_resident_and_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    solver_version: str,
 ) -> None:
     cp, torch = _gpu_modules()
     import cuphoton.xscan.device_pipeline as pipeline
@@ -1451,6 +1453,9 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
     checkpoint_dir.mkdir()
     (checkpoint_dir / "checkpoint.pt").write_bytes(b"checkpoint")
     config = _config(checkpoint_dir)
+    config = replace(
+        config, xfit=replace(config.xfit, solver_version=solver_version)
+    )
     load_calls: list[tuple[Path, Any, PerformanceConfig]] = []
 
     def load_model(
@@ -1473,6 +1478,7 @@ def test_persistent_context_pipeline_is_device_resident_and_deterministic(
         lambda *_args, **_kwargs: _feature_schema(config),
     )
     context = DeviceWorkerContext.initialize(config)
+    assert context.solver_config.solver_version == solver_version
     assert len(load_calls) == 1
     assert load_calls[0][:2] == (checkpoint_dir, torch.device("cuda:0"))
     assert load_calls[0][2] == PerformanceConfig()
@@ -1911,19 +1917,39 @@ def test_changed_input_fails_before_device_ingress(
 def test_xfit_backend_defaults_preserve_legacy_payload_and_hash(
     tmp_path: Path,
 ) -> None:
+    from cuphoton.xfit import LMConfig
+
     positional = DeviceXFitPipelineConfig("gaussian", "difference", 1e-6)
     assert positional.f_tol == 1e-6
     assert positional.backend == "cupy"
     assert positional.fusion is False
+    assert positional.solver_version == "v0.2"
     config = _evidence_config(tmp_path)
     legacy = config.to_payload()
     assert "backend" not in legacy["xfit"]
     assert "fusion" not in legacy["xfit"]
+    assert "solver_version" not in legacy["xfit"]
+    assert DevicePipelineConfig.from_payload(legacy).xfit.solver_version == (
+        "v0.2"
+    )
     explicit = config.to_payload()
-    explicit["xfit"].update(backend="cupy", fusion=False)
+    explicit["xfit"].update(
+        backend="cupy", fusion=False, solver_version="v0.2"
+    )
     restored = DevicePipelineConfig.from_payload(explicit)
     assert restored.to_payload() == legacy
     assert restored.configuration_sha256 == config.configuration_sha256
+
+    selected = replace(
+        config, xfit=replace(config.xfit, solver_version="v0.1.3")
+    )
+    selected_payload = selected.to_payload()
+    assert selected_payload["xfit"]["solver_version"] == "v0.1.3"
+    assert DevicePipelineConfig.from_payload(selected_payload) == selected
+    assert selected.configuration_sha256 != config.configuration_sha256
+    assert LMConfig(**selected.xfit.solver_payload()).solver_version == (
+        "v0.1.3"
+    )
 
     fused = replace(
         config, xfit=replace(config.xfit, backend="cutile", fusion=True)
@@ -1966,6 +1992,13 @@ def test_xfit_config_rejects_values_the_solver_cannot_use() -> None:
         DeviceXFitPipelineConfig(damping_decrease=1.0)
     with pytest.raises(ValueError, match="finite_difference_step"):
         DeviceXFitPipelineConfig(finite_difference_step=0.0)
+    for invalid in ("v0.1", None, []):
+        with pytest.raises(ValueError, match="solver_version"):
+            DeviceXFitPipelineConfig(solver_version=invalid)  # type: ignore[arg-type]
+        payload = DeviceXFitPipelineConfig().to_payload()
+        payload["solver_version"] = invalid
+        with pytest.raises(ValueError, match="solver_version"):
+            DeviceXFitPipelineConfig.from_payload(payload)
 
 
 def test_xfit_fusion_configuration_roundtrips_and_defaults_old_payloads(
@@ -2000,13 +2033,15 @@ def test_xfit_fusion_validation_and_solver_settings_are_independent() -> None:
 
 
 @pytest.mark.parametrize(
-    "backend,fusion",
+    "backend,fusion,solver_version",
     [
-        ("cupy", False),
-        ("cupy", True),
-        ("cutile", False),
-        ("cutile", True),
-        ("native", False),
+        ("cupy", False, "v0.2"),
+        ("cupy", False, "v0.1.3"),
+        ("cupy", True, "v0.2"),
+        ("cutile", False, "v0.2"),
+        ("cutile", True, "v0.2"),
+        ("native", False, "v0.2"),
+        ("native", False, "v0.1.3"),
     ],
 )
 def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
@@ -2014,16 +2049,39 @@ def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
     monkeypatch: pytest.MonkeyPatch,
     backend: str,
     fusion: bool,
+    solver_version: str,
 ) -> None:
     import cuphoton.xscan.device_pipeline as pipeline
     from cuphoton.xfit import LMConfig
+    from cuphoton.xscan.pipeline_executor import (
+        DRAGON_DEVICE_PIPELINE_OPTIONS_SCHEMA,
+        _strict_worker_options,
+    )
 
     checkpoint_dir = tmp_path / "checkpoint"
     checkpoint_dir.mkdir()
     (checkpoint_dir / "checkpoint.pt").write_bytes(b"checkpoint")
     ordinary = _config(checkpoint_dir)
     config = replace(
-        ordinary, xfit=replace(ordinary.xfit, backend=backend, fusion=fusion)
+        ordinary,
+        xfit=replace(
+            ordinary.xfit,
+            backend=backend,
+            fusion=fusion,
+            solver_version=solver_version,
+        ),
+    )
+    config = _strict_worker_options(
+        json.loads(
+            json.dumps(
+                {
+                    "schema": DRAGON_DEVICE_PIPELINE_OPTIONS_SCHEMA,
+                    "backend": "cupy",
+                    "configuration": config.to_payload(),
+                    "configuration_sha256": config.configuration_sha256,
+                }
+            )
+        )
     )
     path = tmp_path / "image.npy"
     np.save(path, np.ones((31, 31), dtype=np.float64))
@@ -2057,6 +2115,7 @@ def test_xfit_fusion_option_reaches_device_pipeline_callback_without_cuda(
 
     def fit(images: Any, **kwargs: Any) -> Any:
         calls.append(kwargs)
+        assert kwargs["config"].solver_version == solver_version
         np.testing.assert_array_equal(images, np.zeros((2, 11, 11)))
         raise RuntimeError("reached xFit callback")
 

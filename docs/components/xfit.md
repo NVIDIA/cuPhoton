@@ -376,8 +376,11 @@ Use `--solver-version v0.1.3` in the CLI; `--solver-version v0.2` selects the
 default explicitly. The option is preserved across local, Dragon, and MPI
 execution. New result summaries and effective configurations record the
 selected version. Older artifacts without the field do not identify it.
-The xScan device pipeline uses the default `v0.2` policy; its
-`DeviceXFitPipelineConfig` does not expose solver-version selection.
+For the [xScan device pipeline](xscan.md#persistent-xpois-xfit-and-xscan-pipeline),
+set `DeviceXFitPipelineConfig(solver_version="v0.1.3")` in Python or
+`configuration.xfit.solver_version` in a pipeline manifest. The selection
+reaches each worker and applies to both pipeline runs and stage benchmarks.
+Omitting it retains the default `v0.2` policy.
 
 ## Derived quantities and their uncertainties
 
