@@ -147,7 +147,7 @@ jobs:
         run: >-
           uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
           --extra numba-cuda-mlir --extra ximage
-      - name: Build native xFit and xRay with CUDA 13 compiler wheels
+      - name: Build native xFit, imaging and xRay with CUDA 13 compiler wheels
         env:
           CUPHOTON_XFIT_BUILD_EXT: "1"
           CUPHOTON_XRAY_BUILD_EXT: "1"
@@ -232,7 +232,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xpois-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 6, len(cases)
+          assert len(cases) == 9, len(cases)
           assert not report.findall(".//skipped"), "xPois GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
@@ -281,11 +281,16 @@ jobs:
           assert not report.findall(".//error")
           print(f"All {len(cases)} xImage GPU tests passed without skips")
           PY
-      - name: Run native xFit GPU tests
+      - name: Run native xFit and imaging GPU tests
         run: >-
           uv run --no-sync pytest -q -rs
           --junitxml="${RUNNER_TEMP}/xfit-native-gpu.xml"
           tests/xfit/test_native.py
+          tests/xpois/test_native_constant_kernel.py
+          tests/xpois/test_native_selection.py
+          tests/xpois/test_native_workspace.py
+          tests/xrep/test_native_backend.py
+          tests/xdr/test_native_postprocess.py
       - name: Require native tests to execute
         run: |
           uv run --no-sync python - <<'PY'
@@ -295,11 +300,11 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-native-gpu.xml")
           cases = report.findall(".//testcase")
-          assert cases, "Native xFit tests must execute"
-          assert not report.findall(".//skipped"), "Native xFit tests must not skip"
+          assert cases, "Native xFit and imaging tests must execute"
+          assert not report.findall(".//skipped"), "Native xFit and imaging tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
-          print(f"All {len(cases)} native xFit tests passed without skips")
+          print(f"All {len(cases)} native xFit and imaging tests passed without skips")
           PY
       - name: Run native xRay CPU and GPU parity tests
         env:

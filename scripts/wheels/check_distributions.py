@@ -49,10 +49,18 @@ SOURCES = {
     "src/cuphoton/xfit/src/native_ext.cpp",
     "src/cuphoton/xfit/src/native_api.h",
     "src/cuphoton/xfit/src/native.cu",
+    "src/cuphoton/xfit/src/native_pipeline.cuh",
     "src/cuphoton/xfit/src/native_norm.cu",
     "src/cuphoton/xfit/src/native_jacobian.h",
     "src/cuphoton/xfit/src/native_jacobian.cu",
     "src/cuphoton/xfit/src/native_jacobian_lean.cu",
+    "src/cuphoton/core/src/imaging_ext.cpp",
+    "src/cuphoton/core/src/imaging_api.h",
+    "src/cuphoton/core/src/imaging_copy.cu",
+    "src/cuphoton/core/src/imaging_selection.cu",
+    "src/cuphoton/core/src/imaging_reproject.cu",
+    "src/cuphoton/core/src/imaging_xpois.cu",
+    "src/cuphoton/core/src/imaging_fits.cu",
     "src/cuphoton/xray/setup_package.py",
     "src/cuphoton/xray/src/structured_api.h",
     "src/cuphoton/xray/src/structured_ext.cpp",
@@ -94,10 +102,10 @@ def check_cccl_license(content, artifact):
     )
 
 
-def check_xfit_libraries(content, artifact):
-    """Require dynamic CUDA/cuBLAS linkage in the delivered xFit ELF."""
+def check_cuda_libraries(content, artifact, required):
+    """Require external CUDA SONAMEs in a delivered native ELF."""
     with tempfile.TemporaryDirectory(prefix="cuphoton-elf-") as directory:
-        extension = Path(directory) / "xfit.so"
+        extension = Path(directory) / "extension.so"
         extension.write_bytes(content)
         result = subprocess.run(
             ["readelf", "--dynamic", str(extension)],
@@ -105,15 +113,16 @@ def check_xfit_libraries(content, artifact):
             text=True,
             check=False,
         )
-    require(result.returncode == 0, f"{artifact}: invalid xFit ELF library")
+    require(result.returncode == 0, f"{artifact}: invalid native ELF library")
     needed = set(re.findall(r"\(NEEDED\).*\[([^\]]+)\]", result.stdout))
     require(
-        {"libcudart.so.13", "libcublas.so.13"} <= needed,
-        f"{artifact}: xFit must dynamically link CUDA 13 and cuBLAS 13",
+        required <= needed,
+        f"{artifact}: must dynamically link {sorted(required)}; "
+        f"missing {sorted(required - needed)}",
     )
     require(
         not any("/" in name for name in needed),
-        f"{artifact}: xFit contains an absolute library dependency",
+        f"{artifact}: contains an absolute library dependency",
     )
 
 
@@ -163,6 +172,7 @@ def check_wheel(path):
         for component, module in (
             ("xdr", "_nvcomp_batch_ext"),
             ("xfit", "_native_ext"),
+            ("core", "_imaging_ext"),
             ("xray", "_structured_ext"),
         )
     }
@@ -226,10 +236,19 @@ def check_wheel(path):
             in notices,
             f"{path.name}: missing CFITSIO notice",
         )
-        xfit = next(
-            name for name in native if name.startswith("cuphoton/xfit/")
-        )
-        check_xfit_libraries(archive.read(xfit), path.name)
+        required = {"libcudart.so.13", "libcublas.so.13", "libcusolver.so.12"}
+        for component, libraries in (
+            ("xfit", required),
+            ("core", required | {"libcufft.so.12"}),
+        ):
+            extension = next(
+                name
+                for name in native
+                if name.startswith(f"cuphoton/{component}/")
+            )
+            check_cuda_libraries(
+                archive.read(extension), f"{path.name}:{extension}", libraries
+            )
     return (abi, arch), version
 
 

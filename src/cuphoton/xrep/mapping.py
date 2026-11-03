@@ -280,6 +280,7 @@ def prepare_reprojection(
     *,
     source_shape: tuple[int, int],
     xp=np,
+    backend: str | None = None,
 ) -> PreparedReprojection:
     """Prepare source-coordinate and area arrays for one reproject.
 
@@ -291,6 +292,9 @@ def prepare_reprojection(
         Source ``(height, width)``.
     xp
         NumPy-compatible array module used for dense expansion.
+    backend
+        ``native`` selects ahead-of-time CUDA expansion and device buffers.
+        The default ``None`` uses ``xp``.
 
     Returns
     -------
@@ -310,6 +314,13 @@ def prepare_reprojection(
         raise ValueError("mapping_grid_step must be >= 1")
     if spec.output_bbox.width <= 0 or spec.output_bbox.height <= 0:
         raise ValueError("output bbox dimensions must be positive")
+
+    if backend == "native":
+        from .backends.native_backend import prepare_native
+
+        return prepare_native(spec, source_shape)
+    if backend is not None:
+        raise ValueError("mapping backend must be native or None")
 
     source_ext = interpolate_mapping_grid(
         spec.mapping,
@@ -380,23 +391,9 @@ def interpolate_mapping_grid(
     if interp_len < 1:
         raise ValueError("interp_len must be >= 1")
 
-    max_col = width - 1
-    max_row = height - 1
-
-    # Coarse edges + mapping evaluation stay on the CPU (astropy needs numpy).
-    x_edges_np = np.arange(-1, max_col, interp_len, dtype=np.int64)
-    if x_edges_np[-1] != max_col:
-        x_edges_np = np.concatenate([x_edges_np, [max_col]])
-    y_edges_np = np.arange(-1, max_row, interp_len, dtype=np.int64)
-    if y_edges_np[-1] != max_row:
-        y_edges_np = np.concatenate([y_edges_np, [max_row]])
-
-    xx, yy = np.meshgrid(x_edges_np, y_edges_np, indexing="xy")
-    edge_pts = np.stack([xx.ravel(), yy.ravel()], axis=1).astype(np.float64)
-    mapped_np = np.asarray(map_fn(edge_pts), dtype=np.float64)
-    if mapped_np.shape != edge_pts.shape:
-        raise ValueError("map_fn must return an (N, 2) array")
-    mapped_np = mapped_np.reshape(y_edges_np.size, x_edges_np.size, 2)
+    mapped_np, x_edges_np, y_edges_np = _coarse_mapping_grid(
+        map_fn, width=width, height=height, interp_len=interp_len
+    )
 
     # Dense expansion uses xp (may be CuPy).
     mapped = xp.asarray(mapped_np)
@@ -436,6 +433,29 @@ def interpolate_mapping_grid(
     left = (1.0 - ty) * top_left + ty * bottom_left
     right = (1.0 - ty) * top_right + ty * bottom_right
     return (1.0 - tx) * left + tx * right
+
+
+def _coarse_mapping_grid(map_fn, *, width, height, interp_len):
+    """Evaluate the shared coarse CPU WCS grid before dense expansion."""
+    max_col = width - 1
+    max_row = height - 1
+
+    # Coarse edges + mapping evaluation stay on the CPU (astropy needs numpy).
+    x_edges_np = np.arange(-1, max_col, interp_len, dtype=np.int64)
+    if x_edges_np[-1] != max_col:
+        x_edges_np = np.concatenate([x_edges_np, [max_col]])
+    y_edges_np = np.arange(-1, max_row, interp_len, dtype=np.int64)
+    if y_edges_np[-1] != max_row:
+        y_edges_np = np.concatenate([y_edges_np, [max_row]])
+
+    xx, yy = np.meshgrid(x_edges_np, y_edges_np, indexing="xy")
+    edge_pts = np.stack([xx.ravel(), yy.ravel()], axis=1).astype(np.float64)
+    mapped_np = np.asarray(map_fn(edge_pts), dtype=np.float64)
+    if mapped_np.shape != edge_pts.shape:
+        raise ValueError("map_fn must return an (N, 2) array")
+    mapped_np = mapped_np.reshape(y_edges_np.size, x_edges_np.size, 2)
+
+    return mapped_np, x_edges_np, y_edges_np
 
 
 def _perimeter_samples(height: int, width: int, step: int = 16) -> np.ndarray:

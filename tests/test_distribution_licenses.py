@@ -41,6 +41,7 @@ def make_archive(
     expression=None,
     cfitsio=b"CFITSIO 4.7.0\0",
     xfit_elf=b"",
+    imaging_elf=None,
     cccl_license=CCCL_LICENSE,
 ):
     version = "0.1.4"
@@ -75,6 +76,9 @@ def make_archive(
             (
                 "cuphoton/xfit/_native_ext.cpython-312-x86_64-linux-gnu.so"
             ): xfit_elf,
+            (
+                "cuphoton/core/_imaging_ext.cpython-312-x86_64-linux-gnu.so"
+            ): xfit_elf if imaging_elf is None else imaging_elf,
             "cuphoton.libs/libcfitsio-12345678.so.10.0.0": cfitsio,
             (
                 "cuphoton/xray/_structured_ext."
@@ -186,7 +190,7 @@ def test_native_wheel_rejects_vendored_cuda_libraries(tmp_path, library):
 
 @pytest.fixture(scope="module")
 def xfit_elf(tmp_path_factory):
-    """A real ELF with the same external SONAME contract as native xFit."""
+    """A real ELF with the required xFit and imaging CUDA SONAMEs."""
     if sys.platform != "linux" or shutil.which("readelf") is None:
         pytest.skip("ELF dependency checks require Linux and readelf")
     compiler = shutil.which("cc")
@@ -196,7 +200,12 @@ def xfit_elf(tmp_path_factory):
     source = directory / "stub.c"
     source.write_text("void stub(void) {}\n")
     libraries = []
-    for name in ("libcudart.so.13", "libcublas.so.13"):
+    for name in (
+        "libcudart.so.13",
+        "libcublas.so.13",
+        "libcusolver.so.12",
+        "libcufft.so.12",
+    ):
         library = directory / name
         subprocess.run(
             [
@@ -228,12 +237,31 @@ def xfit_elf(tmp_path_factory):
     return extension.read_bytes()
 
 
-@pytest.mark.parametrize("library", ["libcudart", "libcublas"])
-def test_wheel_rejects_wrong_cuda_linkage(tmp_path, xfit_elf, library):
+@pytest.mark.parametrize(
+    "component, library",
+    [
+        ("xfit", "libcudart.so.13"),
+        ("xfit", "libcublas.so.13"),
+        ("xfit", "libcusolver.so.12"),
+        ("imaging", "libcudart.so.13"),
+        ("imaging", "libcublas.so.13"),
+        ("imaging", "libcusolver.so.12"),
+        ("imaging", "libcufft.so.12"),
+    ],
+)
+def test_wheel_rejects_wrong_cuda_linkage(
+    tmp_path, xfit_elf, component, library
+):
     broken = xfit_elf.replace(
-        f"{library}.so.13".encode(), f"{library}.so.99".encode()
+        library.encode(), (library[:-2] + "99").encode()
     )
-    path = make_archive(tmp_path, "wheel", NOTICES, xfit_elf=broken)
+    path = make_archive(
+        tmp_path,
+        "wheel",
+        NOTICES,
+        xfit_elf=broken if component == "xfit" else xfit_elf,
+        imaging_elf=broken if component == "imaging" else xfit_elf,
+    )
     with pytest.raises(ValueError, match="dynamically link"):
         distributions.check_wheel(path)
 
@@ -297,11 +325,12 @@ def test_archives_require_mit_license_expression(tmp_path, kind):
 @pytest.mark.parametrize(
     "missing",
     [
+        "cuphoton/core/_imaging_ext.cpython-312-x86_64-linux-gnu.so",
         "cuphoton/xray/_structured_ext.cpython-312-x86_64-linux-gnu.so",
         "cuphoton/xray/src/structured_roots.cu",
     ],
 )
-def test_native_wheel_requires_structured_backend(tmp_path, missing):
+def test_native_wheel_requires_compiled_components(tmp_path, missing):
     path = make_archive(tmp_path, "wheel", NOTICES)
     with zipfile.ZipFile(path) as archive:
         files = {
@@ -312,5 +341,5 @@ def test_native_wheel_requires_structured_backend(tmp_path, missing):
     with zipfile.ZipFile(path, "w") as archive:
         for name, content in files.items():
             archive.writestr(name, content)
-    with pytest.raises(ValueError, match="missing .*xray/"):
+    with pytest.raises(ValueError, match="missing .*" + re.escape(missing)):
         distributions.check_wheel(path)

@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from cuphoton.core import _native_imaging
 from cuphoton.xpois import workflows
 from cuphoton.xpois.ois import GaussianBasisComponent
 from cuphoton.xpois.spatial_als import SpatialALSConfig
@@ -914,6 +915,15 @@ def test_run_constant_kernel_fit_auto_stamp_mask_records_metadata(
     [
         pytest.param("cupy", True, True, marks=pytest.mark.gpu),
         pytest.param("auto", False, True, marks=pytest.mark.gpu),
+        pytest.param("native", True, True, marks=pytest.mark.gpu),
+        pytest.param("native", False, True, marks=pytest.mark.gpu),
+        pytest.param(
+            "native",
+            None,
+            True,
+            marks=pytest.mark.gpu,
+            id="native-auto-stamps",
+        ),
         pytest.param("cupy", True, False, id="cpu-dispatch"),
     ],
 )
@@ -921,7 +931,7 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     backend: str,
-    explicit_mask: bool,
+    explicit_mask: bool | None,
     use_gpu: bool,
 ) -> None:
     if use_gpu:
@@ -932,6 +942,10 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
             pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
         if device_count < 1:
             pytest.skip("CuPy CUDA runtime has no visible device")
+        if backend == "native":
+            if importlib.util.find_spec("cuphoton.core._imaging_ext") is None:
+                pytest.skip("native imaging extension is not built")
+            _native_imaging.extension()
     else:
         # Exercise preparation, dispatch and artifacts in CPU CI as well.
         uploads = []
@@ -968,6 +982,15 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
         mask[6:-6, 6:-6] = True
         mask_path = tmp_path / "mask.npy"
         np.save(mask_path, mask.astype(np.uint8))
+    auto_stamps = explicit_mask is None
+    if auto_stamps:
+        mask = cp.asnumpy(
+            workflows.build_compact_source_stamp_mask(
+                cp.asarray(0.5 * (reference + target)),
+                variance=cp.asarray(variance),
+                stamp_size=11,
+            ).mask
+        )
     components = [GaussianBasisComponent(sigma=1.5, degree=0)]
     options = dict(
         kernel_shape=(9, 9),
@@ -985,6 +1008,27 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
     )
     device_solver = workflows.solve_constant_kernel_device
     device_calls = []
+    native_selector_calls = []
+    native_selection_calls = []
+    if backend == "native":
+        selection_image = _native_imaging.selection_image
+        selector = workflows.build_compact_source_stamp_mask
+
+        def checked_selection_image(*args, **kwargs):
+            native_selection_calls.append(True)
+            return selection_image(*args, **kwargs)
+
+        def checked_selector(*args, **kwargs):
+            assert kwargs["backend"] == "native"
+            native_selector_calls.append(True)
+            return selector(*args, **kwargs)
+
+        monkeypatch.setattr(
+            _native_imaging, "selection_image", checked_selection_image
+        )
+        monkeypatch.setattr(
+            workflows, "build_compact_source_stamp_mask", checked_selector
+        )
 
     def checked_device_solver(reference, target, *args, **kwargs):
         inputs = [reference, target, kwargs["variance"]]
@@ -995,10 +1039,14 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
         device_calls.append(True)
         if use_gpu:
             assert all(isinstance(value, cp.ndarray) for value in inputs)
+            assert kwargs.get("backend", "cupy") == (
+                "native" if backend == "native" else "cupy"
+            )
             return device_solver(reference, target, *args, **kwargs)
         assert all(
             any(value is uploaded for uploaded in uploads) for value in inputs
         )
+        assert kwargs.pop("backend", "cupy") == "cupy"
         return replace(
             workflows.solve_constant_kernel(
                 reference, target, *args, backend="cpu", **kwargs
@@ -1020,19 +1068,30 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
         variance_path=variance_path,
         fit_mask_path=mask_path,
         backend=backend,
+        auto_stamp_mask=auto_stamps,
+        auto_stamp_size=11,
         review=False,
         **options,
     )
 
     assert device_calls == [True]
-    assert fitted.summary["backend"] == "cupy"
+    assert fitted.summary["backend"] == (
+        "native" if backend == "native" else "cupy"
+    )
+    if backend == "native":
+        assert native_selector_calls == ([True] if auto_stamps else [])
+        assert native_selection_calls == ([True] if auto_stamps else [])
     assert fitted.summary["fit_pixel_count"] == expected.fit_pixel_count
     assert fitted.summary["dof"] == expected.dof
     assert fitted.summary["chi2"] == pytest.approx(
         expected.chi2, rel=1e-9, abs=1e-8
     )
     assert fitted.summary["fit_region"]["kind"] == (
-        "explicit_mask" if explicit_mask else "interior_box"
+        "auto_stamp_mask"
+        if auto_stamps
+        else "explicit_mask"
+        if explicit_mask
+        else "interior_box"
     )
     for name in ("kernel", "matched", "residual", "background", "fit_mask"):
         actual = np.load(fitted.run_dir / fitted.summary["saved"][name])

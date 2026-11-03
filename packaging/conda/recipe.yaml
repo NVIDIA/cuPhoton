@@ -35,6 +35,8 @@ requirements:
     - cuda-crt-dev_${{ target_platform }}
     # Match the deliberate minimum cuBLAS build version used by wheels.
     - libcublas-dev ==13.0.2.14
+    - libcusolver-dev ==12.0.3.29
+    - libcufft-dev ==12.0.0.15
     # Match the CuPy wheel's CCCL headers used by the native xFit recipe.
     - cupy-core ==14.1.1
     - libcufile-dev
@@ -56,6 +58,8 @@ requirements:
     - cuda-version >=13,<14
     - cuda-pathfinder >=1.5.6,<2
     - libcublas >=13.0.2.14,<14
+    - libcusolver >=12.0.3.29,<13
+    - libcufft >=12.0.0.15,<13
     - cupy >=14,<15
     - kvikio >=26.06,<26.07
     - libkvikio >=26.06,<26.07

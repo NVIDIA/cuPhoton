@@ -20,7 +20,7 @@ floating-point bit patterns; choose explicit modes for comparisons or debugging.
 
 | Direct Python keyword / `xdr_options` key | CLI flag | Values | Meaning of `auto` |
 | --- | --- | --- | --- |
-| `postprocess` | `--xdr-postprocess` | `auto`, `fused`, `separate` | Fuse unshuffle, byte-order conversion and scatter. |
+| `postprocess` | `--xdr-postprocess` | `auto`, `fused`, `separate`, `native` | Restore byte order and scatter decoded tiles. |
 | `gzip_decoder` | `--xdr-gzip-decoder` | `auto`, `gzip`, `deflate` | Use native Gzip when available; otherwise decode aligned raw DEFLATE. |
 | `decompression_backend` | `--xdr-decompression-backend` | `auto`, `cuda` | Let nvCOMP choose a compatible decompression engine for native Gzip, with CUDA fallback. |
 
@@ -31,7 +31,13 @@ DEFLATE. `decompression_backend="cuda"` requires a native extension with
 backend selection support and selects CUDA kernels explicitly. The native
 raw DEFLATE decoder uses CUDA in either backend mode.
 
-Both postprocessing modes leave the decoded input buffer unchanged. The
+`postprocess="native"` requires the [native imaging extension](../packaging.md).
+For `GZIP_1` and `GZIP_2` image tiles it runs byte-order restoration, unshuffle,
+scatter and supported dequantization in precompiled CUDA, without compiling
+CuPy kernels. This choice applies to compressed image HDUs; standalone
+uncompressed HDUs retain their existing reading path.
+
+All postprocessing modes leave the decoded input buffer unchanged. The
 separate path allocates another buffer the size of the decoded tiles and
 copies GZIP_1 input before byte-order conversion. Its timings therefore
 include that copy and are not an exact baseline for the former in-place

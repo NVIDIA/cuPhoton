@@ -19,6 +19,11 @@ nvidia-cuda-crt==13.0.88
 nvidia-cuda-nvcc==13.0.88
 nvidia-nvvm==13.0.88
 nvidia-cublas==13.0.2.14
+# CUDA 13.0 GA solver/FFT components and their CUDA library dependencies.
+nvidia-cusolver==12.0.3.29
+nvidia-cufft==12.0.0.15
+nvidia-cusparse==12.6.2.49
+nvidia-nvjitlink==13.0.39
 # xFit reductions use the same CCCL headers as the supported CuPy runtime.
 cupy-cuda13x==14.1.1
 nvidia-cufile==1.15.1.6

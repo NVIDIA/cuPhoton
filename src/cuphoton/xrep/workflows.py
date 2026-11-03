@@ -657,6 +657,7 @@ def benchmark_backend_variants_reproject_image(
                 spec,
                 source_shape=image.shape,
                 xp=_prepare_array_module(variant.backend),
+                backend="native" if variant.backend == "native" else None,
             )
             _maybe_sync_device(variant.backend)
             prepare_seconds[variant.label] = float(
@@ -718,7 +719,7 @@ def benchmark_backend_variants_reproject_image(
                         )
                     )
 
-                if variant.backend == "cupy" and hasattr(
+                if variant.backend in {"native", "cupy"} and hasattr(
                     backend_impl,
                     "reproject_device",
                 ):
@@ -914,7 +915,7 @@ def run_reproject_stack(
         input_paths,
         fits_reader=reader,
         xdr_options=xdr_options,
-        device=backend == "cupy",
+        device=backend in {"native", "cupy"},
         read_metadata=fits_reads,
         grid=grid,
         hdu=hdu,
@@ -1065,7 +1066,7 @@ def _execute_single_reprojection(
         hdu=hdu,
         fits_reader=reader,
         xdr_options=xdr_options,
-        device=backend == "cupy",
+        device=backend in {"native", "cupy"},
         read_metadata=fits_reads,
     )
     grid = _resolve_grid(
@@ -1082,7 +1083,7 @@ def _execute_single_reprojection(
             hdu=mask_hdu,
             fits_reader=reader,
             xdr_options=xdr_options,
-            device=backend == "cupy",
+            device=backend in {"native", "cupy"},
             read_metadata=fits_reads,
         )
     load_seconds = float(time.perf_counter() - load_start)
@@ -1107,6 +1108,7 @@ def _execute_single_reprojection(
         spec,
         source_shape=image.shape,
         xp=_prepare_array_module(backend),
+        backend="native" if backend == "native" else None,
     )
     prepare_seconds = float(time.perf_counter() - prepare_start)
 
@@ -1155,7 +1157,7 @@ def _maybe_sync_device(backend: str) -> None:
             return
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-    elif backend == "cupy":
+    elif backend in {"native", "cupy"}:
         try:
             import cupy as cp
         except Exception:
@@ -1215,10 +1217,14 @@ def _benchmark_cupy_device_variant(
 ) -> list[dict[str, float]]:
     import cupy as cp
 
-    source_device = cp.asarray(image, dtype=cp.float64)
+    if backend_impl.name == "native":
+        from cuphoton.core._native_imaging import asarray
+    else:
+        asarray = cp.asarray
+    source_device = asarray(image, dtype=cp.float64)
     mask_device = None
     if source_mask is not None:
-        mask_device = cp.asarray(source_mask)
+        mask_device = asarray(source_mask)
     cp.cuda.runtime.deviceSynchronize()
     for _ in range(warmup):
         backend_impl.reproject_device(

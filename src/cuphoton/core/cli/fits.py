@@ -21,7 +21,8 @@ class XdrOptionsMixin:
         _arg = "--xdr-postprocess"
         _help = (
             "xDR postprocessing: auto/fused combine restoration kernels; "
-            "separate runs individual kernels. Omitted preserves input "
+            "separate runs individual kernels; native uses ahead-of-time "
+            "CUDA kernels for compressed tiles. Omitted preserves input "
             "choices or uses xDR defaults; applies when the FITS reader "
             "uses xDR."
         )

@@ -33,7 +33,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from cuphoton.core.arrays import array_module, ndimage_module, to_host
 
-EXPLICIT_BACKENDS = ("cpu", "cupy", "numba-cuda", "cutile")
+EXPLICIT_BACKENDS = ("cpu", "cupy", "numba-cuda", "cutile", "native")
 AUTO_BACKEND_PREFERENCE = ("cupy", "numba-cuda", "cpu")
 SUPPORTED_BACKENDS = ("auto", *EXPLICIT_BACKENDS)
 _SUPPORTED_BACKENDS_SET = frozenset(SUPPORTED_BACKENDS)
@@ -179,7 +179,7 @@ class DeviceConstantKernelFitResult:
     flux_conserve
         Whether a unit-sum/zero-sum basis rewrite was requested.
     backend
-        Always ``"cupy"``.
+        ``"cupy"`` or the explicitly selected ``"native"`` implementation.
     schema, solver, result_location
         Immutable tags identifying this device-only result contract.
     device_id
@@ -205,13 +205,15 @@ class DeviceConstantKernelFitResult:
         default="cuphoton.xpois.device-fit-result/v1",
     )
     solver: Literal["constant"] = field(init=False, default="constant")
-    backend: Literal["cupy"] = field(init=False, default="cupy")
+    backend: Literal["cupy", "native"] = "cupy"
     result_location: Literal["device"] = field(
         init=False,
         default="device",
     )
 
     def __post_init__(self) -> None:
+        if self.backend not in {"cupy", "native"}:
+            raise ValueError("device backend must be 'cupy' or 'native'")
         if isinstance(self.device_id, bool) or not isinstance(
             self.device_id, (int, np.integer)
         ):
@@ -544,6 +546,7 @@ def build_compact_source_stamp_mask(
     peak_filter_size: int = 9,
     min_separation: int | None = None,
     compact_core_size: int = 3,
+    backend: Literal["auto", "native"] = "auto",
 ) -> AutoStampMaskResult:
     """Build a sparse fit mask around compact sources.
 
@@ -567,6 +570,10 @@ def build_compact_source_stamp_mask(
         Minimum source-center separation in pixels.
     compact_core_size
         Odd central width used for compactness scoring.
+    backend
+        ``auto`` uses the input array module. ``native`` selects ahead-of-time
+        CUDA filtering and scoring, with CuPy buffer ownership. Native median
+        filters support odd widths through 31 and stamps through 63.
 
     Returns
     -------
@@ -604,6 +611,26 @@ def build_compact_source_stamp_mask(
         raise ValueError("max_stamps must be positive")
     if not 0.0 < peak_percentile < 100.0:
         raise ValueError("peak_percentile must satisfy 0 < p < 100")
+
+    if backend == "native":
+        from ._native_selection import build_mask
+
+        return build_mask(
+            image,
+            variance=variance,
+            valid_mask=valid_mask,
+            stamp_size=stamp_size,
+            max_stamps=max_stamps,
+            peak_percentile=peak_percentile,
+            background_filter_size=background_filter_size,
+            peak_filter_size=peak_filter_size,
+            min_separation=min_separation,
+            compact_core_size=compact_core_size,
+        )
+    if backend != "auto":
+        raise ValueError(
+            "source selection backend must be 'auto' or 'native'"
+        )
 
     xp = array_module(image, variance, valid_mask)
     ndimage = ndimage_module(xp)
@@ -923,6 +950,41 @@ def solve_constant_kernel(
     """
 
     backend = _normalize_backend(backend)
+    if backend == "native":
+        device = solve_constant_kernel_device(
+            reference,
+            target,
+            components,
+            kernel_shape=kernel_shape,
+            variance=variance,
+            fit_mask=fit_mask,
+            background_degree=background_degree,
+            flux_conserve=flux_conserve,
+            flux_reference_index=flux_reference_index,
+            backend="native",
+        )
+        arrays = {
+            name: to_host(getattr(device, name))
+            for name in (
+                "kernel",
+                "matched",
+                "residual",
+                "fit_mask",
+                "background",
+                "kernel_coefficients",
+                "background_coefficients",
+                "basis_kernels",
+            )
+        }
+        return ConstantKernelFitResult(
+            **arrays,
+            basis_terms=device.basis_terms,
+            chi2=device.chi2,
+            dof=device.dof,
+            fit_pixel_count=device.fit_pixel_count,
+            flux_conserve=device.flux_conserve,
+            backend="native",
+        )
     reference_arr = np.asarray(reference, dtype=np.float64)
     target_arr = np.asarray(target, dtype=np.float64)
     _validate_image_pair(reference_arr, target_arr)
@@ -1068,11 +1130,12 @@ def solve_constant_kernel_device(
     background_degree: int = 0,
     flux_conserve: bool = False,
     flux_reference_index: int = 0,
+    backend: Literal["cupy", "native"] = "cupy",
 ) -> DeviceConstantKernelFitResult:
     """Fit a constant kernel while keeping array results on the GPU.
 
-    Parameters match :func:`solve_constant_kernel`, except this experimental
-    seam is explicitly CuPy-only and therefore has no backend selector.
+    Parameters match :func:`solve_constant_kernel`; the backend selects
+    CuPy execution or ahead-of-time native CUDA execution.
     NumPy inputs are accepted and copied to the active CUDA device; CuPy
     inputs already on that device are reused when their dtype permits.
 
@@ -1081,6 +1144,23 @@ def solve_constant_kernel_device(
     DeviceConstantKernelFitResult
         CuPy-resident fitted arrays and compact host diagnostics.
     """
+
+    if backend == "native":
+        from ._native import solve_constant_kernel_device as native_solve
+
+        return native_solve(
+            reference,
+            target,
+            components,
+            kernel_shape=kernel_shape,
+            variance=variance,
+            fit_mask=fit_mask,
+            background_degree=background_degree,
+            flux_conserve=flux_conserve,
+            flux_reference_index=flux_reference_index,
+        )
+    if backend != "cupy":
+        raise ValueError("device backend must be 'cupy' or 'native'")
 
     cp, cupy_fftconvolve = _load_cupy()
     active_device_id = _active_cupy_device_id(cp)
@@ -1874,14 +1954,14 @@ def resolve_backend(backend: str = "auto") -> str:
     Parameters
     ----------
     backend
-        ``auto``, ``cupy``, ``numba-cuda``, ``cpu``, or ``cutile``. The
-        ``numba_cuda`` spelling is accepted as an input alias.
+        One of ``auto``, ``cupy``, ``numba-cuda``, ``cpu``, ``cutile``,
+        or ``native``. ``numba_cuda`` is accepted as an input alias.
 
     Returns
     -------
     str
         Explicit backend name. ``auto`` prefers CuPy, then Numba-CUDA, and
-        finally CPU. cuTile is never selected automatically.
+        finally CPU. cuTile and native CUDA require explicit selection.
     """
 
     normalized = str(backend).strip().lower()

@@ -43,7 +43,11 @@ def test_runtime_libraries_load_before_extension(monkeypatch):
 
     def load(name):
         events.append(name)
-        return SimpleNamespace(abs_path=f"/cuda/lib64/lib{name}.so.13")
+        return SimpleNamespace(
+            abs_path=(
+                f"/cuda/lib64/lib{name}.so.{12 if name == 'cusolver' else 13}"
+            )
+        )
 
     _runtime(monkeypatch, load)
     extension = ModuleType("cuphoton.xfit._native_ext")
@@ -54,10 +58,15 @@ def test_runtime_libraries_load_before_extension(monkeypatch):
 
     monkeypatch.setattr(_native.importlib, "import_module", import_extension)
     assert _native.load_extension() is extension
-    assert events == ["cudart", "cublas", "cuphoton.xfit._native_ext"]
+    assert events == [
+        "cudart",
+        "cublas",
+        "cusolver",
+        "cuphoton.xfit._native_ext",
+    ]
 
 
-@pytest.mark.parametrize("missing", ["cudart", "cublas"])
+@pytest.mark.parametrize("missing", ["cudart", "cublas", "cusolver"])
 def test_missing_runtime_reports_dependency_without_loading_extension(
     monkeypatch, missing
 ):
@@ -66,7 +75,11 @@ def test_missing_runtime_reports_dependency_without_loading_extension(
     def load(name):
         if name == missing:
             raise error
-        return SimpleNamespace(abs_path=f"/cuda/lib64/lib{name}.so.13")
+        return SimpleNamespace(
+            abs_path=(
+                f"/cuda/lib64/lib{name}.so.{12 if name == 'cusolver' else 13}"
+            )
+        )
 
     _runtime(monkeypatch, load)
     monkeypatch.setattr(
@@ -84,7 +97,10 @@ def test_extension_linker_error_is_preserved(monkeypatch):
     _runtime(
         monkeypatch,
         lambda name: SimpleNamespace(
-            abs_path=f"/cuda/lib64/lib{name}.so.13.0.96"
+            abs_path=(
+                f"/cuda/lib64/lib{name}.so."
+                f"{12 if name == 'cusolver' else 13}.0.96"
+            )
         ),
     )
     error = ImportError("libcublas.so.13: cannot open shared object file")

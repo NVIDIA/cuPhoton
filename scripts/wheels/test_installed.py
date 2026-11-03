@@ -20,10 +20,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from importlib import metadata, resources
 from pathlib import Path
+from unittest.mock import patch
 
 GPU_DISTRIBUTIONS = (
     "cupy-cuda13x",
@@ -35,6 +38,9 @@ GPU_DISTRIBUTIONS = (
     "cuda-toolkit",
     "nvidia-cuda-runtime",
     "nvidia-cublas",
+    "nvidia-cusolver",
+    "nvidia-cufft",
+    "nvidia-cusparse",
     "nvidia-cuda-nvrtc",
     "nvidia-cufile",
     "nvidia-nvjitlink",
@@ -70,6 +76,10 @@ def loaded_native_libraries():
     prefixes = (
         "libcudart",
         "libcublas",
+        "libcusolver",
+        "libcufft",
+        "libcusparse",
+        "libnvJitLink",
         "libcufile",
         "libcfitsio",
         "libnvcomp",
@@ -130,6 +140,7 @@ def check_install(mode, components, report):
                     "nvidia.nvcomp",
                     "cuda.pathfinder",
                     "cuphoton.xfit._native_ext",
+                    "cuphoton.core._imaging_ext",
                 )
             ),
             "Base imports loaded an optional GPU package",
@@ -206,6 +217,7 @@ def check_xfit_cpu(report):
 
 
 def check_xfit_native(distribution, report):
+    from cuphoton.core._native_imaging import extension as imaging_extension
     from cuphoton.xfit._native import load_extension
 
     load_extension()
@@ -216,9 +228,236 @@ def check_xfit_native(distribution, report):
     ).hexdigest()
     report["loaded_native_libraries"] = loaded_native_libraries()
     passed(report, "xfit_native_extension_load")
+    imaging_extension()
+    extension = module_path(distribution, "cuphoton.core._imaging_ext")
+    report["paths"]["imaging_native_extension"] = str(extension)
+    report["imaging_extension_sha256"] = hashlib.sha256(
+        extension.read_bytes()
+    ).hexdigest()
+    report["loaded_native_libraries"] = loaded_native_libraries()
+    passed(report, "imaging_native_extension_load")
 
 
-def check_xfit_gpu(report):
+@contextmanager
+def forbid_cupy_compilation():
+    from cupy._core import core
+    from cupy.cuda import compiler
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Native pipeline attempted CuPy compilation")
+
+    with (
+        patch.object(core, "compile_with_cache", forbidden),
+        patch.object(compiler, "_compile_module_with_cache", forbidden),
+        patch.object(compiler, "compile_using_nvrtc", forbidden),
+        patch.object(compiler, "compile_using_nvcc", forbidden),
+        patch.object(compiler.nvrtc, "compileProgram", forbidden),
+    ):
+        yield
+
+
+def run_native_probe(probe, report, *, deadline):
+    """Keep each guarded case clear of earlier CuPy reference kernels."""
+    # Leave time for the parent to report a failure before its hard timeout.
+    timeout = min(180, deadline - time.monotonic() - 10)
+    require(
+        timeout >= 6,
+        f"Fresh native probe {probe} has insufficient time remaining",
+    )
+    with tempfile.TemporaryDirectory(prefix="cuphoton-native-probe-") as tmp:
+        output = Path(tmp) / "report.json"
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(Path(__file__).resolve()),
+                    "--mode",
+                    "gpu",
+                    "--components",
+                    "xfit",
+                    "--native-probe",
+                    probe,
+                    "--output",
+                    str(output),
+                    "--timeout",
+                    str(int(timeout) - 5),
+                ],
+                cwd=tmp,
+                env={
+                    **os.environ,
+                    "CUPY_CACHE_DIR": str(Path(tmp) / "cupy-cache"),
+                    "CUDA_CACHE_PATH": str(Path(tmp) / "cuda-cache"),
+                },
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            raise RuntimeError(
+                f"Fresh native probe {probe} timed out after {timeout:g}s:\n"
+                f"{stdout}\n{stderr}"
+            ) from exc
+        require(
+            result.returncode == 0,
+            f"Fresh native probe {probe} failed:\n"
+            f"{result.stdout}\n{result.stderr}",
+        )
+        child = json.loads(output.read_text())
+        require(child["ok"], f"Fresh native probe {probe} did not pass")
+        report["checks"].extend(
+            check
+            for check in child["checks"]
+            if check not in report["checks"]
+        )
+        for key in ("gpu", "cupy_runtime_version", "cuda_driver"):
+            if key in child:
+                report[key] = child[key]
+
+
+def check_imaging_gpu(report):
+    """Exercise the installed native imaging pipeline."""
+    import cupy as cp
+    import numpy as np
+    from scipy.signal import fftconvolve
+
+    from cuphoton.xdr.reader import GpuCompImageReader
+    from cuphoton.xpois import (
+        GaussianBasisComponent,
+        build_compact_source_stamp_mask,
+        build_gaussian_polynomial_basis,
+        solve_constant_kernel_device,
+    )
+    from cuphoton.xrep import BBox, ReprojectionSpec, reproject_array_device
+
+    require(cp.cuda.runtime.getDeviceCount() > 0, "A CUDA GPU is required")
+    shape = (41, 43)
+    rng = np.random.default_rng(832)
+    reference = rng.normal(10.0, 0.1, shape)
+    yy, xx = np.indices(shape)
+    for row, column in ((10, 11), (21, 29), (31, 12)):
+        reference += 60.0 * np.exp(
+            -((yy - row) ** 2 + (xx - column) ** 2) / 3
+        )
+    components = [GaussianBasisComponent(1.3, 0)]
+    basis, _ = build_gaussian_polynomial_basis((7, 7), components)
+    target = 1.2 * fftconvolve(reference, basis[0], mode="same") + 0.7
+    raw = np.frombuffer(reference.astype(">f8").tobytes(), dtype="u1")
+    raw = raw.reshape(-1, 8).T.ravel()
+    compressed = np.frombuffer(gzip.compress(raw.tobytes()), dtype="u1")
+    plan = dict(
+        out_shape=shape,
+        dtype_char="f8",
+        quantized=False,
+        itemsize=8,
+        compression_type="GZIP_2",
+        sel_lengths=np.asarray([compressed.size], dtype="i8"),
+        out_bytes=np.asarray([raw.size], dtype="i8"),
+        origins_r=np.asarray([0], dtype="i4"),
+        origins_c=np.asarray([0], dtype="i4"),
+        heights=np.asarray([shape[0]], dtype="i4"),
+        widths=np.asarray([shape[1]], dtype="i4"),
+        src_off_r=np.asarray([0], dtype="i4"),
+        src_off_c=np.asarray([0], dtype="i4"),
+        tile_full_w=np.asarray([shape[1]], dtype="i4"),
+    )
+    spec = ReprojectionSpec(
+        mapping=lambda points: points,
+        output_bbox=BBox(0, 0, shape[1], shape[0]),
+        interpolation="bilinear",
+        mapping_grid_step=8,
+    )
+    selection_options = dict(
+        stamp_size=7,
+        max_stamps=5,
+        background_filter_size=7,
+        peak_filter_size=3,
+        peak_percentile=95.0,
+        min_separation=8,
+    )
+    compressed_device = cp.asarray(compressed)
+    target_device = cp.asarray(target)
+    with forbid_cupy_compilation():
+        restored = GpuCompImageReader.decode_from_device_heap(
+            compressed_device,
+            np.asarray([0], dtype="i8"),
+            plan,
+            postprocess="native",
+        )
+        deflate_restored = GpuCompImageReader.decode_from_device_heap(
+            compressed_device,
+            np.asarray([0], dtype="i8"),
+            plan,
+            postprocess="native",
+            gzip_decoder="deflate",
+        )
+        projected = reproject_array_device(restored, spec, backend="native")
+        selected = build_compact_source_stamp_mask(
+            projected.image, backend="native", **selection_options
+        )
+        actual = solve_constant_kernel_device(
+            projected.image,
+            target_device,
+            components,
+            kernel_shape=(7, 7),
+            fit_mask=selected.mask,
+            backend="native",
+        )
+        cp.cuda.get_current_stream().synchronize()
+    np.testing.assert_array_equal(cp.asnumpy(restored), reference)
+    np.testing.assert_array_equal(cp.asnumpy(deflate_restored), reference)
+    require(actual.backend == "native", "xPois fell back from native")
+    require(bool(selected.centers), "Native source selection found no stars")
+    expected_projection = reproject_array_device(
+        cp.asarray(reference), spec, backend="cupy"
+    )
+    expected_selection = build_compact_source_stamp_mask(
+        expected_projection.image, **selection_options
+    )
+    require(
+        selected.centers == expected_selection.centers,
+        "Native source selection changed source order",
+    )
+    np.testing.assert_array_equal(
+        cp.asnumpy(selected.mask), cp.asnumpy(expected_selection.mask)
+    )
+    np.testing.assert_allclose(
+        cp.asnumpy(projected.image),
+        cp.asnumpy(expected_projection.image),
+        rtol=5e-12,
+        atol=5e-12,
+    )
+    expected = solve_constant_kernel_device(
+        expected_projection.image,
+        target_device,
+        components,
+        kernel_shape=(7, 7),
+        fit_mask=expected_selection.mask,
+    )
+    require(
+        actual.fit_pixel_count == expected.fit_pixel_count, "Fit mask changed"
+    )
+    for name in ("kernel", "background", "matched", "residual"):
+        np.testing.assert_allclose(
+            cp.asnumpy(getattr(actual, name)),
+            cp.asnumpy(getattr(expected, name)),
+            rtol=5e-12,
+            atol=5e-12,
+            err_msg=f"native imaging {name}",
+        )
+    np.testing.assert_allclose(
+        actual.chi2, expected.chi2, rtol=5e-12, atol=5e-12
+    )
+    passed(report, "native_imaging_without_cupy_compilation")
+
+
+def check_xfit_gpu_case(report, dtype_name, mode):
     import cupy as cp
     import numpy as np
 
@@ -233,39 +472,37 @@ def check_xfit_gpu(report):
     }
     report["cupy_runtime_version"] = cp.cuda.runtime.runtimeGetVersion()
     report["cuda_driver"] = cp.cuda.runtime.driverGetVersion()
-    for dtype in (np.float32, np.float64):
-        tolerance = 3e-5 if dtype is np.float32 else 5e-12
-        for mode in ("difference", "split"):
-            _, images, options = xfit_fixture(dtype, mode)
-            expected = fit_dipoles(images, backend="cupy", **options)
-            actual = fit_dipoles(images, backend="native", **options)
-            require(actual.backend == "native", "xFit fell back from native")
-            require(actual.converged.all(), "Native xFit did not converge")
-            require(
-                actual.uncertainty_valid.all(),
-                "Native xFit covariance is invalid",
-            )
-            for name in ("status", "evaluations", "converged"):
-                np.testing.assert_array_equal(
-                    getattr(actual, name), getattr(expected, name)
-                )
-            for name in (
-                "parameters",
-                "residuals",
-                "chi_square",
-                "covariance",
-                "standard_errors",
-            ):
-                np.testing.assert_allclose(
-                    getattr(actual, name),
-                    getattr(expected, name),
-                    rtol=tolerance,
-                    atol=tolerance,
-                    err_msg=f"native xFit {name}",
-                )
-            passed(
-                report, f"xfit_native_{np.dtype(dtype).name}_{mode}_parity"
-            )
+    dtype = np.dtype(dtype_name).type
+    tolerance = 3e-5 if dtype is np.float32 else 5e-12
+    _, images, options = xfit_fixture(dtype, mode)
+    with forbid_cupy_compilation():
+        actual = fit_dipoles(images, backend="native", **options)
+    expected = fit_dipoles(images, backend="cupy", **options)
+    require(actual.backend == "native", "xFit fell back from native")
+    require(actual.converged.all(), "Native xFit did not converge")
+    require(
+        actual.uncertainty_valid.all(),
+        "Native xFit covariance is invalid",
+    )
+    for name in ("status", "evaluations", "converged"):
+        np.testing.assert_array_equal(
+            getattr(actual, name), getattr(expected, name)
+        )
+    for name in (
+        "parameters",
+        "residuals",
+        "chi_square",
+        "covariance",
+        "standard_errors",
+    ):
+        np.testing.assert_allclose(
+            getattr(actual, name),
+            getattr(expected, name),
+            rtol=tolerance,
+            atol=tolerance,
+            err_msg=f"native xFit {name}",
+        )
+    passed(report, f"xfit_native_{dtype_name}_{mode}_parity")
     release_workspace()
 
 
@@ -475,6 +712,10 @@ def check_gpu(paths, report):
     retained = batch_to_device(paths, **options)
     check_images(retained, expected)
     passed(report, "native_image_gzip1_gzip2_order_and_dtype")
+    check_images(
+        batch_to_device(paths, postprocess="native", **options), expected
+    )
+    passed(report, "native_postprocess_gzip1_gzip2_order_and_dtype")
 
     stream = cp.cuda.Stream(non_blocking=True)
     supplied = tuple(
@@ -546,6 +787,18 @@ def main():
         help="Native components to qualify (default: xdr xfit xray)",
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--native-probe",
+        choices=(
+            "imaging",
+            *(
+                f"xfit-{dtype}-{mode}"
+                for dtype in ("float32", "float64")
+                for mode in ("difference", "split")
+            ),
+        ),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
     require(args.timeout > 0, "--timeout must be positive")
@@ -558,6 +811,7 @@ def main():
         "checks": [],
         "ok": False,
     }
+    deadline = time.monotonic() + args.timeout
     faulthandler.dump_traceback_later(args.timeout, exit=True)
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     try:
@@ -571,9 +825,20 @@ def main():
                     Path(scratch) / "cupy-cache"
                 )
             distribution = check_install(args.mode, args.components, report)
-            if "xray" in args.components:
+            if args.native_probe:
+                require(
+                    args.mode == "gpu" and args.components == ["xfit"],
+                    "Native probes require --mode gpu --components xfit",
+                )
+                check_xfit_native(distribution, report)
+                if args.native_probe == "imaging":
+                    check_imaging_gpu(report)
+                else:
+                    _, dtype, mode = args.native_probe.split("-")
+                    check_xfit_gpu_case(report, dtype, mode)
+            elif "xray" in args.components:
                 check_xray(distribution, report, gpu=args.mode == "gpu")
-            if args.mode != "base":
+            if args.mode != "base" and not args.native_probe:
                 if "xfit" in args.components:
                     check_xfit_native(distribution, report)
                 if "xdr" in args.components:
@@ -585,7 +850,14 @@ def main():
                     if args.mode == "gpu":
                         check_gpu(paths, report)
                 if args.mode == "gpu" and "xfit" in args.components:
-                    check_xfit_gpu(report)
+                    run_native_probe("imaging", report, deadline=deadline)
+                    for dtype in ("float32", "float64"):
+                        for mode in ("difference", "split"):
+                            run_native_probe(
+                                f"xfit-{dtype}-{mode}",
+                                report,
+                                deadline=deadline,
+                            )
             report["ok"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"

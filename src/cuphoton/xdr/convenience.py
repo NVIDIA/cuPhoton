@@ -71,9 +71,10 @@ def batch_to_device(
     native_read_threads, native_plan_threads, native_batcher
         Scheduling controls for `batch_to_device_stream`. ``parallel=False``
         overrides the depths and native batcher as described above.
-    postprocess : {"auto", "fused", "separate"}
+    postprocess : {"auto", "fused", "separate", "native"}
         ``auto`` (default) uses fused FITS pixel restoration. ``separate``
         selects individual unshuffle, byteswap and scatter kernels.
+        ``native`` uses ahead-of-time CUDA pixel restoration.
     gzip_decoder : {"auto", "gzip", "deflate"}
         ``auto`` prefers native Gzip, with aligned raw DEFLATE fallback.
         ``gzip`` requires native Gzip support; ``deflate`` selects raw decode.

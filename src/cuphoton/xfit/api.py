@@ -686,6 +686,20 @@ def _fit_dipoles_backend(
 ) -> _BackendDipoleFitResult:
     """Fit dipoles while retaining all result arrays in ``resolved``."""
 
+    if resolved.name == "native":
+        from ._native import fit_gaussian_pipeline
+
+        return fit_gaussian_pipeline(
+            images,
+            model=model,
+            initial=initial,
+            mask=mask,
+            variance=variance,
+            mode=mode,
+            resolved=resolved,
+            config=config,
+        )
+
     ap = resolved.module
     images_array = ap.asarray(images)
     batch, height, width = _validate_images(images_array, mode)
@@ -910,24 +924,11 @@ def _fit_dipoles_backend(
                 else numba_workspace.normal_equations
             ),
         )
-        if resolved.name == "native":
-            from ._native import fit_gaussian
-
-            low_level = fit_gaussian(
-                problem,
-                solver_initial,
-                images_array,
-                weights,
-                image_shape=(height, width),
-                mode=mode,
-                config=config,
-            )
-        else:
-            low_level = batched_levenberg_marquardt(
-                problem,
-                solver_initial,
-                config=config,
-            )
+        low_level = batched_levenberg_marquardt(
+            problem,
+            solver_initial,
+            config=config,
+        )
     parameters_backend = model_parameters(low_level.parameters)
     if gaussian_model:
         # An ellipse orientation is periodic modulo pi. Keep portable fit
@@ -1222,10 +1223,10 @@ def fit_dipoles_device(
     This experimental seam uses CuPy-owned buffers. The cuTile backend
     supports Gaussian analytic fits; ``fusion=True`` selects fused residual
     and analytic-Jacobian evaluation. The optional native
-    backend runs Gaussian LM iterations in CUDA C++. The optional
-    ``numba-cuda-mlir`` backend evaluates Gaussian residuals and the analytic
-    Jacobian in separate compiled kernels, then uses CuPy contractions for
-    the normal equations. NumPy inputs are copied to the active device.
+    backend prepares, solves and finalizes Gaussian fits in CUDA C++. The
+    optional ``numba-cuda-mlir`` backend evaluates Gaussian residuals and the
+    analytic Jacobian in separate compiled kernels, then uses CuPy for the
+    normal equations. NumPy inputs are copied to the active device.
     Existing CuPy inputs must already reside on that device and are checked
     before any input conversion. Input arrays are borrowed and are not
     mutated.

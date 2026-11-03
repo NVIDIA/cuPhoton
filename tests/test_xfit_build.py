@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 import setuptools
+from setuptools.command.build_ext import build_ext
 
 _ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(
@@ -46,9 +47,11 @@ def _toolkit(tmp_path, version=13000, library_dir="lib64"):
     for name in (
         "include/cuda_runtime.h",
         "include/cublas_v2.h",
+        "include/cusolverDn.h",
         f"{library_dir}/libcudart.so.13",
         f"{library_dir}/libcublas.so.13",
         f"{library_dir}/libcublasLt.so.13",
+        f"{library_dir}/libcusolver.so.12",
     ):
         (root / name).touch()
     nvcc = root / "bin/nvcc"
@@ -83,12 +86,14 @@ def _cccl(tmp_path):
 @pytest.fixture(autouse=True)
 def clear_inherited_compiler(monkeypatch):
     monkeypatch.delenv("CUDACXX", raising=False)
+    monkeypatch.setenv("CUPHOTON_IMAGING_BUILD_EXT", "0")
 
 
 def test_default_build_does_not_discover_cuda(monkeypatch):
     captured = {}
     monkeypatch.delenv("CUPHOTON_XDR_BUILD_EXT", raising=False)
     monkeypatch.delenv("CUPHOTON_XFIT_BUILD_EXT", raising=False)
+    monkeypatch.delenv("CUPHOTON_IMAGING_BUILD_EXT", raising=False)
     monkeypatch.setenv("CUDA_HOME", "/not/a/toolkit")
     monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", "/not/cccl")
     monkeypatch.setattr(setuptools, "setup", lambda **kw: captured.update(kw))
@@ -135,7 +140,11 @@ def test_native_build_is_enabled_independently(
     assert extension.architectures == ("100", "120")
     assert extension.py_limited_api is False
     assert extension.library_dirs == [str(root / library_dir)]
-    assert extension.libraries == [":libcudart.so.13", ":libcublas.so.13"]
+    assert extension.libraries == [
+        ":libcudart.so.13",
+        ":libcublas.so.13",
+        ":libcusolver.so.12",
+    ]
     assert extension.include_dirs == [
         str(cccl / "cub"),
         str(cccl / "libcudacxx"),
@@ -184,6 +193,65 @@ def test_native_and_xdr_builds_can_be_enabled_together(monkeypatch):
     assert captured["cmdclass"] == {"build_ext": build_command}
 
 
+@pytest.mark.parametrize("with_xfit", [False, True])
+@pytest.mark.parametrize("architectures", [None, "100;120a"])
+def test_imaging_build_checks_cufft_targets_and_math_flags(
+    monkeypatch, tmp_path, with_xfit, architectures
+):
+    root = _toolkit(tmp_path)
+    captured = {}
+    monkeypatch.setenv("CUDA_HOME", str(root))
+    monkeypatch.setenv("CUPHOTON_XFIT_CCCL_ROOT", str(_cccl(tmp_path)))
+    monkeypatch.setenv("CUPHOTON_XDR_BUILD_EXT", "0")
+    monkeypatch.setenv("CUPHOTON_XRAY_BUILD_EXT", "0")
+    monkeypatch.setenv("CUPHOTON_XFIT_BUILD_EXT", str(int(with_xfit)))
+    if architectures is None:
+        monkeypatch.delenv("CUPHOTON_XFIT_CUDA_ARCHS", raising=False)
+    else:
+        monkeypatch.setenv("CUPHOTON_XFIT_CUDA_ARCHS", architectures)
+    if with_xfit:
+        monkeypatch.delenv("CUPHOTON_IMAGING_BUILD_EXT", raising=False)
+    else:
+        monkeypatch.setenv("CUPHOTON_IMAGING_BUILD_EXT", "1")
+    monkeypatch.setattr(setuptools, "setup", lambda **kw: captured.update(kw))
+    with pytest.raises(RuntimeError, match="lacks cuFFT headers"):
+        runpy.run_path(str(_ROOT / "setup.py"))
+    (root / "include/cufft.h").touch()
+    with pytest.raises(RuntimeError, match=r"libcufft\.so\.12"):
+        runpy.run_path(str(_ROOT / "setup.py"))
+    (root / "lib64/libcufft.so.12").touch()
+    runpy.run_path(str(_ROOT / "setup.py"))
+    imaging = captured["ext_modules"][-1]
+    assert imaging.name == "cuphoton.core._imaging_ext"
+    assert ":libcufft.so.12" in imaging.libraries
+    assert len(captured["ext_modules"]) == 1 + with_xfit
+    command = captured["cmdclass"]["build_ext"](setuptools.Distribution())
+    command.build_temp = str(tmp_path / "build")
+    compiled = []
+    monkeypatch.setattr(command, "spawn", compiled.append)
+    monkeypatch.setattr(build_ext, "build_extension", lambda *_: None)
+    command.build_extension(imaging)
+    cubins = ("75",) if architectures is None else ("100", "120a")
+    ptx = ("75",) if architectures is None else ("75", "120")
+    expected = {
+        *(
+            f"--generate-code=arch=compute_{arch},code=sm_{arch}"
+            for arch in cubins
+        ),
+        *(
+            f"--generate-code=arch=compute_{arch},code=compute_{arch}"
+            for arch in ptx
+        ),
+    }
+    assert len(compiled) == 5
+    for arguments in compiled:
+        assert {
+            flag for flag in arguments if flag.startswith("--generate-code=")
+        } == expected
+        assert "--fmad=false" in arguments
+        assert "--ftz=false" in arguments
+
+
 def test_native_build_requires_versioned_runtime(monkeypatch, tmp_path):
     root = _toolkit(tmp_path)
     (root / "lib64/libcudart.so.13").unlink()
@@ -222,6 +290,7 @@ def test_native_build_requires_explicit_complete_cccl(monkeypatch, tmp_path):
         ("89", {"89"}, {"75", "89"}),
         ("75;120", {"75", "120"}, {"75", "120"}),
         ("100;120", {"100", "120"}, {"75", "120"}),
+        ("103;120;121", {"103", "120", "121"}, {"75", "121"}),
         ("120a", {"120a"}, {"75", "120"}),
         (
             "120a,90a;100 120a 100a 075",
@@ -286,7 +355,18 @@ def test_cuda_targets_math_flags_and_relink_dependencies(
         assert all(path in linked.depends for path in linked.extra_objects)
         for source, arguments in compiled.items():
             specialized = source.startswith("native_jacobian")
-            targets = {"100a"} if specialized else portable_targets
+            targets = (
+                (
+                    {
+                        target
+                        for target in portable_targets
+                        if int(target.removesuffix("a")) >= 100
+                    }
+                    or {"100a"}
+                )
+                if specialized
+                else portable_targets
+            )
             ptx_targets = {"100"} if specialized else portable_ptx
             flags = [
                 flag

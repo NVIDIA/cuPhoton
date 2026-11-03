@@ -440,6 +440,7 @@ class GpuCompImageReader:
         _decode_checks=None,
         gzip_decoder: str = "auto",
         decompression_backend: str = "auto",
+        native_preprocessing: bool = False,
     ):
         """Run batched nvCOMP inflate for gzip tiles resident on the device.
 
@@ -469,6 +470,7 @@ class GpuCompImageReader:
                 gzip_decoder=gzip_decoder,
                 decompression_backend=decompression_backend,
                 use_native_pool=keepalive is not None,
+                native_preprocessing=native_preprocessing,
                 keepalive=keepalive,
                 header_sizes=header_sizes,
                 **(
@@ -497,6 +499,8 @@ class GpuCompImageReader:
         and an extra decoded-buffer allocation; GZIP_1 also requires a copy.
         This comparison mode preserves the input, unlike the former in-place
         GZIP_1 path, so its timings are not an exact historical baseline.
+        ``native`` uses ahead-of-time CUDA kernels and requires the native
+        imaging extension.
         """
         normalize_xdr_options({"postprocess": postprocess})
         import cupy as cp
@@ -585,6 +589,20 @@ class GpuCompImageReader:
             )
             if postprocess == "separate":
                 scatter_native_tiles_2d(*scatter_args)
+            elif postprocess == "native":
+                from cuphoton.core._native_imaging import extension
+
+                extension().restore_fits_tiles(
+                    (
+                        *scatter_args[:3],
+                        d_tile_byte_lengths,
+                        *scatter_args[3:-1],
+                    ),
+                    scatter_itemsize,
+                    shuffled,
+                    decode_guard,
+                    cp.cuda.get_current_stream().ptr,
+                )
             else:
                 scatter_tiles_2d(
                     *scatter_args[:3],
@@ -600,7 +618,7 @@ class GpuCompImageReader:
                 d_sel_zzero = cp.asarray(plan["sel_zzero"])
                 if keepalive is not None:
                     keepalive.extend([d_sel_zscale, d_sel_zzero])
-                dequantize_int_to_float(
+                dequantize_args = (
                     d_scatter_target,
                     out,
                     d_origins_r,
@@ -609,8 +627,17 @@ class GpuCompImageReader:
                     d_widths,
                     d_sel_zscale,
                     d_sel_zzero,
-                    decode_guard=decode_guard,
                 )
+                if postprocess == "native":
+                    extension().dequantize_fits_tiles(
+                        dequantize_args,
+                        decode_guard,
+                        cp.cuda.get_current_stream().ptr,
+                    )
+                else:
+                    dequantize_int_to_float(
+                        *dequantize_args, decode_guard=decode_guard
+                    )
 
         return out
 
@@ -655,6 +682,7 @@ class GpuCompImageReader:
                 gzip_decoder=gzip_decoder,
                 decompression_backend=decompression_backend,
                 keepalive=keepalive,
+                native_preprocessing=postprocess == "native",
             )
         )
         if keepalive is not None:
@@ -689,9 +717,10 @@ class GpuCompImageReader:
             kvikio `CompatModeManager` setup per HDU). If `None`, a fresh
             loader is created for this call. Closure is deferred if
             failure leaves its I/O completion unknown.
-        postprocess : {"auto", "fused", "separate"}
+        postprocess : {"auto", "fused", "separate", "native"}
             ``auto`` (default) and ``fused`` restore FITS pixels in one
             kernel; ``separate`` uses individual restoration kernels.
+            ``native`` uses ahead-of-time CUDA pixel restoration.
         gzip_decoder : {"auto", "gzip", "deflate"}
             ``auto`` prefers native Gzip with aligned DEFLATE fallback.
             ``gzip`` requires native Gzip support; ``deflate`` selects

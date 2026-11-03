@@ -302,7 +302,13 @@ def test_xpois_device_api_is_additive_and_legacy_signature_is_stable() -> (
         "background_degree",
         "flux_conserve",
         "flux_reference_index",
+        "backend",
     ]
+    backend = inspect.signature(
+        xpois.solve_constant_kernel_device
+    ).parameters["backend"]
+    assert backend.kind is inspect.Parameter.KEYWORD_ONLY
+    assert backend.default == "cupy"
 
 
 def test_xrep_additions_do_not_expand_existing_dataclasses() -> None:
@@ -565,7 +571,13 @@ def test_xpois_review_selectors_are_exported_with_stable_signatures() -> None:
         "peak_filter_size",
         "min_separation",
         "compact_core_size",
+        "backend",
     ]
+    backend = inspect.signature(
+        xpois.build_compact_source_stamp_mask
+    ).parameters["backend"]
+    assert backend.kind is inspect.Parameter.KEYWORD_ONLY
+    assert backend.default == "auto"
 
 
 def test_core_bulk_sanitize_json_is_exported() -> None:
