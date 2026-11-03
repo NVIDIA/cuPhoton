@@ -2745,7 +2745,9 @@ class DetectorArtifactsCommand(_XRayCommand):
     class StructuredScheduleArg(SetInvariant):
         _arg = "--structured-schedule"
         _help = (
-            "Overlap one GPU root batch with host preparation and fitting."
+            "serial: complete each batch before preparing the next; "
+            "overlap: overlap one GPU root batch with host preparation "
+            "and fitting."
         )
         _required = False
         _set = {"serial", "overlap"}

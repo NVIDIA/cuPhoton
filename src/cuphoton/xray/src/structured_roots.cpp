@@ -134,7 +134,10 @@ std::array<Rot, 3> turnover(Rot u, Rot v, Rot w) {
     r5.s = -r5.s;
     Rot r6;
     if (r5.s != 0) {
-        // The improved turnover's sine-product invariant (2018 Eq. 5.3).
+        // Sine-product invariant: Aurentz et al., "Fast and Backward Stable
+        // Computation of Roots of Polynomials, Part II: Backward Error
+        // Analysis; Companion Matrix and Companion Pencil" (2018), Eq. (5.3).
+        // https://doi.org/10.1137/17M1152802
         r6 = polish(u.c * v.s * s4 + v.c * c4, u.s * v.s / r5.s, v.i);
     } else {
         // Correct the upstream zero-s5 branch. Read the residual 2x2
