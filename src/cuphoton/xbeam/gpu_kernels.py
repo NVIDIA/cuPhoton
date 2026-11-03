@@ -45,8 +45,11 @@ from .kernel_compilation import (
     _channelize_residual_kernel,
     _clear_rejected_fft_kernel,
     _decode_kernel,
+    _front_chunked_kernel,
+    _front_chunked_real_bands_kernel,
     _front_kernel,
     _front_packed_real_bands_kernel,
+    _front_weight_kernel,
     _residual_kernel,
 )
 
@@ -254,6 +257,24 @@ def _validate_source_validity(
     return validity_stride
 
 
+def _front_chunk_counts(
+    *,
+    fft_length: int,
+    block_count: int,
+    band_count: int,
+    complex_input: bool,
+    xp: Any,
+) -> Any:
+    """Allocate chunk counts only for qualified real-input batches."""
+
+    if complex_input or fft_length != 262144 or not 8 <= block_count <= 1600:
+        return None
+    try:
+        return xp.empty((band_count, block_count, 64), dtype=xp.uint32)
+    except xp.cuda.memory.OutOfMemoryError:
+        return None
+
+
 def front_rotate(
     *,
     source: Any,
@@ -277,7 +298,7 @@ def front_rotate(
     _validate_geometry: bool = True,
     _fft_batch_rows: int | None = None,
 ) -> tuple[Any, Any]:
-    """Gather, mask, fringe-rotate, and reduce weights in one GPU launch."""
+    """Gather, mask, fringe-rotate, and reduce valid-sample weights."""
 
     block_count = _block_count(block_parameters)
     packed_input = source_sample_count is not None
@@ -355,9 +376,20 @@ def front_rotate(
     if rotated.shape[0] > block_count:
         rotated[block_count:].fill(0)
     weights = xp.empty(block_count, dtype=xp.float64)
-    kernel = _front_kernel(complex_input, packed_input)
+    counts = _front_chunk_counts(
+        fft_length=fft_length,
+        block_count=block_count,
+        band_count=1,
+        complex_input=complex_input,
+        xp=xp,
+    )
+    kernel = (
+        _front_kernel(complex_input, packed_input)
+        if counts is None
+        else _front_chunked_kernel(packed_input)
+    )
     kernel(
-        (block_count,),
+        (block_count,) if counts is None else (block_count, 1, 64),
         (256,),
         (
             source,
@@ -377,9 +409,15 @@ def front_rotate(
             np.float64(lo_offset_hz),
             np.float64(wall_lo_cycles),
             rotated,
-            weights,
+            weights if counts is None else counts,
         ),
     )
+    if counts is not None:
+        _front_weight_kernel()(
+            (block_count,),
+            (64,),
+            (counts, np.int32(64), np.int32(fft_length), weights),
+        )
     return rotated, weights
 
 
@@ -489,8 +527,22 @@ def front_rotate_packed_real_bands(
         (band_count, block_count, fft_length), dtype=xp.complex64
     )
     weights = xp.empty((band_count, block_count), dtype=xp.float64)
-    _front_packed_real_bands_kernel()(
-        (block_count, band_count),
+    counts = _front_chunk_counts(
+        fft_length=fft_length,
+        block_count=block_count,
+        band_count=band_count,
+        complex_input=False,
+        xp=xp,
+    )
+    kernel = (
+        _front_packed_real_bands_kernel()
+        if counts is None
+        else _front_chunked_real_bands_kernel()
+    )
+    kernel(
+        (block_count, band_count)
+        if counts is None
+        else (block_count, band_count, 64),
         (256,),
         (
             source,
@@ -506,9 +558,15 @@ def front_rotate_packed_real_bands(
             np.int32(fft_length),
             np.float64(1.0 / sample_rate_hz),
             rotated,
-            weights,
+            weights if counts is None else counts,
         ),
     )
+    if counts is not None:
+        _front_weight_kernel()(
+            (band_count * block_count,),
+            (64,),
+            (counts, np.int32(64), np.int32(fft_length), weights),
+        )
     return rotated, weights
 
 

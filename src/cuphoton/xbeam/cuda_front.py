@@ -92,7 +92,8 @@ __device__ __forceinline__ float2 load_sample(
     return make_float2(value, 0.0f);
 }
 
-template <bool COMPLEX_INPUT, bool PACKED_INPUT>
+template <bool COMPLEX_INPUT, bool PACKED_INPUT,
+          bool CHUNKED = false, typename Weight = double>
 __device__ __forceinline__ void front_impl(
     const void* source,
     const unsigned char* source_validity,
@@ -111,22 +112,30 @@ __device__ __forceinline__ void front_impl(
     double lo_offset_hz,
     double wall_lo_cycles,
     float2* rotated,
-    double* weights
+    Weight* weights
 ) {
     const int block = blockIdx.x;
+    // Match the existing 16-iteration recurrence reseed interval exactly.
+    const int sample_begin = CHUNKED ? (int)blockIdx.z * 4096 : 0;
+    const int sample_limit = sample_begin + 4096;
+    const int sample_end = CHUNKED && sample_limit < fft_length
+        ? sample_limit : fft_length;
+    const long long weight_index = CHUNKED
+        ? (long long)block * gridDim.z + blockIdx.z : block;
     const BlockParameters parameter = parameters[block];
     if (parameter.valid_stop <= parameter.valid_start) {
-        for (int i = threadIdx.x; i < fft_length; i += blockDim.x) {
+        for (int i = sample_begin + threadIdx.x;
+             i < sample_end; i += blockDim.x) {
             rotated[(long long)block * fft_length + i] =
                 make_float2(0.0f, 0.0f);
         }
         if (threadIdx.x == 0) {
-            weights[block] = 0.0;
+            weights[weight_index] = 0;
         }
         return;
     }
     unsigned int valid_count = 0;
-    int sample = threadIdx.x;
+    int sample = sample_begin + threadIdx.x;
     const double stride = (double)blockDim.x;
     const double phase_constant =
         -fringe_reference_hz * parameter.delay_zero + wall_lo_cycles
@@ -168,7 +177,7 @@ __device__ __forceinline__ void front_impl(
     long long packed_frame = 0;
     long long packed_within_frame = 0;
     bool packed_position_initialized = false;
-    for (; sample < fft_length; sample += blockDim.x) {
+    for (; sample < sample_end; sample += blockDim.x) {
         const long long source_index = source_base + sample
             + (sample >= parameter.source_cutover ?
                 parameter.source_offset : 0);
@@ -262,7 +271,11 @@ __device__ __forceinline__ void front_impl(
         __syncthreads();
     }
     if (threadIdx.x == 0) {
-        weights[block] = (double)counts[0] / (double)fft_length;
+        if (CHUNKED) {
+            weights[weight_index] = counts[0];
+        } else {
+            weights[weight_index] = (double)counts[0] / (double)fft_length;
+        }
     }
 }
 
@@ -420,5 +433,118 @@ extern "C" __global__ void front_packed_complex(
         fft_length, inverse_sample_rate, fringe_reference_hz, lo_offset_hz,
         wall_lo_cycles, rotated, weights
     );
+}
+
+extern "C" __global__ void front_chunked_real(
+    const float* source,
+    const unsigned char* source_validity,
+    int validity_stride,
+    int authoritative_validity,
+    long long source_size,
+    int samples_per_frame,
+    int payload_bytes,
+    int channel_count,
+    int channel_index,
+    long long source_start_sample,
+    const BlockParameters* parameters,
+    int fft_length,
+    double inverse_sample_rate,
+    double fringe_reference_hz,
+    double lo_offset_hz,
+    double wall_lo_cycles,
+    float2* rotated,
+    unsigned int* weights
+) {
+    front_impl<false, false, true>(
+        source, source_validity, validity_stride, authoritative_validity,
+        source_size,
+        samples_per_frame, payload_bytes, channel_count, channel_index,
+        source_start_sample,
+        parameters,
+        fft_length, inverse_sample_rate, fringe_reference_hz, lo_offset_hz,
+        wall_lo_cycles, rotated, weights
+    );
+}
+
+extern "C" __global__ void front_chunked_packed_real(
+    const unsigned char* source,
+    const unsigned char* source_validity,
+    int validity_stride,
+    int authoritative_validity,
+    long long source_size,
+    int samples_per_frame,
+    int payload_bytes,
+    int channel_count,
+    int channel_index,
+    long long source_start_sample,
+    const BlockParameters* parameters,
+    int fft_length,
+    double inverse_sample_rate,
+    double fringe_reference_hz,
+    double lo_offset_hz,
+    double wall_lo_cycles,
+    float2* rotated,
+    unsigned int* weights
+) {
+    front_impl<false, true, true>(
+        source, source_validity, validity_stride, authoritative_validity,
+        source_size,
+        samples_per_frame, payload_bytes, channel_count, channel_index,
+        source_start_sample,
+        parameters,
+        fft_length, inverse_sample_rate, fringe_reference_hz, lo_offset_hz,
+        wall_lo_cycles, rotated, weights
+    );
+}
+
+extern "C" __global__ void front_chunked_packed_real_bands(
+    const unsigned char* source,
+    const unsigned char* source_validity,
+    int validity_stride,
+    long long source_size,
+    int samples_per_frame,
+    int payload_bytes,
+    int channel_count,
+    const FrontBandParameters* band_parameters,
+    const BlockParameters* parameters,
+    int block_count,
+    int fft_length,
+    double inverse_sample_rate,
+    float2* rotated,
+    unsigned int* weights
+) {
+    const int band = (int)blockIdx.y;
+    const FrontBandParameters metadata = band_parameters[band];
+    const long long block_elements = (long long)block_count * fft_length;
+    front_impl<false, true, true>(
+        source, source_validity, validity_stride, 0, source_size,
+        samples_per_frame, payload_bytes, channel_count,
+        metadata.channel_index,
+        metadata.source_start_sample,
+        parameters + (long long)band * block_count,
+        fft_length, inverse_sample_rate, metadata.fringe_reference_hz,
+        metadata.lo_offset_hz, metadata.wall_lo_cycles,
+        rotated + (long long)band * block_elements,
+        weights + (long long)band * block_count * gridDim.z
+    );
+}
+
+extern "C" __global__ void finish_front_weights(
+    const unsigned int* counts, int chunks, int fft_length, double* weights
+) {
+    const int row = blockIdx.x;
+    unsigned int total = 0;
+    for (int chunk = threadIdx.x; chunk < chunks; chunk += blockDim.x) {
+        total += counts[(long long)row * chunks + chunk];
+    }
+    for (int offset = 16; offset; offset >>= 1) {
+        total += __shfl_down_sync(0xffffffffu, total, offset);
+    }
+    __shared__ unsigned int partial[2];
+    if ((threadIdx.x & 31) == 0) partial[threadIdx.x >> 5] = total;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        weights[row] = (double)(partial[0] + partial[1]) / (double)fft_length;
+    }
 }
 """

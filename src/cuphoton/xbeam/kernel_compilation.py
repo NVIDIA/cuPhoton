@@ -72,6 +72,24 @@ def _front_packed_real_bands_kernel() -> Any:
 
 
 @lru_cache(maxsize=2)
+def _front_chunked_kernel(packed_input: bool) -> Any:
+    name = (
+        "front_chunked_packed_real" if packed_input else "front_chunked_real"
+    )
+    return _raw_function(_FRONT_SOURCE, name)
+
+
+@lru_cache(maxsize=1)
+def _front_chunked_real_bands_kernel() -> Any:
+    return _raw_function(_FRONT_SOURCE, "front_chunked_packed_real_bands")
+
+
+@lru_cache(maxsize=1)
+def _front_weight_kernel() -> Any:
+    return _raw_function(_FRONT_SOURCE, "finish_front_weights")
+
+
+@lru_cache(maxsize=2)
 def _decode_kernel(complex_input: bool) -> Any:
     name = "decode_complex_band" if complex_input else "decode_real_band"
     return _raw_function(_DECODE_SOURCE, name)
