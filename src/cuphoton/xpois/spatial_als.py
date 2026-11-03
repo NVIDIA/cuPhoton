@@ -774,22 +774,24 @@ def _cupy_is_available() -> bool:
     return ois._backend_available("cupy")
 
 
-def _load_cupy() -> Any:
+def _load_cupy(*, backend: str = "cupy") -> Any:
     try:
         import cupy as cp
     except ImportError as exc:
         raise ImportError(
-            "backend='cupy' requires CuPy; run 'uv sync --extra gpu' for "
-            "development or install 'cuphoton[gpu]'"
+            f"backend='{backend}' requires CuPy; run 'uv sync --extra gpu' "
+            "for development or install 'cuphoton[gpu]'"
         ) from exc
     try:
         device_count = int(cp.cuda.runtime.getDeviceCount())
     except Exception as exc:
         raise RuntimeError(
-            "backend='cupy' requires a usable CUDA device"
+            f"backend='{backend}' requires a usable CUDA device"
         ) from exc
     if device_count < 1:
-        raise RuntimeError("backend='cupy' requires a usable CUDA device")
+        raise RuntimeError(
+            f"backend='{backend}' requires a usable CUDA device"
+        )
     return cp
 
 

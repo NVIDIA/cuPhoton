@@ -453,6 +453,9 @@ def solve_spatial_gaussian_polynomial_kernel(
     """
 
     resolved_config = config or SpatialGaussianPolynomialKernelConfig()
+    backend = str(backend).strip().lower()
+    if backend not in {"auto", "cpu", "cupy", "native"}:
+        raise ValueError("backend must be one of: auto, cpu, cupy, native")
     resolved_backend = (
         "native" if backend == "native" else _resolve_spatial_backend(backend)
     )

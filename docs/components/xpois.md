@@ -405,6 +405,14 @@ native support raises an error. Inputs and returned arrays remain NumPy host
 arrays. `backend="auto"` chooses CuPy when a usable CUDA device is available
 and CPU otherwise.
 
+Native library handles and scratch buffers are reused per host thread and
+CUDA device. Scratch retains its largest requested capacity until that thread
+exits.
+
+The native backend supports images and basis arrays containing at most
+2,147,483,647 elements each. It also checks that each QR work chunk fits
+within its 32-bit indexing limits and rejects dimensions beyond those limits.
+
 CLI artifacts preserve the model in `basis_kernels.npy`,
 `shape_coefficients.npy`, `photometric_coefficients.npy` and
 `background_coefficients.npy`. The `spatial_gaussian_polynomial` summary
@@ -412,7 +420,7 @@ contains each field's ordered `(x_degree, y_degree)` Chebyshev terms and
 `spatial_domain`. Evaluate those fields in that domain and combine the
 unit-sum basis with the photometric field and the remaining bases with their
 shape fields to reconstruct the local kernel. `photometric_scale.npy` stores
-its sum over the fitted image, while `kernel_center.npy` previews one
+the local kernel sum at each image pixel, while `kernel_center.npy` previews one
 position. With a CLI crop, the domain retains the original full-image bounds
 and the crop's origin; coefficients keep their parent-pixel interpretation.
 

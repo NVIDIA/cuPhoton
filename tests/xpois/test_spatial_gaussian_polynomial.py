@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1768,13 +1770,40 @@ def test_spatial_model_explicit_cupy_fails_closed(
 
 
 def test_spatial_model_rejects_unknown_backend() -> None:
-    with pytest.raises(ValueError, match="auto, cpu, cupy"):
+    with pytest.raises(ValueError, match="auto, cpu, cupy, native"):
         solve_spatial_gaussian_polynomial_kernel(
             np.ones((9, 9)),
             np.ones((9, 9)),
             [GaussianBasisComponent(sigma=1.0, degree=0)],
             kernel_shape=(3, 3),
             backend="numba-cuda",
+        )
+
+
+@pytest.mark.parametrize("backend", ["native", "Native", " native "])
+@pytest.mark.parametrize("missing_cupy", [True, False])
+def test_native_spatial_reports_unavailable_runtime(
+    monkeypatch: pytest.MonkeyPatch, backend: str, missing_cupy: bool
+) -> None:
+    cp = (
+        None
+        if missing_cupy
+        else SimpleNamespace(
+            cuda=SimpleNamespace(
+                runtime=SimpleNamespace(getDeviceCount=lambda: 0)
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "cupy", cp)
+    error = ImportError if missing_cupy else RuntimeError
+    reason = "CuPy" if missing_cupy else "a usable CUDA device"
+    with pytest.raises(error, match=f"backend='native' requires {reason}"):
+        solve_spatial_gaussian_polynomial_kernel(
+            np.ones((9, 9)),
+            np.ones((9, 9)),
+            [GaussianBasisComponent(sigma=1.0, degree=0)],
+            kernel_shape=(3, 3),
+            backend=backend,
         )
 
 

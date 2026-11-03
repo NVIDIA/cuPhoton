@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <map>
 #include <memory>
 
 namespace cuphoton::imaging {
@@ -43,16 +44,33 @@ struct Libraries {
         blas_check(cublasCreate(&blas));
         try {
             blas_check(cublasSetStream(blas, stream));
-            solver_check(cusolverDnCreate(&solver));
-            solver_check(cusolverDnSetStream(solver, stream));
         } catch (...) {
-            if (solver) {
-                cusolverDnDestroy(solver);
-            }
             cublasDestroy(blas);
             throw;
         }
     }
+
+    void prepare_solver(cudaStream_t stream) {
+        if (!solver) {
+            cusolverDnHandle_t next = nullptr;
+            solver_check(cusolverDnCreate(&next));
+            try {
+                solver_check(cusolverDnSetStream(next, stream));
+            } catch (...) {
+                cusolverDnDestroy(next);
+                throw;
+            }
+            solver = next;
+        }
+    }
+
+    void set_stream(cudaStream_t stream) {
+        blas_check(cublasSetStream(blas, stream));
+        if (solver) {
+            solver_check(cusolverDnSetStream(solver, stream));
+        }
+    }
+
     ~Libraries() {
         if (solver) {
             cusolverDnDestroy(solver);
@@ -62,6 +80,62 @@ struct Libraries {
         }
     }
 };
+
+template <class T>
+struct Scratch {
+    std::unique_ptr<DeviceBuffer<T>> allocation;
+
+    Scratch& resize(std::size_t size) {
+        if (!allocation || allocation->count < size) {
+            allocation = std::make_unique<DeviceBuffer<T>>(size);
+        }
+        return *this;
+    }
+
+    T* get() const {
+        return allocation->get();
+    }
+};
+
+struct SpatialWorkspace {
+    struct State {
+        Libraries libraries;
+        Scratch<double> reversed, patches, projected, kernels;
+        Scratch<double> design, weighted_target, tau, factorization;
+        Scratch<int> invalid, info;
+
+        explicit State(cudaStream_t stream)
+            : libraries(stream) {}
+    };
+
+    int device;
+    std::unique_ptr<State> state;
+    SpatialWorkspace(int owning_device, cudaStream_t stream)
+        : device(owning_device),
+          state(std::make_unique<State>(stream)) {}
+
+    ~SpatialWorkspace() {
+        // Thread exit may select another device or follow CUDA teardown.
+        // Match the other imaging workspaces' non-throwing owned cleanup.
+        int previous = device;
+        cudaGetDevice(&previous);
+        cudaSetDevice(device);
+        state.reset();
+        cudaSetDevice(previous);
+    }
+};
+
+SpatialWorkspace::State& workspace_for(int device, cudaStream_t stream) {
+    // StreamGuard drains each call on success and failure before these
+    // buffers and handles can be reused on another stream in this thread.
+    thread_local std::map<int, std::unique_ptr<SpatialWorkspace>> workspaces;
+    auto& workspace = workspaces[device];
+    if (!workspace) {
+        workspace = std::make_unique<SpatialWorkspace>(device, stream);
+    }
+    workspace->state->libraries.set_stream(stream);
+    return *workspace->state;
+}
 
 int term_count(int degree) {
     if (degree < 0 || degree > 65533) {
@@ -116,10 +190,14 @@ Model resolve_model(
         throw std::invalid_argument(
             "source array lies outside the spatial domain");
     }
-    if (source.size > INT_MAX || source.shape[0] < 1 || source.shape[1] < 1
-        || basis.size > INT_MAX || basis.shape[0] < 1 || basis.shape[1] < 1
-        || basis.shape[2] < 1 || !(basis.shape[1] % 2) || !(basis.shape[2] % 2)
-        || basis.shape[1] > source.shape[0]
+    if (source.size > INT_MAX || basis.size > INT_MAX) {
+        throw std::invalid_argument(
+            "native spatial xPois source and basis buffers are limited to "
+            "2,147,483,647 elements each (32-bit indexing)");
+    }
+    if (source.shape[0] < 1 || source.shape[1] < 1 || basis.shape[0] < 1
+        || basis.shape[1] < 1 || basis.shape[2] < 1 || !(basis.shape[1] % 2)
+        || !(basis.shape[2] % 2) || basis.shape[1] > source.shape[0]
         || basis.shape[2] > source.shape[1]) {
         throw std::invalid_argument(
             "native spatial xPois image or kernel dimensions are invalid");
@@ -227,7 +305,8 @@ __global__ void validate_indices(
     }
 }
 
-void check_indices(const Array& indices, Model model, cudaStream_t stream) {
+void check_indices(
+    const Array& indices, Model model, cudaStream_t stream, int* invalid) {
     indices.require('i', 8, 1);
     if (indices.size > INT_MAX) {
         throw std::invalid_argument(
@@ -236,20 +315,15 @@ void check_indices(const Array& indices, Model model, cudaStream_t stream) {
     if (!indices.size) {
         return;
     }
-    DeviceBuffer<int> invalid(1);
-    check(cudaMemsetAsync(invalid.get(), 0, sizeof(int), stream));
+    check(cudaMemsetAsync(invalid, 0, sizeof(int), stream));
     validate_indices<<<blocks(indices.size), threads, 0, stream>>>(
         indices.data<std::int64_t>(),
         static_cast<int>(indices.size),
         model,
-        invalid.get());
+        invalid);
     int host_invalid = 0;
     check(cudaMemcpyAsync(
-        &host_invalid,
-        invalid.get(),
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream));
+        &host_invalid, invalid, sizeof(int), cudaMemcpyDeviceToHost, stream));
     check(cudaStreamSynchronize(stream));
     if (host_invalid) {
         throw std::invalid_argument(
@@ -548,6 +622,8 @@ PyObject* accumulate_spatial_qr(PyObject*, PyObject* arguments) {
         {
             Detached detached;
             StreamGuard stream(stream_value);
+            int device = 0;
+            check(cudaGetDevice(&device));
             for (const Array* array :
                 {&source, &target, &variance, &basis, &indices, &upper, &rhs}) {
                 array->wait(stream.stream);
@@ -555,19 +631,22 @@ PyObject* accumulate_spatial_qr(PyObject*, PyObject* arguments) {
             if (precision) {
                 precision->wait(stream.stream);
             }
-            check_indices(indices, model, stream.stream);
-            Libraries libraries(stream.stream);
+            auto& scratch = workspace_for(device, stream.stream);
+            auto& invalid = scratch.invalid.resize(1);
+            check_indices(indices, model, stream.stream, invalid.get());
+            auto& libraries = scratch.libraries;
+            libraries.prepare_solver(stream.stream);
             const int capacity = chunk_size + model.columns;
-            DeviceBuffer<double> reversed(basis.size);
-            DeviceBuffer<double> patches(
+            auto& reversed = scratch.reversed.resize(basis.size);
+            auto& patches = scratch.patches.resize(
                 static_cast<std::size_t>(chunk_size) * model.area);
-            DeviceBuffer<double> projected(
+            auto& projected = scratch.projected.resize(
                 static_cast<std::size_t>(chunk_size) * model.bases);
-            DeviceBuffer<double> design(
+            auto& design = scratch.design.resize(
                 static_cast<std::size_t>(capacity) * model.columns);
-            DeviceBuffer<double> weighted_target(capacity);
-            DeviceBuffer<double> tau(model.columns);
-            DeviceBuffer<int> info(3);
+            auto& weighted_target = scratch.weighted_target.resize(capacity);
+            auto& tau = scratch.tau.resize(model.columns);
+            auto& info = scratch.info.resize(3);
             int qr_workspace, apply_workspace;
             solver_check(cusolverDnDgeqrf_bufferSize(
                 libraries.solver,
@@ -590,7 +669,7 @@ PyObject* accumulate_spatial_qr(PyObject*, PyObject* arguments) {
                 capacity,
                 &apply_workspace));
             const int workspace_size = std::max(qr_workspace, apply_workspace);
-            DeviceBuffer<double> workspace(workspace_size);
+            auto& workspace = scratch.factorization.resize(workspace_size);
             reverse_basis<<<blocks(basis.size), threads, 0, stream.stream>>>(
                 basis.data<double>(),
                 reversed.get(),
@@ -765,6 +844,8 @@ PyObject* evaluate_spatial_kernel(PyObject*, PyObject* arguments) {
         {
             Detached detached;
             StreamGuard stream(stream_value);
+            int device = 0;
+            check(cudaGetDevice(&device));
             for (const Array* array :
                 {&source, &basis, &coefficients, &indices, &matched}) {
                 array->wait(stream.stream);
@@ -774,15 +855,18 @@ PyObject* evaluate_spatial_kernel(PyObject*, PyObject* arguments) {
                 diagnostic_indices->wait(stream.stream);
                 propagated->wait(stream.stream);
             }
-            check_indices(indices, model, stream.stream);
+            auto& scratch = workspace_for(device, stream.stream);
+            auto& invalid = scratch.invalid.resize(1);
+            check_indices(indices, model, stream.stream, invalid.get());
             if (diagnostics) {
-                check_indices(*diagnostic_indices, model, stream.stream);
+                check_indices(
+                    *diagnostic_indices, model, stream.stream, invalid.get());
             }
-            Libraries libraries(stream.stream);
-            DeviceBuffer<double> reversed(basis.size);
-            DeviceBuffer<double> patches(
+            auto& libraries = scratch.libraries;
+            auto& reversed = scratch.reversed.resize(basis.size);
+            auto& patches = scratch.patches.resize(
                 static_cast<std::size_t>(chunk_size) * model.area);
-            DeviceBuffer<double> projected(
+            auto& projected = scratch.projected.resize(
                 static_cast<std::size_t>(chunk_size) * model.bases);
             reverse_basis<<<blocks(basis.size), threads, 0, stream.stream>>>(
                 basis.data<double>(),
@@ -822,7 +906,7 @@ PyObject* evaluate_spatial_kernel(PyObject*, PyObject* arguments) {
                 start += rows;
             }
             if (diagnostics) {
-                DeviceBuffer<double> kernels(
+                auto& kernels = scratch.kernels.resize(
                     static_cast<std::size_t>(chunk_size) * model.area);
                 check(cudaMemsetAsync(
                     propagated->pointer,

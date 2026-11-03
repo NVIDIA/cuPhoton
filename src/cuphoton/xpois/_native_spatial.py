@@ -11,6 +11,7 @@ import numpy as np
 from cuphoton.core._native_imaging import extension
 
 from .ois import triangular_degree_pairs
+from .spatial_als import _load_cupy
 from .spatial_gaussian_polynomial import (
     SpatialGaussianPolynomialKernelConfig,
     SpatialKernelDomain,
@@ -37,7 +38,7 @@ def solve_native_spatial(
     and triangular solve. All arrays returned to the public API are on the
     host, matching the existing CPU and CuPy contracts.
     """
-    import cupy as cp
+    cp = _load_cupy(backend="native")
 
     from .spatial_gaussian_polynomial import (
         _gpu_design_chunk_size,
