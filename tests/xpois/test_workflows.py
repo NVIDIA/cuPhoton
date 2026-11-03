@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from cuphoton.core import _native_imaging
 from cuphoton.xpois import workflows
 from cuphoton.xpois.ois import GaussianBasisComponent
 from cuphoton.xpois.spatial_als import SpatialALSConfig
@@ -942,7 +943,9 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
         if device_count < 1:
             pytest.skip("CuPy CUDA runtime has no visible device")
         if backend == "native":
-            pytest.importorskip("cuphoton.core._imaging_ext")
+            if importlib.util.find_spec("cuphoton.core._imaging_ext") is None:
+                pytest.skip("native imaging extension is not built")
+            _native_imaging.extension()
     else:
         # Exercise preparation, dispatch and artifacts in CPU CI as well.
         uploads = []
@@ -1008,8 +1011,6 @@ def test_run_constant_kernel_fit_device_solve_preserves_host_artifacts(
     native_selector_calls = []
     native_selection_calls = []
     if backend == "native":
-        from cuphoton.core import _native_imaging
-
         selection_image = _native_imaging.selection_image
         selector = workflows.build_compact_source_stamp_mask
 

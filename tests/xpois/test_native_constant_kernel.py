@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from contextlib import contextmanager
 from typing import Any
 
@@ -13,6 +14,7 @@ import numpy as np
 import pytest
 from scipy.signal import fftconvolve
 
+from cuphoton.core import _native_imaging
 from cuphoton.xpois.ois import (
     GaussianBasisComponent,
     build_gaussian_polynomial_basis,
@@ -29,7 +31,9 @@ def native_cupy() -> Any:
             pytest.skip("native xPois requires an actual CUDA device")
     except cp.cuda.runtime.CUDARuntimeError as exc:
         pytest.skip(f"CUDA runtime unavailable: {exc}")
-    pytest.importorskip("cuphoton.core._imaging_ext")
+    if importlib.util.find_spec("cuphoton.core._imaging_ext") is None:
+        pytest.skip("native imaging extension is not built")
+    _native_imaging.extension()
     return cp
 
 

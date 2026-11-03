@@ -4,6 +4,7 @@
 
 """Repeated native solves retain stream, shape and thread isolation."""
 
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from cuphoton.core import _native_imaging
 from cuphoton.xpois.ois import (
     GaussianBasisComponent,
     solve_constant_kernel_device,
@@ -25,7 +27,9 @@ def native_cupy() -> Any:
             pytest.skip("native xPois requires an actual CUDA device")
     except cp.cuda.runtime.CUDARuntimeError as exc:
         pytest.skip(f"CUDA runtime unavailable: {exc}")
-    pytest.importorskip("cuphoton.core._imaging_ext")
+    if importlib.util.find_spec("cuphoton.core._imaging_ext") is None:
+        pytest.skip("native imaging extension is not built")
+    _native_imaging.extension()
     return cp
 
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import zlib
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from cuphoton.core import _native_imaging
 from cuphoton.xdr import nvcomp_batch
 from cuphoton.xdr.reader import GpuCompImageReader
 from tests.xdr.test_postprocess_gpu import _decoded_tiles
@@ -21,7 +23,9 @@ from tests.xdr.test_postprocess_gpu import cp as cp
 
 @pytest.fixture
 def native_cupy(cp):
-    pytest.importorskip("cuphoton.core._imaging_ext")
+    if importlib.util.find_spec("cuphoton.core._imaging_ext") is None:
+        pytest.skip("native imaging extension is not built")
+    _native_imaging.extension()
     return cp
 
 
