@@ -129,6 +129,62 @@ def _fit_and_rank(cp, monkeypatch, **kwargs):
     return result, ranks[0]
 
 
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_nonfused_float32_normal_equations_follow_solver_version(
+    cutile_gpu, monkeypatch, solver_version
+):
+    from cuphoton.xfit.solver import _normal_equations_from_jacobian
+
+    cp = cutile_gpu
+    model = GaussianDipoleModel((11, 15), dtype=np.float32)
+    parameters = np.asarray(
+        [[2.0**-75, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7]],
+        dtype=np.float32,
+    )
+
+    class InspectedNormalEquations(Exception):
+        pass
+
+    def inspect(problem, initial, *, config):
+        indices = cp.asarray([0])
+        residual = problem.residual(initial, indices=indices)
+        jacobian = problem.jacobian(initial, indices=indices)
+        if problem.normal_equations is None:
+            _, hessian = _normal_equations_from_jacobian(
+                jacobian, residual, cp, solver_version=config.solver_version
+            )
+        else:
+            _, hessian = problem.normal_equations(
+                initial, residual, indices=indices
+            )
+        # These Gaussian shape derivatives have products below FP32 range,
+        # but their accumulated curvature is representable. Check the
+        # problem handed to the solver before covariance can overflow.
+        if solver_version == "v0.2":
+            shape_jacobian = cp.asnumpy(jacobian[:, 1:]).astype(np.float64)
+            expected = (
+                shape_jacobian @ shape_jacobian.swapaxes(1, 2)
+            ).astype(np.float32)
+            assert np.any(expected != 0)
+        else:
+            expected = np.zeros((1, 7, 7), dtype=np.float32)
+        np.testing.assert_array_equal(
+            cp.asnumpy(hessian[:, 1:, 1:]), expected
+        )
+        raise InspectedNormalEquations
+
+    monkeypatch.setattr(xfit_api, "batched_levenberg_marquardt", inspect)
+    with pytest.raises(InspectedNormalEquations):
+        fit_dipoles(
+            model.evaluate(parameters),
+            model=model,
+            initial=parameters,
+            backend="cutile",
+            fusion=False,
+            config=LMConfig(solver_version=solver_version),
+        )
+
+
 @pytest.mark.parametrize("mode", ["difference", "split"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_fused_fit_preserves_weighted_compacted_results(

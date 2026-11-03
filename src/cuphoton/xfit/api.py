@@ -876,7 +876,15 @@ def _fit_dipoles_backend(
         jacobian_function = jacobian
 
     normal_equations = None
-    if gaussian_model and resolved.name == "cutile" and workspace is None:
+    # Float32 contractions follow the selected solver policy: v0.2 widens
+    # products before reduction, while v0.1.3 retains float32 intermediates.
+    # The direct Tile kernel has no policy-specific accumulation mode.
+    if (
+        gaussian_model
+        and resolved.name == "cutile"
+        and workspace is None
+        and dtype == np.float64
+    ):
         from ._cutile import gaussian_normal_equations
 
         def normal_equations(

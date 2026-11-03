@@ -13,10 +13,11 @@
   permits more work without guaranteeing convergence.
 - The `v0.1.3` policy can report convergence after a small actual cost
   reduction while further improvement remains, and its unscaled rank and
-  covariance calculations depend on parameter units. It also retains the
-  earlier FP32 intermediate precision and dense covariance propagation,
-  which can lose small curvature or erase small derived uncertainties
-  through cancellation. For comparisons that require this earlier policy, select
+  covariance calculations depend on parameter units. Its intermediates use
+  the selected compute dtype: FP32 for float32 fits and FP64 for float64
+  fits. FP32 intermediates can lose small curvature. Its dense covariance
+  propagation can erase small derived uncertainties through cancellation.
+  For comparisons that require this earlier policy, select
   `LMConfig(solver_version="v0.1.3")` in Python or
   `cuphoton xfit fit-dipoles ... --solver-version v0.1.3` in the CLI.
   `v0.2` remains the default; its scaling and stopping checks address those
