@@ -1,3 +1,39 @@
+# CPU source-separation benchmark
+
+`benchmark_source_separation.py` checks the host greedy selection step on
+deterministic ranked coordinate populations. Run it in a quiet CPU window
+using the environment that supplies cuPhoton and NumPy:
+
+```sh
+PYTHONPATH=src python examples/benchmarks/benchmark_source_separation.py --check
+```
+
+The separated population includes centers exactly at the strict distance
+boundary; the crowded population includes nearby competitors. Both grow image
+area with candidate count. Every measured result must match the ordered row
+indices from a straightforward Python tuple-coordinate oracle. Input creation,
+imports and result validation are outside the measured selection interval.
+Repeated runs alternate oracle and implementation order. JSON output includes
+input, selected-index and selector-source hashes, individual times, medians
+and ratios.
+
+The opt-in guard requires uncapped selection at the larger size to take at most
+one quarter of the tuple oracle time and to grow by at most twice the candidate
+count ratio. It uses 512 and 2048 candidates and five repeats by default;
+`--sizes SMALL LARGE` and `--repeats N` permit other controlled experiments.
+`--implementation tuple --check` and `--implementation record --check` are
+quadratic negative controls; the record control intentionally retains repeated
+NumPy record-field access and can take substantially longer. A failed
+performance check exits with status 1. Ordinary unit tests do not enforce
+wall-time limits.
+
+The five-stamp cap retains the current record-scalar fallback; it is measured
+separately and has no performance threshold.
+Automatic source selection is off by default in the public workflow; five is
+the cap when enabled. This benchmark measures uncapped host selection scaling,
+not default end-to-end throughput, scoring, sorting or GPU execution. Existing
+selector tests cover additional fallback and scientific behavior.
+
 # Fresh-launch benchmark campaigns
 
 `run_campaign.py` runs existing local benchmark adapters in fresh processes.
