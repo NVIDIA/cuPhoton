@@ -60,6 +60,7 @@ SOURCES = {
     "src/cuphoton/core/src/imaging_selection.cu",
     "src/cuphoton/core/src/imaging_reproject.cu",
     "src/cuphoton/core/src/imaging_xpois.cu",
+    "src/cuphoton/core/src/imaging_spatial_xpois.cu",
     "src/cuphoton/core/src/imaging_fits.cu",
     "src/cuphoton/xray/setup_package.py",
     "src/cuphoton/xray/src/structured_api.h",

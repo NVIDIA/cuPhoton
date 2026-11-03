@@ -284,6 +284,8 @@ PyObject* reproject(PyObject*, PyObject*);
 PyObject* mapping_edge_score(PyObject*, PyObject*);
 PyObject* sample_mapping(PyObject*, PyObject*);
 PyObject* solve_constant_kernel(PyObject*, PyObject*);
+PyObject* accumulate_spatial_qr(PyObject*, PyObject*);
+PyObject* evaluate_spatial_kernel(PyObject*, PyObject*);
 PyObject* restore_fits_tiles(PyObject*, PyObject*);
 PyObject* dequantize_fits_tiles(PyObject*, PyObject*);
 

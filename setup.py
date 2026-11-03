@@ -76,6 +76,7 @@ if build_xfit or build_imaging:
             "imaging_selection",
             "imaging_reproject",
             "imaging_xpois",
+            "imaging_spatial_xpois",
             "imaging_fits",
         )
         imaging.depends = [

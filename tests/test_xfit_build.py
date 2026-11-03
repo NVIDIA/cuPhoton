@@ -243,7 +243,7 @@ def test_imaging_build_checks_cufft_targets_and_math_flags(
             for arch in ptx
         ),
     }
-    assert len(compiled) == 5
+    assert len(compiled) == 6
     for arguments in compiled:
         assert {
             flag for flag in arguments if flag.startswith("--generate-code=")

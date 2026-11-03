@@ -34,6 +34,7 @@ from .ois import (
     GaussianBasisComponent,
 )
 from .spatial_als import SpatialALSConfig
+from .spatial_gaussian_polynomial import SpatialGaussianPolynomialKernelConfig
 from .workflows import (
     benchmark_constant_kernel_backends,
     evaluate_subtraction_run,
@@ -491,6 +492,48 @@ class _KernelSolveCommand(_SpatialSolverOptionsCommand):
 class _FitCommand(_KernelSolveCommand):
     backend = None
     no_review = None
+    photometric_degree = None
+    condition_limit = None
+
+    class SolverArg(SetInvariant):
+        _arg = "--solver"
+        _help = (
+            "Kernel model: constant, spatial-als, or "
+            "spatial-gaussian-polynomial. [default: %default]"
+        )
+        _mandatory = False
+        _default = "constant"
+        _set = {"constant", "spatial-als", "spatial-gaussian-polynomial"}
+
+    class SpatialDegreeArg(NonNegativeIntegerInvariant):
+        _arg = "--spatial-degree"
+        _help = (
+            "Total Chebyshev degree for spatial ALS coefficient fields or "
+            "Gaussian-polynomial kernel-shape fields. [default: 2]"
+        )
+        _mandatory = False
+        _default = None
+
+    class PhotometricDegreeArg(NonNegativeIntegerInvariant):
+        _arg = "--photometric-degree"
+        _help = (
+            "Gaussian-polynomial photometric-scale degree. "
+            "[default: "
+            f"{SpatialGaussianPolynomialKernelConfig.photometric_degree}]"
+        )
+        _mandatory = False
+        _default = None
+
+    class ConditionLimitArg(FloatInvariant):
+        _arg = "--condition-limit"
+        _help = (
+            "Gaussian-polynomial scaled-design condition limit (>1). "
+            "[default: "
+            f"{SpatialGaussianPolynomialKernelConfig.condition_limit}]"
+        )
+        _mandatory = False
+        _default = None
+        _min = 1.0
 
     class NoReviewArg(BoolInvariant):
         _arg = "--no-review"
@@ -503,6 +546,8 @@ class _FitCommand(_KernelSolveCommand):
         _help = (
             "Fit backend. Constant-solver auto tries cupy, then numba-cuda, "
             "then cpu; spatial-als auto tries cupy, then cpu. "
+            "Spatial Gaussian-polynomial supports auto, cpu, cupy, and "
+            "explicit native; auto tries cupy, then cpu. "
             "[default: %default]"
         )
         _mandatory = False
@@ -561,6 +606,8 @@ class FitKernelCommand(_FitCommand):
             review=not self.no_review,
             solver=self.solver,
             spatial_degree=self.spatial_degree,
+            photometric_degree=self.photometric_degree,
+            condition_limit=self.condition_limit,
             als_iterations=self.als_iterations,
             als_tolerance=self.als_tolerance,
             als_regularization=self.als_regularization,
@@ -617,6 +664,8 @@ class SubtractCommand(_FitCommand):
             review=not self.no_review,
             solver=self.solver,
             spatial_degree=self.spatial_degree,
+            photometric_degree=self.photometric_degree,
+            condition_limit=self.condition_limit,
             als_iterations=self.als_iterations,
             als_tolerance=self.als_tolerance,
             als_regularization=self.als_regularization,

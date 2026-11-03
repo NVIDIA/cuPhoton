@@ -49,6 +49,12 @@ from .spatial_als import (
     SpatialALSFitResult,
     solve_spatial_als,
 )
+from .spatial_gaussian_polynomial import (
+    SpatialGaussianPolynomialKernelConfig,
+    SpatialGaussianPolynomialKernelFitResult,
+    SpatialKernelDomain,
+    solve_spatial_gaussian_polynomial_kernel,
+)
 
 
 @dataclass
@@ -97,6 +103,7 @@ class _PreparedKernelInputs:
     reference: Any
     target: Any
     variance: Any | None
+    parent_image_shape: tuple[int, int]
     raw_reference: np.ndarray | None
     raw_target: np.ndarray | None
     reference_mask: np.ndarray | None
@@ -409,6 +416,7 @@ def _prepare_kernel_inputs(
         reference=reference,
         target=target,
         variance=variance,
+        parent_image_shape=full_shape,
         raw_reference=raw_reference,
         raw_target=raw_target,
         reference_mask=reference_mask,
@@ -487,6 +495,8 @@ def run_constant_kernel_fit(
     review: bool = True,
     solver: str = "constant",
     spatial_degree: int | None = None,
+    photometric_degree: int | None = None,
+    condition_limit: float | None = None,
     als_iterations: int | None = None,
     als_tolerance: float | None = None,
     als_regularization: float | None = None,
@@ -506,10 +516,13 @@ def run_constant_kernel_fit(
     ``solver`` selects the model: ``"constant"`` fits one two-dimensional
     kernel with :func:`solve_constant_kernel`, and ``"spatial-als"`` fits the
     position-dependent separable model with :func:`solve_spatial_als`.
-    ``spatial_degree``, ``als_iterations``, ``als_tolerance``, and
-    ``als_regularization`` apply only to the spatial solver; ``None`` uses
-    the :class:`SpatialALSConfig` default and any explicit value is rejected
-    for the constant solver.
+    ``"spatial-gaussian-polynomial"`` fits the full two-dimensional basis
+    with :func:`solve_spatial_gaussian_polynomial_kernel`. For that solver,
+    ``spatial_degree`` controls shape fields and ``photometric_degree``
+    controls the kernel sum; crops retain the original image's coordinate
+    normalization. ``condition_limit`` applies only to that solver, and ALS
+    controls apply only to ``"spatial-als"``. Unset controls use their model's
+    configuration defaults. Explicit model-incompatible options are rejected.
 
     Returns
     -------
@@ -524,21 +537,70 @@ def run_constant_kernel_fit(
     produce floating-point results that differ from host solves.
     """
 
-    if solver not in {"constant", "spatial-als"}:
+    if solver not in {
+        "constant",
+        "spatial-als",
+        "spatial-gaussian-polynomial",
+    }:
         raise ValueError(f"unsupported solver: {solver}")
     if solver == "spatial-als" and backend not in {"auto", "cpu", "cupy"}:
         raise ValueError(
             "solver 'spatial-als' supports only auto, cpu, and cupy backends"
         )
-    als_config = resolve_spatial_als_config(
-        solver,
-        background_degree=background_degree,
-        flux_conserve=flux_conserve,
-        spatial_degree=spatial_degree,
-        als_iterations=als_iterations,
-        als_tolerance=als_tolerance,
-        als_regularization=als_regularization,
-    )
+    gaussian_config = None
+    als_config = None
+    if solver == "spatial-gaussian-polynomial":
+        if backend not in {"auto", "cpu", "cupy", "native"}:
+            raise ValueError(
+                "solver 'spatial-gaussian-polynomial' supports only auto, "
+                "cpu, cupy, and native backends"
+            )
+        if any(
+            value is not None
+            for value in (als_iterations, als_tolerance, als_regularization)
+        ):
+            raise ValueError("ALS controls require solver='spatial-als'")
+        if flux_conserve:
+            raise ValueError(
+                "flux_conserve is not supported by "
+                "solver='spatial-gaussian-polynomial'; its zero-sum shape "
+                "terms already preserve the separately fitted photometric "
+                "field, controlled by photometric_degree"
+            )
+        defaults = SpatialGaussianPolynomialKernelConfig()
+        gaussian_config = SpatialGaussianPolynomialKernelConfig(
+            shape_degree=(
+                defaults.shape_degree
+                if spatial_degree is None
+                else spatial_degree
+            ),
+            photometric_degree=(
+                defaults.photometric_degree
+                if photometric_degree is None
+                else photometric_degree
+            ),
+            background_degree=background_degree,
+            condition_limit=(
+                defaults.condition_limit
+                if condition_limit is None
+                else condition_limit
+            ),
+        )
+    else:
+        if photometric_degree is not None or condition_limit is not None:
+            raise ValueError(
+                "photometric_degree and condition_limit require "
+                "solver='spatial-gaussian-polynomial'"
+            )
+        als_config = resolve_spatial_als_config(
+            solver,
+            background_degree=background_degree,
+            flux_conserve=flux_conserve,
+            spatial_degree=spatial_degree,
+            als_iterations=als_iterations,
+            als_tolerance=als_tolerance,
+            als_regularization=als_regularization,
+        )
 
     if fit_positions_path is not None and solver != "spatial-als":
         raise ValueError("fit_positions require solver='spatial-als'")
@@ -589,7 +651,11 @@ def run_constant_kernel_fit(
             xdr_options=xdr_options,
         )
         solve_start = time.perf_counter()
-        result: ConstantKernelFitResult | SpatialALSFitResult
+        result: (
+            ConstantKernelFitResult
+            | SpatialALSFitResult
+            | SpatialGaussianPolynomialKernelFitResult
+        )
         if constant_backend in {"cupy", "native"}:
             result = _constant_kernel_result_to_host(
                 solve_constant_kernel_device(
@@ -617,6 +683,25 @@ def run_constant_kernel_fit(
                 background_degree=background_degree,
                 flux_conserve=flux_conserve,
                 backend=constant_backend or backend,
+            )
+        elif solver == "spatial-gaussian-polynomial":
+            crop = prepared.crop_metadata
+            parent_height, parent_width = prepared.parent_image_shape
+            result = solve_spatial_gaussian_polynomial_kernel(
+                prepared.reference,
+                prepared.target,
+                components,
+                kernel_shape=kernel_shape,
+                variance=prepared.variance,
+                fit_mask=prepared.fit_mask,
+                spatial_domain=SpatialKernelDomain(
+                    array_origin_yx=(crop["y0"], crop["x0"])
+                    if crop is not None
+                    else (0, 0),
+                    normalization_bbox=(0, parent_height, 0, parent_width),
+                ),
+                config=gaussian_config,
+                backend=backend,
             )
         else:
             result = solve_spatial_als(
@@ -846,7 +931,6 @@ def run_constant_kernel_fit(
             "timings_sec": timings_sec,
             "wall_sec": wall_sec,
             "fit_pixel_count": result.fit_pixel_count,
-            "chi2": result.chi2,
             "dof": result.dof,
             "residual_mean": residual_mean,
             "residual_std": residual_std,
@@ -867,8 +951,56 @@ def run_constant_kernel_fit(
             "saved": saved,
         }
         if isinstance(result, ConstantKernelFitResult):
+            summary["chi2"] = result.chi2
             summary["kernel_sum"] = float(result.kernel.sum())
+        elif isinstance(result, SpatialGaussianPolynomialKernelFitResult):
+            assert gaussian_config is not None
+            summary["fit_objective"] = result.fit_objective
+            summary["fit_weighting"] = result.fit_weighting
+            summary["kernel_sum_center"] = result.photometric_scale_at_local(
+                (result.image_shape[0] - 1) / 2.0,
+                (result.image_shape[1] - 1) / 2.0,
+            )
+            # This model always separates zero-sum shape corrections from
+            # its photometric field; the legacy boolean does not describe it.
+            del summary["flux_conserve"]
+            summary["spatial_gaussian_polynomial"] = {
+                "shape_degree": gaussian_config.shape_degree,
+                "photometric_degree": gaussian_config.photometric_degree,
+                "background_degree": gaussian_config.background_degree,
+                "condition_limit": gaussian_config.condition_limit,
+                "condition_number": result.condition_number,
+                "basis_terms": [term.__dict__ for term in result.basis_terms],
+                "shape_terms": [list(term) for term in result.shape_terms],
+                "photometric_terms": [
+                    list(term) for term in result.photometric_terms
+                ],
+                "background_terms": [
+                    list(term) for term in result.background_terms
+                ],
+                "spatial_domain": {
+                    "array_origin_yx": list(
+                        result.spatial_domain.array_origin_yx
+                    ),
+                    "normalization_bbox": list(
+                        result.spatial_domain.normalization_bbox
+                    ),
+                },
+                "coordinate_order": "y,x",
+                "term_degree_order": "x,y",
+                "shape_basis_normalization": "zero-sum",
+                "photometric_basis_normalization": "unit-sum",
+                "design_chunk_size": result.design_chunk_size,
+                "fit_selection_kind": result.fit_selection_kind,
+                "requested_fit_pixel_count": result.requested_fit_pixel_count,
+                "excluded_requested_fit_pixel_count": (
+                    result.excluded_requested_fit_pixel_count
+                ),
+                "source_variance_included": result.source_variance_included,
+                "dof_interpretation": "nominal N minus parameter count",
+            }
         else:
+            summary["chi2"] = result.chi2
             center_y = (result.image_shape[0] - 1) / 2.0
             center_x = (result.image_shape[1] - 1) / 2.0
             summary["kernel_sum_center"] = float(
@@ -1413,8 +1545,12 @@ def evaluate_subtraction_run(run_dir: Path) -> dict[str, Any]:
     else:
         if "kernel_sum_center" in summary:
             result["kernel_sum_center"] = summary["kernel_sum_center"]
-        result["converged"] = summary.get("converged")
-        result["iterations"] = summary.get("iterations")
+        if solver == "spatial-als":
+            result["converged"] = summary.get("converged")
+            result["iterations"] = summary.get("iterations")
+        elif solver == "spatial-gaussian-polynomial":
+            result["fit_objective"] = summary["fit_objective"]
+            result["fit_weighting"] = summary["fit_weighting"]
     _write_json(resolved / "evaluation.json", result)
     return result
 
@@ -2263,7 +2399,11 @@ def _load_fit_mask(
 
 def _save_artifacts(
     artifacts_dir: Path,
-    result: ConstantKernelFitResult | SpatialALSFitResult,
+    result: (
+        ConstantKernelFitResult
+        | SpatialALSFitResult
+        | SpatialGaussianPolynomialKernelFitResult
+    ),
 ) -> dict[str, str]:
     saved: dict[str, str] = {}
     arrays: list[tuple[str, np.ndarray]] = [
@@ -2274,6 +2414,31 @@ def _save_artifacts(
     ]
     if isinstance(result, ConstantKernelFitResult):
         arrays.insert(0, ("kernel", result.kernel))
+    elif isinstance(result, SpatialGaussianPolynomialKernelFitResult):
+        arrays.extend(
+            [
+                (
+                    "kernel_center",
+                    result.kernel_at_local(
+                        (result.image_shape[0] - 1) / 2.0,
+                        (result.image_shape[1] - 1) / 2.0,
+                    ),
+                ),
+                ("basis_kernels", result.basis_kernels),
+                ("shape_coefficients", result.shape_coefficients),
+                ("photometric_coefficients", result.photometric_coefficients),
+                ("background_coefficients", result.background_coefficients),
+                ("photometric_scale", result.photometric_scale),
+            ]
+        )
+        for field in (
+            "propagated_source_variance",
+            "marginal_residual_variance",
+            "marginal_standardized_residual",
+        ):
+            value = getattr(result, field)
+            if value is not None:
+                arrays.append((field, value))
     else:
         center_y = (result.image_shape[0] - 1) / 2.0
         center_x = (result.image_shape[1] - 1) / 2.0
