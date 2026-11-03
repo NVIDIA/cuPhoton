@@ -242,13 +242,16 @@ jobs:
         with:
           name: cuphoton-wheels-x86_64
           path: wheelhouse
-      - name: Fit Gaussian inputs using the installed wheel
+      - name: Install the GPU wheel and dependencies
+        timeout-minutes: 5
         run: |
           uv venv --python 3.12 .wheel-venv
           set -- wheelhouse/*-cp312-cp312-*.whl
           test "$#" = 1
           uv pip install --python .wheel-venv/bin/python --only-binary :all: "$1[io]"
           uv pip check --python .wheel-venv/bin/python
+      - name: Fit Gaussian inputs using the installed wheel
+        run: |
           env -u LD_LIBRARY_PATH -u CUDA_HOME -u CUDA_PATH \
             .wheel-venv/bin/python -I scripts/wheels/test_installed.py \
             --mode gpu --components xfit xray --output xfit-wheel-gpu.json
