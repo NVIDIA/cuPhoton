@@ -13,6 +13,7 @@ struct Settings {
     double f_tol, x_tol, g_tol;
     double initial_damping, damping_increase, damping_decrease;
     int max_evaluations;
+    int legacy = 0;
 };
 
 // All device buffers are contiguous and owned by the caller through completion.

@@ -29,6 +29,7 @@ from .solver import (
     BatchedLeastSquaresProblem,
     LMConfig,
     LMStatus,
+    SolverVersion,
     batched_levenberg_marquardt,
 )
 
@@ -78,6 +79,7 @@ class DipoleFitResult:
     model: ModelName
     mode: FitMode
     covariance_factor: np.ndarray | None = None
+    solver_version: SolverVersion = "v0.2"
 
 
 class DipoleFitUncertaintyReason(IntEnum):
@@ -157,8 +159,11 @@ class DeviceDipoleFitResult:
         default="device",
     )
     covariance_factor: Any | None = None
+    solver_version: SolverVersion = "v0.2"
 
     def __post_init__(self) -> None:
+        if self.solver_version not in {"v0.1.3", "v0.2"}:
+            raise ValueError("solver_version must be 'v0.1.3' or 'v0.2'")
         if self.backend not in {
             "cupy",
             "cutile",
@@ -355,6 +360,7 @@ class _BackendDipoleFitResult:
     dtype: FloatDType
     model: ModelName
     mode: FitMode
+    solver_version: SolverVersion = "v0.2"
 
 
 def _floating_dtype(value: BackendArray) -> np.dtype[Any]:
@@ -897,6 +903,7 @@ def _fit_dipoles_backend(
             weights,
             image_shape=(height, width),
             mode=mode,
+            solver_version=(config or LMConfig()).solver_version,
         )
         residual_function = fused.residual
         normal_equations = fused.normal_equations
@@ -908,7 +915,11 @@ def _fit_dipoles_backend(
         from ._numba_mlir import GaussianWorkspace as NumbaGaussianWorkspace
 
         execution = NumbaGaussianWorkspace(
-            images_array, weights, image_shape=(height, width), mode=mode
+            images_array,
+            weights,
+            image_shape=(height, width),
+            mode=mode,
+            solver_version=(config or LMConfig()).solver_version,
         )
     with execution as numba_workspace:
         problem = BatchedLeastSquaresProblem(
@@ -1073,6 +1084,7 @@ def _fit_dipoles_backend(
         dtype=cast(FloatDType, dtype.name),
         model=selected_model.name,
         mode=mode,
+        solver_version=low_level.solver_version,
     )
 
 
@@ -1122,6 +1134,7 @@ def _materialize_dipole_fit_result(
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,
+        solver_version=result.solver_version,
     )
 
 
@@ -1130,6 +1143,8 @@ def _validate_execution_options(
     backend: str,
     config: LMConfig | None,
 ) -> None:
+    if config is not None and config.solver_version not in {"v0.1.3", "v0.2"}:
+        raise ValueError("solver_version must be 'v0.1.3' or 'v0.2'")
     if (
         backend in {"native", "numba-cuda-mlir"}
         and isinstance(model, GaussianDipoleModel)
@@ -1187,6 +1202,12 @@ def fit_dipoles(
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
     evaluation with ``backend="cupy"`` or ``backend="cutile"``. Both retain
     CuPy normal-equation contractions and require analytic derivatives.
+
+    ``config=LMConfig(solver_version="v0.1.3")`` selects the legacy scaling,
+    stopping and covariance rules. The default ``"v0.2"`` retains the current
+    numerical corrections. Results record the selected ``solver_version``;
+    neither choice guarantees scientific validity or convergence for every
+    fit.
     """
 
     _validate_execution_options(model, backend, config)
@@ -1318,6 +1339,7 @@ def fit_dipoles_device(
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,
+        solver_version=result.solver_version,
     )
 
 

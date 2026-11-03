@@ -219,6 +219,7 @@ def fit_gaussian_pipeline(
             settings.damping_increase,
             settings.damping_decrease,
             settings.max_evaluations,
+            settings.solver_version == "v0.1.3",
         ),
         (batch, height, width, 1 if mode == "difference" else 3),
         selected.split_weights,
@@ -240,7 +241,9 @@ def fit_gaussian_pipeline(
         degrees_of_freedom=outputs[19],
         reduced_chi_square=outputs[20],
         covariance=outputs[21],
-        covariance_factor=outputs[22],
+        covariance_factor=(
+            None if settings.solver_version == "v0.1.3" else outputs[22]
+        ),
         standard_errors=outputs[23],
         uncertainty_valid=outputs[24],
         uncertainty_reason_codes=outputs[25],
@@ -250,4 +253,5 @@ def fit_gaussian_pipeline(
         dtype=cast(FloatDType, dtype.name),
         model="gaussian",
         mode=mode,
+        solver_version=settings.solver_version,
     )

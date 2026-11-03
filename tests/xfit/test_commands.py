@@ -93,6 +93,7 @@ def _fake_result(images: np.ndarray):
         dtype="float64",
         model="gaussian",
         mode="difference",
+        solver_version="v0.2",
     )
 
 
@@ -498,6 +499,7 @@ def test_fit_dipoles_command_writes_complete_artifact_set(
             self.damping_decrease = 0.3
             self.finite_difference_step = None
             self.use_finite_difference = kwargs["use_finite_difference"]
+            self.solver_version = kwargs["solver_version"]
 
         def resolved_max_evaluations(self, parameter_count):
             configured = self.values["max_evaluations"]
@@ -563,6 +565,7 @@ def test_fit_dipoles_command_writes_complete_artifact_set(
     }
     assert effective["fusion"] is fusion
     assert effective["backend"] == ("cutile" if fusion else "numpy")
+    assert effective["solver"]["solver_version"] == "v0.2"
 
 
 @pytest.mark.parametrize(
@@ -613,9 +616,11 @@ def test_fusion_command_rejects_invalid_settings_before_loading_input(
     assert not (tmp_path / "fit").exists()
 
 
+@pytest.mark.parametrize("solver_version", ["v0.2", "v0.1.3"])
 def test_fit_dipoles_command_runs_real_synthetic_gaussian_fit(
     tmp_path,
     capsys,
+    solver_version,
 ) -> None:
     from cuphoton.xfit import GaussianDipoleModel
 
@@ -645,6 +650,8 @@ def test_fit_dipoles_command_runs_real_synthetic_gaussian_fit(
             "gaussian",
             "--backend",
             "numpy",
+            "--solver-version",
+            solver_version,
         ],
     )
     captured = capsys.readouterr()
@@ -663,6 +670,8 @@ def test_fit_dipoles_command_runs_real_synthetic_gaussian_fit(
         np.sqrt(np.finfo(np.float64).eps)
     )
     assert effective["solver"]["max_evaluations"] == 1800
+    assert effective["solver"]["solver_version"] == solver_version
+    assert json.loads(captured.out)["solver_version"] == solver_version
 
 
 def test_stamp_command_records_resolved_finite_difference_mode(
@@ -768,6 +777,7 @@ def test_fit_command_refuses_to_overwrite_output_directory(
     class FakeConfig:
         def __init__(self, **kwargs):
             self.values = kwargs
+            self.solver_version = kwargs["solver_version"]
 
     monkeypatch.setattr(xfit, "LMConfig", FakeConfig, raising=False)
     monkeypatch.setattr(
@@ -809,6 +819,7 @@ def test_command_help_exposes_stable_safe_input_options(capsys) -> None:
     assert "finite-volume" in captured.out
     assert "--use-finite-difference" in captured.out
     assert "--fusion" in captured.out
+    assert "--solver-version" in captured.out
 
 
 @pytest.mark.parametrize("runtime", ["dragon", "mpi"])

@@ -342,7 +342,8 @@ def test_extension_rejects_unsafe_buffers_without_a_cuda_workspace(invalid):
 
 @pytest.mark.parametrize("mode", ["difference", "split"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_native_gaussian_fit_matches_cupy(dtype, mode):
+@pytest.mark.parametrize("solver_version", ["v0.2", "v0.1.3"])
+def test_native_gaussian_fit_matches_cupy(dtype, mode, solver_version):
     _require_native()
     model, _, images, initial = _fixture(dtype, mode=mode)
     options = dict(
@@ -350,11 +351,14 @@ def test_native_gaussian_fit_matches_cupy(dtype, mode):
         initial=initial,
         mode=mode,
         variance=np.full(images.shape, 0.5, dtype=dtype),
+        config=LMConfig(solver_version=solver_version),
     )
     expected = fit_dipoles(images, backend="cupy", **options)
     actual = fit_dipoles(images, backend="native", **options)
     assert actual.backend == "native"
     assert actual.dtype == np.dtype(dtype).name
+    assert actual.solver_version == expected.solver_version == solver_version
+    assert (actual.covariance_factor is None) == (solver_version == "v0.1.3")
     assert actual.uncertainty_valid.all()
     assert np.abs(expected.covariance).max() > 1.0e-3
     _assert_fit_matches(actual, expected, dtype)
@@ -723,8 +727,37 @@ def test_fp32_g_tol_rounds_in_residual_precision(backend):
         np.testing.assert_array_equal(result.parameters, initial)
 
 
+def test_native_solver_version_selects_unnormalized_rank():
+    _require_native()
+    units = np.asarray([1e-20, 1, 1e20])
+    truth = np.tile([1, 1.7, 1.1, 0.35, -1.8, 0.7, 2.2, -0.4], (3, 1))
+    truth[:, 0] *= units
+    model = GaussianDipoleModel((25, 25))
+    images = model.evaluate(truth)
+    variance = np.broadcast_to(units[:, None, None] ** 2, images.shape)
+    for version, valid in (
+        ("v0.1.3", [False, True, False]),
+        ("v0.2", [True, True, True]),
+    ):
+        options = dict(
+            model=model,
+            initial=truth,
+            variance=variance,
+            config=LMConfig(solver_version=version, g_tol=1),
+        )
+        expected = fit_dipoles(images, backend="cupy", **options)
+        actual = fit_dipoles(images, backend="native", **options)
+        assert actual.solver_version == version
+        assert actual.evaluations.tolist() == [1, 1, 1]
+        assert actual.uncertainty_valid.tolist() == valid
+        _assert_fit_matches(actual, expected)
+
+
 @pytest.mark.parametrize("backend", ["numpy", "cupy", "native"])
-def test_native_f_tol_requires_small_predicted_progress(backend):
+@pytest.mark.parametrize("solver_version", ["v0.2", "v0.1.3"])
+def test_native_f_tol_requires_small_predicted_progress(
+    backend, solver_version
+):
     if backend == "native":
         _require_native()
     elif backend == "cupy":
@@ -755,13 +788,18 @@ def test_native_f_tol_requires_small_predicted_progress(backend):
         images,
         model=model,
         initial=initial,
-        config=LMConfig(f_tol=0.05, max_evaluations=2),
+        config=LMConfig(
+            f_tol=0.05, max_evaluations=2, solver_version=solver_version
+        ),
         backend=backend,
     )
 
     reduction = cost - 0.5 * np.sum(result.residuals**2)
     assert 0 < reduction < 0.05 * cost
-    assert result.status.tolist() == ["max_evaluations"]
+    expected_status = (
+        "converged_f_tol" if solver_version == "v0.1.3" else "max_evaluations"
+    )
+    assert result.status.tolist() == [expected_status]
     assert result.evaluations.tolist() == [2]
 
 
@@ -798,16 +836,19 @@ def test_masked_nonfinite_split_data_and_independent_row_convergence():
 
 @pytest.mark.parametrize("case", ["rank-deficient", "budget", "nonfinite"])
 @pytest.mark.parametrize("shape", [(11, 15), (51, 51)])
-def test_native_failure_statuses_and_diagnostics_match_cupy(case, shape):
+@pytest.mark.parametrize("solver_version", ["v0.2", "v0.1.3"])
+def test_native_failure_statuses_and_diagnostics_match_cupy(
+    case, shape, solver_version
+):
     _require_native()
     model, truth, images, initial = _fixture(shape=shape)
-    config = LMConfig()
+    config = LMConfig(solver_version=solver_version)
     if case == "rank-deficient":
         truth[:, 0] = 0
         images = model.evaluate(truth)
         initial = truth
     elif case == "budget":
-        config = LMConfig(max_evaluations=1)
+        config = LMConfig(max_evaluations=1, solver_version=solver_version)
     else:
         # Finite positive widths can still overflow inverse squared widths;
         # centered source positions make the model residual nonfinite.

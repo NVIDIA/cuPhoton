@@ -49,6 +49,7 @@ _META_FIELDS = {
     "dtype",
     "model",
     "mode",
+    "solver_version",
 }
 _ARRAY_FIELDS = tuple(
     field.name
@@ -61,6 +62,7 @@ _DEFAULTS = {
     "model": "gaussian",
     "mode": "difference",
     "backend": "cupy",
+    "solver_version": "v0.2",
     "compute_dtype": "input",
     "stamp_evaluation": "bilinear",
     "stamp_scale": 1.0,
@@ -114,7 +116,8 @@ def _plan_xfit_chunks(
         backend=settings["backend"],
         model=settings["model"],
         config=LMConfig(
-            use_finite_difference=settings["use_finite_difference"]
+            solver_version=settings["solver_version"],
+            use_finite_difference=settings["use_finite_difference"],
         ),
     )
     if settings["compute_dtype"] not in {"input", "float32", "float64"}:
@@ -254,6 +257,7 @@ class XFitWorker:
         dataset = _load_input(options, device=True)
         self.dataset: XFitDataset | None = dataset
         self.config = LMConfig(
+            solver_version=self.settings["solver_version"],
             **{
                 name: self.settings[name]
                 for name in ("f_tol", "x_tol", "g_tol", "max_evaluations")
@@ -421,6 +425,7 @@ def _read_result(
         else StampDipoleModel
     )
     expected_metadata = {
+        "solver_version": settings["solver_version"],
         "model": settings["model"],
         "mode": settings["mode"],
         "backend": settings["backend"],
@@ -446,6 +451,7 @@ def _effective_config(
         settings["use_finite_difference"] or settings["model"] == "stamp"
     )
     config = LMConfig(
+        solver_version=settings["solver_version"],
         **{
             name: settings[name]
             for name in ("f_tol", "x_tol", "g_tol", "max_evaluations")
@@ -480,6 +486,7 @@ def _effective_config(
             else None
         ),
         "solver": {
+            "solver_version": config.solver_version,
             **{
                 name: tolerance if settings[name] is None else settings[name]
                 for name in ("f_tol", "x_tol", "g_tol")
@@ -598,6 +605,7 @@ def finalize_xfit_round(
         dtype=metadata["dtype"],
         model=metadata["model"],
         mode=metadata["mode"],
+        solver_version=metadata["solver_version"],
     )
     output = round_dir / "scientific"
     summary = write_fit_artifacts(
@@ -636,7 +644,8 @@ def prepare_xfit_workload(
         backend=backend,
         model=settings["model"],
         config=LMConfig(
-            use_finite_difference=settings["use_finite_difference"]
+            solver_version=settings["solver_version"],
+            use_finite_difference=settings["use_finite_difference"],
         ),
     )
     if backend not in {"cupy", "cutile", "native", "numba-cuda-mlir"}:

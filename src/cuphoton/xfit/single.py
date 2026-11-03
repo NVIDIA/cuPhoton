@@ -27,6 +27,7 @@ from .models import GaussianDipoleModel
 from .solver import (
     BatchedLeastSquaresProblem,
     LMConfig,
+    SolverVersion,
     batched_levenberg_marquardt,
 )
 
@@ -79,6 +80,7 @@ class SingleSourceFitResult:
     uncertainty_reason_codes: Any
     residuals: Any
     dtype: FloatDType
+    solver_version: SolverVersion = "v0.2"
 
 
 def fit_single_sources(
@@ -451,6 +453,7 @@ def fit_single_sources(
         uncertainty_reason_codes=reasons,
         residuals=residuals,
         dtype=cast(FloatDType, dtype.name),
+        solver_version=low_level.solver_version,
     )
 
 

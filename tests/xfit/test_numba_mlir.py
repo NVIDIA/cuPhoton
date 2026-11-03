@@ -135,7 +135,10 @@ def _assert_fit_equal(actual, expected, dtype):
 
 @pytest.mark.parametrize("mode", ["difference", "split"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_gaussian_fit_preserves_scientific_outputs(gpu, mode, dtype):
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_gaussian_fit_preserves_scientific_outputs(
+    gpu, mode, dtype, solver_version
+):
     truth = _truth(dtype)[:2]
     model = GaussianDipoleModel((11, 15), dtype=dtype)
     images = model.evaluate(truth, mode=mode)
@@ -148,11 +151,13 @@ def test_gaussian_fit_preserves_scientific_outputs(gpu, mode, dtype):
         initial=initial,
         variance=np.full(images.shape, 0.5, dtype=dtype),
         mode=mode,
+        config=LMConfig(solver_version=solver_version),
     )
     expected = fit_dipoles(images, backend="cupy", **options)
     actual = fit_dipoles(images, backend=_BACKEND, **options)
 
     assert actual.backend == _BACKEND
+    assert actual.solver_version == expected.solver_version == solver_version
     assert actual.converged.all()
     assert actual.uncertainty_valid.all()
     assert np.abs(expected.covariance).max() > 1.0e-3

@@ -3,7 +3,7 @@
 `cuphoton.xfit` provides batched nonlinear least-squares fitting for
 astronomical dipole models. Its low-level Levenberg--Marquardt solver retains
 NumPy or CuPy arrays; the high-level fit result exposes portable NumPy arrays
-and records the resolved backend, device, and dtype.
+and records the resolved backend, device, dtype, and solver version.
 
 ## Quickstart
 
@@ -314,14 +314,66 @@ weighting model that accounts for that dependence. `uncertainty_valid` reports
 numerical and rank validity. The xScan feature adapter requires difference-mode
 xFit runs.
 
-Rank is computed after normalizing the weighted Jacobian's parameter columns;
-covariance is returned in the original parameter units. This avoids declaring
+With the default `solver_version="v0.2"`, rank is computed after normalizing
+the weighted Jacobian's parameter columns; covariance is returned in the
+original parameter units. This avoids declaring
 an independent parameter unresolved solely because of its units. A valid
 covariance describes the local linear approximation under the supplied noise
 model; it does not establish a unique global optimum or adequate model fit.
 Nearly dependent directions can still yield large, inaccurate uncertainties
 despite passing the numerical rank threshold; no fixed covariance accuracy
 is implied by the validity flag.
+
+### Choosing the solver version
+
+`LMConfig(solver_version="v0.2")` selects the default solver and uncertainty
+policy. Select `"v0.1.3"` to use the earlier stopping, linear-solve, rank, and
+covariance policies. The choice applies to `fit_dipoles`,
+`fit_dipoles_device`, `fit_single_sources`, and the low-level solver:
+
+```python
+from cuphoton.xfit import LMConfig, fit_dipoles
+
+result = fit_dipoles(
+    images,
+    model="gaussian",
+    backend="numpy",
+    config=LMConfig(solver_version="v0.1.3"),
+)
+assert result.solver_version == "v0.1.3"
+```
+
+For `fit_single_sources`, pass the same `LMConfig` as `solver=...`.
+
+| Policy | `v0.2` (default) | `v0.1.3` |
+| --- | --- | --- |
+| Cost stopping | Checks actual and predicted reduction | Checks actual reduction |
+| Linear solve and step stopping | Jacobian-scaled coordinates | Original optimization coordinates |
+| Rank and covariance | Normalizes Jacobian columns before testing rank | Tests the unnormalized Jacobian |
+| FP32 intermediates | Accumulates products and solves in FP64 | Uses FP32 products and solves |
+| Derived uncertainties | Retains a covariance factor to avoid cancellation | Uses the rounded dense covariance |
+
+The default can take substantially more evaluations on slowly converging
+fits. A fit that reaches `max_evaluations` is unconverged and has invalid
+uncertainties, even if its parameters are close to a converged solution.
+An explicit larger `max_evaluations` budget can help; it also increases
+work and does not guarantee convergence.
+
+The earlier policy can stop after a small actual reduction while the local
+model still predicts substantial improvement. Its unscaled rank test also
+depends on parameter units and can invalidate otherwise informative
+uncertainties. Choose it for comparisons requiring those policies, and
+inspect convergence, residuals, fit geometry, and uncertainty validity
+together. Neither policy establishes astronomical accuracy from the
+convergence flag alone. The version identifies a numerical policy, not a
+promise of identical results across package versions, backends, or hardware.
+Both choices retain current input validation and clear unavailable derivative
+diagnostics after invalid-residual exits.
+
+Use `--solver-version v0.1.3` in the CLI; `--solver-version v0.2` selects the
+default explicitly. The option is preserved across local, Dragon, and MPI
+execution. New result summaries and effective configurations record the
+selected version. Older artifacts without the field do not identify it.
 
 ## Derived quantities and their uncertainties
 
@@ -375,7 +427,7 @@ uv run cuphoton xfit fit-dipoles \
   --input /path/to/dipoles.npz \
   --output-dir /path/to/new-fit-run \
   --model gaussian --mode difference --backend auto \
-  --compute-dtype input
+  --compute-dtype input --solver-version v0.2
 ```
 
 An input archive requires `candidate_id` and `images`. It may also contain
@@ -473,25 +525,32 @@ for release before publishing these artifacts.
 
 For the sampled-stamp model, choose `--stamp-evaluation bilinear`,
 `bilinear-vignetted`, or `finite-volume` and provide `stamp_basis` in the
-input archive. Solver controls include `--f-tol`, `--x-tol`, `--g-tol`,
-`--max-evaluations`, and `--use-finite-difference`. Gaussian fits use their
-analytic Jacobian unless finite differences are requested; sampled-stamp
+input archive. Solver controls include `--solver-version`, `--f-tol`,
+`--x-tol`, `--g-tol`, `--max-evaluations`, and `--use-finite-difference`.
+Gaussian fits use their analytic Jacobian unless finite differences are
+requested; sampled-stamp
 fits always use finite differences and record that resolved choice in the
-effective configuration. `--x-tol` bounds the norm of the Jacobian-scaled
-step in weighted-residual units (noise standard deviations when you pass
-`variance`). Changing parameter units preserves the stopping rule, but
-rescaling `variance` changes it. The absolute threshold is
+effective configuration. With `--solver-version v0.2`, `--x-tol` bounds the
+norm of the Jacobian-scaled step in weighted-residual units (noise standard
+deviations when you pass `variance`). Changing parameter units preserves
+the stopping rule, but rescaling `variance` changes it. The absolute threshold is
 `x_tol * (x_tol + 1)`; it does not grow when a periodic parameter drifts to
 a large equivalent value. The linear solve uses the same Jacobian scaling.
 
-The shared NumPy/CuPy solver and native CUDA loop require both actual and
-predicted cost reductions to be at most `f_tol * max(1, cost)` for
-`--f-tol` termination. The prediction must also be finite and positive,
+With `--solver-version v0.2`, the shared NumPy/CuPy solver and native CUDA
+loop require both actual and predicted cost reductions to be at most
+`f_tol * max(1, cost)` for `--f-tol` termination. The prediction must also be
+finite and positive,
 and the actual reduction must not exceed twice the prediction. Their built-in
 float32 normal equations and linear solves use float64 intermediates before
 rounding back to float32. Model evaluation, stored solver state and rank
 thresholds retain the selected precision. A custom normal-equations callback
 controls its own accumulation precision.
+
+With `--solver-version v0.1.3`, cost stopping checks only the actual reduction,
+step stopping uses the norm in the original optimization coordinates with
+the same `x_tol * (x_tol + 1)` threshold, and the built-in normal equations
+and solve use the selected compute dtype.
 
 `--compute-dtype input` preserves the input floating dtype. Select `float32`
 or `float64` to run the solver at an explicit precision while preserving the

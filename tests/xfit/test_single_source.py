@@ -40,10 +40,18 @@ def _flux(amplitude, sigma_x, sigma_y):
     return 2.0 * np.pi * abs(amplitude) * sigma_x * sigma_y
 
 
-def test_recovers_position_flux_and_shape_of_a_bright_source():
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_recovers_position_flux_and_shape_of_a_bright_source(solver_version):
     truth = (40.0, 2.0, 1.6, 0.3, 1.3, -0.8)
     images, variance = _noisy(_single(*truth), 3, seed=0, noise=0.5)
-    result = fit_single_sources(images, variance, np.zeros((3, 2)), sign=1)
+    result = fit_single_sources(
+        images,
+        variance,
+        np.zeros((3, 2)),
+        sign=1,
+        solver=LMConfig(solver_version=solver_version),
+    )
+    assert result.solver_version == solver_version
     assert result.parameter_names == (
         "amplitude",
         "sigma_x",

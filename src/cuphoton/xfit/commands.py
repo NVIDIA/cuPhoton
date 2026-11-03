@@ -46,6 +46,7 @@ from .io import (
     write_fit_artifacts,
 )
 from .models import StampDipoleModel
+from .solver import SolverVersion
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -93,6 +94,10 @@ class ComputeDtypeInvariant(SetInvariant):
 
 class StampEvaluationInvariant(SetInvariant):
     _set = STAMP_EVALUATIONS
+
+
+class SolverVersionInvariant(SetInvariant):
+    _set = frozenset({"v0.2", "v0.1.3"})
 
 
 class FiniteFloatInvariant(FloatInvariant):
@@ -231,6 +236,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     compute_dtype: ComputeDType | None = None
     stamp_evaluation: StampEvaluation | None = None
     stamp_scale: float | None = None
+    solver_version: SolverVersion | None = None
     f_tol = None
     x_tol = None
     g_tol = None
@@ -266,6 +272,15 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         _mandatory = False
         _default = False
 
+    class SolverVersionArg(SolverVersionInvariant):
+        _arg = "--solver-version"
+        _help = (
+            "Solver and uncertainty policy: v0.2 or v0.1.3. "
+            "[default: %default]"
+        )
+        _mandatory = False
+        _default = "v0.2"
+
     class ComputeDtypeArg(ComputeDtypeInvariant):
         _arg = "--compute-dtype"
         _help = (
@@ -292,9 +307,8 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     class FTolArg(NonNegativeFloatInvariant):
         _arg = "--f-tol"
         _help = (
-            "Optional cost-reduction tolerance. Actual and predicted "
-            "reductions must be small; prediction must be positive and "
-            "at least half the actual reduction."
+            "Optional cost-reduction tolerance. v0.2 checks actual and "
+            "predicted reductions; v0.1.3 checks actual reduction only."
         )
         _mandatory = False
         _default = None
@@ -302,9 +316,8 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
     class XTolArg(NonNegativeFloatInvariant):
         _arg = "--x-tol"
         _help = (
-            "Optional Jacobian-scaled step-norm tolerance in weighted-"
-            "residual units. Independent of parameter units; rescaling "
-            "variance changes the stopping rule."
+            "Optional step-norm tolerance. v0.2 uses Jacobian-scaled "
+            "weighted-residual units; v0.1.3 uses parameter units."
         )
         _mandatory = False
         _default = None
@@ -352,13 +365,15 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
         assert self.backend is not None
         assert self.model is not None
         assert self.fusion is not None
+        assert self.solver_version is not None
         self._call(
             _validate_fusion,
             self.fusion,
             backend=self.backend,
             model=self.model,
             config=LMConfig(
-                use_finite_difference=bool(self.use_finite_difference)
+                solver_version=self.solver_version,
+                use_finite_difference=bool(self.use_finite_difference),
             ),
         )
         executor_options = self.executor_options()
@@ -385,6 +400,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                     "model",
                     "mode",
                     "backend",
+                    "solver_version",
                     "compute_dtype",
                     "stamp_evaluation",
                     "stamp_scale",
@@ -432,6 +448,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
             self.use_finite_difference or self.model == "stamp"
         )
         config = LMConfig(
+            solver_version=self.solver_version,
             f_tol=self.f_tol,
             x_tol=self.x_tol,
             g_tol=self.g_tol,
@@ -504,6 +521,7 @@ class FitDipolesCommand(ExecutorOptions, _ValidatedDatasetCommand):
                 else None
             ),
             "solver": {
+                "solver_version": config.solver_version,
                 "f_tol": (
                     default_tolerance if self.f_tol is None else self.f_tol
                 ),

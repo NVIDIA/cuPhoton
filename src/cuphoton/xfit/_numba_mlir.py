@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from ._types import FitMode
-from .solver import _normal_equations_from_jacobian
+from .solver import SolverVersion, _normal_equations_from_jacobian
 
 _THREADS = 128
 _KERNEL_CACHE_SIZE = 16
@@ -236,6 +236,7 @@ class GaussianWorkspace:
         *,
         image_shape: tuple[int, int],
         mode: FitMode,
+        solver_version: SolverVersion = "v0.2",
     ) -> None:
         try:
             import cupy as cp
@@ -261,6 +262,7 @@ class GaussianWorkspace:
         if images.dtype not in (np.dtype("float32"), np.dtype("float64")):
             raise TypeError("Numba-CUDA-MLIR supports float32 and float64")
         self._cp = cp
+        self._solver_version = solver_version
         self._cuda = cuda
         self._stream = cp.cuda.get_current_stream()
         self._device = cp.cuda.Device().id
@@ -370,7 +372,7 @@ class GaussianWorkspace:
         jacobian = self._jacobian[: parameters.shape[0]]
         self._pending.append(((residuals, jacobian), ()))
         gradient, hessian = _normal_equations_from_jacobian(
-            jacobian, residuals, self._cp
+            jacobian, residuals, self._cp, solver_version=self._solver_version
         )
         self._pending.append(((gradient, hessian), ()))
         return gradient, hessian

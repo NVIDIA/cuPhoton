@@ -240,14 +240,16 @@ def test_cupy_fusion_callbacks_preserve_weighting_indices_and_layout(
 
 
 @pytest.mark.parametrize("backend", ["numpy", "cupy"])
-def test_cupy_fusion_preserves_representable_fp32_normal_equations(
-    monkeypatch, backend
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_cupy_fusion_obeys_solver_version_precision(
+    monkeypatch, backend, solver_version
 ):
     from cuphoton.xfit._cupy_fused import GaussianFusedProblem
 
     ap = np if backend == "numpy" else _require_cupy()
     problem = object.__new__(GaussianFusedProblem)
     problem._cp = ap
+    problem._solver_version = solver_version
     problem._dtype = np.dtype(np.float32)
     problem._observations = 16
     # Each product is below FP32 range, but their sum is representable.
@@ -261,7 +263,7 @@ def test_cupy_fusion_preserves_representable_fp32_normal_equations(
         residual,
         indices=ap.asarray([0], dtype=ap.int64),
     )
-    expected = np.float32(2.0**-146)
+    expected = np.float32(2.0**-146 if solver_version == "v0.2" else 0.0)
     for result in (gradient, hessian):
         actual = result if backend == "numpy" else ap.asnumpy(result)
         assert actual.dtype == np.float32

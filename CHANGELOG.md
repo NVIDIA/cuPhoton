@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### xFit solver errata
+
+- The default `v0.2` solver can require substantially more evaluations on
+  slowly converging fits. Reaching the evaluation cap returns an
+  unconverged result with invalid uncertainties, including for some fits
+  that previously reported convergence. Inspect termination status and
+  uncertainty validity when comparing results or timings. An explicit
+  larger `LMConfig(max_evaluations=...)` budget or `--max-evaluations`
+  permits more work without guaranteeing convergence.
+- The `v0.1.3` policy can report convergence after a small actual cost
+  reduction while further improvement remains, and its unscaled rank and
+  covariance calculations depend on parameter units. It also retains the
+  earlier FP32 intermediate precision and dense covariance propagation,
+  which can lose small curvature or erase small derived uncertainties
+  through cancellation. For comparisons that require this earlier policy, select
+  `LMConfig(solver_version="v0.1.3")` in Python or
+  `cuphoton xfit fit-dipoles ... --solver-version v0.1.3` in the CLI.
+  `v0.2` remains the default; its scaling and stopping checks address those
+  limitations. Both policies record the selected version and require
+  checking the fit and its uncertainty diagnostics. See
+  [solver version selection](docs/components/xfit.md#choosing-the-solver-version).
+
 ### xBeam
 
 - Correlate uniformly sampled signals from arrays or HDF5 with NumPy or

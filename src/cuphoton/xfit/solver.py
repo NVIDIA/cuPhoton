@@ -10,12 +10,14 @@ from dataclasses import dataclass
 from enum import IntEnum
 from functools import lru_cache
 from types import ModuleType
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np
 
 from ._types import ArrayLike, BackendArray
 from .backend import as_numpy
+
+SolverVersion = Literal["v0.1.3", "v0.2"]
 
 
 class LMStatus(IntEnum):
@@ -130,7 +132,11 @@ class BatchedLeastSquaresProblem:
 
 @dataclass(frozen=True)
 class LMConfig:
-    """Numerical controls for :func:`batched_levenberg_marquardt`."""
+    """Numerical controls for :func:`batched_levenberg_marquardt`.
+
+    ``solver_version`` selects the numerical policy independently of the
+    execution backend. The default is the current ``"v0.2"`` policy.
+    """
 
     f_tol: float | None = None
     x_tol: float | None = None
@@ -141,6 +147,11 @@ class LMConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
+    solver_version: SolverVersion = "v0.2"
+
+    def __post_init__(self) -> None:
+        if self.solver_version not in ("v0.1.3", "v0.2"):
+            raise ValueError("solver_version must be 'v0.1.3' or 'v0.2'")
 
     def resolved_max_evaluations(self, parameter_count: int) -> int:
         """Return the configured or default residual-evaluation budget."""
@@ -183,6 +194,7 @@ class LMResult:
     covariance: BackendArray
     rank: BackendArray
     covariance_factor: BackendArray | None = None
+    solver_version: SolverVersion = "v0.2"
 
     @property
     def solution(self) -> BackendArray:
@@ -220,6 +232,7 @@ class _Settings:
     damping_decrease: float
     finite_difference_step: float
     use_finite_difference: bool
+    solver_version: SolverVersion = "v0.2"
 
 
 def _settings(config: LMConfig, dtype: np.dtype[Any], n: int) -> _Settings:
@@ -266,6 +279,7 @@ def _settings(config: LMConfig, dtype: np.dtype[Any], n: int) -> _Settings:
         damping_decrease=float(config.damping_decrease),
         finite_difference_step=float(fd_step),
         use_finite_difference=config.use_finite_difference,
+        solver_version=config.solver_version,
     )
 
 
@@ -371,13 +385,20 @@ def _final_jacobian(
 
 
 def _factorize_jacobians(
-    jacobians: BackendArray, ap: ModuleType
+    jacobians: BackendArray,
+    ap: ModuleType,
+    *,
+    solver_version: SolverVersion = "v0.2",
 ) -> tuple[BackendArray, BackendArray, BackendArray]:
-    """Factor equilibrated Jacobians and return their parameter scales."""
+    """Factor Jacobians using the selected policy's parameter scales."""
 
-    scale = ap.max(ap.abs(jacobians), axis=-1)
-    scale = ap.where(scale > 0, scale, 1)
-    normalized = jacobians / scale[..., None]
+    if solver_version == "v0.1.3":
+        scale = ap.ones(jacobians.shape[:-1], dtype=jacobians.dtype)
+        normalized = jacobians
+    else:
+        scale = ap.max(ap.abs(jacobians), axis=-1)
+        scale = ap.where(scale > 0, scale, 1)
+        normalized = jacobians / scale[..., None]
     parameters, observations = jacobians.shape[-2:]
     module_name = type(jacobians).__module__.split(".", maxsplit=1)[0]
     if (
@@ -442,10 +463,19 @@ def _cast_fp32_workspace(
 
 
 def _normal_equations_from_jacobian(
-    jacobian: BackendArray, residual: BackendArray, ap: ModuleType
+    jacobian: BackendArray,
+    residual: BackendArray,
+    ap: ModuleType,
+    *,
+    solver_version: SolverVersion = "v0.2",
 ) -> tuple[BackendArray, BackendArray]:
-    """Accumulate FP32 products in FP64, then retain the input precision."""
+    """Accumulate normal products under the selected precision policy."""
 
+    if solver_version == "v0.1.3":
+        return (
+            ap.einsum("knm,km->kn", jacobian, residual),
+            ap.einsum("knm,kpm->knp", jacobian, jacobian),
+        )
     widen = jacobian.dtype == np.float32 and residual.dtype == np.float32
     normal_jacobian = (
         _cast_fp32_workspace(jacobian, np.float64, ap) if widen else jacobian
@@ -479,7 +509,16 @@ def batched_levenberg_marquardt(
     before returning FP32 steps. Model evaluations, solver state,
     covariance and rank thresholds retain their input precision. A supplied
     normal-equations callback controls its own accumulation precision.
+
+    ``LMConfig(solver_version="v0.1.3")`` selects the release's original
+    scaling, stopping, FP32 intermediates, rank and dense covariance policy.
+    It does not retain a covariance factor for derived uncertainties.
     """
+
+    if config is not None and config.solver_version == "v0.1.3":
+        from ._solver_v013 import solve
+
+        return solve(problem, x0, config=config)
 
     if not hasattr(x0, "ndim") or x0.ndim != 2:
         raise ValueError("x0 must have shape (batch, parameters)")
@@ -852,7 +891,11 @@ def _finalize_lm(
     gradients = ap.full((k, n), ap.nan, dtype=dtype)
     hessians = ap.full((k, n, n), ap.nan, dtype=dtype)
     covariance = ap.full((k, n, n), ap.nan, dtype=dtype)
-    covariance_factor = ap.full((k, n, n), ap.nan, dtype=dtype)
+    covariance_factor = (
+        None
+        if settings.solver_version == "v0.1.3"
+        else ap.full((k, n, n), ap.nan, dtype=dtype)
+    )
     rank = ap.full(k, -1, dtype=np.int32)
     status_host = as_numpy(status)
     jacobian_current_host = as_numpy(jacobian_current)
@@ -967,7 +1010,9 @@ def _finalize_lm(
                 "knm,kpm->knp", diagnostic_jacobians, diagnostic_jacobians
             )
             left_vectors, singular_values, scale = _factorize_jacobians(
-                diagnostic_jacobians, ap
+                diagnostic_jacobians,
+                ap,
+                solver_version=settings.solver_version,
             )
             tolerance = max(n, m) * eps * ap.max(singular_values, axis=1)
             rank_values = ap.sum(singular_values > tolerance[:, None], axis=1)
@@ -975,15 +1020,25 @@ def _finalize_lm(
             full_rank = rank_values == n
             full_rank_indices = diagnostic_indices[full_rank]
             if full_rank_indices.shape[0] > 0:
-                inverse_factor = _covariance_factor_from_svd(
-                    left_vectors[full_rank],
-                    singular_values[full_rank],
-                    scale[full_rank],
-                )
-                covariance_factor[full_rank_indices] = inverse_factor
-                covariance[full_rank_indices] = inverse_factor @ ap.swapaxes(
-                    inverse_factor, -2, -1
-                )
+                if covariance_factor is None:
+                    full_rank_vectors = left_vectors[full_rank]
+                    full_rank_singular_values = singular_values[full_rank]
+                    inverse_squared = 1.0 / (
+                        full_rank_singular_values * full_rank_singular_values
+                    )
+                    covariance[full_rank_indices] = (
+                        full_rank_vectors * inverse_squared[:, None, :]
+                    ) @ full_rank_vectors.transpose(0, 2, 1)
+                else:
+                    inverse_factor = _covariance_factor_from_svd(
+                        left_vectors[full_rank],
+                        singular_values[full_rank],
+                        scale[full_rank],
+                    )
+                    covariance_factor[full_rank_indices] = inverse_factor
+                    covariance[full_rank_indices] = (
+                        inverse_factor @ ap.swapaxes(inverse_factor, -2, -1)
+                    )
         except Exception:
             # Preserve row-level failure isolation if a backend cannot perform
             # one of the batched linear-algebra operations.
@@ -993,18 +1048,30 @@ def _finalize_lm(
                     gradients[row] = jacobian @ residuals[row]
                     hessians[row] = jacobian @ jacobian.T
                     left_vectors, singular_values, scale = (
-                        _factorize_jacobians(jacobian, ap)
+                        _factorize_jacobians(
+                            jacobian,
+                            ap,
+                            solver_version=settings.solver_version,
+                        )
                     )
                     tolerance = max(n, m) * eps * ap.max(singular_values)
                     rank[row] = ap.sum(singular_values > tolerance)
                     if _int(rank[row]) == n:
-                        inverse_factor = _covariance_factor_from_svd(
-                            left_vectors, singular_values, scale
-                        )
-                        covariance_factor[row] = inverse_factor
-                        covariance[row] = inverse_factor @ ap.transpose(
-                            inverse_factor
-                        )
+                        if covariance_factor is None:
+                            inverse_squared = 1.0 / (
+                                singular_values * singular_values
+                            )
+                            covariance[row] = (
+                                left_vectors * inverse_squared[None, :]
+                            ) @ ap.transpose(left_vectors)
+                        else:
+                            inverse_factor = _covariance_factor_from_svd(
+                                left_vectors, singular_values, scale
+                            )
+                            covariance_factor[row] = inverse_factor
+                            covariance[row] = inverse_factor @ ap.transpose(
+                                inverse_factor
+                            )
                 except Exception:
                     continue
 
@@ -1025,6 +1092,7 @@ def _finalize_lm(
         covariance=covariance,
         rank=rank,
         covariance_factor=covariance_factor,
+        solver_version=settings.solver_version,
     )
 
 
@@ -1036,5 +1104,6 @@ __all__ = [
     "LMStatus",
     "NormalEquationsFunction",
     "ResidualFunction",
+    "SolverVersion",
     "batched_levenberg_marquardt",
 ]
