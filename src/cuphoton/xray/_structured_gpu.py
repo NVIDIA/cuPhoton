@@ -54,7 +54,7 @@ class StructuredRootsGPU:
         degree, batch = operator.index(degree), operator.index(batch)
         if not 1 <= degree <= 4096 or not 1 <= batch <= 2147483647:
             raise ValueError(
-                "Require degree1..4096 and a positive actual batch"
+                "Require degree 1..4096 and a positive actual batch"
             )
         cp = self.cp
         return dict(

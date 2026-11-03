@@ -46,7 +46,7 @@ options to `cuphoton xray detector-artifacts`:
 
 ```text
 --fit-backend structured-gpu --structured-schedule overlap
---components 30 --fit-diagnostics none --artifact-layout tile-rows
+--artifact-layout tile-rows
 ```
 
 Use `--fit-backend structured-cpu --structured-schedule serial` for the host
@@ -79,6 +79,9 @@ classification, failed convergence and numerical-range failures. Noise-free
 traces with a constant offset can be rejected when refinement moves a real
 root across the unit circle, even by less than one binary64 ulp. A rounded
 zero decay is not clamped to keep the mode accepted.
+Modes with equal underlying decay rates can also be rejected if rounding
+separates their initial decay estimates and refinement then ties or reorders
+them. Only modes with exactly equal initial decay estimates may change order.
 
 The current double-double refiner requires the magnitude of every nonzero
 intermediate to lie in `[2**-450, 2**451)`. Direct degree-597 Horner evaluation can exceed this
