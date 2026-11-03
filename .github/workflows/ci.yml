@@ -210,7 +210,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 60, len(cases)
+          assert len(cases) == 64, len(cases)
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
@@ -407,9 +407,9 @@ jobs:
               raise SystemExit("cuTile pytest process failed")
           report = ET.parse(root / "cutile-gpu.xml")
           cases = report.findall(".//testcase")
-          if len(cases) != 48 or any(report.findall(".//" + tag) for tag in ("skipped", "failure", "error")):
-              raise SystemExit("Require all 48 selected cuTile tests without skips, failures or errors")
-          print("All 48 cuTile tests passed without skips or teardown errors")
+          if len(cases) != 50 or any(report.findall(".//" + tag) for tag in ("skipped", "failure", "error")):
+              raise SystemExit("Require all 50 selected cuTile tests without skips, failures or errors")
+          print("All 50 cuTile tests passed without skips or teardown errors")
           PY
       - name: Run real cuTile classifier pipeline
         run: |
