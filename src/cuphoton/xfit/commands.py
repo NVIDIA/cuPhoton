@@ -46,7 +46,7 @@ from .io import (
     write_fit_artifacts,
 )
 from .models import StampDipoleModel
-from .solver import SolverVersion
+from .solver import SOLVER_VERSIONS, SolverVersion
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -97,7 +97,7 @@ class StampEvaluationInvariant(SetInvariant):
 
 
 class SolverVersionInvariant(SetInvariant):
-    _set = frozenset({"v0.2", "v0.1.3"})
+    _set = SOLVER_VERSIONS
 
 
 class FiniteFloatInvariant(FloatInvariant):

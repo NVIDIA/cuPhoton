@@ -351,9 +351,26 @@ def test_native_gaussian_fit_matches_cupy(dtype, mode, solver_version):
         initial=initial,
         mode=mode,
         variance=np.full(images.shape, 0.5, dtype=dtype),
-        config=LMConfig(solver_version=solver_version),
+        config=LMConfig(solver_version=solver_version, x_tol=0.3, f_tol=0),
     )
     expected = fit_dipoles(images, backend="cupy", **options)
+    other_version = "v0.2" if solver_version == "v0.1.3" else "v0.1.3"
+    other = fit_dipoles(
+        images,
+        backend="cupy",
+        **{
+            **options,
+            "config": LMConfig(
+                solver_version=other_version, x_tol=0.3, f_tol=0
+            ),
+        },
+    )
+    # The legacy raw-step threshold stops after one accepted update;
+    # v0.2 needs further updates under its scaled stopping rule.
+    assert np.all(expected.evaluations != other.evaluations)
+    if solver_version == "v0.1.3":
+        assert expected.status.tolist() == ["converged_x_tol"] * 2
+        assert expected.evaluations.tolist() == [2, 2]
     actual = fit_dipoles(images, backend="native", **options)
     assert actual.backend == "native"
     assert actual.dtype == np.dtype(dtype).name

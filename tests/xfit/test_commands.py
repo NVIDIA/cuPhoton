@@ -661,6 +661,7 @@ def test_fit_dipoles_command_runs_real_synthetic_gaussian_fit(
     assert json.loads(captured.out)["metrics"]["converged_count"] == 1
     row = pq.read_table(output_dir / "fits.parquet").to_pylist()[0]
     assert row["candidate_id"] == "synthetic-0"
+    assert row["solver_version"] == solver_version
     assert row["converged"] is True
     assert row["amplitude"] == pytest.approx(5.0, rel=1.0e-5)
     effective = yaml.safe_load(

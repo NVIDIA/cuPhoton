@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from functools import lru_cache
 from types import ModuleType
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 import numpy as np
 
@@ -18,6 +18,15 @@ from ._types import ArrayLike, BackendArray
 from .backend import as_numpy
 
 SolverVersion = Literal["v0.1.3", "v0.2"]
+SOLVER_VERSIONS: frozenset[SolverVersion] = frozenset(get_args(SolverVersion))
+
+
+def _validate_solver_version(value: str) -> None:
+    if not isinstance(value, str) or value not in SOLVER_VERSIONS:
+        choices = " or ".join(
+            repr(version) for version in sorted(SOLVER_VERSIONS)
+        )
+        raise ValueError(f"solver_version must be {choices}, got {value!r}")
 
 
 class LMStatus(IntEnum):
@@ -150,8 +159,7 @@ class LMConfig:
     solver_version: SolverVersion = "v0.2"
 
     def __post_init__(self) -> None:
-        if self.solver_version not in ("v0.1.3", "v0.2"):
-            raise ValueError("solver_version must be 'v0.1.3' or 'v0.2'")
+        _validate_solver_version(self.solver_version)
 
     def resolved_max_evaluations(self, parameter_count: int) -> int:
         """Return the configured or default residual-evaluation budget."""
@@ -179,7 +187,8 @@ class LMResult:
 
     ``covariance_factor`` retains F with covariance F F.T so derived
     uncertainties can be computed without subtracting rounded covariance
-    entries. It is None for results constructed without the optional field.
+    entries. It is None under the ``"v0.1.3"`` policy and for results
+    constructed without the optional field.
     """
 
     parameters: BackendArray
@@ -491,34 +500,20 @@ def _normal_equations_from_jacobian(
     return gradient, hessian
 
 
-def batched_levenberg_marquardt(
+def _prepare_solver(
     problem: BatchedLeastSquaresProblem,
     x0: BackendArray,
-    *,
-    config: LMConfig | None = None,
-) -> LMResult:
-    """Solve independent nonlinear least-squares problems in one batch.
-
-    Arrays stay in the array package that owns ``x0``. A problem Jacobian is
-    interpreted as parameter-major, with shape ``(K, N, M)``. When it is
-    absent, or finite differences are requested, the solver allocates the
-    perturbation workspace in the same backend as ``x0``.
-
-    Built-in FP32 normal equations accumulate in FP64 and are rounded back.
-    Scaling, convergence checks and damped solves widen those stored values
-    before returning FP32 steps. Model evaluations, solver state,
-    covariance and rank thresholds retain their input precision. A supplied
-    normal-equations callback controls its own accumulation precision.
-
-    ``LMConfig(solver_version="v0.1.3")`` selects the release's original
-    scaling, stopping, FP32 intermediates, rank and dense covariance policy.
-    It does not retain a covariance factor for derived uncertainties.
-    """
-
-    if config is not None and config.solver_version == "v0.1.3":
-        from ._solver_v013 import solve
-
-        return solve(problem, x0, config=config)
+    config: LMConfig | None,
+) -> tuple[
+    ModuleType,
+    np.dtype[Any],
+    _Settings,
+    BackendArray,
+    BackendArray,
+    BackendArray,
+    tuple[int, int, int],
+]:
+    """Validate inputs and evaluate the initial residual for either policy."""
 
     if not hasattr(x0, "ndim") or x0.ndim != 2:
         raise ValueError("x0 must have shape (batch, parameters)")
@@ -546,6 +541,43 @@ def batched_levenberg_marquardt(
     m = residuals.shape[1]
     if m < 1:
         raise ValueError("the residual must contain at least one observation")
+
+    return ap, dtype, settings, x, indices, residuals, (k, n, m)
+
+
+def batched_levenberg_marquardt(
+    problem: BatchedLeastSquaresProblem,
+    x0: BackendArray,
+    *,
+    config: LMConfig | None = None,
+) -> LMResult:
+    """Solve independent nonlinear least-squares problems in one batch.
+
+    Arrays stay in the array package that owns ``x0``. A problem Jacobian is
+    interpreted as parameter-major, with shape ``(K, N, M)``. When it is
+    absent, or finite differences are requested, the solver allocates the
+    perturbation workspace in the same backend as ``x0``.
+
+    Under the default ``"v0.2"`` policy, built-in FP32 normal equations
+    accumulate in FP64 and are rounded back. Scaling, convergence checks
+    and damped solves widen those stored values before returning FP32 steps.
+    Model evaluations, solver state, covariance and rank thresholds retain
+    their input precision. A supplied normal-equations callback controls
+    its own accumulation precision.
+
+    ``LMConfig(solver_version="v0.1.3")`` selects the release's original
+    scaling, stopping, FP32 intermediates, rank and dense covariance policy.
+    It does not retain a covariance factor for derived uncertainties.
+    """
+
+    if config is not None and config.solver_version == "v0.1.3":
+        from ._solver_v013 import solve
+
+        return solve(problem, x0, config=config)
+
+    ap, dtype, settings, x, indices, residuals, (k, n, m) = _prepare_solver(
+        problem, x0, config
+    )
 
     status = ap.full(k, int(LMStatus.ACTIVE), dtype=np.int8)
     evaluations = ap.ones(k, dtype=np.int32)

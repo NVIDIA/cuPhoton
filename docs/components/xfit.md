@@ -376,6 +376,8 @@ Use `--solver-version v0.1.3` in the CLI; `--solver-version v0.2` selects the
 default explicitly. The option is preserved across local, Dragon, and MPI
 execution. New result summaries and effective configurations record the
 selected version. Older artifacts without the field do not identify it.
+The xScan device pipeline uses the default `v0.2` policy; its
+`DeviceXFitPipelineConfig` does not expose solver-version selection.
 
 ## Derived quantities and their uncertainties
 
@@ -394,13 +396,13 @@ q.lobe_flux, q.lobe_flux_error
 
 Each uncertainty is `sqrt(g C g^T)`, with `C` the fit covariance and `g`
 the quantity's derivatives with respect to the fitted parameters. Live fit
-results retain `covariance_factor`, a matrix `F` with `C = F F^T`.
+results using `v0.2` retain `covariance_factor`, a matrix `F` with `C = F F^T`.
 The implementation computes `g F` before taking its squared norm, preserving
 small uncertainties that rounding large, correlated covariance entries can
-otherwise erase. Results constructed without the optional factor use the
-dense covariance. The existing v1 fit artifacts store only the dense
-covariance; calculate derived uncertainties from the live result to use
-the factor.
+otherwise erase. The `v0.1.3` policy and results constructed without the
+optional factor use the dense covariance. The existing v1 fit artifacts
+store only the dense covariance; calculate derived uncertainties from the
+live result to use the factor.
 
 The covariance's cross terms are needed: amplitude and widths are
 anticorrelated, so combining `standard_errors` as if independent overstates

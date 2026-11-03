@@ -151,9 +151,25 @@ def test_gaussian_fit_preserves_scientific_outputs(
         initial=initial,
         variance=np.full(images.shape, 0.5, dtype=dtype),
         mode=mode,
-        config=LMConfig(solver_version=solver_version),
+        config=LMConfig(solver_version=solver_version, x_tol=0.3, f_tol=0),
     )
     expected = fit_dipoles(images, backend="cupy", **options)
+    other_version = "v0.2" if solver_version == "v0.1.3" else "v0.1.3"
+    other = fit_dipoles(
+        images,
+        backend="cupy",
+        **{
+            **options,
+            "config": LMConfig(
+                solver_version=other_version, x_tol=0.3, f_tol=0
+            ),
+        },
+    )
+    # The fixture must expose a policy switch before checking backend parity.
+    assert np.all(expected.evaluations != other.evaluations)
+    if solver_version == "v0.1.3":
+        assert expected.status.tolist() == ["converged_x_tol"] * 2
+        assert expected.evaluations.tolist() == [2, 2]
     actual = fit_dipoles(images, backend=_BACKEND, **options)
 
     assert actual.backend == _BACKEND

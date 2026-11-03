@@ -26,7 +26,7 @@ from .solver import (
     _call_residual,
     _finalize_lm,
     _finite_difference_jacobian,
-    _settings,
+    _prepare_solver,
 )
 
 
@@ -44,32 +44,9 @@ def solve(
     perturbation workspace in the same backend as ``x0``.
     """
 
-    if not hasattr(x0, "ndim") or x0.ndim != 2:
-        raise ValueError("x0 must have shape (batch, parameters)")
-    dtype = np.dtype(x0.dtype)
-    if dtype.kind != "f":
-        raise TypeError("x0 must have a floating-point dtype")
-    module_name = type(x0).__module__.split(".", maxsplit=1)[0]
-    if module_name == "cupy":
-        import cupy as ap
-    else:
-        ap = np
-        x0 = np.asarray(x0)
-
-    k, n = x0.shape
-    if k < 1 or n < 1:
-        raise ValueError("x0 batch and parameter dimensions must be nonzero")
-    settings = _settings(LMConfig() if config is None else config, dtype, n)
-    x = x0.copy()
-    indices = ap.arange(k, dtype=np.int64)
-    residuals = _call_residual(problem, x, indices)
-    if residuals.ndim != 2 or residuals.shape[0] != k:
-        raise ValueError("residual must return shape (batch, observations)")
-    if np.dtype(residuals.dtype).kind != "f":
-        raise TypeError("residual arrays must have a floating-point dtype")
-    m = residuals.shape[1]
-    if m < 1:
-        raise ValueError("the residual must contain at least one observation")
+    ap, dtype, settings, x, indices, residuals, (k, n, m) = _prepare_solver(
+        problem, x0, config
+    )
 
     status = ap.full(k, int(LMStatus.ACTIVE), dtype=np.int8)
     evaluations = ap.ones(k, dtype=np.int32)

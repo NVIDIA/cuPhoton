@@ -30,6 +30,7 @@ from .solver import (
     LMConfig,
     LMStatus,
     SolverVersion,
+    _validate_solver_version,
     batched_levenberg_marquardt,
 )
 
@@ -48,8 +49,9 @@ class DipoleFitResult:
     parameter units. Propagate a derived quantity's gradient g through F
     before squaring: its local variance is the squared norm of g F. This
     preserves small uncertainties that cancellation in the dense covariance
-    can erase. The factor is NaN for invalid rows and may be None in results
-    constructed by callers. Its columns are not uniquely determined.
+    can erase. The factor is NaN for invalid rows. It is None under the
+    ``"v0.1.3"`` policy and may be None in results constructed by callers.
+    Its columns are not uniquely determined.
     The v1 fit artifacts store the dense covariance only; consume the factor
     from the live result when calculating derived uncertainties.
     """
@@ -119,7 +121,7 @@ class DeviceDipoleFitResult:
     original result before transforming xScan features.
 
     ``covariance_factor`` has the same meaning as in :class:`DipoleFitResult`
-    and remains on the device alongside the dense covariance.
+    and, when present, remains on the device alongside the dense covariance.
     """
 
     parameters: Any
@@ -162,8 +164,7 @@ class DeviceDipoleFitResult:
     solver_version: SolverVersion = "v0.2"
 
     def __post_init__(self) -> None:
-        if self.solver_version not in {"v0.1.3", "v0.2"}:
-            raise ValueError("solver_version must be 'v0.1.3' or 'v0.2'")
+        _validate_solver_version(self.solver_version)
         if self.backend not in {
             "cupy",
             "cutile",
@@ -1151,8 +1152,6 @@ def _validate_execution_options(
     backend: str,
     config: LMConfig | None,
 ) -> None:
-    if config is not None and config.solver_version not in {"v0.1.3", "v0.2"}:
-        raise ValueError("solver_version must be 'v0.1.3' or 'v0.2'")
     if (
         backend in {"native", "numba-cuda-mlir"}
         and isinstance(model, GaussianDipoleModel)
