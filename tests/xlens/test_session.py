@@ -332,11 +332,11 @@ def test_idle_polling_does_not_copy_or_rewrite_full_state(
 
 
 @pytest.mark.parametrize(
-    ("method", "path", "headers", "body", "expected"),
+    ("method", "path", "headers", "body", "expected", "message"),
     [
-        ("GET", "/", {"Host": "attacker.example"}, None, 421),
-        ("GET", "/api/state", {"Host": "attacker.example"}, None, 421),
-        ("GET", "/health", {"Host": "user@localhost"}, None, 421),
+        ("GET", "/", {"Host": "attacker.example"}, None, 421, None),
+        ("GET", "/api/state", {"Host": "attacker.example"}, None, 421, None),
+        ("GET", "/health", {"Host": "user@localhost"}, None, 421, None),
         (
             "POST",
             "/api/ask",
@@ -347,16 +347,52 @@ def test_idle_polling_does_not_copy_or_rewrite_full_state(
             },
             b"{}",
             421,
+            None,
         ),
-        ("POST", "/api/ask", {"Sec-Fetch-Site": "cross-site"}, b"{}", 403),
-        ("POST", "/api/ask", {"Sec-Fetch-Site": "same-site"}, b"{}", 403),
-        ("POST", "/api/ask", {"Content-Type": "text/plain"}, b"{}", 415),
-        ("POST", "/api/ask", {}, b" " * 16385, 400),
-        ("POST", "/api/ask", {}, b'{"unknown":true}', 400),
+        (
+            "POST",
+            "/api/ask",
+            {"Sec-Fetch-Site": "cross-site"},
+            b"{}",
+            403,
+            None,
+        ),
+        (
+            "POST",
+            "/api/ask",
+            {"Sec-Fetch-Site": "same-site"},
+            b"{}",
+            403,
+            None,
+        ),
+        (
+            "POST",
+            "/api/ask",
+            {"Content-Type": "text/plain"},
+            b"{}",
+            415,
+            None,
+        ),
+        (
+            "POST",
+            "/api/ask",
+            {},
+            b" " * 16385,
+            400,
+            "request must contain at most 16384 bytes",
+        ),
+        (
+            "POST",
+            "/api/ask",
+            {},
+            b'{"unknown":true}',
+            400,
+            "unsupported question fields",
+        ),
     ],
 )
 def test_http_request_guards(
-    tmp_path, controlled, method, path, headers, body, expected
+    tmp_path, controlled, method, path, headers, body, expected, message
 ):
     import http.client
 
@@ -378,7 +414,9 @@ def test_http_request_guards(
         )
         response = connection.getresponse()
         assert response.status == expected
-        response.read()
+        payload = response.read()
+        if message is not None:
+            assert json.loads(payload) == {"error": message}
         assert not controlled["calls"]
         assert not reports(monitor)
     finally:

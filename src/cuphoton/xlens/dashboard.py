@@ -140,7 +140,9 @@ class Dashboard:
                 f"{fragment}</section>"
             )
         resources = files("cuphoton.xlens").joinpath("assets")
-        template = resources.joinpath("dashboard.html").read_text()
+        template = resources.joinpath("dashboard.html").read_text(
+            encoding="utf-8"
+        )
         if display["ui"].get("live"):
             template = template.replace(
                 "connect-src 'none'", "connect-src 'self'"
@@ -151,13 +153,17 @@ class Dashboard:
             .replace(">", "\\u003e")
             .replace("&", "\\u0026")
         )
-        script = resources.joinpath("dashboard.js").read_text()
+        script = resources.joinpath("dashboard.js").read_text(
+            encoding="utf-8"
+        )
         script_hash = base64.b64encode(
             hashlib.sha256(script.encode()).digest()
         ).decode()
         values = {
             "__TITLE__": html.escape(self.title),
-            "__STYLE__": resources.joinpath("dashboard.css").read_text(),
+            "__STYLE__": resources.joinpath("dashboard.css").read_text(
+                encoding="utf-8"
+            ),
             "__PANELS__": "".join(panels),
             "__DATA__": data,
             "__SCRIPT__": script,
@@ -171,7 +177,7 @@ class Dashboard:
         """Write a self-contained HTML snapshot, including domain views."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.render())
+        path.write_text(self.render(), encoding="utf-8")
         return path
 
 

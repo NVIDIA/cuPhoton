@@ -192,14 +192,35 @@ def test_unchanged_collector_and_report_do_not_rewrite_state(
     assert monitor.snapshot()["reports"][0]["evidence"] == {"window-a": 1}
 
 
-def test_dashboard_csp_hash_matches_embedded_script(tmp_path):
+@pytest.mark.parametrize("default_encoding", ["utf-8", "latin-1"])
+def test_dashboard_csp_hash_matches_embedded_script(
+    tmp_path, monkeypatch, default_encoding
+):
     import base64
     import hashlib
+    import io
     import re
+    from importlib.resources import files
 
     monitor = Monitor(tmp_path / "run", run_id="csp")
-    page = Dashboard(monitor).render()
+    monkeypatch.setattr(
+        io, "text_encoding", lambda encoding, *_: encoding or default_encoding
+    )
+    dashboard = Dashboard(
+        monitor, title="Measurements \N{GREEK CAPITAL LETTER DELTA}"
+    )
+    page = (
+        dashboard.export(tmp_path / "report.html")
+        .read_bytes()
+        .decode("utf-8")
+    )
+    assert page == dashboard.render()
+    assert "Measurements \N{GREEK CAPITAL LETTER DELTA}" in page
+    assert "Copyright \N{COPYRIGHT SIGN}" in page
     script = re.search(r"<script>(.*?)</script>", page, re.DOTALL).group(1)
+    assert script == files("cuphoton.xlens").joinpath(
+        "assets/dashboard.js"
+    ).read_bytes().decode("utf-8")
     digest = base64.b64encode(
         hashlib.sha256(script.encode()).digest()
     ).decode()
