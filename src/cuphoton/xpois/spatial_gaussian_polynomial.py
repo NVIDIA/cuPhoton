@@ -261,8 +261,8 @@ class SpatialGaussianPolynomialKernelFitResult:
     ``backend`` names the resolved numerical backend. ``design_chunk_size``
     records the row-batch cap used for the block QR accumulation,
     matched-image reconstruction, and source-variance propagation; the CPU
-    path uses a fixed cap, the CuPy path derives it from free device memory,
-    and the final batch may be smaller.
+    path uses a fixed cap, the CuPy and native paths derive it from free
+    device memory, and the final batch may be smaller.
     """
 
     matched: np.ndarray
@@ -445,11 +445,20 @@ def solve_spatial_gaussian_polynomial_kernel(
     backend
         Numerical backend. ``auto`` uses CuPy when a CUDA device is available
         and otherwise uses NumPy. Explicit ``cupy`` requests fail rather than
-        silently falling back to the CPU.
+        silently falling back to the CPU. ``native`` explicitly selects the
+        ahead-of-time CUDA imaging extension for basis projection, block QR,
+        reconstruction and source-variance propagation. Its small reduced
+        system is conditioned and solved on the CPU. ``auto`` never selects
+        this optional backend.
     """
 
     resolved_config = config or SpatialGaussianPolynomialKernelConfig()
-    resolved_backend = _resolve_spatial_backend(backend)
+    backend = str(backend).strip().lower()
+    if backend not in {"auto", "cpu", "cupy", "native"}:
+        raise ValueError("backend must be one of: auto, cpu, cupy, native")
+    resolved_backend = (
+        "native" if backend == "native" else _resolve_spatial_backend(backend)
+    )
     source_arr = np.asarray(source, dtype=np.float64)
     target_arr = np.asarray(target, dtype=np.float64)
     _validate_image_pair(source_arr, target_arr)
@@ -524,7 +533,30 @@ def solve_spatial_gaussian_polynomial_kernel(
         diagnostic_valid_mask = valid_output_mask & source_variance_valid_mask
 
     propagated_source_variance: np.ndarray | None = None
-    if resolved_backend == "cpu":
+    if resolved_backend == "native":
+        from ._native_spatial import solve_native_spatial
+
+        (
+            coefficients,
+            matched,
+            propagated_source_variance,
+            condition_number,
+            design_chunk_size,
+        ) = solve_native_spatial(
+            source_model,
+            target_model,
+            variance_arr,
+            basis_kernels,
+            resolved_fit.sample_indices,
+            resolved_fit.relative_precision,
+            resolved_spatial_domain,
+            resolved_config,
+            valid_output_indices,
+            source_variance_arr,
+            diagnostic_valid_mask,
+        )
+        row_count = int(resolved_fit.sample_indices.size)
+    elif resolved_backend == "cpu":
         design_chunk_size = _DESIGN_CHUNK_SIZE
         upper, transformed_rhs, row_count = _accumulate_qr(
             source_model,

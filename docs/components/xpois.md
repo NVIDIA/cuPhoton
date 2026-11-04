@@ -4,8 +4,9 @@
 then subtracts a matched reference from a target image. It implements
 Alard-Lupton-style Gaussian-polynomial bases for constant two-dimensional
 kernels, a global separable alternating solver, and a spatially varying
-separable ALS model. An experimental research API jointly fits a spatial
-Gaussian-polynomial kernel model. Its CLI group is `cuphoton xpois`.
+separable ALS model. An experimental spatial Gaussian-polynomial model is
+available through Python and the fitting CLI. Its CLI group is
+`cuphoton xpois`.
 
 ## Install and smoke test
 
@@ -25,7 +26,9 @@ CuPy, then Numba-CUDA, then CPU; cuTile remains explicit and experimental. For
 spatial ALS, `auto` prefers CuPy when it has a usable CUDA device and otherwise
 uses the CPU reference implementation. Explicit `cupy` selection requires a
 usable CuPy runtime and raises an error when that requirement is unmet. The
-spatial Gaussian-polynomial research API follows the spatial-ALS rule.
+spatial Gaussian-polynomial model follows the same automatic selection rule
+and also supports explicit `native` execution. Automatic selection never
+chooses its native backend.
 
 For real images and constant two-dimensional kernels, explicit
 `backend="native"` uses the [native imaging extension](../packaging.md)
@@ -50,6 +53,10 @@ A successful run persists `matched.npy`, `residual.npy`, `fit_mask.npy`, and
 `background.npy` plus `summary.json`. Constant-kernel fits save `kernel.npy`.
 Spatial ALS fits instead save the line bases and coefficient fields plus
 `kernel_center.npy`, a clearly named preview evaluated at the image center.
+Spatial Gaussian-polynomial fits save the two-dimensional basis kernels,
+shape, photometric and background coefficients, the photometric-scale image,
+and `kernel_center.npy`. Their summary records the Chebyshev terms and parent
+coordinate domain needed to reconstruct a kernel at another position.
 Auto-stamp fitting also saves the selected-region metadata.
 
 ## FITS reading
@@ -101,6 +108,19 @@ uv run cuphoton xpois subtract \
   --flux-conserve \
   --backend cupy \
   --output-dir /path/to/runs
+
+uv run cuphoton xpois subtract \
+  --reference /path/to/reference.fits \
+  --target /path/to/target.fits \
+  --variance /path/to/target-variance.fits \
+  --fit-mask /path/to/calibration-mask.npy \
+  --solver spatial-gaussian-polynomial \
+  --basis-sigmas 1.1,2.2 --basis-degrees 2,1 \
+  --kernel-height 15 --kernel-width 15 \
+  --spatial-degree 2 --photometric-degree 0 --background-degree 1 \
+  --condition-limit 1e12 \
+  --backend native \
+  --output-dir /path/to/runs
 ```
 
 `fit-kernel` and `subtract` share the same solve but use different workflow
@@ -108,15 +128,27 @@ names. `--solver constant` remains the default. Use `--fit-mask` for a
 reviewed binary NPY selection, or `--auto-stamp-mask` with an odd stamp size
 for compact-source selection.
 
+`--solver spatial-gaussian-polynomial` is available for `fit-kernel` and
+`subtract`. It independently controls the kernel-shape field with
+`--spatial-degree` (default 2), the kernel sum with `--photometric-degree`
+(default 0), and the differential background with `--background-degree`
+(default 0). `--condition-limit` defaults to `1e12`. This model always uses
+zero-sum shape corrections and a separately fitted photometric field, so
+`--flux-conserve` and the `--als-*` controls are rejected. Its supported
+backends are `cpu`, `cupy`, `native` and `auto`. Batch execution and
+`benchmark-backends` support the constant and spatial-ALS models.
+
 Spatial ALS runs that reach the sweep budget persist their artifacts and
 exit with status 0. The command prints a warning, and `summary.json` and
 `evaluation.json` record `converged: false`. Raise `--als-iterations` or enable
 `--flux-conserve`, then verify convergence before accepting the fit.
 
-Optional polynomial backgrounds and a flux-conserving basis rewrite are
-available from the CLI. Inspect the fitted kernel sum (`kernel_sum_center`
-for spatial ALS), fit-pixel count, chi-square, residual distribution, and
-source-scale residuals before accepting a subtraction.
+Inspect the fitted kernel sum (`kernel_sum_center` for either spatial model),
+fit-pixel count, residual distribution and source-scale residuals before
+accepting a subtraction. Gaussian-polynomial summaries record
+`fit_objective` and `fit_weighting`: supplying `--variance` selects
+target-variance weights, and omitting it selects uniform weights. They do
+not label the objective as `chi2` or report ALS convergence iterations.
 
 ## Compare and review
 
@@ -271,11 +303,11 @@ schedule those fits across complete image-pair items, but do not shard one fit
 across GPUs. Keep single-fit solver time separate from orchestration and I/O
 when comparing executors.
 
-## Spatial Gaussian-polynomial research API
+## Spatial Gaussian-polynomial model
 
-`solve_spatial_gaussian_polynomial_kernel` is an experimental CPU and CuPy
-implementation of a spatial Gaussian-polynomial kernel model. Its fixed
-Gaussian-polynomial basis, built from isotropic Gaussian envelopes,
+`solve_spatial_gaussian_polynomial_kernel` is an experimental CPU, CuPy and
+native CUDA implementation of a spatial Gaussian-polynomial kernel model.
+Its fixed Gaussian-polynomial basis, built from isotropic Gaussian envelopes,
 represents nonseparable kernel modes. The ALS outer-product family also
 represents kernels outside this fixed basis. The model follows the
 spatial-kernel lineage of
@@ -286,16 +318,22 @@ array, coordinate, and weighting contracts described below. Import this
 experimental API from its defining submodule:
 
 ```python
+from cuphoton.xpois import GaussianBasisComponent
 from cuphoton.xpois.spatial_gaussian_polynomial import (
     SpatialKernelDomain,
     SpatialGaussianPolynomialKernelConfig,
     solve_spatial_gaussian_polynomial_kernel,
 )
 
+components = (
+    GaussianBasisComponent(sigma=1.1, degree=2),
+    GaussianBasisComponent(sigma=2.2, degree=1),
+)
 fit = solve_spatial_gaussian_polynomial_kernel(
     reference,
     target,
     components,
+    kernel_shape=(15, 15),
     variance=target_variance,
     source_variance=reference_variance,
     fit_mask=fit_mask,
@@ -307,8 +345,9 @@ fit = solve_spatial_gaussian_polynomial_kernel(
         shape_degree=2,
         photometric_degree=0,
         background_degree=1,
+        condition_limit=1e12,
     ),
-    backend="cupy",
+    backend="native",
 )
 local_kernel = fit.kernel_at_local(local_y, local_x)
 parent_kernel = fit.kernel_at_parent(detector_y, detector_x)
@@ -334,7 +373,7 @@ parameters.
 The model fits all fixed two-dimensional Gaussian-polynomial basis terms
 jointly in one convex weighted linear solve. The first, unit-sum basis carries
 the photometric-scale field; every remaining basis has zero sum and describes
-kernel shape, preserving the kernel sum during shape variation. Both
+kernel shape, preserving the kernel sum during shape variation. All
 backends use the same unregularized block QR reduction and raise an error for
 ill-conditioned fits. Before the solve, a separate check rejects basis
 kernels or design columns that cancel to rounding noise, such as a duplicated
@@ -352,11 +391,38 @@ y1, x0, x1)`, this means `y0 <= y <= y1 - 1` and `x0 <= x <= x1 - 1`,
 including fractional positions between centers. For a cutout it
 extrapolates the fitted fields beyond the array within these bounds.
 
-Access this experimental model through the Python API. The CPU path is the
-same-model numerical reference; `backend="cupy"` executes the same
-two-dimensional basis contraction and FP64 QR solve on one GPU, while
-`backend="auto"` chooses CuPy when a usable CUDA device is available and CPU
-otherwise.
+The CPU path is the same-model numerical reference. `backend="cupy"`
+executes the two-dimensional basis contraction and FP64 block QR on one GPU.
+Explicit `backend="native"` uses the
+[native imaging extension](../packaging.md) for basis projection, bounded
+FP64 block QR, matched-image reconstruction and source-variance propagation.
+It transfers the small reduced QR factor to the shared CPU condition check
+and triangular solve. Row chunks bound the design-matrix scratch storage;
+the full design matrix is never materialized. CuPy still owns device
+allocations and transfers, so native execution requires both a usable CuPy
+CUDA 13 runtime and an extension built with spatial fitting support. Missing
+native support raises an error. Inputs and returned arrays remain NumPy host
+arrays. `backend="auto"` chooses CuPy when a usable CUDA device is available
+and CPU otherwise.
+
+Native library handles and scratch buffers are reused per host thread and
+CUDA device. Scratch retains its largest requested capacity until that thread
+exits.
+
+The native backend supports images and basis arrays containing at most
+2,147,483,647 elements each. It also checks that each QR work chunk fits
+within its 32-bit indexing limits and rejects dimensions beyond those limits.
+
+CLI artifacts preserve the model in `basis_kernels.npy`,
+`shape_coefficients.npy`, `photometric_coefficients.npy` and
+`background_coefficients.npy`. The `spatial_gaussian_polynomial` summary
+contains each field's ordered `(x_degree, y_degree)` Chebyshev terms and
+`spatial_domain`. Evaluate those fields in that domain and combine the
+unit-sum basis with the photometric field and the remaining bases with their
+shape fields to reconstruct the local kernel. `photometric_scale.npy` stores
+the local kernel sum at each image pixel, while `kernel_center.npy` previews one
+position. With a CLI crop, the domain retains the original full-image bounds
+and the crop's origin; coefficients keep their parent-pixel interpretation.
 
 `variance` supplies target-only weights for the fit objective. When
 `source_variance` is also supplied, the result propagates independent source
@@ -368,6 +434,13 @@ missing. They describe marginal pixel variance for a fixed fitted model. The
 residual retains cross-pixel correlations; a proper-difference or calibrated
 detection-significance analysis requires additional treatment of those
 correlations and fit uncertainty.
+
+Source variance is currently a Python-only input. CLI variance diagnostics
+use target variance alone and save `marginal_residual_variance.npy` and
+`marginal_standardized_residual.npy` when it is supplied. Scientific model
+selection requires representative held-out measurements of subtraction
+quality, PSF adequacy and residual structure; backend parity establishes the
+numerical implementation of the selected model.
 
 ## Fixed-kernel marginal noise diagnostics
 

@@ -49,7 +49,9 @@ def test_help_for_fit_kernel_command(capsys) -> None:
     assert "--backend" in captured.out
     assert "--solver" in captured.out
     unwrapped_help = " ".join(captured.out.split())
-    assert "Kernel model to fit: constant or spatial-als." in unwrapped_help
+    assert "spatial-gaussian-polynomial" in unwrapped_help.replace("- ", "-")
+    assert "--photometric-degree" in captured.out
+    assert "--condition-limit" in captured.out
     assert "spatial-als auto tries cupy, then cpu." in unwrapped_help
     assert "--spatial-degree" in captured.out
     assert "--als-iterations" in captured.out
@@ -74,6 +76,8 @@ def test_help_for_benchmark_backends_command_case(capsys) -> None:
     assert "--als-iterations" in captured.out
     assert "--als-tolerance" in captured.out
     assert "--als-regularization" in captured.out
+    assert "spatial-gaussian-polynomial" not in captured.out
+    assert "--photometric-degree" not in captured.out
 
 
 def test_help_for_fit_batch_command(capsys) -> None:
@@ -106,6 +110,8 @@ def test_help_for_fit_batch_command(capsys) -> None:
     assert "--als-iterations" in captured.out
     assert "--als-tolerance" in captured.out
     assert "--als-regularization" in captured.out
+    assert "spatial-gaussian-polynomial" not in captured.out
+    assert "--photometric-degree" not in captured.out
 
 
 def test_fit_kernel_forwards_spatial_solver_options(
@@ -277,6 +283,125 @@ def _write_cli_spatial_inputs(tmp_path) -> tuple[str, str]:
     np.save(reference_path, source, allow_pickle=False)
     np.save(target_path, target, allow_pickle=False)
     return str(reference_path), str(target_path)
+
+
+@pytest.mark.parametrize("command", ["fit-kernel", "subtract"])
+def test_cli_spatial_gaussian_polynomial_fits_photometric_field(
+    tmp_path, capsys, command
+) -> None:
+    reference, target_path = _write_cli_spatial_inputs(tmp_path)
+    target = np.load(target_path)
+    scale = 1.0 + 0.2 * np.linspace(-1.0, 1.0, target.shape[1])[None, :]
+    target = (target - 0.1) * scale + 0.3
+    np.save(target_path, target, allow_pickle=False)
+
+    rc = _run_cli(
+        [
+            command,
+            "--reference",
+            reference,
+            "--target",
+            target_path,
+            "--solver",
+            "spatial-gaussian-polynomial",
+            "--backend",
+            "cpu",
+            "--basis-sigmas",
+            "1.5",
+            "--basis-degrees",
+            "0",
+            "--spatial-degree",
+            "0",
+            "--photometric-degree",
+            "1",
+            "--condition-limit",
+            "1000000",
+            "--no-review",
+            "--output-dir",
+            str(tmp_path / "runs"),
+            "--name",
+            "spatial-gp",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    summary = json.loads(captured.out)
+    assert summary["workflow"] == command.replace("-", "_")
+    assert summary["backend"] == "cpu"
+    assert summary["fit_weighting"] == "uniform"
+    assert summary["fit_objective"] < 1e-20
+    assert "chi2" not in summary
+    assert "converged" not in summary
+    model = summary["spatial_gaussian_polynomial"]
+    assert model["photometric_degree"] == 1
+    assert model["condition_limit"] == 1e6
+    run = tmp_path / "runs" / "spatial-gp"
+    saved_scale = np.load(run / summary["saved"]["photometric_scale"])
+    np.testing.assert_allclose(
+        saved_scale, np.broadcast_to(scale, target.shape)
+    )
+    residual = np.load(run / summary["saved"]["residual"])
+    np.testing.assert_allclose(residual[7:-7, 7:-7], 0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("solver", "options", "message"),
+    [
+        (
+            "spatial-gaussian-polynomial",
+            ["--als-iterations", "3"],
+            "ALS controls",
+        ),
+        (
+            "spatial-gaussian-polynomial",
+            ["--als-tolerance", "0"],
+            "ALS controls",
+        ),
+        (
+            "spatial-gaussian-polynomial",
+            ["--als-regularization", "0"],
+            "ALS controls",
+        ),
+        (
+            "spatial-gaussian-polynomial",
+            ["--flux-conserve"],
+            "photometric field",
+        ),
+        (
+            "spatial-gaussian-polynomial",
+            ["--backend", "numba-cuda"],
+            "supports only",
+        ),
+        (
+            "spatial-gaussian-polynomial",
+            ["--condition-limit", "1"],
+            "greater than one",
+        ),
+        ("constant", ["--photometric-degree", "0"], "require solver="),
+        ("spatial-als", ["--condition-limit", "1000"], "require solver="),
+    ],
+)
+def test_cli_rejects_incompatible_gaussian_polynomial_controls(
+    tmp_path, capsys, solver, options, message
+) -> None:
+    rc = _run_cli(
+        [
+            "fit-kernel",
+            "--reference",
+            str(tmp_path / "missing-reference.npy"),
+            "--target",
+            str(tmp_path / "missing-target.npy"),
+            "--solver",
+            solver,
+            "--output-dir",
+            str(tmp_path / "runs"),
+            *options,
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc != 0
+    assert message in captured.err
+    assert not (tmp_path / "runs").exists()
 
 
 def test_fit_kernel_runs_spatial_solver_with_cli_defaults(

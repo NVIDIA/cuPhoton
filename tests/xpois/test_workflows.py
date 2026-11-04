@@ -231,6 +231,127 @@ def test_run_constant_kernel_fit_rejects_spatial_options_for_constant(
     assert not (tmp_path / "runs").exists()
 
 
+@pytest.mark.parametrize("weighted", [False, True])
+def test_spatial_gaussian_polynomial_crop_preserves_model_and_artifacts(
+    tmp_path: Path,
+    weighted: bool,
+) -> None:
+    from scipy.signal import convolve2d
+
+    from cuphoton.xpois.ois import build_gaussian_polynomial_basis
+
+    rng = np.random.default_rng(812)
+    source = rng.normal(size=(41, 43))
+    yy, xx = np.meshgrid(
+        np.linspace(-1.0, 1.0, source.shape[0]),
+        np.linspace(-1.0, 1.0, source.shape[1]),
+        indexing="ij",
+    )
+    components = [GaussianBasisComponent(sigma=0.9, degree=2)]
+    basis, _ = build_gaussian_polynomial_basis(
+        (5, 5),
+        components,
+        flux_conserve=True,
+    )
+    scale = 1.0 + 0.1 * xx - 0.05 * yy
+    shape_fields = np.stack(
+        [
+            0.02 * (index + 1) * xx - 0.01 * yy
+            for index in range(len(basis) - 1)
+        ]
+    )
+    target = scale * convolve2d(source, basis[0], mode="same")
+    for kernel, field in zip(basis[1:], shape_fields, strict=True):
+        target += field * convolve2d(source, kernel, mode="same")
+    target += 0.2 + 0.03 * yy
+    reference_path = tmp_path / "reference.npy"
+    target_path = tmp_path / "target.npy"
+    fit_mask_path = tmp_path / "fit-mask.npy"
+    fit_mask = np.ones(source.shape, dtype=bool)
+    fit_mask[15:18, 17:21] = False
+    np.save(reference_path, source)
+    np.save(target_path, target)
+    np.save(fit_mask_path, fit_mask)
+    variance_path = None
+    variance = 2.0 + 0.2 * xx
+    if weighted:
+        variance_path = tmp_path / "variance.npy"
+        np.save(variance_path, variance)
+
+    result = workflows.run_constant_kernel_fit(
+        reference_path=reference_path,
+        target_path=target_path,
+        reference_hdu=None,
+        target_hdu=None,
+        output_root=tmp_path / "runs",
+        name="spatial-gp",
+        kernel_shape=(5, 5),
+        components=components,
+        variance_path=variance_path,
+        fit_mask_path=fit_mask_path,
+        background_degree=1,
+        flux_conserve=False,
+        solver="spatial-gaussian-polynomial",
+        spatial_degree=1,
+        photometric_degree=1,
+        backend="cpu",
+        review=False,
+        crop_y0=6,
+        crop_x0=7,
+        crop_height=27,
+        crop_width=29,
+    )
+    summary = result.summary
+    model = summary["spatial_gaussian_polynomial"]
+    assert model["spatial_domain"] == {
+        "array_origin_yx": [6, 7],
+        "normalization_bbox": [0, 41, 0, 43],
+    }
+    assert summary["fit_weighting"] == (
+        "target_variance" if weighted else "uniform"
+    )
+    assert "chi2" not in summary
+    assert "flux_conserve" not in summary
+    arrays = {
+        name: np.load(result.run_dir / path)
+        for name, path in summary["saved"].items()
+        if path.endswith(".npy")
+    }
+    np.testing.assert_allclose(
+        arrays["matched"][2:-2, 2:-2],
+        target[8:31, 9:34],
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        arrays["photometric_scale"],
+        scale[6:33, 7:36],
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(arrays["basis_kernels"], basis)
+    assert arrays["shape_coefficients"].shape == (len(basis) - 1, 3)
+    assert arrays["photometric_coefficients"].shape == (3,)
+    assert arrays["background_coefficients"].shape == (3,)
+    assert not arrays["fit_mask"][9:12, 10:14].any()
+    residual = arrays["residual"][arrays["fit_mask"]]
+    objective = np.square(residual)
+    if weighted:
+        objective /= variance[6:33, 7:36][arrays["fit_mask"]]
+        np.testing.assert_allclose(
+            arrays["marginal_residual_variance"][2:-2, 2:-2],
+            variance[8:31, 9:34],
+        )
+    else:
+        assert "marginal_residual_variance" not in arrays
+    assert summary["fit_objective"] == pytest.approx(
+        float(objective.sum()),
+        rel=1e-12,
+        abs=1e-30,
+    )
+    evaluation = workflows.evaluate_subtraction_run(result.run_dir)
+    assert evaluation["fit_weighting"] == summary["fit_weighting"]
+    assert "converged" not in evaluation
+
+
 def test_run_spatial_als_resolves_unset_options_from_config_defaults(
     tmp_path: Path,
 ) -> None:

@@ -99,11 +99,11 @@ combined with a fit mask or automatic stamp selection. Duplicate positions are
 retained and therefore increase that pixel's weight. Every explicit position
 must reference a finite target, variance, and source footprint; an invalid
 explicit position raises an error for the selection. Mask and default
-selection use valid pixels. Chebyshev coordinates are normalized over the
-fitted image
-axes recorded in the summary's `image_shape`, which is the crop when a
-workflow crop is applied, so saved coefficient fields and `kernel_at` use crop
-coordinates. These positions and all image, variance, mask, registration, PSF,
+selection use valid pixels. For spatial ALS, Chebyshev coordinates are
+normalized over the fitted image axes recorded in the summary's `image_shape`,
+which is the crop when a workflow crop is applied, so saved coefficient fields
+and `kernel_at` use crop coordinates. These positions and all image, variance,
+mask, registration, PSF,
 and instrument-calibration inputs come from the calling pipeline.
 
 Explicit-position summaries distinguish row count, unique pixel count, and
@@ -138,6 +138,20 @@ photometric scale comes from the sum of `kernel_at(y, x)`. The center kernel
 sum is recorded in either case. Spatial ALS `dof` is the nominal fit-row
 count minus parameter count. Estimating effective degrees of freedom for
 this regularized nonlinear fit requires a separate statistical analysis.
+
+Spatial Gaussian-polynomial runs save `basis_kernels.npy`,
+`shape_coefficients.npy`, `photometric_coefficients.npy`, and
+`background_coefficients.npy`. The `spatial_gaussian_polynomial` section of
+`summary.json` records the ordered `(x_degree, y_degree)` Chebyshev terms for
+each field and its `spatial_domain`: the array's parent origin and the
+half-open parent bounding box used for normalization. With a CLI crop, this
+box retains the original full-image bounds; the coefficients use parent
+coordinates. `kernel_center.npy` previews the kernel at the crop's center,
+and `photometric_scale.npy` contains the local kernel sum at each image pixel.
+When target variance is supplied, `marginal_residual_variance.npy` and
+`marginal_standardized_residual.npy` contain the target-only marginal noise
+diagnostics. See the [model description](components/xpois.md#spatial-gaussian-polynomial-model)
+for reconstruction and uncertainty conventions.
 
 Auto-stamp selection also writes metadata describing the selected regions.
 

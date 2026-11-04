@@ -287,6 +287,7 @@ jobs:
           --junitxml="${RUNNER_TEMP}/xfit-native-gpu.xml"
           tests/xfit/test_native.py
           tests/xpois/test_native_constant_kernel.py
+          tests/xpois/test_native_spatial_gaussian_polynomial.py
           tests/xpois/test_native_selection.py
           tests/xpois/test_native_workspace.py
           tests/xrep/test_native_backend.py
