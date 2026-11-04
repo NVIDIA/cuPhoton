@@ -182,7 +182,7 @@ def prepare_dataset(
 
     torch.cuda.set_device(0)
     cp.cuda.Device(0).use()
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     image_rows: dict[str, list[np.ndarray]] = {
         key: [] for key in ("search", "template", "difference")
     }

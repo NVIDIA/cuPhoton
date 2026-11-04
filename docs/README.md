@@ -29,7 +29,7 @@ provides installation notes for published versions.
   requires a CUDA 13-capable NVIDIA GPU and xDR's native extension.
 - [Dragon imaging notebook](../examples/dragon-imaging-pipeline/README.md):
   real archival pixels with controlled injections, Python/CLI comparisons,
-  worker placement, a trained demonstration classifier and native backends.
+  worker placement, classifier training during preparation and native backends.
 - [Command-line index](cli.md): the umbrella executable and command groups.
 
 ## Workflow guides

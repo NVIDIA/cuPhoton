@@ -22,7 +22,8 @@ on independently observed transients.
 
 Use Linux, Python 3.12, CUDA 13, and a GPU with enough memory for the prepared
 1024×1024 pairs. Use one checkout revision and matching native extensions on
-all participating nodes. Run these commands from the repository root:
+all participating nodes. The command cells require Bash, GNU `time` at
+`/usr/bin/time`, and GNU `timeout`. Run these commands from the repository root:
 
 ```bash
 uv sync --locked --python 3.12 --extra gpu --extra dragon --extra viz
@@ -50,16 +51,24 @@ python examples/dragon-imaging-pipeline/prepare.py \
 ```
 
 Preparation verifies the archive download, saves controlled image pairs and
-candidate stamps, trains the small model for 20 epochs on GPU `cuda:0`, selects
-its threshold on validation data, evaluates held-out data on the GPU, and writes
+candidate stamps, trains the small model for 20 epochs on GPU `cuda:0`, retains
+the checkpoint with the best validation ROC AUC, selects its threshold on
+validation data, evaluates held-out data on the GPU, and writes
 the workload manifests. The result is `prepared.json`; it is published only
 after preparation completes.
-A completed preparation can be reused with the same inputs. Changed seeds or
-settings require a new output directory. To prepare without downloading, add
+A completed preparation can be reused with the same inputs and package versions.
+Changed seeds, settings, or installed package versions require a new output
+directory; the existing prepared data remain usable by the notebook. To prepare without downloading, add
 `--source /path/to/ngc5194_v7.phot.1.fits`; the same size and checksum checks apply.
 Do not move a prepared directory: its descriptors contain absolute paths.
 
 The training parameters are visible in [train.example.yaml](train.example.yaml).
+The qualified run completed all 20 epochs and retained epoch 1; later epochs
+improved training loss while validation ranking deteriorated. The notebook
+shows the retained epoch and compact history. Its uncalibrated scores occupy a
+narrow range near 0.5, so it also shows logits and ranks. The preparation gate
+only rejects training that fails to beat the held-out majority-class baseline;
+it does not qualify the model for survey use.
 With batch size 32, GPU training reserved approximately 22 GiB at peak on an
 RTX PRO 6000 during preparation. Leave GPU memory headroom for training; this
 measurement is specific to that configuration and includes PyTorch's allocator
@@ -78,40 +87,54 @@ python -m ipykernel install --user --name cuphoton-sc26 \
 jupyter lab examples/dragon-imaging-pipeline/run_dragon_imaging.ipynb
 ```
 
+To include the optional transient-chain section, set
+`export CUPHOTON_DEMO_TRANSIENT_CHAIN=1` before launching Jupyter.
+
 Select that kernel, restart it, and run all cells. The notebook records actual
 versions and the GPU. Its outputs go to a fresh directory beneath
 `$CUPHOTON_DEMO_ROOT/runs/`; rerunning the setup cell chooses a new run name.
 The committed notebook has no saved outputs. Keep an executed copy and its
-figures in the run directory for rehearsal and offline presentation.
+figures in the run directory for rehearsal and offline presentation. If that copy
+is served outside the checkout, also set `CUPHOTON_DEMO_REPO` to the checkout's
+absolute path before starting its kernel.
+
+The actual CLI commands live in `%%bash` cells, followed by Python inspection
+cells. Setup exports input paths and selects the kernel environment's tools on
+`PATH`; it does not construct commands. Each Bash cell uses `set -euxo pipefail`,
+a 10-minute timeout, a regular-file `<stage>.log`, and a GNU `time` record
+`<stage>.elapsed` containing launcher-to-exit wall seconds. The last 40 log lines
+are displayed on exit, including failures. No command output is piped through a
+logging subprocess.
 
 ## Select hosts and GPUs
 
-One host needs no host file or dummy network manifest:
+The executable Bash cells use `dragon -s` for one host. No host file or dummy
+network manifest is needed. Set the worker cap before launching Jupyter:
 
 ```bash
-export CUPHOTON_DEMO_LAUNCH=single
 export CUPHOTON_DEMO_WORKERS=1
 ```
 
-For several allocated GPUs, increase the worker cap without exceeding the
-allocation. Launch Jupyter with these variables already set. On multiple
-nodes, the environment, checkout, data and writable run directory must be
-visible at identical absolute paths. Use the same CPU architecture and runtime
-versions. From an interactive Slurm allocation:
+Every distributed stage has complete Slurm and SSH alternatives immediately
+below its Bash cell. To run on a cluster, replace that cell's `dragon -s ...`
+command with the selected literal alternative, keeping its timing and log
+redirection. For Slurm, start Jupyter inside an interactive allocation and set:
 
 ```bash
-export CUPHOTON_DEMO_LAUNCH=slurm
 export CUPHOTON_DEMO_NODES=2
 export CUPHOTON_DEMO_WORKERS=8
 ```
 
-For dedicated hosts reached through noninteractive SSH, select `ssh` and set
+Do not exceed the allocation's GPU count. On multiple nodes, the environment,
+checkout, data and writable run directory must be visible at identical absolute
+paths, with the same CPU architecture and runtime versions.
+
+For dedicated hosts reached through noninteractive SSH, set
 `CUPHOTON_DEMO_HOSTFILE` to a file containing one actual hostname per line,
-without comments or blank lines. Dragon's SSH backend does not inherit the
-launching shell's GPU visibility mask; use only authorized hosts and GPUs.
-The notebook prints the full command for each launch mode before executing the
-selected one. See the [launch guide](../../docs/distributed-execution.md) for
-site network selection and scheduler requirements.
+without comments or blank lines, and use the literal SSH command. Dragon's SSH
+backend does not inherit the launching shell's GPU visibility mask; use only
+authorized hosts and GPUs. See the [launch guide](../../docs/distributed-execution.md)
+for site network selection and scheduler requirements.
 
 The YAML `pairs.yaml` describes image-pair work. `pipeline.json` describes the
 model and resident pipeline. Neither file configures Dragon's hosts or network.
@@ -132,7 +155,9 @@ Gaussian fitting, xFit solver policy `v0.2`, and fixed candidate/minibatch sizes
 The notebook checks scientific arrays and candidate ordering, then displays
 worker placement and completion records. Failed commands and timeouts raise an
 error and retain their logs. Inspect those logs and actual worker cleanup
-before retrying with a fresh run.
+before retrying with a fresh run. The shell timeout bounds the launcher, not
+all worker lifetimes. Use `dragon-cleanup` only in an isolated allocation that
+contains no other Dragon sessions; it can affect other users on a shared host.
 
 The resident pipeline first runs through the local `cuphoton xscan run-pipeline
 --executor processes` command with one worker on the notebook's first visible
@@ -140,9 +165,11 @@ GPU, then through the same command with Dragon and the selected worker cap.
 Both process the complete corpus with one warmup and three measured rounds.
 A separate one-pair Python example exposes the API without repeating the full
 benchmark. Each worker loads the model once and retains intermediate images
-on the GPU. The notebook checks all 22 scientific arrays across the measured
-rounds and displays fixed examples from each injected class alongside the
-classifier's scores and decisions.
+on the GPU. The notebook checks all 22 scientific arrays against the final local
+round, skipping that baseline's self-comparison: 40 independent item-round
+comparisons for the default eight pairs. It also compares saved-feature scores
+with scores from resident feature recomputation, and displays fixed examples
+from each injected class alongside the classifier's logits, ranks and decisions.
 
 The CLI batch timers include dispatch, input loading, computation and worker
 outputs. Keep actual worker counts, setup, validation, shutdown and total
@@ -170,6 +197,17 @@ its own launcher and automatically detects candidates and adds quality and
 uncertainty information. Run it without a checkpoint here: it expects an
 image-only classifier, while this demonstration trains a fusion classifier.
 Its current CuPy path does not expose the native switches.
+
+## Check the example helpers
+
+Run the focused CPU tests from the prepared environment:
+
+```bash
+python -m pytest examples/dragon-imaging-pipeline/tests -q
+```
+
+These cover data and preparation contracts plus display/summary helpers. They do
+not replace the clean-kernel GPU execution or qualify a multinode launch.
 
 ## Data and attribution
 

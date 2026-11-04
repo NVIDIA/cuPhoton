@@ -8,10 +8,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import signal
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,43 +19,6 @@ _SPEC = importlib.util.spec_from_file_location(
 assert _SPEC is not None and _SPEC.loader is not None
 demo = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(demo)
-
-
-def test_command_permits_dragon_process_group_initialization():
-    script = """import json
-import os
-os.setpgid(0, 0)
-print(json.dumps({"pid": os.getpid(), "pgid": os.getpgrp(),
-                  "sid": os.getsid(0)}))
-"""
-    receipt = demo.run_command([sys.executable, "-c", script], timeout=10)
-    child = json.loads(receipt["stdout"])
-    assert child["pgid"] == child["pid"]
-    assert child["pgid"] != os.getpgrp()
-    assert child["sid"] == os.getsid(0)
-
-
-def test_command_interrupt_terminates_and_reaps_child(tmp_path, monkeypatch):
-    communicate = subprocess.Popen.communicate
-    children = []
-
-    def interrupt_once(process, *args, **kwargs):
-        if not children:
-            children.append(process)
-            raise KeyboardInterrupt
-        return communicate(process, *args, **kwargs)
-
-    monkeypatch.setattr(subprocess.Popen, "communicate", interrupt_once)
-    log = tmp_path / "interrupted.log"
-    with pytest.raises(KeyboardInterrupt):
-        demo.run_command(
-            [sys.executable, "-c", "import time; time.sleep(10)"],
-            log_path=log,
-        )
-    assert children[0].returncode == -signal.SIGTERM
-    assert log.is_file()
-    with pytest.raises(ProcessLookupError):
-        os.kill(children[0].pid, 0)
 
 
 def test_boolean_comparison_requires_exact_flags(capsys):
@@ -81,12 +40,15 @@ def test_numeric_comparison_keeps_tolerance_and_matching_nans():
         demo.compare_arrays(expected, actual, rtol=0, atol=1e-8)
 
 
-@pytest.mark.parametrize("disk_records", [False, True])
+@pytest.mark.parametrize(
+    ("executor", "disk_records"),
+    [("dragon", False), ("dragon", True), ("processes", False)],
+)
 def test_summary_shows_completions_and_rejects_changed_workers(
-    tmp_path, monkeypatch, disk_records
+    tmp_path, monkeypatch, executor, disk_records
 ):
     tables = []
-    monkeypatch.setattr("IPython.display.display", tables.append)
+    monkeypatch.setattr(demo, "_show", tables.append)
     provenance = {
         "worker_id": 0,
         "requested_host": "demo-host",
@@ -130,6 +92,9 @@ def test_summary_shows_completions_and_rejects_changed_workers(
                 }
             ],
         }
+        if executor == "processes":
+            # Local rounds inherit their label from the root benchmark.
+            payload.pop("round_id")
         worker = payload["worker_results"][0]
         if disk_records:
             # xPois rounds retain worker and item records in separate files.
@@ -145,11 +110,14 @@ def test_summary_shows_completions_and_rejects_changed_workers(
         round_path.write_text(json.dumps(payload))
     summary = {
         "status": "success",
-        "executor": "dragon",
-        "process_exit_audit": {"ok": True},
-        "ready_messages": [{"worker_id": 0, "provenance": provenance}],
+        "executor": executor,
         "benchmark": {"rounds": rounds},
     }
+    if executor == "dragon":
+        summary["process_exit_audit"] = {"ok": True}
+        summary["ready_messages"] = [
+            {"worker_id": 0, "provenance": provenance}
+        ]
     (tmp_path / "summary.json").write_text(json.dumps(summary))
 
     placement = demo.summarize_run(tmp_path)
@@ -158,11 +126,16 @@ def test_summary_shows_completions_and_rejects_changed_workers(
     assert placement["gpu.device_index"].tolist() == [0]
     completions = next(t for t in tables if "same_as_ready" in t)
     assert completions["round"].tolist() == ["warmup-0000", "measure-0000"]
-    assert completions["same_as_ready"].all()
+    if executor == "dragon":
+        assert completions["same_as_ready"].all()
+    else:
+        assert completions["same_as_ready"].isna().all()
     assert completions["item_examples"].tolist() == ["pair-0", "pair-0"]
     records = next(t for t in tables if "item_id" in t)
     assert records["status"].tolist() == ["success"]
 
+    if executor == "processes":
+        return
     worker["provenance"]["pid"] = 456
     if disk_records:
         worker_path.write_text(json.dumps(worker))
