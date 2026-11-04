@@ -330,9 +330,7 @@ def _valid_shard_provenance(
         return False
     gpu_backend = gpu.get("backend")
     expected_identity_backend = (
-        "cupy"
-        if backend in {"cupy", "cutile", "native", "numba-cuda-mlir"}
-        else backend
+        "cupy" if backend in {"cupy", "cutile", "native"} else backend
     )
     return (
         isinstance(gpu_backend, str)
@@ -1034,9 +1032,7 @@ def _validate_binding(
         )
     visibility = _singleton_cuda_visibility(placement.gpu_id)
     premature = [
-        name
-        for name in ("cupy", "numba.cuda", "cuda.tile")
-        if name in sys.modules
+        name for name in ("cupy", "cuda.tile") if name in sys.modules
     ]
     torch = sys.modules.get("torch")
     if torch is not None and torch.cuda.is_initialized():

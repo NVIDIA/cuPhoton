@@ -22,9 +22,9 @@ uv run python examples/run_quickstarts.py \
 ```
 
 Backend selection is solver-specific. For the constant solver, `auto` prefers
-CuPy, then Numba-CUDA, then CPU; cuTile remains explicit and experimental. For
-spatial ALS, `auto` prefers CuPy when it has a usable CUDA device and otherwise
-uses the CPU reference implementation. Explicit `cupy` selection requires a
+CuPy, then CPU; cuTile remains explicit and experimental. For spatial ALS,
+`auto` prefers CuPy when it has a usable CUDA device and otherwise uses the
+CPU reference implementation. Explicit `cupy` selection requires a
 usable CuPy runtime and raises an error when that requirement is unmet. The
 spatial Gaussian-polynomial model follows the same automatic selection rule
 and also supports explicit `native` execution. Automatic selection never
@@ -719,7 +719,7 @@ on one GPU. The two required selection flags name different layers:
 | Flag | Selects | Values |
 | --- | --- | --- |
 | `--executor` | process placement, lifecycle, and result aggregation | `mpi`, `dragon` |
-| `--backend` | the numerical fit implementation inside each worker | `cupy`, `numba-cuda`, `cutile` |
+| `--backend` | the numerical fit implementation inside each worker | `cupy`, `cutile` |
 
 The command uses one solver and one set of fit options for every pair in a
 batch. Select either the constant-kernel workflow or the spatial ALS workflow
@@ -817,8 +817,8 @@ The marker-only recovery retry described below must reuse the existing
 `--name` and `--attempt-id`.
 
 Spatial ALS supports only `cupy` in this GPU-only command. Selecting
-`numba-cuda` or `cutile` with `--solver spatial-als` fails before either executor
-launches. Both executor routes accept `--solver spatial-als --spatial-degree 2`
+`cutile` with `--solver spatial-als` fails before either executor launches.
+Both executor routes accept `--solver spatial-als --spatial-degree 2`
 to select the spatial model.
 
 ### Launch with MPI

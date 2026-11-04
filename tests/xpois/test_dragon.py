@@ -865,7 +865,7 @@ def test_shard_result_audit_rejects_decreasing_timestamps() -> None:
         ("cuda_visible_devices", "3,7"),
         ("gpu", {}),
         ("gpu", {"backend": "", "name": "fake-gpu"}),
-        ("gpu", {"backend": "numba-cuda", "name": "fake-gpu"}),
+        ("gpu", {"backend": "unknown", "name": "fake-gpu"}),
     ],
 )
 def test_shard_result_audit_rejects_invalid_provenance(field, value) -> None:
@@ -890,7 +890,7 @@ def test_shard_result_audit_rejects_invalid_provenance(field, value) -> None:
     ]
 
 
-@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 def test_shard_result_audit_accepts_backend_identity(backend) -> None:
     shard = (WorkItem("zero", {}, 10),)
     placement = Placement(worker_id=0, host="localhost", gpu_id=3)
@@ -911,7 +911,7 @@ def test_shard_result_audit_accepts_backend_identity(backend) -> None:
     assert audit["ok"] is True
 
 
-@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 @pytest.mark.parametrize(
     ("uuid", "pci_bus_id", "identity_error"),
     [
@@ -950,7 +950,7 @@ def test_shard_result_audit_requires_stable_gpu_identity(
     ]
 
 
-@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 @pytest.mark.parametrize("identity_field", ["uuid", "pci_bus_id"])
 def test_shard_result_audit_rejects_duplicate_physical_gpu_identity(
     backend, identity_field
@@ -996,7 +996,7 @@ def test_shard_result_audit_rejects_duplicate_physical_gpu_identity(
     ]
 
 
-@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 def test_shard_result_audit_allows_distinct_mig_uuids_sharing_pci(
     backend: str,
 ) -> None:
@@ -1033,7 +1033,7 @@ def test_shard_result_audit_allows_distinct_mig_uuids_sharing_pci(
     assert audit["duplicate_physical_gpu_worker_ids"] == []
 
 
-@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 def test_shard_result_audit_rejects_incomparable_same_host_identity(
     backend: str,
 ) -> None:
@@ -1073,7 +1073,7 @@ def test_shard_result_audit_rejects_incomparable_same_host_identity(
     ]
 
 
-@pytest.mark.parametrize("backend", ["cupy", "numba-cuda", "cutile"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 def test_shard_result_audit_rejects_duplicate_uuid_across_hosts(
     backend: str,
 ) -> None:
@@ -2845,7 +2845,7 @@ def test_launch_worker_retains_descriptor_failures(
     ("overrides", "message"),
     [
         ({"worker_target": lambda: None}, "package-importable"),
-        ({"options_payload": {"backend": "numba-cuda"}}, "must match"),
+        ({"options_payload": {"backend": "cutile"}}, "must match"),
         ({"items": ()}, "must not be empty"),
     ],
 )

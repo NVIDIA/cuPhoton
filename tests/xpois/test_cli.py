@@ -52,7 +52,7 @@ def test_help_for_fit_kernel_command(capsys) -> None:
     assert "spatial-gaussian-polynomial" in unwrapped_help.replace("- ", "-")
     assert "--photometric-degree" in captured.out
     assert "--condition-limit" in captured.out
-    assert "spatial-als auto tries cupy, then cpu." in unwrapped_help
+    assert "spatial-als auto try cupy, then cpu." in unwrapped_help
     assert "--spatial-degree" in captured.out
     assert "--als-iterations" in captured.out
     assert "--als-tolerance" in captured.out
@@ -97,7 +97,7 @@ def test_help_for_fit_batch_command(capsys) -> None:
     assert "--rank-setup-timeout-sec" in captured.out
     assert "--rank-timeout-sec" in captured.out
     assert "--attempt-id" in captured.out
-    assert "--backend {cupy,cutile,numba-cuda}" in captured.out
+    assert "--backend {cupy,cutile}" in captured.out
     assert "Dragon default: 60.0" in captured.out
     assert "MPI-only rank-metadata aggregation mode" in captured.out
     assert "[MPI default:" in captured.out
@@ -369,7 +369,7 @@ def test_cli_spatial_gaussian_polynomial_fits_photometric_field(
         ),
         (
             "spatial-gaussian-polynomial",
-            ["--backend", "numba-cuda"],
+            ["--backend", "cutile"],
             "supports only",
         ),
         (
@@ -526,7 +526,7 @@ def test_dragon_example_rejects_executor_override(
 
 
 @pytest.mark.parametrize(
-    "arguments", [["--backend", "numba-cuda"], ["--backend=cutile"]]
+    "arguments", [["--backend", "cupy"], ["--backend=cutile"]]
 )
 def test_dragon_example_preserves_explicit_backend(
     arguments, monkeypatch
@@ -766,7 +766,7 @@ def test_fit_batch_dispatches_mpi_with_effective_defaults(
             "--manifest",
             str(manifest),
             "--backend",
-            "numba-cuda",
+            "cutile",
         ]
     )
     captured = capsys.readouterr()
@@ -777,7 +777,7 @@ def test_fit_batch_dispatches_mpi_with_effective_defaults(
         "status": "success",
     }
     assert seen["manifest_path"] == manifest
-    assert seen["options"].backend == "numba-cuda"
+    assert seen["options"].backend == "cutile"
     assert seen["aggregation_mode"] == "mpi"
     assert seen["rank_setup_timeout_sec"] == 600.0
     assert seen["rank_timeout_sec"] is None

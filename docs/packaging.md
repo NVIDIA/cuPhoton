@@ -19,8 +19,7 @@ Each wheel contains `cuphoton.xdr._nvcomp_batch_ext`,
 4.7.0 shared library. CUDA, cuBLAS, cuSOLVER, cuFFT, cuFile, KvikIO, and nvCOMP
 remain in their upstream wheels, installed through `cuphoton[io]`.
 Native xFit and imaging use `cuda.pathfinder` to load their CUDA libraries.
-`cuphoton[gpu]`
-also includes the photometry, PyTorch, and Numba backends. Installing Photutils
+`cuphoton[gpu]` also includes photometry and PyTorch. Installing Photutils
 from PyPI currently requires a source build, C compiler, and Python
 development headers on ARM64;
 `cuphoton` and `cuphoton[io]` do not install it. Conda provides ARM64 Photutils
@@ -205,8 +204,7 @@ The PyTorch build selector chooses its CUDA 13.0 build:
 ```bash
 conda install --prefix ./conda-xdr --override-channels \
   --strict-channel-priority -c "$PWD/dist/conda" -c rapidsai -c conda-forge \
-  'photutils>=3' 'numba>=0.61,<0.66' 'numba-cuda>=0.30,<0.31' \
-  'pytorch>=2.13,<3' 'pytorch=*=cuda130*' 'cuda-version=13.0'
+  'photutils>=3' 'pytorch>=2.13,<3' 'pytorch=*=cuda130*' 'cuda-version=13.0'
 ```
 
 Install development tools such as `pytest`, `ruff`, and `pre-commit` through
@@ -309,10 +307,10 @@ CUDA_VISIBLE_DEVICES= timeout --kill-after=15s 180s dragon --single-node-overrid
   --workers 2 --report /results/dragon-cpu.json
 ```
 
-The compute check solves the same known xPois problem with CPU, CuPy,
-Numba-CUDA, and cuTile, and checks CuPy-to-PyTorch GPU inference through
-xScan's DLPack bridge. With `--backend cupy`, the executor checks run cuPhoton's
-MPI/Dragon batch paths and verify saved numerical outputs. Missing selected
+The compute check solves the same known xPois problem with CPU, CuPy, and
+cuTile, and checks CuPy-to-PyTorch GPU inference through xScan's DLPack
+bridge. With `--backend cupy`, the executor checks run cuPhoton's MPI/Dragon
+batch paths and verify saved numerical outputs. Missing selected
 runtimes, GPU support, worker results, or compiler tools fail instead of skipping.
 Retain these JSON receipts with the wheel hashes and native xDR receipts.
 

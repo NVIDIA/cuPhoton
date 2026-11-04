@@ -14,7 +14,7 @@ cuphoton.core  -- command discovery, context, logging, invariants
 component workflow -- validation, orchestration, artifact contract
           |
           v
-CPU / PyTorch / CuPy / Numba-CUDA / cuTile implementation
+CPU / PyTorch / CuPy / cuTile implementation
           |
           v
 summary.json + numeric artifacts + optional review output
@@ -178,7 +178,7 @@ choices for numerical work are:
 | Component | Automatic order |
 | --- | --- |
 | xFit | CuPy, then NumPy |
-| xPois | Constant: CuPy, Numba-CUDA, then CPU; spatial ALS and Gaussian-polynomial: CuPy, then CPU |
+| xPois | CuPy, then CPU |
 | xScan | Packaged inference: PyTorch CUDA, then PyTorch CPU; FITS inference and the device pipeline require explicit CUDA |
 | xRep | CuPy, PyTorch CUDA, then CPU |
 | xRay | CuPy, then NumPy for supported operations |

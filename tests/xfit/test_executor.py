@@ -66,7 +66,7 @@ def _input(tmp_path, *, mode="difference", auxiliary="candidate"):
         ("gaussian", True, "does not support finite-difference fitting"),
     ],
 )
-@pytest.mark.parametrize("backend", ["cutile", "numba-cuda-mlir"])
+@pytest.mark.parametrize("backend", ["cutile", "native"])
 def test_preflight_rejects_unsupported_specialized_settings(
     tmp_path, monkeypatch, model, finite_difference, message, backend
 ):
@@ -177,7 +177,7 @@ def test_finalizer_retains_planning_input_and_still_checks_content(
 
 @pytest.mark.parametrize(
     "backend,fusion",
-    [("cutile", False), ("cutile", True), ("numba-cuda-mlir", False)],
+    [("cutile", False), ("cutile", True), ("native", False)],
 )
 def test_preflight_accepts_analytic_gaussian_specialized(
     tmp_path, backend, fusion
@@ -219,7 +219,7 @@ def test_preflight_rejects_invalid_fusion_before_input_reads(
 )
 @pytest.mark.parametrize(
     "backend,fusion",
-    [("cupy", False), ("cutile", True), ("numba-cuda-mlir", False)],
+    [("cupy", False), ("cutile", True), ("native", False)],
 )
 def test_cli_dispatches_collective_preflight_and_preserves_options(
     tmp_path, monkeypatch, capsys, runtime, rank, backend, fusion

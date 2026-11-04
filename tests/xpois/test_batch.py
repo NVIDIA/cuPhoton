@@ -614,7 +614,7 @@ def test_batch_options_reject_unknown_solver() -> None:
         _options(solver="unknown")
 
 
-@pytest.mark.parametrize("backend", ["cutile", "numba-cuda"])
+@pytest.mark.parametrize("backend", ["cutile"])
 def test_batch_options_reject_unsupported_spatial_backend(backend) -> None:
     with pytest.raises(ValueError, match="supports only auto, cpu, and cupy"):
         _options(solver="spatial-als", backend=backend)

@@ -1776,7 +1776,7 @@ def test_spatial_model_rejects_unknown_backend() -> None:
             np.ones((9, 9)),
             [GaussianBasisComponent(sigma=1.0, degree=0)],
             kernel_shape=(3, 3),
-            backend="numba-cuda",
+            backend="unknown",
         )
 
 

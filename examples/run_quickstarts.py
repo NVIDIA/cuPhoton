@@ -106,15 +106,6 @@ def _cupy_hardware() -> dict[str, Any]:
         }
 
 
-def _numba_cuda_available() -> bool:
-    try:
-        from numba import cuda
-
-        return bool(cuda.is_available())
-    except Exception:
-        return False
-
-
 def detect_hardware() -> dict[str, Any]:
     """Return JSON-compatible runtime and accelerator metadata."""
 
@@ -126,11 +117,8 @@ def detect_hardware() -> dict[str, Any]:
         "cuphoton": __version__,
         "torch": torch,
         "cupy": cupy,
-        "numba_cuda_available": _numba_cuda_available(),
         "gpu_available": bool(
-            torch.get("cuda_available")
-            or cupy.get("cuda_available")
-            or _numba_cuda_available()
+            torch.get("cuda_available") or cupy.get("cuda_available")
         ),
     }
 
@@ -166,8 +154,6 @@ def _array_backend(
         return "cpu"
     if hardware["cupy"].get("cuda_available"):
         return "cupy"
-    if component == "xpois" and hardware["numba_cuda_available"]:
-        return "numba-cuda"
     if allow_torch and hardware["torch"].get("cuda_available"):
         return "torch"
     if require_gpu:

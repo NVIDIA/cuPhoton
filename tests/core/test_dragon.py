@@ -595,7 +595,7 @@ def test_native_workers_keep_spawn_children_on_standard_multiprocessing(
     assert completed.returncode == 0, completed.stderr
 
 
-@pytest.mark.parametrize("backend", ["cupy", "cutile", "numba-cuda-mlir"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile"])
 def test_ordinary_workload_retains_root_artifacts(
     monkeypatch, tmp_path, backend
 ):
@@ -1115,7 +1115,7 @@ def test_interrupted_worker_keeps_failed_close_evidence(
 
 @pytest.mark.parametrize("initialized", [False, True])
 def test_binding_allows_torch_import_without_cuda(monkeypatch, initialized):
-    for name in ("cupy", "numba.cuda", "cuda.tile"):
+    for name in ("cupy", "cuda.tile"):
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.setitem(
         sys.modules,

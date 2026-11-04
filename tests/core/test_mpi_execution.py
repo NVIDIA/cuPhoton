@@ -71,7 +71,7 @@ def test_two_rank_persistent_lifecycle_and_collective_failures(
         ):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
-    for name in ("cupy", "numba.cuda", "cuda.tile", "torch"):
+    for name in ("cupy", "cuda.tile", "torch"):
         monkeypatch.delitem(sys.modules, name, raising=False)
     barrier = Barrier(2, timeout=5)
     shared = SimpleNamespace(gathered=[None, None], broadcast=None)
@@ -238,7 +238,7 @@ def test_ordinary_mode_and_rank_binding_before_worker_factory(
             )
         ):
             monkeypatch.delenv(name, raising=False)
-    for name in ("cupy", "numba.cuda", "cuda.tile", "torch"):
+    for name in ("cupy", "cuda.tile", "torch"):
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     comm = Comm()

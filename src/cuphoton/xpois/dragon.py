@@ -66,7 +66,7 @@ from .batch import (
     run_image_pair_item,
 )
 
-_DRAGON_GPU_BACKENDS = frozenset({"cupy", "numba-cuda", "cutile"})
+_DRAGON_GPU_BACKENDS = frozenset({"cupy", "cutile"})
 _DRAGON_LAUNCH_SCHEMA = "cuphoton.xpois.dragon-launch/v1"
 _DRAGON_TEMPLATE_BUDGET_BYTES = 96 * 1024
 _WORKER_POLL_SEC = 0.5
@@ -1489,9 +1489,7 @@ def _validate_worker_placement(
         )
     visibility = _singleton_cuda_visibility(placement.gpu_id)
     premature = sorted(
-        name
-        for name in ("cupy", "numba.cuda", "cuda.tile", "torch")
-        if name in sys.modules
+        name for name in ("cupy", "cuda.tile", "torch") if name in sys.modules
     )
     if require_clean_cuda_imports and premature:
         raise RuntimeError(

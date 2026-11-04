@@ -211,7 +211,6 @@ def test_public_fit_option_hints_are_literal_and_cupy_optional() -> None:
         "cupy",
         "cutile",
         "native",
-        "numba-cuda-mlir",
     }
 
 

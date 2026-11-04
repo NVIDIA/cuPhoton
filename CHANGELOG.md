@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Remove the Numba-CUDA xPois backend and Numba-CUDA-MLIR xFit backend,
+  including their dependencies, installation extra, CLI options, and
+  pipeline configuration choices. Use CuPy, native CUDA, or cuTile for GPU
+  execution. CPU execution remains available.
+
 ### xFit solver errata
 
 - The default `v0.2` solver can require substantially more evaluations on

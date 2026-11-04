@@ -1179,32 +1179,6 @@ def test_prebound_visibility_validates_helper_allocation() -> None:
         )
 
 
-def test_numba_gpu_identity_uses_normalized_pci_address(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    device = SimpleNamespace(
-        id=0,
-        uuid="GPU-one",
-        PCI_DOMAIN_ID=0,
-        PCI_BUS_ID=0xC1,
-        PCI_DEVICE_ID=0,
-    )
-    fake_cuda = SimpleNamespace(get_current_device=lambda: device)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = mpi._gpu_identity("numba-cuda")
-
-    assert identity == {
-        "backend": "numba-cuda",
-        "device_index": 0,
-        "name": "unknown",
-        "uuid": "GPU-one",
-        "pci_bus_id": "00000000:C1:00.0",
-        "identity_error": None,
-        "identity_warnings": [],
-    }
-
-
 def test_cupy_gpu_identity_uses_normalized_pci_address(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1249,97 +1223,6 @@ def test_cupy_gpu_identity_preserves_uuid_on_pci_error(
     assert identity["identity_error"] is None
     assert identity["identity_warnings"] == [
         "pci_bus_id: RuntimeError: pci unavailable"
-    ]
-
-
-def test_numba_gpu_identity_preserves_missing_uuid_for_pci_fallback(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    device = SimpleNamespace(
-        id=0,
-        uuid=None,
-        PCI_DOMAIN_ID=0,
-        PCI_BUS_ID=1,
-        PCI_DEVICE_ID=0,
-    )
-    fake_cuda = SimpleNamespace(get_current_device=lambda: device)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = mpi._gpu_identity("numba-cuda")
-
-    assert identity["uuid"] is None
-    assert identity["pci_bus_id"] == "00000000:01:00.0"
-    assert identity["identity_error"] is None
-    assert identity["identity_warnings"] == []
-    audit = _audit_gpu_identities(
-        tmp_path,
-        (identity, identity),
-        ("same-host", "same-host"),
-        "numba-cuda",
-    )
-    assert audit["duplicate_physical_gpu_ranks"] == [0, 1]
-
-
-@pytest.mark.parametrize("broken_field", ["uuid", "pci_bus_id"])
-def test_numba_gpu_identity_preserves_partial_identity(
-    monkeypatch: pytest.MonkeyPatch, broken_field: str
-) -> None:
-    class PartialIdentity:
-        id = 0
-        PCI_BUS_ID = 1
-        PCI_DEVICE_ID = 0
-
-        @property
-        def uuid(self):
-            if broken_field == "uuid":
-                raise RuntimeError("uuid unavailable")
-            return "GPU-one"
-
-        @property
-        def PCI_DOMAIN_ID(self):
-            if broken_field == "pci_bus_id":
-                raise RuntimeError("pci unavailable")
-            return 0
-
-    fake_cuda = SimpleNamespace(get_current_device=PartialIdentity)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = mpi._gpu_identity("numba-cuda")
-
-    assert identity["identity_error"] is None
-    assert len(identity["identity_warnings"]) == 1
-    assert identity["identity_warnings"][0].startswith(broken_field)
-    assert identity["uuid"] is not None or identity["pci_bus_id"] is not None
-
-
-def test_numba_gpu_identity_reports_identity_lookup_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class BrokenIdentity:
-        id = 0
-
-        @property
-        def uuid(self):
-            raise RuntimeError("uuid unavailable")
-
-        @property
-        def PCI_DOMAIN_ID(self):
-            raise RuntimeError("pci unavailable")
-
-    fake_cuda = SimpleNamespace(get_current_device=BrokenIdentity)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = mpi._gpu_identity("numba-cuda")
-
-    assert identity["uuid"] is None
-    assert identity["pci_bus_id"] is None
-    assert identity["identity_error"] == (
-        "uuid: RuntimeError: uuid unavailable; "
-        "pci_bus_id: RuntimeError: pci unavailable"
-    )
-    assert identity["identity_warnings"] == [
-        "uuid: RuntimeError: uuid unavailable",
-        "pci_bus_id: RuntimeError: pci unavailable",
     ]
 
 
@@ -2696,8 +2579,8 @@ def test_terminal_record_audit_checks_execution_identity() -> None:
         "item_id": "one",
         "rank": 1,
         "weight_bytes": 8,
-        "requested_backend": "numba-cuda",
-        "backend": "numba-cuda",
+        "requested_backend": "cutile",
+        "backend": "cutile",
         "status": "success",
         "error": {"type": "RuntimeError", "message": "contradiction"},
     }
@@ -3623,7 +3506,7 @@ def test_file_setup_validates_nonroot_configuration(
         mpi.read_json_mapping(run_dir / "input-identity.json")
         == manifest.input_identity_payload()
     )
-    divergent_options = replace(options, backend="numba-cuda")
+    divergent_options = replace(options, backend="cutile")
     setup_error = mpi._file_ready_error(
         peer,
         run_dir,
@@ -5297,7 +5180,7 @@ def test_exact_retry_repairs_only_committed_attempt_marker(
             0.1,
             mpi.timestamp_utc(),
             manifest,
-            _options(backend="numba-cuda"),
+            _options(backend="cutile"),
         )
     assert marker_path.read_bytes() == marker_before
     assert {

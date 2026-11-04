@@ -654,7 +654,7 @@ class DeviceXFitPipelineConfig:
     damping_decrease: float = 0.3
     finite_difference_step: float | None = None
     use_finite_difference: bool = False
-    backend: Literal["cupy", "cutile", "native", "numba-cuda-mlir"] = "cupy"
+    backend: Literal["cupy", "cutile", "native"] = "cupy"
     fusion: bool = False
     solver_version: SolverVersion = "v0.2"
 
@@ -666,15 +666,9 @@ class DeviceXFitPipelineConfig:
             raise ValueError("xfit model must be 'gaussian'")
         if self.mode != "difference":
             raise ValueError("xfit mode must be 'difference'")
-        if self.backend not in (
-            "cupy",
-            "cutile",
-            "native",
-            "numba-cuda-mlir",
-        ):
+        if self.backend not in ("cupy", "cutile", "native"):
             raise ValueError(
-                "xfit backend must be 'cupy', 'cutile', 'native', "
-                "or 'numba-cuda-mlir'"
+                "xfit backend must be 'cupy', 'cutile', or 'native'"
             )
         if not isinstance(self.use_finite_difference, bool):
             raise TypeError("xfit use_finite_difference must be boolean")
@@ -690,10 +684,7 @@ class DeviceXFitPipelineConfig:
             raise ValueError(
                 "xfit backend='cutile' does not support finite differences"
             )
-        if (
-            self.backend in {"native", "numba-cuda-mlir"}
-            and self.use_finite_difference
-        ):
+        if self.backend == "native" and self.use_finite_difference:
             raise ValueError(
                 f"{self.backend} xfit does not support finite differences"
             )
@@ -1121,7 +1112,7 @@ def _device_pipeline_evidence_layout_contract(
         "mode": "difference",
         "dtype": "float64",
     }
-    if xfit["backend"] not in ("cupy", "cutile", "native", "numba-cuda-mlir"):
+    if xfit["backend"] not in ("cupy", "cutile", "native"):
         raise ValueError("scientific evidence xfit.backend is unsupported")
     for name, expected in expected_xfit.items():
         if xfit[name] != expected:
@@ -2198,9 +2189,7 @@ def _pack_scientific_evidence(
     candidate_count: int,
     kernel_shape: tuple[int, int],
     flux_conserve: bool,
-    xfit_backend: Literal[
-        "cupy", "cutile", "native", "numba-cuda-mlir"
-    ] = "cupy",
+    xfit_backend: Literal["cupy", "cutile", "native"] = "cupy",
 ) -> _PackedScientificEvidence:
     """Pack all parity evidence on the producer stream as float64."""
 

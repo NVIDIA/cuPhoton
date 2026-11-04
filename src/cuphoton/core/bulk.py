@@ -293,26 +293,6 @@ def timestamp_utc() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def numba_pci_bus_id(device: Any) -> str:
-    """Return a normalized PCI address from Numba CUDA device attributes."""
-
-    components = (
-        (device.PCI_DOMAIN_ID, "PCI domain", 0xFFFFFFFF, 8),
-        (device.PCI_BUS_ID, "PCI bus", 0xFF, 2),
-        (device.PCI_DEVICE_ID, "PCI device", 0x1F, 2),
-    )
-    normalized: list[str] = []
-    for value, field, maximum, width in components:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise RuntimeError(f"{field} must be non-negative")
-        if value > maximum:
-            raise RuntimeError(f"{field} is outside the PCI address range")
-        normalized.append(f"{value:0{width}X}")
-    return normalize_pci_bus_id(
-        f"{normalized[0]}:{normalized[1]}:{normalized[2]}.0"
-    )
-
-
 def normalize_pci_bus_id(value: Any) -> str:
     """Return one canonical CUDA/NVML PCI bus identifier."""
 
@@ -374,7 +354,6 @@ __all__ = [
     "json_mapping",
     "new_run_id",
     "normalize_pci_bus_id",
-    "numba_pci_bus_id",
     "partition_byte_balanced",
     "read_json_mapping",
     "sanitize_json",
@@ -386,13 +365,9 @@ __all__ = [
 def collect_gpu_identity(backend: str) -> dict[str, Any]:
     """Collect stable device identity after caller-established placement."""
 
-    if backend in {"auto", "cupy", "cutile", "native", "numba-cuda-mlir"}:
-        try:
-            return _collect_cupy_identity()
-        except (ImportError, OSError, RuntimeError):
-            if backend != "auto":
-                raise
-    return _collect_numba_identity()
+    if backend not in {"auto", "cupy", "cutile", "native"}:
+        raise ValueError("GPU identity requires a CuPy-backed backend")
+    return _collect_cupy_identity()
 
 
 def _collect_cupy_identity() -> dict[str, Any]:
@@ -424,41 +399,6 @@ def _collect_cupy_identity() -> dict[str, Any]:
     return {
         "backend": "cupy",
         "device_index": device_index,
-        "name": str(name),
-        "uuid": uuid_value,
-        "pci_bus_id": pci_bus_id,
-        "identity_error": identity_error,
-        "identity_warnings": identity_warnings,
-    }
-
-
-def _collect_numba_identity() -> dict[str, Any]:
-    from numba import cuda
-
-    device = cuda.get_current_device()
-    name = getattr(device, "name", "unknown")
-    if isinstance(name, bytes):
-        name = name.decode(errors="replace")
-    identity_warnings: list[str] = []
-    try:
-        raw_uuid = device.uuid
-        uuid_value = None if raw_uuid is None else str(raw_uuid) or None
-    except Exception as exc:  # pragma: no cover - runtime-specific
-        uuid_value = None
-        identity_warnings.append(f"uuid: {type(exc).__name__}: {exc}")
-    try:
-        pci_bus_id = numba_pci_bus_id(device)
-    except Exception as exc:  # pragma: no cover - runtime-specific
-        pci_bus_id = None
-        identity_warnings.append(f"pci_bus_id: {type(exc).__name__}: {exc}")
-    identity_error = (
-        "; ".join(identity_warnings) or "no stable GPU identity was available"
-        if uuid_value is None and pci_bus_id is None
-        else None
-    )
-    return {
-        "backend": "numba-cuda",
-        "device_index": int(getattr(device, "id", 0)),
         "name": str(name),
         "uuid": uuid_value,
         "pci_bus_id": pci_bus_id,

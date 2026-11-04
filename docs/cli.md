@@ -78,7 +78,7 @@ See [xImage](components/ximage.md) for configuration and offline FITS adapters.
 `evaluate-subtraction`, and `review-bokeh` cover local data inspection,
 subtraction, distributed whole-pair execution, numerical comparison, and
 review. For `fit-batch`, `--executor mpi|dragon` selects process orchestration
-while `--backend cupy|numba-cuda|cutile` selects the numerical implementation
+while `--backend cupy|cutile` selects the numerical implementation
 inside each worker. Both are explicit; launcher and Dragon transport options
 remain outside cuPhoton. See [xPois](components/xpois.md).
 

@@ -32,10 +32,10 @@ from cuphoton.xpois.ois import (
 )
 
 
-def test_auto_backend_prefers_cupy_then_numba_cuda(
+def test_auto_backend_prefers_cupy_then_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    available = {"cupy": False, "numba-cuda": True, "cpu": True}
+    available = {"cupy": False, "cpu": True}
     seen: list[str] = []
 
     def is_available(backend: str) -> bool:
@@ -47,8 +47,8 @@ def test_auto_backend_prefers_cupy_then_numba_cuda(
         is_available,
     )
 
-    assert resolve_backend("auto") == "numba-cuda"
-    assert seen == ["cupy", "numba-cuda"]
+    assert resolve_backend("auto") == "cpu"
+    assert seen == ["cupy", "cpu"]
 
     available["cupy"] = True
     seen.clear()
@@ -600,16 +600,6 @@ def test_solve_constant_kernel_device_masks_non_finite_pixels_exactly() -> (
 
     assert np.array_equal(cp.asnumpy(device.fit_mask), cpu.fit_mask)
     assert device.fit_pixel_count == cpu.fit_pixel_count
-
-
-def test_solve_constant_kernel_numba_cuda_matches_cpu() -> None:
-    cuda = pytest.importorskip("numba.cuda")
-    if not cuda.is_available():
-        pytest.skip("Numba CUDA runtime is not usable")
-
-    cpu = _solve_parity_fixture_backend("cpu")
-    gpu = _solve_parity_fixture_backend("numba-cuda")
-    _assert_constant_kernel_matches_cpu(cpu, gpu, backend="numba-cuda")
 
 
 def test_solve_constant_kernel_cutile_matches_cpu() -> None:

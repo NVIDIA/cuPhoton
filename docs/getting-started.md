@@ -64,7 +64,7 @@ The extras are composable:
 | `torch` | CPU-capable PyTorch |
 | `ximage` | PyTorch, photometry, and Zarr bundle support for xImage |
 | `rubin` | Offline Rubin image archive reader |
-| `gpu` | `io`, `photometry`, CUDA 13 PyTorch, and Numba-CUDA |
+| `gpu` | `io`, `photometry`, and CUDA 13 PyTorch |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `mpi` | mpi4py bindings; an MPI runtime and launcher are also required |
 | `dragon` | DragonHPC; Python 3.12 or 3.13 |

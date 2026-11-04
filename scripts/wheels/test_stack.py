@@ -145,14 +145,14 @@ def check_gpu(report):
 
     require(cp.cuda.runtime.getDeviceCount() > 0, "A CUDA GPU is required")
     require(torch.cuda.is_available(), "Torch CUDA is required")
-    for distribution in ("cupy-cuda13x", "cuda-tile", "numba-cuda", "torch"):
+    for distribution in ("cupy-cuda13x", "cuda-tile", "torch"):
         report["versions"][distribution] = metadata.version(distribution)
     report["gpu"] = {
         "name": torch.cuda.get_device_name(0),
         "compute_capability": list(torch.cuda.get_device_capability(0)),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }
-    for backend in ("cpu", "cupy", "numba-cuda", "cutile"):
+    for backend in ("cpu", "cupy", "cutile"):
         report[backend] = solve(backend)
         report["checks"].append(f"xpois_{backend}_known_solution")
 

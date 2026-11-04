@@ -44,8 +44,6 @@ GPU_DISTRIBUTIONS = (
     "nvidia-cuda-nvrtc",
     "nvidia-cufile",
     "nvidia-nvjitlink",
-    "numba",
-    "numba-cuda",
     "torch",
 )
 HDU_INDICES = (5, 1, 3, 2, 4)

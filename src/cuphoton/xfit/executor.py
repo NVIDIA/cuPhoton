@@ -648,12 +648,11 @@ def prepare_xfit_workload(
             use_finite_difference=settings["use_finite_difference"],
         ),
     )
-    if backend not in {"cupy", "cutile", "native", "numba-cuda-mlir"}:
+    if backend not in {"cupy", "cutile", "native"}:
         raise ValueError(
-            "distributed xFit requires backend cupy, cutile, native, or "
-            "numba-cuda-mlir"
+            "distributed xFit requires backend cupy, cutile, or native"
         )
-    specialized = backend in {"cutile", "native", "numba-cuda-mlir"}
+    specialized = backend in {"cutile", "native"}
     if specialized and settings["model"] == "stamp":
         raise ValueError(
             f"backend={backend!r} currently supports only the Gaussian model"
