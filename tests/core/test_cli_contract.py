@@ -71,7 +71,7 @@ def test_public_command_surface_counts_are_exact() -> None:
 
     assert per_group == [
         ("xdr", 1, 0, 17, 0),
-        ("xfit", 3, 3, 39, 1),
+        ("xfit", 3, 3, 40, 1),
         ("ximage", 15, 0, 98, 1),
         ("xpois", 7, 7, 162, 1),
         ("xscan", 44, 44, 229, 1),
@@ -84,7 +84,7 @@ def test_public_command_surface_counts_are_exact() -> None:
     assert sum(item[1] for item in per_group) == 119
     assert sum(item[1] + item[4] for item in per_group) == 127
     assert sum(item[2] for item in per_group) == 97
-    assert sum(item[3] for item in per_group) == 1130
+    assert sum(item[3] for item in per_group) == 1131
 
 
 def test_public_registry_order_and_component_derivations() -> None:

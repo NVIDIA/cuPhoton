@@ -29,14 +29,16 @@ struct Maximum {
     }
 };
 
-template <typename T, int block_size>
+template <typename T, int block_size, bool Legacy>
 __global__ void norm_rows(const T* input, T* output, int observations) {
     using Reduce = cub::BlockReduce<T, block_size>;
     __shared__ typename Reduce::TempStorage storage;
     const T* row = input + std::size_t(blockIdx.x) * observations;
-    T local_scale = 0;
-    for (int i = threadIdx.x; i < observations; i += block_size) {
-        local_scale = Maximum<T>()(local_scale, abs(row[i]));
+    T local_scale = Legacy ? T(1) : T(0);
+    if constexpr (!Legacy) {
+        for (int i = threadIdx.x; i < observations; i += block_size) {
+            local_scale = Maximum<T>()(local_scale, abs(row[i]));
+        }
     }
     T reduced_scale = Reduce(storage).Reduce(local_scale, Maximum<T>());
     __shared__ T scale;
@@ -63,16 +65,18 @@ __global__ void norm_rows(const T* input, T* output, int observations) {
     }
 }
 
-template <typename T>
+template <typename T, bool Legacy>
 __global__ void norm_singleton(
     const T* input, T* output, int observations, int stride) {
     __shared__ T sums[512];
     int tid = threadIdx.x;
     int output_index = tid % stride;
     int first = output_index + tid / stride;
-    T local_scale = 0;
-    for (int index = first; index < observations; index += 512 / stride) {
-        local_scale = Maximum<T>()(local_scale, abs(input[index]));
+    T local_scale = Legacy ? T(1) : T(0);
+    if constexpr (!Legacy) {
+        for (int index = first; index < observations; index += 512 / stride) {
+            local_scale = Maximum<T>()(local_scale, abs(input[index]));
+        }
     }
     sums[tid] = local_scale;
     __syncthreads();
@@ -106,7 +110,7 @@ __global__ void norm_singleton(
     }
 }
 
-template <typename T>
+template <typename T, bool Legacy = false>
 void launch(
     const T* input,
     T* output,
@@ -121,8 +125,8 @@ void launch(
         while (stride <= ratio / 2) {
             stride *= 2;
         }
-        norm_singleton<<<1, 512, 0, stream>>>(
-            input, output, observations, stride);
+        norm_singleton<T, Legacy>
+            <<<1, 512, 0, stream>>>(input, output, observations, stride);
         return;
     }
     int blocks = 32;
@@ -132,7 +136,8 @@ void launch(
     switch (blocks) {
 #define LAUNCH(B)                                                              \
     case B:                                                                    \
-        norm_rows<T, B><<<count, B, 0, stream>>>(input, output, observations); \
+        norm_rows<T, B, Legacy>                                                \
+            <<<count, B, 0, stream>>>(input, output, observations);            \
         break
         LAUNCH(32);
         LAUNCH(64);
@@ -149,9 +154,26 @@ extern "C" int xfit_library_norms(
     int count,
     int observations,
     bool fp64,
-    std::uintptr_t stream_ptr) {
+    std::uintptr_t stream_ptr,
+    bool legacy) {
     auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-    if (fp64) {
+    if (legacy) {
+        if (fp64) {
+            launch<double, true>(
+                static_cast<const double*>(input),
+                static_cast<double*>(output),
+                count,
+                observations,
+                stream);
+        } else {
+            launch<float, true>(
+                static_cast<const float*>(input),
+                static_cast<float*>(output),
+                count,
+                observations,
+                stream);
+        }
+    } else if (fp64) {
         launch(
             static_cast<const double*>(input),
             static_cast<double*>(output),

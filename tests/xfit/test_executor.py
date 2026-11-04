@@ -103,6 +103,23 @@ def test_chunk_size_is_part_of_configuration_identity(tmp_path):
     assert first["configuration_sha256"] != second["configuration_sha256"]
 
 
+def test_solver_version_is_validated_and_part_of_configuration_identity(
+    tmp_path,
+):
+    path = _input(tmp_path)
+    _, current = executor.plan_xfit_chunks(path, chunk_size=2, fit_options={})
+    _, legacy = executor.plan_xfit_chunks(
+        path, chunk_size=2, fit_options={"solver_version": "v0.1.3"}
+    )
+    assert current["fit_options"]["solver_version"] == "v0.2"
+    assert current["configuration_sha256"] != legacy["configuration_sha256"]
+    with pytest.raises(ValueError, match="solver_version"):
+        executor.prepare_xfit_workload(
+            input_path=tmp_path / "missing.npz",
+            fit_options={"solver_version": "unsupported"},
+        )
+
+
 @pytest.mark.parametrize("fusion", [False, True])
 def test_finalizer_retains_planning_input_and_still_checks_content(
     tmp_path, monkeypatch, fusion
@@ -255,6 +272,8 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
                 str(output_dir),
                 "--max-evaluations",
                 "10",
+                "--solver-version",
+                "v0.1.3",
                 "--warmup-rounds",
                 "1",
                 "--measure-rounds",
@@ -274,6 +293,7 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
     assert spec.options_payload["fit_options"]["backend"] == backend
     assert spec.options_payload["fit_options"]["max_evaluations"] == 10
     assert spec.options_payload["fit_options"]["fusion"] is fusion
+    assert spec.options_payload["fit_options"]["solver_version"] == "v0.1.3"
     assert json.loads(capsys.readouterr().out)["status"] == "success"
 
 
@@ -286,14 +306,20 @@ def test_cli_dispatches_collective_preflight_and_preserves_options(
         ("difference", "scalar"),
     ],
 )
+@pytest.mark.parametrize("solver_version", ["v0.2", "v0.1.3"])
 def test_chunks_preserve_numerics_broadcasting_and_order(
-    tmp_path, monkeypatch, mode, auxiliary
+    tmp_path, monkeypatch, mode, auxiliary, solver_version
 ):
     path = _input(tmp_path, mode=mode, auxiliary=auxiliary)
     items, options = executor.plan_xfit_chunks(
         path,
         chunk_size=2,
-        fit_options={"backend": "numpy", "mode": mode, "max_evaluations": 10},
+        fit_options={
+            "backend": "numpy",
+            "mode": mode,
+            "max_evaluations": 10,
+            "solver_version": solver_version,
+        },
     )
     identities = []
     monkeypatch.setattr(
@@ -302,6 +328,7 @@ def test_chunks_preserve_numerics_broadcasting_and_order(
         lambda backend: identities.append(backend) or {"backend": "numpy"},
     )
     worker = executor.create_xfit_worker(options)
+    assert worker.config.solver_version == solver_version
     dataset = load_xfit_dataset(path, mode=mode, model="gaussian")
     ordinary = fit_dipoles(
         dataset.images,
@@ -364,6 +391,11 @@ def test_chunks_preserve_numerics_broadcasting_and_order(
             == dataset.input_archive_sha256
         )
         assert summary["metrics"]["candidate_count"] == 3
+        assert summary["solver_version"] == solver_version
+        effective = yaml.safe_load(
+            (round_dir / "scientific" / "effective-config.yaml").read_text()
+        )
+        assert effective["solver"]["solver_version"] == solver_version
     assert identities == ["numpy"]
     worker.close()
 
@@ -379,6 +411,8 @@ def test_chunks_preserve_numerics_broadcasting_and_order(
         ("wrong_candidates", "candidate identity mismatch"),
         ("wrong_summary", "summary identity mismatch"),
         ("wrong_model", "configuration mismatch"),
+        ("wrong_solver_version", "configuration mismatch"),
+        ("missing_solver_version", "metadata mismatch"),
     ],
 )
 def test_merge_rejects_incomplete_or_changed_scientific_results(
@@ -415,6 +449,10 @@ def test_merge_rejects_incomplete_or_changed_scientific_results(
             summary["configuration_sha256"] = "changed"
         elif defect == "wrong_model":
             summary["result_metadata"]["model"] = "stamp"
+        elif defect == "wrong_solver_version":
+            summary["result_metadata"]["solver_version"] = "v0.1.3"
+        elif defect == "missing_solver_version":
+            del summary["result_metadata"]["solver_version"]
         else:
             archive = item_dir / "result.npz"
             with np.load(archive, allow_pickle=False) as loaded:

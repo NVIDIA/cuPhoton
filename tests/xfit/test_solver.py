@@ -110,8 +110,9 @@ def test_active_batch_is_compacted_after_independent_termination() -> None:
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("use_normal_equations", [False, True])
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
 def test_mixed_batch_matches_independent_rows(
-    dtype, use_normal_equations: bool
+    dtype, use_normal_equations: bool, solver_version
 ) -> None:
     # Interleave successful fits, initially invalid rows, an already solved
     # row, an invalid derivative, a wrong-signed derivative, and a residual
@@ -158,7 +159,7 @@ def test_mixed_batch_matches_independent_rows(
                 ),
             ),
             initial[rows, None],
-            config=LMConfig(max_evaluations=6),
+            config=LMConfig(max_evaluations=6, solver_version=solver_version),
         )
         np.testing.assert_array_equal(result.evaluations, evaluated)
         return result
@@ -166,6 +167,12 @@ def test_mixed_batch_matches_independent_rows(
     batched = solve(np.arange(initial.size))
     independent = [solve(np.asarray([row])) for row in range(initial.size)]
     for field in fields(batched):
+        value = getattr(batched, field.name)
+        if value is None or isinstance(value, str):
+            assert all(
+                getattr(result, field.name) == value for result in independent
+            )
+            continue
         expected = np.concatenate(
             [getattr(result, field.name) for result in independent]
         )
@@ -263,8 +270,10 @@ def test_finite_difference_jacobian_converges_and_counts_evaluations() -> (
     [False, True],
     ids=["residual-only", "forced-finite-difference"],
 )
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
 def test_finite_difference_budget_can_end_before_the_trial(
     with_analytic_jacobian: bool,
+    solver_version,
 ) -> None:
     residual_calls = 0
 
@@ -285,6 +294,7 @@ def test_finite_difference_budget_can_end_before_the_trial(
         ),
         initial,
         config=LMConfig(
+            solver_version=solver_version,
             max_evaluations=3,
             use_finite_difference=with_analytic_jacobian,
         ),
@@ -1134,6 +1144,183 @@ def test_f_tol_still_accepts_small_well_predicted_progress() -> None:
     assert result.status.tolist() == [LMStatus.CONVERGED_F_TOL]
     assert result.evaluations.tolist() == [2]
     np.testing.assert_allclose(result.parameters, 1.0e-5 / 1001.0)
+
+
+def test_legacy_solver_retains_the_release_function_stop() -> None:
+    coefficient = 1.001 - 1.0e-8
+
+    def residual(x, *, indices):
+        del indices
+        return 1.0 - x + coefficient * x * x
+
+    def jacobian(x, *, indices):
+        del indices
+        return (-1.0 + 2.0 * coefficient * x)[:, :, None]
+
+    problem = BatchedLeastSquaresProblem(residual, jacobian)
+    initial = np.zeros((1, 1))
+    legacy = batched_levenberg_marquardt(
+        problem, initial, config=LMConfig(solver_version="v0.1.3")
+    )
+    current = batched_levenberg_marquardt(problem, initial)
+
+    # Reproducing the release includes its premature function stop; selecting
+    # the version must not silently retain the newer prediction requirement.
+    assert legacy.solver_version == "v0.1.3"
+    assert current.solver_version == "v0.2"
+    assert legacy.status.tolist() == [LMStatus.CONVERGED_F_TOL]
+    assert legacy.evaluations.tolist() == [2]
+    np.testing.assert_allclose(legacy.parameters, 1.0 / 1.001)
+    assert legacy.covariance_factor is None
+    assert current.evaluations[0] > legacy.evaluations[0]
+    assert current.residual_norm[0] < 0.8 * legacy.residual_norm[0]
+
+
+@pytest.mark.parametrize(
+    "target, tolerances, expected_status, expected_evaluations",
+    [
+        (1.0, {"x_tol": 0.9, "f_tol": 0.0}, LMStatus.CONVERGED_X_TOL, 2),
+        (1.0, {"x_tol": 0.9, "f_tol": 1.0}, LMStatus.CONVERGED_F_TOL, 2),
+        (0.1, {"g_tol": 0.5}, LMStatus.CONVERGED_G_TOL, 1),
+    ],
+    ids=["step-threshold", "function-before-step", "gradient-residual-floor"],
+)
+def test_legacy_solver_retains_release_stopping_rules(
+    target, tolerances, expected_status, expected_evaluations
+) -> None:
+    def residual(x, *, indices):
+        del indices
+        return x - target
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.ones((len(x), 1, 1))
+
+    # The first step is about one, between x_tol and x_tol * (1 + x_tol).
+    # The third case's small residual reaches the release's gradient floor.
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.zeros((1, 1)),
+        config=LMConfig(solver_version="v0.1.3", **tolerances),
+    )
+
+    assert result.status.tolist() == [expected_status]
+    assert result.evaluations.tolist() == [expected_evaluations]
+
+
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_solver_versions_preserve_correlated_parameter_covariance(
+    solver_version,
+) -> None:
+    matrix = np.asarray([[1.0, 1.0, 0.0], [0.0, 2.0, 1.0]])
+    target = np.asarray([[1.0, -2.0]]) @ matrix
+
+    def residual(x, *, indices):
+        del indices
+        return x @ matrix - target
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(matrix, (len(x), 2, 3))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.zeros((1, 2)),
+        config=LMConfig(solver_version=solver_version),
+    )
+
+    assert result.converged.all()
+    assert result.rank.tolist() == [2]
+    np.testing.assert_allclose(
+        result.covariance[0], np.linalg.inv(matrix @ matrix.T), rtol=1e-12
+    )
+
+
+def test_legacy_solver_retains_release_scaling_and_rank() -> None:
+    units = np.asarray([1.0e-20, 1.0, 1.0e20])
+
+    def residual(x, *, indices):
+        return x * units[indices, None] - 1
+
+    def jacobian(x, *, indices):
+        del x
+        return units[indices, None, None]
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.zeros((3, 1)),
+        config=LMConfig(solver_version="v0.1.3"),
+    )
+    # The release's epsilon floor and raw step norm make these mathematically
+    # equivalent problems stop differently when parameter units change.
+    assert result.status.tolist() == [
+        LMStatus.CONVERGED_G_TOL,
+        LMStatus.CONVERGED_F_TOL,
+        LMStatus.CONVERGED_X_TOL,
+    ]
+    np.testing.assert_allclose(result.residuals[[0, 2], 0], [-1, -1 / 1001])
+    assert abs(result.residuals[1, 0]) < 1e-9
+    np.testing.assert_allclose(result.covariance[:, 0, 0], 1 / units**2)
+    assert result.covariance_factor is None
+
+    matrix = np.diag(units[[0, 2]])
+
+    def coupled_residual(x, *, indices):
+        del indices
+        return x @ matrix
+
+    def coupled_jacobian(x, *, indices):
+        del indices
+        return np.broadcast_to(matrix, (len(x), 2, 2))
+
+    problem = BatchedLeastSquaresProblem(coupled_residual, coupled_jacobian)
+    legacy = batched_levenberg_marquardt(
+        problem,
+        np.zeros((1, 2)),
+        config=LMConfig(solver_version="v0.1.3"),
+    )
+    current = batched_levenberg_marquardt(problem, np.zeros((1, 2)))
+    assert legacy.rank.tolist() == [1]
+    assert np.isnan(legacy.covariance).all()
+    assert current.rank.tolist() == [2]
+    np.testing.assert_allclose(
+        current.covariance[0], np.diag(1 / units[[0, 2]] ** 2)
+    )
+
+
+def test_solver_version_is_validated_when_configured() -> None:
+    with pytest.raises(ValueError, match=r"solver_version.*got 'v0\.1'"):
+        LMConfig(solver_version="v0.1")
+
+
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_solver_versions_clear_diagnostics_after_invalid_trials(
+    solver_version,
+):
+    def residual(x, *, indices):
+        value = x - 1
+        value[(indices == 0) & (x[:, 0] != 0)] = np.nan
+        return value
+
+    def jacobian(x, *, indices):
+        del indices
+        return np.ones((len(x), 1, 1))
+
+    result = batched_levenberg_marquardt(
+        BatchedLeastSquaresProblem(residual, jacobian),
+        np.zeros((2, 1)),
+        config=LMConfig(solver_version=solver_version),
+    )
+
+    # Both versions keep the current safety rule: a derivative cached before
+    # invalid trials must not survive an INVALID_RESIDUAL result.
+    assert result.status[0] == LMStatus.INVALID_RESIDUAL
+    assert result.rank[0] == -1
+    for name in ("jacobian", "gradient", "gn_hessian", "covariance"):
+        assert np.isnan(getattr(result, name)[0]).all()
+    assert result.parameters[0, 0] == 0
+    assert result.converged[1]
+    np.testing.assert_allclose(result.parameters[1], 1)
 
 
 def test_ill_scaled_covariance_and_rank_are_independent_of_units() -> None:

@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 from ._types import BackendArray, FitMode
-from .solver import _normal_equations_from_jacobian
+from .solver import SolverVersion, _normal_equations_from_jacobian
 
 _BLOCK_SIZE = 128
 
@@ -173,6 +173,7 @@ class GaussianFusedProblem:
         weights: BackendArray,
         image_shape: tuple[int, int],
         mode: FitMode,
+        solver_version: SolverVersion = "v0.2",
     ) -> None:
         if mode not in ("difference", "split"):
             raise ValueError("mode must be 'difference' or 'split'")
@@ -195,6 +196,7 @@ class GaussianFusedProblem:
                 "images and weights must match the Gaussian mode"
             )
         self._cp = cp
+        self._solver_version = solver_version
         self._height = np.int64(height)
         self._width = np.int64(width)
         self._observations = int(np.prod(expected_shape))
@@ -305,4 +307,6 @@ class GaussianFusedProblem:
                 self._cp.empty((0, 8), dtype=self._dtype),
                 self._cp.empty((0, 8, 8), dtype=self._dtype),
             )
-        return _normal_equations_from_jacobian(jacobian, residuals, self._cp)
+        return _normal_equations_from_jacobian(
+            jacobian, residuals, self._cp, solver_version=self._solver_version
+        )

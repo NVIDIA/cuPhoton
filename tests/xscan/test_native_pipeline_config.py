@@ -43,6 +43,7 @@ def test_default_execution_preserves_legacy_payload_and_hash(tmp_path):
     legacy_xfit = asdict(config.xfit)
     del legacy_xfit["backend"]
     del legacy_xfit["fusion"]
+    del legacy_xfit["solver_version"]
     legacy["xfit"] = legacy_xfit
 
     restored = DevicePipelineConfig.from_payload(legacy)
@@ -91,8 +92,9 @@ def test_invalid_execution_is_rejected_in_config(options, error, message):
 
 
 @pytest.mark.parametrize("backend", ["cupy", "native"])
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
 def test_stage_forwards_execution_and_reports_actual_backend(
-    tmp_path, monkeypatch, backend
+    tmp_path, monkeypatch, backend, solver_version
 ):
     pytest.importorskip("torch")
     import cuphoton.xfit as xfit
@@ -102,7 +104,9 @@ def test_stage_forwards_execution_and_reports_actual_backend(
 
     config = _config(
         tmp_path,
-        DeviceXFitPipelineConfig(backend=backend),
+        DeviceXFitPipelineConfig(
+            backend=backend, solver_version=solver_version
+        ),
     )
     captured = {}
     result = SimpleNamespace(
@@ -148,7 +152,7 @@ def test_stage_forwards_execution_and_reports_actual_backend(
         0,
     )
     assert metadata["backend"] == backend
-    assert captured["config"] == LMConfig()
+    assert captured["config"] == LMConfig(solver_version=solver_version)
     if backend == "native":
         assert captured["backend"] == "native"
     else:

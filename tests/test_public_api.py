@@ -262,6 +262,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "model",
         "mode",
         "covariance_factor",
+        "solver_version",
     ]
 
 

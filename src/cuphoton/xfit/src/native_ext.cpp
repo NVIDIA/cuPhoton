@@ -409,14 +409,15 @@ PyObject* run_impl(PyObject* arguments) {
     Batch batch{};
     if (!PyArg_ParseTuple(
             configuration,
-            "ddddddi",
+            "ddddddi|p",
             &settings.f_tol,
             &settings.x_tol,
             &settings.g_tol,
             &settings.initial_damping,
             &settings.damping_increase,
             &settings.damping_decrease,
-            &settings.max_evaluations)
+            &settings.max_evaluations,
+            &settings.legacy)
         || !PyArg_ParseTuple(
             dimensions, "iii", &batch.height, &batch.width, &batch.planes)) {
         return nullptr;
@@ -593,14 +594,15 @@ PyObject* fit_impl(PyObject* arguments) {
     Settings settings{};
     if (!PyArg_ParseTuple(
             configuration,
-            "ddddddi",
+            "ddddddi|p",
             &settings.f_tol,
             &settings.x_tol,
             &settings.g_tol,
             &settings.initial_damping,
             &settings.damping_increase,
             &settings.damping_decrease,
-            &settings.max_evaluations)
+            &settings.max_evaluations,
+            &settings.legacy)
         || !PyArg_ParseTuple(
             dimensions,
             "iiii",

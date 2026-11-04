@@ -37,6 +37,7 @@ from .solver import (
     LMStatus,
     NormalEquationsFunction,
     ResidualFunction,
+    SolverVersion,
     batched_levenberg_marquardt,
 )
 
@@ -65,6 +66,7 @@ __all__ = [
     "ResidualFunction",
     "ResolvedBackend",
     "SingleSourceFitResult",
+    "SolverVersion",
     "StampEvaluation",
     "StampDipoleModel",
     "batched_levenberg_marquardt",

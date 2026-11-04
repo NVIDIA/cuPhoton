@@ -29,6 +29,8 @@ from .solver import (
     BatchedLeastSquaresProblem,
     LMConfig,
     LMStatus,
+    SolverVersion,
+    _validate_solver_version,
     batched_levenberg_marquardt,
 )
 
@@ -47,8 +49,9 @@ class DipoleFitResult:
     parameter units. Propagate a derived quantity's gradient g through F
     before squaring: its local variance is the squared norm of g F. This
     preserves small uncertainties that cancellation in the dense covariance
-    can erase. The factor is NaN for invalid rows and may be None in results
-    constructed by callers. Its columns are not uniquely determined.
+    can erase. The factor is NaN for invalid rows. It is None under the
+    ``"v0.1.3"`` policy and may be None in results constructed by callers.
+    Its columns are not uniquely determined.
     The v1 fit artifacts store the dense covariance only; consume the factor
     from the live result when calculating derived uncertainties.
     """
@@ -78,6 +81,7 @@ class DipoleFitResult:
     model: ModelName
     mode: FitMode
     covariance_factor: np.ndarray | None = None
+    solver_version: SolverVersion = "v0.2"
 
 
 class DipoleFitUncertaintyReason(IntEnum):
@@ -117,7 +121,7 @@ class DeviceDipoleFitResult:
     original result before transforming xScan features.
 
     ``covariance_factor`` has the same meaning as in :class:`DipoleFitResult`
-    and remains on the device alongside the dense covariance.
+    and, when present, remains on the device alongside the dense covariance.
     """
 
     parameters: Any
@@ -157,8 +161,10 @@ class DeviceDipoleFitResult:
         default="device",
     )
     covariance_factor: Any | None = None
+    solver_version: SolverVersion = "v0.2"
 
     def __post_init__(self) -> None:
+        _validate_solver_version(self.solver_version)
         if self.backend not in {
             "cupy",
             "cutile",
@@ -355,6 +361,7 @@ class _BackendDipoleFitResult:
     dtype: FloatDType
     model: ModelName
     mode: FitMode
+    solver_version: SolverVersion = "v0.2"
 
 
 def _floating_dtype(value: BackendArray) -> np.dtype[Any]:
@@ -870,7 +877,15 @@ def _fit_dipoles_backend(
         jacobian_function = jacobian
 
     normal_equations = None
-    if gaussian_model and resolved.name == "cutile" and workspace is None:
+    # Float32 contractions follow the selected solver policy: v0.2 widens
+    # products before reduction, while v0.1.3 retains float32 intermediates.
+    # The direct Tile kernel has no policy-specific accumulation mode.
+    if (
+        gaussian_model
+        and resolved.name == "cutile"
+        and workspace is None
+        and dtype == np.float64
+    ):
         from ._cutile import gaussian_normal_equations
 
         def normal_equations(
@@ -897,6 +912,7 @@ def _fit_dipoles_backend(
             weights,
             image_shape=(height, width),
             mode=mode,
+            solver_version=(config or LMConfig()).solver_version,
         )
         residual_function = fused.residual
         normal_equations = fused.normal_equations
@@ -908,7 +924,11 @@ def _fit_dipoles_backend(
         from ._numba_mlir import GaussianWorkspace as NumbaGaussianWorkspace
 
         execution = NumbaGaussianWorkspace(
-            images_array, weights, image_shape=(height, width), mode=mode
+            images_array,
+            weights,
+            image_shape=(height, width),
+            mode=mode,
+            solver_version=(config or LMConfig()).solver_version,
         )
     with execution as numba_workspace:
         problem = BatchedLeastSquaresProblem(
@@ -1073,6 +1093,7 @@ def _fit_dipoles_backend(
         dtype=cast(FloatDType, dtype.name),
         model=selected_model.name,
         mode=mode,
+        solver_version=low_level.solver_version,
     )
 
 
@@ -1122,6 +1143,7 @@ def _materialize_dipole_fit_result(
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,
+        solver_version=result.solver_version,
     )
 
 
@@ -1187,6 +1209,12 @@ def fit_dipoles(
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
     evaluation with ``backend="cupy"`` or ``backend="cutile"``. Both retain
     CuPy normal-equation contractions and require analytic derivatives.
+
+    ``config=LMConfig(solver_version="v0.1.3")`` selects the legacy scaling,
+    stopping and covariance rules. The default ``"v0.2"`` retains the current
+    numerical corrections. Results record the selected ``solver_version``;
+    neither choice guarantees scientific validity or convergence for every
+    fit.
     """
 
     _validate_execution_options(model, backend, config)
@@ -1318,6 +1346,7 @@ def fit_dipoles_device(
         dtype=result.dtype,
         model=result.model,
         mode=result.mode,
+        solver_version=result.solver_version,
     )
 
 

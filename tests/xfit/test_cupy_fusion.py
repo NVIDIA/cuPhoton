@@ -240,14 +240,16 @@ def test_cupy_fusion_callbacks_preserve_weighting_indices_and_layout(
 
 
 @pytest.mark.parametrize("backend", ["numpy", "cupy"])
-def test_cupy_fusion_preserves_representable_fp32_normal_equations(
-    monkeypatch, backend
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_cupy_fusion_obeys_solver_version_precision(
+    monkeypatch, backend, solver_version
 ):
     from cuphoton.xfit._cupy_fused import GaussianFusedProblem
 
     ap = np if backend == "numpy" else _require_cupy()
     problem = object.__new__(GaussianFusedProblem)
     problem._cp = ap
+    problem._solver_version = solver_version
     problem._dtype = np.dtype(np.float32)
     problem._observations = 16
     # Each product is below FP32 range, but their sum is representable.
@@ -261,11 +263,59 @@ def test_cupy_fusion_preserves_representable_fp32_normal_equations(
         residual,
         indices=ap.asarray([0], dtype=ap.int64),
     )
-    expected = np.float32(2.0**-146)
+    expected = np.float32(2.0**-146 if solver_version == "v0.2" else 0.0)
     for result in (gradient, hessian):
         actual = result if backend == "numpy" else ap.asnumpy(result)
         assert actual.dtype == np.float32
         np.testing.assert_array_equal(actual, np.full(actual.shape, expected))
+
+
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
+def test_public_cupy_fusion_forwards_solver_version(
+    monkeypatch, solver_version
+):
+    cp = _require_cupy()
+    model = GaussianDipoleModel((11, 15), dtype=np.float32)
+    parameters = np.asarray(
+        [[2.0**-75, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7]],
+        dtype=np.float32,
+    )
+
+    class InspectedNormalEquations(Exception):
+        pass
+
+    def inspect(problem, initial, *, config):
+        indices = cp.asarray([0])
+        residual = problem.residual(initial, indices=indices)
+        jacobian = problem.jacobian(initial, indices=indices)
+        _, hessian = problem.normal_equations(
+            initial, residual, indices=indices
+        )
+        # Shape-derivative products individually underflow FP32; v0.2
+        # accumulates them in FP64 before rounding the representable sum.
+        if solver_version == "v0.2":
+            shape_jacobian = cp.asnumpy(jacobian[:, 1:]).astype(np.float64)
+            expected = (
+                shape_jacobian @ shape_jacobian.swapaxes(1, 2)
+            ).astype(np.float32)
+            assert np.any(expected != 0)
+        else:
+            expected = np.zeros((1, 7, 7), dtype=np.float32)
+        np.testing.assert_array_equal(
+            cp.asnumpy(hessian[:, 1:, 1:]), expected
+        )
+        raise InspectedNormalEquations
+
+    monkeypatch.setattr(xfit_api, "batched_levenberg_marquardt", inspect)
+    with pytest.raises(InspectedNormalEquations):
+        fit_dipoles(
+            model.evaluate(parameters),
+            model=model,
+            initial=parameters,
+            backend="cupy",
+            fusion=True,
+            config=LMConfig(solver_version=solver_version),
+        )
 
 
 def test_cupy_fusion_preserves_cancelling_hessian_terms():

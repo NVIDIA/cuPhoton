@@ -742,8 +742,10 @@ def test_portable_result_owns_all_materialized_arrays() -> None:
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("solver_version", ["v0.1.3", "v0.2"])
 def test_fit_dipoles_device_matches_portable_result_without_bulk_d2h(
     dtype,
+    solver_version,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cp = _require_cupy_device()
@@ -795,6 +797,7 @@ def test_fit_dipoles_device_matches_portable_result_without_bulk_d2h(
             images,
             model=model,
             initial=initial,
+            config=LMConfig(solver_version=solver_version),
         )
 
         # Keep the guards effective for numerical results of every rank,
@@ -825,8 +828,11 @@ def test_fit_dipoles_device_matches_portable_result_without_bulk_d2h(
         model=model,
         initial=initial,
         backend="cupy",
+        config=LMConfig(solver_version=solver_version),
     )
 
+    assert device.solver_version == portable.solver_version == solver_version
+    assert (device.covariance_factor is None) == (solver_version == "v0.1.3")
     assert isinstance(device, DeviceDipoleFitResult)
     assert device.schema == "cuphoton.xfit.device-fit-result/v1"
     assert device.solver == "levenberg-marquardt"

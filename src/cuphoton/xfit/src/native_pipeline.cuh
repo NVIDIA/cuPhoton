@@ -198,7 +198,12 @@ __global__ void prepare_parameters(GaussianFit fit, int* error) {
 
 template <typename T>
 __global__ void final_jacobians(
-    GaussianFit fit, T* jacobian, T* scale, bool* eligible, T cube_exponent) {
+    GaussianFit fit,
+    T* jacobian,
+    T* scale,
+    bool* eligible,
+    T cube_exponent,
+    bool legacy) {
     int row = blockIdx.x, m = fit.height * fit.width * fit.planes;
     auto status = static_cast<const std::int8_t*>(fit.outputs[4])[row];
     bool current = static_cast<const bool*>(fit.outputs[6])[row];
@@ -243,7 +248,7 @@ __global__ void final_jacobians(
                     jacobian
                         [(std::size_t(row) * 8 + threadIdx.x) * m + pixel]));
         }
-        scale[row * 8 + threadIdx.x] = largest > 0 ? largest : T(1);
+        scale[row * 8 + threadIdx.x] = !legacy && largest > 0 ? largest : T(1);
     }
 }
 
@@ -326,7 +331,9 @@ __global__ void inverse_factors(
     int* rank,
     int count,
     int m,
-    bool transposed_vectors) {
+    bool transposed_vectors,
+    bool legacy,
+    T* covariance_vectors) {
     int slot = blockIdx.x * blockDim.x + threadIdx.x;
     if (slot >= count) {
         return;
@@ -347,14 +354,24 @@ __global__ void inverse_factors(
     for (int p = 0; p < 8; ++p) {
         for (int q = 0; q < 8; ++q) {
             T value = T(NAN);
+            T right = T(NAN);
             if (rank_value == 8 && info[slot] == 0) {
                 T u = vectors
                     [slot * 64 + (transposed_vectors ? p * 8 + q : q * 8 + p)];
-                value = rn_div(
-                    rn_div(u, singular_values[slot * 8 + q]),
-                    scale[row * 8 + p]);
+                if (legacy) {
+                    T singular = singular_values[slot * 8 + q];
+                    value = rn_mul(u, rn_div(T(1), rn_mul(singular, singular)));
+                    right = u;
+                } else {
+                    value = rn_div(
+                        rn_div(u, singular_values[slot * 8 + q]),
+                        scale[row * 8 + p]);
+                }
             }
             factors[slot * 64 + p * 8 + q] = value;
+            if (legacy) {
+                covariance_vectors[slot * 64 + p * 8 + q] = right;
+            }
         }
     }
 }
@@ -574,7 +591,7 @@ struct GaussianPipeline::Impl {
     }
 
     template <typename T>
-    void diagnostics(const GaussianFit& fit, cudaStream_t stream) {
+    void diagnostics(const GaussianFit& fit, cudaStream_t stream, bool legacy) {
         int count = fit.count, m = fit.height * fit.width * fit.planes;
         T* j = jacobian.get<T>(std::size_t(count) * 8 * m);
         T* scale = scales.get<T>(count * 8);
@@ -583,7 +600,7 @@ struct GaussianPipeline::Impl {
         initialize_diagnostics<T>
             <<<(count + 127) / 128, 128, 0, stream>>>(fit, ranks);
         final_jacobians<T>
-            <<<count, threads, 0, stream>>>(fit, j, scale, valid, T(3));
+            <<<count, threads, 0, stream>>>(fit, j, scale, valid, T(3), legacy);
         check(cudaGetLastError());
         std::vector<unsigned char> valid_host(count);
         check(cudaMemcpyAsync(
@@ -947,7 +964,8 @@ struct GaussianPipeline::Impl {
                     }
                 }
                 T* f = factors.get<T>(selected * 64);
-                T* cov = covariance.get<T>(selected * 64);
+                T* cov = covariance.get<T>(selected * (legacy ? 128 : 64));
+                T* right = legacy ? cov + selected * 64 : f;
                 inverse_factors<<<(selected + 127) / 128, 128, 0, stream>>>(
                     u,
                     s,
@@ -958,7 +976,9 @@ struct GaussianPipeline::Impl {
                     ranks,
                     selected,
                     m,
-                    !jacobi);
+                    !jacobi,
+                    legacy,
+                    right);
                 T alpha = 1, beta = 0;
                 if constexpr (sizeof(T) == 8) {
                     check(cublasDgemmStridedBatched(
@@ -969,7 +989,7 @@ struct GaussianPipeline::Impl {
                         8,
                         8,
                         &alpha,
-                        f,
+                        right,
                         8,
                         64,
                         f,
@@ -989,7 +1009,7 @@ struct GaussianPipeline::Impl {
                         8,
                         8,
                         &alpha,
-                        f,
+                        right,
                         8,
                         64,
                         f,
@@ -1046,7 +1066,7 @@ struct GaussianPipeline::Impl {
                             static_cast<char*>(fit.outputs[field])
                             + row * elements * bytes;
                     }
-                    diagnostics<T>(single, stream);
+                    diagnostics<T>(single, stream, legacy);
                 }
                 return;
             }
@@ -1131,7 +1151,7 @@ struct GaussianPipeline::Impl {
             fit.fp64};
         Timings timings =
             lm.run(batch, settings, reinterpret_cast<std::uintptr_t>(stream));
-        diagnostics<T>(fit, stream);
+        diagnostics<T>(fit, stream, settings.legacy);
         return timings;
     }
 };
