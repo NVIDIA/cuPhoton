@@ -31,9 +31,10 @@ def build_environment(tmp_path):
     bin_dir.mkdir()
     for name in ("dirname", "env", "mktemp", "rm"):
         (bin_dir / name).symlink_to(shutil.which(name))
+    (bin_dir / "xdr-python").symlink_to(sys.executable)
     _executable(
         bin_dir / "uv",
-        f"#!{sys.executable}\n"
+        "#!/usr/bin/env xdr-python\n"
         "import json, os, sys\n"
         "from pathlib import Path\n"
         "arguments = sys.argv[1:]\n"

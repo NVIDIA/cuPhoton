@@ -355,5 +355,12 @@ def test_response_contract_validates_answers(tmp_path, monkeypatch, invalid):
         assert report["citations"] == answer["citations"]
     else:
         assert report["status"] == "failed"
+        expected_error = {
+            "finish_reason": (
+                "endpoint did not complete a bounded text response"
+            ),
+            "tool_calls": "model requested unsupported tool execution",
+        }.get(invalid, "model response failed evidence validation")
+        assert report["diagnostic"] == expected_error
         assert "narrative" not in report
         assert "citations" not in report

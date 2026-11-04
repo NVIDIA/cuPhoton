@@ -219,7 +219,8 @@ Only CUDA 13 dependency variants are supported by this release.
 For a Dragon GPU environment, run `make sync-dragon` (Python 3.12), or
 `make sync-dragon DRAGON_PYTHON=3.13`. The generated
 [`requirements-dragon.txt`](requirements-dragon.txt) provides the same pinned
-runtime dependencies for pip users. See the
+runtime dependencies for pip users, including catalog tables for xScan and
+the transient-chain example. See the
 [Dragon installation handoff](docs/getting-started.md#dragon-with-pip)
 for installation and regeneration instructions.
 

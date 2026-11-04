@@ -117,17 +117,18 @@ DragonHPC 0.14.2 provides Linux x86-64 and ARM64 wheels for Python 3.12 and
 instead of silently omitting Dragon. Use the installed `dragon` launcher and
 the [distributed launch guide](distributed-execution.md).
 Both executors need the same environment on every participating node.
-The Dragon target selects `gpu`, `viz`, and `dragon`. Add `--extra catalog`
-to an explicit `uv sync` command when using xScan's catalog/registry inputs,
-or `--extra ximage` for xImage workflows. Include every desired extra when
-syncing an existing environment.
+The Dragon target selects `gpu`, `viz`, `dragon`, and `catalog`, including
+xScan's catalog/registry inputs and the transient-chain example's catalog
+tables. For xImage workflows, add `--extra ximage` to an explicit `uv sync`
+command. Include every desired extra when syncing an existing environment.
 
 ### Dragon with pip
 
 [`requirements-dragon.txt`](../requirements-dragon.txt) is generated from
-`uv.lock` for the `gpu`, `viz`, and `dragon` extras. It contains pinned runtime
-dependencies and hashes for Linux on Python 3.12 or 3.13. Use the requirements
-file from the same release or revision as cuPhoton, in a fresh environment:
+`uv.lock` for the `gpu`, `viz`, `dragon`, and `catalog` extras. It contains
+pinned runtime dependencies and hashes for Linux on Python 3.12 or 3.13. Use
+the requirements file from the same release or revision as cuPhoton, in a
+fresh environment:
 
 ```bash
 python -m pip install --require-hashes -r requirements-dragon.txt
@@ -140,9 +141,11 @@ still needs the [native build prerequisites](components/xdr.md#install).
 The NVIDIA driver and site configuration remain host prerequisites. On ARM64,
 Photutils requires a source build and its compiler prerequisites described above.
 
-Regenerate the file after changing `pyproject.toml` and running `uv lock`:
+After changing `pyproject.toml`, regenerate the lock with the uv version used
+by CI, then regenerate the requirements file:
 
 ```bash
+uv tool run --from 'uv==0.12.1' uv lock
 make requirements-dragon
 make requirements-check
 ```

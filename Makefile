@@ -6,7 +6,7 @@
 
 CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry --extra xlens-inference --extra ximage --extra rubin --extra catalog
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
-DRAGON_EXTRAS = --extra gpu --extra viz --extra dragon
+DRAGON_EXTRAS = --extra gpu --extra viz --extra dragon --extra catalog
 DRAGON_PYTHON ?= 3.12
 DRAGON_EXPORT = uv export --locked --no-default-groups --format requirements.txt --no-emit-project $(DRAGON_EXTRAS)
 CORE_EXTRAS = --extra dev --extra photometry

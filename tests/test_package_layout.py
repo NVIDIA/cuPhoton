@@ -189,6 +189,10 @@ def test_cli_help_and_version_do_not_import_optional_gpu_packages(
 import importlib.abc
 import sys
 
+# Match absent packages when Astropy probes them with find_spec.
+for name in ("pandas", "numexpr", "pydantic"):
+    sys.modules[name] = None
+
 BLOCKED = (
     "cupy",
     "dragon",
