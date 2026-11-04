@@ -1,0 +1,18 @@
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+SPDX-License-Identifier: Apache-2.0
+
+The license above covers the figure composition and annotations.
+
+Source pixels: Spitzer/SINGS M51 (NGC 5194 and NGC 5195), IRAC channel 1.
+Credit: Spitzer/SINGS; NASA/IPAC Infrared Science Archive;
+Kennicutt et al. (2003). Dataset DOI: https://doi.org/10.26131/IRSA424
+
+The underlying archival data are publicly reusable with no usage restrictions
+under IRSA's public-data policy:
+https://irsa.ipac.caltech.edu/data_use_terms.html
+
+The left panel displays a cropped archival image with an asinh intensity
+stretch. The center and right panels show a cuPhoton subtraction from a
+controlled simulation using that image. Source motion, detector artifacts
+and added noise are simulated. The image does not claim an observed transient.
+The pinned source URL, checksum and attribution are in source-data.json.

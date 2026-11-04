@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# prepare.py substitutes absolute dataset, feature and output paths.
+dataset_dir: training/dataset
+output_root: training
+run_name: model
+use_xfit_features: true
+xfit_feature_dir: training/features
+seed: 2026
+device: cuda:0
+epochs: 20
+batch_size: 32
+learning_rate: 0.001
+weight_decay: 0.0
+train_split: train
+val_split: val
+eval_split: test
+performance:
+  amp_dtype: "off"
+  allow_tf32: false
+  cudnn_benchmark: false
+  compile: false
+  num_workers: 0
+model:
+  input_mode: triplet
+  image_size: 51
+  depths: [1]
+  num_heads: [1]
+  embed_dims: [8]
+  decoder_embedding_dim: 4
+  pos_dim: 8
+  output_nc: 1
+  drop_rate: 0.0
+  attn_drop: 0.0
+  xfit_hidden_dim: 8
