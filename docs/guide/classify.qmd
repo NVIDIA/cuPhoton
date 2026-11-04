@@ -1,0 +1,426 @@
+# Classify candidates {#sec-classify}
+
+A real/bogus classifier reads three cutouts around a candidate, from the target, the reference and the difference image, and returns the probability that the candidate is a real change in the sky and not an artifact, such as a cosmic ray or a badly subtracted star. xScan (`cuphoton.xscan`) trains and runs these classifiers with PyTorch, using the transformer of [Inada et al. (2026)](https://doi.org/10.3847/1538-3881/ae38d8). Its command-line workflow packages cutouts as a dataset, checks it, trains, evaluates, predicts and queues uncertain candidates for human review. Use xScan after @sec-subtract has found the candidates.
+
+**You need:**
+
+- cuPhoton with the `torch` extra on a CPU or the `gpu` extra on a GPU host (@sec-install). The review viewers also need `viz`.
+- For each candidate, three cutouts of the same square size, centered on it, and a label: 1 for real, 0 for bogus.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic set of cutouts. The printed values only demonstrate the API.
+:::
+
+## Make labeled cutouts
+
+The block below makes 240 synthetic candidates of 21 by 21 pixels, in units of the sky noise. Half are real, with a new source in the target. The other half are bogus. They hold a star that moved by one pixel between the images, or a cosmic ray (one bright pixel in the target).
+
+```{python}
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, size = 240, 21
+yy, xx = np.mgrid[:size, :size] - size // 2
+
+
+def psf(dx):  # a Gaussian point source, shifted dx pixels to the right
+    return np.exp(-(yy**2 + (xx - dx) ** 2) / (2 * 1.5**2))
+
+
+labels = np.tile([1, 0], n // 2)                          # 1 real, 0 bogus
+kind = np.where(labels == 1, 0, rng.integers(1, 3, n))    # 0 new source, 1 moved star, 2 cosmic ray
+peak = rng.uniform(5, 25, n)[:, None, None]
+reference = rng.normal(0, 1, (n, size, size)).astype(np.float32)
+target = rng.normal(0, 1, (n, size, size)).astype(np.float32)
+target += np.where(kind[:, None, None] == 0, peak * psf(0), 0)
+reference += np.where(kind[:, None, None] == 1, peak * psf(0), 0)
+target += np.where(kind[:, None, None] == 1, peak * psf(1), 0)
+target[kind == 2, size // 2, size // 2] += peak[kind == 2, 0, 0]
+difference = target - reference
+print(target.shape, target.dtype, "real:", labels.sum(), "bogus:", n - labels.sum())
+```
+
+Training and prediction use the cutouts as stored. They do not align, subtract or rescale them. Prepare every cutout the same way.
+
+## Write the dataset
+
+xScan reads a dataset directory with one NumPy file per array (@tbl-xscan-files). It calls the target `search` and the reference `template`.
+
+| File | Shape | Holds |
+|---|---|---|
+| `search.npy` | (candidate, y, x) | target cutouts |
+| `template.npy` | (candidate, y, x) | reference cutouts |
+| `difference.npy` | (candidate, y, x) | difference cutouts, for triplet models |
+| `labels.npy` | (candidate,) | 1 real, 0 bogus |
+| `split.npy` | (candidate,) | 0 train, 1 validation, 2 test |
+| `metadata.jsonl` | one JSON object per candidate | identifiers, label source and split group |
+
+: The files of an xScan dataset. {#tbl-xscan-files}
+
+```{python}
+import json
+from pathlib import Path
+
+dataset = Path("sample/cutouts")
+dataset.mkdir(parents=True, exist_ok=True)
+split = np.repeat([0, 1, 2], [160, 40, 40])
+for name, array in [("search", target), ("template", reference), ("difference", difference),
+                    ("labels", labels), ("split", split)]:
+    np.save(dataset / f"{name}.npy", array)
+rows = [{"candidate_id": f"cand-{i}", "split_group": f"cand-{i}", "split": ("train", "val", "test")[s],
+         "label": int(y), "label_source": "synthetic", "exposure_id": 0, "ccd_id": 0, "band": "r",
+         "x": 10, "y": 10} for i, (s, y) in enumerate(zip(split, labels))]
+(dataset / "metadata.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+```
+
+`label_source` records where a label came from. `split_group` names the object a candidate belongs to. Keep all candidates of one object in one split. The dataset check also requires `exposure_id`, `ccd_id` (the detector chip), `band` (the filter) and the cutout center `x`, `y`. Use placeholders when your data has none.
+
+## Check the dataset
+
+`validate_dataset_dir` checks shapes, splits and metadata fields. The label guard, `check_training_label_provenance`, checks that the labels are binary, match the metadata, have a named source, cover both classes and keep each `split_group` in one split.
+
+```{python}
+from cuphoton.xscan.dataset import validate_dataset_dir
+from cuphoton.xscan.training import check_training_label_provenance
+
+report = validate_dataset_dir(dataset)
+print("valid:", report["valid"], "| input mode:", report["input_mode"])
+print(report["splits"])
+guard = check_training_label_provenance(dataset)
+print("labels ok:", guard["ok"], guard["errors"])
+```
+
+The command-line equivalents print the full JSON reports. With `--require-ok`, the label check exits with an error when it fails:
+
+```bash
+cuphoton xscan data-validate --dataset-dir sample/cutouts
+cuphoton xscan data-check-training-labels --dataset-dir sample/cutouts --require-ok
+```
+
+Training runs the label guard again and stops when it fails.
+
+## Train a model
+
+Training reads a YAML file. The model settings below make a tiny network that trains in seconds on a CPU. For the default network, which takes 51-pixel cutouts, start from the repository's `examples/xscan/train-triplet.example.yaml`.
+
+```{python}
+import shutil
+
+Path("runs").mkdir(exist_ok=True)
+Path("runs/classify-train.yaml").write_text("""\
+dataset_dir: sample/cutouts
+output_root: runs
+run_name: classify-demo
+epochs: 2
+batch_size: 16
+early_stopping_metric: val_loss   # keep the epoch with the lowest validation loss
+device: auto                      # CUDA when PyTorch finds a GPU, otherwise the CPU
+model:
+  image_size: 21                  # cutout side in pixels
+  depths: [1, 1]                  # two small encoder stages, for this demo only
+  num_heads: [1, 1]
+  embed_dims: [16, 16]
+  decoder_embedding_dim: 16
+""")
+shutil.rmtree("runs/classify-demo", ignore_errors=True)  # xScan never writes into an existing run
+```
+
+Train the triplet model, which reads all three channels. `train-inada-pair` reads the target and reference only. The command prints a JSON summary. Save it to a file:
+
+```bash
+cuphoton xscan train-inada-triplet --config runs/classify-train.yaml > runs/classify-train.json
+```
+
+```{python}
+#| echo: false
+import shlex
+import subprocess
+import sys
+
+command = "cuphoton xscan train-inada-triplet --config runs/classify-train.yaml"
+args = shlex.split(command)
+args[0] = str(Path(sys.executable).with_name(args[0]))
+with open("runs/classify-train.json", "w") as out:
+    subprocess.run(args, stdout=out, check=True)
+```
+
+The run directory `runs/classify-demo/` holds `checkpoint.pt`, the full configuration `config.yaml`, the per-epoch `history.json` and the run `summary.json`.
+
+```{python}
+summary = json.loads(Path("runs/classify-train.json").read_text())
+print("device:", summary["device"], "| saved epoch:", summary["early_stopping"]["best_epoch"],
+      "| selected by:", summary["best_metric"]["name"])
+for epoch in json.loads(Path("runs/classify-demo/history.json").read_text()):
+    print(f"epoch {epoch['epoch']:.0f}: train loss {epoch['train_loss']:.3f}, "
+          f"validation loss {epoch['val_loss']:.3f}, validation ROC AUC {epoch['val_roc_auc']:.3f}")
+```
+
+The checkpoint holds the epoch with the best selection metric, which is not always the last epoch. The default metric is the validation ROC AUC (defined in the next step).
+
+## Evaluate on the test split
+
+`evaluate-real-bogus` scores one split, `test` by default, and writes metrics, curves and per-candidate predictions to `runs/classify-demo/evaluation/test/`.
+
+```bash
+cuphoton xscan evaluate-real-bogus --run-dir runs/classify-demo --dataset-dir sample/cutouts > runs/classify-evaluate.json
+```
+
+```{python}
+#| echo: false
+command = "cuphoton xscan evaluate-real-bogus --run-dir runs/classify-demo --dataset-dir sample/cutouts"
+args = shlex.split(command)
+args[0] = str(Path(sys.executable).with_name(args[0]))
+with open("runs/classify-evaluate.json", "w") as out:
+    subprocess.run(args, stdout=out, check=True)
+```
+
+```{python}
+evaluation = json.loads(Path("runs/classify-evaluate.json").read_text())
+print(f"ROC AUC {evaluation['roc_auc']:.3f}, PR AUC {evaluation['pr_auc']:.3f}")
+thresholds = evaluation["threshold_diagnostics"]
+for name, result in [("fixed", thresholds["fixed_threshold"]),
+                     ("validation-selected", thresholds["validation_selected"]["evaluated_split_metrics"])]:
+    print(f"{name} threshold {result['threshold']:.3f}: accuracy {result['accuracy']:.3f}, "
+          f"real missed {result['fn']}, bogus passed {result['fp']}")
+```
+
+ROC AUC is the probability that a random real candidate scores higher than a random bogus one. PR AUC is the area under the precision-recall curve. A candidate counts as real when its probability reaches the threshold. Next to the fixed threshold of 0.5, the command picks the threshold with the best validation accuracy and applies it to the test split. `summary.md` in the same directory is a readable version of the report.
+
+## Predict
+
+`infer-real-bogus` only scores. It writes the logits and probabilities of one split to `runs/classify-demo/inference/test/`.
+
+```bash
+cuphoton xscan infer-real-bogus --run-dir runs/classify-demo --dataset-dir sample/cutouts > runs/classify-infer.json
+```
+
+```{python}
+#| echo: false
+command = "cuphoton xscan infer-real-bogus --run-dir runs/classify-demo --dataset-dir sample/cutouts"
+args = shlex.split(command)
+args[0] = str(Path(sys.executable).with_name(args[0]))
+with open("runs/classify-infer.json", "w") as out:
+    subprocess.run(args, stdout=out, check=True)
+```
+
+```{python}
+probabilities = np.load("runs/classify-demo/inference/test/probabilities.npy")
+print("p(real):", probabilities[:6].round(3))
+print("labels: ", labels[split == 2][:6])
+```
+
+The arrays follow the order of the test split in the dataset.
+
+## Score your own cutouts in Python
+
+For cutouts in memory, load the checkpoint and call the model. `load_model_from_checkpoint` rebuilds the network, loads the saved weights and sets evaluation mode. The model takes a float32 tensor of shape (candidate, channel, y, x), with the channels target, reference, difference. It returns one logit per candidate. The sigmoid of the logit is the probability that the candidate is real.
+
+```{python}
+import torch
+from cuphoton.xscan.training import load_model_from_checkpoint
+
+model, checkpoint, performance = load_model_from_checkpoint(Path("runs/classify-demo"), device=torch.device("cpu"))
+cutouts = np.stack([target, reference, difference], axis=1)[split == 2][:6]
+with torch.no_grad():
+    logits = model(torch.from_numpy(cutouts))
+print("p(real):", torch.sigmoid(logits).numpy().round(3))
+print("same as infer-real-bogus:", np.allclose(torch.sigmoid(logits).numpy(), probabilities[:6]))
+```
+
+@fig-classify shows test cutouts of each kind with these probabilities.
+
+```{python}
+#| label: fig-classify
+#| fig-cap: "Six test cutouts, two of each kind in the synthetic set, titled with the probability $p$ that the trained model gives them. Rows are the target, the reference and the difference. The target and reference share one magma scale per column, and the difference panels a red-blue scale centered on zero. A new source appears in the target and the difference only. A moved star leaves a positive and a negative lobe in the difference. A cosmic ray is one sharp pixel. Synthetic data, for demonstration only."
+#| fig-alt: "A grid of three rows and six columns of small cutouts. Columns show a new source, a moved star with a two-lobed difference, and a single bright pixel, each titled with a probability."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+
+test = np.flatnonzero(split == 2)
+picks = [i for k in range(3) for i in test[kind[test] == k][:2]]
+names = ["new source", "moved star", "cosmic ray"]
+fig, axes = plt.subplots(3, 6, figsize=(6.5, 3.8))
+for col, i in enumerate(picks):
+    top = max(target[i].max(), reference[i].max())
+    for row, (image, cmap, lo, hi) in enumerate([(target[i], "magma", -3, top), (reference[i], "magma", -3, top),
+                                                 (difference[i], "RdBu_r", -top / 2, top / 2)]):
+        axes[row, col].imshow(image, origin="lower", cmap=cmap, vmin=lo, vmax=hi)
+        axes[row, col].set_xticks([]); axes[row, col].set_yticks([])
+    p = probabilities[np.searchsorted(test, i)]
+    axes[0, col].set_title(f"{names[kind[i]]}\n$p$ = {p:.2f}", fontsize=8)
+for row, label in enumerate(["Target", "Reference", "Difference"]):
+    axes[row, 0].set_ylabel(label, fontsize=8)
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+## Handle checkpoints
+
+A checkpoint is a dictionary. `model_config` holds the network's shape, `model_state` its weights, `train_config` the training configuration and `xfit_feature_bundle` the identity of optional xFit features.
+
+```{python}
+print(sorted(checkpoint))
+config = checkpoint["model_config"]
+print(config["input_mode"], config["image_size"], config["embed_dims"])
+```
+
+`load_model_from_checkpoint` passes `model_config` to `build_model` and loads `model_state` into the result. Call `build_model(**checkpoint["model_config"])` to build the same network in your own PyTorch code. A checkpoint only works on cutouts with its input mode, size and preprocessing. A wrong size fails late, inside the network. To reject a checkpoint before any model is built, pass a `checkpoint_validator`, a function that raises `ValueError`:
+
+```{python}
+def require_triplet(size):
+    def check(checkpoint):
+        config = checkpoint["model_config"]
+        if config["input_mode"] != "triplet" or config["image_size"] != size:
+            raise ValueError(f"need a triplet model for {size} px cutouts, got "
+                             f"{config['input_mode']} for {config['image_size']} px")
+    return check
+
+
+try:
+    load_model_from_checkpoint(Path("runs/classify-demo"), checkpoint_validator=require_triplet(51))
+except ValueError as error:
+    print("ValueError:", error)
+```
+
+## Queue candidates for human review
+
+Reviewers correct and extend labels through a review queue. `review-queue` ranks the predictions of one split. The default strategy, `hybrid`, favors candidates near the decision threshold most.
+
+```bash
+cuphoton xscan review-queue --run-dir runs/classify-demo --dataset-dir sample/cutouts --output-dir runs/classify-demo/review --max-items 8 > runs/classify-review.json
+```
+
+```{python}
+#| echo: false
+command = ("cuphoton xscan review-queue --run-dir runs/classify-demo --dataset-dir sample/cutouts "
+           "--output-dir runs/classify-demo/review --max-items 8")
+args = shlex.split(command)
+args[0] = str(Path(sys.executable).with_name(args[0]))
+with open("runs/classify-review.json", "w") as out:
+    subprocess.run(args, stdout=out, check=True)
+```
+
+```{python}
+queue = Path("runs/classify-demo/review/queue.jsonl").read_text().splitlines()
+for item in map(json.loads, queue[:4]):
+    print(item["rank"], item["candidate_id"], f"p(real) {item['probability']:.2f}", "|", item["rank_reason"])
+```
+
+The other review commands take the review directory (`--review-dir`) and follow @tbl-xscan-review.
+
+| Step | Command | Does |
+|---|---|---|
+| Look | `review-bokeh`, `review-contact-sheet` | serves the queue in a browser, or writes PNG sheets (both need `viz`) |
+| Annotate offline | `review-annotation-template`, `review-import-annotations` | writes a CSV to fill in, then validates it into `annotations.jsonl` |
+| Check | `review-status` | reports whether every item has enough agreeing reviews (by default two, unanimous) |
+| Decide | `review-aggregate` | turns each reviewer's latest annotation into a decision |
+| Apply | `review-apply` | writes a new dataset with the reviewed labels |
+
+: The human review commands after `review-queue`, in order. {#tbl-xscan-review}
+
+The queue and the append-only `annotations.jsonl` are the review record. `review-apply` writes to a new `--output-dir` and leaves the source dataset unchanged.
+
+## Options
+
+@tbl-xscan-options lists the main settings of the training YAML file and the commands.
+
+| Option | Default | Effect |
+|---|---|---|
+| `epochs` | `4` | passes over the training split |
+| `batch_size` | `16` | candidates per training step |
+| `learning_rate` | `0.001` | optimizer step size |
+| `device` | `auto` | CUDA when available, otherwise the CPU |
+| `early_stopping_metric` | none | `val_roc_auc`, `val_pr_auc` or `val_loss`: selects the saved epoch and turns on early stopping |
+| `early_stopping_patience` | none | epochs without improvement before training stops (0 when only the metric is set) |
+| `model.image_size` | `51` | cutout side in pixels |
+| `model.depths`, `num_heads`, `embed_dims` | six stages, 64 to 512 wide | network size |
+| `use_xfit_features`, `xfit_feature_dir` | off | adds xFit fit features of each difference cutout |
+| `performance.amp_dtype` | `off` | `bf16` or `fp16` mixed precision, GPU only |
+| `--split` (infer, evaluate, review-queue) | `test` | split to score |
+| `--batch-size` (infer, evaluate) | `32` | candidates per inference batch |
+| `--strategy` (review-queue) | `hybrid` | queue ranking, also `uncertainty` or `known-errors` |
+| `--max-items` (review-queue) | `200` | queue length |
+
+: Main options. The first rows go in the training YAML file, the last four are command flags. {#tbl-xscan-options}
+
+## On a GPU
+
+With the `gpu` extra, the same commands run on CUDA, which `device: auto` selects. GPU settings go in the `performance` section of the YAML file. They are off by default. On a CPU, xScan ignores mixed precision and pinned memory.
+
+```{python}
+#| eval: false
+import yaml
+
+config = yaml.safe_load(Path("runs/classify-train.yaml").read_text())
+config.update(run_name="classify-gpu", device="cuda", performance={
+    "amp_dtype": "bf16", "allow_tf32": True, "cudnn_benchmark": True, "num_workers": 2,
+    "worker_start_method": "spawn", "pin_memory": True, "persistent_workers": True,
+    "non_blocking_transfers": True})
+Path("runs/classify-gpu.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+```
+
+```bash
+cuphoton xscan train-inada-triplet --config runs/classify-gpu.yaml > runs/classify-gpu.json
+```
+
+For cutouts already on the GPU, `predict_tensors` scores a contiguous float32 tensor on an explicit CUDA device and returns logits and probabilities on it:
+
+```{python}
+#| eval: false
+from cuphoton.xscan.training import predict_tensors
+
+device = torch.device("cuda:0")
+model, _, performance = load_model_from_checkpoint(Path("runs/classify-gpu"), device=device)
+result = predict_tensors(model=model, images=torch.from_numpy(cutouts).to(device), device=device,
+                         performance=performance)
+print(result["probabilities"].cpu())
+```
+
+`predict_fits` cuts and scores cutouts straight from aligned FITS images on the GPU, without a dataset directory. It needs CuPy and an explicit CUDA device, and the cutout sides in `stamp_shape` must be odd. It does not align, subtract or normalize the images.
+
+```{python}
+#| eval: false
+from cuphoton.xscan.fits_inference import FitsPlane, predict_fits
+
+result = predict_fits(
+    model=model, device=device, performance=performance,
+    search=FitsPlane("target.fits", hdu=1), template=FitsPlane("reference-aligned.fits", hdu=1),
+    difference=FitsPlane("difference.fits", hdu=1),
+    centers_yx=[(200, 300), (450, 600)], candidate_ids=["candidate-a", "candidate-b"], stamp_shape=(21, 21),
+)
+print(result.candidate_ids, result.probabilities)
+```
+
+## What is survey-specific
+
+The array format, the model and the checkpoints are generic. These parts depend on the survey:
+
+- **Cutout preparation.** Size, centering, scaling and masking are your choice. A checkpoint is valid only for cutouts prepared like its training set.
+- **Dataset builders.** `cuphoton xscan --help` lists builders for several surveys' products, such as `data-build-autoscan`. Example manifests are in `examples/xscan/`.
+- **Labels.** The label guard rejects placeholder labels from survey smoke datasets, and survey object IDs that appear in two splits.
+- **Thresholds.** Choose the threshold on a validation split from the same survey as the candidates you score.
+
+## Troubleshooting
+
+`ERROR: [Errno 17] File exists: '.../runs/classify-demo'`
+: Each training run needs a new directory. Change `run_name` or delete the old run.
+
+`ERROR: refusing to train with group leakage across train/validation/test splits`, or `refusing to train on labels that are not real-bogus usable: label_source_untrusted`
+: The label guard failed. Run `data-check-training-labels` and fix the listed metadata. A `label_source` that is empty or contains "placeholder" or "unlabeled" is untrusted.
+
+`RuntimeError: The expanded size of the tensor (676) must match the existing size (121)`
+: The cutouts differ in size from the checkpoint's `image_size`. Use a `checkpoint_validator` to catch this at load time.
+
+`ValueError: triplet model expects 3-channel stacked input`
+: Stack the channels target, reference and difference, in that order. A pair model takes the first two.
+
+## Next steps
+
+- Add xFit dipole-fit features to the classifier: @sec-measure and [Optional xFit fusion](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md#optional-xfit-fusion).
+- Classify every candidate of an image pair in one GPU pipeline: @sec-transient-chain.
+- Spread `infer-real-bogus` over many GPUs: @sec-scale.
+- Full reference: the [xScan component guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md) and the [dataset contract](https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md#xscan-datasets).

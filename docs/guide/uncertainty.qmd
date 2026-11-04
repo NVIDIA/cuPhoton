@@ -1,0 +1,432 @@
+# Uncertainty Quantification {#sec-uncertainty}
+
+cuPhoton reports an error bar with every flux and position it measures. Each error bar starts from the variance planes you supply. xRep resamples them, xPois propagates them into the difference image, and xFit turns them into errors. Use this page to correct those errors for correlated noise, read the transient chain's error budget, and check the error bars on your own data.
+
+**You need:**
+
+- cuPhoton with the CPU profile (@sec-install), and Matplotlib for the figure.
+- A target and a reference image with variance planes. This page makes a sample pair.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic pair. The printed values only demonstrate the API.
+:::
+
+## Make a sample pair
+
+The block below writes the pair of @sec-first-difference. The target is rotated by 3 degrees against the reference and has slightly larger pixels.
+
+{{< include _sample-pair.qmd >}}
+
+## Follow the noise through the pipeline
+
+Each step takes a variance plane and returns one:
+
+| Step | Call | Noise it returns | Guide |
+|---|---|---|---|
+| Your input | a variance plane per image | the expected squared error of each pixel, in squared image units | @sec-concepts |
+| Align | `reproject_masked_array` (xRep) | the reference variance on the target grid, through the squared interpolation weights | @sec-align |
+| Subtract | `standardize_constant_kernel_residual` (xPois) | `marginal_residual_variance`, the target variance plus the reference variance convolved with the squared kernel, and `standardized_residual`, the difference over its square root | @sec-subtract |
+| Measure | `fit_single_sources`, `forced_psf_photometry`, `fit_dipoles` (xFit) | the errors of each call, such as `flux_error`, `covariance`, `standard_errors` and `uncertainty_valid` | @sec-measure |
+
+Every step treats each pixel's noise as independent. The blocks below align and subtract as in @sec-measure, and print the median variance after each step.
+
+```{python}
+import numpy as np
+from astropy.wcs import WCS
+from cuphoton.core.fits_io import read_fits_images
+from cuphoton.xrep import BBox, ReprojectionSpec, make_wcs_pair_transform, prepare_reprojection, reproject_masked_array
+
+target_read, reference_read = (read_fits_images(f"sample/{name}.fits", [0]) for name in ("target", "reference"))
+target, reference = (r.arrays[0].astype(np.float64) for r in (target_read, reference_read))
+target_header, reference_header = target_read.infos[0].header, reference_read.infos[0].header
+target_variance = np.clip(target, 0, None) / target_header["GAIN"]  # your own variance planes go here
+reference_variance = np.clip(reference, 0, None) / reference_header["GAIN"]
+spec = ReprojectionSpec(mapping=make_wcs_pair_transform(WCS(target_header), WCS(reference_header)),
+                        output_bbox=BBox(0, 0, target.shape[1], target.shape[0]))  # (x, y) origin, then the size
+prepared = prepare_reprojection(spec, source_shape=reference.shape)
+no_bad_pixels = np.zeros(reference.shape, dtype=bool)
+aligned = reproject_masked_array(reference, reference_variance, no_bad_pixels, spec, backend="cpu", prepared=prepared)
+```
+
+```{python}
+from cuphoton.xpois import (GaussianBasisComponent, identify_residual_hotspots, solve_constant_kernel,
+                            standardize_constant_kernel_residual)
+
+basis = [GaussianBasisComponent(0.7, 4), GaussianBasisComponent(1.4, 2), GaussianBasisComponent(2.8, 2)]
+fit = solve_constant_kernel(aligned.image, target, basis, kernel_shape=(19, 19),
+                            variance=target_variance, background_degree=1, backend="cpu")
+noise = standardize_constant_kernel_residual(fit.residual, kernel=fit.kernel, target_variance=target_variance,
+                                             reference_variance=aligned.variance)
+difference, difference_variance, inside = fit.residual, noise.marginal_residual_variance, noise.valid_mask
+for name, plane in [("reference", reference_variance), ("reference, aligned", aligned.variance),
+                    ("reference, through the kernel", noise.propagated_reference_variance),
+                    ("target", target_variance), ("difference", difference_variance)]:
+    print(f"{name:30s} median variance {np.nanmedian(plane):6.2f}")
+```
+
+Alignment and the kernel shrink the reference variance, because each output pixel averages several input pixels. The averaged noise becomes correlated between neighbors, which a per-pixel variance does not describe.
+
+## Measure the candidates
+
+Find the two candidates and fit them with xFit. The window, $2\lceil 5\sigma\rceil + 1$ pixels for a PSF (point spread function) width $\sigma$, is the one the transient chain uses.
+
+```{python}
+from cuphoton.xfit import fit_single_sources
+from cuphoton.xpois import window_stamps
+
+regions = identify_residual_hotspots(noise.standardized_residual, robust_sigma=1.0, max_regions=None)
+candidates = np.array([region["peak_yx"][::-1] for region in regions], dtype=float)  # (x, y)
+psf_sigma = target_header["PSFSIG"]
+size = 2 * int(np.ceil(5 * psf_sigma)) + 1
+cutout_variance = window_stamps(difference_variance, candidates, size)
+sources = fit_single_sources(window_stamps(difference, candidates, size), cutout_variance,
+                             np.zeros((len(candidates), 2)), psf_sigma, mask=np.isfinite(cutout_variance),
+                             sign=1)  # both candidates brightened
+print("window", size, "px, uncertainty_valid", sources.uncertainty_valid)
+print("flux error      ", sources.flux_error.round(1))
+print("x position error", sources.position_error_x.round(4))
+```
+
+The errors come from the fit covariance and are NaN where `uncertainty_valid` is false.
+
+## Correct for correlated noise
+
+A flux or a position is a weighted sum of difference pixels. Where neighbors are correlated, their errors add up instead of averaging out. The correlation factor $f$ is the true variance of such a sum over the variance that independent pixels predict. Multiply an error bar by $\sqrt{f}$ to correct it. You can measure $f$ on your difference image, or compute it in closed form.
+
+### Measure the factor at empty positions
+
+`empty_positions` picks pixels more than one window from every candidate and every loud pixel. `empirical_correlation_factor` divides the weighted sum of the difference at each by its predicted error, and returns the squared robust spread (1.4826 times the median absolute deviation) of the ratios. `psf_weights` builds flux weights, and with `derivative` position weights.
+
+```{python}
+from cuphoton.xpois import empirical_correlation_factor, empty_positions, psf_weights
+
+# loud: pixels more than 5 robust sigmas from the median of the difference
+empty, _ = empty_positions(inside, exclude_xy=candidates, window=size, count=500, loud=(difference, 5.0))
+weights = np.stack([psf_weights(psf_sigma, size), psf_weights(psf_sigma, size, derivative="x"),
+                    psf_weights(psf_sigma, size, derivative="y")])  # a flux, an x and a y position
+measured = empirical_correlation_factor(difference, difference_variance, weights, empty)
+n = measured.positions_used
+standard_error = measured.factor * np.sqrt(2 / (0.3675 * (n - 1)))  # as the transient chain computes it
+print(f"{n} positions. Factors for the flux, x and y: {measured.factor.round(3)} +- {standard_error.round(3)}")
+```
+
+On this small image, each factor lies within about one standard error of one. The standard error shrinks as the number of positions grows.
+
+### Apply the factor
+
+Scale each error bar by the square root of its factor. Floor the factor at one, as the transient chain does.
+
+```{python}
+f_flux, f_x, f_y = np.maximum(measured.factor, 1.0)
+print("flux error      ", sources.flux_error.round(1), "->", (sources.flux_error * np.sqrt(f_flux)).round(1))
+print("x position error", sources.position_error_x.round(4), "->", (sources.position_error_x * np.sqrt(f_x)).round(4))
+```
+
+### Compute the factor in closed form
+
+`correlation_factor` computes $f$ at each position from the kernel, both variance planes and the interpolation weights that xRep applied there, which `resampling_weights_at` returns. Pass `resampling_weights_at` the prepared mapping of the alignment.
+
+```{python}
+from cuphoton.xpois import correlation_factor
+from cuphoton.xrep import resampling_weights_at
+
+taps = resampling_weights_at(spec, candidates[:, 0], candidates[:, 1], prepared=prepared, source_shape=reference.shape)
+closed = correlation_factor(weights[0], kernel=fit.kernel, target_variance=target_variance,
+                            reference_variance=aligned.variance, resampling_weights=taps.weights,
+                            positions=candidates, residual_variance=difference_variance,
+                            is_translation=taps.is_translation)
+print("is_translation", taps.is_translation, "factor", closed.factor, "n_rotated", closed.n_rotated)
+print("local Jacobian, reference pixels per target pixel:\n", taps.jacobian[0].round(3))
+```
+
+The closed form holds only where the mapping between the grids is locally a shift. `is_translation` is false where the local Jacobian, the change of reference pixel per target pixel, differs from the identity by more than `1e-3`. Here it shows the rotation and the change of pixel scale. On such a pair, use the measured factor. The transient chain leaves those error bars NaN (@sec-transient-chain-errors).
+
+Write a target that only a shift separates from the reference, and subtract it. `make_wcs` and `render` come from the sample-pair block.
+
+```{python}
+shift_wcs = make_wcs((256, 256), 0.26, 0.0, (4.3, 6.3))  # the reference's scale and orientation
+shifted = render((256, 256), shift_wcs, target_ra, target_dec, target_flux, psf_sigma, 120.0,
+                 target_header["GAIN"]).astype(np.float64)
+shifted_variance = np.clip(shifted, 0, None) / target_header["GAIN"]
+shift_spec = ReprojectionSpec(mapping=make_wcs_pair_transform(shift_wcs, WCS(reference_header)),
+                              output_bbox=BBox(0, 0, 256, 256))
+shift_prepared = prepare_reprojection(shift_spec, source_shape=reference.shape)
+shift_aligned = reproject_masked_array(reference, reference_variance, no_bad_pixels, shift_spec, backend="cpu",
+                                       prepared=shift_prepared)
+shift_fit = solve_constant_kernel(shift_aligned.image, shifted, basis, kernel_shape=(19, 19),
+                                  variance=shifted_variance, background_degree=1, backend="cpu")
+shift_noise = standardize_constant_kernel_residual(shift_fit.residual, kernel=shift_fit.kernel,
+                                                   target_variance=shifted_variance,
+                                                   reference_variance=shift_aligned.variance)
+```
+
+Read the resampling weights at empty positions of the new difference:
+
+```{python}
+shift_regions = identify_residual_hotspots(shift_noise.standardized_residual, robust_sigma=1.0, max_regions=None)
+shift_candidates = np.array([region["peak_yx"][::-1] for region in shift_regions], dtype=float)
+shift_empty, _ = empty_positions(shift_noise.valid_mask, exclude_xy=shift_candidates, window=size, count=500,
+                                 loud=(shift_fit.residual, 5.0))
+shift_taps = resampling_weights_at(shift_spec, shift_empty[:, 0], shift_empty[:, 1], prepared=shift_prepared,
+                                   source_shape=reference.shape)
+print("is_translation everywhere", bool(shift_taps.is_translation.all()))
+```
+
+Compute both factors at those positions. With weights of shape `(N, q, s, s)`, one call returns `q` factors per position.
+
+```{python}
+shift_closed = correlation_factor(np.broadcast_to(weights, (len(shift_empty),) + weights.shape),
+                                  kernel=shift_fit.kernel, target_variance=shifted_variance,
+                                  reference_variance=shift_aligned.variance, resampling_weights=shift_taps.weights,
+                                  positions=shift_empty, residual_variance=shift_noise.marginal_residual_variance,
+                                  is_translation=shift_taps.is_translation)
+shift_measured = empirical_correlation_factor(shift_fit.residual, shift_noise.marginal_residual_variance,
+                                              weights, shift_empty)
+shift_error = shift_measured.factor * np.sqrt(2 / (0.3675 * (shift_measured.positions_used - 1)))
+print("closed form, median", np.nanmedian(shift_closed.factor, axis=0).round(3))
+print("measured           ", shift_measured.factor.round(3), "+-", shift_error.round(3))
+```
+
+The closed form models only the resampling and the kernel. The pixel correlations of a coadd (a stack of resampled exposures) escape it. The transient chain therefore uses the measured factor where it exceeds one and the median closed form by more than two standard errors.
+
+## Read the transient chain's error budget
+
+The transient chain (@sec-transient-chain) runs these calls and adds three more terms. For each quantity `q`, one of `center_x`, `center_y`, `positive_x`, `positive_y` and `psf_flux`, it writes the error bar `<q>_err` and each term in its own column:
+
+```text
+<q>_err = sqrt(fit^2 + corr^2 + kfit^2 + kmatch^2 + mis^2)
+```
+
+| Term | Column | What it adds | Applies to | Needs |
+|---|---|---|---|---|
+| fit | `<q>_err_fit` | xFit's error, weighted by the target variance plane | all five | the fit. Without a target variance plane, xFit scales the covariance by the reduced chi-square |
+| corr | `<q>_err_corr` | the reference's noise and its correlation, `<q>_err_fit * sqrt(max(f, 1) - 1)`, with `f` relative to the target variance | all five | target and reference variance planes, and a PSF width |
+| kfit | `<q>_err_kfit` | the uncertainty of the fitted kernel and background, largest on a bright reference source | all five | a target variance plane, a PSF width and `uq.kernel_fit: true` |
+| kmatch | `<q>_err_kmatch` | reference flux the kernel did not match, `eta` times the matched reference flux at the source | `psf_flux`, 0 for positions | a target variance plane, a PSF width and at least 5 stars matched by the refine stage |
+| mis | `<q>_err_mis` | the alignment error left after the refine stage | positions, 0 for `psf_flux` | a misalignment model: `align.refine: true`, an affine refinement, a star finder other than `daofind`, and a reference that the chain reprojects or mosaics onto the target grid |
+| sky | `sky_err_arcsec` | the absolute sky astrometry of the exposure | reported apart, never added to `<q>_err` | `uq.sky_astrometry_arcsec` and `uq.sky_astrometry_source` |
+
+: The terms of the chain's error budget, from `docs/uncertainty-quantification.md` and `transient_chain/uq.py`. {#tbl-uncertainty-terms}
+
+A term without its inputs is left out. The `uq` block of the configuration sets the budget:
+
+| Key | Default | Effect |
+|---|---|---|
+| `uq.enabled` | `true` | `false` sets every `<q>_err` to `<q>_err_fit` and every other term to 0 |
+| `uq.kernel_fit` | `true` | computes the kfit term |
+| `uq.measure_correlation` | `true` | measures the correlation factor at empty positions of each exposure |
+| `uq.correlation_positions` | `1000` | the number of empty positions for that measurement, at least 20 |
+| `uq.max_lobe_reach_px` | `32` | the largest center-to-lobe distance that keeps a center error bar |
+| `uq.single_source_refit` | `true` | refits a candidate with one unsupported lobe with the one-lobe model |
+| `uq.sky_astrometry_arcsec`, `uq.sky_astrometry_source` | null | set together. They are copied to `sky_err_arcsec` and `sky_err_source` |
+
+Quote `<q>_err`. It is NaN where fewer than half of its window's pixels are usable or its correlation factor is undefined. `uq_valid` is true where every `<q>_err` of the row is defined. The block below, which needs a finished run (@sec-transient-chain-errors), rebuilds an error bar without one term.
+
+```{python}
+#| eval: false
+import json
+import pandas as pd
+
+table = pd.read_parquet("out/catalog.parquet")
+rows = table[table["uq_valid"]]
+terms = ["fit", "corr", "kfit", "kmatch", "mis"]
+print(rows[["psf_flux", "psf_flux_err"] + [f"psf_flux_err_{term}" for term in terms]])
+without_kfit = np.sqrt(sum(rows[f"psf_flux_err_{term}"] ** 2 for term in terms if term != "kfit"))
+
+summary = json.load(open("out/items/S1-v1/summary.json"))
+print(summary["uq_terms"], summary["uq"]["excluded"], summary["uq"]["correlation"]["source"])
+```
+
+These fields record how the error bars were built:
+
+| Field | Holds |
+|---|---|
+| `uq_terms` in `summary.json` | the terms that went into `<q>_err` |
+| `uq.excluded` | each term left out, with the reason. `uq` is null for an item with no candidates |
+| `uq.correlation` | `closed_form`, `measured`, `measured_se`, `plain_ratio` and `source` for the flux and the two position weightings |
+| `uq.kernel_mismatch` | `eta` and `n`, the number of stars it was fitted on |
+| `uq.invalid_window`, `uq.masked_window`, `uq.undefined_factor`, `uq.rotated_grid`, `uq.sensitivity_capped` | the number of rows with each condition |
+| `uq_window_masked`, `uq_corr_measured` in the catalog | rows whose window lost masked pixels, and rows that used the measured factor |
+
+## Check your error bars with injected sources
+
+Inject sources of known flux into your difference image and measure them as you measure your candidates. A source's pull is its measured minus true flux, over its error bar. With correct error bars, the pulls have a mean near zero and a standard deviation near one.
+
+The correction matters when the reference's noise is a large part of the difference image's noise, and xRep resampled the reference onto the target grid. The sample reference is much deeper than the target, and its correction is small. Make a second reference as noisy as the target, on the same grid, and subtract it from the shifted target:
+
+```{python}
+gain = target_header["GAIN"]
+# the sample reference's stars, grid and PSF, with the target's sky level and gain
+shallow = render(reference.shape, WCS(reference_header), ra, dec, flux, reference_header["PSFSIG"], 120.0,
+                 gain).astype(np.float64)
+shallow_variance = np.clip(shallow, 0, None) / gain
+shallow_aligned = reproject_masked_array(shallow, shallow_variance, no_bad_pixels, shift_spec, backend="cpu",
+                                         prepared=shift_prepared)
+shallow_fit = solve_constant_kernel(shallow_aligned.image, shifted, basis, kernel_shape=(19, 19),
+                                    variance=shifted_variance, background_degree=1, backend="cpu")
+shallow_noise = standardize_constant_kernel_residual(shallow_fit.residual, kernel=shallow_fit.kernel,
+                                                     target_variance=shifted_variance,
+                                                     reference_variance=shallow_aligned.variance)
+print(f"median variance: deep reference {np.median(reference_variance):.1f}, "
+      f"shallow reference {np.median(shallow_variance):.1f}, target {np.median(shifted_variance):.1f}")
+```
+
+Place one source per cell of an 11 pixel grid where the window is empty, each with its own photon noise. Both pairs get the same sources and noise.
+
+```{python}
+rng = np.random.default_rng(0)  # a new seed for the injection
+all_empty, _ = empty_positions(shift_noise.valid_mask, exclude_xy=shift_candidates, window=size,
+                               count=shifted.size, loud=(shift_fit.residual, 5.0))
+is_empty = np.zeros(shifted.shape, dtype=bool)
+is_empty[all_empty[:, 1].astype(int), all_empty[:, 0].astype(int)] = True
+gy, gx = np.mgrid[size:shifted.shape[0] - size:11, size:shifted.shape[1] - size:11]
+keep = is_empty[gy, gx]
+true_xy = np.column_stack([gx[keep], gy[keep]]) + rng.uniform(-0.5, 0.5, (keep.sum(), 2))  # (x, y)
+true_flux = rng.uniform(500, 3000, len(true_xy))
+half = size // 2
+rows = np.rint(true_xy[:, 1]).astype(int)[:, None, None] + np.arange(-half, half + 1)[:, None]
+cols = np.rint(true_xy[:, 0]).astype(int)[:, None, None] + np.arange(-half, half + 1)
+model = np.zeros_like(shifted)
+np.add.at(model, (rows, cols), true_flux[:, None, None] * psf_weights(psf_sigma, size, offset=true_xy - np.rint(true_xy)))
+source_noise = rng.normal(0.0, np.sqrt(model / gain))
+print(len(true_xy), "sources")
+```
+
+`injection_test` injects the sources into one difference and measures them with `forced_flux_at` at their true positions. It corrects each pull with the closed-form factor at the source, as the transient chain does at each candidate. It also measures the factor at the empty positions.
+
+```{python}
+from cuphoton.xpois import forced_flux_at
+
+source_taps = resampling_weights_at(shift_spec, true_xy[:, 0], true_xy[:, 1], prepared=shift_prepared,
+                                    source_shape=reference.shape)
+
+
+def injection_test(aligned_reference, subtraction, subtraction_noise):
+    injected = subtraction.residual + model + source_noise
+    injected_variance = subtraction_noise.marginal_residual_variance + model / gain
+    photometry = forced_flux_at(injected, true_xy, psf_sigma, window=size, variance=injected_variance, local_sky=False)
+    pull = (photometry.flux - true_flux) / photometry.flux_error
+    flux_weights = (psf_weights(psf_sigma, size, offset=true_xy - np.rint(true_xy))
+                    / window_stamps(injected_variance, true_xy, size))  # the weights of the forced flux
+    closed = correlation_factor(flux_weights, kernel=subtraction.kernel, target_variance=shifted_variance + model / gain,
+                                reference_variance=aligned_reference.variance, resampling_weights=source_taps.weights,
+                                positions=true_xy, residual_variance=injected_variance,
+                                is_translation=source_taps.is_translation).factor
+    measured = empirical_correlation_factor(subtraction.residual, subtraction_noise.marginal_residual_variance,
+                                            weights[0], shift_empty)
+    return pull, pull / np.sqrt(np.maximum(closed, 1.0)), closed, measured
+```
+
+Run it on both pairs and compare:
+
+```{python}
+results = {"deep reference": injection_test(shift_aligned, shift_fit, shift_noise),
+           "shallow reference": injection_test(shallow_aligned, shallow_fit, shallow_noise)}
+print(f"{'':18s} {'measured factor':>16s} {'closed form':>12s} {'fit-only width':>15s} {'corrected width':>16s}")
+for name, (pull, corrected, closed, measured) in results.items():
+    factor_error = measured.factor * np.sqrt(2 / (0.3675 * (measured.positions_used - 1)))
+    width = [f"{p.std(ddof=1):.2f} +- {p.std(ddof=1) / np.sqrt(2 * (len(p) - 1)):.2f}" for p in (pull, corrected)]
+    print(f"{name:18s} {measured.factor:9.2f} +- {factor_error:.2f} {np.median(closed):12.2f} {width[0]:>15s} "
+          f"{width[1]:>16s}")
+```
+
+The closed form, a median over the sources, sits below the measured factor, because a source's own photon noise is not correlated. With the shallow reference, the fit-only pulls are wider than one by several standard errors, and the corrected pulls sit near one. With the deep reference, the correction is small. @fig-uncertainty-pulls shows both cases.
+
+```{python}
+#| label: fig-uncertainty-pulls
+#| fig-cap: "Pulls of the injected sources, measured minus true flux over the flux error, for the deep sample reference (left) and a reference as noisy as the target (right). Gray outline: with the fit error alone. Blue bars: with the closed-form correlation factor applied. Orange line: the unit normal that the pulls follow when the error bars are right. With the noisy reference, the fit-only pulls spread wider than the unit normal. Synthetic data, for demonstration only."
+#| fig-alt: "Two histogram panels of pulls. In the left panel the gray outline and the blue bars both match the orange bell curve. In the right panel the gray outline is wider than the curve, and the blue bars match it."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 2, figsize=(6.5, 2.8), sharey=True)
+bins, grid = np.linspace(-4, 4, 21), np.linspace(-4, 4, 200)
+for ax, (name, (pull, corrected, _, _)) in zip(axes, results.items()):
+    ax.hist(corrected, bins=bins, density=True, color="#2A78D6", alpha=0.8, label="corrected")
+    ax.hist(pull, bins=bins, density=True, histtype="step", color="0.5", lw=1.5, label="fit error alone")
+    ax.plot(grid, np.exp(-grid**2 / 2) / np.sqrt(2 * np.pi), color="#EB6834", lw=2, label="unit normal")
+    ax.set_title(name.capitalize(), fontsize=9)
+    ax.set_xlabel("Pull")
+axes[0].set_ylabel("Density")
+axes[1].legend(frameon=False, fontsize=7)
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+Read the result like this:
+
+| Result | What it means | What to change |
+|---|---|---|
+| width near one, mean near zero | the error bars describe the scatter | nothing |
+| width above one | the error bars are too small. The variance planes leave noise out, such as correlated noise, read noise or a wrong gain | apply the correlation factor, check the gain and read noise behind your variance planes, or run the chain's full budget |
+| width below one | the error bars are too large. The variance planes count noise twice, or already carry the correlation that you correct for | check the variance planes for noise counted twice. Measure the factor before you apply one. A factor near one means that the planes already carry the correlation |
+| mean away from zero | the fluxes are biased, for example by a wrong PSF width or a background left in the difference | measure the PSF width from your stars, and check the background fit |
+
+For repeated exposures of one field, `repeat_catalogs.py` runs the same test on the chain's catalogs, without injections. Run it from the root of your cuPhoton checkout:
+
+```bash
+python examples/transient-chain/repeat_catalogs.py out/items/*/catalog.parquet --out repeat.json
+```
+
+It scores `<q>_err` with and without each term. The reference's noise never scatters between exposures. A score below one can therefore come with correct error bars. A bias that every exposure shares passes the test unseen. The [repeat test](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md#repeat-test) explains its report.
+
+## Limits
+
+The error bars do not cover these cases:
+
+- A PSF model that does not match the data. A wrong width biases a forced flux, and the flux error does not include the bias.
+- The absolute sky astrometry (how well pixels map to sky positions), which the chain reports in `sky_err_arcsec`.
+- Errors that are not small next to the PSF width and the lobe separation. The error bars are first order.
+- Wrong variance planes. The fit term and the closed form assume that the planes describe the pixel noise.
+- Unmatched reference light in a position. The kmatch term covers the flux only.
+
+## Options
+
+The options of the calls that compute and measure the factor:
+
+| Option | Default | Effect |
+|---|---|---|
+| `correlation_factor(residual_variance=...)` | the target variance plus the reference variance times the kernel's sum of squares | the per-pixel variance that the factor compares against. Pass the variance your measurement used |
+| `correlation_factor(is_translation=...)` | none, no position is checked | positions flagged false get NaN and count in `n_rotated` |
+| `correlation_factor(valid=...)` | none | the window pixels to use. Masked pixels get zero weight, and `n_masked` counts them |
+| weights of `correlation_factor` | required | `(N, s, s)`, `(N, q, s, s)` for `q` weightings, or with `positions` one `(s, s)` stamp for every position |
+| `empty_positions(count=...)` | required | the number of positions wanted, spread evenly over the empty pixels |
+| `empty_positions(loud=...)` | none | `(image, n_sigma)` also keeps windows away from pixels beyond `n_sigma` robust sigmas |
+| `resampling_weights_at(translation_tolerance=...)` | `1e-3` | the largest deviation of the local Jacobian from the identity that still counts as a shift |
+| `psf_weights(offset=..., derivative=...)` | none | sub-pixel offsets of the source, and `"x"` or `"y"` for position weights |
+
+## On a GPU
+
+`empty_positions`, `empirical_correlation_factor`, `correlation_factor` and `forced_flux_at` follow the array module of their inputs. With the `gpu` profile, pass CuPy arrays. They run on the GPU and return CuPy arrays:
+
+```{python}
+#| eval: false
+import cupy as cp
+
+d_difference, d_variance = cp.asarray(difference), cp.asarray(difference_variance)
+d_empty, _ = empty_positions(cp.asarray(inside), exclude_xy=cp.asarray(candidates), window=size, count=1000,
+                             loud=(d_difference, 5.0))
+d_measured = empirical_correlation_factor(d_difference, d_variance, cp.asarray(weights), d_empty)
+d_photometry = forced_flux_at(d_difference, cp.asarray(candidates), psf_sigma, window=size, variance=d_variance,
+                              local_sky=False)
+```
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `correlation_factor` returns NaN, and `n_rotated` is above 0 | The grid mapping is not locally a shift. Use the measured factor |
+| `correlation_factor` returns NaN, and `n_rotated` is 0 | A window pixel is not finite, as in the edge band, or the reference does not cover the position and its resampling weights are all zero. Pass `valid`, or drop the position |
+| `empirical_correlation_factor` returns NaN | Fewer than two positions had a finite window. Check `positions_used`, and ask `empty_positions` for more positions |
+
+## Next steps
+
+- Predict the noise of a difference image: @sec-subtract.
+- Fit candidates and read their covariance: @sec-measure.
+- Run the transient chain and read its error bars: @sec-transient-chain-errors.
+- [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) builds a PSF-flux error bar with every library call, the kernel-fit term included.
+- The [xPois](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md#correlation-factor-of-weighted-sums) and [xRep](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xrep.md#python-api) references cover the factor and the resampling weights. The chain's [README](https://github.com/NVIDIA/cuPhoton/blob/main/examples/transient-chain/README.md#how-the-error-bar-is-built) defines every term.

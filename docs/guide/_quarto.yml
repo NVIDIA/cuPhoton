@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+project:
+  type: book
+
+book:
+  title: "cuPhoton User Guide"
+  subtitle: "Install cuPhoton, run your first image difference, then follow task guides for each module."
+  author: "cuPhoton Imaging Engineer"
+  date: today
+  chapters:
+    - index.qmd
+    - part: "Get started"
+      chapters:
+        - install.qmd
+        - first-difference.qmd
+        - concepts.qmd
+    - part: "How-to guides"
+      chapters:
+        - read-fits.qmd
+        - align.qmd
+        - subtract.qmd
+        - measure.qmd
+        - classify.qmd
+        - transient-chain.qmd
+        - uncertainty.qmd
+        - reconstruct.qmd
+        - xray-traces.qmd
+        - correlate.qmd
+        - scale.qmd
+        - monitor.qmd
+  appendices:
+    - reference.qmd
+
+execute:
+  freeze: auto
+  warning: false
+
+lightbox: auto
+
+format:
+  html:
+    theme:
+      light: cosmo
+      dark: darkly
+    toc: true
+    number-sections: true
+    code-copy: true
+    code-overflow: wrap
+    fig-width: 6.5
+    fig-height: 4
+    fig-dpi: 150
+    fig-align: center

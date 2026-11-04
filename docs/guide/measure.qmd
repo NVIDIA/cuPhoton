@@ -1,0 +1,373 @@
+# Measure candidates {#sec-measure}
+
+xFit measures what a difference image holds at each candidate. It fits a small model to every cutout of a batch at once, with a batched Levenberg-Marquardt least-squares solver. It can fit one source, measure a flux at a fixed position, or fit a dipole. A dipole is a positive and a negative lobe side by side. A source that moved between the two images leaves one, and so does a slightly misaligned star.
+
+**You need:** cuPhoton installed with the CPU profile (@sec-install), and a difference image with its variance and candidate positions (@sec-subtract). This page makes them from a sample pair.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic pair. The printed values only demonstrate the API.
+:::
+
+{{< include _sample-pair.qmd >}}
+
+## Make a difference image
+
+The two blocks run the alignment and subtraction of @sec-subtract in short form, without the refit.
+
+```{python}
+import numpy as np
+from astropy.wcs import WCS
+from cuphoton.core.fits_io import read_fits_images
+from cuphoton.xrep import BBox, ReprojectionSpec, make_wcs_pair_transform, reproject_masked_array
+
+target_read, reference_read = (read_fits_images(f"sample/{name}.fits", [0]) for name in ("target", "reference"))
+target, reference = (r.arrays[0].astype(np.float64) for r in (target_read, reference_read))
+target_header, reference_header = target_read.infos[0].header, reference_read.infos[0].header
+target_variance = np.clip(target, 0, None) / target_header["GAIN"]
+reference_variance = np.clip(reference, 0, None) / reference_header["GAIN"]
+spec = ReprojectionSpec(mapping=make_wcs_pair_transform(WCS(target_header), WCS(reference_header)),
+                        output_bbox=BBox(0, 0, target.shape[1], target.shape[0]))  # (x, y) origin, then the size
+aligned = reproject_masked_array(reference, reference_variance, np.zeros(reference.shape, dtype=bool), spec, backend="cpu")
+```
+
+```{python}
+from cuphoton.xpois import (GaussianBasisComponent, identify_residual_hotspots, solve_constant_kernel,
+                            standardize_constant_kernel_residual)
+
+basis = [GaussianBasisComponent(0.7, 4), GaussianBasisComponent(1.4, 2), GaussianBasisComponent(2.8, 2)]
+fit = solve_constant_kernel(aligned.image, target, basis, kernel_shape=(19, 19),
+                            variance=target_variance, background_degree=1, backend="cpu")
+noise = standardize_constant_kernel_residual(fit.residual, kernel=fit.kernel, target_variance=target_variance,
+                                             reference_variance=aligned.variance)
+regions = identify_residual_hotspots(noise.standardized_residual, robust_sigma=1.0, max_regions=None)
+difference, difference_variance = fit.residual, noise.marginal_residual_variance
+print([region["peak_yx"] for region in regions])  # (y, x)
+```
+
+The two candidates are the brightened star and the new source, at (y, x) pixels.
+
+## Cut cutouts around the candidates
+
+xFit takes cutouts as an array of shape `(batch, y, x)`. `window_stamps` from xPois cuts a square window around each `(x, y)` position, with NaN outside the image. Cut the difference and its variance the same way.
+
+```{python}
+from cuphoton.xpois import window_stamps
+
+positions = np.array([region["peak_yx"][::-1] for region in regions], dtype=float)  # (x, y)
+cutouts = window_stamps(difference, positions, 31)
+cutout_variance = window_stamps(difference_variance, positions, 31)
+usable = np.isfinite(cutout_variance)  # NaN outside the valid pixels of the difference
+print(cutouts.shape, usable.sum(axis=(1, 2)), "usable pixels")
+```
+
+The first cutout reaches into the edge band and has fewer usable pixels. Inside a cutout, xFit positions are `(x, y)` pixels from the center pixel, which is `(0, 0)`. The cutouts are 31 pixels wide, because the quality flags need more than 26 (@sec-measure-flags).
+
+## Choose the call
+
+xFit has four ways to measure a cutout:
+
+| Call | Fits | Returns | Use when |
+|---|---|---|---|
+| `fit_single_sources` | one Gaussian lobe: position, amplitude and, unless fixed, widths and orientation | `SingleSourceFitResult` | a source is in one image only: new, brightened or faded |
+| `forced_psf_photometry` | the flux of a PSF at a fixed position | `ForcedPhotometryResult` | you know the position and the PSF, and want the flux |
+| `fit_dipoles` with `GaussianDipoleModel` | two Gaussian lobes of opposite sign with one amplitude and shape | `DipoleFitResult` | a candidate can hold two lobes, and the PSF is close to Gaussian |
+| `fit_dipoles` with `StampDipoleModel` | two shifted copies of a sampled PSF image with one flux | `DipoleFitResult` | you have a PSF image, and the PSF is not Gaussian |
+
+`derived_dipole_quantities` and `dipole_quality_flags` read a Gaussian `fit_dipoles` result.
+
+## Fit one source per cutout
+
+`fit_single_sources` fits one Gaussian lobe per cutout, from the start position you pass. With `psf_sigma` the lobe is round with that width, and only its amplitude and position are fitted. Without it, the widths and orientation are free. `sign` is `+1` for a brightening source and `-1` for a fading one. Without `sign`, a matched filter at the start sets it.
+
+```{python}
+from cuphoton.xfit import fit_single_sources
+
+psf_sigma = target_header["PSFSIG"]  # the target PSF width, in pixels
+start = np.zeros((len(positions), 2))  # (x, y) offsets from each cutout center, all zero
+sources = fit_single_sources(cutouts, cutout_variance, start, psf_sigma, mask=usable, sign=1)
+for i in range(len(sources.x)):
+    print(f"x {sources.x[i]:+.2f} +- {sources.position_error_x[i]:.2f}, y {sources.y[i]:+.2f} +- "
+          f"{sources.position_error_y[i]:.2f}, flux {sources.flux[i]:.0f} +- {sources.flux_error[i]:.0f}, "
+          f"converged {sources.converged[i]}")
+```
+
+`flux` is the lobe's total flux, $2\pi|A|\sigma_x\sigma_y$ for amplitude $A$. The result also holds `parameters`, `covariance`, `standard_errors`, `chi_square`, `uncertainty_valid` and `residuals` (model minus data). The covariance is right when the variance describes the noise, and too small when neighboring pixels are correlated.
+
+## Measure the flux at a fixed position
+
+`forced_psf_photometry` fits only the flux of a unit-flux Gaussian PSF at fixed positions. The model is linear in the flux. The flux and its error therefore follow without iteration. Pass the fitted positions, or positions from a catalog.
+
+```{python}
+from cuphoton.xfit import forced_psf_photometry
+
+fixed = np.column_stack([sources.x, sources.y])  # (x, y) from each cutout center
+photometry = forced_psf_photometry(cutouts, cutout_variance, fixed, psf_sigma, mask=usable)
+print("flux", photometry.flux.round(0), "error", photometry.flux_error.round(0), "valid", photometry.valid)
+```
+
+`flux_error` assumes that the position and the PSF are right. It leaves out the uncertainty of a position fitted on the same image. To replace the Gaussian, pass your own PSF cutouts, evaluated at the positions, as `psf=`. `cuphoton.xpois.forced_flux_at` runs the same measurement on a full image at a list of (x, y) positions.
+
+## Build a dipole cutout
+
+The sample pair has no dipole. Build one with NumPy. A star of flux 6,000 sits at (x, y) = `(2, 1)` in the target and at `(-1, -1)` in the reference. The difference is target minus matched reference. The star therefore leaves a positive lobe where it is in the target and a negative lobe where it was in the reference. The noise matches the sky of the difference image.
+
+```{python}
+rng = np.random.default_rng(3)
+y, x = np.mgrid[-15:16, -15:16]  # pixels from the cutout center
+
+
+def star(x0, y0, flux):
+    return flux / (2 * np.pi * psf_sigma**2) * np.exp(-((x - x0) ** 2 + (y - y0) ** 2) / (2 * psf_sigma**2))
+
+
+dipole_variance = np.full((31, 31), np.nanmedian(difference_variance))
+dipole = star(2, 1, 6000) - star(-1, -1, 6000) + rng.normal(0, np.sqrt(dipole_variance))
+```
+
+## Fit dipoles
+
+`GaussianDipoleModel` draws one elliptical Gaussian twice, with opposite signs. Both lobes share one `amplitude`, their peak height, and one shape, set by the widths `sigma_x` and `sigma_y` and the orientation `theta`. The other four parameters are the lobe centers `x_pos`, `y_pos`, `x_neg` and `y_neg`. The lobe at `(x_pos, y_pos)` has the sign of `amplitude`, and the lobe at `(x_neg, y_neg)` has the opposite sign. `GaussianDipoleModel((31, 31))` takes the cutout shape, `(height, width)`, which must match the images. `model="gaussian"` builds the same model from the image shape. Fit the two candidates and the dipole in one batch, with a `mask` that excludes every non-finite pixel.
+
+```{python}
+from cuphoton.xfit import GaussianDipoleModel, fit_dipoles
+
+images = np.concatenate([cutouts, dipole[None]])
+variance = np.concatenate([cutout_variance, dipole_variance[None]])
+mask = np.isfinite(variance)
+dipoles = fit_dipoles(images, model=GaussianDipoleModel((31, 31)), variance=variance, mask=mask, backend="numpy")
+print(dipoles.status, dipoles.uncertainty_valid, dipoles.uncertainty_reason)
+for name, value, error in zip(dipoles.parameter_names, dipoles.parameters[2], dipoles.standard_errors[2]):
+    print(f"{name:9s} {value:8.2f} +- {error:.2f}")
+```
+
+Check `converged` and `uncertainty_valid` before you use a fit. The parameters printed are the dipole's. Without `initial`, the fit starts its lobes at the brightest and faintest pixels. A round PSF leaves `theta` poorly constrained. `fit_dipoles` does not order the widths, because `(sigma_y, sigma_x, theta + pi/2)` describes the same ellipse. The result holds these fields:
+
+| Field | Holds |
+|---|---|
+| `parameters`, `parameter_names` | one row of fitted parameters per cutout |
+| `standard_errors`, `covariance` | the parameter errors and their full covariance |
+| `status`, `converged`, `evaluations` | how the solver stopped, and after how many evaluations |
+| `chi_square`, `reduced_chi_square`, `degrees_of_freedom` | the fit statistics |
+| `null_chi_square`, `delta_chi_square` | the chi-square of a zero model, and the fit's improvement on it |
+| `uncertainty_valid`, `uncertainty_reason` | whether the covariance is usable, and why not |
+| `residuals` | model minus data, in the cutout shape |
+| `backend`, `device`, `dtype`, `solver_version` | where and in which precision the fit ran, and the solver rules it used |
+
+## Derive catalog quantities
+
+`derived_dipole_quantities` turns each Gaussian dipole fit into its center, the position of the positive lobe (where the source is in the target), the lobe separation and the lobe flux. It propagates the full covariance to each error. The cross terms matter, because amplitude and widths are anticorrelated.
+
+```{python}
+from cuphoton.xfit import derived_dipole_quantities
+
+q = derived_dipole_quantities(dipoles)
+i = 2  # the dipole cutout
+print(f"center (x, y) ({q.center_x[i]:+.2f}, {q.center_y[i]:+.2f}) +- ({q.center_x_error[i]:.2f}, {q.center_y_error[i]:.2f}) px")
+print(f"separation {q.separation[i]:.2f} +- {q.separation_error[i]:.2f} px")
+print(f"lobe flux {q.lobe_flux[i]:.0f} +- {q.lobe_flux_error[i]:.0f}")
+```
+
+The errors are NaN where `uncertainty_valid` is false. They are first order, and apply while they are small next to the widths and the separation.
+
+## Screen the fits with quality flags {#sec-measure-flags}
+
+A converged fit can still be wrong. `dipole_quality_flags` returns one integer of `DipoleQualityFlag` bits per fit. Set `width_range` from the PSF, for example 0.5 to 2.5 times its width.
+
+```{python}
+from cuphoton.xfit import DipoleQualityFlag, dipole_quality_flags
+
+flags = dipole_quality_flags(dipoles, images, variance=variance, mask=mask,
+                             width_range=(0.5 * psf_sigma, 2.5 * psf_sigma))
+for i, value in enumerate(flags):
+    print(i, int(value), [flag.name for flag in DipoleQualityFlag if value & flag])
+```
+
+Both candidates set `NEGATIVE_LOBE_UNSUPPORTED` and `LOBE_OUTSIDE_STAMP`. They are brightening single sources, with the spare lobe placed outside the cutout. Measure them with `fit_single_sources`. The new source's spare lobe ran too far out for the lobe test, which then sets both lobe bits. The dipole sets no flag. Read the bits together:
+
+| Bit | Flag | Set when |
+|---|---|---|
+| 1 | `UNCERTAINTY_INVALID` | the fit has no valid covariance |
+| 2 | `WIDTH_OUT_OF_RANGE` | a fitted width lies outside `width_range` |
+| 4 | `LOBE_OUTSIDE_STAMP` | a lobe center lies outside the cutout |
+| 8 | `NO_LOBE_AT_CANDIDATE` | no lobe lies within `center_radius` pixels of the cutout center |
+| 16 | `LOBES_OVERLAP` | the lobes are closer than `overlap_separation` pixels |
+| 32 | `NEGATIVE_LOBE_UNSUPPORTED` | the negative lobe is below `lobe_snr` standard errors: a brightening single source |
+| 64 | `POSITIVE_LOBE_UNSUPPORTED` | the positive lobe is below `lobe_snr` standard errors: a fading single source |
+
+Test one bit with `(flags & int(DipoleQualityFlag.LOBES_OVERLAP)) != 0`. A slightly misaligned star leaves lobes that overlap. Their center is measured, but their amplitude and separation trade against each other. With `calibrate_noise=True`, the default, the flags rescale each lobe's significance by its spread at empty positions of the cutout. This corrects for noise correlated between neighboring pixels.
+
+## Look at the result
+
+@fig-measure shows the three cutouts with the fitted positions.
+
+```{python}
+#| label: fig-measure
+#| fig-cap: "The three cutouts, each on its own red-blue scale centered on zero, red positive. Left and middle: the brightened star and the new source from the sample difference image, with the `fit_single_sources` position (black cross). The gray band at the bottom of the left cutout lies outside the valid pixels. Right: the synthetic dipole, with the fitted positive (plus) and negative (circle) lobe centers. Synthetic data, for demonstration only."
+#| fig-alt: "Three square panels of noise. The first two hold one red spot each with a black cross on it. The third holds a red spot and a blue spot side by side, marked with a plus and a circle."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 3, figsize=(6.5, 2.4))
+cmap = plt.get_cmap("RdBu_r").copy()
+cmap.set_bad("0.75")
+for ax, image, keep, title in zip(axes, images, mask, ["Brightened star", "New source", "Dipole"]):
+    limit = np.abs(image[keep]).max()
+    ax.imshow(np.where(keep, image, np.nan), origin="lower", cmap=cmap, vmin=-limit, vmax=limit,
+              extent=(-15.5, 15.5, -15.5, 15.5))
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([]); ax.set_yticks([])
+axes[0].plot(sources.x[0], sources.y[0], "kx", ms=8)
+axes[1].plot(sources.x[1], sources.y[1], "kx", ms=8)
+p = dict(zip(dipoles.parameter_names, dipoles.parameters[2]))
+axes[2].plot(p["x_pos"], p["y_pos"], "k+", ms=10)
+axes[2].plot(p["x_neg"], p["y_neg"], "ko", ms=8, mfc="none")
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+## Use a sampled PSF
+
+`StampDipoleModel` shifts copies of a PSF image instead of drawing Gaussians. Its five parameters are the two lobe centers and one shared `flux`. Use it when you have an image of the PSF, such as a survey's PSF model, and the PSF is not Gaussian. The block uses a sampled Gaussian as the PSF image.
+
+```{python}
+from cuphoton.xfit import StampDipoleModel
+
+py, px = np.mgrid[-7:8, -7:8]
+psf = np.exp(-(px**2 + py**2) / (2 * psf_sigma**2))
+stamp_model = StampDipoleModel(psf / psf.sum(), image_shape=(31, 31))
+stamp_fit = fit_dipoles(dipole[None], model=stamp_model, variance=dipole_variance[None], backend="numpy")
+print(dict(zip(stamp_fit.parameter_names, stamp_fit.parameters[0].round(2))))
+```
+
+At the native pixel size, the default bilinear shift biases sub-pixel offsets. For sub-pixel work, pass a PSF image oversampled by a factor `n` with `scale=1 / n`. `evaluation` also takes `"bilinear-vignetted"` or `"finite-volume"`. Sampled-PSF fits always use finite differences and run on the `numpy` and `cupy` backends only.
+
+## Options
+
+The options of `fit_dipoles`:
+
+| Option | Default | Effect |
+|---|---|---|
+| `model` | required | `"gaussian"`, a `GaussianDipoleModel` or a `StampDipoleModel` |
+| `initial` | `None` | starting parameters, one row per cutout. `None` starts at the brightest and faintest pixels. |
+| `mask` | `None` | the pixels to fit. It must exclude every non-finite image or variance pixel. |
+| `variance` | `None` | per-pixel variance. Without it, the covariance is scaled by the reduced chi-square. |
+| `mode` | `"difference"` | `"split"` takes `(batch, 3, y, x)` cutouts: difference, positive and negative planes |
+| `backend` | `"auto"` | `numpy`, `cupy`, `cutile` or `native`. `auto` picks CuPy when a GPU is usable, else NumPy. |
+| `config` | `None` | an `LMConfig` with solver tolerances, the evaluation budget and the solver version |
+| `fusion` | `False` | fuses the Gaussian model and its derivatives on `cupy` or `cutile` |
+
+The `LMConfig` fields you change first:
+
+| Option | Default | Effect |
+|---|---|---|
+| `max_evaluations` | `None` | the evaluation budget of each fit. `None` allows `200 * (n + 1)` for `n` model parameters, 1,800 for a Gaussian dipole. The flag is `--max-evaluations`. |
+| `solver_version` | `"v0.2"` | the stopping, rank and covariance rules. `"v0.1.3"` selects the earlier rules for comparisons with earlier results. The flag is `--solver-version`. |
+
+The options of `dipole_quality_flags`:
+
+| Option | Default | Effect |
+|---|---|---|
+| `width_range` | `(0.5, 5.0)` | allowed lobe widths, in pixels |
+| `center_radius` | `5.0` | how far from the cutout center a lobe can sit, in pixels |
+| `overlap_separation` | `2.0` | the lobe distance below which `LOBES_OVERLAP` is set, in pixels |
+| `lobe_snr` | `3.0` | the significance a lobe needs, in standard errors |
+| `calibrate_noise` | `True` | rescales lobe significance by the spread at empty positions |
+
+## On a GPU
+
+With the `gpu` profile, pass `backend="cupy"` to `fit_dipoles`, which still returns NumPy arrays. `fit_dipoles_device` keeps the result on the GPU. The other xFit calls return CuPy arrays for CuPy inputs. The `cutile` and `native` backends fit Gaussian models only, as the [xFit reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md) describes. `cutile` needs the `cutile` extra, and `native` needs the native extension (@sec-install).
+
+```{python}
+#| eval: false
+import cupy as cp
+from cuphoton.xfit import fit_dipoles_device
+
+on_host = fit_dipoles(images, model="gaussian", variance=variance, mask=mask, backend="cupy", fusion=True)
+d_images, d_variance, d_mask = cp.asarray(images), cp.asarray(variance), cp.asarray(mask)
+on_device = fit_dipoles_device(d_images, model="gaussian", variance=d_variance, mask=d_mask, backend="cupy")
+flags = dipole_quality_flags(on_device, d_images, variance=d_variance, mask=d_mask)  # CuPy flags
+```
+
+CuPy flags do not combine with `DipoleQualityFlag` members. Convert a member with `int()` before you test a bit.
+
+## Command line
+
+`cuphoton xfit fit-dipoles` fits a batch of cutouts saved as an NPZ archive. The archive needs `candidate_id` and `images`, and can hold `initial`, `mask`, `variance` and `stamp_basis`.
+
+```{python}
+np.savez("sample/cutouts.npz", candidate_id=np.array(["star", "new", "dipole"]),
+         images=images, variance=variance, mask=mask)
+```
+
+Run these from the directory that holds `sample/`, with the cuPhoton environment active:
+
+```bash
+cuphoton xfit data-validate --input sample/cutouts.npz --model gaussian --mode difference
+cuphoton xfit fit-dipoles --input sample/cutouts.npz --model gaussian --backend numpy --output-dir runs/dipoles
+```
+
+`data-validate` prints the array shapes and `"valid": true`. `fit-dipoles` writes `summary.json`, `fits.parquet` and `fit-arrays.npz` into a new directory and prints the summary. Its `metrics` block reads:
+
+```{python}
+#| echo: false
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import shutil
+
+shutil.rmtree("runs/dipoles", ignore_errors=True)  # the command refuses an existing output directory
+cli = str(Path(sys.executable).with_name("cuphoton"))
+subprocess.run([cli, "xfit", "data-validate", "--input", "sample/cutouts.npz", "--model", "gaussian", "--mode", "difference"],
+               capture_output=True, text=True, check=True)
+out = subprocess.run([cli, "xfit", "fit-dipoles", "--input", "sample/cutouts.npz", "--model", "gaussian",
+                      "--backend", "numpy", "--output-dir", "runs/dipoles"], capture_output=True, text=True, check=True)
+print(json.dumps(json.loads(out.stdout)["metrics"], indent=2))
+```
+
+`fits.parquet` holds one row per candidate, with each parameter and its standard error:
+
+```{python}
+import pandas as pd
+
+table = pd.read_parquet("runs/dipoles/fits.parquet")
+print(table[["candidate_id", "uncertainty_valid", "reduced_chi_square", "x_pos", "y_pos"]].round(2).to_string(index=False))
+```
+
+The command line fits dipoles only. To cut the cutouts from aligned FITS images, pass a JSON candidate manifest as `--input`. The [xFit reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md#fits-images-and-candidate-positions) describes its format.
+
+## Troubleshooting
+
+`ValueError: images must be finite on included pixels`
+: Pass a `mask` that excludes NaN pixels, such as `np.isfinite(variance)`.
+
+`UserWarning: 21x21 stamps hold fewer than 12 calibration positions`
+: The noise calibration needs cutouts of more than 26 pixels on a side. Cut larger cutouts, or pass `calibrate_noise=False`.
+
+`uncertainty_valid` is `False`
+: Read `uncertainty_reason`. A `rank-deficient Jacobian` means the data do not constrain a parameter, such as a spare lobe on a single source. Check the quality flags.
+
+`status` is `max_evaluations`
+: The fit used up its evaluation budget before it converged. A slowly converging fit can need many evaluations under the default `"v0.2"` rules. `converged` is then `False` and the uncertainties are invalid. Raise `max_evaluations` in `LMConfig`, or pass `--max-evaluations`. A larger budget takes longer and does not guarantee convergence.
+
+`ValueError: derived quantities require a Gaussian dipole fit`
+: `derived_dipole_quantities` and `dipole_quality_flags` take `GaussianDipoleModel` fits only.
+
+`ValueError: fusion requires backend='cupy' or 'cutile'`
+: Fusion runs on `cupy` or `cutile`, with the Gaussian model only.
+
+`ERROR: output directory already exists`
+: `fit-dipoles` needs a new `--output-dir` for every run.
+
+## Next steps
+
+- Score the candidates as real or bogus: @sec-classify.
+- Run the shipped end-to-end pipeline: @sec-transient-chain.
+- Correct the error bars for correlated noise, and check them on your data: @sec-uncertainty.
+- Subtract the images and find the candidates: @sec-subtract.
+- The [xFit reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md) covers the GPU backends, multi-GPU fitting and the solver controls.

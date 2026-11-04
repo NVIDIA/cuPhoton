@@ -1,0 +1,174 @@
+# Your first image difference {#sec-first-difference}
+
+This tutorial takes two images of the same sky and finds what changed between them. You read the images, put one on the other's pixel grid, match their blur, subtract, find the candidates and measure them. It uses four modules: Core reads the files, xRep aligns, xPois subtracts and detects, and xFit measures. The whole run takes a few seconds on a laptop CPU.
+
+**You need:** cuPhoton installed with the CPU profile (@sec-install). No GPU and no data files: the first step makes a small sample pair.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic pair. The printed values only demonstrate the API.
+:::
+
+## Make a sample pair
+
+The block below writes `sample/reference.fits` and `sample/target.fits`. They are two synthetic star fields of the same patch of sky. The reference is sharper and deeper. The target is rotated by 3 degrees, has slightly larger pixels, more blur and a brighter sky. It also holds one new source and one star that became three times brighter. You do not need to read the code. Expand it to copy it.
+
+{{< include _sample-pair.qmd >}}
+
+## Read the images
+
+`read_fits_images` reads the listed HDUs (header data units, the images inside a FITS file) of one file. It returns the arrays, their headers and a receipt that records which reader ran.
+
+```{python}
+import numpy as np
+from cuphoton.core.fits_io import read_fits_images
+
+target_read = read_fits_images("sample/target.fits", [0])
+reference_read = read_fits_images("sample/reference.fits", [0])
+target = target_read.arrays[0].astype(np.float64)
+reference = reference_read.arrays[0].astype(np.float64)
+target_header = target_read.infos[0].header
+reference_header = reference_read.infos[0].header
+print(target.shape, reference.shape, target_read.metadata()["reader"])
+```
+
+The two images have different shapes because they come from different pixel grids. The reader is Astropy, the default. On a GPU host you can read straight to device memory instead (@sec-read-fits).
+
+## Give each image a variance plane
+
+cuPhoton calls take the noise explicitly, as a variance plane: one number per pixel, in squared data units. For a CCD image, the variance is close to the image divided by the gain (electrons per data number).
+
+```{python}
+target_variance = np.clip(target, 0, None) / target_header["GAIN"]
+reference_variance = np.clip(reference, 0, None) / reference_header["GAIN"]
+```
+
+Real pipelines also add read noise and use a measured sky level. Any estimate works, as long as it is a per-pixel variance.
+
+## Put the reference on the target grid
+
+xRep resamples the reference onto the target's pixel grid. `make_wcs_pair_transform` builds the mapping from target pixels to reference pixels out of the two WCS headers (world coordinate system: the mapping from pixel to sky position). `reproject_masked_array` then resamples the image, its variance and its mask together.
+
+```{python}
+from astropy.wcs import WCS
+from cuphoton.xrep import BBox, ReprojectionSpec, make_wcs_pair_transform, reproject_masked_array
+
+mapping = make_wcs_pair_transform(WCS(target_header), WCS(reference_header))  # maps (x, y) positions
+# BBox takes the (x, y) origin, then the width and the height
+spec = ReprojectionSpec(mapping=mapping, output_bbox=BBox(0, 0, target.shape[1], target.shape[0]))
+no_bad_pixels = np.zeros(reference.shape, dtype=bool)
+aligned = reproject_masked_array(reference, reference_variance, no_bad_pixels, spec, backend="cpu")
+print(aligned.image.shape, aligned.interpolation, int(aligned.mask.sum()), "invalid pixels")
+```
+
+The aligned reference now has the target's shape. Pixels that the reference does not cover come back NaN and flagged in `aligned.mask`, and xPois leaves them out of the fit. Here the reference covers the whole target.
+
+## Match the blur and subtract
+
+The target is blurrier than the reference. A plain subtraction would leave a ring at every star. xPois fits a convolution kernel that blurs the reference to match the target, plus a smooth background, then subtracts. The kernel is a sum of Gaussian basis functions. Three widths with a few polynomial terms each cover most image pairs. @sec-subtract-basis shows how to choose the widths from the blur of each image.
+
+```{python}
+from cuphoton.xpois import GaussianBasisComponent, solve_constant_kernel
+
+basis = [GaussianBasisComponent(0.7, 4), GaussianBasisComponent(1.4, 2), GaussianBasisComponent(2.8, 2)]
+fit = solve_constant_kernel(aligned.image, target, basis, kernel_shape=(19, 19),
+                            variance=target_variance, background_degree=1, backend="cpu")
+difference = fit.residual  # target minus the matched reference
+print(f"kernel sum {fit.kernel.sum():.3f}, chi-square per degree of freedom {fit.chi2 / fit.dof:.2f}")
+```
+
+The kernel sum is the brightness ratio between the images. It is close to one here because both images use the same flux units. A chi-square per degree of freedom near one means the variance plane describes the noise. It is above one here because the two changed sources sit inside the fit. @sec-subtract shows how to leave them out with `fit_mask`.
+
+## Find the candidates
+
+To find candidates, divide the difference image by its predicted noise and look for peaks. `standardize_constant_kernel_residual` returns that standardized image, $z$, where pure noise has a scatter of one. `identify_residual_hotspots` then groups pixels above a threshold into regions.
+
+```{python}
+from cuphoton.xpois import identify_residual_hotspots, standardize_constant_kernel_residual
+
+noise = standardize_constant_kernel_residual(difference, kernel=fit.kernel, target_variance=target_variance,
+                                             reference_variance=aligned.variance)
+z = noise.standardized_residual
+regions = identify_residual_hotspots(z, robust_sigma=1.0, threshold_sigma=5.0, max_regions=None)
+for region in regions:
+    print(region["peak_yx"], region["pixel_count"], "pixels")  # peak_yx is (y, x)
+```
+
+Two regions pass the threshold of 5. They are the two changes in the sample pair: the brightened star and the new source. Every other star subtracted cleanly.
+
+## Measure the candidates
+
+xFit fits a model to a batch of cutouts at once. `window_stamps` from xPois cuts a square window around each position, with NaN where the window leaves the image. Cut the difference and its predicted variance the same way, then fit one Gaussian source per cutout. The fit returns each source's flux and its error.
+
+```{python}
+from cuphoton.xfit import fit_single_sources
+from cuphoton.xpois import window_stamps
+
+peaks = np.array([region["peak_yx"] for region in regions])  # (y, x)
+positions = peaks[:, ::-1].astype(float)  # window_stamps takes (x, y)
+cutouts = window_stamps(difference, positions, 21)
+cutout_variance = window_stamps(noise.marginal_residual_variance, positions, 21)
+valid = np.isfinite(cutout_variance)  # NaN outside the valid pixels of the difference
+
+start = np.zeros((len(peaks), 2))  # (x, y) from each cutout center
+sources = fit_single_sources(cutouts, cutout_variance, start, target_header["PSFSIG"], mask=valid)
+for peak, flux, error in zip(peaks, sources.flux, sources.flux_error):
+    print(f"candidate at (y, x) {peak}: flux {flux:.0f} +- {error:.0f} DN")
+```
+
+The third argument is each source's starting position, as (x, y) pixels from the cutout center. `psf_sigma` fixes the width of the source to the target's PSF (point spread function: the blur pattern of a point of light).
+
+## Look at the result
+
+@fig-first-difference shows the inputs and the difference image.
+
+```{python}
+#| label: fig-first-difference
+#| fig-cap: "The sample pair at three stages. Left: the target. Middle: the reference after xRep, on the target grid. Right: the standardized difference $z$ on a red-blue scale from -6 to 6, with the two candidates circled. Every star but the brightened one subtracts to noise. The white frame is the edge band the kernel cannot reach. Synthetic data, for demonstration only."
+#| fig-alt: "Three square panels. The first two show the same star field, the middle one sharper. The third is flat noise with two circled bright spots."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 3, figsize=(6.5, 2.5))
+lo, hi = np.percentile(target, [1, 99.5])
+for ax, image, title in [(axes[0], target, "Target"), (axes[1], aligned.image, "Reference, aligned")]:
+    ax.imshow(image, origin="lower", cmap="magma", vmin=lo, vmax=hi)
+    ax.set_title(title, fontsize=9)
+axes[2].imshow(z, origin="lower", cmap="RdBu_r", vmin=-6, vmax=6)
+axes[2].scatter(peaks[:, 1], peaks[:, 0], s=180, facecolors="none", edgecolors="black", linewidths=1)
+axes[2].set_title("Difference over its noise, $z$", fontsize=9)
+for ax in axes:
+    ax.set_xticks([]); ax.set_yticks([])
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+## Run it on a GPU
+
+On a host with the `gpu` profile, select the GPU backends. xRep and xPois take a `backend` argument. xRep returns host (NumPy) arrays. xFit runs on the device when you pass it CuPy arrays, and returns CuPy arrays.
+
+```{python}
+#| eval: false
+import cupy as cp
+
+aligned = reproject_masked_array(reference, reference_variance, no_bad_pixels, spec, backend="cupy")
+fit = solve_constant_kernel(aligned.image, target, basis, kernel_shape=(19, 19),
+                            variance=target_variance, background_degree=1, backend="cupy")
+sources = fit_single_sources(cp.asarray(cutouts), cp.asarray(cutout_variance), cp.asarray(start),
+                             target_header["PSFSIG"], mask=cp.asarray(valid))
+```
+
+## Next steps
+
+You ran the core of a difference-imaging pipeline. Each step has its own guide with the options and the command-line equivalent:
+
+- Read FITS files, also straight to the GPU: @sec-read-fits.
+- Align images, with masks and stacks: @sec-align.
+- Subtract, and choose the kernel basis and solver: @sec-subtract.
+- Measure candidates, including dipoles (a positive and a negative lobe from a moving or misaligned source): @sec-measure.
+- Run the shipped end-to-end pipeline on your own images: @sec-transient-chain.
+
+@sec-concepts explains the ideas these calls share: arrays and backends, variance and masks, and receipts.

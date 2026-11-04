@@ -1,0 +1,19 @@
+_book/
+/.quarto/
+**/*.quarto_ipynb
+_environment.local
+# written by the pages' sample-data cells
+sample/
+runs/
+
+/_*.local
+results.h5
+series.json
+signals.h5
+tile.npz
+xray-sample/
+xray-artifacts/
+out/
+out-*/
+# rendered outputs; render with `quarto render docs/guide`
+_freeze/

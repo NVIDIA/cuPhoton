@@ -1,0 +1,310 @@
+# Scale out to many GPUs {#sec-scale}
+
+cuPhoton scales a batch by handing whole work items, such as image pairs or chunks of cutouts, to GPU workers. A worker is a process bound to one GPU. It loads its model once and runs its share of the items. Executors start and place the workers: MPI and Dragon across nodes, or local processes and threads on one GPU. You choose one with the `--executor` option of the same command.
+
+**You need:**
+
+- For the steps that run here: cuPhoton with the CPU profile (@sec-install). Run from the root of your cuPhoton checkout.
+- For GPU runs: Linux nodes with CUDA 13-compatible drivers, the `gpu` extra, and either the `mpi` extra with your site's Open MPI or the `dragon` extra (Python 3.12 or 3.13). Every node must see the checkout, the environment, the inputs and the outputs at the same absolute paths.
+
+::: {.callout-note}
+## Sample data
+This page runs on small synthetic inputs. The printed values only demonstrate the API.
+:::
+
+## Pick a command and an executor
+
+These commands spread their work over GPU workers:
+
+| Command | One work item | `--executor` |
+|---|---|---|
+| `cuphoton xfit fit-dipoles` | a chunk of cutouts (`--chunk-size`, default 256) | `local` (default), `dragon`, `mpi` |
+| `cuphoton xscan infer-real-bogus` | a group of whole minibatches (`--task-batches`) | `local` (default), `dragon`, `mpi` |
+| `cuphoton xscan run-pipeline` | one image pair and its candidates, through xPois, xFit and xScan | `processes`, `threads`, `dragon`, `mpi` |
+| `cuphoton xpois fit-batch` (own executor, refer to the [xPois MPI guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md#launch-with-mpi)) | one aligned image pair | `dragon`, `mpi` |
+
+The executors place their workers as follows:
+
+| Executor | Workers | Hosts | Can share a GPU |
+|---|---|---|---|
+| `local` | none, the batch runs in the calling process | one | no |
+| `processes` | spawned processes | one, with one visible GPU | yes |
+| `threads` | threads of one process (NPY inputs only) | one, with one visible GPU | yes |
+| `mpi` | one rank (MPI process) per GPU, started by `mpiexec` | many | no |
+| `dragon` | processes that a coordinator places, started by `dragon` | many | yes |
+
+Before the first round, cuPhoton sorts the items by weight (input bytes, or sample counts for xScan) and gives each one to the least-loaded worker. A worker keeps that list, its shard, for every round. An item never splits across GPUs, and an idle worker does not take items from a busy one. A round therefore ends when its slowest worker finishes.
+
+## Run a command locally first
+
+Before you request GPUs, try the command on a small input. The block below writes eight synthetic dipole cutouts to an NPZ archive for `xfit fit-dipoles`. A dipole is a positive and a negative lobe side by side, the shape a slightly moved star leaves in a difference image.
+
+```{python}
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+
+shutil.rmtree("runs/scale", ignore_errors=True)  # every run below needs a new output directory
+Path("runs/scale").mkdir(parents=True)
+rng = np.random.default_rng(1)
+y, x = np.mgrid[-8:9, -8:9]
+lobe = lambda x0, y0: np.exp(-((x - x0) ** 2 + (y - y0) ** 2) / (2 * 1.5**2))
+images = 500 * (lobe(1.0, 0.5) - lobe(-1.0, -0.5)) + rng.normal(0, 5, (8, 17, 17))
+np.savez("runs/scale/stamps.npz", candidate_id=np.array([f"candidate-{i}" for i in range(8)]),
+         images=images, variance=np.full(images.shape, 25.0))
+print(images.shape)
+```
+
+Fit them with the default executor, `local`, which runs the whole batch in this process:
+
+```bash
+cuphoton xfit fit-dipoles --input runs/scale/stamps.npz --model gaussian --backend numpy \
+  --output-dir runs/scale/xfit-local
+```
+
+```{python}
+#| echo: false
+cli = Path(sys.executable).with_name("cuphoton")
+_ = subprocess.run([str(cli), "xfit", "fit-dipoles", "--input", "runs/scale/stamps.npz", "--model", "gaussian",
+                    "--backend", "numpy", "--output-dir", "runs/scale/xfit-local"], capture_output=True, check=True)
+```
+
+The command prints a JSON run summary and saves it as `summary.json` next to the fit results. Read the parts to check:
+
+```{python}
+run = Path("runs/scale/xfit-local")
+summary = json.loads((run / "summary.json").read_text())
+print(summary["backend"], summary["device"], summary["metrics"]["status_counts"])
+print(sorted(path.name for path in run.iterdir()))
+```
+
+All eight fits converged. To fit on GPUs, add `--executor mpi` or `--executor dragon`, a GPU backend such as `--backend cupy`, and a launcher, as in the steps below. A distributed run prints its run directory and status instead.
+
+## Write a pipeline manifest
+
+`xscan run-pipeline` reads a JSON manifest with three keys: `schema`, `configuration` (the model checkpoint, its feature schema, and the xPois and xFit settings) and `items` (one entry per image pair). The repository's example script writes a small workload without a GPU: 256 by 256 pixel image pairs, nine candidates per pair, a model and `pipeline.json`. The model is untrained and only exercises execution.
+
+```{python}
+REPO = Path(os.environ.get("CUPHOTON_REPO", "."))
+script = REPO / "examples" / "distributed-pipeline" / "prepare_example.py"
+subprocess.run([sys.executable, str(script), "--output", "runs/scale/input", "--images", "4"],
+               check=True, capture_output=True)
+manifest = json.loads(Path("runs/scale/input/pipeline.json").read_text())
+item = manifest["items"][0]
+print(manifest["schema"], "with", len(manifest["items"]), "items")
+print("item keys:", sorted(item))
+print("reference:", item["reference"]["shape"], item["reference"]["dtype"], item["reference"]["sha256"][:16], "...")
+print("first candidate:", item["candidates"][0])
+```
+
+Each image is a descriptor: path, SHA-256, shape and dtype. `variance` and `fit_mask` can be `null`. For your own data, start from [`pipeline.example.json`](https://github.com/NVIDIA/cuPhoton/blob/main/examples/distributed-pipeline/pipeline.example.json) and follow these rules:
+
+- Replace each `<SHA256 ...>` placeholder with the file's lowercase SHA-256. For `checkpoint_sha256`, hash `checkpoint_dir/checkpoint.pt`.
+- Use absolute paths or paths relative to the manifest. The example script writes absolute paths. Run it at the final shared location.
+- Reference and target must already share a pixel grid and photometric units.
+- Keep `device` as `cuda:0`. Each worker sees its own GPU as device 0.
+- Give every item a distinct `item_id`.
+
+## Check the manifest and plan the shards
+
+You can check a manifest on the CPU before you launch. `load_pipeline_manifest` parses it. `prepare_pipeline_workload` checks the files against their hashes and returns the work items an executor receives. `partition_byte_balanced` shows the shards for a worker count.
+
+```{python}
+from cuphoton.core.bulk import partition_byte_balanced
+from cuphoton.xscan.pipeline_executor import load_pipeline_manifest, prepare_pipeline_workload
+
+config, pairs = load_pipeline_manifest(Path("runs/scale/input/pipeline.json"))
+workload = prepare_pipeline_workload(pairs, config)
+print([(item.item_id, item.weight_bytes) for item in workload.items])
+for workers in (2, 3, 4):
+    shards = partition_byte_balanced(workload.items, workers)
+    print(workers, "workers:", [[item.item_id for item in shard] for shard in shards])
+```
+
+With three workers, one worker gets two pairs and the round waits for it. Choose a worker count that gives every worker the same load. Dragon starts no more workers than there are items. MPI rejects more ranks than items.
+
+## Launch with MPI
+
+Each MPI rank is one GPU worker, and rank 0 also coordinates. Prepare the environment and the workload on the shared filesystem, then request an allocation. Replace the account, partition and paths with your site's values.
+
+```bash
+uv sync --locked --python 3.12 --extra gpu --extra catalog --extra mpi
+export CUPHOTON_ENV="$(pwd -P)/.venv"
+source "$CUPHOTON_ENV/bin/activate"
+export RUN=/shared/cuphoton-demo                 # a directory every node sees
+python examples/distributed-pipeline/prepare_example.py --output "$RUN/input" --images 8
+
+salloc --account=YOUR_ACCOUNT --partition=YOUR_GPU_PARTITION --exclusive \
+  --nodes=2 --ntasks-per-node=4 --gpus-per-node=4 --time=00:20:00
+```
+
+Inside the allocation, start eight ranks, four per node:
+
+```bash
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-0,1,2,3}"
+mpiexec -n 8 --map-by ppr:4:node --bind-to none -x CUDA_VISIBLE_DEVICES \
+  "$CUPHOTON_ENV/bin/cuphoton-openmpi-rank-exec" -- \
+  "$CUPHOTON_ENV/bin/cuphoton" xscan run-pipeline --executor mpi \
+  --manifest "$RUN/input/pipeline.json" --output-dir "$RUN/runs" --name slurm-mpi \
+  --warmup-rounds 1 --measure-rounds 3
+```
+
+Each rank must see one GPU before Python starts. `cuphoton-openmpi-rank-exec` picks one entry of the node's `CUDA_VISIBLE_DEVICES` by the rank's position on its node, then runs the command. It is specific to Open MPI. When the scheduler already gives each task one GPU, launch without the wrapper. You can check the wrapper on any machine:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 OMPI_COMM_WORLD_LOCAL_SIZE=4 OMPI_COMM_WORLD_LOCAL_RANK=2 \
+  cuphoton-openmpi-rank-exec -- env | grep CUDA_VISIBLE_DEVICES
+```
+
+```{python}
+#| echo: false
+wrapper = Path(sys.executable).with_name("cuphoton-openmpi-rank-exec")
+command = (f"CUDA_VISIBLE_DEVICES=0,1,2,3 OMPI_COMM_WORLD_LOCAL_SIZE=4 OMPI_COMM_WORLD_LOCAL_RANK=2 "
+           f"{wrapper} -- env | grep CUDA_VISIBLE_DEVICES")
+print(subprocess.run(command, shell=True, capture_output=True, text=True, check=True).stdout.strip())
+```
+
+Local rank 2 sees only GPU 2. Without a scheduler, list the hosts in an Open MPI host file, one line per host such as `gpu-node-01 slots=4`, and add `--hostfile "$RUN/mpi-hosts.txt"` right after `mpiexec`. The same pattern launches `xfit fit-dipoles` and `xscan infer-real-bogus` with `--executor mpi`.
+
+## Launch with Dragon
+
+Dragon starts one cuPhoton coordinator. It finds the allocated nodes and their GPUs, then starts one worker per GPU. It rotates across hosts before it takes a second GPU on any host. `--max-workers` caps the total.
+
+Build the Dragon environment once, from the checkout. `make sync-dragon` selects the `gpu`, `viz`, `dragon` and `catalog` extras on Python 3.12. Add `DRAGON_PYTHON=3.13` for Python 3.13, and add `--extra ximage` to an explicit `uv sync` for xImage work.
+
+```bash
+make sync-dragon
+export CUPHOTON_ENV="$(pwd -P)/.venv"
+```
+
+Then start the run:
+
+```bash
+"$CUPHOTON_ENV/bin/dragon" --wlm slurm --nodes 2 -t tcp -o tcp \
+  "$CUPHOTON_ENV/bin/cuphoton" xscan run-pipeline --executor dragon \
+  --manifest "$RUN/input/pipeline.json" --output-dir "$RUN/runs" --name slurm-dragon \
+  --max-workers 8 --warmup-rounds 1 --measure-rounds 3
+```
+
+`-t tcp -o tcp` selects TCP for both Dragon transports. cuPhoton does not choose one. On named hosts without a scheduler, write the hostnames one per line, with no comments or blank lines, and select the SSH launcher:
+
+```bash
+"$CUPHOTON_ENV/bin/dragon" --wlm ssh --nodes 2 --hostfile "$RUN/dragon-hosts.txt" -t tcp -o tcp \
+  "$CUPHOTON_ENV/bin/cuphoton" xscan run-pipeline --executor dragon \
+  --manifest "$RUN/input/pipeline.json" --output-dir "$RUN/runs" --name ssh-dragon --max-workers 8
+```
+
+Dragon's SSH launcher does not forward `CUDA_VISIBLE_DEVICES`. A mask in your shell does not limit the GPUs it finds on remote hosts.
+
+## Choose workers per GPU
+
+By default each GPU gets one worker. `--workers-per-gpu N` lets up to N workers, each with its own items, share a GPU under `processes`, `threads` and `dragon`. Each worker keeps its own model and context. Every extra worker therefore uses more GPU and host memory. Start small, and measure throughput and memory on your own images.
+
+On one GPU, expose only that GPU and use `processes` or `threads`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 cuphoton xscan run-pipeline --executor processes --workers-per-gpu 4 \
+  --manifest "$RUN/input/pipeline.json" --output-dir "$RUN/runs" --name processes-4 \
+  --worker-timeout-sec 600 --warmup-rounds 1 --measure-rounds 3
+```
+
+`threads` takes the same options but reads prepared NPY inputs only. Use `processes` for FITS inputs. Under Dragon, the count applies to every GPU found, and distinct GPUs fill before any GPU gets a second worker:
+
+```bash
+dragon cuphoton xscan run-pipeline --executor dragon --workers-per-gpu 4 --max-workers 16 \
+  --manifest "$RUN/input/pipeline.json" --output-dir "$RUN/runs" --name dragon-shared
+```
+
+MPI keeps one rank per physical GPU and rejects `--workers-per-gpu`.
+
+## Share a GPU with MPS
+
+Several processes can share a GPU under ordinary CUDA scheduling. CUDA's Multi-Process Service (MPS) lets work from different processes overlap on the GPU. `--mps-pipe-directory` requires every `processes` or `dragon` worker to connect to an MPS v2 service that is already running. Startup fails if a worker is missing from the service's clients. cuPhoton does not start or stop MPS.
+
+```bash
+CUDA_VISIBLE_DEVICES=GPU-your-allocated-device-uuid \
+  cuphoton xscan run-pipeline --executor processes --workers-per-gpu 4 \
+  --mps-pipe-directory /tmp/my-job-mps \
+  --manifest "$RUN/input/pipeline.json" --output-dir "$RUN/runs" --name mps-4
+```
+
+On several hosts, use the same absolute, node-local pipe directory on each. Dragon also needs `nvidia-smi` on each host. Without the option, workers inherit the environment's MPS settings, and cuPhoton does not verify a connection. `threads` rejects the option, because its workers already share one process.
+
+## Check a multi-node run
+
+Each run writes `<output-dir>/<name>/summary.json`. With round options, each pass keeps its outputs under `rounds/warmup-*` or `rounds/measure-*`. Every worker writes a record of where it ran and what it finished. Read them after the launcher exits:
+
+```{python}
+#| eval: false
+run = Path("/shared/cuphoton-demo/runs/slurm-mpi")
+summary = json.loads((run / "summary.json").read_text())
+print(summary["executor"], summary["status"])
+print(summary.get("benchmark", {}).get("measured_batch_wall_sec"))  # min, median and max
+for path in sorted(run.glob("**/workers/worker-*.json")):
+    worker = json.loads(path.read_text())
+    where = worker["provenance"]
+    print(path.parent.parent.name, worker["worker_id"], where["hostname"], where["gpu"].get("uuid"),
+          worker["success_count"], "done,", worker["failed_count"], "failed")
+```
+
+Check that:
+
+- `status` is `success`. cuPhoton writes it only after every worker closed and every record matched its files on disk.
+- Each worker ran on the host and GPU you expected.
+- The launcher also exited cleanly. A successful summary does not prove that MPI finalized or Dragon stopped.
+
+The summary fields to read first:
+
+| Field | Meaning |
+|---|---|
+| `status` | `success` or `failed` for the whole run |
+| `batch_wall_sec` | one round, from dispatch until every worker reported, including input reads and output writes |
+| `finalization_sec` | the output merge, after the record checks |
+| `benchmark.measured_batch_wall_sec` | minimum, median and maximum `batch_wall_sec` of the measured rounds |
+| `placements` (Dragon), `world_size` (MPI) | where the workers ran, and how many |
+
+No executor retries a failed item or replaces a failed worker. Use a new `--name` for every attempt.
+
+## Options
+
+Executor options, from the commands' `--help` and Core's option checks:
+
+| Option | Default | Accepted by | Effect |
+|---|---|---|---|
+| `--max-workers` | GPUs found times workers per GPU | `dragon` | caps the total number of workers |
+| `--workers-per-gpu` | `1` | `processes`, `threads`, `dragon` | allows up to N workers on each GPU |
+| `--worker-timeout-sec` | `3600` | `processes`, `threads`, `dragon` | lifetime of each worker |
+| `--mps-pipe-directory` | none | `processes`, `dragon` | requires every worker to join that MPS service |
+| `--result-timeout-sec` | `60` | `dragon` | time allowed for results and their files |
+| `--rank-setup-timeout-sec` | `600` | `mpi` | wait for shared files on every rank. It does not bound MPI calls |
+| `--warmup-rounds` | `0` | all but `local` | turns on the round layout, with this many passes before the measured ones. Outputs are kept |
+| `--measure-rounds` | `1` | all but `local` | turns on the round layout, with this many measured passes in the same workers |
+| `--require-free-threaded` | off | `threads` | requires Python's GIL to stay disabled |
+
+An option that does not apply to the executor stops the command before any GPU work. `--chunk-size` (xFit) and `--task-batches` (xScan) set the size of one item. Keep them fixed when you compare worker counts.
+
+## Troubleshooting
+
+| Message or symptom | Fix |
+|---|---|
+| `--workers-per-gpu cannot be used with --executor local` | The option belongs to another executor. Refer to the options table. |
+| `--chunk-size requires --executor dragon or mpi` | The local executor fits the whole batch at once. Drop the option. |
+| `output directory already exists` | Use a new `--output-dir` or `--name`. |
+| `distributed xFit requires backend cupy, cutile, or native` | Add a GPU `--backend`. |
+| `MPI collective aggregation requires mpi4py and a compatible MPI runtime` | Install the `mpi` extra, load your site's Open MPI, and start the command with `mpiexec`. |
+| `The Dragon executor requires the dragonhpc runtime` | Install the `dragon` extra on Python 3.12 or 3.13 on every node, and start the command with `dragon`. |
+| `set CUDA_VISIBLE_DEVICES to exactly one GPU` | `processes` and `threads` need exactly one visible GPU. |
+| `<item> reference input changed before Dragon launch` | The file's SHA-256 differs from the manifest, with either executor. Rehash the file or fix its path. |
+| `MPI world size cannot exceed the item count` | Start fewer ranks or split the work into more items. |
+| An MPI run hangs | A dead or hung rank can block MPI. Let the launcher or scheduler enforce a time limit. |
+
+## Next steps
+
+- Run the end-to-end pipeline on your own images, also under Dragon or MPI: @sec-transient-chain.
+- Record what each run measured and review it in a dashboard: @sec-monitor.
+- Repository reference: [distributed architecture](https://github.com/NVIDIA/cuPhoton/blob/main/docs/distributed.md), [MPI](https://github.com/NVIDIA/cuPhoton/blob/main/docs/mpi.md), [Dragon](https://github.com/NVIDIA/cuPhoton/blob/main/docs/dragon.md), [Dragon transports](https://github.com/NVIDIA/cuPhoton/blob/main/docs/dragon-performance.md), [GPU sharing](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md#share-a-gpu-between-image-pairs), [distributed fitting](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md#distributed-fitting) and [distributed inference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md#distributed-inference).

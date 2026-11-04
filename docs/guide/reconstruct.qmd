@@ -1,0 +1,276 @@
+# Reconstruct from many frames {#sec-reconstruct}
+
+xImage makes one sharp image from many registered frames with known PSFs (point spread functions: the blur pattern of a point of light in each frame). It fits one nonnegative scene that, blurred by each frame's PSF, matches every frame within its noise. Use it when you have several exposures of the same field on one pixel grid, each with its own blur and noise. xImage runs on PyTorch, on a CPU or a CUDA GPU. Each workflow reads a bundle of arrays and a YAML configuration, then writes a run directory with a receipt.
+
+**You need:**
+
+- cuPhoton with the `ximage` extra, which adds PyTorch, Photutils and Zarr (@sec-install).
+- Frames already on one pixel grid (@sec-align), a variance plane per frame and one PSF per frame.
+- The cuPhoton checkout, for its example configurations. Run from the root of your checkout, or set `CUPHOTON_REPO` to its path.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic bundle. The printed values only demonstrate the API.
+:::
+
+## Make the frames
+
+The block below makes three noisy 64 by 64 frames of three point sources. Each frame has its own Gaussian PSF, 0.8, 1.0 and 1.2 pixels wide. These are the same arrays that the repository's `examples/ximage/make_synthetic_bundle.py` writes.
+
+```{python}
+import numpy as np
+from scipy.signal import convolve2d
+
+scene = np.full((64, 64), 0.1)  # faint sky
+scene[20, 22], scene[35, 40], scene[44, 18] = 30.0, 50.0, 20.0  # three point sources
+y, x = np.indices((9, 9)) - 4
+rng = np.random.default_rng(0)
+psfs = np.empty((9, 9, 1, 3))
+images = np.empty((1, 64, 64, 3))
+for k, sigma in enumerate((0.8, 1.0, 1.2)):
+    psf = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+    psfs[:, :, 0, k] = psf / psf.sum()
+    images[0, :, :, k] = convolve2d(scene, psfs[:, :, 0, k], mode="same") + rng.normal(0, 0.01, scene.shape)
+print(images.shape, psfs.shape)
+```
+
+The frame index is the last axis of both arrays.
+
+## Save and validate a bundle
+
+A bundle is a set of named arrays in one NPY directory, HDF5 file or Zarr store. Three arrays are required:
+
+| Key | Axes | Holds |
+|---|---|---|
+| `images` | `(batch, y, x, frame)` | the registered frames |
+| `variances` | `(batch, y, x, frame)` | the variance of every pixel, finite and positive |
+| `psfs` | `(psf_y, psf_x, channel, frame)` | one PSF per frame, square, odd-sized, one channel |
+
+An NPY bundle is a directory with one `<key>.npy` file per array. `validate_bundle` returns a list of issues, empty for a good bundle. `summarize_bundle` returns each array's shape, dtype and axes.
+
+```{python}
+from pathlib import Path
+from cuphoton.ximage import load_ximage_bundle, summarize_bundle, validate_bundle
+
+bundle_dir = Path("sample/ximage")
+bundle_dir.mkdir(parents=True, exist_ok=True)
+np.save(bundle_dir / "images.npy", images)
+np.save(bundle_dir / "variances.npy", np.full_like(images, 0.01**2))
+np.save(bundle_dir / "psfs.npy", psfs)
+
+with load_ximage_bundle(bundle_dir) as bundle:
+    print("issues:", validate_bundle(bundle))
+    for key, info in summarize_bundle(bundle).items():
+        print(f"{key:9s} {info['shape']} {info['axes']}")
+```
+
+Optional arrays use the same naming. `masks` is a boolean array shaped like `images`, `True` for a good pixel. `exp_times` holds one positive value per frame. xImage divides each frame by its exposure time and each variance by its square. The [data contract](https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md#ximage-reconstruction-bundles) lists every array.
+
+## Write a configuration
+
+A workflow reads its settings from a YAML file. xImage validates the file strictly. A misspelled key is an error. The repository has annotated examples in `examples/ximage/`. Copy the L2 example, point it at the bundle, and give the run a name that later runs can overwrite:
+
+```{python}
+import os
+import yaml
+
+REPO = Path(os.environ.get("CUPHOTON_REPO", "."))
+config = yaml.safe_load((REPO / "examples/ximage/reconstruct-l2.example.yaml").read_text())
+config["data"]["base"] = "sample/ximage"
+config["output"] = {"root_dir": "sample/runs", "name": "l2", "overwrite": True}
+Path("sample/reconstruct-l2.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+print(config["algorithm"], config["device"], config["dtype"], config["max_iter"], config["padding"], config["roi"])
+```
+
+The example reconstructs the central 48 by 48 pixels. With `VALID` padding, the frames must hold real pixels half a PSF beyond each edge of the region, 4 pixels for these 9 by 9 PSFs. `device: auto` runs on CUDA when PyTorch sees a GPU and on the CPU otherwise. @tbl-reconstruct-options lists the keys you change first.
+
+## Run the reconstruction
+
+`run_reconstruction` takes the configuration's path as a `Path`. It returns a `WorkflowResult` with the run directory and the summary, which the run also saves as its receipt.
+
+```{python}
+from cuphoton.ximage.workflows import run_reconstruction
+
+result = run_reconstruction(Path("sample/reconstruct-l2.yaml"))
+summary = result.summary
+print(result.run_dir.name, summary["backend"], summary["performance"]["device"]["device"], summary["dtype"])
+print("saved image:", summary["image_shape"])
+trace = summary["trace_summary"]
+print(f"{trace['iterations_count']} iterations, loss {trace['loss_last']:.2f}, u_score {trace['u_score_last']:.1e}")
+```
+
+The saved image is the 48-pixel region plus the 4-pixel PSF border on each side. A run stops after `max_iter` iterations, or earlier once the update score `u_score` falls below `stop_tol`. The `loss` is the mean, over good pixels, of the squared residual divided by the variance.
+
+## Read the run directory
+
+Every run writes the same files:
+
+```{python}
+print(sorted(str(p.relative_to(result.run_dir)) for p in result.run_dir.rglob("*") if p.is_file()))
+image = np.load(summary["saved"]["image"])
+scene_l2 = image[0, 4:-4, 4:-4, 0]  # drop the 4-pixel PSF border
+print(image.shape, "->", scene_l2.shape)
+```
+
+The files are the following:
+
+- `config.yaml`: the configuration as the run resolved it, with every default filled in.
+- `summary.json`: the receipt. It records the backend, device, dtype, cuPhoton version, input store, region, saved paths, a trace summary and timings.
+- `artifacts/image.npy`: the scene on the region plus its border.
+- `trace/`: the loss and update score at each iteration.
+
+Crop the border before you use the scene, as the evaluation does. The scene is in exposure-time-normalized units. The run returns no output variance and no effective PSF for the scene. `summary.json` holds input paths and metadata. Review it before you share it.
+
+## Evaluate the run
+
+`evaluate_reconstruction_run` crops the scene to the region and compares it with a median coadd (the pixel-by-pixel median of the frames). It reports sharpness, sky scatter, PSNR and SSIM (two image-similarity scores), and the flux of detected sources.
+
+```{python}
+from cuphoton.ximage.evaluation import evaluate_reconstruction_run
+
+evaluation = evaluate_reconstruction_run(result.run_dir, metrics_backend="auto")
+print(evaluation["metrics_backend"], evaluation["projection_shape"])
+for name in ("restoration", "synthetic_coadd"):
+    print(name, {key: round(value, 3) for key, value in evaluation[name].items() if isinstance(value, float)})
+print("matched sources:", evaluation["photometry"]["matched_aperture_count"])
+```
+
+`restoration` describes the scene and `synthetic_coadd` the median. Both come from the same frames and share their noise. Similarity or sharpness alone therefore does not show that a reconstruction is accurate.
+
+## Calibrate the PSFs
+
+With the frame PSFs, xImage aims for the scene itself, with point sources as single pixels. PSF calibration instead fits, for each frame, the kernel that blurs a narrow Gaussian of width `sigma_g` (0.55 pixels in the example) into that frame's PSF. A reconstruction with these kernels returns the scene as seen through that Gaussian. `run_psf_solve` fits them with multiplicative updates (`method: mm`) or the Adam optimizer (`method: adam`).
+
+```{python}
+from cuphoton.ximage.workflows import run_psf_solve
+
+psf_config = yaml.safe_load((REPO / "examples/ximage/psf-mm.example.yaml").read_text())
+psf_config["data"]["base"] = "sample/ximage"
+psf_config["output"] = {"root_dir": "sample/runs", "name": "psf-mm", "overwrite": True}
+Path("sample/psf-mm.yaml").write_text(yaml.safe_dump(psf_config, sort_keys=False))
+kernels = run_psf_solve(Path("sample/psf-mm.yaml"))
+print(kernels.summary["method"], kernels.summary["psfs_shape"])
+print(sorted(p.name for p in (kernels.run_dir / "artifacts").iterdir()))
+```
+
+`psfs.npy` holds the kernels, `psfs_padded.npy` the kernels before their final crop, and `gaussian_psf.npy` the Gaussian. To reconstruct with the kernels, set `psf_path` to the saved `psfs.npy`:
+
+```{python}
+config["psf_path"] = kernels.summary["saved"]["psfs"]
+config["output"]["name"] = "l2-calibrated"
+Path("sample/reconstruct-l2-calibrated.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+calibrated = run_reconstruction(Path("sample/reconstruct-l2-calibrated.yaml"))
+scene_calibrated = np.load(calibrated.summary["saved"]["image"])[0, 4:-4, 4:-4, 0]
+print(calibrated.run_dir.name, calibrated.summary["image_shape"])
+```
+
+With `psf_path: null`, a reconstruction uses the bundle's PSFs.
+
+## Look at the result
+
+@fig-reconstruct compares one frame and the median of the frames with the two reconstructions.
+
+```{python}
+#| label: fig-reconstruct
+#| fig-cap: "The central 48 by 48 pixels of the sample bundle on one logarithmic color scale, brighter for higher intensity. From left: the frame with the widest PSF, the median of the three frames, the L2 reconstruction with the frame PSFs, and the L2 reconstruction with calibrated kernels. With the frame PSFs, each source shrinks to a few pixels inside a dark ring where the scene falls below the sky level. The calibrated reconstruction shows each source as a slightly wider spot. Synthetic data, for demonstration only."
+#| fig-alt: "Four square panels of the same three point sources. The first two show soft blobs. The third shows bright single points inside dark rings. The fourth shows small compact spots."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+
+panels = [(images[0, 8:56, 8:56, 2], "One frame"), (np.median(images[0, 8:56, 8:56], axis=-1), "Median of frames"),
+          (scene_l2, "xImage, frame PSFs"), (scene_calibrated, "xImage, calibrated")]
+fig, axes = plt.subplots(1, 4, figsize=(6.5, 1.9))
+norm = LogNorm(vmin=0.05, vmax=max(panel.max() for panel, _ in panels))
+for ax, (panel, title) in zip(axes, panels):
+    ax.imshow(np.clip(panel, 0.05, None), origin="lower", cmap="magma", norm=norm)
+    ax.set_title(title, fontsize=8)
+    ax.set_xticks([]); ax.set_yticks([])
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+## Options
+
+| Key | Default | Effect |
+|---|---|---|
+| `algorithm` | set by the command | `l2` (variance-weighted least squares) or `rho` (robust loss) |
+| `device` | `auto` | `cpu`, `cuda`, or `auto` (CUDA when PyTorch sees a GPU) |
+| `dtype` | `float64` | `float32` or `float64` |
+| `data.base` | `data` | the bundle path, relative to the working directory |
+| `data.exposure_indices`, `data.max_exposures` | `null` | use a subset of the frames (set one, not both) |
+| `output.root_dir` | `~/.local/state/cuphoton/ximage/runs` | where runs go (under `$XDG_STATE_HOME` when set) |
+| `output.name`, `output.overwrite` | `null`, `false` | the run directory name (timestamped when `null`), and whether to replace it |
+| `roi.center`, `roi.height`, `roi.width` | `null` | the region in pixels, `center` as `(row, column)`. `null` means the whole frame and its middle |
+| `mask.mode` | `provided` | `provided` uses the bundle's `masks`, `none` ignores them |
+| `psf_path` | `null` | calibrated kernels from a PSF run, or `null` for the bundle's PSFs |
+| `max_iter`, `stop_tol` | `75`, `1e-6` | the iteration cap, and the update score below which a run stops early |
+| `padding` | `VALID` | `VALID` needs real pixels half a PSF beyond the region, `SAME` treats them as zero |
+| `exposure_batch_size` | `null` | frames per convolution call, `null` for all at once |
+| `rho_loss` | `huber` | the loss for `rho` runs. `cauchy`, `bisquare` and `damped_rl` are experimental |
+| `delta_rho_start`, `delta_rho_end` | `2.0`, `1.0` | the Huber threshold in standard deviations, lowered linearly over the iterations |
+
+: Reconstruction keys to change first. The examples set `roi` to 48 by 48 and `mask.mode` to `none`. {#tbl-reconstruct-options}
+
+`rho` applies the Huber loss to each residual divided by its noise. The loss is quadratic up to the threshold and linear beyond it. A few large residuals therefore pull less on the scene. `reconstruct-rho.example.yaml` sets it up. For the PSF calibration keys, refer to the annotated `psf-mm.example.yaml` and `psf-adam.example.yaml`.
+
+## On a GPU
+
+Install the `gpu` extra together with the `ximage` extra:
+
+```bash
+uv sync --locked --extra ximage --extra gpu
+```
+
+`device_override="cuda"` (or `device: cuda`) requires a GPU. `metrics_backend="cupy"` computes the evaluation metrics on it:
+
+```{python}
+#| eval: false
+result = run_reconstruction(Path("sample/reconstruct-l2.yaml"), device_override="cuda")
+print(result.summary["performance"]["device"])  # GPU name, peak memory, cuDNN settings
+evaluation = evaluate_reconstruction_run(result.run_dir, metrics_backend="cupy")
+```
+
+To bound device memory, set `exposure_batch_size` to a positive number of frames. The region, the frame selection and tiling also limit the work per run. The receipt records the resolved device, precision and timings. The evaluation records `metrics_backend` separately from the reconstruction backend.
+
+## Command line
+
+The `cuphoton ximage` commands run the same workflows. From the root of the checkout, the repository's example runs end to end:
+
+```bash
+uv run --no-sync python examples/ximage/make_synthetic_bundle.py --output data
+uv run --no-sync cuphoton ximage data-validate --base data
+uv run --no-sync cuphoton ximage reconstruct-l2 --config examples/ximage/reconstruct-l2.example.yaml
+uv run --no-sync cuphoton ximage psf-solve-mm --config examples/ximage/psf-mm.example.yaml
+uv run --no-sync cuphoton ximage evaluate-reconstruction --run-dir runs/reconstruct-l2-example
+```
+
+`data-validate` prints each array's shape or the list of issues. The reconstruction and PSF commands print the run summary and accept `--device`, `--backend` and `--output-dir` overrides. `evaluate-reconstruction` also writes `evaluation/evaluation_summary.json` into the run directory. The example script and configurations do not overwrite earlier output. Remove `data/` and `runs/` before you repeat them. To time a workflow on the CPU and the GPU, run `benchmark-devices`:
+
+```bash
+uv run --no-sync cuphoton ximage benchmark-devices --config examples/ximage/reconstruct-l2.example.yaml \
+  --workflow reconstruct-l2 --devices cpu,cuda --warmup 1 --repeats 3
+```
+
+It times whole workflow calls, input loading and artifact writing included. It does not compare the CPU and GPU images.
+
+## Troubleshooting
+
+| Error | Fix |
+|---|---|
+| `FileExistsError: ... already exists. Set overwrite=true to reuse it.` | Set `output.overwrite: true` or a new `output.name`. |
+| `ValueError: Padded ROI exceeds the input image bounds; the requested PSF and srf require 4 input pixels beyond each ROI edge.` | Shrink or move `roi`, or use `padding: SAME`. |
+| `ValidationError: ... Extra inputs are not permitted` | Fix the misspelled key named in the message. |
+| `PSF kernels must have positive, square, odd spatial dimensions` | Crop or pad each PSF to an odd square, such as 9 by 9. |
+| `RuntimeError: CUDA was requested but Torch cannot access a CUDA device.` | Install the `gpu` extra, or set `device: auto` or `cpu`. |
+| `AttributeError: 'str' object has no attribute 'read_text'` | Pass the configuration path as a `Path`, not a string. |
+
+## Next steps
+
+- Put frames on one pixel grid before you reconstruct: @sec-align.
+- Variance planes, masks and receipts: @sec-concepts.
+- The [xImage reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/ximage.md) covers HDF5 and Zarr bundles, tiling, the survey adapters and the evaluation's catalog comparisons.
+- xImage adapts the ImageMM method of [Sukurdeep et al. (2025)](https://doi.org/10.3847/1538-3881/adfb72). If you publish results, cite ImageMM and your cuPhoton version, as the [citation guide](https://github.com/NVIDIA/cuPhoton/blob/main/CITATION.md#ximage) describes.

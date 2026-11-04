@@ -1,0 +1,82 @@
+# Install cuPhoton {#sec-install}
+
+cuPhoton installs from a source checkout. CPU workflows need no GPU. The GPU profile targets CUDA 13 and an NVIDIA driver that supports it. The repository's [getting-started guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/getting-started.md) has the full list of profiles and platform notes.
+
+**You need:** CPython 3.12 to 3.14 on Linux, Git, and [uv](https://docs.astral.sh/uv/), the supported environment tool.
+
+## Clone the repository
+
+```bash
+git clone https://github.com/NVIDIA/cuPhoton.git
+cd cuPhoton
+```
+
+This clones the development branch, which this guide describes. To use a published version instead, pick its tag from [Releases](https://github.com/NVIDIA/cuPhoton/releases), add `--branch TAG` to the clone command, and use the documentation in that checkout.
+
+## Choose a profile
+
+A profile is a set of extras. Pick the line that matches your machine:
+
+```bash
+# CPU only: PyTorch, photometry, xImage and the catalog tables that several pages read
+uv sync --locked --extra ximage --extra catalog
+
+# NVIDIA GPU with CUDA 13: adds the GPU readers and CUDA PyTorch
+uv sync --locked --extra gpu --extra ximage --extra catalog
+```
+
+Add an extra for each optional workflow:
+
+| Extra | Adds | Needed for |
+|---|---|---|
+| `torch` | PyTorch on the CPU | xScan and xImage without a GPU |
+| `photometry` | Photutils | source detection and aperture photometry |
+| `gpu` | CuPy, nvCOMP, KvikIO, Photutils, CUDA PyTorch | every GPU path |
+| `ximage` | PyTorch, Photutils, Pydantic and Zarr | xImage configurations and bundles |
+| `catalog` | Pandas and NumExpr | xScan catalogs, the transient-chain example and the pages that read tables with Pandas |
+| `mpi` | mpi4py (bring your own MPI runtime) | MPI executors (@sec-scale) |
+| `dragon` | DragonHPC, Python 3.12 or 3.13 only. `make sync-dragon` builds a Dragon environment | Dragon executors (@sec-scale) |
+| `viz` | Bokeh and Pillow | interactive views |
+
+The figures in this guide also need Matplotlib, which no profile installs. Add it after you sync with `uv pip install matplotlib`.
+
+List every extra you want in one `uv sync` call. A later call without an extra removes it. `uv sync` also removes packages you added with `uv pip install`, such as the transient-chain example (@sec-transient-chain). Reinstall them after each sync.
+
+To install into an existing environment with pip instead, run `python -m pip install -e '.[ximage,catalog]'` from the checkout. The lock file covers Linux only. On macOS, `uv sync --locked` fails, and the CPU profile installs with this pip command.
+
+The native GPU FITS reader (xDR) needs a separate source build even with the `gpu` profile. Refer to the [xDR install notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md#install). Without it, cuPhoton reads FITS files with Astropy.
+
+The `native` backends of xRep, xPois and xFit (@sec-concepts), and xDR's `native` pixel restoration (@sec-read-fits), need the `gpu` profile and cuPhoton's native extension. A checkout builds the extension only when you set `CUPHOTON_XFIT_BUILD_EXT=1`. The build needs Linux, a CUDA 13 toolkit with cuBLAS, cuSOLVER and cuFFT, and a C++17 compiler. Refer to the [native xFit build notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md#optional-native-cuda-backend).
+
+## Check the installation
+
+Run these from the checkout:
+
+```bash
+uv run --no-sync python -c "import cuphoton; print(cuphoton.__version__)"
+uv run --no-sync cuphoton --help
+```
+
+The first command prints the version. The second lists the command groups, one per module:
+
+```{python}
+#| echo: false
+import subprocess
+import sys
+from pathlib import Path
+
+cli = Path(sys.executable).with_name("cuphoton")
+print(subprocess.run([str(cli), "--help"], capture_output=True, text=True).stdout.strip())
+```
+
+To exercise every module on small generated inputs, run the repository's smoke test. Each run needs a new output directory:
+
+```bash
+uv run --no-sync python examples/run_quickstarts.py --profile cpu --output-dir /tmp/cuphoton-quickstart
+```
+
+On a GPU host, add `--require-gpu` to fail instead of falling back to the CPU. The run writes a `summary.json` that names the backend and device each module used.
+
+## Next steps
+
+Run @sec-first-difference, a five-minute tutorial that finds what changed between two images.
