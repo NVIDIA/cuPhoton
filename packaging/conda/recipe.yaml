@@ -26,7 +26,7 @@ requirements:
   host:
     - python
     - pip
-    - setuptools >=83
+    - setuptools >=84.2.1
     - setuptools-scm ==10.3.4
     - wheel
     - pybind11 ==3.0.4

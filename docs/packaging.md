@@ -212,7 +212,7 @@ conda install --prefix ./conda-xdr --override-channels \
 Install development tools such as `pytest`, `ruff`, and `pre-commit` through
 conda. Keep the repository's uv development environment separate: the current
 conda PyTorch package requires `setuptools<82`, while the pip `dev` extra
-requires `setuptools>=83`. For Python-only editable work in a separate conda
+requires `setuptools>=84.2.1`. For Python-only editable work in a separate conda
 environment with the runtime dependencies and pip installed, run
 `CUPHOTON_XDR_BUILD_EXT=0 conda run --prefix ./conda-dev python -m pip install --no-deps -e .`.
 Native builds should use the recipe above.

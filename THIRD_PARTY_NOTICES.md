@@ -69,7 +69,7 @@ more than one license.
 
 | Profile | Declared requirement | Locked version(s) | License or component caveat | Upstream | Distribution |
 | --- | --- | --- | --- | --- | --- |
-| `build` | `setuptools>=83.0.0` | `not locked` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `build frontend / PyPI` |
+| `build` | `setuptools>=84.2.1` | `not locked` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `build frontend / PyPI` |
 | `build` | `wheel` | `not locked` | `MIT` | [wheel](https://github.com/pypa/wheel) | `build frontend / PyPI` |
 | `base` | `astropy>=7.2.0` | `8.0.0` | `BSD-3-Clause` | [Astropy](https://github.com/astropy/astropy) | `uv / PyPI` |
 | `base` | `h5py>=3.10` | `3.16.0` | `BSD-3-Clause`; binary wheels may include HDF5 under its HDF5 license | [h5py](https://github.com/h5py/h5py) | `uv / PyPI` |
@@ -85,8 +85,8 @@ more than one license.
 | `base` | `scipy>=1.13` | `1.18.0` | `BSD-3-Clause`; distributions include separately licensed components | [SciPy](https://github.com/scipy/scipy) | `uv / PyPI` |
 | `torch` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
 | `viz` | `bokeh>=3.9` | `3.9.1` | `BSD-3-Clause` | [Bokeh](https://github.com/bokeh/bokeh) | `uv / PyPI` |
-| `viz` | `pillow>=10.4` | `12.3.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
-| `viz` | `tornado>=6.5.10` | `6.5.10` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
+| `viz` | `pillow>=13.0.0` | `13.0.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
+| `viz` | `tornado>=6.6` | `6.6` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
 | `io`, `gpu` | `cuda-pathfinder>=1.5.6,<2` | `1.5.6` | `Apache-2.0` | [CUDA Python](https://github.com/NVIDIA/cuda-python/tree/main/cuda_pathfinder) | `uv / PyPI; loaded separately for native xFit CUDA library discovery` |
 | `io`, `gpu` | `cuda-bindings>=13,<14` | `13.3.1` | `LicenseRef-NVIDIA-SOFTWARE-LICENSE` | [CUDA Python](https://github.com/NVIDIA/cuda-python) | `uv / PyPI` |
 | `io`, `gpu` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
@@ -102,9 +102,9 @@ more than one license.
 | `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
 | `numba-cuda-mlir` | `numba-cuda-mlir[cu13]>=0.5.4,<0.6` | `0.5.4` | `Apache-2.0` with bundled third-party notices; the `cu13` extra installs separately licensed NVIDIA CUDA component wheels | [Numba-CUDA-MLIR](https://github.com/NVIDIA/numba-cuda-mlir) | `uv / PyPI` |
 | `numba-cuda-mlir` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
-| `dev` | `setuptools>=83.0.0` | `83.0.0` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
+| `dev` | `setuptools>=84.2.1` | `84.2.1` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
-| `dev` | `virtualenv>=21.7.12` | `21.7.12` | `MIT` | [virtualenv](https://github.com/pypa/virtualenv) | `uv / PyPI; pre-commit environment creation` |
+| `dev` | `virtualenv>=21.15.4` | `21.15.4` | `MIT` | [virtualenv](https://github.com/pypa/virtualenv) | `uv / PyPI; pre-commit environment creation` |
 | `dev` | `pytest>=8.3` | `9.1.1` | `MIT` | [pytest](https://github.com/pytest-dev/pytest) | `uv / PyPI` |
 | `dev` | `ruff>=0.15.12` | `0.15.20` | `MIT` | [Ruff](https://github.com/astral-sh/ruff) | `uv / PyPI` |
 | `dev` | `mypy==1.19.1` | `1.19.1` | `MIT` | [mypy](https://github.com/python/mypy) | `uv / PyPI` |
