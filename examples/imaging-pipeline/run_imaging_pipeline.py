@@ -13,7 +13,7 @@ Run from the repository root:
 
     uv sync --locked --extra gpu --extra viz
     bash src/cuphoton/xdr/src/build.sh
-    uv run --locked --extra gpu --extra viz python \
+    uv run --no-sync python \
         examples/imaging-pipeline/run_imaging_pipeline.py
 
 The full walkthrough requires Linux and a CUDA 13-capable NVIDIA GPU.

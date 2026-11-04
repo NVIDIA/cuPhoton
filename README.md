@@ -179,6 +179,8 @@ upstream release has no Python 3.14 wheel.
 | Extra | Use |
 | --- | --- |
 | `dev` | Tests, formatting, linting, and build tools |
+| `catalog` | Pandas and NumExpr for xScan catalog and registry ingestion |
+| `ximage` | PyTorch, photometry, Pydantic configuration, and Zarr bundles |
 | `photometry` | Photutils source detection, backgrounds, and aperture measurements |
 | `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for xDR and xBeam |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
@@ -213,6 +215,13 @@ uv sync --locked --extra dev --extra gpu --extra cutile
 ```
 
 Only CUDA 13 dependency variants are supported by this release.
+
+For a Dragon GPU environment, run `make sync-dragon` (Python 3.12), or
+`make sync-dragon DRAGON_PYTHON=3.13`. The generated
+[`requirements-dragon.txt`](requirements-dragon.txt) provides the same pinned
+runtime dependencies for pip users. See the
+[Dragon installation handoff](docs/getting-started.md#dragon-with-pip)
+for installation and regeneration instructions.
 
 See the [xDR installation guide](docs/components/xdr.md) for native build
 prerequisites and [Packaging](docs/packaging.md) for local package builds.

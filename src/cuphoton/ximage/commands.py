@@ -10,7 +10,7 @@ import json
 import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from cuphoton.core.cli import (
     BoolInvariant,
@@ -48,7 +48,9 @@ from .tools.store import (
     benchmark_store,
     resolve_artifacts,
 )
-from .workflows import run_psf_solve, run_reconstruction
+
+if TYPE_CHECKING:
+    from .workflows import WorkflowResult
 
 T = TypeVar("T")
 SUPPORTED_WORKFLOWS = {
@@ -72,6 +74,22 @@ _KNOWN_COMMAND_EXCEPTIONS = (
 
 def _emit_json_payload(payload: Any, *, out: Callable[[str], None]) -> None:
     out(json.dumps(payload, indent=2, default=str))
+
+
+def run_psf_solve(*args: Any, **kwargs: Any) -> WorkflowResult:
+    """Load reconstruction dependencies when a PSF solve is requested."""
+
+    from .workflows import run_psf_solve as _run_psf_solve
+
+    return _run_psf_solve(*args, **kwargs)
+
+
+def run_reconstruction(*args: Any, **kwargs: Any) -> WorkflowResult:
+    """Load reconstruction dependencies when a solve is requested."""
+
+    from .workflows import run_reconstruction as _run_reconstruction
+
+    return _run_reconstruction(*args, **kwargs)
 
 
 def benchmark_devices(*args: Any, **kwargs: Any) -> dict[str, Any]:

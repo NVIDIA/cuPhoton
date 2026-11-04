@@ -153,6 +153,9 @@ compute 100 PTX.
 Conda has no pip-style extras: this package provides the native I/O profile
 only and requires CUDA 13 libraries. It does not provide a CPU-only install;
 use the base pip package for that profile.
+The Conda recipe also retains Pandas, NumExpr, and Pydantic for catalog
+ingestion and configuration support. The pip distribution selects those
+dependencies through the `catalog` and `ximage` extras.
 
 With uv and pixi installed, run on each native Linux architecture:
 

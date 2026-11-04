@@ -24,7 +24,6 @@ from cuphoton.core.cli import (
 from .dashboard import Dashboard, serve
 from .inference import InferenceConfig, InferenceError, Investigator
 from .monitor import Monitor
-from .nooa_backend import NooaError
 from .quickstart import quickstart
 from .records import encode
 from .session import MonitorSession
@@ -110,7 +109,7 @@ class ServeCommand(_XLensCommand):
 
     class InferenceConfigArg(PathValueInvariant):
         _arg = "--inference-config"
-        _help = "Optional endpoint/backend TOML for browser investigation."
+        _help = "Optional endpoint TOML for browser investigation."
 
     class AutoInvestigateArg(BoolInvariant):
         _arg = "--auto-investigate"
@@ -222,7 +221,7 @@ class AskCommand(_StateCommand):
         investigator = Investigator(InferenceConfig.from_toml(self.config))
         try:
             investigator.check_available()
-        except (InferenceError, NooaError) as exc:
+        except InferenceError as exc:
             raise CommandError(str(exc)) from exc
         snapshot = Monitor.load(self.state, recover=False).snapshot()
         snapshot.pop("storage_error")

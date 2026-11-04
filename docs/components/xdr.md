@@ -274,7 +274,7 @@ interpreter or active environment fails before installation. To select the
 interpreter running a command, use:
 
 ```bash
-PYTHON="$(uv run python -c 'import sys; print(sys.executable)')" \
+PYTHON="$(uv run --no-sync python -c 'import sys; print(sys.executable)')" \
   bash src/cuphoton/xdr/src/build.sh
 ```
 
@@ -311,15 +311,18 @@ for concurrent native planning and reads.
 
 An explicit native source build runs without
 PEP 517 build isolation (as `build.sh` does with `--no-build-isolation`)
-because pybind11, KvikIO and nvCOMP are resolved from the installed `io`
-environment. CFITSIO headers and libraries come from
+because its Python build tools and GPU libraries come from the selected
+environment. The helper installs the `native-build` dependency group from
+`uv.lock`, then rebuilds cuPhoton without resolving runtime dependencies.
+Prepare `io` or `gpu` with `uv sync --locked` first, retaining every extra
+needed for the workload. The helper preserves those installed extras.
+CFITSIO headers and libraries come from
 `CUPHOTON_XDR_CFITSIO_ROOT` or `pkg-config cfitsio`, as described above.
-The helper installs pybind11 as a build dependency; it is not an I/O runtime
-requirement.
-Verify the extension after building:
+Use `uv run --no-sync` after building to retain the native installation.
+Verify the extension:
 
 ```bash
-uv run python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
+uv run --no-sync python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
 ```
 
 If the extension is missing, `batch_to_device` and `batch_to_device_stream`

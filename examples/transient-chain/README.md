@@ -90,19 +90,20 @@ set it, `null` when neither was available and the `psf_flux` columns are NaN).
 
 ## Prerequisites
 
-1. cuPhoton with the `gpu` extra (CuPy, xDR dependencies, Torch, photutils) plus `dragon`
-   or `mpi` for those executors; Python 3.12 or 3.13 (Dragon has no 3.14 wheel). Follow
+1. cuPhoton with the `gpu` extra (CuPy, xDR dependencies, Torch, photutils) and
+   `catalog` for catalog tables, plus `dragon` or `mpi` for those executors;
+   Python 3.12 or 3.13 (Dragon has no 3.14 wheel). Follow
    `docs/getting-started.md` for development environment setup and
    `docs/components/xdr.md` for the xDR native extension. From the root of this development
    checkout, install both packages in editable mode:
    ```bash
-   uv pip install -e '.[gpu]' -e examples/transient-chain
+   uv pip install -e '.[gpu,catalog]' -e examples/transient-chain
    ```
-   Use `'.[gpu,dragon]'` or `'.[gpu,mpi]'` for the corresponding executor.
-   The example itself needs only `pyyaml`, `pandas`, `pyarrow`, `astropy` and `scipy`, all of which
-   cuPhoton already requires.
-   The host tests run without a GPU, from this directory, with the `dev` and `photometry`
-   extras installed:
+   Use `'.[gpu,catalog,dragon]'` or `'.[gpu,catalog,mpi]'` for the corresponding executor.
+   The example uses `pyyaml`, `pandas`, `pyarrow`, `astropy` and `scipy`, supplied
+   by cuPhoton and its `catalog` extra.
+   The host tests run without a GPU, from this directory, with the `dev`,
+   `photometry` and `catalog` extras installed:
    ```bash
    CUDA_VISIBLE_DEVICES= pytest tests
    ```

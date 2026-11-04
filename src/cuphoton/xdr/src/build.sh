@@ -38,9 +38,16 @@ fi
 
 cd "$ROOT_DIR"
 printf 'Building xdr with Python: %s\n' "$PYTHON"
+XDR_BUILD_REQUIREMENTS=$(mktemp)
+trap 'rm -f "$XDR_BUILD_REQUIREMENTS"' EXIT
+uv export --locked --only-group native-build --no-emit-project \
+    --format requirements.txt --python "$PYTHON" \
+    --output-file "$XDR_BUILD_REQUIREMENTS" >/dev/null
 uv pip install --python "$PYTHON" \
-    'setuptools>=84.2.1' 'setuptools-scm==10.3.4' wheel 'pybind11>=3.0,<4'
-exec env CUPHOTON_XDR_BUILD_EXT=1 uv pip install \
+    --no-deps --require-hashes --requirement "$XDR_BUILD_REQUIREMENTS"
+env CUPHOTON_XDR_BUILD_EXT=1 uv pip install \
     --python "$PYTHON" \
+    --no-cache --reinstall \
+    --no-deps \
     --no-build-isolation \
-    -e "${ROOT_DIR}[io]"
+    -e "$ROOT_DIR"

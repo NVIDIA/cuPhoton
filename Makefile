@@ -4,14 +4,17 @@
 
 .PHONY: sync sync-gpu sync-cutile lock lock-check lint typecheck format test test-cpu test-core test-xdr test-xfit test-ximage test-xfit-real test-xpois test-xscan test-xrep test-xray test-xbeam test-gpu test-cutile clean-dist build package-check wheels conda release-check ci-lint ci-test-cpu hooks
 
-CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry --extra xlens-inference --extra ximage --extra rubin
+CPU_EXTRAS = --extra dev --extra torch --extra viz --extra photometry --extra xlens-inference --extra ximage --extra rubin --extra catalog
 GPU_EXTRAS = --extra dev --extra gpu --extra viz
+DRAGON_EXTRAS = --extra gpu --extra viz --extra dragon
+DRAGON_PYTHON ?= 3.12
+DRAGON_EXPORT = uv export --locked --no-default-groups --format requirements.txt --no-emit-project $(DRAGON_EXTRAS)
 CORE_EXTRAS = --extra dev --extra photometry
 VIZ_EXTRAS = --extra dev --extra viz --extra photometry
 UV_RUN = uv run --locked
 PYTEST = pytest
 
-.PHONY: test-cpu-coverage test-xdr-coverage coverage-report
+.PHONY: test-cpu-coverage test-xdr-coverage coverage-report sync-dragon requirements-dragon requirements-check
 
 sync:
 	uv sync --locked $(CPU_EXTRAS)
@@ -21,6 +24,17 @@ sync-gpu:
 
 sync-cutile:
 	uv sync --locked $(GPU_EXTRAS) --extra cutile
+
+sync-dragon:
+	uv sync --locked --python $(DRAGON_PYTHON) $(DRAGON_EXTRAS)
+
+requirements-dragon:
+	$(DRAGON_EXPORT) > requirements-dragon.txt
+
+requirements-check:
+	@export_file=$$(mktemp); trap 'rm -f "$$export_file"' EXIT; \
+	$(DRAGON_EXPORT) > "$$export_file" && \
+	diff -u requirements-dragon.txt "$$export_file"
 
 lock:
 	uv lock
@@ -93,7 +107,7 @@ test-xlens:
 	$(UV_RUN) --extra dev --extra xlens-inference pytest tests/xlens
 
 test-gpu:
-	$(UV_RUN) $(GPU_EXTRAS) pytest
+	$(UV_RUN) $(GPU_EXTRAS) --extra ximage --extra catalog pytest
 
 test-cutile:
 	$(UV_RUN) $(GPU_EXTRAS) --extra cutile pytest tests/xfit tests/xpois
@@ -118,6 +132,7 @@ package-check: build
 
 release-check:
 	$(MAKE) lock-check
+	$(MAKE) requirements-check
 	$(MAKE) ci-lint
 	$(MAKE) ci-test-cpu
 	$(MAKE) wheels

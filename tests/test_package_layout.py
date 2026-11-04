@@ -83,6 +83,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         distribution.metadata.get_all("Classifier") or ()
     )
     assert set(distribution.metadata.get_all("Provides-Extra") or ()) == {
+        "catalog",
         "cutile",
         "dev",
         "dragon",
@@ -95,7 +96,6 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "ximage",
         "rubin",
         "xlens-inference",
-        "xlens-nooa",
     }
 
 

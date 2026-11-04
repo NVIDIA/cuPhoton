@@ -478,13 +478,12 @@ def test_remote_investigation_and_token_requirements(tmp_path, monkeypatch):
         )
 
 
-@pytest.mark.parametrize("prerequisite", ["available", "httpx", "nooa"])
+@pytest.mark.parametrize("prerequisite", ["available", "httpx"])
 def test_ask_prints_detached_report_without_writing_run(
     tmp_path, monkeypatch, capsys, controlled, prerequisite
 ):
     from cuphoton.core.cli import main
     from cuphoton.xlens import inference
-    from cuphoton.xlens.nooa_backend import NooaError
 
     monitor = Monitor(tmp_path / "run", run_id="owned")
     monitor.publish(sample())
@@ -493,18 +492,11 @@ def test_ask_prints_detached_report_without_writing_run(
     config = tmp_path / "inference.toml"
     config.write_text(
         '[inference]\nbase_url="http://localhost:1/v1"\nmodel="fixture"\n'
-        + ('backend="nooa"\n' if prerequisite == "nooa" else "")
     )
     if prerequisite == "httpx":
         monkeypatch.setattr(
             inference.importlib.util, "find_spec", lambda name: None
         )
-    elif prerequisite == "nooa":
-
-        def unavailable():
-            raise NooaError("NOOA requires Linux bubblewrap")
-
-        monkeypatch.setattr(inference, "_command", unavailable)
     result = main(
         [
             "xlens",
