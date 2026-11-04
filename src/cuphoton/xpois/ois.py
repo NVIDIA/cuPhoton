@@ -33,13 +33,10 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from cuphoton.core.arrays import array_module, ndimage_module, to_host
 
-EXPLICIT_BACKENDS = ("cpu", "cupy", "numba-cuda", "cutile", "native")
-AUTO_BACKEND_PREFERENCE = ("cupy", "numba-cuda", "cpu")
+EXPLICIT_BACKENDS = ("cpu", "cupy", "cutile", "native")
+AUTO_BACKEND_PREFERENCE = ("cupy", "cpu")
 SUPPORTED_BACKENDS = ("auto", *EXPLICIT_BACKENDS)
 _SUPPORTED_BACKENDS_SET = frozenset(SUPPORTED_BACKENDS)
-_NUMBA_MAX_COLUMNS = 64
-_NUMBA_THREADS_PER_BLOCK = 256
-_NUMBA_ROWS_PER_BLOCK = 1024
 _CUTILE_MMA_SMALL_ROWS_PER_TILE = 32
 _CUTILE_MMA_LARGE_ROWS_PER_TILE = 128
 # Fits with at least this many rows use the 128-row tile specialization.
@@ -47,7 +44,6 @@ _CUTILE_MMA_LARGE_ROW_THRESHOLD = 1 << 20
 _CUTILE_MMA_K_TILE = 16
 # Element budget for batched candidate stamps (8 MiB of float64 values).
 _STAMP_CHUNK_ELEMENTS = 2**20
-_NUMBA_ACCUMULATE_KERNEL: Any | None = None
 ct: Any | None = None
 
 
@@ -931,8 +927,8 @@ def solve_constant_kernel(
     flux_reference_index
         Raw basis term carrying the overall flux scale.
     backend
-        Normal-equation backend. ``auto`` tries CuPy, then Numba-CUDA, then
-        CPU. ``cutile`` is explicit-only.
+        Normal-equation backend. ``auto`` tries CuPy, then CPU. ``cutile``
+        is explicit-only.
 
     Returns
     -------
@@ -1016,17 +1012,6 @@ def solve_constant_kernel(
     if backend == "cupy":
         gram_matrix, rhs_vector, row_count = (
             _accumulate_normal_equations_cupy(
-                reference_model_arr,
-                target_model_arr,
-                variance_arr,
-                mask_arr,
-                basis_kernels,
-                background_terms,
-            )
-        )
-    elif backend == "numba-cuda":
-        gram_matrix, rhs_vector, row_count = (
-            _accumulate_normal_equations_numba_cuda(
                 reference_model_arr,
                 target_model_arr,
                 variance_arr,
@@ -1954,19 +1939,16 @@ def resolve_backend(backend: str = "auto") -> str:
     Parameters
     ----------
     backend
-        One of ``auto``, ``cupy``, ``numba-cuda``, ``cpu``, ``cutile``,
-        or ``native``. ``numba_cuda`` is accepted as an input alias.
+        One of ``auto``, ``cupy``, ``cpu``, ``cutile``, or ``native``.
 
     Returns
     -------
     str
-        Explicit backend name. ``auto`` prefers CuPy, then Numba-CUDA, and
-        finally CPU. cuTile and native CUDA require explicit selection.
+        Explicit backend name. ``auto`` prefers CuPy, then CPU. cuTile and
+        native CUDA require explicit selection.
     """
 
     normalized = str(backend).strip().lower()
-    if normalized == "numba_cuda":
-        normalized = "numba-cuda"
     if normalized not in _SUPPORTED_BACKENDS_SET:
         choices = ", ".join(SUPPORTED_BACKENDS)
         raise ValueError(f"backend must be one of: {choices}")
@@ -1986,13 +1968,6 @@ def _backend_available(backend: str) -> bool:
             import cupy as cp
 
             return cp.cuda.runtime.getDeviceCount() > 0
-        except Exception:
-            return False
-    if backend == "numba-cuda":
-        try:
-            from numba import cuda
-
-            return bool(cuda.is_available())
         except Exception:
             return False
     return False
@@ -2130,229 +2105,6 @@ def _accumulate_normal_equations_cupy_device(
         gram_matrix += weighted_design.T @ weighted_design
         rhs_vector += weighted_design.T @ weighted_target
 
-    return gram_matrix, rhs_vector, row_count
-
-
-def _load_numba_cuda() -> Any:
-    try:
-        from numba import cuda
-    except ImportError as exc:
-        raise ImportError(
-            "backend='numba-cuda' requires Numba with CUDA support; "
-            "run 'uv sync --extra gpu' for development or install "
-            "'cuphoton[gpu]'"
-        ) from exc
-    if not cuda.is_available():
-        raise ImportError(
-            "backend='numba-cuda' requires a usable CUDA device"
-        )
-    return cuda
-
-
-def _get_numba_accumulate_kernel() -> tuple[Any, Any]:
-    global _NUMBA_ACCUMULATE_KERNEL
-    cuda = _load_numba_cuda()
-    if _NUMBA_ACCUMULATE_KERNEL is not None:
-        return cuda, _NUMBA_ACCUMULATE_KERNEL
-
-    from numba import float64
-
-    @cuda.jit
-    def kernel(
-        reference,
-        target,
-        variance,
-        y_indices,
-        x_indices,
-        basis_kernels,
-        background_terms,
-        partial_gram,
-        partial_rhs,
-        row_count,
-        rows_per_block,
-        column_count,
-        basis_count,
-        background_count,
-        kernel_height,
-        kernel_width,
-    ):
-        shared_gram = cuda.shared.array(
-            shape=4096,
-            dtype=float64,
-        )
-        shared_rhs = cuda.shared.array(
-            shape=64,
-            dtype=float64,
-        )
-        design = cuda.local.array(
-            shape=64,
-            dtype=float64,
-        )
-        thread_id = cuda.threadIdx.x
-        block_start = cuda.blockIdx.x * rows_per_block
-        block_stop = block_start + rows_per_block
-        if block_stop > row_count:
-            block_stop = row_count
-
-        for flat_index in range(
-            thread_id,
-            column_count * column_count,
-            cuda.blockDim.x,
-        ):
-            shared_gram[flat_index] = 0.0
-        for column in range(thread_id, column_count, cuda.blockDim.x):
-            shared_rhs[column] = 0.0
-        cuda.syncthreads()
-
-        margin_y = kernel_height // 2
-        margin_x = kernel_width // 2
-        for row_number in range(
-            block_start + thread_id,
-            block_stop,
-            cuda.blockDim.x,
-        ):
-            y = y_indices[row_number]
-            x = x_indices[row_number]
-            for column in range(column_count):
-                design[column] = 0.0
-
-            for basis_index in range(basis_count):
-                value = 0.0
-                for ky in range(kernel_height):
-                    ref_y = y + ky - margin_y
-                    basis_y = kernel_height - 1 - ky
-                    for kx in range(kernel_width):
-                        ref_x = x + kx - margin_x
-                        basis_x = kernel_width - 1 - kx
-                        value += (
-                            reference[ref_y, ref_x]
-                            * basis_kernels[
-                                basis_index,
-                                basis_y,
-                                basis_x,
-                            ]
-                        )
-                design[basis_index] = value
-
-            for background_index in range(background_count):
-                design[basis_count + background_index] = background_terms[
-                    background_index,
-                    y,
-                    x,
-                ]
-
-            inv_var = 1.0 / variance[y, x]
-            target_scaled = target[y, x] * inv_var
-            for left in range(column_count):
-                left_value = design[left]
-                cuda.atomic.add(
-                    shared_rhs,
-                    left,
-                    left_value * target_scaled,
-                )
-                for right in range(left, column_count):
-                    cuda.atomic.add(
-                        shared_gram,
-                        left * column_count + right,
-                        left_value * design[right] * inv_var,
-                    )
-
-        cuda.syncthreads()
-        block = cuda.blockIdx.x
-        for flat_index in range(
-            thread_id,
-            column_count * column_count,
-            cuda.blockDim.x,
-        ):
-            row = flat_index // column_count
-            column = flat_index - row * column_count
-            partial_gram[block, row, column] = shared_gram[flat_index]
-        for column in range(thread_id, column_count, cuda.blockDim.x):
-            partial_rhs[block, column] = shared_rhs[column]
-
-    _NUMBA_ACCUMULATE_KERNEL = kernel
-    return cuda, kernel
-
-
-def _accumulate_normal_equations_numba_cuda(
-    reference: np.ndarray,
-    target: np.ndarray,
-    variance: np.ndarray,
-    mask: np.ndarray,
-    basis_kernels: np.ndarray,
-    background_terms: np.ndarray,
-    *,
-    rows_per_block: int = _NUMBA_ROWS_PER_BLOCK,
-    threads_per_block: int = _NUMBA_THREADS_PER_BLOCK,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    cuda, kernel = _get_numba_accumulate_kernel()
-    column_count = int(basis_kernels.shape[0] + background_terms.shape[0])
-    if column_count > _NUMBA_MAX_COLUMNS:
-        raise ValueError(
-            "backend='numba-cuda' supports at most "
-            f"{_NUMBA_MAX_COLUMNS} fit columns; got {column_count}"
-        )
-
-    ys, xs = np.nonzero(mask)
-    row_count = int(ys.size)
-    block_count = math.ceil(row_count / rows_per_block)
-    if block_count == 0:
-        return (
-            np.zeros((column_count, column_count), dtype=np.float64),
-            np.zeros(column_count, dtype=np.float64),
-            0,
-        )
-
-    reference_device = cuda.to_device(
-        np.ascontiguousarray(reference, dtype=np.float64)
-    )
-    target_device = cuda.to_device(
-        np.ascontiguousarray(target, dtype=np.float64)
-    )
-    variance_device = cuda.to_device(
-        np.ascontiguousarray(variance, dtype=np.float64)
-    )
-    y_device = cuda.to_device(np.ascontiguousarray(ys, dtype=np.int64))
-    x_device = cuda.to_device(np.ascontiguousarray(xs, dtype=np.int64))
-    basis_device = cuda.to_device(
-        np.ascontiguousarray(basis_kernels, dtype=np.float64)
-    )
-    background_device = cuda.to_device(
-        np.ascontiguousarray(background_terms, dtype=np.float64)
-    )
-    partial_gram_device = cuda.device_array(
-        (block_count, column_count, column_count),
-        dtype=np.float64,
-    )
-    partial_rhs_device = cuda.device_array(
-        (block_count, column_count),
-        dtype=np.float64,
-    )
-    kernel_height, kernel_width = basis_kernels.shape[1:]
-
-    kernel[block_count, threads_per_block](
-        reference_device,
-        target_device,
-        variance_device,
-        y_device,
-        x_device,
-        basis_device,
-        background_device,
-        partial_gram_device,
-        partial_rhs_device,
-        row_count,
-        rows_per_block,
-        column_count,
-        int(basis_kernels.shape[0]),
-        int(background_terms.shape[0]),
-        int(kernel_height),
-        int(kernel_width),
-    )
-    cuda.synchronize()
-
-    gram_matrix = partial_gram_device.copy_to_host().sum(axis=0)
-    rhs_vector = partial_rhs_device.copy_to_host().sum(axis=0)
-    gram_matrix = np.triu(gram_matrix) + np.triu(gram_matrix, k=1).T
     return gram_matrix, rhs_vector, row_count
 
 

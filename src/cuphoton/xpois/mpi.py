@@ -103,9 +103,9 @@ from .batch import (
 )
 
 _AGGREGATION_MODES = frozenset({"files", "mpi"})
-_GPU_BACKENDS = frozenset({"cupy", "cutile", "numba-cuda"})
+_GPU_BACKENDS = frozenset({"cupy", "cutile"})
 _ALLOCATED_DEVICES = "CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES"
-_CUDA_MODULES = ("cupy", "numba.cuda", "cuda.tile")
+_CUDA_MODULES = ("cupy", "cuda.tile")
 _POLL_INITIAL_SEC = 0.05
 _POLL_MAX_SEC = 1.0
 

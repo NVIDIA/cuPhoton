@@ -1903,11 +1903,6 @@ def _cupy_timing_events(backend: str) -> tuple[Any, Any] | None:
 
 
 def _sync_backend(backend: str) -> None:
-    if backend == "numba-cuda":
-        from numba import cuda
-
-        cuda.synchronize()
-        return
     if backend not in {"cupy", "cutile"}:
         return
 

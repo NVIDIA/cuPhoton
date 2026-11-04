@@ -58,8 +58,8 @@ celestial WCS, including supported SIP distortion.
 
 ## Software references
 
-The exact versions of Astropy, NumPy, SciPy, PyTorch, CuPy, Numba-CUDA, and
-other dependencies used for a result are recorded by `uv.lock` or the
-downstream environment. Cite those projects when their methods materially
+The exact versions of Astropy, NumPy, SciPy, PyTorch, CuPy, and other
+dependencies used for a result are recorded by `uv.lock` or the downstream
+environment. Cite those projects when their methods materially
 support a publication, and cite cuPhoton as described in
 [`CITATION.md`](../CITATION.md).

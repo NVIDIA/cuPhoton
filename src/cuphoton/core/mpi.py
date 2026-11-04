@@ -93,9 +93,7 @@ def run_mpi_work_items(
             raise TypeError("prepare_workload must be callable")
         visibility = _prebound_visibility(os.environ)
         premature = sorted(
-            name
-            for name in ("cupy", "numba.cuda", "cuda.tile")
-            if name in sys.modules
+            name for name in ("cupy", "cuda.tile") if name in sys.modules
         )
         torch = sys.modules.get("torch")
         if torch is not None and torch.cuda.is_initialized():

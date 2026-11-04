@@ -182,9 +182,8 @@ upstream release has no Python 3.14 wheel.
 | `photometry` | Photutils source detection, backgrounds, and aperture measurements |
 | `io` | CUDA 13 CuPy, KvikIO, cuFile, and nvCOMP for xDR and xBeam |
 | `torch` | PyTorch workflows that can be forced to CPU execution |
-| `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch and Numba-CUDA |
+| `gpu` | The `io` and `photometry` extras plus CUDA 13 PyTorch |
 | `cutile` | Experimental `cuda.tile` backend and CuPy |
-| `numba-cuda-mlir` | Gaussian xFit kernels compiled with Numba-CUDA-MLIR and CuPy |
 | `mpi` | mpi4py bindings for an existing MPI runtime |
 | `dragon` | DragonHPC runtime on Python 3.12 or 3.13 |
 | `viz` | Bokeh reviews and Pillow image outputs |

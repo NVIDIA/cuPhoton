@@ -38,7 +38,7 @@ def test_two_rank_adapters_publish_scientific_results(
         ):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
-    for name in ("cupy", "numba.cuda", "cuda.tile"):
+    for name in ("cupy", "cuda.tile"):
         monkeypatch.delitem(sys.modules, name, raising=False)
     state = local()
     barrier = Barrier(2, timeout=10)

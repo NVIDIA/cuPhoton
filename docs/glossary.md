@@ -6,7 +6,7 @@
 
 **Backend**
 : The numerical implementation selected for an operation, such as CPU NumPy,
-  PyTorch, CuPy, Numba-CUDA, or cuTile.
+  PyTorch, CuPy, or cuTile.
 
 **Candidate**
 : A detection or object selected for further investigation. A stable candidate

@@ -74,8 +74,9 @@ for that process.
 
 Before creating the component worker, cuPhoton checks the actual hostname and
 `CUDA_VISIBLE_DEVICES`. The worker must see exactly the requested GPU.
-The check rejects prior imports of CuPy, Numba CUDA or cuTile, or an
-initialized Torch CUDA runtime. The component then initializes its numerical libraries and uses local device 0.
+The check rejects prior imports of CuPy or cuTile, or an initialized Torch
+CUDA runtime. The component then initializes its numerical libraries and uses
+local device 0.
 The worker reports its physical GPU identity. Workers assigned to the same
 GPU must agree on that identity. Workers assigned to different GPUs must
 report different identities.

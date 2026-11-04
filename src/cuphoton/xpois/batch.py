@@ -58,9 +58,7 @@ _PAIR_FIELDS = (
     _PAIR_REQUIRED_FIELDS | frozenset(_PATH_FIELDS) | frozenset(_HDU_FIELDS)
 )
 _PAIR_FIELDS_V1 = _PAIR_FIELDS - {"fit_positions"}
-_SUPPORTED_BACKENDS = frozenset(
-    {"auto", "cpu", "cupy", "numba-cuda", "cutile"}
-)
+_SUPPORTED_BACKENDS = frozenset({"auto", "cpu", "cupy", "cutile"})
 _SUPPORTED_SOLVERS = frozenset({"constant", "spatial-als"})
 _SPATIAL_ALS_BACKENDS = frozenset({"auto", "cpu", "cupy"})
 _MASK_POLICIES = frozenset({"none", "strict", "hsc-masklite", "masklite"})

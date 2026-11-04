@@ -544,8 +544,8 @@ class _FitCommand(_KernelSolveCommand):
     class BackendArg(SetInvariant):
         _arg = "--backend"
         _help = (
-            "Fit backend. Constant-solver auto tries cupy, then numba-cuda, "
-            "then cpu; spatial-als auto tries cupy, then cpu. "
+            "Fit backend. Constant-solver and spatial-als auto try cupy, "
+            "then cpu. "
             "Spatial Gaussian-polynomial supports auto, cpu, cupy, and "
             "explicit native; auto tries cupy, then cpu. "
             "[default: %default]"
@@ -792,8 +792,8 @@ class FitBatchCommand(_SpatialSolverOptionsCommand):
         _arg = "--backend"
         _help = "Explicit GPU fit backend."
         _mandatory = True
-        _set = {"cupy", "numba-cuda", "cutile"}
-        _metavar = "{cupy,cutile,numba-cuda}"
+        _set = {"cupy", "cutile"}
+        _metavar = "{cupy,cutile}"
 
     def run(self) -> None:
         assert self.manifest is not None

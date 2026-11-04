@@ -429,7 +429,6 @@ def provenance() -> dict[str, Any]:
         "xfit/api.py",
         "xfit/backend.py",
         "xfit/_native.py",
-        "xfit/_numba_mlir.py",
         "xfit/_cutile.py",
         "xfit/_cutile_fused.py",
         "xfit/models.py",
@@ -448,7 +447,6 @@ def provenance() -> dict[str, Any]:
         "numpy",
         "torch",
         "cuda-tile",
-        "numba-cuda-mlir",
         *cupy_packages,
     ):
         try:

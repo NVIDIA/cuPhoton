@@ -158,7 +158,7 @@ def test_run_constant_kernel_fit_rejects_spatial_als_unsupported_backend(
             fit_mask_path=None,
             background_degree=0,
             flux_conserve=True,
-            backend="numba-cuda",
+            backend="cutile",
             solver="spatial-als",
         )
 
@@ -737,7 +737,7 @@ def test_benchmark_spatial_als_rejects_unsupported_backend_before_run(
 ) -> None:
     with pytest.raises(
         ValueError,
-        match="spatial-als.*unsupported: numba-cuda",
+        match="spatial-als.*unsupported: cutile",
     ):
         workflows.benchmark_constant_kernel_backends(
             reference_path=tmp_path / "missing-reference.npy",
@@ -749,7 +749,7 @@ def test_benchmark_spatial_als_rejects_unsupported_backend_before_run(
             kernel_shape=(5, 5),
             components=[GaussianBasisComponent(sigma=0.9, degree=1)],
             variance_path=None,
-            backends=["cpu", "numba-cuda"],
+            backends=["cpu", "cutile"],
             solver="spatial-als",
         )
 

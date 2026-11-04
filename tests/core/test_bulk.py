@@ -20,7 +20,6 @@ from cuphoton.core.bulk import (
     classify_physical_gpu_pair,
     collect_gpu_identity,
     normalize_pci_bus_id,
-    numba_pci_bus_id,
     partition_byte_balanced,
     sanitize_json,
 )
@@ -166,26 +165,6 @@ def test_atomic_write_json_can_preserve_existing_destination(
     assert list(tmp_path.glob(".*.tmp-*")) == []
 
 
-def test_numba_pci_bus_id_normalizes_cuda_attributes() -> None:
-    device = SimpleNamespace(
-        PCI_DOMAIN_ID=0,
-        PCI_BUS_ID=0xC1,
-        PCI_DEVICE_ID=0,
-    )
-
-    assert numba_pci_bus_id(device) == "00000000:C1:00.0"
-
-
-def test_numba_pci_bus_id_accepts_extended_domain() -> None:
-    device = SimpleNamespace(
-        PCI_DOMAIN_ID=0x10000,
-        PCI_BUS_ID=0xC1,
-        PCI_DEVICE_ID=0,
-    )
-
-    assert numba_pci_bus_id(device) == "00010000:C1:00.0"
-
-
 @pytest.mark.parametrize("value", ["0000:c1:00.0", "00000000:C1:00.0"])
 def test_normalize_pci_bus_id_accepts_cuda_and_nvml_forms(value: str) -> None:
     assert normalize_pci_bus_id(value) == "00000000:C1:00.0"
@@ -195,29 +174,6 @@ def test_normalize_pci_bus_id_accepts_cuda_and_nvml_forms(value: str) -> None:
 def test_normalize_pci_bus_id_rejects_invalid_values(value: object) -> None:
     with pytest.raises(ValueError, match="domain:bus:device.function"):
         normalize_pci_bus_id(value)
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("PCI_DOMAIN_ID", True, "PCI domain must be non-negative"),
-        ("PCI_DOMAIN_ID", 0x100000000, "PCI domain is outside"),
-        ("PCI_BUS_ID", -1, "PCI bus must be non-negative"),
-        ("PCI_DEVICE_ID", 0x20, "PCI device is outside"),
-    ],
-)
-def test_numba_pci_bus_id_rejects_invalid_components(
-    field, value, message
-) -> None:
-    values = {
-        "PCI_DOMAIN_ID": 0,
-        "PCI_BUS_ID": 1,
-        "PCI_DEVICE_ID": 0,
-    }
-    values[field] = value
-
-    with pytest.raises(RuntimeError, match=message):
-        numba_pci_bus_id(SimpleNamespace(**values))
 
 
 @pytest.mark.parametrize(
@@ -268,94 +224,7 @@ def test_classify_physical_gpu_pair(
     )
 
 
-def test_numba_gpu_identity_uses_normalized_pci_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    device = SimpleNamespace(
-        id=0,
-        name=b"test GPU",
-        uuid=None,
-        PCI_DOMAIN_ID=0,
-        PCI_BUS_ID=0xC1,
-        PCI_DEVICE_ID=0,
-    )
-    fake_cuda = SimpleNamespace(get_current_device=lambda: device)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = collect_gpu_identity("numba-cuda")
-
-    assert identity == {
-        "backend": "numba-cuda",
-        "device_index": 0,
-        "name": "test GPU",
-        "uuid": None,
-        "pci_bus_id": "00000000:C1:00.0",
-        "identity_error": None,
-        "identity_warnings": [],
-    }
-
-
-@pytest.mark.parametrize("broken_field", ["uuid", "pci_bus_id"])
-def test_numba_gpu_identity_preserves_partial_identity(
-    monkeypatch: pytest.MonkeyPatch, broken_field: str
-) -> None:
-    class PartialIdentity:
-        id = 0
-        name = b"test GPU"
-        PCI_BUS_ID = 1
-        PCI_DEVICE_ID = 0
-
-        @property
-        def uuid(self):
-            if broken_field == "uuid":
-                raise RuntimeError("uuid unavailable")
-            return "GPU-one"
-
-        @property
-        def PCI_DOMAIN_ID(self):
-            if broken_field == "pci_bus_id":
-                raise RuntimeError("pci unavailable")
-            return 0
-
-    fake_cuda = SimpleNamespace(get_current_device=PartialIdentity)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = collect_gpu_identity("numba-cuda")
-
-    assert identity["identity_error"] is None
-    assert len(identity["identity_warnings"]) == 1
-    assert identity["identity_warnings"][0].startswith(broken_field)
-    assert identity["uuid"] is not None or identity["pci_bus_id"] is not None
-
-
-def test_numba_gpu_identity_fails_without_stable_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class BrokenIdentity:
-        id = 0
-        name = b"test GPU"
-
-        @property
-        def uuid(self):
-            raise RuntimeError("uuid unavailable")
-
-        @property
-        def PCI_DOMAIN_ID(self):
-            raise RuntimeError("pci unavailable")
-
-    fake_cuda = SimpleNamespace(get_current_device=BrokenIdentity)
-    monkeypatch.setitem(sys.modules, "numba", SimpleNamespace(cuda=fake_cuda))
-
-    identity = collect_gpu_identity("numba-cuda")
-
-    assert identity["uuid"] is None
-    assert identity["pci_bus_id"] is None
-    assert identity["identity_error"] == "; ".join(
-        identity["identity_warnings"]
-    )
-
-
-@pytest.mark.parametrize("backend", ["cupy", "cutile", "numba-cuda-mlir"])
+@pytest.mark.parametrize("backend", ["cupy", "cutile", "native"])
 def test_cupy_gpu_identity_uses_normalized_pci_address(
     monkeypatch: pytest.MonkeyPatch,
     backend: str,

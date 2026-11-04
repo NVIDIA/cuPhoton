@@ -74,7 +74,6 @@ def _cpu_hardware() -> dict[str, Any]:
         "cuphoton": "test",
         "torch": {"available": True, "cuda_available": False},
         "cupy": {"available": False, "cuda_available": False},
-        "numba_cuda_available": False,
         "gpu_available": False,
     }
 

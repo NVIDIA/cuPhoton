@@ -36,14 +36,8 @@ def runtime_metadata(
 
     if backend == "torch":
         _add_torch_metadata(metadata, resolved_device)
-    elif backend in {"cupy", "cutile", "native", "numba-cuda-mlir"}:
+    elif backend in {"cupy", "cutile", "native"}:
         _add_cupy_metadata(metadata)
-        if backend == "numba-cuda-mlir":
-            metadata["numba_cuda_mlir_version"] = _package_version(
-                "numba-cuda-mlir"
-            )
-    elif backend == "numba-cuda":
-        _add_numba_metadata(metadata)
     return metadata
 
 
@@ -67,8 +61,6 @@ def _device_type(backend: str, device: str | None) -> str:
         "cupy",
         "cutile",
         "native",
-        "numba-cuda",
-        "numba-cuda-mlir",
     }:
         return "cuda"
     return device or "unknown"
@@ -117,28 +109,6 @@ def _add_cupy_metadata(metadata: dict[str, Any]) -> None:
         minor = properties.get("minor")
         if major is not None and minor is not None:
             metadata["compute_capability"] = f"{major}.{minor}"
-    except Exception as exc:  # pragma: no cover - runtime-specific
-        metadata["metadata_error"] = f"{type(exc).__name__}: {exc}"
-
-
-def _add_numba_metadata(metadata: dict[str, Any]) -> None:
-    try:
-        import numba
-        from numba import cuda
-
-        device = cuda.get_current_device()
-        name = device.name
-        if isinstance(name, bytes):
-            name = name.decode(errors="replace")
-        metadata.update(
-            {
-                "numba_version": str(numba.__version__),
-                "device_name": str(name),
-                "compute_capability": ".".join(
-                    str(value) for value in device.compute_capability
-                ),
-            }
-        )
     except Exception as exc:  # pragma: no cover - runtime-specific
         metadata["metadata_error"] = f"{type(exc).__name__}: {exc}"
 

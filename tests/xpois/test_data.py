@@ -39,7 +39,7 @@ from pathlib import Path
 class BlockImageDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split('.')[0] in {
-            'astropy', 'cupy', 'cuda', 'numba', 'numba_cuda_mlir'
+            'astropy', 'cupy', 'cuda'
         }:
             raise ModuleNotFoundError(
                 'blocked image dependency', name=fullname

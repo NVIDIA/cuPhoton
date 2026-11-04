@@ -463,4 +463,3 @@ def test_provenance_discovers_installed_cuda_distributions(
     )
     packages = benchmark.provenance()["packages"]
     assert packages["cupy"] == "test-cupy"
-    assert packages["numba-cuda-mlir"] == "test-numba-cuda-mlir"
