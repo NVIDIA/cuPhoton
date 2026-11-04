@@ -11,7 +11,7 @@ VIZ_EXTRAS = --extra dev --extra viz --extra photometry
 UV_RUN = uv run --locked
 PYTEST = pytest
 
-.PHONY: test-cpu-coverage test-xdr-coverage coverage-report
+.PHONY: test-cpu-coverage test-xdr-coverage coverage-report test-dragon-imaging-example
 
 sync:
 	uv sync --locked $(CPU_EXTRAS)
@@ -44,6 +44,9 @@ test:
 
 test-cpu:
 	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) $(PYTEST) -rs
+
+test-dragon-imaging-example:
+	CUDA_VISIBLE_DEVICES= $(UV_RUN) $(VIZ_EXTRAS) $(PYTEST) examples/dragon-imaging-pipeline/tests
 
 test-cpu-coverage:
 	$(UV_RUN) --extra dev coverage erase

@@ -1,0 +1,21 @@
+{
+  "title": "Spitzer/SINGS M51 (NGC 5194 and NGC 5195), IRAC channel 1",
+  "filename": "ngc5194_v7.phot.1.fits",
+  "url": "https://irsa.ipac.caltech.edu/data/SPITZER/SINGS/galaxies/ngc5194/IRAC/ngc5194_v7.phot.1.fits",
+  "bytes": 21902400,
+  "sha256": "b6364775a952c2f847e4bc193327d94f731ca7bfc68747d84bfbac05fd1c0e41",
+  "hdu": 0,
+  "shape": [2242, 2416],
+  "crop_yx": [[704, 1728], [544, 1568]],
+  "units": "MJy/sr",
+  "wavelength_microns": 3.6,
+  "pixel_scale_arcsec": 0.75,
+  "credit": "Spitzer/SINGS; NASA/IPAC Infrared Science Archive; Kennicutt et al. (2003)",
+  "dataset_doi": "https://doi.org/10.26131/IRSA424",
+  "source_page": "https://irsa.ipac.caltech.edu/data/SPITZER/SINGS/galaxies/ngc5194.html",
+  "survey_page": "https://irsa.ipac.caltech.edu/data/SPITZER/SINGS/overview.html",
+  "usage_policy": "https://irsa.ipac.caltech.edu/data_use_terms.html",
+  "acknowledgments": "https://irsa.ipac.caltech.edu/ack.html",
+  "reuse": "Public archival data with no usage restrictions under IRSA's public-data policy. This is not a separate public-domain declaration.",
+  "derived_data": "The notebook crops this calibrated mosaic and adds simulated PSF broadening, source motion, detector artifacts and Gaussian noise. The generated image pairs are not observed epochs, and their labels are injection truth rather than survey classifications."
+}

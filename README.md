@@ -69,6 +69,11 @@ subtraction, dipole fitting, and plotting, run the
 [script](examples/imaging-pipeline/run_imaging_pipeline.py). Both include setup
 instructions and require a CUDA 13-capable NVIDIA GPU and xDR's native extension.
 
+For real archival backgrounds, controlled injections and Python/Dragon CLI
+comparisons, use the [Dragon imaging notebook](examples/dragon-imaging-pipeline/README.md).
+It trains a demonstration classifier during preparation and covers persistent
+workers and native CUDA backend comparisons.
+
 ## Components
 
 ### xDataReader: load pixels into GPU memory

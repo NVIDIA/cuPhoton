@@ -76,6 +76,9 @@ jobs:
           uv sync --locked --python "${PYTHON_VERSION}"
           --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin
       - run: make ci-test-cpu
+      - name: Check Dragon imaging preparation and scientific comparisons
+        if: matrix.name == 'linux-x64' && matrix.python == '3.12'
+        run: make test-dragon-imaging-example UV_RUN='uv run --no-sync'
       - name: Build native xRay CPU extension
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
         env:

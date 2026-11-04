@@ -31,5 +31,6 @@
 *.pptx filter=lfs diff=lfs merge=lfs -text
 *.ipynb filter=lfs diff=lfs merge=lfs -text
 
-# Keep this small, reviewed, output-free walkthrough readable in code reviews.
+# Keep these small, reviewed, output-free walkthroughs readable in code reviews.
 /examples/imaging-pipeline/run_imaging_pipeline.ipynb -filter diff merge text eol=lf
+/examples/dragon-imaging-pipeline/run_dragon_imaging.ipynb -filter diff merge text eol=lf
