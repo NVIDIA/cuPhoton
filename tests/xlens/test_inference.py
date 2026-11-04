@@ -169,61 +169,6 @@ def test_reject_incorrect_evidence_and_unsupported_capability(
     assert seen[-1]["body"]["response_format"] == {"type": "json_object"}
 
 
-@pytest.mark.parametrize(
-    ("changed", "reason"),
-    [
-        (
-            {"value": 999},
-            "citation does not match the recorded measurement",
-        ),
-        ({"sample_id": ["observation"]}, "invalid answer structure"),
-    ],
-)
-def test_nooa_invalid_answer_reports_validation_not_transport(
-    tmp_path, monkeypatch, changed, reason
-):
-    monitor = make_monitor(tmp_path)
-    before = monitor.snapshot()["samples"]
-    answer = {
-        "narrative": "private response text must not enter a failed report",
-        "citations": [
-            {
-                "sample_id": "observation",
-                "revision": 1,
-                "measurement": "flux",
-                "value": 2.5,
-                "unit": "arb",
-                **changed,
-            }
-        ],
-    }
-
-    async def completed_nooa(*args, **kwargs):
-        return answer
-
-    monkeypatch.setattr(
-        "cuphoton.xlens.nooa_backend.run_nooa", completed_nooa
-    )
-    investigator = Investigator(
-        InferenceConfig(
-            "http://inference.example/v1", "custom", backend="nooa"
-        )
-    )
-    report = asyncio.run(investigator.investigate(monitor, ["observation"]))
-    assert report["status"] == "failed"
-    assert report["diagnostic"] == (
-        "NOOA response failed evidence validation: " + reason
-    )
-    assert answer["narrative"] not in json.dumps(report)
-    assert monitor.snapshot()["reports"][-1] == report
-    assert monitor.snapshot()["samples"] == before
-
-    answer["citations"][0].update(sample_id="observation", value=2.5)
-    report = asyncio.run(investigator.investigate(monitor, ["observation"]))
-    assert report["status"] == "completed"
-    assert report["citations"][0]["value"] == 2.5
-
-
 def test_bounds_missing_credentials_and_timeouts(
     tmp_path, monkeypatch, endpoint
 ):
@@ -341,6 +286,7 @@ def test_bearer_allows_https_or_loopback(url):
     [
         "valid",
         "revision",
+        "sample_id",
         "unit",
         "boolean",
         "narrative",
@@ -349,9 +295,7 @@ def test_bearer_allows_https_or_loopback(url):
         "tool_calls",
     ],
 )
-def test_basic_response_contract_validates_answers(
-    tmp_path, monkeypatch, invalid
-):
+def test_response_contract_validates_answers(tmp_path, monkeypatch, invalid):
     monitor = make_monitor(tmp_path)
     # A unit-valued measurement makes bool/numeric equality otherwise pass.
     monitor.publish(
@@ -373,6 +317,8 @@ def test_basic_response_contract_validates_answers(
     }
     if invalid == "revision":
         answer["citations"][0]["revision"] = 1
+    elif invalid == "sample_id":
+        answer["citations"][0]["sample_id"] = ["observation"]
     elif invalid == "unit":
         answer["citations"][0]["unit"] = "other"
     elif invalid == "boolean":
@@ -409,5 +355,12 @@ def test_basic_response_contract_validates_answers(
         assert report["citations"] == answer["citations"]
     else:
         assert report["status"] == "failed"
+        expected_error = {
+            "finish_reason": (
+                "endpoint did not complete a bounded text response"
+            ),
+            "tool_calls": "model requested unsupported tool execution",
+        }.get(invalid, "model response failed evidence validation")
+        assert report["diagnostic"] == expected_error
         assert "narrative" not in report
         assert "citations" not in report

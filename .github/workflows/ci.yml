@@ -37,6 +37,7 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --locked --extra dev --python 3.12
+      - run: make requirements-check
       - run: make ci-lint
 
   test-cpu:
@@ -72,9 +73,19 @@ jobs:
           version: "0.12.1"
           enable-cache: true
       - run: uv python install "${PYTHON_VERSION}"
+      - name: Check CLI help with only base dependencies
+        run: |
+          uv sync --locked --python "${PYTHON_VERSION}"
+          uv run --no-sync cuphoton ximage --help
+          uv run --no-sync cuphoton xscan --help
+      - name: Resolve the hashed Dragon requirements
+        if: matrix.python != '3.14'
+        run: >-
+          uv pip install --python .venv/bin/python --dry-run --reinstall
+          --require-hashes -r requirements-dragon.txt
       - run: >-
           uv sync --locked --python "${PYTHON_VERSION}"
-          --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin
+          --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin --extra catalog
       - run: make ci-test-cpu
       - name: Build native xRay CPU extension
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
@@ -112,7 +123,7 @@ jobs:
       - name: Run synthetic CPU quickstarts
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
         run: >-
-          uv run --locked --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin
+          uv run --locked --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin --extra catalog
           python examples/run_quickstarts.py --profile cpu
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
 

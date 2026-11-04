@@ -1687,7 +1687,8 @@ def load_lsstcomcam_candidate_catalog(path: Path) -> list[dict[str, Any]]:
         import pandas as pd
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "pandas is required when candidate_catalog is used"
+            "pandas is required when candidate_catalog is used; "
+            "install 'cuphoton[catalog]'"
         ) from exc
     if suffix in {".parq", ".parquet"}:
         df = pd.read_parquet(path)
@@ -1825,7 +1826,8 @@ def _filter_dataframe_range(
         import pandas as pd
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "pandas is required when LSSTComCam registry filters are used"
+            "pandas is required when LSSTComCam registry filters are used; "
+            "install 'cuphoton[catalog]'"
         ) from exc
 
     series = df[column]
@@ -1859,7 +1861,8 @@ def _pair_forming_product_mask(df):
         import pandas as pd
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "pandas is required when LSSTComCam registry filters are used"
+            "pandas is required when LSSTComCam registry filters are used; "
+            "install 'cuphoton[catalog]'"
         ) from exc
     mask = pd.Series(False, index=df.index)
     for column in ("product", "butler_datasettype"):

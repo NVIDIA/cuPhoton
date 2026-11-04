@@ -299,7 +299,8 @@ def _load_registry_dataframe(registry_path: Path):
         import pandas as pd
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "pandas is required when butler_registry is configured"
+            "pandas is required when butler_registry is configured; "
+            "install 'cuphoton[catalog]'"
         ) from exc
     suffix = registry_path.suffix.lower()
     if suffix in {".parquet", ".pq"}:
@@ -321,7 +322,8 @@ def _write_registry_dataframe(
         import pandas as pd
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "pandas is required to write the HSC FITS registry"
+            "pandas is required to write the HSC FITS registry; "
+            "install 'cuphoton[catalog]'"
         ) from exc
     df = pd.DataFrame(rows)
     suffix = output_path.suffix.lower()
@@ -687,7 +689,8 @@ def _resolve_collection_entry(
             import pandas as pd
         except ModuleNotFoundError as exc:
             raise RuntimeError(
-                "pandas is required when butler_registry is configured"
+                "pandas is required when butler_registry is configured; "
+                "install 'cuphoton[catalog]'"
             ) from exc
         parts = [
             _resolve_collection_entry(df, entries, str(member), seen=seen)
@@ -722,6 +725,10 @@ def _safe_query(df, expression: str, *, source: str):
     # query failures descriptive without treating manifest text as untrusted.
     try:
         return df.query(expression, engine="numexpr")
+    except ImportError as exc:
+        raise RuntimeError(
+            "Registry queries require numexpr; install 'cuphoton[catalog]'"
+        ) from exc
     except Exception as exc:
         raise ValueError(
             f"{source} must be a pandas query compatible with the numexpr "

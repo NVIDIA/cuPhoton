@@ -83,6 +83,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         distribution.metadata.get_all("Classifier") or ()
     )
     assert set(distribution.metadata.get_all("Provides-Extra") or ()) == {
+        "catalog",
         "cutile",
         "dev",
         "dragon",
@@ -95,7 +96,6 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "ximage",
         "rubin",
         "xlens-inference",
-        "xlens-nooa",
     }
 
 
@@ -188,6 +188,10 @@ def test_cli_help_and_version_do_not_import_optional_gpu_packages(
     code = f"""
 import importlib.abc
 import sys
+
+# Match absent packages when Astropy probes them with find_spec.
+for name in ("pandas", "numexpr", "pydantic"):
+    sys.modules[name] = None
 
 BLOCKED = (
     "cupy",

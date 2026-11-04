@@ -59,10 +59,11 @@ The extras are composable:
 | Extra | Adds |
 | --- | --- |
 | `dev` | pytest, Ruff, mypy, pre-commit, and packaging checks |
+| `catalog` | Pandas and NumExpr for xScan catalog and registry ingestion |
 | `photometry` | Photutils background, detection, and aperture routines |
 | `io` | CuPy, KvikIO, cuFile, and nvCOMP for native xDR |
 | `torch` | CPU-capable PyTorch |
-| `ximage` | PyTorch, photometry, and Zarr bundle support for xImage |
+| `ximage` | PyTorch, photometry, Pydantic configuration, and Zarr bundles |
 | `rubin` | Offline Rubin image archive reader |
 | `gpu` | `io`, `photometry`, and CUDA 13 PyTorch |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
@@ -97,7 +98,9 @@ corresponding distributed GPU executor. From a checkout:
 # Choose the MPI profile:
 uv sync --locked --extra gpu --extra mpi
 # Or the Dragon profile:
-uv sync --locked --python 3.13 --extra gpu --extra dragon
+make sync-dragon
+# Choose Python 3.13 instead:
+make sync-dragon DRAGON_PYTHON=3.13
 ```
 
 The `mpi` extra installs mpi4py, not an MPI implementation. Load the site's
@@ -114,6 +117,45 @@ DragonHPC 0.14.2 provides Linux x86-64 and ARM64 wheels for Python 3.12 and
 instead of silently omitting Dragon. Use the installed `dragon` launcher and
 the [distributed launch guide](distributed-execution.md).
 Both executors need the same environment on every participating node.
+The Dragon target selects `gpu`, `viz`, `dragon`, and `catalog`, including
+xScan's catalog/registry inputs and the transient-chain example's catalog
+tables. For xImage workflows, add `--extra ximage` to an explicit `uv sync`
+command. Include every desired extra when syncing an existing environment.
+
+### Dragon with pip
+
+[`requirements-dragon.txt`](../requirements-dragon.txt) is generated from
+`uv.lock` for the `gpu`, `viz`, `dragon`, and `catalog` extras. It contains
+pinned runtime dependencies and hashes for Linux on Python 3.12 or 3.13. Use
+the requirements file from the same release or revision as cuPhoton, in a
+fresh environment:
+
+```bash
+python -m pip install --require-hashes -r requirements-dragon.txt
+```
+
+Then install the matching cuPhoton wheel with `python -m pip install --no-deps`
+followed by the wheel's path. The requirements file contains dependencies;
+the wheel supplies cuPhoton and its native extensions. A source installation
+still needs the [native build prerequisites](components/xdr.md#install).
+The NVIDIA driver and site configuration remain host prerequisites. On ARM64,
+Photutils requires a source build and its compiler prerequisites described above.
+
+After changing `pyproject.toml`, regenerate the lock with the uv version used
+by CI, then regenerate the requirements file:
+
+```bash
+uv tool run --from 'uv==0.12.1' uv lock
+make requirements-dragon
+make requirements-check
+```
+
+CI checks that the committed export matches the lock and resolves it on
+supported Dragon interpreters. The export excludes development, notebook,
+and native-build groups. For another workflow, use `uv export --locked` with
+its extras rather than editing the generated requirements file.
+
+### cuTile compiler
 
 The `cutile` extra installs cuda-tile 1.6 or newer and CuPy on Python
 3.12–3.14. For kernel compilation in this setup, use a CUDA 13.2 or newer
@@ -173,8 +215,27 @@ or, for CUDA 13:
 python -m pip install -e '.[dev,gpu,viz]'
 ```
 
-The lock file applies to uv-managed checkout environments. A downstream pip or
-conda project should record its own complete dependency resolution.
+The lock file applies to uv-managed checkout environments. Pip users can use
+the [generated Dragon requirements](#dragon-with-pip) or export their chosen
+extras with `uv export --locked --format requirements.txt --no-emit-project`.
+Downstream environments with different dependencies should record their own
+complete resolution.
+
+## Notebook and native build tools
+
+The `notebook` and `native-build` dependency groups contain checkout tools
+resolved in `uv.lock`. Add `--group notebook` when preparing an environment
+for JupyterLab, then launch it without resyncing:
+
+```bash
+uv sync --locked --extra gpu --extra viz --group notebook
+uv run --no-sync jupyter lab
+```
+
+The xDR build helper installs the locked `native-build` group into the chosen
+interpreter and preserves its installed runtime extras. The group contains
+Python build tools; CUDA headers, a C++ compiler, and CFITSIO are separate
+[native prerequisites](components/xdr.md#native-extension-availability).
 
 ## Next steps
 

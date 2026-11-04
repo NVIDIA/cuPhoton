@@ -4,10 +4,26 @@
 
 ### Breaking changes
 
+- Remove the optional NOOA xLens engine, its installation extra, and its
+  backend and generated-code configuration. xLens uses its built-in
+  evidence-based inference engine. Remove `backend`, `max_iterations`,
+  `max_tool_calls`, and `max_evidence_bytes` from existing `[inference]`
+  tables, including `backend = "basic"`; these settings are no longer accepted.
+- Move Pandas and NumExpr into the `catalog` extra for xScan ingestion,
+  and Pydantic into the `ximage` extra for xImage configuration. Select
+  these extras for the corresponding workflows.
 - Remove the Numba-CUDA xPois backend and Numba-CUDA-MLIR xFit backend,
   including their dependencies, installation extra, CLI options, and
   pipeline configuration choices. Use CuPy, native CUDA, or cuTile for GPU
   execution. CPU execution remains available.
+
+### Installation and development
+
+- Add `make sync-dragon` and a generated, hashed `requirements-dragon.txt`
+  for Python 3.12/3.13 GPU environments, including catalog dependencies.
+  CI checks the export against `uv.lock`.
+- Lock notebook and native Python build tools in dependency groups. The xDR
+  source-build helper preserves installed runtime dependencies when rebuilding.
 
 ### xFit solver errata
 

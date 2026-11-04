@@ -5,19 +5,20 @@ optional-development, and build requirements are declared in
 [`pyproject.toml`](pyproject.toml). Optional distributed runtimes, native
 requirements, compiled header code, and the CFITSIO library bundled in Linux
 wheels are documented below. `uv.lock` records the reproducible resolution for
-the project Python dependency profiles, including the optional DragonHPC and
-mpi4py packages.
-The site-provided MPI implementation is not part of that lock. Build-system requirements are resolved separately
-by the PEP 517 build frontend and are not locked by `uv.lock`; they are labeled
-`not locked` below.
+the project Python dependency profiles and the `native-build` and `notebook`
+groups, including the optional DragonHPC and mpi4py packages.
+The site-provided MPI implementation is not part of that lock. Isolated
+PEP 517 builds resolve build-system requirements separately from `uv.lock`;
+their `build` rows are labeled `not locked` below.
 
 Git-derived package versions use the MIT-licensed build tools
 [`setuptools-scm==10.3.4`](https://pypi.org/project/setuptools-scm/10.3.4/)
 and its [`vcs-versioning==2.5.0`](https://pypi.org/project/vcs-versioning/2.5.0/)
 dependency in native wheel builds. They are not
 included in the installed runtime dependencies. Native wheel builds pin both
-tools in `scripts/wheels/build-requirements.txt`; isolated source builds
-resolve build requirements separately from `uv.lock`.
+tools in `scripts/wheels/build-requirements.txt`; checkout builds use the
+locked `native-build` group. Isolated source builds resolve build requirements
+separately from `uv.lock`.
 
 cuPhoton uses `uv` to resolve Python distributions from the registries
 recorded in `uv.lock` (currently the Python Package Index). NVIDIA-authored
@@ -71,14 +72,19 @@ more than one license.
 | --- | --- | --- | --- | --- | --- |
 | `build` | `setuptools>=84.2.1` | `not locked` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `build frontend / PyPI` |
 | `build` | `wheel` | `not locked` | `MIT` | [wheel](https://github.com/pypa/wheel) | `build frontend / PyPI` |
+| `native-build` | `setuptools-scm==10.3.4` | `10.3.4` | `MIT` | [setuptools-scm](https://github.com/pypa/setuptools-scm) | `uv / PyPI; checkout build tools` |
+| `native-build` | `wheel` | `0.48.0` | `MIT` | [wheel](https://github.com/pypa/wheel) | `uv / PyPI; checkout build tools` |
+| `native-build` | `pybind11>=3.0,<4` | `3.1.0` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI; checkout build tools` |
+| `notebook` | `jupyterlab>=4,<5` | `4.6.5` | `BSD-3-Clause` | [JupyterLab](https://github.com/jupyterlab/jupyterlab) | `uv / PyPI; notebook tools` |
+| `notebook` | `ipykernel>=6,<8` | `7.4.0` | `BSD-3-Clause` | [IPython kernel](https://github.com/ipython/ipykernel) | `uv / PyPI; notebook tools` |
 | `base` | `astropy>=7.2.0` | `8.0.0` | `BSD-3-Clause` | [Astropy](https://github.com/astropy/astropy) | `uv / PyPI` |
 | `base` | `h5py>=3.10` | `3.16.0` | `BSD-3-Clause`; binary wheels may include HDF5 under its HDF5 license | [h5py](https://github.com/h5py/h5py) | `uv / PyPI` |
-| `base` | `numexpr>=2.10` | `2.14.1` | `MIT` | [NumExpr](https://github.com/pydata/numexpr) | `uv / PyPI` |
+| `catalog` | `numexpr>=2.10` | `2.14.1` | `MIT` | [NumExpr](https://github.com/pydata/numexpr) | `uv / PyPI` |
 | `base` | `numpy>=2.0,<2.6` | `2.4.6` | `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0` | [NumPy](https://github.com/numpy/numpy) | `uv / PyPI` |
-| `base` | `pandas>=2.2` | `3.0.3` | `BSD-3-Clause` | [pandas](https://github.com/pandas-dev/pandas) | `uv / PyPI` |
+| `catalog` | `pandas>=2.2` | `3.0.3` | `BSD-3-Clause` | [pandas](https://github.com/pandas-dev/pandas) | `uv / PyPI` |
 | `photometry` | `photutils>=3.0` | `3.0.0` | `BSD-3-Clause` | [Photutils](https://github.com/astropy/photutils) | `uv / PyPI` |
 | `base` | `pyarrow>=23.0` | `24.0.0` | `Apache-2.0`; binary distributions include Arrow and third-party notices | [Apache Arrow](https://github.com/apache/arrow) | `uv / PyPI` |
-| `base` | `pydantic>=2.11,<3` | `2.14.1` | `MIT` | [Pydantic](https://github.com/pydantic/pydantic) | `uv / PyPI` |
+| `ximage`, `dev` | `pydantic>=2.11,<3` | `2.14.1` | `MIT` | [Pydantic](https://github.com/pydantic/pydantic) | `uv / PyPI` |
 | `ximage` | `zarr>=3,<4` | `3.4.1` | `MIT` | [Zarr](https://github.com/zarr-developers/zarr-python) | `uv / PyPI` |
 | `rubin` | `lsst-images[https]==30.0.10` | `30.0.10` | `BSD-3-Clause`; optional dependency tree includes `starlink-pyast` under `LGPL-3.0-or-later` | [LSST Images](https://github.com/lsst/images) | `uv / PyPI` |
 | `base` | `PyYAML>=6.0` | `6.0.3` | `MIT` | [PyYAML](https://github.com/yaml/pyyaml) | `uv / PyPI` |
@@ -94,11 +100,11 @@ more than one license.
 | `io`, `gpu` | `libkvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
 | `io`, `gpu` | `nvidia-libnvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
 | `io`, `gpu` | `nvidia-nvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
-| `native build` | `pybind11==3.0.4` | `build recipe` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
+| `wheel build` | `pybind11==3.0.4` | `build recipe` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
 | `gpu` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
 | `cutile` | `cuda-tile>=1.6,<2` | `1.6.0` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI` |
 | `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
-| `dev` | `setuptools>=84.2.1` | `84.2.1` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
+| `dev`, `native-build` | `setuptools>=84.2.1` | `84.2.1` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
 | `dev` | `virtualenv>=21.15.4` | `21.15.4` | `MIT` | [virtualenv](https://github.com/pypa/virtualenv) | `uv / PyPI; pre-commit environment creation` |
 | `dev` | `pytest>=8.3` | `9.1.1` | `MIT` | [pytest](https://github.com/pytest-dev/pytest) | `uv / PyPI` |

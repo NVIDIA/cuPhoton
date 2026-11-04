@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,19 +29,42 @@ def build_environment(tmp_path):
     shutil.copy2(source / "src/cuphoton/xdr/src/build.sh", script)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("dirname", "env"):
+    for name in ("dirname", "env", "mktemp", "rm"):
         (bin_dir / name).symlink_to(shutil.which(name))
+    (bin_dir / "xdr-python").symlink_to(sys.executable)
     _executable(
         bin_dir / "uv",
-        "#!/bin/sh\n"
-        'printf "%s\\n" "$CUPHOTON_XDR_BUILD_EXT" "$@" '
-        '> "$XDR_BUILD_ARGS"\n',
+        "#!/usr/bin/env xdr-python\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "arguments = sys.argv[1:]\n"
+        "native = os.environ.get('CUPHOTON_XDR_BUILD_EXT', '')\n"
+        "phase = ('export' if arguments[0] == 'export' else\n"
+        "         'build' if native == '1' else 'dependencies')\n"
+        "call = {'arguments': arguments, 'native': native}\n"
+        "if '--requirement' in arguments:\n"
+        "    path = arguments[arguments.index('--requirement') + 1]\n"
+        "    call['requirements'] = Path(path).read_text()\n"
+        "with Path(os.environ['XDR_BUILD_ARGS']).open('a') as log:\n"
+        "    log.write(json.dumps(call) + '\\n')\n"
+        "if os.environ.get('UV_FAIL_PHASE') == phase:\n"
+        "    sys.exit(23)\n"
+        "if phase == 'export':\n"
+        "    path = arguments[arguments.index('--output-file') + 1]\n"
+        "    Path(path).write_text('locked-build-tool==1.2.3\\n')\n",
     )
     env = {
         "PATH": str(bin_dir),
         "XDR_BUILD_ARGS": str(tmp_path / "args"),
     }
     return root, script, bin_dir, env
+
+
+def _build_calls(env):
+    return [
+        json.loads(line)
+        for line in Path(env["XDR_BUILD_ARGS"]).read_text().splitlines()
+    ]
 
 
 def _run_build(script, env, cwd=None):
@@ -73,16 +98,47 @@ def test_build_selects_interpreter_and_preserves_install_arguments(
     result = _run_build(script, env)
     assert result.returncode == 0, result.stderr
     assert str(expected) in result.stdout
-    assert Path(env["XDR_BUILD_ARGS"]).read_text().splitlines() == [
-        "1",
+    export, dependencies, build = _build_calls(env)
+    exported_arguments = export["arguments"]
+    requirements = Path(exported_arguments[-1])
+    assert exported_arguments == [
+        "export",
+        "--locked",
+        "--only-group",
+        "native-build",
+        "--no-emit-project",
+        "--format",
+        "requirements.txt",
+        "--python",
+        str(expected),
+        "--output-file",
+        str(requirements),
+    ]
+    assert dependencies["arguments"] == [
         "pip",
         "install",
         "--python",
         str(expected),
+        "--no-deps",
+        "--require-hashes",
+        "--requirement",
+        str(requirements),
+    ]
+    assert dependencies["requirements"] == "locked-build-tool==1.2.3\n"
+    assert build["native"] == "1"
+    assert build["arguments"] == [
+        "pip",
+        "install",
+        "--python",
+        str(expected),
+        "--no-cache",
+        "--reinstall",
+        "--no-deps",
         "--no-build-isolation",
         "-e",
-        f"{root}[io]",
+        str(root),
     ]
+    assert not requirements.exists()
 
 
 def test_build_accepts_interpreter_command_on_path(build_environment):
@@ -105,12 +161,18 @@ def test_build_resolves_relative_interpreter_before_changing_directory(
     assert str(expected) in Path(env["XDR_BUILD_ARGS"]).read_text()
 
 
-def test_build_propagates_installer_failure(build_environment):
+@pytest.mark.parametrize("phase", ["export", "dependencies", "build"])
+def test_build_stops_after_failure_and_cleans_export(
+    build_environment, phase
+):
     _, script, bin_dir, env = build_environment
     _executable(bin_dir / "python3")
-    _executable(bin_dir / "uv", "#!/bin/sh\nexit 23\n")
+    env["UV_FAIL_PHASE"] = phase
     result = _run_build(script, env)
     assert result.returncode == 23
+    calls = _build_calls(env)
+    assert len(calls) == ["export", "dependencies", "build"].index(phase) + 1
+    assert not Path(calls[0]["arguments"][-1]).exists()
 
 
 @pytest.mark.parametrize("selection", ["missing", "empty", "active", "none"])

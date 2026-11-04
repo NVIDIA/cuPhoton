@@ -25,6 +25,11 @@ The quickstart builds deterministic stamps and runs a small one-epoch train and
 evaluation path. `device: auto` prefers PyTorch CUDA and reports a PyTorch CPU
 fallback.
 
+For Butler/HSC registry operations and LSSTComCam catalog ingestion, install
+`cuphoton[catalog]`, or add `--extra catalog` to the checkout setup command.
+This profile supplies Pandas for catalog tables and NumExpr for registry
+queries.
+
 ## Prepared dataset contract
 
 Pair models use `search.npy` and `template.npy`; triplet models also require

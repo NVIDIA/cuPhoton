@@ -11,13 +11,19 @@ from typing import Literal
 
 import numpy as np
 import yaml
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_validator,
-)
+
+try:
+    from pydantic import (
+        BaseModel,
+        ConfigDict,
+        Field,
+        field_validator,
+        model_validator,
+    )
+except ImportError as exc:
+    raise ImportError(
+        "xImage workflows require pydantic; install 'cuphoton[ximage]'"
+    ) from exc
 
 from cuphoton.core.cli import ApplicationContext, get_component
 from cuphoton.ximage.data.bundle import STORE_PRIORITY

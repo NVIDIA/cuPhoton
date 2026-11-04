@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +47,51 @@ def _run_cli(argv: list[str], **kwargs) -> int:
 def test_registered_component_uses_canonical_namespace() -> None:
     assert get_component("ximage").group == "ximage"
     assert get_component("ximage").import_name == "cuphoton.ximage"
+
+
+def test_cli_without_reconstruction_dependencies(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json
+import sys
+from io import StringIO
+from pathlib import Path
+
+import numpy as np
+
+sys.modules["pydantic"] = None
+from cuphoton.core.cli import main
+
+assert main(["ximage", "--help"], out=StringIO()) == 0
+store = Path(sys.argv[1])
+np.save(store / "images.npy", np.zeros((1, 2, 2, 1)))
+output = StringIO()
+assert main([
+    "ximage", "data-inspect", "--store", str(store),
+    "--artifacts", "images",
+], out=output) == 0
+assert json.loads(output.getvalue())["images"]["shape"] == [1, 2, 2, 1]
+for arguments in (
+    ["psf-solve-adam", "--config", "unused.yaml"],
+    ["reconstruct-l2", "--config", "unused.yaml"],
+    ["benchmark-devices", "--config", "unused.yaml",
+     "--workflow", "reconstruct-l2"],
+    ["evaluate-reconstruction", "--run-dir", "unused"],
+):
+    error = StringIO()
+    assert main(["ximage", *arguments], err=error) == 1
+    assert "cuphoton[ximage]" in error.getvalue(), error.getvalue()
+""",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
