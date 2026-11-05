@@ -4,6 +4,8 @@
 # Writes sample/reference.fits and sample/target.fits: two synthetic star fields
 # of the same sky on different pixel grids, with different blur and sky level.
 # The target also holds one new source and one star three times brighter.
+# Noise is independent Gaussian noise with variance expected_image / gain;
+# this teaching sample has no read noise, saturation, or detector artifacts.
 from pathlib import Path
 
 import numpy as np

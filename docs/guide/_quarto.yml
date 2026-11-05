@@ -11,7 +11,7 @@ book:
   title: "cuPhoton User Guide"
   site-url: https://nvidia.github.io/cuPhoton/
   subtitle: "Install cuPhoton, run your first image difference, then follow task guides for each module."
-  author: "cuPhoton Imaging Engineer"
+  author: "cuPhoton contributors"
   date: today
   navbar:
     title: "cuPhoton"

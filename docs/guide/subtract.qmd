@@ -39,7 +39,7 @@ print(target.shape, aligned.image.shape)
 
 ## Choose the kernel basis {#sec-subtract-basis}
 
-The kernel must turn the reference PSF (point spread function: the blur pattern of a point of light) into the target PSF. For Gaussian PSFs the kernel is itself a Gaussian, of width $\sqrt{\sigma_T^2 - \sigma_R^2}$ with both widths in target pixels. xPois builds the kernel from basis functions. Each `GaussianBasisComponent(sigma, degree)` is a Gaussian of width `sigma` pixels times every polynomial up to total degree `degree`. A narrow, a matching and a wide Gaussian around the needed width cover most pairs.
+The kernel must turn the reference PSF (point spread function: the blur pattern of a point of light) into the target PSF. When the target is blurrier than the reference and both PSFs are Gaussian, the matching kernel is a Gaussian of width $\sqrt{\sigma_T^2 - \sigma_R^2}$ with both widths in target pixels. xPois builds the kernel from basis functions. Each `GaussianBasisComponent(sigma, degree)` is a Gaussian of width `sigma` pixels times every polynomial up to total degree `degree`. The example places a narrow, a matching and a wide Gaussian around the needed width. For real images, inspect the residuals and adjust the basis; resampling and non-Gaussian PSFs change the matching problem. If the target is sharper, swap the subtraction roles or choose a sharper reference instead of taking the square root of a negative width difference.
 
 ```{python}
 from astropy.wcs.utils import proj_plane_pixel_scales
@@ -99,18 +99,18 @@ spread = 1.4826 * np.median(np.abs(z[inside] - np.median(z[inside])))
 print(f"{int(inside.sum())} valid pixels, robust spread of z {spread:.3f}")
 ```
 
-Pure noise in `z` has a spread of one. The result holds four arrays:
+A spread near one is expected when the fixed-kernel, independent-input noise model is adequate. The result holds four arrays:
 
 - `marginal_residual_variance`: the predicted variance of each difference pixel.
 - `propagated_reference_variance`: the reference part of that variance alone.
 - `standardized_residual`: the difference over the square root of the predicted variance.
 - `valid_mask`: the pixels with a complete, finite reference-variance footprint, a positive target variance and a finite difference. If you pass your own `valid_mask`, the result keeps only pixels inside it.
 
-The arrays are NaN outside `valid_mask`. The prediction treats every pixel as independent, and the result records this with `covariance_represented=False`. Resampling and the kernel correlate neighboring pixels. The [xPois reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md#correlation-factor-of-weighted-sums) shows how to correct sums of pixels, such as a flux, for that correlation.
+The three floating-point arrays are NaN outside `valid_mask`. The prediction assumes independent reference pixels, independent target pixels and independence between the two images. It treats the kernel as fixed, omitting the uncertainty in the fitted kernel and background. The result records `covariance_represented=False` and `fit_parameter_uncertainty_represented=False`. In this example, the reference was resampled: its pixels are already correlated, so the diagonal prediction is approximate even for the variance of an individual difference pixel. Standardization also does not remove correlations between difference pixels. The [xPois reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md#correlation-factor-of-weighted-sums) and @sec-uncertainty explain how to account for correlation and other terms in measurements such as a flux.
 
 ## Find the candidates
 
-`identify_residual_hotspots` divides an image by `robust_sigma` and marks every pixel whose absolute value reaches `threshold_sigma`. It groups marked pixels that touch horizontally or vertically into regions, and sorts the regions by peak significance, then by size. On `z` the noise unit is one.
+`identify_residual_hotspots` divides an image by `robust_sigma` and marks every pixel whose absolute value reaches `threshold_sigma`. It groups marked pixels that touch horizontally or vertically into regions, and sorts the regions by peak significance, then by size. Using `robust_sigma=1.0` thresholds the supplied `z` values directly; it does not calibrate their statistical significance.
 
 ```{python}
 from cuphoton.xpois import identify_residual_hotspots
@@ -144,7 +144,7 @@ noise = standardize_constant_kernel_residual(refit.residual, kernel=refit.kernel
 z = noise.standardized_residual
 ```
 
-The difference still covers the masked pixels. To fit only a few bright, isolated stars instead, build the mask with `build_compact_source_stamp_mask`.
+The difference still covers the masked pixels. The reported `chi2` continues to use target-only variance; the later noise calculation does not change the solver weights or its `chi2`. To fit only a few bright, isolated stars instead, build the mask with `build_compact_source_stamp_mask`.
 
 ## Look at the result
 
@@ -362,7 +362,7 @@ evaluation["run_dir"] = "runs/sample"  # the directory passed above, without thi
 print(json.dumps(evaluation, indent=2))
 ```
 
-`robust_sigma` is 1.4826 times the median absolute deviation of the residual inside the fit region, a noise estimate that ignores outliers. The receipt matches the Python refit:
+`robust_sigma` is 1.4826 times the median absolute deviation of the residual inside the fit region, a noise estimate that is less sensitive to outliers than a standard deviation. The receipt matches the Python refit:
 
 ```{python}
 import json

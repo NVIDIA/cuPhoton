@@ -1,11 +1,13 @@
 # Classify candidates {#sec-classify}
 
-A real/bogus classifier reads three cutouts around a candidate, from the target, the reference and the difference image, and returns the probability that the candidate is a real change in the sky and not an artifact, such as a cosmic ray or a badly subtracted star. xScan (`cuphoton.xscan`) trains and runs these classifiers with PyTorch, using the transformer of [Inada et al. (2026)](https://doi.org/10.3847/1538-3881/ae38d8). Its command-line workflow packages cutouts as a dataset, checks it, trains, evaluates, predicts and queues uncertain candidates for human review. Use xScan after @sec-subtract has found the candidates.
+A real/bogus classifier scores cutouts around a candidate to distinguish the labeled real-source class from artifacts, such as cosmic rays or badly subtracted stars. xScan (`cuphoton.xscan`) trains and runs the transformer family of [Inada et al. (2026)](https://doi.org/10.3847/1538-3881/ae38d8) with PyTorch. Pair models use target and reference cutouts; triplet models also use the difference image. Its command-line workflow packages cutouts as a dataset, checks it, trains, evaluates, predicts and queues candidates for human review. Use xScan after @sec-subtract has found the candidates.
+
+The output named `probability` is a sigmoid score between zero and one. Training does not calibrate it into an observed probability that a candidate is astrophysical. Check calibration and the operating threshold on representative held-out data before interpreting a score such as 0.9 as a 90% chance of being real.
 
 **You need:**
 
 - cuPhoton with the `torch` extra on a CPU or the `gpu` extra on a GPU host (@sec-install). The review viewers also need `viz`.
-- For each candidate, three cutouts of the same square size, centered on it, and a label: 1 for real, 0 for bogus.
+- For this triplet example, three cutouts of the same square size, centered on each candidate. Training and evaluation also need labels: 1 for real, 0 for bogus.
 
 ::: {.callout-note}
 ## Sample data
@@ -14,7 +16,7 @@ This page runs on a small synthetic set of cutouts. The printed values only demo
 
 ## Make labeled cutouts
 
-The block below makes 240 synthetic candidates of 21 by 21 pixels, in units of the sky noise. Half are real, with a new source in the target. The other half are bogus. They hold a star that moved by one pixel between the images, or a cosmic ray (one bright pixel in the target).
+The block below makes 240 synthetic candidates of 21 by 21 pixels, in units of the sky noise. Half are labeled real, with a new source in the target. The other half simulate artifacts: a stationary star misregistered by one pixel between the images, or a cosmic ray (one bright pixel in the target). A genuinely moving source can produce the same dipole shape; its label depends on your science target, not on the shape alone.
 
 ```{python}
 import numpy as np
@@ -29,7 +31,7 @@ def psf(dx):  # a Gaussian point source, shifted dx pixels to the right
 
 
 labels = np.tile([1, 0], n // 2)                          # 1 real, 0 bogus
-kind = np.where(labels == 1, 0, rng.integers(1, 3, n))    # 0 new source, 1 moved star, 2 cosmic ray
+kind = np.where(labels == 1, 0, rng.integers(1, 3, n))    # 0 new source, 1 misregistered star, 2 cosmic ray
 peak = rng.uniform(5, 25, n)[:, None, None]
 reference = rng.normal(0, 1, (n, size, size)).astype(np.float32)
 target = rng.normal(0, 1, (n, size, size)).astype(np.float32)
@@ -185,7 +187,9 @@ for name, result in [("fixed", thresholds["fixed_threshold"]),
           f"real missed {result['fn']}, bogus passed {result['fp']}")
 ```
 
-ROC AUC is the probability that a random real candidate scores higher than a random bogus one. PR AUC is the area under the precision-recall curve. A candidate counts as real when its probability reaches the threshold. Next to the fixed threshold of 0.5, the command picks the threshold with the best validation accuracy and applies it to the test split. `summary.md` in the same directory is a readable version of the report.
+ROC AUC measures how often a random labeled-real candidate outranks a labeled-bogus one, counting ties as half. PR AUC is the trapezoidal area under the precision-recall curve. A candidate is classified as real when its score reaches the threshold. Next to the fixed threshold of 0.5, the command picks the threshold with the best validation accuracy and applies it to the test split. `summary.md` in the same directory is a readable version of the report.
+
+These metrics describe this small synthetic test split. They do not establish survey performance or score calibration. On real data, choose a threshold on validation data for the missed-source and false-positive rates you can accept, then evaluate it once on an independent test split. Precision also depends on how common real sources are in the scored population.
 
 ## Predict
 
@@ -214,7 +218,7 @@ The arrays follow the order of the test split in the dataset.
 
 ## Score your own cutouts in Python
 
-For cutouts in memory, load the checkpoint and call the model. `load_model_from_checkpoint` rebuilds the network, loads the saved weights and sets evaluation mode. The model takes a float32 tensor of shape (candidate, channel, y, x), with the channels target, reference, difference. It returns one logit per candidate. The sigmoid of the logit is the probability that the candidate is real.
+For cutouts in memory, load the checkpoint and call the model. `load_model_from_checkpoint` rebuilds the network, loads the saved weights and sets evaluation mode. The triplet model takes a float32 tensor of shape (candidate, channel, y, x), with the channels target, reference, difference. It returns one logit per candidate. Its sigmoid is the model's real-class score, exposed as `probabilities` by the inference commands.
 
 ```{python}
 import torch
@@ -232,15 +236,15 @@ print("same as infer-real-bogus:", np.allclose(torch.sigmoid(logits).numpy(), pr
 
 ```{python}
 #| label: fig-classify
-#| fig-cap: "Six test cutouts, two of each kind in the synthetic set, titled with the probability $p$ that the trained model gives them. Rows are the target, the reference and the difference. The target and reference share one magma scale per column, and the difference panels a red-blue scale centered on zero. A new source appears in the target and the difference only. A moved star leaves a positive and a negative lobe in the difference. A cosmic ray is one sharp pixel. Synthetic data, for demonstration only."
-#| fig-alt: "A grid of three rows and six columns of small cutouts. Columns show a new source, a moved star with a two-lobed difference, and a single bright pixel, each titled with a probability."
+#| fig-cap: "Six test cutouts, two of each kind in the synthetic set, titled with the model's real-class score $p$. Rows are the target, the reference and the difference. The target and reference share one magma scale per column, and the difference panels a red-blue scale centered on zero. A new source appears in the target and the difference only. A misregistered star leaves a positive and a negative lobe in the difference. A cosmic ray is one sharp pixel. Synthetic data, for demonstration only."
+#| fig-alt: "A grid of three rows and six columns of small cutouts. Columns show a new source, a misregistered star with a two-lobed difference, and a single bright pixel, each titled with a model score."
 #| code-fold: true
 #| code-summary: "Plotting code"
 import matplotlib.pyplot as plt
 
 test = np.flatnonzero(split == 2)
 picks = [i for k in range(3) for i in test[kind[test] == k][:2]]
-names = ["new source", "moved star", "cosmic ray"]
+names = ["new source", "misregistered", "cosmic ray"]
 fig, axes = plt.subplots(3, 6, figsize=(6.5, 3.8))
 for col, i in enumerate(picks):
     top = max(target[i].max(), reference[i].max())
@@ -401,8 +405,8 @@ The array format, the model and the checkpoints are generic. These parts depend 
 
 - **Cutout preparation.** Size, centering, scaling and masking are your choice. A checkpoint is valid only for cutouts prepared like its training set.
 - **Dataset builders.** `cuphoton xscan --help` lists builders for several surveys' products, such as `data-build-autoscan`. Example manifests are in `examples/xscan/`.
-- **Labels.** The label guard rejects placeholder labels from survey smoke datasets, and survey object IDs that appear in two splits.
-- **Thresholds.** Choose the threshold on a validation split from the same survey as the candidates you score.
+- **Labels.** Define which astrophysical changes count as real for your task. The label guard rejects placeholder labels from survey smoke datasets and survey object IDs that appear in two splits; it cannot verify that a human label is scientifically correct.
+- **Thresholds and calibration.** Choose the threshold on a representative validation split, and check performance and score calibration on held-out data with the class balance and observing conditions you expect to encounter.
 
 ## Troubleshooting
 

@@ -1,6 +1,6 @@
 # Measure candidates {#sec-measure}
 
-xFit measures what a difference image holds at each candidate. It fits a small model to every cutout of a batch at once, with a batched Levenberg-Marquardt least-squares solver. It can fit one source, measure a flux at a fixed position, or fit a dipole. A dipole is a positive and a negative lobe side by side. A source that moved between the two images leaves one, and so does a slightly misaligned star.
+xFit measures what a difference image holds at each candidate. Its nonlinear source and dipole fits use a batched Levenberg-Marquardt least-squares solver; fixed-position photometry uses a direct linear solution. A dipole is a positive and a negative lobe side by side. A source that moved between the two images leaves one, and so does a slightly misaligned star.
 
 **You need:** cuPhoton installed with the CPU profile (@sec-install), and a difference image with its variance and candidate positions (@sec-subtract). This page makes them from a sample pair.
 
@@ -57,11 +57,11 @@ from cuphoton.xpois import window_stamps
 positions = np.array([region["peak_yx"][::-1] for region in regions], dtype=float)  # (x, y)
 cutouts = window_stamps(difference, positions, 31)
 cutout_variance = window_stamps(difference_variance, positions, 31)
-usable = np.isfinite(cutout_variance)  # NaN outside the valid pixels of the difference
+usable = np.isfinite(cutouts) & np.isfinite(cutout_variance) & (cutout_variance > 0)
 print(cutouts.shape, usable.sum(axis=(1, 2)), "usable pixels")
 ```
 
-The first cutout reaches into the edge band and has fewer usable pixels. Inside a cutout, xFit positions are `(x, y)` pixels from the center pixel, which is `(0, 0)`. The cutouts are 31 pixels wide, because the quality flags need more than 26 (@sec-measure-flags).
+The first cutout reaches into the edge band and has fewer usable pixels. Inside a cutout, xFit positions are `(x, y)` pixels from the center pixel, which is `(0, 0)`. The cutouts are 31 pixels wide to leave room for the quality flags' optional noise calibration (@sec-measure-flags); the flags themselves also work on smaller cutouts.
 
 ## Choose the call
 
@@ -78,7 +78,7 @@ xFit has four ways to measure a cutout:
 
 ## Fit one source per cutout
 
-`fit_single_sources` fits one Gaussian lobe per cutout, from the start position you pass. With `psf_sigma` the lobe is round with that width, and only its amplitude and position are fitted. Without it, the widths and orientation are free. `sign` is `+1` for a brightening source and `-1` for a fading one. Without `sign`, a matched filter at the start sets it.
+`fit_single_sources` fits one Gaussian lobe per cutout, from the start position you pass. With `psf_sigma` the lobe is round with that width, and only its amplitude and position are fitted. Without it, the widths and orientation are free. `sign=+1` starts a brightening source and `sign=-1` a fading one; without `sign`, a matched filter at the start sets it. This initializes the amplitude, whose fitted sign is free to change.
 
 ```{python}
 from cuphoton.xfit import fit_single_sources
@@ -92,7 +92,7 @@ for i in range(len(sources.x)):
           f"converged {sources.converged[i]}")
 ```
 
-`flux` is the lobe's total flux, $2\pi|A|\sigma_x\sigma_y$ for amplitude $A$. The result also holds `parameters`, `covariance`, `standard_errors`, `chi_square`, `uncertainty_valid` and `residuals` (model minus data). The covariance is right when the variance describes the noise, and too small when neighboring pixels are correlated.
+`flux` is the nonnegative lobe-flux magnitude, $2\pi|A|\sigma_x\sigma_y$ for fitted amplitude $A$. Recover a signed difference flux with `np.sign(sources.parameters[:, 0]) * sources.flux`; `sources.sign` records the starting sign. The result also holds `parameters`, `covariance`, `standard_errors`, `chi_square`, `uncertainty_valid` and `residuals` (model minus data). Its covariance is a local, first-order estimate assuming independent pixels and the supplied variances. It does not account for a wrong PSF or pixel correlations.
 
 ## Measure the flux at a fixed position
 
@@ -106,7 +106,7 @@ photometry = forced_psf_photometry(cutouts, cutout_variance, fixed, psf_sigma, m
 print("flux", photometry.flux.round(0), "error", photometry.flux_error.round(0), "valid", photometry.valid)
 ```
 
-`flux_error` assumes that the position and the PSF are right. It leaves out the uncertainty of a position fitted on the same image. To replace the Gaussian, pass your own PSF cutouts, evaluated at the positions, as `psf=`. `cuphoton.xpois.forced_flux_at` runs the same measurement on a full image at a list of (x, y) positions.
+Here `flux` is signed: a fading source gives a negative value. `flux_error` assumes that the position and the PSF are right and the pixel noise is independent. It leaves out the uncertainty of a position fitted on the same image. To replace the Gaussian, pass unit-flux PSF cutouts, already evaluated at the positions, as `psf=`; the function does not normalize them. `cuphoton.xpois.forced_flux_at` applies this estimator to a full image at `(x, y)` positions. Set `local_sky=False` to match this example: its default subtracts each window's median, without adding the uncertainty of that sky estimate to the flux error.
 
 ## Build a dipole cutout
 
@@ -134,7 +134,7 @@ from cuphoton.xfit import GaussianDipoleModel, fit_dipoles
 
 images = np.concatenate([cutouts, dipole[None]])
 variance = np.concatenate([cutout_variance, dipole_variance[None]])
-mask = np.isfinite(variance)
+mask = np.isfinite(images) & np.isfinite(variance) & (variance > 0)
 dipoles = fit_dipoles(images, model=GaussianDipoleModel((31, 31)), variance=variance, mask=mask, backend="numpy")
 print(dipoles.status, dipoles.uncertainty_valid, dipoles.uncertainty_reason)
 for name, value, error in zip(dipoles.parameter_names, dipoles.parameters[2], dipoles.standard_errors[2]):
@@ -192,10 +192,10 @@ Both candidates set `NEGATIVE_LOBE_UNSUPPORTED` and `LOBE_OUTSIDE_STAMP`. They a
 | 4 | `LOBE_OUTSIDE_STAMP` | a lobe center lies outside the cutout |
 | 8 | `NO_LOBE_AT_CANDIDATE` | no lobe lies within `center_radius` pixels of the cutout center |
 | 16 | `LOBES_OVERLAP` | the lobes are closer than `overlap_separation` pixels |
-| 32 | `NEGATIVE_LOBE_UNSUPPORTED` | the negative lobe is below `lobe_snr` standard errors: a brightening single source |
-| 64 | `POSITIVE_LOBE_UNSUPPORTED` | the positive lobe is below `lobe_snr` standard errors: a fading single source |
+| 32 | `NEGATIVE_LOBE_UNSUPPORTED` | the lobes do not overlap and the negative lobe fails the `lobe_snr` significance test |
+| 64 | `POSITIVE_LOBE_UNSUPPORTED` | the lobes do not overlap and the positive lobe fails the `lobe_snr` significance test |
 
-Test one bit with `(flags & int(DipoleQualityFlag.LOBES_OVERLAP)) != 0`. A slightly misaligned star leaves lobes that overlap. Their center is measured, but their amplitude and separation trade against each other. With `calibrate_noise=True`, the default, the flags rescale each lobe's significance by its spread at empty positions of the cutout. This corrects for noise correlated between neighboring pixels.
+Test one bit with `(flags & int(DipoleQualityFlag.LOBES_OVERLAP)) != 0`. Exactly one unsupported-lobe bit suggests a brightening or fading single source; read it with the other flags, since a failed fit or unusable lobe can also set it. Closely overlapping lobes make amplitude and separation trade against each other. With `calibrate_noise=True`, the default, the flags can reduce lobe significance using its robust spread at empty positions of the cutout. This estimates the effect of correlated noise on the lobe test, not on the fitted covariance. Calibration needs at least 12 usable empty positions; even a large cutout can have too few.
 
 ## Look at the result
 
@@ -253,12 +253,14 @@ The options of `fit_dipoles`:
 |---|---|---|
 | `model` | required | `"gaussian"`, a `GaussianDipoleModel` or a `StampDipoleModel` |
 | `initial` | `None` | starting parameters, one row per cutout. `None` starts at the brightest and faintest pixels. |
-| `mask` | `None` | the pixels to fit. It must exclude every non-finite image or variance pixel. |
+| `mask` | `None` | the pixels to fit. It must exclude non-finite image values and non-finite or nonpositive variances. |
 | `variance` | `None` | per-pixel variance. Without it, the covariance is scaled by the reduced chi-square. |
-| `mode` | `"difference"` | `"split"` takes `(batch, 3, y, x)` cutouts: difference, positive and negative planes |
+| `mode` | `"difference"` | `"split"` takes `(batch, 3, y, x)` cutouts: difference, positive and negative planes, treated as independent |
 | `backend` | `"auto"` | `numpy`, `cupy`, `cutile` or `native`. `auto` picks CuPy when a GPU is usable, else NumPy. |
 | `config` | `None` | an `LMConfig` with solver tolerances, the evaluation budget and the solver version |
 | `fusion` | `False` | fuses the Gaussian model and its derivatives on `cupy` or `cutile` |
+
+If the split-mode difference is computed from the other two planes, those inputs are correlated. The split-mode degrees of freedom and uncertainties do not account for that dependence. Use difference mode for the statistical interpretation shown here.
 
 The `LMConfig` fields you change first:
 
@@ -344,10 +346,10 @@ The command line fits dipoles only. To cut the cutouts from aligned FITS images,
 ## Troubleshooting
 
 `ValueError: images must be finite on included pixels`
-: Pass a `mask` that excludes NaN pixels, such as `np.isfinite(variance)`.
+: Pass `mask=np.isfinite(images) & np.isfinite(variance) & (variance > 0)` so invalid image and variance pixels are both excluded.
 
 `UserWarning: 21x21 stamps hold fewer than 12 calibration positions`
-: The noise calibration needs cutouts of more than 26 pixels on a side. Cut larger cutouts, or pass `calibrate_noise=False`.
+: The optional noise calibration needs at least 12 usable empty positions. Square cutouts of 26 pixels or less cannot provide them. Cut larger cutouts, or pass `calibrate_noise=False` and interpret the lobe tests without a correlation correction.
 
 `uncertainty_valid` is `False`
 : Read `uncertainty_reason`. A `rank-deficient Jacobian` means the data do not constrain a parameter, such as a spare lobe on a single source. Check the quality flags.

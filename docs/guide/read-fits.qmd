@@ -19,7 +19,7 @@ The folded block writes `sample/reference.fits` and `sample/target.fits`.
 
 ## List the images in a file
 
-A FITS file holds one or more HDUs (header data units), each a text header followed by binary data. `inspect_fits_images` lists the two-dimensional image HDUs from their headers, without decoding pixels.
+A FITS file holds one or more HDUs (header/data units), each a text header followed by binary data. `inspect_fits_images` lists the two-dimensional image HDUs from their headers, without decoding pixels.
 
 ```{python}
 from cuphoton.core.fits_io import inspect_fits_images
@@ -28,7 +28,7 @@ for info in inspect_fits_images("sample/target.fits"):
     print(info.hdu, info.shape, info.dtype, info.compression, info.xdr_unsupported_reason)
 ```
 
-The sample file holds one uncompressed image, in HDU 0. `xdr_unsupported_reason` is `None` when xDR can decode the image, and otherwise gives the reason. Tables and data cubes do not appear in the list.
+The sample file holds one uncompressed image, in HDU 0. `xdr_unsupported_reason` is `None` when the image format passes the reader's xDR checks, and otherwise gives the reason. This inspection does not check whether the GPU and xDR dependencies are available. Tables and data cubes do not appear in the list.
 
 ## Read an image
 
@@ -98,6 +98,8 @@ cutout = read_fits_images("sample/target.fits", [0], reader="auto", section=box)
 print(cutout.arrays[0].shape, "|", cutout.metadata()["fallback_reason"])
 ```
 
+The returned `infos[0].header` still describes the full image; section reads do not shift its WCS. Use `WCS(cutout.infos[0].header).slice(box)` for cutout-relative sky coordinates, or add the section origin to the cutout pixel coordinates before using the original WCS.
+
 A section of an uncompressed image always uses Astropy. A small cutout then does not cost a full-image GPU read. `reader="xdr"` rejects it. xDR reads sections of tile-compressed images. @fig-read-fits-section shows the cutout.
 
 ```{python}
@@ -127,7 +129,7 @@ plt.show()
 
 ## Write files xDR can decode
 
-xDR decodes uncompressed images and images tile-compressed with `GZIP_1` or `GZIP_2`. Tile compression cuts an image into rectangles (tiles) and compresses each one on its own. The GPU can then decode all tiles at once. This block writes the target twice into one file with Astropy, as lossless `GZIP_2` in HDU 1 and with Astropy's defaults in HDU 2.
+xDR decodes supported uncompressed images and lossless images tile-compressed with `GZIP_1` or `GZIP_2`; scaling, nulls and quantization have the restrictions listed below. Tile compression cuts an image into rectangles (tiles) and compresses each one on its own. The GPU can then decode all tiles at once. This block writes the target twice into one file with Astropy, as lossless `GZIP_2` in HDU 1 and with Astropy's defaults in HDU 2.
 
 ```{python}
 from astropy.io import fits
@@ -180,10 +182,9 @@ Astropy's default tile is one image row. For tile sizes, refer to the [xDR tile-
 
 ## On a GPU
 
-xDR needs the `gpu` profile (CuPy, KvikIO and nvCOMP) and a native extension that you build from the checkout. The build needs a C++17 compiler, the CUDA and cuFile headers and a thread-safe CFITSIO, as the [xDR install notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md#install) describe. Build the extension and check that it loads:
+xDR needs the GPU environment from @sec-install and a native extension that you build from the checkout. The build needs a C++17 compiler, the CUDA and cuFile headers and a thread-safe CFITSIO, as the [xDR install notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md#install) describe. From that prepared environment, build the extension and check that it loads:
 
 ```bash
-uv sync --locked --extra gpu
 bash src/cuphoton/xdr/src/build.sh
 uv run --no-sync python -c "from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"
 ```

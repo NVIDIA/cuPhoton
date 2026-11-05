@@ -5,7 +5,7 @@ xRay (`cuphoton.xray`) analyzes time-resolved X-ray detector data from pump-prob
 **You need:**
 
 - cuPhoton with the CPU profile (@sec-install) for the trace steps.
-- The `gpu` profile and an NVIDIA GPU for the detector-wide fit.
+- The `gpu` profile and an NVIDIA GPU for the default detector-wide fit. The restricted `structured-cpu` backend is a separate option (@sec-xray-options).
 - A laser-on and laser-off pair of HDF5 files (Hierarchical Data Format 5, a format for named arrays), or the sample pair below.
 
 ::: {.callout-note}
@@ -28,10 +28,10 @@ import sys
 from pathlib import Path
 
 cli = Path(sys.executable).with_name("cuphoton")
-print(subprocess.run([str(cli), "xray", "doctor"], capture_output=True, text=True).stdout.strip())
+print(subprocess.run([str(cli), "xray", "doctor"], capture_output=True, text=True, check=True).stdout.strip())
 ```
 
-NumPy and h5py are required. Without CuPy, only the detector-wide fit stops with an error. Bokeh adds interactive review pages. Include this output in environment bug reports.
+NumPy and h5py are required. The trace steps below run without CuPy; the GPU trace API and default detector-wide backend require it. Bokeh adds interactive review pages. Include this output in environment bug reports.
 
 ## Make a sample pair
 
@@ -108,7 +108,7 @@ xRay drops the first frame, sums the ROI's pixels in each frame and divides each
 
 ## Choose the model order
 
-Linear prediction fits a sum of damped cosines plus a constant with no starting guess. It turns the fit into linear algebra and reads each mode's frequency and decay rate from the roots of a polynomial. The one choice you make is the model order, `n_components`, the number of singular values the fit keeps. Each oscillating mode adds two to the order. Too small an order misses a mode, and too large an order fits noise.
+Linear prediction fits a sum of damped cosines plus a constant with no starting guess. It assumes finite samples at uniformly increasing delays; check that condition before fitting your own trace. It turns the fit into linear algebra and reads each mode's frequency and decay rate from the roots of a polynomial. The one choice you make is the model order, `n_components`, the number of singular values the fit keeps. Each oscillating mode adds two to the order. Too small an order misses a mode, and too large an order fits noise.
 
 `model_order_sweep` fits the trace at each requested order. It picks the smallest order whose RMS (root-mean-square) residual is within 1% of the best:
 
@@ -121,7 +121,7 @@ for entry in sweep.entries:
 print("chosen order:", sweep.best_components)
 ```
 
-The chosen order is where the residual stops falling. Set `relative_tolerance` to change the 1% rule.
+The chosen order balances residual size against model order among the values tested. Set `relative_tolerance` to change the 1% rule.
 
 ## Fit the trace with linear prediction
 
@@ -144,7 +144,8 @@ The fit returns these fields, all as NumPy arrays or numbers:
 | `amplitude`, `phase` | each mode's amplitude (trace units) and phase (radians, at the first sample) |
 | `reconstruction` | the fitted modes plus the constant, on `fit.time` |
 | `frequency`, `spectrum_total` | the modal spectrum, on a grid in cycles per delay unit |
-| `chi2`, `selected_model_order` | the mean squared residual and the order used |
+| `chi2` | sum of squared residuals over the first N − 1 samples, divided by N − 2, where N is the trace length; no variance weighting |
+| `selected_model_order` | the order used |
 
 Divide `angular_frequency` by 2π for cycles per delay unit. With delays in picoseconds, that is THz. `fit.time` starts at zero on the first sample. @sec-xray-options lists the call's options.
 
@@ -195,10 +196,10 @@ cuphoton xray detector-mask --roi-lower 0 0 --roi-dim 32 32
 ```{python}
 #| echo: false
 args = ["xray", "detector-mask", "--roi-lower", "0", "0", "--roi-dim", "32", "32"]
-print(subprocess.run([str(cli), *args], capture_output=True, text=True).stdout.strip())
+print(subprocess.run([str(cli), *args], capture_output=True, text=True, check=True).stdout.strip())
 ```
 
-Add `--exclude-y start:end` to skip dead detector rows. The fit itself needs CuPy and a GPU:
+Add `--exclude-y start:end` to skip dead detector rows. This fit uses the default backend, which needs CuPy and a GPU:
 
 ```bash
 cuphoton xray detector-artifacts --h5dir xray-sample --fon on.h5 --foff off.h5 \
@@ -215,10 +216,10 @@ cuphoton xray detector-artifacts --h5dir xray-sample --fon on.h5 --foff off.h5 \
 | File | Shape | Holds |
 |---|---|---|
 | `manifest.json` | | the inputs, ROI, fit settings, counts of fits and failures, and the status codes |
-| `freq_all.npy` | (y, x, mode) | each fitted mode's frequency, in cycles per delay unit, zero-padded |
+| `freq_all.npy` | (y, x, mode) | each mode's peak frequency on the sampled modal spectrum, in cycles per delay unit, zero-padded; iterative fits store the fitted frequency directly |
 | `amp_all.npy` | (y, x, mode) | each fitted mode's amplitude, zero-padded |
 | `fft_all.npy`, `fft_freq_all.npy` | (y, x, bin) | the magnitude of the trace's Fourier transform, and its frequencies |
-| `amp_all_sum_filtered.npy` | (y, x) | the sum of the amplitudes above `--amp-threshold` (default 1.6) |
+| `amp_all_sum_filtered.npy` | (y, x) | the sum of amplitudes strictly above `--amp-threshold` (default 1.6) and below 1e6 |
 | `fit_status.npy` | (y, x) | 0 not processed, 1 fitted, 2 skipped, 3 failed |
 | `fit_diagnostics.npz` | | per-row residual and conditioning records, with `--fit-diagnostics summary` or `full` |
 | `spectral-layout.json` | | the tile map, with `--artifact-layout tile-rows` |
@@ -257,7 +258,7 @@ cuphoton xray phonon-viz --detector-artifact-dir xray-artifacts --x-value 8 --ou
 | Option | Default | Effect |
 |---|---|---|
 | `n_components` | required | Model order: the number of singular values kept. Each oscillating mode adds two. |
-| `roots_backend` | `"eigvals"` | Root solver. `"eigvals"` takes companion-matrix eigenvalues. `"roots"` uses `numpy.roots`. |
+| `roots_backend` | `"eigvals"` | Root solver. `"eigvals"` takes companion-matrix eigenvalues. `"roots"` uses NumPy or CuPy `roots`, matching the array backend. |
 | `p2_ridge_alpha` | `0.0` | Ridge penalty on the fitted cosine and sine terms. The constant is never penalized. |
 | `fit_diagnostics` | `False` | Fill `fit.diagnostics` with residual and conditioning metrics |
 
@@ -270,7 +271,7 @@ cuphoton xray phonon-viz --detector-artifact-dir xray-artifacts --x-value 8 --ou
 | `--savgol-window`, `--savgol-polyorder` | `5`, `3` | Savitzky-Golay smoothing before the fit |
 | `--components` | `30` | Model order, or the mode count for the iterative fit |
 | `--fit-method` | `linear-prediction` | `iterative` fits a fixed number of modes by Levenberg-Marquardt iteration |
-| `--fit-backend` | `cupy` | `structured-cpu` and `structured-gpu` need the native extension, a 798-sample window, tiles of at most 16 by 16 and the default `--components`, `--fit-diagnostics`, `--p2-ridge-alpha` and `--roots-backend`. Distributed runs reject them. |
+| `--fit-backend` | `cupy` | `structured-cpu` and `structured-gpu` need the native extension, a 798-sample fitted window, tiles of at most 16 by 16, batched rows, and the default `--fit-method`, `--components`, `--fit-diagnostics`, `--p2-ridge-alpha` and `--roots-backend`. Distributed runs reject them. |
 | `--structured-schedule` | `serial` | `overlap` overlaps one GPU root batch with host work, on `structured-gpu` only |
 | `--artifact-layout` | `dense` | `tile-rows` stores each spectrum once per tile row |
 | `--fit-diagnostics` | `none` | `summary` or `full` records per-row diagnostics |
@@ -314,18 +315,18 @@ for args in (["xray", "extract-trace", "--h5dir", "xray-sample", "--fon", "on.h5
               "--roi-lower", "0", "0", "--roi-dim", "16", "16", "--output", "tile.npz"],
              ["xray", "model-order-sweep", "--trace-npz", "tile.npz", "--min-components", "2",
               "--max-components", "8", "--step", "2"]):
-    print(subprocess.run([str(cli), *args], capture_output=True, text=True).stdout.strip())
+    print(subprocess.run([str(cli), *args], capture_output=True, text=True, check=True).stdout.strip())
 ```
 
-`data-probe` prints the same check as `probe_hdf5_pair`. To write one trace per detector row, repeat `--row-y` with `--output-dir`. `model-order-sweep --trace-dir` sweeps that directory. Add `--json` for machine-readable output. `cuphoton xray --help` lists every command.
+`data-probe` prints the same check as `probe_hdf5_pair`. To write one trace per detector row, repeat `--row-y` with `--output-dir`, keeping `--roi-lower` and `--roi-dim` to define the containing ROI. `model-order-sweep --trace-dir` sweeps that directory. Add `--json` for machine-readable output. `cuphoton xray --help` lists every command.
 
 ## Troubleshooting {#sec-xray-troubleshooting}
 
 - **`CuPy is required for detector artifacts`.** Install the `gpu` profile, or fit single traces on the CPU with `linear_prediction_numpy`.
-- **`The structured xRay backend requires the native extension`.** Set `CUPHOTON_XRAY_BUILD_EXT=1` and add `--reinstall-package cuphoton` to your `uv sync` command. The build needs a C++17 compiler.
+- **`The structured xRay backend requires the native extension`.** Set `CUPHOTON_XRAY_BUILD_EXT=1` and add `--reinstall-package cuphoton` to your `uv sync` command, retaining the extras you need. The build needs Linux and a C++17 compiler.
 - **`time and trace must contain at least 16 samples`.** Use a longer scan.
 - **`on/off delay axes do not match`, or `schema mismatch`.** The files come from different scans or layouts. Run `data-probe`.
-- **A fast mode is missing from the fit.** Linear prediction keeps only a third of its roots, those with the largest real part. It drops modes above about one third of the Nyquist frequency (half the sampling rate), even without noise. Sample the delay at least six times faster than the fastest mode, or try `--fit-method iterative`. Its frequency bound is the Nyquist frequency by default.
+- **A fast mode is missing from the fit.** Linear prediction keeps only part of the polynomial's roots, prioritizing large real parts, then filters by decay. This can discard high-frequency modes even without noise; there is no fixed frequency cutoff that guarantees recovery. Check synthetic modes at your scan's sampling cadence, or try `--fit-method iterative`. Its frequency bound is the Nyquist frequency (half the sampling rate) by default.
 - **`Bokeh is required for phonon-viz`.** Install the `viz` extra.
 
 ## Next steps

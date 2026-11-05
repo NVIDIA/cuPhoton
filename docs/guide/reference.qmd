@@ -26,7 +26,7 @@ Three topics span several modules:
 | Topic | Where | Repository reference | Guide page |
 |---|---|---|---|
 | Transient chain, from FITS files to a candidate catalog | `examples/transient-chain/` | [README](https://github.com/NVIDIA/cuPhoton/blob/main/examples/transient-chain/README.md) | @sec-transient-chain |
-| Error bars of transient catalogs | the transient chain | [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) | @sec-transient-chain |
+| Error bars of transient catalogs | the transient chain | [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) | @sec-uncertainty |
 | Dragon and MPI execution | `--executor`, `cuphoton.core.executors` | [Distributed launch guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/distributed-execution.md) | @sec-scale |
 
 : Topics across modules. {#tbl-reference-topics}
@@ -42,7 +42,7 @@ import sys
 from pathlib import Path
 
 cli = Path(sys.executable).with_name("cuphoton")
-print(subprocess.run([str(cli), "--help"], capture_output=True, text=True).stdout.strip())
+print(subprocess.run([str(cli), "--help"], capture_output=True, text=True, check=True).stdout.strip())
 ```
 
 `cuphoton <group> --help` lists a group's commands, and `cuphoton <group> help <command>` prints one command's options with their defaults. The [command-line index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/cli.md) describes every group. @sec-concepts explains the flags that the groups share.
@@ -78,9 +78,9 @@ xScan and xRay export only their version at the top level. They are command-line
 
 ## Documents that span modules
 
-- [Documentation index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/README.md): every page in the repository's `docs/`.
+- [Documentation index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/README.md): entry points to the repository's guides and references.
 - [Getting started](https://github.com/NVIDIA/cuPhoton/blob/main/docs/getting-started.md): install profiles and platform notes.
-- [Quickstarts](https://github.com/NVIDIA/cuPhoton/blob/main/docs/quickstarts.md): synthetic smoke runs of every module, on the CPU or a GPU.
+- [Quickstarts](https://github.com/NVIDIA/cuPhoton/blob/main/docs/quickstarts.md): synthetic smoke runs for xFit, xPois, xScan, xRep and xRay, plus a separate xBeam example.
 - [Command-line index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/cli.md): each group's commands and the options they share.
 - [Data and artifact contracts](https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md): array shapes, axis order, mask rules and the files each run writes.
 - [Architecture](https://github.com/NVIDIA/cuPhoton/blob/main/docs/architecture.md): how the modules fit together, and the order `auto` tries backends in.

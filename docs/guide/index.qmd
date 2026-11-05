@@ -1,6 +1,6 @@
 # Welcome {.unnumbered}
 
-cuPhoton is a set of GPU-accelerated Python modules for multi-dimensional image processing. Each module takes arrays and returns arrays, with a command-line tool on top. Time-domain astronomy, finding what changed between two images of the sky, is the first workload. The same calls work on other stacks of images that must be aligned, compared and measured, such as microscopy time series.
+cuPhoton provides Python libraries and command-line workflows for GPU-accelerated imaging and signal analysis. Its workflows include image alignment and subtraction, source measurement, candidate classification, reconstruction, X-ray detector analysis, and signal correlation. This guide starts with time-domain astronomy: finding what changed between two images of the sky.
 
 This guide shows you how to use cuPhoton. Start with the first three pages, then go to the guide for your task.
 
@@ -20,7 +20,7 @@ This guide shows you how to use cuPhoton. Start with the first three pages, then
 | Measure sources and dipoles in many cutouts at once | xFit | @sec-measure |
 | Score candidates as real or bogus with a neural network | xScan | @sec-classify |
 | Run the shipped end-to-end pipeline on my own images | all of the above | @sec-transient-chain |
-| Get error bars I can trust, and check them on my data | xPois, xFit, the transient chain | @sec-uncertainty |
+| Propagate uncertainty and check error bars on my data | xPois, xFit, the transient chain | @sec-uncertainty |
 | Reconstruct one sharp image from many frames | xImage | @sec-reconstruct |
 | Analyze time-resolved X-ray detector data | xRay | @sec-xray-traces |
 | Correlate two sampled signals, or radio recordings | xBeam | @sec-correlate |
@@ -31,13 +31,9 @@ This guide shows you how to use cuPhoton. Start with the first three pages, then
 
 ## About this guide
 
-The examples run on small synthetic inputs that each page generates. You can run every block as written. Printed values demonstrate the API only. They are not benchmarks. Code that needs a GPU is shown but not run in this copy. Those blocks were also run on one datacenter GPU with CUDA 13 at the version below, except the following:
+The executable Python examples use small synthetic inputs that each page generates. Run a page's cells in order in the environment described in @sec-install. Commands that use your own files, a GPU, native extensions, or distributed launchers need the prerequisites and inputs described on their page.
 
-- the native xDR reader (@sec-read-fits) and the `native` backends, which need the native extension. Building it needs a CUDA 13 toolkit.
-- prediction from your own FITS files (@sec-classify)
-- the radio commands (@sec-correlate)
-- the multi-node commands (@sec-scale)
-
+The documentation build executes the CPU examples. GPU, native, and distributed command examples are instructions for those environments, rather than results of that build. Printed values and figures demonstrate the APIs; they do not establish performance or scientific accuracy on your data. @sec-uncertainty describes checks for your own noise model and measurements.
 
 This copy was rendered with:
 

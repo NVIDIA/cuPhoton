@@ -1,8 +1,10 @@
 # Install cuPhoton {#sec-install}
 
-cuPhoton installs from a source checkout. CPU workflows need no GPU. The GPU profile targets CUDA 13 and an NVIDIA driver that supports it. The repository's [getting-started guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/getting-started.md) has the full list of profiles and platform notes.
+This guide uses cuPhoton from a source checkout. CPU workflows need no GPU. The GPU profile targets CUDA 13 and an NVIDIA driver that supports it. The repository's [getting-started guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/getting-started.md) has the full list of profiles and platform notes.
 
 **You need:** CPython 3.12 to 3.14 on Linux, Git, and [uv](https://docs.astral.sh/uv/), the supported environment tool.
+
+On Linux ARM64, Photutils also needs a C compiler and Python development headers.
 
 ## Clone the repository
 
@@ -15,38 +17,38 @@ This clones the development branch, which this guide describes. To use a publish
 
 ## Choose a profile
 
-A profile is a set of extras. Pick the line that matches your machine:
+A profile selects optional dependencies through extras. The CPU command also selects the `docs` dependency group used to build this guide. Choose one command:
 
 ```bash
-# CPU only: PyTorch, photometry, xImage and the catalog tables that several pages read
-uv sync --locked --extra ximage --extra catalog
+# CPU examples: CPU PyTorch, Matplotlib, Jupyter, xImage and catalog tables
+uv sync --locked --python 3.12 --group docs --extra ximage --extra catalog
 
 # NVIDIA GPU with CUDA 13: adds the GPU readers and CUDA PyTorch
-uv sync --locked --extra gpu --extra ximage --extra catalog
+uv sync --locked --python 3.12 --extra gpu --extra ximage --extra catalog
 ```
 
 Add an extra for each optional workflow:
 
 | Extra | Adds | Needed for |
 |---|---|---|
-| `torch` | PyTorch on the CPU | xScan and xImage without a GPU |
+| `torch` | CPU-capable PyTorch | xScan and xImage; the `docs` group selects a CPU-only wheel |
 | `photometry` | Photutils | source detection and aperture photometry |
-| `gpu` | CuPy, nvCOMP, KvikIO, Photutils, CUDA PyTorch | every GPU path |
+| `gpu` | CuPy, nvCOMP, KvikIO, Photutils, CUDA PyTorch | the GPU examples in this guide; native builds have additional prerequisites |
 | `ximage` | PyTorch, Photutils, Pydantic and Zarr | xImage configurations and bundles |
 | `catalog` | Pandas and NumExpr | xScan catalogs, the transient-chain example and the pages that read tables with Pandas |
 | `mpi` | mpi4py (bring your own MPI runtime) | MPI executors (@sec-scale) |
 | `dragon` | DragonHPC, Python 3.12 or 3.13 only. `make sync-dragon` builds a Dragon environment | Dragon executors (@sec-scale) |
-| `viz` | Bokeh and Pillow | interactive views |
+| `viz` | Bokeh, Pillow and Tornado | Bokeh visualization workflows |
 
-The figures in this guide also need Matplotlib, which no profile installs. Add it after you sync with `uv pip install matplotlib`.
+The `docs` group includes Matplotlib for the figures and CPU-only PyTorch. It cannot be combined with the `gpu` extra. With the GPU command, add Matplotlib after syncing with `uv pip install matplotlib`. Selecting `torch` or `ximage` without the `docs` group uses the default PyTorch distribution, which can install CUDA runtime packages on Linux even if you intend to run on the CPU.
 
-List every extra you want in one `uv sync` call. A later call without an extra removes it. `uv sync` also removes packages you added with `uv pip install`, such as the transient-chain example (@sec-transient-chain). Reinstall them after each sync.
+List every extra and dependency group you want in one `uv sync` call. A later call without one removes its otherwise-unused dependencies. `uv sync` also removes packages you added with `uv pip install`, such as the transient-chain example (@sec-transient-chain). Reinstall them after each sync. Use `uv run --no-sync` for the commands below, or activate the environment with `source .venv/bin/activate` before running the other chapters' plain `python` and `cuphoton` commands.
 
-To install into an existing environment with pip instead, run `python -m pip install -e '.[ximage,catalog]'` from the checkout. The lock file covers Linux only. On macOS, `uv sync --locked` fails, and the CPU profile installs with this pip command.
+To install into an existing environment with pip instead, run `python -m pip install -e '.[ximage,catalog]' matplotlib` from the checkout. This resolves dependencies independently of `uv.lock` and does not select the docs group's CPU-only PyTorch index. The supported platform and lock file are Linux; this guide does not validate a macOS installation.
 
 The native GPU FITS reader (xDR) needs a separate source build even with the `gpu` profile. Refer to the [xDR install notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md#install). Without it, cuPhoton reads FITS files with Astropy.
 
-The `native` backends of xRep, xPois and xFit (@sec-concepts), and xDR's `native` pixel restoration (@sec-read-fits), need the `gpu` profile and cuPhoton's native extension. A checkout builds the extension only when you set `CUPHOTON_XFIT_BUILD_EXT=1`. The build needs Linux, a CUDA 13 toolkit with cuBLAS, cuSOLVER and cuFFT, and a C++17 compiler. Refer to the [native xFit build notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md#optional-native-cuda-backend).
+The `native` backends of xRep, xPois and xFit (@sec-concepts), and xDR's `native` pixel restoration (@sec-read-fits), need CUDA runtime dependencies and compiled extensions. Setting `CUPHOTON_XFIT_BUILD_EXT=1` during a source build enables xFit and, by default, the shared imaging extension; `CUPHOTON_IMAGING_BUILD_EXT=1` can build the imaging extension independently. The combined build needs Linux, a CUDA 13 toolkit with cuBLAS, cuSOLVER and cuFFT, a C++17 compiler, and matching CCCL headers. Refer to the [native xFit build notes](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md#optional-native-cuda-backend). Building these extensions does not build xDR's separate FITS reader.
 
 ## Check the installation
 
@@ -66,16 +68,22 @@ import sys
 from pathlib import Path
 
 cli = Path(sys.executable).with_name("cuphoton")
-print(subprocess.run([str(cli), "--help"], capture_output=True, text=True).stdout.strip())
+print(subprocess.run([str(cli), "--help"], capture_output=True, text=True, check=True).stdout.strip())
 ```
 
-To exercise every module on small generated inputs, run the repository's smoke test. Each run needs a new output directory:
+To exercise xFit, xPois, xScan, xRep and xRay on small generated inputs, run the repository's smoke test. Each run needs a new output directory:
 
 ```bash
 uv run --no-sync python examples/run_quickstarts.py --profile cpu --output-dir /tmp/cuphoton-quickstart
 ```
 
-On a GPU host, add `--require-gpu` to fail instead of falling back to the CPU. The run writes a `summary.json` that names the backend and device each module used.
+With the GPU environment, replace `--profile cpu` with `--require-gpu` to require GPU execution:
+
+```bash
+uv run --no-sync python examples/run_quickstarts.py --require-gpu --output-dir /tmp/cuphoton-gpu-quickstart
+```
+
+The flags `--profile cpu` and `--require-gpu` are incompatible. The run writes a `summary.json` that names the backend and device each selected component used. It does not test every module or establish that the native xDR reader is available.
 
 ## Next steps
 

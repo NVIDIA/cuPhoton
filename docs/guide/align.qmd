@@ -36,7 +36,7 @@ print(target.shape, reference.shape)
 
 ## Flag bad pixels
 
-Real images come with a bad-pixel mask, an integer array in which each bit marks one kind of fault. The sample pair has none. This block adds a hot column and a hot pixel to the reference and flags them with bits 2 and 4. It then builds the variance plane, one noise variance per pixel (@sec-first-difference).
+Real images come with a bad-pixel mask, an integer array in which each bit marks one kind of fault. The sample pair has none. This block adds a hot column and a hot pixel to the reference and flags them with mask values 2 and 4 (bit positions 1 and 2). It then builds the variance plane, one noise variance per pixel (@sec-first-difference).
 
 ```{python}
 mask = np.zeros(reference.shape, dtype=np.int32)
@@ -47,7 +47,7 @@ mask[200, 60] |= 4
 reference_variance = np.clip(reference, 0, None) / reference_read.infos[0].header["GAIN"]
 ```
 
-Bit 1 stays free for output pixels that the reference does not cover.
+Mask value 1 (bit position 0) stays free for output pixels that the reference does not cover.
 
 ## Map target pixels to reference pixels
 
@@ -88,7 +88,7 @@ print(aligned.image.shape, aligned.mask.dtype, aligned.backend, aligned.interpol
 print(aligned.metadata)
 ```
 
-All three planes now have the target's shape. The image uses the kernel weights, and the variance uses their squares. The metadata records that the variance is diagonal. Neighboring output pixels share source pixels, which correlates their noise. xRep does not return that correlation.
+All three planes now have the target's shape. Masked source values still contribute to the image; the mask propagates their flags so that later steps can reject affected pixels. The image uses the kernel weights, and the variance uses their squares. The metadata records that the variance is diagonal. Neighboring output pixels share source pixels, which correlates their noise. xRep does not return that correlation.
 
 ## Read the aligned mask
 
@@ -148,7 +148,7 @@ sky_aligned = reproject_masked_array(sky, sky / 8.0, np.zeros(reference.shape, d
 print(f"flat sky on the target grid: {np.median(sky_aligned.image):.2f} DN per pixel")
 ```
 
-A target pixel covers the printed area ratio of reference pixels. It therefore collects that much more light. With `area_scaling=True`, xRep multiplies the image by the ratio and the variance by its square. Set `area_scaling=False` to keep the input values. A prepared mapping belongs to one spec and one source shape.
+A target pixel covers the printed area ratio of reference pixels. It therefore collects that much more light. With `area_scaling=True`, xRep multiplies the image by the ratio and the variance by its square. Set `area_scaling=False` for surface-brightness units, where a constant field should retain its value after resampling. A prepared mapping belongs to one spec and one source shape.
 
 ## Stack several images on one grid
 
@@ -165,7 +165,7 @@ print(stack.images.shape, "invalid pixels per image:", stack.masks.sum(axis=(1, 
 
 Without a `grid`, the stack uses a north-up grid with the first image's pixel scale and grid pixel (0, 0) at the first image's center. The box covers every footprint. Its origin can therefore be negative. Each image is NaN, and flagged in `stack.masks`, where it has no data (@fig-align-stack). For the target's grid instead, pass `grid=Grid.from_wcs(target_wcs)` and `output_bbox=BBox(0, 0, width, height)`.
 
-`reproject_stack` returns no variance, and its masks cover only the 2 by 2 bilinear neighborhood. For variance and full-kernel masks, call `reproject_masked_array` with each member's spec:
+`reproject_stack` returns no variance. Without source masks, its masks mark the geometric footprint; with source masks, it propagates flags only from the 2 by 2 bilinear neighborhood, even for Lanczos interpolation. For variance and full-kernel masks, call `reproject_masked_array` with each member's spec:
 
 ```{python}
 member = reproject_masked_array(reference, reference_variance, mask, stack_spec.members[1], backend="cpu")
@@ -256,7 +256,7 @@ summary = json.loads(subprocess.run(command, capture_output=True, text=True, che
 print(summary["stack_shape"], summary["interpolation"], summary["saved"])
 ```
 
-The commands do not resample variance, their masks cover only the bilinear neighborhood, and `reproject-stack` takes no mask. Use `reproject_masked_array` when you need either. For a target WCS with SIP distortion (polynomial corrections to the projection), pass `--mapping-grid-step 1`. Otherwise `reproject-stack` warns that the coarse mapping grid interpolates the distortion.
+The commands do not resample variance. `reproject-image` propagates an input mask only over the bilinear neighborhood, even for Lanczos interpolation; `reproject-stack` takes no input mask and marks only the geometric footprint. Use `reproject_masked_array` when you need either. For a target WCS with SIP distortion (polynomial corrections to the projection), pass `--mapping-grid-step 1`. Otherwise `reproject-stack` warns that the coarse mapping grid interpolates the distortion.
 
 ## Troubleshooting
 

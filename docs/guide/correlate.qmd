@@ -194,9 +194,13 @@ gpu_spec = CorrelationSpec(pairs=(("a", "b"),), window_samples=1024, windows_per
 gpu_results = list(correlate_series(gpu_source, gpu_spec))
 ```
 
-Add `result_location="device"` to the spec to keep the products on the GPU as CuPy arrays. `result.to_host()` copies one result to the host.
+Add `result_location="device"` to the spec to keep the products on the GPU as CuPy arrays. Before consuming them on a CUDA stream, call `result.wait(stream)` to order that stream after the result's work. `result.to_host()` waits and copies one result to the host.
 
-For HDF5 input, `Hdf5Source` reads slices on the host and uploads them asynchronously. With `io_backend="cufile"`, it reads them straight into GPU memory through GPUDirect Storage. That path needs contiguous, uncompressed datasets whose offsets and sizes are multiples of 4096 bytes. On the command line, add `--backend cupy`, and set `io_backend` at the top level of the JSON file. `--upload-workers` caps the input workers, at `auto` or 1 to 16. Select one GPU per shard task through `CUDA_VISIBLE_DEVICES`.
+For HDF5 input, `Hdf5Source` reads slices on the host and uploads them asynchronously. With `io_backend="cufile"`, it reads them into GPU memory through GPUDirect Storage. That path needs a working GDS installation and supported filesystem, plus the HDF5 `sec2` driver and contiguous, uncompressed datasets with native numeric types. Every signal and validity dataset must belong to the opened file, with an offset and byte size divisible by 4096.
+
+The sample file above uses ordinary HDF5 allocation and is not guaranteed to meet those alignment requirements. To create an aligned version, use `h5py.File("signals.h5", "w", alignment_threshold=1, alignment_interval=4096)` in its creation block and choose array lengths whose byte sizes are divisible by 4096. The sample's 8192-element `float32` arrays meet the size requirement. Unsupported layouts raise an error instead of switching to POSIX reads.
+
+On the command line, add `--backend cupy`, and set `io_backend` at the top level of the JSON file. `--upload-workers` caps the input workers, at `auto` or 1 to 16. Select one GPU per shard task through `CUDA_VISIBLE_DEVICES`.
 
 ## Command line
 
@@ -273,7 +277,7 @@ cuphoton xbeam correlate job.json --output visibilities-gpu --backend cupy --ind
   --scan SCAN --first-integration 0 --integration-count 100 --devices 0,1
 ```
 
-Time sharding needs `--scan`, `--first-integration` and `--integration-count` together. To run shards under an external scheduler, use `--shard-count` and `--shard-index`, then assemble the parts with `merge-shards`.
+Time sharding needs `--scan`, `--first-integration` and `--integration-count` together. To run shards under an external scheduler, give each task that same parent scan window and `--shard-count`, its own `--shard-index`, and a separate output directory. Assemble the complete set of parts with `merge-shards`.
 
 ## Troubleshooting
 

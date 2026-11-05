@@ -1,6 +1,6 @@
 # Concepts {#sec-concepts}
 
-Every cuPhoton module follows the same few conventions. Its functions take arrays and return arrays. It picks a backend the same way, carries the noise and the bad pixels with each image, and records what ran. Its command-line tools share one framework. This page explains each convention with a short example.
+cuPhoton's imaging functions share conventions for arrays, backends, variance planes, masks and execution records. The details differ by call, and the command-line tools share one framework. This page explains the conventions and the differences to check.
 
 **You need:** cuPhoton installed with the CPU profile, which includes PyTorch (@sec-install). The examples make their own inputs.
 
@@ -15,9 +15,9 @@ Some examples read the sample pair from @sec-first-difference. The block below w
 
 ## Arrays in, arrays out
 
-cuPhoton has no image class and no file objects of its own. A function takes arrays and returns a small result object whose fields are arrays. NumPy arrays work everywhere. On a GPU host, the GPU code paths also take CuPy arrays.
+The low-level imaging calls in this guide take arrays and return arrays or small result objects. NumPy arrays serve the CPU paths. Many GPU paths accept CuPy arrays; xScan's model and tensor APIs use PyTorch tensors. File-based workflows also accept paths and configurations.
 
-Most functions return NumPy arrays, whichever backend ran. A few follow their input instead. xFit's `fit_single_sources` returns NumPy arrays for NumPy input and CuPy arrays for CuPy input. cuPhoton recognizes NumPy and CuPy arrays only. It treats any other array as NumPy. A PyTorch tensor on the CPU therefore works, and the result comes back as NumPy:
+The host-result APIs, including `reproject_masked_array` and `fit_dipoles`, return NumPy arrays whichever backend ran. Other calls follow their input: xFit's `fit_single_sources` returns NumPy arrays for NumPy input and CuPy arrays for CuPy input. Its array helper recognizes CuPy and otherwise tries NumPy conversion. A CPU PyTorch tensor that supports that conversion therefore works, and the result comes back as NumPy:
 
 ```{python}
 import numpy as np
@@ -37,7 +37,7 @@ for images in (stamps, torch.from_numpy(stamps)):
           f"{type(fit.flux).__module__}.{type(fit.flux).__name__} out, flux {fit.flux[0]:.1f}")
 ```
 
-Both calls give the same NumPy result. A tensor in GPU memory takes the same NumPy path. Pass GPU data as CuPy arrays instead. xScan and xImage run on PyTorch internally, and their workflows read files and configurations (@sec-classify, @sec-reconstruct).
+Both calls give the same NumPy result. A CUDA tensor, or a CPU tensor requiring gradients, cannot be converted this way. For these NumPy/CuPy APIs, pass GPU data as CuPy arrays instead. xScan and xImage run on PyTorch internally, and their workflows read files and configurations (@sec-classify, @sec-reconstruct).
 
 ## Backends
 
@@ -88,9 +88,9 @@ for backend in ("auto", "cpu", "torch", "cupy"):
 
 The precision rules are the following:
 
-- The FITS reader returns each image in its file's dtype, in native byte order. FITS is the standard astronomy file format. Integer masks stay integers.
+- The FITS reader returns decoded image values in native byte order. FITS is the standard astronomy file format. Unscaled integer masks stay integers; FITS scaling or blank-value handling can change a stored integer image to floating point.
 - xRep and xPois compute in `float64` and return `float64`.
-- xFit computes in the input's floating dtype. Set `compute_dtype` to `"float32"` or `"float64"` to choose.
+- xFit's `fit_dipoles` and `fit_single_sources` preserve float32 or float64 image precision; other input dtypes become float64. `fit_single_sources` also accepts `compute_dtype="float32"` or `"float64"`. `forced_psf_photometry` computes in float64.
 - xImage runs in `float64` by default. Its configuration's `dtype` can select `float32`.
 
 ```{python}
@@ -122,7 +122,7 @@ on_host = to_host(on_gpu)  # a NumPy copy
 
 An image travels with two more planes of the same shape. The variance plane holds each pixel's expected squared error, in squared image units. The mask says which pixels to use.
 
-cuPhoton does not estimate the noise from the pixels. You pass a variance. It sets each pixel's weight in a fit, one over its variance, and the size of every reported error. xPois treats a missing variance as one everywhere. The errors from xFit's `fit_single_sources` follow the variance you pass:
+Pass a variance plane when you have a noise model. In weighted least squares it sets the squared-residual weight, one over the variance, and the scale of the reported errors. Without it, xPois's kernel solver uses unit weights and xFit's `fit_dipoles` scales its covariance by the reduced chi-square. Some detection and quality checks estimate a robust noise scale from the pixels. The errors from xFit's `fit_single_sources` follow the variance you pass:
 
 ```{python}
 for scale in (1.0, 4.0):
@@ -154,7 +154,7 @@ print(int(use.sum()), "of", use.size, "pixels usable")
 
 The flag now covers both pixels that sampled the flagged one. The last column fell outside the input. xRep propagates the variance with the squares of the interpolation weights. Each output here sums two inputs with weight 0.5, which gives 0.5² + 0.5² = 0.5. This is a diagonal approximation. It leaves out the correlation that interpolation adds between neighbors.
 
-Later steps also drop pixels on their own. xPois leaves out a pixel whose target or variance is not finite, and every pixel whose kernel footprint touches a non-finite reference pixel. Those pixels come back as NaN in `matched` and `residual`, like the edge band the kernel cannot reach. xFit uses a pixel only where the mask is `True`, the image is finite and the variance is finite and positive.
+Later steps also check pixel validity. xPois leaves out a pixel whose target or variance is not finite, and every pixel whose kernel footprint touches a non-finite reference pixel. Those pixels come back as NaN in `matched` and `residual`, like the edge band the kernel cannot reach. xFit's `fit_single_sources` and `forced_psf_photometry` automatically exclude non-finite images and non-finite or nonpositive variances, in addition to the supplied mask. `fit_dipoles` instead requires you to mask those pixels explicitly and raises an error if an included pixel is invalid.
 
 ## Pixel and sky coordinates
 
@@ -244,7 +244,7 @@ Many flags recur across groups:
 
 : Shared command-line flags. {#tbl-concepts-flags}
 
-A command that writes a run creates one directory per run. It holds `summary.json` and numeric artifacts under `artifacts/`. Some workflows also save the effective configuration. Logs go to `logs/` in the group's state directory. The state directory moves with `XDG_STATE_HOME`. Many commands refuse to overwrite an existing run directory. Choose a new `--name` or output root.
+Run-producing commands write a summary and numeric artifacts, but their layouts differ. xRep uses `summary.json` and an `artifacts/` subdirectory; xFit's `fit-dipoles` writes its table and arrays directly under `--output-dir`. Some workflows also save the effective configuration. Shared CLI logs use `logs/` in the group's state directory, which moves with `XDG_STATE_HOME`. Many commands refuse to overwrite an existing run directory. Choose a new `--name` or output root.
 
 Run xRep on the sample target. The command also prints its summary as JSON, which this example discards:
 

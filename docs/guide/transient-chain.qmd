@@ -1,6 +1,6 @@
 # Run the transient chain {#sec-transient-chain}
 
-The cuPhoton checkout ships an end-to-end pipeline in `examples/transient-chain/`. It takes a target image and its reference from FITS files to a catalog of candidates, each with a position, a flux, their error bars and, with a classifier checkpoint, a real-or-bogus score. One persistent worker per GPU keeps the images in GPU memory from read to catalog. Use it to run the whole pipeline on your own images instead of calling each module as in @sec-first-difference. The chain needs an NVIDIA GPU. Its configuration, input checks and file loaders run on a CPU, and this page runs them on the sample pair.
+The cuPhoton checkout ships an end-to-end pipeline in `examples/transient-chain/`. It takes a target image and its reference from FITS files to a catalog of candidates, each with a position, a flux, their error bars and, with a classifier checkpoint, a real-or-bogus score. Each GPU worker keeps the main image calculations on the device. Astropy reads begin on the host, and WCS work, optional host star finding, diagnostics and final catalog columns can cross the host/device boundary. Use it to run the whole pipeline on your own images instead of calling each module as in @sec-first-difference. The chain needs an NVIDIA GPU. Its configuration, input checks and file loaders run on a CPU, and this page runs them on the sample pair.
 
 The worker runs these steps for each target image:
 
@@ -9,7 +9,7 @@ The worker runs these steps for each target image:
 | Read | `read` | Core, xDR | reads the target and reference planes with the reader set in `io.reader` |
 | Align | `template`, `refine` | xRep | reprojects the reference onto the target grid, then corrects the mapping with matched stars |
 | Subtract | `mask`, `xpois` | xPois | masks bad pixels, fits the blur-matching kernel and subtracts |
-| Detect | `detect`, `stamps` | the example | finds peaks in the difference image and cuts a target, reference and difference cutout around each |
+| Detect | `detect`, `stamps` | the example | finds residual hotspots and cuts target, kernel-matched reference (including fitted background), and difference stamps around each |
 | Measure | `xfit`, `uncertainty` | xFit | fits a dipole to each candidate, sets quality flags and measures a PSF flux |
 | Error bars | `uq` | xPois, xRep | adds the noise terms that the fit leaves out |
 | Classify | `xscan` | xScan | scores the cutouts, only when you pass a checkpoint |
@@ -32,7 +32,7 @@ The block below writes `sample/reference.fits` and `sample/target.fits`, the pai
 
 {{< include _sample-pair.qmd >}}
 
-The chain's error bars need two pixel grids that differ by a shift only. On a rotated or rescaled grid they come back undefined (@sec-transient-chain-errors). Write a second target that keeps the reference's pixel scale and orientation, with the same two changes:
+The correlation term of the chain's error budget requires a locally translation-only mapping. When that term is active, a rotated or rescaled grid gives undefined error bars (@sec-transient-chain-errors). Write a second target that keeps the reference's pixel scale and orientation, with the same two changes:
 
 ```{python}
 wcs = make_wcs((256, 256), 0.26, 0.0, (4.3, 6.3))  # the reference's scale, no rotation, shifted by a few pixels
@@ -44,10 +44,9 @@ fits.writeto("sample/chain-target.fits", image, header, overwrite=True)
 
 ## Install the example
 
-The example is a separate package inside the checkout. On the GPU host, install it with cuPhoton, from the root of the checkout. Add `--extra dragon` or `--extra mpi` to `uv sync` for those executors. A later `uv sync` removes the example, so install it again after each sync.
+The example is a separate package inside the checkout. Start with the GPU environment from @sec-install, which includes the catalog dependencies, then install the example from the checkout root. For a distributed executor, include `--extra dragon` or `--extra mpi` in that environment's sync command. A later `uv sync` removes the example, so install it again after each sync.
 
 ```bash
-uv sync --locked --extra gpu --extra catalog
 uv pip install -e examples/transient-chain
 ```
 
@@ -87,7 +86,7 @@ print("blocks that differ:", [block for block in shipped if shipped[block] != ge
 
 ## Describe your files to the survey adapter
 
-The `survey` block picks an adapter, the code that turns one entry of the selections file into image planes. The `generic` adapter reads each plane from a file and an HDU (header data unit, one image inside a FITS file) that you name. The template is the reference image. Print the layout that `config-generic.yaml` ships:
+The `survey` block picks an adapter, the code that turns one entry of the selections file into image planes. The `generic` adapter reads each plane from a file and an HDU (header/data unit; here, an image inside a FITS file) that you name. The template is the reference image. Print the layout that `config-generic.yaml` ships:
 
 ```{python}
 params = generic["survey"]["params"]
@@ -106,6 +105,7 @@ A key that you leave out takes the adapter's default, not the shipped value. Rep
 | `template.on_target_grid`, `template.pieces` | `false`, `correlated` |
 | `identity` | `exposure_id`, `ccd_id` and `band` read from the entry keys of the same names |
 | `extra_keys` | none |
+| `mask_policy` | `strict`: any nonzero mask value marks a bad pixel |
 
 : Defaults of the generic adapter, from `transient_chain/surveys/generic.py`. {#tbl-tc-adapter-defaults}
 
@@ -121,7 +121,7 @@ A key that you leave out takes the adapter's default, not the shipped value. Rep
 
 ## Give each image a variance plane
 
-The sample pair has no variance planes. Write one per image from its gain (electrons per data number), as in @sec-first-difference:
+The sample pair has no variance planes. Approximate its Gaussian noise variance from the positive, sky-inclusive image and gain (electrons per data number), as in @sec-first-difference. Real data need their calibrated noise model, including sky and read noise:
 
 ```{python}
 import numpy as np
@@ -194,7 +194,7 @@ template, template_bad, coverage = provider.build()
 print(target.shape, template.shape, "variance planes:", target.variance is not None, provider.has_variance)
 ```
 
-Check that the template has the target's shape and that both variance planes are there. Without a reference variance plane, the chain leaves out the `corr` error term. @fig-transient-chain-inputs shows the two planes.
+Check that the template has the target's shape and that both variance planes are there. Without a reference variance plane, the chain leaves out the `corr` error term; the remaining errors then omit that contribution. @fig-transient-chain-inputs shows the two planes.
 
 ```{python}
 #| label: fig-transient-chain-inputs
@@ -266,22 +266,26 @@ The columns you are most likely to use:
 | Column | Meaning |
 |---|---|
 | `candidate_id` | `cu-<exposure_id>-<ccd_id>-<index>` |
-| `x`, `y` | zero-based target pixel of the candidate |
-| `ra`, `dec` | sky position in degrees, from the header WCS at that pixel |
-| `sign` | +1 for a source that brightened, -1 for one that faded |
+| `x`, `y` | rounded hotspot centroid on the target grid, in zero-based pixels |
+| `ra`, `dec` | sky position in degrees, from the target header WCS at (`x`, `y`), rather than the fitted source position |
+| `sign` | sign of the hotspot's peak residual: +1 for a positive excursion, -1 for a negative excursion |
 | `source_x`, `source_y` | position of the measured source in pixels, relative to (`x`, `y`) |
-| `psf_flux` | forced PSF (point spread function) flux at the source, in image units |
+| `psf_flux` | difference flux at the source, in target image units; normally forced PSF (point spread function) photometry. It requires a variance plane and an independent PSF width. Without that width, an accepted one-lobe fit supplies its fitted flux; other rows are NaN |
 | `fit_model` | `"dipole"`, or `"single"` for a candidate refit with one lobe |
 | `quality_flags` | bits of `cuphoton.xfit.DipoleQualityFlag`, 0 when none is set |
 | `probability`, `decision` | classifier output, NaN and false without a checkpoint |
 
 ### Error bars {#sec-transient-chain-errors}
 
-Five quantities carry error bars: `center_x`, `center_y`, `positive_x`, `positive_y` and `psf_flux`. For each quantity `q`, quote `<q>_err`. It adds `<q>_err_fit`, the xFit term, and the four terms above in quadrature. It is NaN where fewer than half the pixels around the quantity are usable, or where its correlation factor is undefined. `uq_valid` is true where every `<q>_err` of the row is defined. `source_x_err` and `source_y_err` copy the `positive_*` bars.
+The budget covers `center_x`, `center_y`, `positive_x`, `positive_y` and, when forced photometry runs, `psf_flux`. For each computed quantity `q`, use `<q>_err`: the quadrature sum of `<q>_err_fit` and the available terms above. It is NaN where fewer than half the pixels in a required window are usable, the correlation factor is undefined, or the total uncertainty is non-finite. A center needs both lobe windows to pass.
 
-The correlation factor is undefined where the grid mapping between the two images is not locally a shift, for example a reference that is rotated or has a different pixel scale. Those rows get NaN error bars and `uq_valid` false. `summary.json` counts them under `uq.undefined_factor`, and those on a rotated grid under `uq.rotated_grid`. The example's README explains why. This page's sample target shares the reference's pixel scale and orientation for that reason.
+With the budget enabled, `uq_valid` means that every computed budget quantity has a defined error. It does not certify that every term was available, that the source model is appropriate, or that unavailable PSF photometry has a valid error. If a one-lobe fitted flux stands in for missing forced photometry, it keeps its fit-only error. Inspect `summary.json` for excluded terms and `quality_flags` for fit problems.
 
-After a GPU run, keep the rows with valid error bars and read how the item's bars were built. This block needs a finished run and is not run here.
+`source_x_err` and `source_y_err` normally copy the `positive_*` bars. For a fading candidate identified by the lobe-support flags whose one-lobe refit was not accepted, `source_*` instead selects the dipole's negative lobe and its position errors are NaN: the budget was computed for the positive lobe.
+
+When `corr` is active, its factor is undefined where the grid mapping between the two images is not locally a shift, for example a reference that is rotated or has a different pixel scale. The affected computed quantities get NaN error bars and `uq_valid` is false. `summary.json` counts them under `uq.undefined_factor`, and those on a rotated grid under `uq.rotated_grid`. The example's README explains why. This page's sample target shares the reference's pixel scale and orientation for that reason.
+
+After a GPU run, inspect the rows and read how the item's bars were built. This block needs a finished run and is not run here.
 
 ```{python}
 #| eval: false
@@ -291,20 +295,13 @@ print(table[columns].to_string())
 
 summary = json.loads(Path("out/items/S1-v1/summary.json").read_text())
 print(summary["candidates"], summary["psf_sigma_source"], summary["uq_terms"])
-print(summary["uq"]["excluded"])  # each term left out, with the reason; uq is null with no candidates
+if summary["uq"] is not None:  # null when there are no candidates
+    print(summary["uq"]["excluded"])  # each term left out, with the reason
 ```
 
-On one datacenter GPU, with the sample pair and the configuration above, the block printed the following (synthetic data, for demonstration only):
+A candidate can have a finite flux error and still have `uq_valid=False` because a position error is undefined. Check `quality_flags` and `fit_model` before quoting a position. The one-lobe refit is attempted only when exactly one lobe is unsupported, and its result replaces the dipole position only when the refit covariance is valid. Rows with both lobes unsupported keep their dipole values and need further inspection.
 
-```text
-    x    y fit_model  quality_flags      psf_flux  psf_flux_err  source_x_err  uq_valid
-0  76   23    dipole              0  11865.377484    118.069144      0.145135      True
-1  76  175    dipole            101   4035.495050     72.801204           NaN     False
-2 stars ['fit', 'corr', 'kfit', 'kmatch']
-{'mis': 'no misalignment model'}
-```
-
-The chain found both changes. Row 0 is the brightened star, with every error bar defined. Row 1 is the new source. Its flux and flux error are defined, but its quality flags (101) mark both lobes of the dipole fit as unsupported and its fit uncertainty as invalid (@sec-measure-flags). The one-lobe refit runs only when exactly one lobe is unsupported, so this row keeps the dipole fit, and its position error is NaN. `uq_valid` is therefore false. Check `quality_flags` and `fit_model` before you quote a position. The summary shows that the chain measured the PSF from the stars it matched. It left out the `mis` term because the run built no misalignment model. `diagnostics.align.refine.misalignment.reason` in `summary.json` says why.
+`psf_sigma_source` reports where the PSF width came from. If `uq.excluded` reports `mis: no misalignment model`, inspect `diagnostics.align.refine.misalignment.reason` for the cause. These GPU result fields are described from the implementation; this page's executable examples validate the CPU setup and input loading.
 
 `summary.json` also records the reader each file took (`diagnostics.read.receipts`), the time per stage (`timings_sec`) and the bytes copied to the host (`transfers`).
 
@@ -330,11 +327,13 @@ python examples/transient-chain/launch.py --executor local --config sample/chain
     --selections sample/selections.json --output-dir out-fit-only --set uq.enabled=false
 ```
 
+With `uq.enabled=false`, `uq_valid` is always true; inspect the fit validity flags and finite error values before using those fit-only errors.
+
 A term also needs its inputs. `corr` needs both variance planes, and `kmatch` and `mis` need stars that the align step matched. [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) explains each term.
 
 ## Options
 
-The `launch.py` flags are the following.
+Common `launch.py` flags are listed below. Run `python examples/transient-chain/launch.py --help` for the complete list, including worker and rank timeouts.
 
 | Option | Default | Effect |
 |---|---|---|

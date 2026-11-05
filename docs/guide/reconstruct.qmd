@@ -46,7 +46,7 @@ A bundle is a set of named arrays in one NPY directory, HDF5 file or Zarr store.
 | `variances` | `(batch, y, x, frame)` | the variance of every pixel, finite and positive |
 | `psfs` | `(psf_y, psf_x, channel, frame)` | one PSF per frame, square, odd-sized, one channel |
 
-An NPY bundle is a directory with one `<key>.npy` file per array. `validate_bundle` returns a list of issues, empty for a good bundle. `summarize_bundle` returns each array's shape, dtype and axes.
+An NPY bundle is a directory with one `<key>.npy` file per array. `validate_bundle` checks the array layout, mask dtype and exposure times and returns a list of issues. An empty list does not check every pixel value; check that the image and variance values are usable before reconstruction. `summarize_bundle` returns each array's shape, dtype and axes.
 
 ```{python}
 from pathlib import Path
@@ -103,7 +103,7 @@ The saved image is the 48-pixel region plus the 4-pixel PSF border on each side.
 
 ## Read the run directory
 
-Every run writes the same files:
+This reconstruction writes the following files:
 
 ```{python}
 print(sorted(str(p.relative_to(result.run_dir)) for p in result.run_dir.rglob("*") if p.is_file()))
@@ -219,11 +219,7 @@ plt.show()
 
 ## On a GPU
 
-Install the `gpu` extra together with the `ximage` extra:
-
-```bash
-uv sync --locked --extra ximage --extra gpu
-```
+Use the GPU environment from @sec-install, which includes `ximage` and the plotting dependencies.
 
 `device_override="cuda"` (or `device: cuda`) requires a GPU. `metrics_backend="cupy"` computes the evaluation metrics on it:
 
@@ -234,7 +230,7 @@ print(result.summary["performance"]["device"])  # GPU name, peak memory, cuDNN s
 evaluation = evaluate_reconstruction_run(result.run_dir, metrics_backend="cupy")
 ```
 
-To bound device memory, set `exposure_batch_size` to a positive number of frames. The region, the frame selection and tiling also limit the work per run. The receipt records the resolved device, precision and timings. The evaluation records `metrics_backend` separately from the reconstruction backend.
+To reduce convolution working memory, set `exposure_batch_size` to a positive number of frames. The selected input images, variances and masks still reside on the device together. Use a smaller region, fewer frames or tiling to reduce that input footprint. The receipt records the resolved device, precision and timings. The evaluation records `metrics_backend` separately from the reconstruction backend.
 
 ## Command line
 
@@ -248,7 +244,7 @@ uv run --no-sync cuphoton ximage psf-solve-mm --config examples/ximage/psf-mm.ex
 uv run --no-sync cuphoton ximage evaluate-reconstruction --run-dir runs/reconstruct-l2-example
 ```
 
-`data-validate` prints each array's shape or the list of issues. The reconstruction and PSF commands print the run summary and accept `--device`, `--backend` and `--output-dir` overrides. `evaluate-reconstruction` also writes `evaluation/evaluation_summary.json` into the run directory. The example script and configurations do not overwrite earlier output. Remove `data/` and `runs/` before you repeat them. To time a workflow on the CPU and the GPU, run `benchmark-devices`:
+`data-validate` prints each array's shape or the list of issues. The reconstruction and PSF commands print the run summary and accept `--device`, `--backend` and `--output-dir` overrides. `evaluate-reconstruction` also writes `evaluation/evaluation_summary.json` into the run directory. The example script and configurations do not overwrite earlier output. To repeat them, use a new bundle path and run names, or remove only the outputs created by this example. To time a workflow on the CPU and the GPU, run `benchmark-devices`:
 
 ```bash
 uv run --no-sync cuphoton ximage benchmark-devices --config examples/ximage/reconstruct-l2.example.yaml \

@@ -1,6 +1,6 @@
 # Scale out to many GPUs {#sec-scale}
 
-cuPhoton scales a batch by handing whole work items, such as image pairs or chunks of cutouts, to GPU workers. A worker is a process bound to one GPU. It loads its model once and runs its share of the items. Executors start and place the workers: MPI and Dragon across nodes, or local processes and threads on one GPU. You choose one with the `--executor` option of the same command.
+cuPhoton scales a batch by handing whole work items, such as image pairs or chunks of cutouts, to GPU workers. A worker owns its state on one GPU, loads its model once and runs its share of the items. Executors start and place the workers: MPI and Dragon use processes across nodes; local execution can use processes or threads on one GPU. You choose one with the `--executor` option of the same command.
 
 **You need:**
 
@@ -102,11 +102,12 @@ print("reference:", item["reference"]["shape"], item["reference"]["dtype"], item
 print("first candidate:", item["candidates"][0])
 ```
 
-Each image is a descriptor: path, SHA-256, shape and dtype. `variance` and `fit_mask` can be `null`. For your own data, start from [`pipeline.example.json`](https://github.com/NVIDIA/cuPhoton/blob/main/examples/distributed-pipeline/pipeline.example.json) and follow these rules:
+Each image is a descriptor: path, SHA-256, shape and dtype. `variance` and `fit_mask` can be `null`; when supplied, they apply to xPois. The pipeline's xFit stage uses unweighted, unmasked Gaussian difference fits. For your own data, start from [`pipeline.example.json`](https://github.com/NVIDIA/cuPhoton/blob/main/examples/distributed-pipeline/pipeline.example.json) and follow these rules:
 
 - Replace each `<SHA256 ...>` placeholder with the file's lowercase SHA-256. For `checkpoint_sha256`, hash `checkpoint_dir/checkpoint.pt`.
 - Use absolute paths or paths relative to the manifest. The example script writes absolute paths. Run it at the final shared location.
 - Reference and target must already share a pixel grid and photometric units.
+- Use a triplet fusion checkpoint, its exact training feature schema and the matching stamp size.
 - Keep `device` as `cuda:0`. Each worker sees its own GPU as device 0.
 - Give every item a distinct `item_id`.
 
@@ -130,7 +131,7 @@ With three workers, one worker gets two pairs and the round waits for it. Choose
 
 ## Launch with MPI
 
-Each MPI rank is one GPU worker, and rank 0 also coordinates. Prepare the environment and the workload on the shared filesystem, then request an allocation. Replace the account, partition and paths with your site's values.
+Each MPI rank is one GPU worker, and rank 0 also coordinates. Prepare the environment and the workload on the shared filesystem, then request an allocation. The commands below select the dependencies for this pipeline; retain any other extras you need in the same sync command, and reinstall separately added packages afterward (@sec-install). Replace the account, partition and paths with your site's values.
 
 ```bash
 uv sync --locked --python 3.12 --extra gpu --extra catalog --extra mpi
@@ -180,9 +181,10 @@ Build the Dragon environment once, from the checkout. `make sync-dragon` selects
 ```bash
 make sync-dragon
 export CUPHOTON_ENV="$(pwd -P)/.venv"
+source "$CUPHOTON_ENV/bin/activate"
 ```
 
-Then start the run:
+With `$RUN/input/pipeline.json` prepared on shared storage as above, start the run inside a Slurm allocation that provides two GPU nodes:
 
 ```bash
 "$CUPHOTON_ENV/bin/dragon" --wlm slurm --nodes 2 -t tcp -o tcp \
@@ -203,7 +205,7 @@ Dragon's SSH launcher does not forward `CUDA_VISIBLE_DEVICES`. A mask in your sh
 
 ## Choose workers per GPU
 
-By default each GPU gets one worker. `--workers-per-gpu N` lets up to N workers, each with its own items, share a GPU under `processes`, `threads` and `dragon`. Each worker keeps its own model and context. Every extra worker therefore uses more GPU and host memory. Start small, and measure throughput and memory on your own images.
+By default each GPU gets one worker. `--workers-per-gpu N` lets up to N workers, each with its own items, share a GPU under `processes`, `threads` and `dragon`. Each worker keeps its own model and numerical state. Process workers have separate CUDA contexts; thread workers share one process and context, with their own streams and allocators. Every extra worker uses more GPU and host memory. Start small, and measure throughput and memory on your own images.
 
 On one GPU, expose only that GPU and use `processes` or `threads`:
 
@@ -272,13 +274,13 @@ No executor retries a failed item or replaces a failed worker. Use a new `--name
 
 ## Options
 
-Executor options, from the commands' `--help` and Core's option checks:
+Shared executor options for xFit and xScan, from the commands' `--help` and Core's option checks. The separate xPois executor has its own options in the linked xPois guide.
 
 | Option | Default | Accepted by | Effect |
 |---|---|---|---|
 | `--max-workers` | GPUs found times workers per GPU | `dragon` | caps the total number of workers |
 | `--workers-per-gpu` | `1` | `processes`, `threads`, `dragon` | allows up to N workers on each GPU |
-| `--worker-timeout-sec` | `3600` | `processes`, `threads`, `dragon` | lifetime of each worker |
+| `--worker-timeout-sec` | `3600` | `processes`, `threads`, `dragon` | bounds the worker run, including startup, rounds and close |
 | `--mps-pipe-directory` | none | `processes`, `dragon` | requires every worker to join that MPS service |
 | `--result-timeout-sec` | `60` | `dragon` | time allowed for results and their files |
 | `--rank-setup-timeout-sec` | `600` | `mpi` | wait for shared files on every rank. It does not bound MPI calls |

@@ -136,7 +136,7 @@ Recompute any totals you keep from `monitor.samples`, which always holds the cur
 
 ## Open a saved run
 
-The state directory is the saved run. `Monitor.load` opens it again. With `recover=False`, it reads without writing, for example while the run's own process still writes. Without that flag, it takes over as the writer and marks unfinished collection as interrupted. Keep one writer per state directory.
+The state directory is the saved run. `Monitor.load` opens it again. With `recover=False`, loading reads without writing, for example while the run's own process still writes. Default recovery marks unfinished collection as interrupted. Use it only when you own the writer role: loading does not acquire an exclusive lock. Keep one writer per state directory.
 
 ```{python}
 viewer = Monitor.load("runs/monitor/state", recover=False)
@@ -179,13 +179,18 @@ import urllib.request
 
 from cuphoton.xlens.dashboard import make_server
 
-server = make_server(Dashboard(viewer), host="127.0.0.1", port=0)  # port 0 picks a free port
-threading.Thread(target=server.serve_forever, daemon=True).start()
-print(urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/health").read().decode())
-server.shutdown()
+with make_server(Dashboard(viewer), host="127.0.0.1", port=0) as server:  # port 0 picks a free port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/health") as response:
+            print(response.read().decode())
+    finally:
+        server.shutdown()
+        thread.join()
 ```
 
-In a pipeline that writes results as it runs, let a `MonitorSession` poll for new inputs in the process that owns the monitor, and serve the dashboard from there:
+In a pipeline that writes results as it runs, let a `MonitorSession` poll for new inputs in the process that owns the monitor, and serve the dashboard from there. This poller processes each filename once. Have the producer write a temporary file and rename it to `.json` only when complete, then leave that file unchanged. Handle reprocessing separately by publishing a higher sample revision.
 
 ```python
 from cuphoton.xlens import MonitorSession, serve
@@ -207,7 +212,7 @@ serve(Dashboard(monitor, title="Night 1 images"), session=MonitorSession(monitor
 
 The page has these parts:
 
-- **Run status**: the run ID, the sample count, the collector status (`idle`, `running`, `complete`, `failed` or `interrupted`) and the number of revisions.
+- **Run status**: the run ID, the sample count, the collector status (`idle`, `running`, `complete`, `stopped`, `failed` or `interrupted`) and the number of revisions.
 - **Samples**: the list in sequence order, with a text filter and a finding-category filter.
 - **Measurement history**: up to six measurements at a time, against sample sequence or observation time, on a linear or log scale. Samples with findings are outlined. Missing and invalid values leave gaps.
 - **Selected sample**: its findings, a table of measurements with value, unit, status and coverage, your domain view, and its configuration, provenance and artifacts.
@@ -241,10 +246,10 @@ A sample is at most 64 KiB with at most 128 measurements. A run holds at most 10
 cuphoton xlens quickstart --output-dir xlens-demo                   # an invented run and its report.html
 cuphoton xlens export --state runs/monitor/state --output-file runs/monitor/report-cli.html
 cuphoton xlens serve --state runs/monitor/state --port 8765
-cuphoton xlens serve --state runs/monitor/state --host 0.0.0.0 --allowed-host monitor.example
+cuphoton xlens serve --state runs/monitor/state --host 0.0.0.0 --allowed-host monitor.example:8765
 ```
 
-`serve` takes exactly one of `--state` and `--site`. `--site` serves an installed application's own collection of monitors. `--prefix` mounts the page under a URL path. The server does not configure TLS or access control. Put it behind your site's proxy when you share it.
+`serve` takes exactly one of `--state` and `--site`. `--site` serves an installed application's own collection of monitors. `--prefix` mounts the page under a URL path. The server does not configure TLS or authenticate dashboard viewers. Put it behind your site's proxy when you share it.
 
 ## Troubleshooting
 
