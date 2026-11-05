@@ -183,7 +183,7 @@ for i, value in enumerate(flags):
     print(i, int(value), [flag.name for flag in DipoleQualityFlag if value & flag])
 ```
 
-Both candidates set `NEGATIVE_LOBE_UNSUPPORTED` and `LOBE_OUTSIDE_STAMP`. They are brightening single sources, with the spare lobe placed outside the cutout. Measure them with `fit_single_sources`. The new source's spare lobe ran too far out for the lobe test, which then sets both lobe bits. The dipole sets no flag. Read the bits together:
+Both candidates set `NEGATIVE_LOBE_UNSUPPORTED` and `LOBE_OUTSIDE_STAMP`. They are brightening single sources, with the spare lobe placed outside the cutout. Measure them with `fit_single_sources`. The new source's spare lobe ran too far out for the lobe test, which then sets both `NEGATIVE_LOBE_UNSUPPORTED` and `POSITIVE_LOBE_UNSUPPORTED`. The dipole sets no flag. Read the bits together:
 
 | Bit | Flag | Set when |
 |---|---|---|

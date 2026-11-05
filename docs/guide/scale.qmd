@@ -246,7 +246,12 @@ Each run writes `<output-dir>/<name>/summary.json`. With round options, each pas
 run = Path("/shared/cuphoton-demo/runs/slurm-mpi")
 summary = json.loads((run / "summary.json").read_text())
 print(summary["executor"], summary["status"])
-print(summary.get("benchmark", {}).get("measured_batch_wall_sec"))  # min, median and max
+if "benchmark" in summary:
+    print(summary["benchmark"]["measured_batch_wall_sec"])  # min, median and max
+    for receipt in summary["benchmark"]["rounds"]:
+        print(receipt["round_id"], receipt["batch_wall_sec"], receipt["finalization_sec"])
+else:
+    print(summary["batch_wall_sec"], summary["finalization_sec"])
 for path in sorted(run.glob("**/workers/worker-*.json")):
     worker = json.loads(path.read_text())
     where = worker["provenance"]
@@ -260,13 +265,14 @@ Check that:
 - Each worker ran on the host and GPU you expected.
 - The launcher also exited cleanly. A successful summary does not prove that MPI finalized or Dragon stopped.
 
-The summary fields to read first:
+Without round options, `batch_wall_sec` and `finalization_sec` are fields in the run's top-level `summary.json`. With round options, read them in each `rounds/warmup-*/summary.json` or `rounds/measure-*/summary.json`, or in the top-level `benchmark.rounds` receipts. Use these fields to check the run:
 
 | Field | Meaning |
 |---|---|
 | `status` | `success` or `failed` for the whole run |
 | `batch_wall_sec` | one round, from dispatch until every worker reported, including input reads and output writes |
 | `finalization_sec` | the output merge, after the record checks |
+| `benchmark.rounds` | per-round timings, status and the relative path to each round's summary, when round options are used |
 | `benchmark.measured_batch_wall_sec` | minimum, median and maximum `batch_wall_sec` of the measured rounds |
 | `placements` (Dragon), `world_size` (MPI) | where the workers ran, and how many |
 

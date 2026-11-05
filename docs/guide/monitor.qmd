@@ -246,10 +246,13 @@ A sample is at most 64 KiB with at most 128 measurements. A run holds at most 10
 cuphoton xlens quickstart --output-dir xlens-demo                   # an invented run and its report.html
 cuphoton xlens export --state runs/monitor/state --output-file runs/monitor/report-cli.html
 cuphoton xlens serve --state runs/monitor/state --port 8765
-cuphoton xlens serve --state runs/monitor/state --host 0.0.0.0 --allowed-host monitor.example:8765
+# Backend for a reverse proxy on this machine
+cuphoton xlens serve --state runs/monitor/state --host 127.0.0.1 --port 8765 --allowed-host monitor.example
 ```
 
-`serve` takes exactly one of `--state` and `--site`. `--site` serves an installed application's own collection of monitors. `--prefix` mounts the page under a URL path. The server does not configure TLS or authenticate dashboard viewers. Put it behind your site's proxy when you share it.
+`serve` takes exactly one of `--state` and `--site`. `--site` serves an installed application's own collection of monitors. `--prefix` mounts the page under a URL path.
+
+The server does not configure TLS or authenticate dashboard viewers. When sharing a dashboard, use a proxy that provides both. Bind the backend to `127.0.0.1` for a proxy on the same machine, as shown above. If the proxy runs elsewhere, bind a private interface and restrict access to the backend port to that proxy. Set `--allowed-host` to the HTTP Host value the proxy forwards, including its port when present; this header check does not authenticate the viewer.
 
 ## Troubleshooting
 

@@ -246,26 +246,25 @@ Many flags recur across groups:
 
 Run-producing commands write a summary and numeric artifacts, but their layouts differ. xRep uses `summary.json` and an `artifacts/` subdirectory; xFit's `fit-dipoles` writes its table and arrays directly under `--output-dir`. Some workflows also save the effective configuration. Shared CLI logs use `logs/` in the group's state directory, which moves with `XDG_STATE_HOME`. Many commands refuse to overwrite an existing run directory. Choose a new `--name` or output root.
 
-Run xRep on the sample target. The command also prints its summary as JSON, which this example discards:
-
-```bash
-cuphoton xrep reproject-image --input sample/target.fits --output-dir runs/concepts > /dev/null
-find runs/concepts -type f | sort
-```
+Run xRep on the sample target. This cell calls the CLI with a unique output root so earlier runs remain intact. The command also prints its summary as JSON, which this example discards:
 
 ```{python}
-#| echo: false
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-import shutil
-
-shutil.rmtree("runs/concepts", ignore_errors=True)  # start empty, so the listing shows one run
+Path("runs").mkdir(exist_ok=True)
+output_dir = Path(tempfile.mkdtemp(prefix="concepts-", dir="runs"))
 cli = Path(sys.executable).with_name("cuphoton")
-subprocess.run([str(cli), "xrep", "reproject-image", "--input", "sample/target.fits", "--output-dir", "runs/concepts"],
-               check=True, stdout=subprocess.DEVNULL)
-print(subprocess.run("find runs/concepts -type f | sort", shell=True, capture_output=True, text=True).stdout.strip())
+subprocess.run(
+    [str(cli), "xrep", "reproject-image", "--input", "sample/target.fits",
+     "--output-dir", str(output_dir)],
+    check=True, stdout=subprocess.DEVNULL,
+)
+for path in sorted(output_dir.rglob("*")):
+    if path.is_file():
+        print(path.relative_to(Path.cwd()))
 ```
 
 `summary.json` is the run's receipt. Read it before you rely on the backend or device:
@@ -274,7 +273,7 @@ print(subprocess.run("find runs/concepts -type f | sort", shell=True, capture_ou
 import json
 from pathlib import Path
 
-run = sorted(Path("runs/concepts").glob("reproject-image-*"))[-1]
+run = next(output_dir.glob("reproject-image-*"))
 summary = json.loads((run / "summary.json").read_text())
 for key in ("workflow", "requested_backend", "backend", "device", "dtype", "fits_reader"):
     print(f"{key:17s} {summary[key]}")

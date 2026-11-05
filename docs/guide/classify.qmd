@@ -158,7 +158,7 @@ for epoch in json.loads(Path("runs/classify-demo/history.json").read_text()):
           f"validation loss {epoch['val_loss']:.3f}, validation ROC AUC {epoch['val_roc_auc']:.3f}")
 ```
 
-The checkpoint holds the epoch with the best selection metric, which is not always the last epoch. The default metric is the validation ROC AUC (defined in the next step).
+The checkpoint holds the epoch with the best selection metric, which is not always the last epoch. When `early_stopping_metric` is unset, selection uses validation ROC AUC (defined in the next step), or validation loss for a single-class validation split. Early stopping remains disabled unless a metric or patience is set.
 
 ## Evaluate on the test split
 
@@ -338,7 +338,7 @@ The queue and the append-only `annotations.jsonl` are the review record. `review
 | `batch_size` | `16` | candidates per training step |
 | `learning_rate` | `0.001` | optimizer step size |
 | `device` | `auto` | CUDA when available, otherwise the CPU |
-| `early_stopping_metric` | none | `val_roc_auc`, `val_pr_auc` or `val_loss`: selects the saved epoch and turns on early stopping |
+| `early_stopping_metric` | none | Set to `val_roc_auc`, `val_pr_auc` or `val_loss` to select the saved epoch and turn on early stopping. When unset, selection uses `val_roc_auc`, or `val_loss` for a single-class validation split. |
 | `early_stopping_patience` | none | epochs without improvement before training stops (0 when only the metric is set) |
 | `model.image_size` | `51` | cutout side in pixels |
 | `model.depths`, `num_heads`, `embed_dims` | six stages, 64 to 512 wide | network size |
