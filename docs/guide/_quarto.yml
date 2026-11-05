@@ -4,12 +4,32 @@
 
 project:
   type: book
+  resources:
+    - assets/**
 
 book:
   title: "cuPhoton User Guide"
+  site-url: https://nvidia.github.io/cuPhoton/
   subtitle: "Install cuPhoton, run your first image difference, then follow task guides for each module."
   author: "cuPhoton Imaging Engineer"
   date: today
+  navbar:
+    title: "cuPhoton"
+    logo: assets/nvidia-logo.png
+    logo-alt: "NVIDIA"
+    background: dark
+    pinned: true
+    right:
+      - icon: github
+        text: Source
+        href: https://github.com/NVIDIA/cuPhoton
+  sidebar:
+    title: "User guide"
+    style: docked
+    collapse-level: 2
+  page-footer:
+    left: "NVIDIA · cuPhoton"
+    right: "Built with Quarto"
   chapters:
     - index.qmd
     - part: "Get started"
@@ -43,8 +63,8 @@ lightbox: auto
 format:
   html:
     theme:
-      light: cosmo
-      dark: darkly
+      dark: [darkly, nvidia.scss, theme-dark.scss]
+      light: [flatly, nvidia.scss, theme-light.scss]
     toc: true
     number-sections: true
     code-copy: true

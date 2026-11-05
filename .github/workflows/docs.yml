@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: user guide
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/docs.yml
+      - docs/**
+      - src/**
+      - examples/**
+      - pyproject.toml
+      - uv.lock
+      - setup.py
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/docs.yml
+      - docs/**
+      - src/**
+      - examples/**
+      - pyproject.toml
+      - uv.lock
+      - setup.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: render user guide
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CUPHOTON_XDR_BUILD_EXT: "0"
+      CUPHOTON_XREP_TORCH_DEVICE: cpu
+      CUDA_VISIBLE_DEVICES: ""
+      MPLBACKEND: Agg
+      UV_HTTP_TIMEOUT: "300"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - name: Install Quarto
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/quarto.deb" \
+            https://github.com/quarto-dev/quarto-cli/releases/download/v1.9.36/quarto-1.9.36-linux-amd64.deb
+          printf '%s  %s\n' \
+            8c47762e78fe58642246a94d18f67eb332c1778b711e5bef991ef3c15490d83a \
+            "$RUNNER_TEMP/quarto.deb" | sha256sum --check
+          sudo dpkg --install "$RUNNER_TEMP/quarto.deb"
+      - name: Install documentation dependencies
+        run: uv sync --locked --python 3.12 --group docs --extra ximage --extra catalog
+      - name: Render the guide and execute its CPU examples
+        env:
+          CUPHOTON_REPO: ${{ github.workspace }}
+          QUARTO_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: quarto render docs/guide
+      - name: Upload the rendered site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs/guide/_book
+
+  deploy:
+    name: deploy user guide
+    needs: build
+    if: >-
+      github.repository == 'NVIDIA/cuPhoton' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
