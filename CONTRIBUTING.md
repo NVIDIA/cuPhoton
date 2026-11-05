@@ -202,7 +202,8 @@ not qualify new changes.
 
 The required `ci-required` check combines CPU, package, and GPU results for
 that revision. The initial `ci-pr-checks` result does not satisfy the merge
-gate. Pushes to `main` and `0.1.x` also run the full package and GPU checks.
+gate. Pushes to `main`, `0.1.x` and `0.2.x` also run the full package and GPU
+checks.
 
 Installed-wheel and runtime checks cover Python 3.12–3.14 on x86-64 and
 arm64. Each matrix job pulls its pinned Python image once and runs both

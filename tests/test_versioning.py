@@ -185,6 +185,7 @@ def test_event_version_selects_rc_or_final_on_same_commit(
         ("codex/versioning", (0, 2, 0)),
         (None, (0, 2, 0)),
         ("0.1.x", (0, 1, 4)),
+        ("0.2.x", (0, 2, 0)),
     ],
 )
 def test_untagged_descendant_is_next_development_version(
