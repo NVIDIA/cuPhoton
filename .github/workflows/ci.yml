@@ -196,7 +196,7 @@ jobs:
           assert float((tensor * tensor).sum().item()) == 1240.0
           print("CuPy and PyTorch CUDA kernels and DLPack passed")
           PY
-      - name: Run xFit GPU parity and device pipeline tests
+      - name: Run xFit and xRay GPU parity and device pipeline tests
         run: >-
           uv run --no-sync pytest -q -rs
           --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
@@ -212,6 +212,7 @@ jobs:
           tests/xfit/test_models.py::test_fp32_solver_preserves_subnormal_curvature
           tests/xscan/test_device_pipeline.py::test_persistent_context_pipeline_is_device_resident_and_deterministic
           tests/xfit/test_cupy_fusion.py
+          tests/xray/test_mode_refinement_batched.py::test_batched_refinement_on_cupy_matches_numpy
       - name: Require all selected tests to execute
         run: |
           uv run --no-sync python - <<'PY'
@@ -221,7 +222,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 67, len(cases)
+          assert len(cases) == 70, len(cases)
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")
