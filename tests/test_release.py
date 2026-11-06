@@ -158,15 +158,20 @@ def test_tags_resolve_to_commits_and_detect_a_moved_tag(source):
         release.resolve("v0.1.3", sha)
 
 
-def test_tag_requires_a_release_branch_ancestor(source):
+@pytest.mark.parametrize(
+    "branch, version",
+    [("0.1.x", "0.1.4"), ("0.2.x", "0.2.0"), ("0.2.x", "0.2.0rc0")],
+)
+def test_tag_requires_a_release_branch_ancestor(source, branch, version):
     git, _ = source
     git("commit", "--allow-empty", "-m", "Unreviewed source")
     sha = git("rev-parse", "HEAD")
-    git("tag", "v0.1.4")
-    with pytest.raises(ValueError, match="must belong to main or 0.1.x"):
-        release.resolve("v0.1.4")
-    git("update-ref", "refs/remotes/origin/0.1.x", sha)
-    assert release.resolve("v0.1.4") == ("0.1.4", sha)
+    tag = f"v{version}"
+    git("tag", tag)
+    with pytest.raises(ValueError, match="must belong to main"):
+        release.resolve(tag)
+    git("update-ref", f"refs/remotes/origin/{branch}", sha)
+    assert release.resolve(tag) == (version, sha)
 
 
 @pytest.fixture

@@ -342,8 +342,8 @@ No stored API token is needed. See the [PyPI Trusted Publisher setup
 instructions](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
 
 Pushing a `vX.Y.ZrcN` or `vX.Y.Z` tag starts `publish.yml`. It validates the tag and
-requires its commit to belong to `main` or `0.1.x`, builds the six native wheels
-from one versioned source archive, and tests their clean installation. It then
+requires its commit to belong to `main`, `0.1.x` or `0.2.x`, builds the six native
+wheels from one versioned source archive, and tests their clean installation. It then
 waits at the `testpypi` environment for approval. PyPI publication requires an
 explicit manual dispatch with `target=pypi`. No release tags are created by the
 workflow.
