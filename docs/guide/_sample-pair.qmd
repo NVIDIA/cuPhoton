@@ -1,0 +1,52 @@
+```{python}
+#| code-fold: true
+#| code-summary: "Create the sample pair (NumPy and Astropy only)"
+# Writes sample/reference.fits and sample/target.fits: two synthetic star fields
+# of the same sky on different pixel grids, with different blur and sky level.
+# The target also holds one new source and one star three times brighter.
+# Noise is independent Gaussian noise with variance expected_image / gain;
+# this teaching sample has no read noise, saturation, or detector artifacts.
+from pathlib import Path
+
+import numpy as np
+from astropy.io import fits
+from astropy.wcs import WCS
+
+rng = np.random.default_rng(7)
+
+
+def make_wcs(shape, scale_arcsec, rotation_deg, crpix_shift):
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crval = [150.0, 2.0]
+    w.wcs.crpix = [shape[1] / 2 + crpix_shift[0], shape[0] / 2 + crpix_shift[1]]
+    c, s = np.cos(np.radians(rotation_deg)), np.sin(np.radians(rotation_deg))
+    w.wcs.cd = scale_arcsec / 3600 * np.array([[-c, s], [s, c]])
+    return w
+
+
+def render(shape, wcs, ra, dec, flux, sigma, sky, gain):
+    x, y = wcs.world_to_pixel_values(ra, dec)
+    yy, xx = np.mgrid[: shape[0], : shape[1]]
+    image = np.full(shape, sky, dtype=float)
+    for xi, yi, fi in zip(x, y, flux):
+        image += fi / (2 * np.pi * sigma**2) * np.exp(-((xx - xi) ** 2 + (yy - yi) ** 2) / (2 * sigma**2))
+    return rng.normal(image, np.sqrt(image / gain)).astype(np.float32)
+
+
+ra = 150.0 + rng.uniform(-0.016, 0.016, 150)
+dec = 2.0 + rng.uniform(-0.016, 0.016, 150)
+flux = 10 ** rng.uniform(2.5, 4.5, 150)
+target_flux = np.r_[3 * flux[0], flux[1:], 4000.0]  # star 0 brightens; one new source
+target_ra, target_dec = np.r_[ra, 150.004], np.r_[dec, 2.003]
+
+Path("sample").mkdir(exist_ok=True)
+for name, shape, wcs, sky_coords, fl, sigma, sky, gain in [
+    ("reference", (300, 300), make_wcs((300, 300), 0.26, 0.0, (0, 0)), (ra, dec), flux, 1.2, 100.0, 8.0),
+    ("target", (256, 256), make_wcs((256, 256), 0.27, 3.0, (4.3, -2.7)), (target_ra, target_dec), target_flux, 1.8, 120.0, 2.0),
+]:
+    header = wcs.to_header()
+    header["GAIN"] = (gain, "electrons per data number (DN)")
+    header["PSFSIG"] = (sigma, "Gaussian PSF sigma [px]")
+    fits.writeto(f"sample/{name}.fits", render(shape, wcs, *sky_coords, fl, sigma, sky, gain), header, overwrite=True)
+```

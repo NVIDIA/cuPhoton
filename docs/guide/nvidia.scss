@@ -1,0 +1,141 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*-- scss:defaults --*/
+
+$primary: #76b900;
+$font-family-sans-serif: "NVIDIA Sans", "Helvetica Neue", Arial, sans-serif;
+$font-family-monospace: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+$font-size-base: 1.05rem;
+$headings-font-family: $font-family-sans-serif;
+$headings-font-weight: 700;
+$navbar-bg: #0a0a0a;
+$navbar-fg: #ffffff;
+$navbar-hl: #bff230;
+$code-block-border-left: #76b900;
+
+/*-- scss:rules --*/
+
+.navbar {
+  background: linear-gradient(90deg, #0a0a0a, #141a06);
+  border-bottom: 2px solid #76b900;
+
+  .navbar-brand {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .navbar-logo {
+    max-height: 42px;
+    width: auto;
+  }
+
+  .nav-link,
+  .quarto-color-scheme-toggle,
+  #quarto-search .aa-DetachedSearchButton {
+    color: #ffffff;
+  }
+}
+
+@media (max-width: 575.98px) {
+  #quarto-header .navbar {
+    padding-inline: 0.5rem;
+
+    .navbar-container {
+      padding-inline: 0;
+    }
+
+    .navbar-logo {
+      max-height: 30px;
+    }
+
+    .navbar-brand {
+      margin-right: 0.4rem;
+      font-size: 1.1rem;
+    }
+  }
+}
+
+#quarto-sidebar {
+  .sidebar-title {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .sidebar-item-container .active {
+    font-weight: 700;
+  }
+}
+
+#title-block-header {
+  padding-bottom: 1.2rem;
+  border-bottom: 3px solid #76b900;
+
+  .title {
+    letter-spacing: -0.035em;
+    line-height: 1.1;
+  }
+
+  .subtitle {
+    max-width: 44rem;
+    line-height: 1.5;
+  }
+}
+
+main {
+  line-height: 1.65;
+
+  p,
+  li {
+    overflow-wrap: anywhere;
+  }
+
+  a {
+    text-underline-offset: 0.16em;
+  }
+
+  pre,
+  code {
+    font-size: 0.88em;
+  }
+
+  pre code {
+    font-size: inherit;
+  }
+
+  :not(pre) > code:not(.sourceCode) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .cell-output-display img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .table {
+    font-size: 0.92em;
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  mjx-container[display="true"] {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+}
+
+.nav-footer {
+  border-top: 2px solid #76b900;
+  background: #0a0a0a;
+  color: #e0e0e0;
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}

@@ -1,0 +1,44 @@
+# Welcome {.unnumbered}
+
+cuPhoton provides Python libraries and command-line workflows for GPU-accelerated imaging and signal analysis. Its workflows include image alignment and subtraction, source measurement, candidate classification, reconstruction, X-ray detector analysis, and signal correlation. This guide starts with time-domain astronomy: finding what changed between two images of the sky.
+
+This guide shows you how to use cuPhoton. Start with the first three pages, then go to the guide for your task.
+
+## Get started
+
+1. @sec-install: clone the repository and pick a CPU or GPU profile.
+2. @sec-first-difference: a five-minute tutorial. Make a sample image pair, then align, subtract, detect and measure what changed.
+3. @sec-concepts: the ideas every module shares.
+
+## Find your task
+
+| I want to | Module | Guide |
+|---|---|---|
+| Read FITS images, also straight to GPU memory | Core, xDataReader | @sec-read-fits |
+| Put one image on another's pixel grid, or stack images | xRep | @sec-align |
+| Match two images' blur and subtract them | xPois | @sec-subtract |
+| Measure sources and dipoles in many cutouts at once | xFit | @sec-measure |
+| Score candidates as real or bogus with a neural network | xScan | @sec-classify |
+| Run the shipped end-to-end pipeline on my own images | all of the above | @sec-transient-chain |
+| Propagate uncertainty and check error bars on my data | xPois, xFit, the transient chain | @sec-uncertainty |
+| Reconstruct one sharp image from many frames | xImage | @sec-reconstruct |
+| Analyze time-resolved X-ray detector data | xRay | @sec-xray-traces |
+| Correlate two sampled signals, or radio recordings | xBeam | @sec-correlate |
+| Run work on many GPUs or nodes | Core executors | @sec-scale |
+| Record what a run measured and review it in a dashboard | xLens | @sec-monitor |
+
+@sec-reference lists where to find the full API, CLI and data-format documentation in the repository.
+
+## About this guide
+
+The executable Python examples use small synthetic inputs that each page generates. Run a page's cells in order in the environment described in @sec-install. Commands that use your own files, a GPU, native extensions, or distributed launchers need the prerequisites and inputs described on their page.
+
+The documentation build executes the CPU examples. GPU, native, and distributed command examples are instructions for those environments, rather than results of that build. Printed values and figures demonstrate the APIs; they do not establish performance or scientific accuracy on your data. @sec-uncertainty describes checks for your own noise model and measurements.
+
+This copy was rendered with:
+
+```{python}
+import cuphoton
+
+print(cuphoton.__version__)
+```

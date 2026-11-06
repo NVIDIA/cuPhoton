@@ -17,6 +17,8 @@ provides installation notes for published versions.
 
 ## First run
 
+- [User guide](https://nvidia.github.io/cuPhoton/): installation, a first image
+  difference, and task guides with executable examples.
 - [Getting started](getting-started.md): prerequisites and installation
   profiles.
 - [Packaging](packaging.md): local wheel and Conda builds, source builds,
@@ -76,3 +78,21 @@ provides installation notes for published versions.
 Project-wide policies are in [Contributing](../CONTRIBUTING.md),
 [Governance](../GOVERNANCE.md), [Support](../SUPPORT.md), and
 [Security](../SECURITY.md).
+
+## Building the user guide
+
+The Quarto book in [`guide/`](guide/) renders with Python 3.12 and Quarto
+1.9.36. From the repository root:
+
+```sh
+uv sync --locked --python 3.12 --group docs --extra ximage --extra catalog
+CUPHOTON_REPO="$PWD" QUARTO_PYTHON="$PWD/.venv/bin/python" quarto render docs/guide
+```
+
+The documentation environment uses CPU PyTorch. Open
+`docs/guide/_book/index.html` to read the result. Generated HTML, sample
+outputs, and Quarto's execution cache are ignored by Git.
+
+The `user guide` workflow builds pull requests and publishes successful
+`main` builds to GitHub Pages. It also supports a manual run on `main`.
+Each clean CI build executes the CPU examples from the checked-out source.

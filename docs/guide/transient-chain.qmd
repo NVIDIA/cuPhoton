@@ -1,0 +1,391 @@
+# Run the transient chain {#sec-transient-chain}
+
+The cuPhoton checkout ships an end-to-end pipeline in `examples/transient-chain/`. It takes a target image and its reference from FITS files to a catalog of candidates, each with a position, a flux, their error bars and, with a classifier checkpoint, a real-or-bogus score. Each GPU worker keeps the main image calculations on the device. Astropy reads begin on the host, and WCS work, optional host star finding, diagnostics and final catalog columns can cross the host/device boundary. Use it to run the whole pipeline on your own images instead of calling each module as in @sec-first-difference. The chain needs an NVIDIA GPU. Its configuration, input checks and file loaders run on a CPU, and this page runs them on the sample pair.
+
+The worker runs these steps for each target image:
+
+| Step | Stages in `summary.json` | Module | What it does |
+|---|---|---|---|
+| Read | `read` | Core, xDR | reads the target and reference planes with the reader set in `io.reader` |
+| Align | `template`, `refine` | xRep | reprojects the reference onto the target grid, then corrects the mapping with matched stars |
+| Subtract | `mask`, `xpois` | xPois | masks bad pixels, fits the blur-matching kernel and subtracts |
+| Detect | `detect`, `stamps` | the example | finds residual hotspots and cuts target, kernel-matched reference (including fitted background), and difference stamps around each |
+| Measure | `xfit`, `uncertainty` | xFit | fits a dipole to each candidate, sets quality flags and measures a PSF flux |
+| Error bars | `uq` | xPois, xRep | adds the noise terms that the fit leaves out |
+| Classify | `xscan` | xScan | scores the cutouts, only when you pass a checkpoint |
+
+**You need:**
+
+- A cuPhoton source checkout with any profile (@sec-install). Run the blocks from its root, or set `CUPHOTON_REPO` to its path.
+- For the chain: a Linux host with an NVIDIA GPU and the `gpu` and `catalog` extras, plus `dragon` or `mpi` for those executors.
+- A target and a reference image as FITS files with WCS headers (world coordinate system: the mapping from pixel to sky position). Most of the error budget also needs a variance plane for each.
+- Optional: an xScan checkpoint (@sec-classify).
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic pair. The printed values only demonstrate the API.
+:::
+
+## Make a sample pair
+
+The block below writes `sample/reference.fits` and `sample/target.fits`, the pair of @sec-first-difference.
+
+{{< include _sample-pair.qmd >}}
+
+The correlation term of the chain's error budget requires a locally translation-only mapping. When that term is active, a rotated or rescaled grid gives undefined error bars (@sec-transient-chain-errors). Write a second target that keeps the reference's pixel scale and orientation, with the same two changes:
+
+```{python}
+wcs = make_wcs((256, 256), 0.26, 0.0, (4.3, 6.3))  # the reference's scale, no rotation, shifted by a few pixels
+header = wcs.to_header()
+header["GAIN"], header["PSFSIG"] = 2.0, 1.8
+image = render((256, 256), wcs, target_ra, target_dec, target_flux, 1.8, 120.0, 2.0)
+fits.writeto("sample/chain-target.fits", image, header, overwrite=True)
+```
+
+## Install the example
+
+The example is a separate package inside the checkout. Start with the GPU environment from @sec-install, which includes the catalog dependencies, then install the example from the checkout root. For a distributed executor, include `--extra dragon` or `--extra mpi` in that environment's sync command. A later `uv sync` removes the example, so install it again after each sync.
+
+```bash
+uv pip install -e examples/transient-chain
+```
+
+On a CPU machine you can skip the install. The block below imports the example from the checkout, as `launch.py` does.
+
+```{python}
+import os
+import sys
+from pathlib import Path
+
+REPO = Path(os.environ.get("CUPHOTON_REPO", "."))
+EXAMPLE = REPO / "examples" / "transient-chain"
+sys.path.insert(0, str(EXAMPLE))  # not needed after you install the example
+print(sorted(p.name for p in EXAMPLE.iterdir() if p.suffix in (".py", ".yaml")))
+```
+
+`launch.py` starts a run, and the two YAML files hold every step's parameters.
+
+## Read the shipped configurations
+
+`load_config` reads a configuration file as `launch.py` does. It fills in defaults, rejects unknown keys and checks each value. Load both files and compare the settings you are most likely to change:
+
+```{python}
+import pandas as pd
+from transient_chain.config import load_config
+
+configs = {name: load_config(EXAMPLE / name) for name in ("config.yaml", "config-generic.yaml")}
+keys = ["io.reader", "align.star_finder", "subtract.kernel_height", "subtract.basis_sigmas",
+        "detect.threshold_sigma", "stamps.stamp_size", "xfit.psf_sigma_px", "uq.enabled"]
+rows = {key: [cfg[block][name] for cfg in configs.values()] for key in keys for block, name in [key.split(".")]}
+print(pd.DataFrame.from_dict(rows, orient="index", columns=list(configs)).to_string())
+shipped, generic = configs.values()
+print("blocks that differ:", [block for block in shipped if shipped[block] != generic[block]])
+```
+
+`config.yaml` is set up for one survey's public data release. `config-generic.yaml` reads any FITS pair that its `survey` block describes. After loading, that block is the only difference. Start from `config-generic.yaml` for your own images.
+
+## Describe your files to the survey adapter
+
+The `survey` block picks an adapter, the code that turns one entry of the selections file into image planes. The `generic` adapter reads each plane from a file and an HDU (header/data unit; here, an image inside a FITS file) that you name. The template is the reference image. Print the layout that `config-generic.yaml` ships:
+
+```{python}
+params = generic["survey"]["params"]
+print(pd.DataFrame({"target": params["target"], "template": params["template"]}).to_string(na_rep=""))
+print("identity:", params["identity"], " extra_keys:", params.get("extra_keys"), " mask_policy:", params["mask_policy"])
+```
+
+A key that you leave out takes the adapter's default, not the shipped value. Replacing the whole `params` block, as the next steps do, therefore drops the shipped `identity`, `extra_keys` and `variance_kind`. The defaults are the following.
+
+| Key | Default |
+|---|---|
+| `target.path_key`, `template.path_key` | `image`, `template` |
+| `image_hdu` | null: the first 2D image in the file |
+| `mask_path_key`, `mask_hdu`, `variance_path_key`, `variance_hdu` | null: no mask, no variance plane |
+| `variance_kind` | `variance` (the shipped target block uses `inverse_variance`) |
+| `template.on_target_grid`, `template.pieces` | `false`, `correlated` |
+| `identity` | `exposure_id`, `ccd_id` and `band` read from the entry keys of the same names |
+| `extra_keys` | none |
+| `mask_policy` | `strict`: any nonzero mask value marks a bad pixel |
+
+: Defaults of the generic adapter, from `transient_chain/surveys/generic.py`. {#tbl-tc-adapter-defaults}
+
+| Key | Meaning |
+|---|---|
+| `path_key`, `mask_path_key`, `variance_path_key` | the key of a selections entry that holds the file path |
+| `image_hdu`, `mask_hdu`, `variance_hdu` | an HDU index, an `EXTNAME`, or null for the first 2D image. An HDU without a path key reads the image's own file. A plane with both null is absent |
+| `variance_kind` | `variance`, `inverse_variance` (a weight map) or `none` |
+| `on_target_grid` | `false` reprojects the reference through its WCS. `true` takes a reference already on the target grid |
+| `pieces` | how the variances of overlapping reference pieces combine: `correlated` or `independent` |
+| `identity` | the entry keys that fill the catalog's `exposure_id`, `ccd_id` and `band` |
+| `mask_policy` | the mask bits that mark a bad pixel: `none`, `strict` (any nonzero bit), a survey preset, `{planes: [...]}` or `{bits: N}` |
+
+## Give each image a variance plane
+
+The sample pair has no variance planes. Approximate its Gaussian noise variance from the positive, sky-inclusive image and gain (electrons per data number), as in @sec-first-difference. Real data need their calibrated noise model, including sky and read noise:
+
+```{python}
+import numpy as np
+from astropy.io import fits
+
+for name in ("chain-target", "reference"):
+    image, header = fits.getdata(f"sample/{name}.fits", header=True)
+    fits.writeto(f"sample/{name}_variance.fits", np.clip(image, 0, None) / header["GAIN"], overwrite=True)
+```
+
+## Write a configuration for your files
+
+Copy `config-generic.yaml` and replace its survey parameters. Each sample image sits in its primary HDU, with one variance file and no mask. Keys that you leave out take the adapter's defaults.
+
+```{python}
+import yaml
+
+config = yaml.safe_load((EXAMPLE / "config-generic.yaml").read_text())
+config["survey"]["params"] = {
+    "target": {"path_key": "image", "variance_path_key": "image_variance"},
+    "template": {"path_key": "template", "variance_path_key": "template_variance"},
+    "mask_policy": "none",
+}
+config["align"]["xcorr_window_px"] = 128  # keep the alignment check's central window inside the 256 px target
+config["stamps"]["stamp_size"] = 31  # the default 51 drops candidates within 25 px of the edge of this small image
+Path("sample/chain.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+```
+
+## Write the selections file
+
+The selections file lists one entry per target image. Each entry holds the identity keys (`exposure_id`, `ccd_id` and `band` by default) and the path keys that you named. Each process reads a relative path from the directory it starts in. Write absolute paths.
+
+```{python}
+import json
+
+entry = {"exposure_id": 1, "ccd_id": "S1", "band": "r"}
+for key, name in [("image", "chain-target"), ("image_variance", "chain-target_variance"),
+                  ("template", "reference"), ("template_variance", "reference_variance")]:
+    entry[key] = str(Path(f"sample/{name}.fits").resolve())
+Path("sample/selections.json").write_text(json.dumps({"selections": [entry]}, indent=1))
+```
+
+## Check the inputs
+
+`prepare_workload` runs the input checks that `launch.py` runs before it starts a worker. It loads the configuration, builds the adapter, and checks each entry for missing keys and files. The third argument is the checkpoint directory.
+
+```{python}
+from transient_chain.workload import prepare_workload
+
+spec = prepare_workload(Path("sample/selections.json"), Path("sample/chain.yaml"), None)
+print(spec.manifest_payload["survey"], spec.manifest_payload["reader"], spec.manifest_payload["items"])
+```
+
+Each item is named `<ccd_id>-v<exposure_id>`. `--only S1/1` runs that item alone, and `--only S1` every exposure of detector `S1`.
+
+## Look at what the adapter reads
+
+Run the adapter's loaders with a host reader. `load_target` returns the target planes. `template` returns a provider whose `build` reprojects the reference onto the target grid with xRep, as the worker does on the GPU.
+
+```{python}
+from transient_chain.fitsio import PlaneReader
+from transient_chain.surveys import make_adapter
+
+cfg = load_config("sample/chain.yaml")
+adapter = make_adapter(cfg["survey"])
+reader = PlaneReader("astropy", device=False)  # NumPy arrays; the worker reads to the GPU
+target = adapter.load_target(entry, reader)
+provider = adapter.template(entry, target, reader, mapping_grid_step=cfg["align"]["mapping_grid_step"])
+template, template_bad, coverage = provider.build()
+print(target.shape, template.shape, "variance planes:", target.variance is not None, provider.has_variance)
+```
+
+Check that the template has the target's shape and that both variance planes are there. Without a reference variance plane, the chain leaves out the `corr` error term; the remaining errors then omit that contribution. @fig-transient-chain-inputs shows the two planes.
+
+```{python}
+#| label: fig-transient-chain-inputs
+#| fig-cap: "What the generic adapter hands the chain for the sample pair, read on the CPU. Left: the target. Right: the reference after the template provider reprojected it onto the target grid. Each panel has its own color scale. Apart from the two changes, the same stars sit at the same pixels in both panels. Synthetic data, for demonstration only."
+#| fig-alt: "Two square panels of the same star field on the same pixel grid, the right one sharper."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 2, figsize=(5, 2.6))
+for ax, image, title in [(axes[0], target.image, "Target"), (axes[1], template, "Template on the target grid")]:
+    lo, hi = np.percentile(image, [1, 99.5])
+    ax.imshow(image, origin="lower", cmap="magma", vmin=lo, vmax=hi)
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([]); ax.set_yticks([])
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+## Run the chain on a GPU
+
+On the GPU host, run the blocks above, then start the chain from the root of the checkout. The `local` executor runs the items in turn, in this process, on one GPU. This command needs a GPU and is not run here.
+
+```bash
+python examples/transient-chain/launch.py --executor local \
+    --config sample/chain.yaml --selections sample/selections.json --output-dir out
+```
+
+Without `--checkpoint-dir`, the chain skips the classify step. To score the cutouts, pass the directory that holds an xScan `checkpoint.pt`. To change one value for one run, add `--set block.key=value`, such as `--set io.reader=astropy`.
+
+For many images on several GPUs, pick another executor (@sec-scale):
+
+| Executor | Start it with | Workers |
+|---|---|---|
+| `local` | `python launch.py` | this process, one GPU |
+| `dragon` | the `dragon` launcher | one persistent worker per GPU, placed by DragonHPC |
+| `mpi` | `mpirun` and `cuphoton-openmpi-rank-exec` | one worker per MPI rank, one GPU each |
+
+```bash
+# Dragon, one node, one worker per GPU
+dragon -s -t tcp -o tcp examples/transient-chain/launch.py --executor dragon \
+    --config chain.yaml --selections sel.json --output-dir runs --name probe --max-workers 4
+
+# MPI (Open MPI), one GPU per rank
+CUDA_VISIBLE_DEVICES=0,1,2,3 mpirun -n 4 --map-by slot --bind-to none -x CUDA_VISIBLE_DEVICES \
+    cuphoton-openmpi-rank-exec -- python examples/transient-chain/launch.py --executor mpi \
+    --config chain.yaml --selections sel.json --output-dir runs --name probe-mpi
+```
+
+## Read the catalog and the summary
+
+The `local` run writes `out/items/<item>/catalog.parquet` and `summary.json` for each item, and `out/catalog.parquet` with the rows of all items. Dragon and MPI write the same files under `<output-dir>/<name>/`. Every item writes the same columns with the same types, also when it finds no candidates. Print the column count, the flux columns and the error terms:
+
+```{python}
+from cuphoton.xfit import GaussianDipoleModel
+from transient_chain import catalog
+
+columns = catalog.schema(GaussianDipoleModel((51, 51)).parameter_names)  # the worker's dipole model
+print(len(columns), "columns")
+print([name for name in columns if name.startswith("psf_flux")])
+for term, meaning in catalog.BUDGET_TERMS.items():
+    print(f"{term:7} {meaning}")
+```
+
+The columns you are most likely to use:
+
+| Column | Meaning |
+|---|---|
+| `candidate_id` | `cu-<exposure_id>-<ccd_id>-<index>` |
+| `x`, `y` | rounded hotspot centroid on the target grid, in zero-based pixels |
+| `ra`, `dec` | sky position in degrees, from the target header WCS at (`x`, `y`), rather than the fitted source position |
+| `sign` | sign of the hotspot's peak residual: +1 for a positive excursion, -1 for a negative excursion |
+| `source_x`, `source_y` | position of the measured source in pixels, relative to (`x`, `y`) |
+| `psf_flux` | difference flux at the source, in target image units; normally forced PSF (point spread function) photometry. It requires a variance plane and an independent PSF width. Without that width, an accepted one-lobe fit supplies its fitted flux; other rows are NaN |
+| `fit_model` | `"dipole"`, or `"single"` for a candidate refit with one lobe |
+| `quality_flags` | bits of `cuphoton.xfit.DipoleQualityFlag`, 0 when none is set |
+| `probability`, `decision` | classifier output, NaN and false without a checkpoint |
+
+### Error bars {#sec-transient-chain-errors}
+
+The budget covers `center_x`, `center_y`, `positive_x`, `positive_y` and, when forced photometry runs, `psf_flux`. For each computed quantity `q`, use `<q>_err`: the quadrature sum of `<q>_err_fit` and the available terms above. It is NaN where fewer than half the pixels in a required window are usable, the correlation factor is undefined, or the total uncertainty is non-finite. A center needs both lobe windows to pass.
+
+With the budget enabled, `uq_valid` means that every computed budget quantity has a defined error. It does not certify that every term was available, that the source model is appropriate, or that unavailable PSF photometry has a valid error. If a one-lobe fitted flux stands in for missing forced photometry, it keeps its fit-only error. Inspect `summary.json` for excluded terms and `quality_flags` for fit problems.
+
+`source_x_err` and `source_y_err` normally copy the `positive_*` bars. For a fading candidate identified by the lobe-support flags whose one-lobe refit was not accepted, `source_*` instead selects the dipole's negative lobe and its position errors are NaN: the budget was computed for the positive lobe.
+
+When `corr` is active, its factor is undefined where the grid mapping between the two images is not locally a shift, for example a reference that is rotated or has a different pixel scale. The affected computed quantities get NaN error bars and `uq_valid` is false. `summary.json` counts them under `uq.undefined_factor`, and those on a rotated grid under `uq.rotated_grid`. The example's README explains why. This page's sample target shares the reference's pixel scale and orientation for that reason.
+
+After a GPU run, inspect the rows and read how the item's bars were built. This block needs a finished run and is not run here.
+
+```{python}
+#| eval: false
+table = pd.read_parquet("out/catalog.parquet")
+columns = ["x", "y", "fit_model", "quality_flags", "psf_flux", "psf_flux_err", "source_x_err", "uq_valid"]
+print(table[columns].to_string())
+
+summary = json.loads(Path("out/items/S1-v1/summary.json").read_text())
+print(summary["candidates"], summary["psf_sigma_source"], summary["uq_terms"])
+if summary["uq"] is not None:  # null when there are no candidates
+    print(summary["uq"]["excluded"])  # each term left out, with the reason
+```
+
+A candidate can have a finite flux error and still have `uq_valid=False` because a position error is undefined. Check `quality_flags` and `fit_model` before quoting a position. The one-lobe refit is attempted only when exactly one lobe is unsupported, and its result replaces the dipole position only when the refit covariance is valid. Rows with both lobes unsupported keep their dipole values and need further inspection.
+
+`psf_sigma_source` reports where the PSF width came from. If `uq.excluded` reports `mis: no misalignment model`, inspect `diagnostics.align.refine.misalignment.reason` for the cause. These GPU result fields are described from the implementation; this page's executable examples validate the CPU setup and input loading.
+
+`summary.json` also records the reader each file took (`diagnostics.read.receipts`), the time per stage (`timings_sec`) and the bytes copied to the host (`transfers`).
+
+## Turn the error budget on or off
+
+The `uq` block controls the error budget, which is on by default. The second argument of `load_config` takes the same overrides as `--set`. Compare the shipped block with the one that `uq.enabled=false` gives:
+
+```{python}
+fit_only = load_config(EXAMPLE / "config-generic.yaml", ["uq.enabled=false"])
+print(pd.DataFrame({"shipped": generic["uq"], "uq.enabled=false": fit_only["uq"]}).to_string())
+```
+
+| Key | Effect when `false` (or set) |
+|---|---|
+| `enabled` | every `<q>_err` equals `<q>_err_fit`, the term columns are 0, `uq_valid` is true, no candidate is refit with one lobe, and `summary.json` lists only `fit` under `uq_terms` |
+| `kernel_fit` | leaves out the `kfit` term |
+| `measure_correlation` | skips the per-image measurement of the correlation factor |
+| `single_source_refit` | keeps the dipole fit for candidates with one supported lobe |
+| `sky_astrometry_arcsec`, `sky_astrometry_source` | set together, copy an outside sky-position error into `sky_err_arcsec`, never added to the pixel error bars |
+
+```bash
+python examples/transient-chain/launch.py --executor local --config sample/chain.yaml \
+    --selections sample/selections.json --output-dir out-fit-only --set uq.enabled=false
+```
+
+With `uq.enabled=false`, `uq_valid` is always true; inspect the fit validity flags and finite error values before using those fit-only errors.
+
+A term also needs its inputs. `corr` needs both variance planes, and `kmatch` and `mis` need stars that the align step matched. [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) explains each term.
+
+## Options
+
+Common `launch.py` flags are listed below. Run `python examples/transient-chain/launch.py --help` for the complete list, including worker and rank timeouts.
+
+| Option | Default | Effect |
+|---|---|---|
+| `--executor` | required | `local`, `dragon` or `mpi` |
+| `--selections`, `--output-dir` | required | the selections file and the output folder |
+| `--config` | `config.yaml` next to `launch.py` | the configuration file |
+| `--set BLOCK.KEY=VALUE` | none | overrides one configuration value, repeatable |
+| `--checkpoint-dir` | none | folder with an xScan `checkpoint.pt`. Without it the chain does not classify |
+| `--only CCD[/EXPOSURE]` | every entry | runs only the matching items, repeatable |
+| `--name` | a timestamped id | run id, `dragon` and `mpi` only |
+| `--max-workers` | one per visible GPU | `dragon` only |
+| `--warmup-rounds`, `--measure-rounds` | none | benchmark rounds under `rounds/`, `dragon` and `mpi` only |
+
+Check these configuration keys for new data.
+
+| Option | Default | Effect |
+|---|---|---|
+| `io.reader` | `auto` | `auto` decodes on the GPU with xDR when the file allows it, else with Astropy. `xdr` insists on the GPU decoder. `astropy` decodes on the host |
+| `align.star_finder` | `gpu` | `daofind` finds stars with Photutils on host copies |
+| `xfit.psf_sigma_px` | null | PSF width in pixels. Null measures it from the stars that the align step matched |
+| `stamps.stamp_size` | `51` in both files | odd cutout size, equal to the checkpoint's `image_size`. Candidates closer than half of it to the image edge are dropped |
+| `align.xcorr_window_px` | `512` | side of the central window of the alignment check. It must fit inside the target |
+| `align.star_fwhm_px`, `align.star_threshold_sigma`, `align.match_radius_px` | `4.0`, `20.0`, `8.0` | star finding and matching for the alignment refinement and the PSF measurement. Set them for your seeing, depth and astrometric accuracy |
+| `subtract.basis_sigmas` | `[1.5, 3.0, 6.0]` | the kernel's Gaussian widths in pixels. @sec-subtract shows how to pick them from the two PSF widths |
+| `subtract.template_bad_dilation_px` | `0` | grows the reference's bad-pixel mask by this many pixels. The README's "Known issues" says when to set it |
+| `classify.noise_reference_sigma` | set for the checkpoint the chain was built with | change it with the checkpoint, or set `classify.apply_noise_match: false` |
+
+## Troubleshooting
+
+| Message | Cause and fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'cupy'` | The host has no GPU stack. Install the `gpu` extra on a GPU host |
+| `config block 'uq' has unknown keys ['enable']` | A misspelled key, in the file or in `--set`. The message lists the valid keys |
+| `selection 0 (S1-v1): 1 input file(s) not found` | The chain checks every path before it starts. The message names the first missing file |
+| `selection 0 lacks keys [...]` | The entry misses a key that the adapter needs. The message lists every key the adapter needs |
+| `--only [...] matched nothing` | A token is `CCD` or `CCD/EXPOSURE`, such as `S1` or `S1/1` |
+| `checkpoint image_size ... != stamps.stamp_size ...` | Set `stamps.stamp_size` to the checkpoint's image size |
+
+With `io.reader: xdr`, a RICE-compressed, scaled or quantized image fails before any pixel is read. Use `auto`.
+
+## Next steps
+
+- @sec-first-difference runs the same steps by hand, one module at a time.
+- @sec-classify trains the checkpoint that `--checkpoint-dir` takes.
+- @sec-scale explains the Dragon and MPI executors.
+- @sec-uncertainty explains each error-budget term and how to check the error bars on your own data.
+
+To check a finished catalog against a reference catalog, or its error bars on repeated exposures of one detector, run:
+
+```bash
+python examples/transient-chain/compare_catalogs.py --ours out/catalog.parquet --reference reference.csv --out report.json
+python examples/transient-chain/repeat_catalogs.py out/items/*/catalog.parquet --out repeat.json
+```
+
+The example's [README](https://github.com/NVIDIA/cuPhoton/blob/main/examples/transient-chain/README.md) lists every configuration key and column, the shipped survey adapter's parameters, and how to add an adapter for another survey. [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) explains how to check the error bars. [Distributed execution](https://github.com/NVIDIA/cuPhoton/blob/main/docs/distributed-execution.md) and [Dragon](https://github.com/NVIDIA/cuPhoton/blob/main/docs/dragon.md) cover the executors.
