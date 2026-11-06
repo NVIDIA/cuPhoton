@@ -61,18 +61,21 @@ The build derives the package version from Git tags using `setuptools-scm`:
 | `vX.Y.Z` | `X.Y.Z` |
 
 Use exactly `vX.Y.Z` or `vX.Y.ZrcN`. A checkout after a release tag receives
-a development version. There is no version constant to bump: builds generate
+a development version. Builds generate
 `cuphoton/_version.py`, and package metadata, `cuphoton.__version__`, and
 `cuphoton --version` use that version. A source archive preserves it without
 Git. An unbuilt source checkout reports `0.0.0.dev0` until installed or built;
 a Git-free copy without archive metadata cannot produce a release.
 
-On `main` and topic branches, development builds target the next minor
-release and include a `.devN+gHASH` suffix. Detached development checkouts
-use the same policy. A matching `X.Y.x` maintenance branch instead advances
-the patch or release-candidate version. The existing `0.1.x` branch retains
-its patch-based version configuration, including for detached builds.
-Exact release and release-candidate tags retain their tagged versions.
+On `main` and topic branches, development builds target at least `0.3.0` and
+include a `.devN+gHASH` suffix. Detached development checkouts use the same
+policy. The build policy in `setup.py` sets this minimum while the latest
+reachable tag is still from an earlier release; later tags advance development
+to the next minor release as usual. A matching `X.Y.x` maintenance branch
+instead advances the patch or release-candidate version. The `0.1.x` and
+`0.2.x` branches retain their own version policies; the main development
+minimum is not backported. Exact release and release-candidate tags retain
+their tagged versions.
 
 Release CI explicitly selects the triggering tag's version. This also works
 when an RC tag and a final tag refer to the same commit. A final release needs
