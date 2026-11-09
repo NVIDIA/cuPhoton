@@ -6,7 +6,7 @@ name: ci
 
 on:
   push:
-    branches: [main, 0.1.x, "pull-request/[0-9]+"]
+    branches: [main, 0.1.x, 0.2.x, "pull-request/[0-9]+"]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
 

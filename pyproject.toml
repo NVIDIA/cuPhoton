@@ -133,8 +133,7 @@ script-files = ["scripts/cuphoton-openmpi-rank-exec"]
 
 [tool.setuptools_scm]
 version_file = "src/cuphoton/_version.py"
-version_scheme = "semver-pep440-release-branch"
-# The version scheme also parses maintenance branch names with this pattern.
+# setup.py supplies the development version policy, including maintenance branches.
 tag_regex = '^(?P<version>v[0-9]+\.[0-9]+\.[0-9]+(?:rc[0-9]+)?|[0-9]+\.[0-9]+\.x)$'
 git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"]
 version_file_template = '''

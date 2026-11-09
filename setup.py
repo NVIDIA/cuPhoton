@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import sys
 import sysconfig
 from pathlib import Path
@@ -15,6 +16,18 @@ from setuptools import setup
 ROOT = Path(__file__).resolve().parent
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _development_version(version):
+    from packaging.version import Version
+    from setuptools_scm.version import release_branch_semver_version
+
+    inferred = release_branch_semver_version(version)
+    branch = (version.branch or "").rsplit("/", 1)[-1]
+    if version.exact or re.fullmatch(r"[0-9]+\.[0-9]+\.x", branch):
+        return inferred
+    minimum = version.format_with("0.3.0.dev{distance}")
+    return str(max(Version(inferred), Version(minimum)))
 
 
 def _load_build_helpers(component):
@@ -91,4 +104,8 @@ if build_xfit or build_imaging:
         )
         extensions.append(imaging)
 
-setup(ext_modules=extensions, cmdclass=commands)
+setup(
+    use_scm_version={"version_scheme": _development_version},
+    ext_modules=extensions,
+    cmdclass=commands,
+)

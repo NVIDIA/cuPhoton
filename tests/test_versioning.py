@@ -59,7 +59,7 @@ def source(tmp_path: Path) -> Path:
         for key, value in config["tool"]["setuptools_scm"].items()
     )
     (source / "pyproject.toml").write_text("\n".join(lines) + "\n")
-    for name in (".gitignore", "MANIFEST.in"):
+    for name in (".gitignore", "MANIFEST.in", "setup.py"):
         shutil.copyfile(ROOT / name, source / name)
     for name in (
         "AGENTS.md",
@@ -95,6 +95,8 @@ def _build(
         for key, value in os.environ.items()
         if not key.startswith("SETUPTOOLS_SCM_")
     }
+    for component in ("XDR", "XFIT", "XRAY", "IMAGING"):
+        env[f"CUPHOTON_{component}_BUILD_EXT"] = "0"
     if override is not None:
         env["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CUPHOTON"] = override
     _run(
@@ -136,7 +138,9 @@ def _wheel_version(wheel: Path, output: Path) -> str:
     return version
 
 
-@pytest.mark.parametrize("version", ["0.1.3rc0", "0.1.3"])
+@pytest.mark.parametrize(
+    "version", ["0.1.3rc0", "0.1.3", "0.2.0rc0", "0.2.0"]
+)
 def test_tag_version_survives_gitless_sdist(
     source: Path, tmp_path: Path, version: str
 ) -> None:
@@ -179,21 +183,26 @@ def test_event_version_selects_rc_or_final_on_same_commit(
 
 
 @pytest.mark.parametrize(
-    ("branch", "release"),
+    ("tag", "branch", "release"),
     [
-        ("main", (0, 2, 0)),
-        ("codex/versioning", (0, 2, 0)),
-        (None, (0, 2, 0)),
-        ("0.1.x", (0, 1, 4)),
+        ("v0.1.3", "main", (0, 3, 0)),
+        ("v0.1.3", "codex/versioning", (0, 3, 0)),
+        ("v0.1.3", None, (0, 3, 0)),
+        ("v0.1.3", "0.1.x", (0, 1, 4)),
+        ("v0.1.3", "0.2.x", (0, 2, 0)),
+        ("v0.2.0", "main", (0, 3, 0)),
+        ("v0.2.0", "0.2.x", (0, 2, 1)),
+        ("v0.3.0", "main", (0, 4, 0)),
     ],
 )
 def test_untagged_descendant_is_next_development_version(
     source: Path,
     tmp_path: Path,
+    tag: str,
     branch: str | None,
     release: tuple[int, int, int],
 ) -> None:
-    _run("git", "tag", "v0.1.3", cwd=source)
+    _run("git", "tag", tag, cwd=source)
     if branch is None:
         _run("git", "checkout", "--detach", cwd=source)
     elif branch != "main":
@@ -206,6 +215,26 @@ def test_untagged_descendant_is_next_development_version(
     assert version.release == release
     assert version.dev == 1
     assert version.local is not None
+
+
+def test_development_version_survives_gitless_sdist(
+    source: Path, tmp_path: Path
+) -> None:
+    _run("git", "tag", "v0.1.3", cwd=source)
+    _run("git", "commit", "--allow-empty", "-m", "Development", cwd=source)
+    sdist = _build(source, tmp_path / "sdist", "sdist")
+    unpacked = tmp_path / "unpacked"
+    with tarfile.open(sdist) as archive:
+        archive.extractall(unpacked, filter="data")
+    (gitless_source,) = unpacked.iterdir()
+    assert not (gitless_source / ".git").exists()
+    metadata = Parser().parsestr((gitless_source / "PKG-INFO").read_text())
+    original = metadata["Version"]
+    assert Version(original).release == (0, 3, 0)
+    assert Version(original).dev == 1
+    assert Version(original).local is not None
+    wheel = _build(gitless_source, tmp_path / "wheel", "wheel")
+    assert _wheel_version(wheel, tmp_path / "installed") == original
 
 
 @pytest.mark.parametrize("tag", ["v0.1.3beta0", "v0.1.x"])

@@ -40,7 +40,11 @@ def resolve(tag, expected_sha=""):
     version = release_version(tag)
     sha = git("rev-parse", f"refs/tags/{tag}^{{commit}}")
     require(not expected_sha or sha == expected_sha, "Release tag moved")
-    branches = ("refs/remotes/origin/main", "refs/remotes/origin/0.1.x")
+    branches = (
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/0.1.x",
+        "refs/remotes/origin/0.2.x",
+    )
     require(
         any(
             subprocess.run(
@@ -51,7 +55,7 @@ def resolve(tag, expected_sha=""):
             == 0
             for branch in branches
         ),
-        "Release commit must belong to main or 0.1.x",
+        "Release commit must belong to main, 0.1.x or 0.2.x",
     )
     return version, sha
 
