@@ -1,0 +1,103 @@
+# Reference {#sec-reference}
+
+This guide covers common tasks. The cuPhoton repository holds the full reference: each module's options, data contracts and limits, the command-line index and troubleshooting. This page lists where each part lives. The links point to the repository's `main` branch, which can be newer than this guide.
+
+## Modules
+
+The table lists each module's Python package, command group and reference page:
+
+| Module | Python package | CLI group | Repository reference | Guide page |
+|---|---|---|---|---|
+| Core | `cuphoton.core` | none, Core supplies the `cuphoton` root | [Core](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/core.md) | @sec-concepts, @sec-scale |
+| xDataReader (xDR) | `cuphoton.xdr` | `xdr` | [xDataReader](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md) | @sec-read-fits |
+| xRep | `cuphoton.xrep` | `xrep` | [xRep](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xrep.md) | @sec-align |
+| xImage | `cuphoton.ximage` | `ximage` | [xImage](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/ximage.md) | @sec-reconstruct |
+| xPois | `cuphoton.xpois` | `xpois` | [xPois](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md) | @sec-subtract |
+| xFit | `cuphoton.xfit` | `xfit` | [xFit](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md) | @sec-measure |
+| xScan | `cuphoton.xscan` | `xscan` | [xScan](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md) | @sec-classify |
+| xRay | `cuphoton.xray` | `xray` | [xRay](https://github.com/NVIDIA/cuPhoton/blob/main/docs/xray/README.md) | @sec-xray-traces |
+| xBeam | `cuphoton.xbeam` | `xbeam` | [xBeam](https://github.com/NVIDIA/cuPhoton/blob/main/docs/xbeam/README.md) | @sec-correlate |
+| xLens | `cuphoton.xlens` | `xlens` | [xLens](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xlens.md) | @sec-monitor |
+
+: Modules and where their documentation lives. {#tbl-reference-modules}
+
+Three topics span several modules:
+
+| Topic | Where | Repository reference | Guide page |
+|---|---|---|---|
+| Transient chain, from FITS files to a candidate catalog | `examples/transient-chain/` | [README](https://github.com/NVIDIA/cuPhoton/blob/main/examples/transient-chain/README.md) | @sec-transient-chain |
+| Error bars of transient catalogs | the transient chain | [Uncertainty quantification](https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md) | @sec-uncertainty |
+| Dragon and MPI execution | `--executor`, `cuphoton.core.executors` | [Distributed launch guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/distributed-execution.md) | @sec-scale |
+
+: Topics across modules. {#tbl-reference-topics}
+
+## Command line
+
+`cuphoton --help` lists the command groups, one per module:
+
+```{python}
+#| echo: false
+import subprocess
+import sys
+from pathlib import Path
+
+cli = Path(sys.executable).with_name("cuphoton")
+print(subprocess.run([str(cli), "--help"], capture_output=True, text=True, check=True).stdout.strip())
+```
+
+`cuphoton <group> --help` lists a group's commands, and `cuphoton <group> help <command>` prints one command's options with their defaults. The [command-line index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/cli.md) describes every group. @sec-concepts explains the flags that the groups share.
+
+## Python API
+
+Each function's docstring documents its arguments, defaults and return fields. Print a signature with `inspect`, or the whole docstring with `help`:
+
+```{python}
+import inspect
+from cuphoton.xrep import reproject_masked_array
+
+print(inspect.signature(reproject_masked_array))
+```
+
+Each package lists its public names in `__all__`:
+
+```{python}
+import importlib
+
+print("package          public names")
+for name in ("core", "xdr", "xrep", "ximage", "xpois", "xfit", "xscan", "xray", "xbeam", "xlens"):
+    package = importlib.import_module(f"cuphoton.{name}")
+    print(f"cuphoton.{name:7s} {len(package.__all__):12d}")
+```
+
+xScan and xRay export only their version at the top level. They are command-line tools first. Their reference pages show the submodules to import from, such as `cuphoton.xscan.fits_inference` and `cuphoton.xray.detector_artifacts`. Core's shared code also lives in submodules:
+
+- `cuphoton.core.fits_io`: the FITS reader and its receipts.
+- `cuphoton.core.arrays`: helpers that serve NumPy and CuPy arrays with one code path.
+- `cuphoton.core.cli`: the command-line framework.
+- `cuphoton.core.executors`: Dragon and MPI execution.
+
+## Documents that span modules
+
+- [Documentation index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/README.md): entry points to the repository's guides and references.
+- [Getting started](https://github.com/NVIDIA/cuPhoton/blob/main/docs/getting-started.md): install profiles and platform notes.
+- [Quickstarts](https://github.com/NVIDIA/cuPhoton/blob/main/docs/quickstarts.md): synthetic smoke runs for xFit, xPois, xScan, xRep and xRay, plus a separate xBeam example.
+- [Command-line index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/cli.md): each group's commands and the options they share.
+- [Data and artifact contracts](https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md): array shapes, axis order, mask rules and the files each run writes.
+- [Architecture](https://github.com/NVIDIA/cuPhoton/blob/main/docs/architecture.md): how the modules fit together, and the order `auto` tries backends in.
+- [Troubleshooting](https://github.com/NVIDIA/cuPhoton/blob/main/docs/troubleshooting.md): environment, CUDA, FITS reader and input errors.
+- [Glossary](https://github.com/NVIDIA/cuPhoton/blob/main/docs/glossary.md): cuPhoton and astronomy terms.
+- [Changelog](https://github.com/NVIDIA/cuPhoton/blob/main/CHANGELOG.md): changes and migration notes by release.
+
+## Getting help
+
+cuPhoton has best-effort community support through its GitHub repository. Its [support policy](https://github.com/NVIDIA/cuPhoton/blob/main/SUPPORT.md) gives the details.
+
+1. Search the [GitHub issues](https://github.com/NVIDIA/cuPhoton/issues) for your problem.
+2. If no issue matches, open a bug report with a minimal reproducer. Include the following:
+   - the output of `cuphoton --version`
+   - the cuPhoton commit, Python version, operating system and installed extras
+   - the command line and the shapes of your inputs
+   - for a GPU problem, the GPU model, driver, CUDA runtime, the backend from `summary.json`, and whether the CPU profile works
+3. Open a feature request for a new workflow or data contract, or a pull request for a concrete fix.
+
+Remove credentials, private paths and proprietary data from what you post. Do not report security problems on GitHub. Follow the [security policy](https://github.com/NVIDIA/cuPhoton/blob/main/SECURITY.md) instead.

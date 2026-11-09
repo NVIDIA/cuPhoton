@@ -109,6 +109,12 @@ Issues = "https://github.com/NVIDIA/cuPhoton/issues"
 cuphoton = "cuphoton.core.cli:main"
 
 [dependency-groups]
+docs = [
+  "ipykernel>=6,<8",
+  "nbclient>=0.10,<1",
+  "matplotlib>=3.10,<4",
+  "torch>=2.13,<3",
+]
 native-build = [
   "setuptools>=84.2.1",
   "setuptools-scm==10.3.4",
@@ -154,6 +160,16 @@ include = ["cuphoton*"]
 managed = true
 package = true
 environments = ["sys_platform == 'linux'"]
+# Keep the guide's CPU Torch installation separate from the GPU profile.
+conflicts = [[{ group = "docs" }, { extra = "gpu" }]]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", group = "docs" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff]
 line-length = 78

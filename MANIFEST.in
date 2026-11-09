@@ -27,6 +27,7 @@ include uv.lock
 include requirements-dragon.txt
 include .pre-commit-config.yaml
 recursive-include docs *.md
+prune docs/guide
 recursive-include examples *.py *.yaml
 recursive-include examples/distributed-pipeline *.json *.txt *.license
 recursive-include tests *.py
