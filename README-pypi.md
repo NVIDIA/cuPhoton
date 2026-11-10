@@ -19,9 +19,11 @@ python -m pip install 'cuphoton[ximage]==0.2.0'
 ```
 
 Linux wheels support CPython 3.12–3.14 on x86-64 and ARM64. GPU execution
-requires a CUDA 13-compatible NVIDIA driver. See the
-[installation guide](https://nvidia.github.io/cuPhoton/install.html) for
-environment setup and optional dependencies.
+requires a CUDA 13-compatible NVIDIA driver. Release wheels include the native
+xDR, xFit, imaging and structured xRay extensions.
+
+For development from a source checkout, see the
+[source installation guide](https://nvidia.github.io/cuPhoton/install.html).
 
 ## Documentation and source
 
