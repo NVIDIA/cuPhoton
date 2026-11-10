@@ -28,6 +28,9 @@ the data flow and the adapters needed between stages.
 
 ## Start here
 
+The [cuPhoton User Guide](https://nvidia.github.io/cuPhoton/) covers
+installation and task workflows with executable examples.
+
 These instructions follow the development branch. For a published version,
 select a tag from [Releases](https://github.com/NVIDIA/cuPhoton/releases)
 and follow its installation notes. See the [changelog](CHANGELOG.md) for

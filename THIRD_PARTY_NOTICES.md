@@ -90,6 +90,7 @@ more than one license.
 | `base` | `PyYAML>=6.0` | `6.0.3` | `MIT` | [PyYAML](https://github.com/yaml/pyyaml) | `uv / PyPI` |
 | `base` | `scipy>=1.13` | `1.18.0` | `BSD-3-Clause`; distributions include separately licensed components | [SciPy](https://github.com/scipy/scipy) | `uv / PyPI` |
 | `torch` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
+| `torch`, `gpu`, `dev`, `docs` | `filelock>=4.2.1` | `4.2.10` | `MIT` | [filelock](https://github.com/tox-dev/filelock) | `uv / PyPI; shared dependency of PyTorch and virtualenv` |
 | `viz` | `bokeh>=3.9` | `3.9.1` | `BSD-3-Clause` | [Bokeh](https://github.com/bokeh/bokeh) | `uv / PyPI` |
 | `viz` | `pillow>=13.0.0` | `13.0.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
 | `viz` | `tornado>=6.6` | `6.6` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
@@ -97,7 +98,7 @@ more than one license.
 | `io`, `gpu` | `cuda-bindings>=13,<14` | `13.3.1` | `LicenseRef-NVIDIA-SOFTWARE-LICENSE` | [CUDA Python](https://github.com/NVIDIA/cuda-python) | `uv / PyPI` |
 | `io`, `gpu` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
 | `io`, `gpu` | `kvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
-| `io`, `gpu` | `libkvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI` |
+| `io`, `gpu` | `libkvikio-cu13==26.6.*` | `26.6.0` | `Apache-2.0`; its bundled BS::thread_pool header is MIT-licensed | [KvikIO](https://github.com/rapidsai/kvikio) | `uv / PyPI; shared library installed separately; header code compiled into xDR` |
 | `io`, `gpu` | `nvidia-libnvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
 | `io`, `gpu` | `nvidia-nvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
 | `wheel build` | `pybind11==3.0.4` | `build recipe` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
@@ -193,7 +194,9 @@ cuPhoton wheels.
 | --- | --- | --- | --- | --- | --- |
 | `CFITSIO` | The local wheel recipe bundles `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
 | `pybind11` | Native wheel builds use `3.0.4`. | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11/tree/v3.0.4) | C++ bindings for the xDR extension. | Header code is compiled into the native extension; its copyright and license notice follow below. No separate pybind11 runtime package is bundled. |
-| `CCCL` (CUB, Thrust, libcu++) | `3.1.2` headers from the pinned `cupy-cuda13x==14.1.1` build wheel. | `BSD-3-Clause` (CUB), `Apache-2.0` (Thrust), `Apache-2.0 WITH LLVM-exception` (libcu++) | [CCCL 3.1.2](https://github.com/NVIDIA/cccl/tree/v3.1.2) | CUB block reductions and supporting Thrust/libcu++ headers for native xFit row norms. | Header code is compiled into the xFit extension. The applicable notices follow below; no CCCL source tree or runtime library is bundled. |
+| `KvikIO` | `26.6.0` headers from the pinned `libkvikio-cu13` build wheel. | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | File I/O and thread-pool wrappers for native xDR. | Header code is compiled into the xDR extension. The KvikIO shared library is installed separately; the included BS::thread_pool header has the MIT notice below. |
+| `BS::thread_pool` | `4.1.0`, included in the pinned KvikIO headers. | `MIT` | [BS::thread_pool 4.1.0](https://github.com/bshoshany/thread-pool/tree/v4.1.0) | Worker scheduling used by KvikIO in native xDR. | Header code is compiled into the xDR extension; its copyright and full license notice follow below. |
+| `CCCL` (CUB, Thrust, libcu++) | `3.1.2` headers from the pinned `cupy-cuda13x==14.1.1` build wheel. | `BSD-3-Clause` (CUB), `Apache-2.0` (Thrust), `Apache-2.0 WITH LLVM-exception` (libcu++) | [CCCL 3.1.2](https://github.com/NVIDIA/cccl/tree/v3.1.2) | CUB reductions, selection and sorting, with supporting Thrust/libcu++ headers, for native xFit and core imaging. | Header code is compiled into the xFit and core imaging extensions. The applicable notices follow below; no CCCL source tree or runtime library is bundled. |
 
 The complete upstream CCCL 3.1.2 license is also included as
 [`licenses/CCCL-3.1.2.txt`](licenses/CCCL-3.1.2.txt) in source, wheel and
@@ -239,11 +242,41 @@ Please also refer to the file .github/CONTRIBUTING.md, which clarifies licensing
 external contributions to this project including patches, pull requests, etc.
 ```
 
+### BS::thread_pool copyright and license notice
+
+KvikIO supplies the `BS_thread_pool.hpp` 4.1.0 header, whose code
+is compiled into the native xDR extension. The following notice is reproduced
+from the [BS::thread_pool 4.1.0 LICENSE.txt](https://github.com/bshoshany/thread-pool/blob/v4.1.0/LICENSE.txt).
+
+```text
+MIT License
+
+Copyright (c) 2024 Barak Shoshany
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### CCCL compiled header notices
 
-Native xFit compiles CUB block reductions from the CCCL 3.1.2 headers in
-`cupy-cuda13x==14.1.1`. These include supporting Thrust configuration and
-`any_assign` headers and libcu++ headers. The CUB notice and LLVM exception
+Native xFit and core imaging compile CUB reductions, selection and sorting
+from the CCCL 3.1.2 headers in `cupy-cuda13x==14.1.1`, with supporting
+Thrust and libcu++ headers. The CUB notice and LLVM exception
 below are reproduced from that wheel's `cupy/_core/include/cupy/_cccl/LICENSE`,
 also available in the [CCCL 3.1.2 LICENSE](https://github.com/NVIDIA/cccl/blob/v3.1.2/LICENSE).
 The complete Apache License 2.0 text applicable to Thrust and libcu++ is
@@ -369,12 +402,12 @@ For a CPU-only development environment, replace `gpu` with `torch`.
 
 `make build` creates a source distribution containing cuPhoton's extension
 sources and the pinned native build recipe. `make wheels` builds the native
-Linux wheels from that archive. Each wheel includes the xDR and xFit extensions
-and a privately renamed CFITSIO shared library. The xDR extension contains
-compiled pybind11 binding code, and the xFit extension contains compiled CCCL
-header code. The source archive and wheels include `LICENSE` and this notice
-file, including the CFITSIO, pybind11, CUB, and LLVM
-exception notices above.
+Linux wheels from that archive. Each wheel includes native extensions and a
+privately renamed CFITSIO shared library. The xDR extension contains compiled
+pybind11, KvikIO and BS::thread_pool header code; the xFit and core imaging
+extensions contain compiled CCCL header code. The source archive and wheels
+include `LICENSE` and this notice file, including the CFITSIO, pybind11,
+BS::thread_pool, CUB, and LLVM exception notices above.
 
 DragonHPC, `mpi4py`, MPI, and CUDA runtime libraries are installed separately.
 A development source build links against the available CFITSIO and CUDA

@@ -1,0 +1,293 @@
+# Concepts {#sec-concepts}
+
+cuPhoton's imaging functions share conventions for arrays, backends, variance planes, masks and execution records. The details differ by call, and the command-line tools share one framework. This page explains the conventions and the differences to check.
+
+**You need:** cuPhoton installed with the CPU profile, which includes PyTorch (@sec-install). The examples make their own inputs.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic pair. The printed values only demonstrate the API.
+:::
+
+Some examples read the sample pair from @sec-first-difference. The block below writes it to `sample/`.
+
+{{< include _sample-pair.qmd >}}
+
+## Arrays in, arrays out
+
+The low-level imaging calls in this guide take arrays and return arrays or small result objects. NumPy arrays serve the CPU paths. Many GPU paths accept CuPy arrays; xScan's model and tensor APIs use PyTorch tensors. File-based workflows also accept paths and configurations.
+
+The host-result APIs, including `reproject_masked_array` and `fit_dipoles`, return NumPy arrays whichever backend ran. Other calls follow their input: xFit's `fit_single_sources` returns NumPy arrays for NumPy input and CuPy arrays for CuPy input. Its array helper recognizes CuPy and otherwise tries NumPy conversion. A CPU PyTorch tensor that supports that conversion therefore works, and the result comes back as NumPy:
+
+```{python}
+import numpy as np
+import torch
+from cuphoton.xfit import fit_single_sources
+
+# One 15 x 15 cutout of a point source with unit noise, as a batch of one
+yy, xx = np.mgrid[-7:8, -7:8]
+source = 400 / (2 * np.pi * 1.5**2) * np.exp(-(xx**2 + yy**2) / (2 * 1.5**2))
+stamps = (source + np.random.default_rng(1).normal(0, 1, (15, 15)))[None]
+variance = np.ones_like(stamps)
+start = np.zeros((1, 2))  # starting (x, y) offset from the cutout center
+
+for images in (stamps, torch.from_numpy(stamps)):
+    fit = fit_single_sources(images, variance, start, psf_sigma=1.5)
+    print(f"{type(images).__module__}.{type(images).__name__} in, "
+          f"{type(fit.flux).__module__}.{type(fit.flux).__name__} out, flux {fit.flux[0]:.1f}")
+```
+
+Both calls give the same NumPy result. A CUDA tensor, or a CPU tensor requiring gradients, cannot be converted this way. For these NumPy/CuPy APIs, pass GPU data as CuPy arrays instead. xScan and xImage run on PyTorch internally, and their workflows read files and configurations (@sec-classify, @sec-reconstruct).
+
+## Backends
+
+A backend is the library that does the arithmetic. A module with more than one backend takes a `backend` argument in Python and a `--backend` flag on the command line. The names are the same across modules, with one exception. The CPU path is `cpu` in some modules and `numpy` in others.
+
+| Name | Runs on | Modules |
+|---|---|---|
+| `cpu` or `numpy` | the CPU, through NumPy | `cpu` in xRep and xPois, `numpy` in xFit and xBeam |
+| `cupy` | CuPy on an NVIDIA GPU | xRep, xPois, xFit, xBeam |
+| `torch` | PyTorch, on the CPU or a GPU | xRep |
+| `cutile` | CUDA kernels written in cuTile, from the `cutile` extra | xPois, xFit |
+| `native` | precompiled CUDA kernels from cuPhoton's native extension (@sec-install) | xRep, xPois, xFit |
+
+: Backend names. {#tbl-concepts-backends}
+
+The default is usually `auto`. It tries the backends in a fixed order and takes the first one that is installed and can reach a GPU. It ends on the CPU. A script left at `auto` therefore also runs on a laptop.
+
+| Module | `auto` tries, in order |
+|---|---|
+| xRep | `cupy`, `torch` on a CUDA GPU, `cpu` |
+| xPois | `cupy`, `cpu` |
+| xFit, `fit_dipoles` | `cupy`, `numpy` |
+| xScan, xImage | a CUDA device, then the CPU (a `device` setting) |
+| xBeam | no `auto`. The default is `numpy`. |
+
+: What `auto` resolves to. {#tbl-concepts-auto}
+
+`auto` never selects `cutile` or `native`. Request them by name. The `native` kernels are compiled when you build cuPhoton. CuPy compiles nothing for them at run time. An explicit name fails when it cannot run, instead of falling back. On this CPU host:
+
+```{python}
+from cuphoton.xrep import BBox, ReprojectionSpec, reproject_masked_array
+
+image = np.random.default_rng(2).normal(100, 1, (64, 64)).astype(np.float32)
+no_flags = np.zeros(image.shape, dtype=bool)
+shift = ReprojectionSpec(mapping=lambda xy: xy + 0.5, output_bbox=BBox(0, 0, 64, 64))  # half a pixel
+
+for backend in ("auto", "cpu", "torch", "cupy"):
+    try:
+        result = reproject_masked_array(image, np.ones_like(image), no_flags, shift, backend=backend)
+        print(f"backend={backend!r}: ran {result.backend}")
+    except RuntimeError as error:
+        print(f"backend={backend!r}: {error}")
+```
+
+`auto` resolved to `cpu`. It skipped `torch` because xRep's `auto` uses PyTorch only on a CUDA GPU. An explicit `torch` still runs on the CPU. The explicit `cupy` request failed and named the extra to install. The [execution policy](https://github.com/NVIDIA/cuPhoton/blob/main/docs/architecture.md#execution-policy) lists the order for every module.
+
+## Dtype and device
+
+The precision rules are the following:
+
+- The FITS reader returns decoded image values in native byte order. FITS is the standard astronomy file format. Unscaled integer masks stay integers; FITS scaling or blank-value handling can change a stored integer image to floating point.
+- xRep and xPois compute in `float64` and return `float64`.
+- xFit's `fit_dipoles` and `fit_single_sources` preserve float32 or float64 image precision; other input dtypes become float64. `fit_single_sources` also accepts `compute_dtype="float32"` or `"float64"`. `forced_psf_photometry` computes in float64.
+- xImage runs in `float64` by default. Its configuration's `dtype` can select `float32`.
+
+```{python}
+from cuphoton.core.fits_io import read_fits_images
+
+read = read_fits_images("sample/target.fits", [0])
+target, target_header = read.arrays[0], read.infos[0].header
+print("FITS reader:", target.dtype)
+print("xRep, float32 in:", result.image.dtype)
+for compute_dtype in ("input", "float64"):
+    fit32 = fit_single_sources(stamps.astype(np.float32), variance.astype(np.float32), start,
+                               psf_sigma=1.5, compute_dtype=compute_dtype)
+    print(f"xFit, float32 in, compute_dtype={compute_dtype!r}:", fit32.flux.dtype)
+```
+
+Results that are NumPy arrays live in host memory, even when a GPU backend ran. Functions whose names end in `_device` keep their results in GPU memory as CuPy arrays. They are `reproject_array_device` in xRep, `solve_constant_kernel_device` in xPois and `fit_dipoles_device` in xFit. The xPois and xFit versions copy NumPy inputs to the active GPU. CuPy inputs must already be on that GPU. The FITS reader with `device=True` returns CuPy arrays. On a host with the `gpu` profile:
+
+```{python}
+#| eval: false
+from cuphoton.core.arrays import array_module, to_host
+
+read = read_fits_images("sample/target.fits", [0], device=True)
+on_gpu = read.arrays[0]
+print(array_module(on_gpu).__name__, read.metadata()["location"])  # cupy device
+on_host = to_host(on_gpu)  # a NumPy copy
+```
+
+## Variance and masks
+
+An image travels with two more planes of the same shape. The variance plane holds each pixel's expected squared error, in squared image units. The mask says which pixels to use.
+
+Pass a variance plane when you have a noise model. In weighted least squares it sets the squared-residual weight, one over the variance, and the scale of the reported errors. Without it, xPois's kernel solver uses unit weights and xFit's `fit_dipoles` scales its covariance by the reduced chi-square. Some detection and quality checks estimate a robust noise scale from the pixels. The errors from xFit's `fit_single_sources` follow the variance you pass:
+
+```{python}
+for scale in (1.0, 4.0):
+    fit = fit_single_sources(stamps, scale * variance, start, psf_sigma=1.5)
+    print(f"variance {scale:.0f}: flux {fit.flux[0]:.1f} +- {fit.flux_error[0]:.2f}")
+```
+
+The flux is the same and the error doubles. A variance that is too small gives error bars that are too small. @sec-first-difference builds one from the image and the gain.
+
+Masks come in two kinds:
+
+- An instrument mask is an integer image. Each bit is one flag, such as saturated. Nonzero means flagged.
+- A fit mask is boolean. `True` means use the pixel.
+
+xRep resamples a bit mask together with the image and its variance. Each output pixel gets the bitwise OR of the input flags that fed it. Output pixels outside the input get the flag `1` by default, and NaN image and variance. Here a shift of half a pixel in x moves one flagged pixel:
+
+```{python}
+flat = np.full((8, 8), 10.0)
+flags = np.zeros((8, 8), dtype=np.uint8)
+flags[4, 4] = 4  # one flagged pixel, bit 2 set
+shift_x = ReprojectionSpec(mapping=lambda xy: xy + [0.5, 0.0], output_bbox=BBox(0, 0, 8, 8),
+                           interpolation="bilinear")
+moved = reproject_masked_array(flat, np.ones((8, 8)), flags, shift_x, backend="cpu")
+print(moved.mask)
+print("variance, row 0:", moved.variance[0])
+use = moved.mask == 0  # the fit mask
+print(int(use.sum()), "of", use.size, "pixels usable")
+```
+
+The flag now covers both pixels that sampled the flagged one. The last column fell outside the input. xRep propagates the variance with the squares of the interpolation weights. Each output here sums two inputs with weight 0.5, which gives 0.5² + 0.5² = 0.5. This is a diagonal approximation. It leaves out the correlation that interpolation adds between neighbors.
+
+Later steps also check pixel validity. xPois leaves out a pixel whose target or variance is not finite, and every pixel whose kernel footprint touches a non-finite reference pixel. Those pixels come back as NaN in `matched` and `residual`, like the edge band the kernel cannot reach. xFit's `fit_single_sources` and `forced_psf_photometry` automatically exclude non-finite images and non-finite or nonpositive variances, in addition to the supplied mask. `fit_dipoles` instead requires you to mask those pixels explicitly and raises an error if an included pixel is invalid.
+
+## Pixel and sky coordinates
+
+Arrays index as `image[y, x]`, row first. Shapes read `(height, width)`. Many cuPhoton calls that take a position use the same `(y, x)` order. Others take `(x, y)`. Check the order before you pass a position:
+
+| Call | Order |
+|---|---|
+| Image arrays, NumPy indexing | `(y, x)`, shape `(height, width)` |
+| FITS reader `section` | `(y, x)` pair of slices |
+| xPois `identify_residual_hotspots` | `peak_yx`, `centroid_yx` |
+| xPois spatial solver `fit_positions` | `(y, x)` rows |
+| xScan FITS inference centers | `(y, x)` |
+| xImage `roi.center` | `(row, column)` |
+| xRep `BBox` | `min_x, min_y, width, height` |
+| xRep mappings | `(N, 2)` arrays of `(x, y)` |
+| xFit `positions` | `(x, y)`, from the cutout center |
+| xFit FITS manifest centers | `(x, y)` |
+| xRay `--roi-lower`, `--roi-dim` | `X Y`, then `WIDTH HEIGHT` |
+| Astropy WCS methods | `(x, y)` |
+
+: Axis order by call. Pixel positions count from zero. {#tbl-concepts-axes}
+
+A WCS (world coordinate system) is the header's map from pixel position to sky position, given as right ascension (RA) and declination (Dec). Astropy reads it. Here the new source in the sample target goes from array index to sky and back:
+
+```{python}
+from astropy.wcs import WCS
+
+y, x = 167, 80  # the new source, as (row, column)
+print(f"pixel value: {target[y, x]:.0f}")
+wcs = WCS(target_header)
+ra, dec = wcs.pixel_to_world_values(x, y)  # Astropy takes x first
+print(f"sky position: RA {ra:.4f}, Dec {dec:.4f} degrees")
+print("back to pixels (x, y):", np.round(wcs.world_to_pixel_values(ra, dec), 2))
+```
+
+The round trip returns `(x, y)`, the reverse of the array index. Astropy counts pixels from zero here, like NumPy.
+
+## Receipts
+
+A receipt is the record a result carries of what ran. It shows whether a call used the GPU or fell back, and why. The FITS reader returns one with every read. Ask for `auto` on a CPU host, and the receipt records the fallback:
+
+```{python}
+receipt = read_fits_images("sample/target.fits", [0], reader="auto").metadata()
+for key, value in receipt.items():
+    print(f"{key:17s} {value}")
+```
+
+The call asked for `auto`, and Astropy ran. `fallback_reason` says why the GPU reader, xDataReader (xDR), did not. Each HDU (header data unit, one image inside a FITS file) lists its shape, dtype and compression.
+
+Other results carry the same facts as fields:
+
+- xRep results: `backend`, `interpolation` and `metadata`, which records the settings and how the variance propagated. CuPy and PyTorch runs add the device.
+- xPois results: `backend`.
+- xFit's `fit_dipoles` results: `backend`, `device` and `dtype`.
+- Command-line runs: `summary.json` (refer to the next section).
+
+```{python}
+print(moved.backend, moved.interpolation)
+print(moved.metadata)
+```
+
+Check the receipt before you compare two runs. Record the backend, device and dtype with every result you share.
+
+## The command line
+
+One executable, `cuphoton`, holds one command group per module: `xdr`, `xrep`, `xpois`, `xfit`, `xscan`, `ximage`, `xray`, `xbeam` and `xlens`. Core has no group. It supplies what every group shares: help, option checks, logging, errors and output paths. Help works at three levels:
+
+```bash
+cuphoton --help                      # the groups
+cuphoton xrep --help                 # a group's commands and their aliases
+cuphoton xrep help reproject-image   # one command's options
+```
+
+Most commands have a short alias, shown in parentheses in the group help, such as `ri` for `reproject-image`. A failed command prints one line that starts with `ERROR:` and exits with a nonzero status.
+
+Many flags recur across groups:
+
+| Flag | Commands | Effect |
+|---|---|---|
+| `--output-dir` | commands that write a run | root for run directories. Default: `~/.local/state/cuphoton/<group>/runs` |
+| `--name` | xPois, xRep and some xScan runs | run directory name. Default: a name with a time stamp |
+| `--backend` | commands that compute | the backend, with the names above |
+| `--fits-reader` | commands that read FITS | `auto`, `astropy` or `xdr` (@sec-read-fits) |
+| `--config` | YAML-driven workflows, such as xImage and xScan training | a YAML configuration file |
+| `--executor` | batch and pipeline commands | `local`, `dragon` or `mpi` (@sec-scale) |
+| `--log-level` | xFit, xPois, xRep, xScan, xBeam | Python logging level. Default: `INFO` |
+
+: Shared command-line flags. {#tbl-concepts-flags}
+
+Run-producing commands write a summary and numeric artifacts, but their layouts differ. xRep uses `summary.json` and an `artifacts/` subdirectory; xFit's `fit-dipoles` writes its table and arrays directly under `--output-dir`. Some workflows also save the effective configuration. Shared CLI logs use `logs/` in the group's state directory, which moves with `XDG_STATE_HOME`. Many commands refuse to overwrite an existing run directory. Choose a new `--name` or output root.
+
+Run xRep on the sample target. This cell calls the CLI with a unique output root so earlier runs remain intact. The command also prints its summary as JSON, which this example discards:
+
+```{python}
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+Path("runs").mkdir(exist_ok=True)
+output_dir = Path(tempfile.mkdtemp(prefix="concepts-", dir="runs"))
+cli = Path(sys.executable).with_name("cuphoton")
+subprocess.run(
+    [str(cli), "xrep", "reproject-image", "--input", "sample/target.fits",
+     "--output-dir", str(output_dir)],
+    check=True, stdout=subprocess.DEVNULL,
+)
+for path in sorted(output_dir.rglob("*")):
+    if path.is_file():
+        print(path.relative_to(Path.cwd()))
+```
+
+`summary.json` is the run's receipt. Read it before you rely on the backend or device:
+
+```{python}
+import json
+from pathlib import Path
+
+run = next(output_dir.glob("reproject-image-*"))
+summary = json.loads((run / "summary.json").read_text())
+for key in ("workflow", "requested_backend", "backend", "device", "dtype", "fits_reader"):
+    print(f"{key:17s} {summary[key]}")
+fits_read = summary["fits_reads"][0]
+print(f"{'fits_reads[0]':17s} requested {fits_read['requested_reader']}, ran {fits_read['reader']}")
+```
+
+The run asked for `--fits-reader auto`, yet the read receipt shows `astropy` as the request. CPU workflows in xFit, xPois and xRep turn `auto` into Astropy before they read.
+
+## Next steps
+
+- Read FITS files, and choose the reader: @sec-read-fits.
+- Align, subtract and measure with these conventions: @sec-align, @sec-subtract, @sec-measure.
+- Spread work over GPUs and nodes with `--executor`: @sec-scale.
+- Follow the variance plane through to the error bars: @sec-uncertainty.
+- Find the full documentation for each module: @sec-reference.
+- Refer to the repository's [architecture](https://github.com/NVIDIA/cuPhoton/blob/main/docs/architecture.md), [data and artifact contracts](https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md) and [command-line index](https://github.com/NVIDIA/cuPhoton/blob/main/docs/cli.md) for the details.

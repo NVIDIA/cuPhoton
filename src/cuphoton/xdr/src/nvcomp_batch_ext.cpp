@@ -15,6 +15,8 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 
+#include <cuda.h>
+#include <cudaTypedefs.h>
 #include <cuda_runtime.h>
 #include <nvcomp/deflate.h>
 #include <nvcomp/gzip.h>
@@ -35,6 +37,83 @@ inline void check_nvcomp(nvcompStatus_t s, const char* ctx) {
         throw std::runtime_error(
             std::string("nvcomp error in ") + ctx
             + ": status=" + std::to_string(static_cast<int>(s)));
+    }
+}
+
+// Check device limits and allocation eligibility before hardware submission.
+void validate_hardware_gzip(
+    std::uintptr_t input, std::uintptr_t output, std::size_t max_chunk_bytes) {
+    // Select the ABI of each function, independently of the device attributes
+    // queried below. cuCtxGetDevice gained a second argument in API 13000.
+    auto entry_point = [](const char* symbol, unsigned int version) {
+        void* entry = nullptr;
+        cudaDriverEntryPointQueryResult status;
+        check_cuda(
+            cudaGetDriverEntryPointByVersion(
+                symbol, &entry, version, cudaEnableDefault, &status),
+            "hardware Gzip driver query");
+        if (status != cudaDriverEntryPointSuccess || entry == nullptr) {
+            throw std::runtime_error(
+                std::string("hardware Gzip requires CUDA driver query ")
+                + symbol);
+        }
+        return entry;
+    };
+    auto check_driver = [](CUresult status, const char* context) {
+        if (status != CUDA_SUCCESS) {
+            throw std::runtime_error(
+                std::string("hardware Gzip ") + context
+                + " failed: CUDA driver status="
+                + std::to_string(static_cast<int>(status)));
+        }
+    };
+    const auto get_device = reinterpret_cast<PFN_cuCtxGetDevice_v2000>(
+        entry_point("cuCtxGetDevice", 2000));
+    const auto get_attribute = reinterpret_cast<PFN_cuDeviceGetAttribute_v2000>(
+        entry_point("cuDeviceGetAttribute", 2000));
+    const auto get_pointer_attribute =
+        reinterpret_cast<PFN_cuPointerGetAttribute_v4000>(
+            entry_point("cuPointerGetAttribute", 4000));
+    CUdevice device;
+    check_driver(get_device(&device), "device query");
+    int algorithms = 0;
+    check_driver(
+        get_attribute(
+            &algorithms,
+            CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_ALGORITHM_MASK,
+            device),
+        "algorithm query");
+    if ((algorithms & CU_MEM_DECOMPRESS_ALGORITHM_DEFLATE) == 0) {
+        throw std::runtime_error(
+            "hardware Gzip decompression is unavailable on this device");
+    }
+    int maximum = 0;
+    check_driver(
+        get_attribute(
+            &maximum,
+            CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH,
+            device),
+        "chunk-limit query");
+    if (maximum <= 0 || max_chunk_bytes > static_cast<std::size_t>(maximum)) {
+        throw std::runtime_error(
+            "hardware Gzip chunk size " + std::to_string(max_chunk_bytes)
+            + " exceeds device limit " + std::to_string(maximum));
+    }
+    // Both buffers are contiguous. Scratch and actual-size buffers come from
+    // the native cudaMalloc pool, which supports hardware decompression.
+    for (auto pointer : {input, output}) {
+        bool capable = false;
+        check_driver(
+            get_pointer_attribute(
+                &capable,
+                CU_POINTER_ATTRIBUTE_IS_HW_DECOMPRESS_CAPABLE,
+                static_cast<CUdeviceptr>(pointer)),
+            "allocation query");
+        if (!capable) {
+            throw std::runtime_error(
+                "hardware Gzip requires hardware-decompression-capable "
+                "input and output allocations");
+        }
     }
 }
 
@@ -233,7 +312,8 @@ py::object batch_deflate_decompress_pooled(
 
 // Gzip uses the same pointer/size arrays, with offsets and lengths covering
 // complete RFC-1952 streams. "auto" permits compatible hardware with CUDA
-// fallback; "cuda" selects CUDA. A pooled owner must survive stream completion.
+// fallback; "cuda" selects CUDA, and "hardware" requires pooled hardware
+// decoding. A pooled owner must survive stream completion.
 py::object batch_gzip_decompress(
     std::uintptr_t d_concat_ptr,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>
@@ -282,9 +362,16 @@ py::object batch_decompress_impl(
         backend = NVCOMP_DECOMPRESS_BACKEND_DEFAULT;
     } else if (decompression_backend == "cuda") {
         backend = NVCOMP_DECOMPRESS_BACKEND_CUDA;
+    } else if (decompression_backend == "hardware") {
+        if (!gzip_wrapped || !use_native_pool) {
+            throw std::invalid_argument(
+                "decompression_backend='hardware' requires native Gzip "
+                "decoding with use_native_pool=True");
+        }
+        backend = NVCOMP_DECOMPRESS_BACKEND_HARDWARE;
     } else {
         throw std::invalid_argument(
-            "decompression_backend must be 'auto' or 'cuda'");
+            "decompression_backend must be 'auto', 'cuda', or 'hardware'");
     }
     const std::size_t n = static_cast<std::size_t>(rel_offsets.size());
     if (lengths.size() != static_cast<py::ssize_t>(n)
@@ -336,6 +423,14 @@ py::object batch_decompress_impl(
         h_out_sizes[i] = static_cast<std::size_t>(os(i));
         max_uncomp = std::max(max_uncomp, h_out_sizes[i]);
         total_uncomp += h_out_sizes[i];
+    }
+    if (backend == NVCOMP_DECOMPRESS_BACKEND_HARDWARE) {
+        validate_hardware_gzip(
+            d_concat_ptr,
+            d_out_ptr,
+            std::max(
+                max_uncomp,
+                *std::max_element(h_comp_sizes.begin(), h_comp_sizes.end())));
     }
 
     // Allocate device-side mirror arrays + temp in one stream-ordered batch.
@@ -540,8 +635,11 @@ py::object batch_decompress_impl(
                           opts,
                           static_cast<nvcompStatus_t*>(d_statuses),
                           stream),
-                gzip_wrapped ? "batched gzip decompression"
-                             : "batched deflate decompression");
+                backend == NVCOMP_DECOMPRESS_BACKEND_HARDWARE
+                    ? "hardware Gzip decompression (check device, allocation "
+                      "and chunk-size compatibility)"
+                    : (gzip_wrapped ? "batched gzip decompression"
+                                    : "batched deflate decompression"));
             check_cuda(
                 cudaMemcpyAsync(
                     deferred ? completion->statuses : h_statuses.data(),
@@ -628,6 +726,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         "Batched Gzip/DEFLATE decompression — device-pointer interface to nvcomp.";
 
     m.attr("supports_decompression_backend") = true;
+    m.attr("supports_hardware_decompression") = true;
 
     xdr_gpu::bind_io(m);
     xdr_gpu::bind_memory_manager(m);
@@ -753,5 +852,5 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         "Waits for decode completion and validates per-tile status and size.\n"
         "Pooled calls return an owner capsule for scratch buffers.\n"
         "decompression_backend=auto permits compatible hardware with CUDA fallback;\n"
-        "cuda selects CUDA explicitly.");
+        "cuda selects CUDA explicitly; hardware requires pooled hardware decoding.");
 }

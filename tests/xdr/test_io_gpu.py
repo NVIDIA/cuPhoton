@@ -247,3 +247,53 @@ def test_native_readers_recover_independently_after_failure(
             finally:
                 for builder in builders:
                     builder.request_stop()
+
+
+@pytest.mark.parametrize("compression", ["GZIP_1", "GZIP_2"])
+def test_hardware_batch_matches_astropy(tmp_path, native_io, compression):
+    from astropy.io import fits
+    from cuda.bindings import driver
+
+    from cuphoton.xdr import batch_to_device
+
+    cp, _ = native_io
+    status, mask = driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_ALGORITHM_MASK,
+        cp.cuda.runtime.getDevice(),
+    )
+    assert status == driver.CUresult.CUDA_SUCCESS
+    if not mask & 1:
+        pytest.skip("device has no hardware DEFLATE engine")
+
+    paths, expected = [], []
+    for index in range(2):
+        image = np.arange(65 * 97, dtype=np.int32).reshape(65, 97) - index * 7
+        path = tmp_path / f"image-{index}.fits"
+        fits.HDUList(
+            [
+                fits.PrimaryHDU(),
+                fits.CompImageHDU(
+                    image,
+                    compression_type=compression,
+                    tile_shape=(4, 32),
+                ),
+            ]
+        ).writeto(path)
+        with fits.open(path) as source:
+            expected.append(np.asarray(source[1].data, dtype=image.dtype))
+        paths.append(path)
+
+    (actual,) = batch_to_device(
+        paths,
+        hdu_indices=[1],
+        native_batcher=True,
+        native_read_threads=1,
+        native_plan_threads=1,
+        decode_batch_files=2,
+        decompression_backend="hardware",
+    )
+    actual = cp.asnumpy(actual)
+    expected = np.stack(expected)
+    assert actual.dtype == expected.dtype
+    assert actual.shape == expected.shape
+    assert actual.tobytes() == expected.tobytes()

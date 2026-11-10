@@ -1,0 +1,279 @@
+# Align images {#sec-align}
+
+xRep puts an image on another image's pixel grid, using the WCS (world coordinate system, the mapping from pixel to sky position) in both headers. It resamples the image, its variance and its bad-pixel mask together. Align a pair before you subtract it (@sec-subtract), or put several exposures on one shared grid as a stack.
+
+**You need:**
+
+- cuPhoton with the CPU profile (@sec-install). The `gpu` profile adds the CuPy backend.
+- Two-dimensional FITS images with a celestial WCS in their headers. This page writes a sample pair.
+
+::: {.callout-note}
+## Sample data
+This page runs on a small synthetic pair. The printed values only demonstrate the API.
+:::
+
+The folded block writes `sample/reference.fits` and `sample/target.fits`. The reference has smaller pixels, on a grid rotated by 3 degrees from the target's.
+
+{{< include _sample-pair.qmd >}}
+
+## Read the pair
+
+Read both images and their WCS (@sec-read-fits).
+
+```{python}
+import numpy as np
+from astropy.wcs import WCS
+from cuphoton.core.fits_io import read_fits_images
+
+target_read = read_fits_images("sample/target.fits", [0])
+reference_read = read_fits_images("sample/reference.fits", [0])
+target = target_read.arrays[0].astype(np.float64)
+reference = reference_read.arrays[0].astype(np.float64)
+target_wcs = WCS(target_read.infos[0].header)
+reference_wcs = WCS(reference_read.infos[0].header)
+print(target.shape, reference.shape)
+```
+
+## Flag bad pixels
+
+Real images come with a bad-pixel mask, an integer array in which each bit marks one kind of fault. The sample pair has none. This block adds a hot column and a hot pixel to the reference and flags them with mask values 2 and 4 (bit positions 1 and 2). It then builds the variance plane, one noise variance per pixel (@sec-first-difference).
+
+```{python}
+mask = np.zeros(reference.shape, dtype=np.int32)
+reference[:, 120] += 500.0  # a hot column at x = 120 (NumPy indexes [y, x])
+mask[:, 120] |= 2
+reference[200, 60] += 5e4  # a hot pixel at (y, x) = (200, 60)
+mask[200, 60] |= 4
+reference_variance = np.clip(reference, 0, None) / reference_read.infos[0].header["GAIN"]
+```
+
+Mask value 1 (bit position 0) stays free for output pixels that the reference does not cover.
+
+## Map target pixels to reference pixels
+
+For each output pixel, xRep finds where that pixel falls in the source image and interpolates the source there. `make_wcs_pair_transform` builds that mapping from two WCS, target pixel to sky to reference pixel. It maps an (N, 2) array of zero-based (x, y) pixel positions:
+
+```{python}
+from cuphoton.xrep import make_wcs_pair_transform
+
+mapping = make_wcs_pair_transform(target_wcs, reference_wcs)
+print(mapping(np.array([[80.0, 167.0]])))  # (x, y) on the target grid
+```
+
+Target pixel (x, y) = (80, 167) falls at the printed position on the reference grid. The mapping uses (x, y) order, while NumPy arrays index (y, x).
+
+## Describe the output grid
+
+A `ReprojectionSpec` holds the mapping, the output region and the resampling options (refer to "Options"). `BBox` gives the region as its origin, width and height on the output grid. This one covers the whole target grid:
+
+```{python}
+from cuphoton.xrep import BBox, ReprojectionSpec
+
+height, width = target.shape
+spec = ReprojectionSpec(mapping=mapping, output_bbox=BBox(0, 0, width, height))  # (x, y) origin, then the size
+print(spec.interpolation, spec.mapping_grid_step, spec.area_scaling, spec.invalid_mask_value)
+```
+
+The defaults resample with a Lanczos-3 kernel (a windowed sinc that reads 6 by 6 source pixels), evaluate the WCS mapping every 100 output pixels and interpolate it in between, and scale values for the change in pixel area.
+
+## Reproject the image, variance and mask
+
+`reproject_masked_array` resamples the three planes with one mapping:
+
+```{python}
+from cuphoton.xrep import reproject_masked_array
+
+aligned = reproject_masked_array(reference, reference_variance, mask, spec, backend="cpu")
+print(aligned.image.shape, aligned.mask.dtype, aligned.backend, aligned.interpolation)
+print(aligned.metadata)
+```
+
+All three planes now have the target's shape. Masked source values still contribute to the image; the mask propagates their flags so that later steps can reject affected pixels. The image uses the kernel weights, and the variance uses their squares. The metadata records that the variance is diagonal. Neighboring output pixels share source pixels, which correlates their noise. xRep does not return that correlation.
+
+## Read the aligned mask
+
+Each pixel of `aligned.mask` holds the bitwise OR of the mask bits of every source pixel that feeds it with a nonzero weight. A flagged source pixel therefore marks every output pixel that its value reached. Output pixels outside the reference get `invalid_mask_value` (1) in the mask and NaN in the image and the variance.
+
+```{python}
+for bit, name in [(1, "outside the reference"), (2, "hot column"), (4, "hot pixel")]:
+    print(f"bit {bit} ({name}): reference {np.count_nonzero(mask & bit)}, "
+          f"aligned {np.count_nonzero(aligned.mask & bit)} pixels")
+```
+
+The hot column becomes a band a few pixels wide, and the hot pixel a block, because the kernel spreads their values over that area (@fig-align-mask). The reference covers the whole target grid. No pixel has bit 1. Treat every pixel with a nonzero mask as unusable, for example with `good = aligned.mask == 0`. To keep these pixels out of a subtraction, set them to NaN before the fit (@sec-subtract-bad-pixels).
+
+```{python}
+#| label: fig-align-mask
+#| fig-cap: "The reference before and after xRep. Left: the reference as stored, with its hot column. Middle: the reference on the target grid, where the column is tilted by the 3 degree rotation. Right: the aligned mask, blue for the hot column (bit 2) and orange for the hot pixel (bit 4), which is too small to see in the image panels. Synthetic data, for demonstration only."
+#| fig-alt: "Three square panels. The first two show a star field crossed by one bright vertical line, tilted slightly in the second. The third is light gray with a tilted blue band and one small orange square."
+#| code-fold: true
+#| code-summary: "Plotting code"
+import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgb
+from matplotlib.patches import Patch
+
+lo, hi = np.percentile(reference, [1, 99.5])
+colors = {2: "#2A78D6", 4: "#EB6834"}  # blue for bit 2, orange for bit 4
+mask_rgb = np.full(aligned.mask.shape + (3,), 0.93)
+for bit, color in colors.items():
+    mask_rgb[(aligned.mask & bit) > 0] = to_rgb(color)
+fig, axes = plt.subplots(1, 3, figsize=(6.5, 2.6))
+axes[0].imshow(reference, origin="lower", cmap="magma", vmin=lo, vmax=hi)
+axes[1].imshow(aligned.image, origin="lower", cmap="magma", vmin=lo, vmax=hi)
+axes[2].imshow(mask_rgb, origin="lower")
+for ax, title in zip(axes, ["Reference, as stored", "Reference, aligned", "aligned.mask"]):
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([]); ax.set_yticks([])
+fig.legend([Patch(color=color) for color in colors.values()], ["bit 2", "bit 4"],
+           loc="lower right", ncol=2, fontsize=8, frameon=False)
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout(rect=(0, 0.06, 1, 1))
+plt.show()
+```
+
+## Reuse the mapping for more images
+
+`reproject_masked_array` evaluates the mapping once per call. `prepare_reprojection` does it once for many calls, and returns the source position, area ratio and a valid flag of every output pixel. Pass it as `prepared` to reproject other images with the reference's shape and WCS, such as a model of the reference. This block aligns a flat sky of 100 DN (data numbers, the detector's unit) per reference pixel:
+
+```{python}
+from cuphoton.xrep import prepare_reprojection
+
+prepared = prepare_reprojection(spec, source_shape=reference.shape)
+print(prepared.output_shape, f"area ratio {np.median(prepared.relative_area):.4f}")
+
+sky = np.full(reference.shape, 100.0)
+sky_aligned = reproject_masked_array(sky, sky / 8.0, np.zeros(reference.shape, dtype=np.int32), spec,
+                                     backend="cpu", prepared=prepared)
+print(f"flat sky on the target grid: {np.median(sky_aligned.image):.2f} DN per pixel")
+```
+
+A target pixel covers the printed area ratio of reference pixels. It therefore collects that much more light. With `area_scaling=True`, xRep multiplies the image by the ratio and the variance by its square. Set `area_scaling=False` for surface-brightness units, where a constant field should retain its value after resampling. A prepared mapping belongs to one spec and one source shape.
+
+## Stack several images on one grid
+
+An xRep stack resamples several images onto one grid and returns one array with shape (images, height, width). It does not combine them. `build_stack_spec_from_fits` reads the files and builds one spec per image, and `reproject_stack` resamples them:
+
+```{python}
+from cuphoton.xrep import build_stack_spec_from_fits, reproject_stack
+
+images, stack_spec = build_stack_spec_from_fits(["sample/target.fits", "sample/reference.fits"])
+stack = reproject_stack(images, stack_spec, backend="cpu")
+print(stack_spec.output_bbox, stack_spec.grid.pixel_scale_arcsec, "arcsec per pixel")
+print(stack.images.shape, "invalid pixels per image:", stack.masks.sum(axis=(1, 2)))
+```
+
+Without a `grid`, the stack uses a north-up grid with the first image's pixel scale and grid pixel (0, 0) at the first image's center. The box covers every footprint. Its origin can therefore be negative. Each image is NaN, and flagged in `stack.masks`, where it has no data (@fig-align-stack). For the target's grid instead, pass `grid=Grid.from_wcs(target_wcs)` and `output_bbox=BBox(0, 0, width, height)`.
+
+`reproject_stack` returns no variance. Without source masks, its masks mark the geometric footprint; with source masks, it propagates flags only from the 2 by 2 bilinear neighborhood, even for Lanczos interpolation. For variance and full-kernel masks, call `reproject_masked_array` with each member's spec:
+
+```{python}
+member = reproject_masked_array(reference, reference_variance, mask, stack_spec.members[1], backend="cpu")
+print(member.image.shape, np.count_nonzero(member.mask & 1), "pixels outside the reference")
+```
+
+```{python}
+#| label: fig-align-stack
+#| fig-cap: "The two images of the stack on the shared north-up grid, on one color scale. White marks pixels where an image has no data. Left: the target, rotated by 3 degrees from the grid. Right: the reference, whose larger footprint covers most of the grid. Synthetic data, for demonstration only."
+#| fig-alt: "Two square panels on the same grid. The left shows a slightly tilted square star field with white wedges around it. The right shows a larger star field with thin white margins."
+#| code-fold: true
+#| code-summary: "Plotting code"
+lo, hi = np.nanpercentile(stack.images, [1, 99.5])
+fig, axes = plt.subplots(1, 2, figsize=(5.5, 2.9))
+for ax, plane, title in zip(axes, stack.images, ["stack.images[0], target", "stack.images[1], reference"]):
+    ax.imshow(plane, origin="lower", cmap="magma", vmin=lo, vmax=hi)
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([]); ax.set_yticks([])
+fig.text(1, 1, "Synthetic data, for demonstration only", ha="right", va="bottom",
+         fontsize=7, style="italic", color="0.4", transform=fig.transFigure)
+fig.tight_layout()
+plt.show()
+```
+
+## Options
+
+`ReprojectionSpec` takes these fields:
+
+| Option | Default | Effect |
+|---|---|---|
+| `mapping` | required | callable from output (x, y) pixels to source (x, y) pixels |
+| `output_bbox` | required | `BBox(min_x, min_y, width, height)` on the output grid |
+| `source_origin` | `(0, 0)` | (x, y) offset subtracted from source positions when the source array is a cutout |
+| `interpolation` | `"lanczos3"` | `"lanczos3"` or `"bilinear"` (2 by 2 pixels, no ringing at sharp edges) |
+| `mapping_grid_step` | `100` | output pixels between exact WCS evaluations; `1` evaluates every pixel |
+| `area_scaling` | `True` | multiply by the source area each output pixel covers |
+| `fill_value` | `nan` | image value outside the source footprint |
+| `invalid_mask_value` | `1` | mask value outside the source footprint |
+| `lanczos_a` | `3` | Lanczos kernel radius |
+| `two_a_footprint` | `True` | use `2 * lanczos_a` taps per axis; `False` uses `2 * lanczos_a + 1` |
+
+`reproject_masked_array` also takes `backend`, `prepared` and `variance_fill_value` (NaN). Without `backend`, it takes the first available of `cupy`, CUDA `torch` and `cpu` (NumPy). The variance must be nonnegative, with NaN or positive infinity for no data. The mask must have an integer or boolean dtype.
+
+## On a GPU
+
+With the `gpu` profile, pass `backend="cupy"`, or `backend="native"` for the precompiled kernels of the native extension (@sec-install). `reproject_masked_array` still takes and returns NumPy arrays:
+
+```{python}
+#| eval: false
+aligned = reproject_masked_array(reference, reference_variance, mask, spec, backend="cupy")
+```
+
+To keep the result on the GPU, use `reproject_array_device` with CuPy inputs. It runs on the `cupy` backend, the default, or on `native`. Its mask covers the bilinear neighborhood. It does not check the variance for negative values, because that check needs a copy to the host.
+
+```{python}
+#| eval: false
+import cupy as cp
+from cuphoton.xrep import reproject_array_device
+
+prepared_gpu = prepare_reprojection(spec, source_shape=reference.shape, xp=cp)
+out = reproject_array_device(cp.asarray(reference), spec, source_mask=cp.asarray(mask),
+                             source_variance=cp.asarray(reference_variance), prepared=prepared_gpu)
+print(type(out.image), out.variance.dtype, out.mask.dtype)  # CuPy arrays
+```
+
+`prepare_reprojection` evaluates the WCS with Astropy on the CPU and expands the mapping to every pixel on the GPU. `build_stack_spec_from_fits` takes `fits_reader="xdr"` and `device=True` to decode its inputs on the GPU (@sec-read-fits).
+
+## Command line
+
+`cuphoton xrep reproject-image` resamples one FITS image, and optionally a FITS `--mask`, onto a north-up grid. The grid takes the image's center and pixel scale unless you pass `--grid-crval-ra`, `--grid-crval-dec` and `--pixel-scale-arcsec` together. To align one image to another image's grid, run `reproject-stack` with one input and `--target-wcs`:
+
+```bash
+cuphoton xrep reproject-stack --inputs sample/reference.fits --target-wcs sample/target.fits \
+  --backend cpu --mapping-grid-step 1 --output-dir runs/align
+```
+
+The command writes a new run directory under `runs/align`, with `summary.json` and the arrays in `artifacts/`. `--write-fits` adds a FITS copy with the target's WCS. From Python, run the command and print part of its summary:
+
+```{python}
+import json
+import subprocess
+import sys
+
+command = [sys.executable, "-m", "cuphoton", "xrep", "reproject-stack",
+           "--inputs", "sample/reference.fits", "--target-wcs", "sample/target.fits",
+           "--backend", "cpu", "--mapping-grid-step", "1", "--output-dir", "runs/align"]
+summary = json.loads(subprocess.run(command, capture_output=True, text=True, check=True).stdout)
+print(summary["stack_shape"], summary["interpolation"], summary["saved"])
+```
+
+The commands do not resample variance. `reproject-image` propagates an input mask only over the bilinear neighborhood, even for Lanczos interpolation; `reproject-stack` takes no input mask and marks only the geometric footprint. Use `reproject_masked_array` when you need either. For a target WCS with SIP distortion (polynomial corrections to the projection), pass `--mapping-grid-step 1`. Otherwise `reproject-stack` warns that the coarse mapping grid interpolates the distortion.
+
+## Troubleshooting
+
+The aligned image has more NaN pixels than the source
+: xRep does not skip NaN source pixels. Each NaN turns every output pixel that reads it into NaN. Before you resample, replace NaN pixels, for example with the local sky level, and flag them.
+
+Edge pixels come back NaN and flagged, even where the source covers the grid
+: xRep keeps an output pixel only when its source position lies inside the source image. WCS round-off can place edge pixels just outside, for example when you map an image onto its own grid. Treat them as missing.
+
+`RuntimeError: Requested backend is unavailable: cupy`
+: Install the `gpu` profile, or pass `backend="cpu"`.
+
+`ERROR: run directory already exists`
+: Each run needs a new directory. Pass a new `--name`, or leave it out for a timestamped name. Two runs started in the same second get the same name.
+
+## Next steps
+
+- Subtract the aligned pair: @sec-subtract.
+- Read inputs on the GPU: @sec-read-fits.
+- The [xRep reference](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xrep.md), which also covers `resampling_weights_at` (the interpolation weights, for noise models), and the [xRep run files](https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md#xrep-fits-and-arrays).

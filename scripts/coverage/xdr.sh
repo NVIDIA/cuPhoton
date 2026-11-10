@@ -33,7 +33,9 @@ PY
 
 python -m pytest -q -rs -o "pythonpath=$PYTHONPATH" \
     --junitxml="$coverage_build/junit.xml" \
-    tests/xdr/test_native.py tests/xdr/test_deflate_gpu.py
+    tests/xdr/test_native.py tests/xdr/test_deflate_gpu.py \
+    tests/xdr/test_gzip_gpu.py::test_forced_hardware_roundtrip_or_unsupported_device \
+    tests/xdr/test_gzip_gpu.py::test_native_hardware_rejects_incompatible_route
 
 python - <<'PY'
 from xml.etree import ElementTree as ET
