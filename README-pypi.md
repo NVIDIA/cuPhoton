@@ -8,7 +8,7 @@ signal correlation and X-ray trace analysis.
 Choose the extras for your workflow:
 
 ```bash
-# FITS I/O
+# GPU FITS I/O
 python -m pip install 'cuphoton[io]==0.2.0'
 # GPU imaging and fitting
 python -m pip install 'cuphoton[gpu]==0.2.0'
