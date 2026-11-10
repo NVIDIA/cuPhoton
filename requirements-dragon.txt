@@ -211,10 +211,12 @@ dragonhpc==0.14.2 ; sys_platform == 'linux' \
     --hash=sha256:c94e96fb486103ac6172ec3042d4ba48660ca64486dbbd8fc0669c2e827c3ff4 \
     --hash=sha256:e78f466e44fdc5faad16ba4116f238ae0669d15bc523d526c945611fb428793e
     # via cuphoton
-filelock==3.29.4 ; sys_platform == 'linux' \
-    --hash=sha256:10cdb3656fc44541cdf30652a93fb10ec6b05325620eb316bd26893e4201538a \
-    --hash=sha256:dac1648087d5115554850d113e7dd8c83ab2d38e3435dde2d4f163847e57b767
-    # via torch
+filelock==4.2.10 ; sys_platform == 'linux' \
+    --hash=sha256:9479aaeb4db20b5a53e3da28493edd24720b66b8a0b84030aa56ccdf243d6857 \
+    --hash=sha256:fcc3c0cb8bfe7f4b3bb0e231c04b15dbad068cb3c2515f343d8fde4dce93bd5d
+    # via
+    #   cuphoton
+    #   torch
 fsspec==2026.6.0 ; sys_platform == 'linux' \
     --hash=sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1 \
     --hash=sha256:f5bac145310fe30e16e1471bd6840b2d990d609e872251d7e674241822abf01a

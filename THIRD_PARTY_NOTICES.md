@@ -90,6 +90,7 @@ more than one license.
 | `base` | `PyYAML>=6.0` | `6.0.3` | `MIT` | [PyYAML](https://github.com/yaml/pyyaml) | `uv / PyPI` |
 | `base` | `scipy>=1.13` | `1.18.0` | `BSD-3-Clause`; distributions include separately licensed components | [SciPy](https://github.com/scipy/scipy) | `uv / PyPI` |
 | `torch` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
+| `torch`, `gpu`, `dev`, `docs` | `filelock>=4.2.1` | `4.2.10` | `MIT` | [filelock](https://github.com/tox-dev/filelock) | `uv / PyPI; shared dependency of PyTorch and virtualenv` |
 | `viz` | `bokeh>=3.9` | `3.9.1` | `BSD-3-Clause` | [Bokeh](https://github.com/bokeh/bokeh) | `uv / PyPI` |
 | `viz` | `pillow>=13.0.0` | `13.0.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
 | `viz` | `tornado>=6.6` | `6.6` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |

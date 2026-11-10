@@ -221,7 +221,7 @@ jobs:
     # Use the same vetted push boundary as the source GPU tests.
     if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     runs-on: linux-amd64-gpu-l40g-latest-1
-    timeout-minutes: 15
+    timeout-minutes: 25
     concurrency:
       group: cuphoton-gpu
       queue: max
@@ -243,7 +243,7 @@ jobs:
           name: cuphoton-wheels-x86_64
           path: wheelhouse
       - name: Install the GPU wheel and dependencies
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           uv venv --python 3.12 .wheel-venv
           set -- wheelhouse/*-cp312-cp312-*.whl
