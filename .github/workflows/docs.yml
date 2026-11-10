@@ -16,7 +16,7 @@ on:
       - uv.lock
       - setup.py
   pull_request:
-    branches: [main]
+    branches: [main, 0.1.x, 0.2.x]
     paths:
       - .github/workflows/docs.yml
       - docs/**

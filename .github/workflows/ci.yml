@@ -23,7 +23,30 @@ env:
   UV_HTTP_TIMEOUT: "300"
 
 jobs:
+  changes:
+    name: classify changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Test change classification
+        run: python3 -m unittest discover -s tests -p test_ci_changes.py
+      - name: Classify the complete PR diff
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_changes.py
+
   lint:
+    needs: changes
     timeout-minutes: 15
     name: lint
     runs-on: ubuntu-24.04
@@ -39,8 +62,16 @@ jobs:
       - run: uv sync --locked --extra dev --python 3.12
       - run: make requirements-check
       - run: make ci-lint
+      - name: Check documentation package metadata and architecture claims
+        if: needs.changes.outputs.docs-only == 'true'
+        run: |
+          make package-check
+          uv run --no-sync pytest -q \
+            tests/test_xfit_build.py::test_wheel_architectures_match_documented_cubin_targets
 
   test-cpu:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     timeout-minutes: 30
     name: tests / ${{ matrix.name }} / py${{ matrix.python }}
     strategy:
@@ -128,9 +159,12 @@ jobs:
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
 
   test-gpu:
+    needs: changes
     name: xFit, xRay and GPU quickstarts / L40G / py3.12
     # Only vetted copies and maintained branches may use self-hosted GPUs.
-    if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
+    if: >-
+      needs.changes.outputs.docs-only != 'true' &&
+      github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     runs-on: linux-amd64-gpu-l40g-latest-1
     timeout-minutes: 30
     concurrency:
@@ -481,29 +515,38 @@ jobs:
           retention-days: 14
 
   coverage:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     name: coverage
     uses: ./.github/workflows/coverage.yml
 
   package:
+    needs: changes
     name: native distributions
     # Qualify packages once, on the same vetted source as the GPU checks.
-    if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
+    if: >-
+      needs.changes.outputs.docs-only != 'true' &&
+      github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     uses: ./.github/workflows/wheels.yml
 
   conda:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     name: native conda distributions
     uses: ./.github/workflows/conda.yml
 
   ci-required:
-    # PR checks do not satisfy the merge gate before package and GPU qualification.
+    # The vetted copy must satisfy every check selected for the complete PR diff.
     name: ${{ github.event_name == 'pull_request' && 'ci-pr-checks' || 'ci-required' }}
-    needs: [lint, test-cpu, test-gpu, coverage, package, conda]
+    needs: [changes, lint, test-cpu, test-gpu, coverage, package, conda]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every CI job to succeed
+      - name: Require every selected CI job to succeed
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
           GPU_RESULT: ${{ needs.test-gpu.result }}
@@ -512,7 +555,16 @@ jobs:
           PACKAGE_RESULT: ${{ needs.package.result }}
           CONDA_RESULT: ${{ needs.conda.result }}
         run: |
-          for result in "${LINT_RESULT}" "${CPU_RESULT}" "${COVERAGE_RESULT}" "${CONDA_RESULT}"; do
+          test "${CHANGES_RESULT}" = success || exit 1
+          test "${LINT_RESULT}" = success || exit 1
+          if [ "${DOCS_ONLY}" = true ]; then
+            for result in "${CPU_RESULT}" "${GPU_RESULT}" "${COVERAGE_RESULT}" "${PACKAGE_RESULT}" "${CONDA_RESULT}"; do
+              test "${result}" = skipped || exit 1
+            done
+            exit 0
+          fi
+          test "${DOCS_ONLY}" = false || exit 1
+          for result in "${CPU_RESULT}" "${COVERAGE_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done
           if [ "${REQUIRE_FULL_CI}" = true ]; then
