@@ -121,7 +121,7 @@ and multiprocessing workers contribute to the report. Compiled C++/CUDA
 code, scripts, and examples are outside this Python package measurement.
 No minimum percentage is enforced while establishing a baseline.
 
-Each CI run collects coverage once in a separate Python 3.12/Linux CPU job,
+Full CI collects coverage once in a separate Python 3.12/Linux CPU job,
 running the CPU suite and synthetic quickstarts. The regular test matrix
 runs without coverage instrumentation. Vetted CI pushes also run one native
 xDR coverage job on an L40G runner. CI requires the applicable coverage jobs
@@ -186,9 +186,18 @@ these tests do not establish GPUDirect Storage coverage.
 
 ### Package and GPU CI
 
-Pull requests first run lint, CPU, and conda checks on GitHub-hosted runners.
-Native wheel builds, installed-wheel/runtime checks, and GPU CI start when
-`copy-pr-bot` copies a vetted revision to
+Documentation-only pull requests run lint, source-package metadata checks,
+and the documented GPU architecture check. Changes under `docs/` also run
+the user-guide build, which executes its CPU examples. These PRs skip the
+full CPU matrix, coverage, native wheel builds, conda builds, and GPU jobs.
+The classifier checks the complete PR diff against an explicit set of
+documentation paths. Code, tests, dependencies, packaging, CI configuration,
+license files, and unfamiliar paths select full CI; unavailable change
+information also selects full CI.
+
+Other pull requests first run lint, CPU, and conda checks on GitHub-hosted
+runners. Native wheel builds, installed-wheel/runtime checks, and GPU CI
+start when `copy-pr-bot` copies a vetted revision to
 `pull-request/<number>` in this repository. Ready PRs from verified NVIDIA
 contributors with signed commits sync automatically. Draft PRs need an
 explicit maintainer trigger; each new external contribution revision needs
@@ -200,8 +209,9 @@ commit to `pull-request/<number>` directly. Confirm that the copied SHA
 matches the current PR head; a passing result for an older revision does
 not qualify new changes.
 
-The required `ci-required` check combines CPU, package, and GPU results for
-that revision. The initial `ci-pr-checks` result does not satisfy the merge
+The required `ci-required` check requires every job selected for that
+revision to succeed, accepting skipped jobs only for the selected profile.
+The initial `ci-pr-checks` result does not satisfy the merge
 gate. Pushes to `main`, `0.1.x` and `0.2.x` also run the full package and GPU
 checks.
 
