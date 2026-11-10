@@ -894,10 +894,12 @@ def gpu_gzip_decompress_batch(
         "auto" uses native Gzip when available, otherwise raw DEFLATE.
         "gzip" requires the native Gzip helper and gzip-wrapped inputs.
         "deflate" strips gzip framing and aligns payloads before decoding.
-    decompression_backend : "auto" | "cuda"
+    decompression_backend : "auto" | "cuda" | "hardware"
         "auto" lets native Gzip use compatible hardware with CUDA fallback.
-        Native raw DEFLATE uses CUDA in either mode.
+        Native raw DEFLATE supports only "auto" and "cuda" and uses CUDA.
         "cuda" requires a rebuilt native helper and uses CUDA kernels.
+        "hardware" requires native Gzip and pooled allocations, and fails
+        when the device, buffers, or tile sizes cannot use hardware decoding.
     use_cpp_helper : "auto" | True | False
         "auto" (default) → use the C++ pybind11 helper when importable, else
         fall back to the Python loop. True forces the C++ path (raises if
@@ -939,12 +941,30 @@ def gpu_gzip_decompress_batch(
     """
     if _decode_checks is not None and keepalive is None:
         raise ValueError("deferred decode requires an explicit owner list")
-    if decompression_backend not in ("auto", "cuda"):
-        raise ValueError("decompression_backend must be 'auto' or 'cuda'")
+    if decompression_backend not in ("auto", "cuda", "hardware"):
+        raise ValueError(
+            "decompression_backend must be 'auto', 'cuda', or 'hardware'"
+        )
     if gzip_decoder not in ("auto", "gzip", "deflate"):
         raise ValueError("gzip_decoder must be 'auto', 'gzip', or 'deflate'")
     if gzip_decoder == "gzip" and not gzip_wrapped:
         raise ValueError("gzip_decoder='gzip' requires gzip_wrapped=True")
+    if decompression_backend == "hardware":
+        if not gzip_wrapped or gzip_decoder == "deflate":
+            raise ValueError(
+                "decompression_backend='hardware' requires native Gzip "
+                "decoding of gzip-wrapped inputs"
+            )
+        if not use_native_pool:
+            raise ValueError(
+                "decompression_backend='hardware' requires "
+                "use_native_pool=True"
+            )
+        if use_cpp_helper is False:
+            raise ValueError(
+                "decompression_backend='hardware' requires "
+                "use_cpp_helper enabled"
+            )
 
     import cupy as cp
 
@@ -1017,14 +1037,19 @@ def gpu_gzip_decompress_batch(
         ext = None
     else:
         ext = _try_get_cpp_ext()
-        if ext is None and gzip_decoder != "gzip":
+        if (
+            ext is None
+            and gzip_decoder != "gzip"
+            and decompression_backend != "hardware"
+        ):
             _warn_python_fallback_once()
 
     backend_selection = getattr(ext, "supports_decompression_backend", False)
     if decompression_backend != "auto" and not backend_selection:
         raise RuntimeError(
-            "decompression_backend='cuda' requires a rebuilt native "
-            "extension with backend selection and use_cpp_helper enabled"
+            f"decompression_backend={decompression_backend!r} requires a "
+            "rebuilt native extension with backend selection and "
+            "use_cpp_helper enabled"
         )
     backend_kwargs = (
         {"decompression_backend": decompression_backend}
@@ -1032,10 +1057,12 @@ def gpu_gzip_decompress_batch(
         else {}
     )
     gzip_fn = getattr(ext, "batch_gzip_decompress", None)
-    if gzip_decoder == "gzip" and gzip_fn is None:
+    if (
+        gzip_decoder == "gzip" or decompression_backend == "hardware"
+    ) and gzip_fn is None:
         raise RuntimeError(
-            "gzip_decoder='gzip' requires a native extension with Gzip "
-            "support and use_cpp_helper enabled"
+            "the requested decoder/backend requires a native extension with "
+            "Gzip support and use_cpp_helper enabled"
         )
     use_gzip = (
         gzip_wrapped and gzip_decoder != "deflate" and gzip_fn is not None
@@ -1113,7 +1140,11 @@ def gpu_gzip_decompress_batch(
                     out_offsets,
                     size_array,
                     stream_ptr,
-                    use_native_pool and keepalive is not None,
+                    use_native_pool
+                    and (
+                        keepalive is not None
+                        or decompression_backend == "hardware"
+                    ),
                     **backend_kwargs,
                 )
                 if keepalive is not None and scratch_owner is not None:

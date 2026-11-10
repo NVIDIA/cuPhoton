@@ -935,7 +935,7 @@ def test_auto_decoder_propagates_native_gzip_error(monkeypatch):
         )
 
 
-@pytest.mark.parametrize("backend", ["invalid", "hardware", "", True])
+@pytest.mark.parametrize("backend", ["invalid", "", True])
 def test_gpu_batch_rejects_invalid_backend_before_import(backend):
     with pytest.raises(ValueError, match="decompression_backend must be"):
         nvcomp_batch.gpu_gzip_decompress_batch(
@@ -943,9 +943,10 @@ def test_gpu_batch_rejects_invalid_backend_before_import(backend):
         )
 
 
+@pytest.mark.parametrize("backend", ["cuda", "hardware"])
 @pytest.mark.parametrize("extension", [None, SimpleNamespace()])
-def test_forced_cuda_rejects_missing_native_capability(
-    monkeypatch, extension
+def test_forced_backend_rejects_missing_native_capability(
+    monkeypatch, extension, backend
 ):
     monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace())
     monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
@@ -959,12 +960,58 @@ def test_forced_cuda_rejects_missing_native_capability(
             [20],
             [1],
             header_sizes=[10],
-            decompression_backend="cuda",
+            decompression_backend=backend,
+            use_native_pool=True,
         )
 
 
-@pytest.mark.parametrize("backend", ["auto", "cuda"])
-@pytest.mark.parametrize("route", ["gzip", "deflate", "deflate_pooled"])
+@pytest.mark.parametrize(
+    "kwargs,match",
+    [
+        ({"gzip_wrapped": False}, "requires native Gzip"),
+        ({"gzip_decoder": "deflate"}, "requires native Gzip"),
+        ({"use_native_pool": False}, "requires use_native_pool=True"),
+        ({"use_cpp_helper": False}, "requires use_cpp_helper enabled"),
+    ],
+)
+def test_hardware_rejects_incompatible_configuration_before_import(
+    kwargs, match
+):
+    options = {"use_native_pool": True, **kwargs}
+    with pytest.raises(ValueError, match=match):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            None, [], [], [], decompression_backend="hardware", **options
+        )
+
+
+def test_hardware_rejects_extension_without_gzip(monkeypatch):
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace())
+    monkeypatch.setattr(
+        nvcomp_batch,
+        "_try_get_cpp_ext",
+        lambda: SimpleNamespace(supports_decompression_backend=True),
+    )
+    with pytest.raises(RuntimeError, match="native extension with Gzip"):
+        nvcomp_batch.gpu_gzip_decompress_batch(
+            SimpleNamespace(size=20),
+            [0],
+            [20],
+            [1],
+            header_sizes=[10],
+            decompression_backend="hardware",
+            use_native_pool=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "backend,route",
+    [
+        (backend, route)
+        for backend in ("auto", "cuda")
+        for route in ("gzip", "deflate", "deflate_pooled")
+    ]
+    + [("hardware", "gzip_pooled")],
+)
 def test_native_backend_forwarding(monkeypatch, backend, route):
     calls = []
     output = SimpleNamespace(data=SimpleNamespace(ptr=200))
@@ -977,6 +1024,7 @@ def test_native_backend_forwarding(monkeypatch, backend, route):
 
     entrypoint = {
         "gzip": "batch_gzip_decompress",
+        "gzip_pooled": "batch_gzip_decompress",
         "deflate": "batch_deflate_decompress",
         "deflate_pooled": "batch_deflate_decompress_pooled",
     }[route]
@@ -1004,8 +1052,8 @@ def test_native_backend_forwarding(monkeypatch, backend, route):
         [0],
         [20],
         [8],
-        gzip_wrapped=route == "gzip",
-        header_sizes=[10] if route == "gzip" else None,
+        gzip_wrapped=route.startswith("gzip"),
+        header_sizes=[10] if route.startswith("gzip") else None,
         use_native_pool=pooled,
         keepalive=keepalive,
         decompression_backend=backend,
@@ -1018,3 +1066,5 @@ def test_native_backend_forwarding(monkeypatch, backend, route):
     assert kwargs == {"decompression_backend": backend}
     if pooled:
         assert keepalive == [output, owner]
+        if route == "gzip_pooled":
+            assert args[7] is True

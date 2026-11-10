@@ -9,7 +9,7 @@ from collections.abc import Mapping
 XDR_OPTION_CHOICES = {
     "postprocess": frozenset({"auto", "fused", "separate", "native"}),
     "gzip_decoder": frozenset({"auto", "gzip", "deflate"}),
-    "decompression_backend": frozenset({"auto", "cuda"}),
+    "decompression_backend": frozenset({"auto", "cuda", "hardware"}),
 }
 
 

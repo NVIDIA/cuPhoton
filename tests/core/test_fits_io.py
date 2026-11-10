@@ -15,9 +15,20 @@ from astropy.io import fits
 from cuphoton.core import fits_io
 
 
-@pytest.mark.parametrize("decompression_backend", ["auto", "cuda"])
+@pytest.mark.parametrize(
+    ("gzip_decoder", "decompression_backend"),
+    [
+        ("auto", "auto"),
+        ("auto", "cuda"),
+        ("gzip", "auto"),
+        ("gzip", "cuda"),
+        ("deflate", "auto"),
+        ("deflate", "cuda"),
+        ("auto", "hardware"),
+        ("gzip", "hardware"),
+    ],
+)
 @pytest.mark.parametrize("postprocess", ["fused", "separate"])
-@pytest.mark.parametrize("gzip_decoder", ["auto", "gzip", "deflate"])
 def test_xdr_options_reach_batch_dispatch(
     tmp_path, monkeypatch, postprocess, gzip_decoder, decompression_backend
 ):
@@ -162,7 +173,13 @@ def test_cpu_reader_does_not_import_gpu_dependencies(tmp_path, monkeypatch):
     path = _write(tmp_path, np.ones((3, 4), dtype="i4"))
     for name in ("cupy", "kvikio", "nvidia.nvcomp", "cuphoton.xdr"):
         monkeypatch.setitem(sys.modules, name, None)
-    assert fits_io.read_fits_images(path, [1]).reader == "astropy"
+    result = fits_io.read_fits_images(
+        path, [1], xdr_options={"decompression_backend": "hardware"}
+    )
+    assert result.reader == "astropy"
+    assert result.metadata()["xdr_options"] == {
+        "decompression_backend": "hardware"
+    }
 
 
 def test_explicit_selection_rejects_table_empty_and_invalid_hdu(tmp_path):

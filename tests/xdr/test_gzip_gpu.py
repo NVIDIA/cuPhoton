@@ -229,6 +229,136 @@ def test_native_decoder_rejects_invalid_backend(cp, entrypoint):
         )
 
 
+def _hardware_limits(cp):
+    from cuda.bindings import driver
+
+    device = cp.cuda.runtime.getDevice()
+    status, mask = driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_ALGORITHM_MASK,
+        device,
+    )
+    assert status == driver.CUresult.CUDA_SUCCESS
+    status, maximum = driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH,
+        device,
+    )
+    assert status == driver.CUresult.CUDA_SUCCESS
+    return bool(mask & 1), maximum
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_forced_hardware_roundtrip_or_unsupported_device(cp, deferred):
+    supported, _ = _hardware_limits(cp)
+    originals = [bytes(range(256)) * 1024, b"second tile" * 513]
+    payloads = [gzip.compress(value) for value in originals]
+    lengths = np.array([len(value) for value in payloads], dtype="i8")
+    offsets = np.cumsum(lengths) - lengths
+    owners = [] if deferred else None
+    checks = [] if deferred else None
+    stream = cp.cuda.Stream(non_blocking=True)
+
+    def decode():
+        return nvcomp_batch.gpu_gzip_decompress_batch(
+            data,
+            offsets,
+            lengths,
+            [len(value) for value in originals],
+            gzip_decoder="gzip",
+            decompression_backend="hardware",
+            use_native_pool=True,
+            keepalive=owners,
+            _decode_checks=checks,
+        )
+
+    with stream:
+        data = nvcomp_batch._native_device_empty_uint8(sum(lengths))
+        data.set(np.frombuffer(b"".join(payloads), dtype="u1"))
+        if not supported:
+            with pytest.raises(RuntimeError, match="hardware Gzip"):
+                decode()
+            return
+        result, out_offsets = decode()
+        for completion in checks or ():
+            completion.check()
+    stream.synchronize()
+    np.testing.assert_array_equal(out_offsets, [0, len(originals[0])])
+    np.testing.assert_array_equal(
+        cp.asnumpy(result), np.frombuffer(b"".join(originals), dtype="u1")
+    )
+
+
+@pytest.mark.parametrize("ineligible", ["allocation", "chunk_size"])
+def test_forced_hardware_rejects_ineligible_input(cp, ineligible):
+    supported, maximum = _hardware_limits(cp)
+    if not supported:
+        pytest.skip("device has no hardware DEFLATE engine")
+    original = (
+        bytes(maximum + 1)
+        if ineligible == "chunk_size"
+        else bytes(range(256))
+    )
+    payload = gzip.compress(original)
+    stream = cp.cuda.Stream(non_blocking=True)
+    with stream:
+        if ineligible == "allocation":
+            # The ordinary asynchronous pool does not opt in to hardware
+            # decompression. This must error, even though CUDA can decode it.
+            with cp.cuda.using_allocator(cp.cuda.malloc_async):
+                data = cp.asarray(np.frombuffer(payload, dtype="u1"))
+        else:
+            data = nvcomp_batch._native_device_empty_uint8(len(payload))
+            data.set(np.frombuffer(payload, dtype="u1"))
+        with pytest.raises(RuntimeError, match="hardware Gzip"):
+            nvcomp_batch.gpu_gzip_decompress_batch(
+                data,
+                [0],
+                [len(payload)],
+                [len(original)],
+                gzip_decoder="gzip",
+                decompression_backend="hardware",
+                use_native_pool=True,
+            )
+        result, _ = nvcomp_batch.gpu_gzip_decompress_batch(
+            data,
+            [0],
+            [len(payload)],
+            [len(original)],
+            gzip_decoder="gzip",
+            decompression_backend="cuda",
+            use_native_pool=True,
+        )
+    stream.synchronize()
+    np.testing.assert_array_equal(
+        cp.asnumpy(result), np.frombuffer(original, dtype="u1")
+    )
+
+
+@pytest.mark.parametrize(
+    "entrypoint,kwargs",
+    [
+        ("batch_gzip_decompress", {}),
+        ("batch_gzip_decompress_deferred", {"use_native_pool": False}),
+        ("batch_deflate_decompress", {}),
+        ("batch_deflate_decompress_pooled", {}),
+        ("batch_deflate_decompress_deferred", {}),
+    ],
+)
+def test_native_hardware_rejects_incompatible_route(cp, entrypoint, kwargs):
+    extension = nvcomp_batch._try_get_cpp_ext()
+    empty = np.empty(0, dtype="i8")
+    with pytest.raises(ValueError, match="requires native Gzip"):
+        getattr(extension, entrypoint)(
+            0,
+            empty,
+            empty,
+            0,
+            empty,
+            empty,
+            decompression_backend="hardware",
+            **kwargs,
+        )
+
+
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("decoder", ["gzip", "deflate"])
 def test_batch_decode_failure_skips_pixels_and_raises(
