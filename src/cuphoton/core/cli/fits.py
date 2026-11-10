@@ -49,8 +49,10 @@ class XdrOptionsMixin:
         _help = (
             "xDR decompression backend: auto permits compatible Gzip "
             "hardware with CUDA fallback; cuda requires explicit CUDA "
-            "selection support. Omitted preserves input choices or uses "
-            "xDR defaults; applies when the FITS reader uses xDR."
+            "selection support; hardware requires native Gzip on the "
+            "hardware engine, with no CUDA fallback. Omitted preserves "
+            "input choices or uses xDR defaults; applies when the FITS "
+            "reader uses xDR."
         )
         _set = XDR_OPTION_CHOICES["decompression_backend"]
         _default = None

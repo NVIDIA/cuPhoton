@@ -141,9 +141,14 @@ def test_benchmark_invalid_hdu_indices_preserve_parser_error(capsys):
     )
 
 
+@pytest.mark.parametrize(
+    ("decoder", "backend"), [("deflate", "cuda"), ("gzip", "hardware")]
+)
 def test_benchmark_command_preserves_ordered_positionals_and_options(
     monkeypatch,
     capsys,
+    decoder,
+    backend,
 ):
     import cuphoton.xdr.commands as commands
 
@@ -166,9 +171,9 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
             "--xdr-postprocess",
             "separate",
             "--xdr-gzip-decoder",
-            "deflate",
+            decoder,
             "--xdr-decompression-backend",
-            "cuda",
+            backend,
             "--mock-storage",
             "host",
             "--skip-gds-read",
@@ -190,8 +195,8 @@ def test_benchmark_command_preserves_ordered_positionals_and_options(
     assert received["hdu_indices"] == [2, 1, 2]
     assert received["native_batcher"] == "off"
     assert received["postprocess"] == "separate"
-    assert received["gzip_decoder"] == "deflate"
-    assert received["decompression_backend"] == "cuda"
+    assert received["gzip_decoder"] == decoder
+    assert received["decompression_backend"] == backend
     assert received["mock_storage_kind"] == "host"
     assert received["skip_gds_read"] is True
     assert received["output_json"] == Path("report.json")

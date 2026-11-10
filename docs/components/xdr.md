@@ -22,14 +22,16 @@ floating-point bit patterns; choose explicit modes for comparisons or debugging.
 | --- | --- | --- | --- |
 | `postprocess` | `--xdr-postprocess` | `auto`, `fused`, `separate`, `native` | Restore byte order and scatter decoded tiles. |
 | `gzip_decoder` | `--xdr-gzip-decoder` | `auto`, `gzip`, `deflate` | Use native Gzip when available; otherwise decode aligned raw DEFLATE. |
-| `decompression_backend` | `--xdr-decompression-backend` | `auto`, `cuda` | Let nvCOMP choose a compatible decompression engine for native Gzip, with CUDA fallback. |
+| `decompression_backend` | `--xdr-decompression-backend` | `auto`, `cuda`, `hardware` | Let nvCOMP choose a compatible decompression engine for native Gzip, with CUDA fallback. |
 
 `postprocess="fused"` selects the same kernel as `auto`; `"separate"` runs
 individual restoration kernels. `gzip_decoder="gzip"` requires native Gzip
 support. `"deflate"` strips the Gzip framing and aligns payloads for raw
 DEFLATE. `decompression_backend="cuda"` requires a native extension with
-backend selection support and selects CUDA kernels explicitly. The native
-raw DEFLATE decoder uses CUDA in either backend mode.
+backend selection support and selects CUDA kernels explicitly.
+`decompression_backend="hardware"` requires native Gzip hardware decoding,
+with no CUDA fallback. Use it with `gzip_decoder="auto"` or `"gzip"`; the
+native raw DEFLATE decoder supports only the `auto` and `cuda` backends.
 
 `postprocess="native"` requires the [native imaging extension](../packaging.md).
 For `GZIP_1` and `GZIP_2` image tiles it runs byte-order restoration, unshuffle,
@@ -109,9 +111,9 @@ defaults. Full batch FITS loading
 still requires the native FITS planner; codec fallback does not remove that
 requirement.
 
-When xDR decodes compressed HDUs, explicit `gzip` or `cuda` requests fail clearly
-if the installed extension cannot honor them. Rebuild an older source extension
-using the [native build instructions](#native-extension-availability). The `auto`
+When xDR decodes compressed HDUs, explicit `gzip`, `cuda` or `hardware`
+requests fail clearly if the installed extension cannot honor them. Rebuild
+an older source extension using the [native build instructions](#native-extension-availability). The `auto`
 choices select available capabilities before decoding. I/O or decoder exceptions
 propagate; they do not trigger another reader, codec or postprocessing attempt.
 The supported FITS compression formats remain `GZIP_1` and `GZIP_2`.
@@ -131,12 +133,26 @@ tiles beyond the hardware limit.
 Batch readers retain native pooled scratch buffers. The low-level non-pooled
 path, including `GpuCompImageReader.read()` without an explicit stream, uses
 `cudaMallocAsync` scratch, which is not hardware-decompression capable. That
-path selects CUDA directly, including with `decompression_backend="auto"`,
-to avoid a failed hardware attempt on each call. Custom CuPy allocators can
-also affect eligibility in pooled calls.
+path selects CUDA directly with `auto` or `cuda` and rejects `hardware`.
+Pass an explicit stream to `GpuCompImageReader.read` or use a batch reader
+for pooled scratch. Custom CuPy allocators can also affect eligibility in
+pooled calls.
 An `auto` receipt and a compatible GPU therefore do not establish hardware use.
 See [nvCOMP logging](../troubleshooting.md#confirm-the-decompression-engine)
 to inspect the actual decoder calls.
+
+For a hardware-only diagnostic run on supported compressed FITS inputs:
+
+```bash
+cuphoton xdr benchmark-fits --hdu-indices 1 \
+  --xdr-gzip-decoder gzip --xdr-decompression-backend hardware exposure.fits
+```
+
+The decode fails if the device, buffers or tile sizes are incompatible; it
+does not retry with CUDA. In workflows, combine the hardware option with
+`reader="xdr"` (CLI `--fits-reader xdr`) to require xDR as well. Uncompressed
+HDUs perform no decompression, and Astropy-selected reads do not apply this
+backend option. A receipt records the request, including these cases.
 
 The benchmark's `--output-json` report includes
 `capabilities.hardware_decompression`: the current device's algorithm mask,

@@ -205,7 +205,7 @@ With `reader="astropy"`, `device=True` decodes on the CPU and copies the arrays 
 |---|---|---|---|
 | `postprocess` | `--xdr-postprocess` | `auto`, `fused`, `separate`, `native` | restores the pixels with one fused kernel |
 | `gzip_decoder` | `--xdr-gzip-decoder` | `auto`, `gzip`, `deflate` | uses native Gzip when available, otherwise raw DEFLATE |
-| `decompression_backend` | `--xdr-decompression-backend` | `auto`, `cuda` | lets nvCOMP pick its decompression engine, with CUDA as the fallback |
+| `decompression_backend` | `--xdr-decompression-backend` | `auto`, `cuda`, `hardware` | lets nvCOMP pick its decompression engine, with CUDA as the fallback |
 
 `postprocess="native"` restores compressed tiles with the precompiled kernels of cuPhoton's native extension (@sec-install). Every key defaults to `auto`. The keys choose how xDR decodes, not whether it runs, and none changes a pixel value. The call checks them on any machine and records them in the receipt:
 
@@ -214,6 +214,8 @@ checked = read_fits_images("sample/target.fits", [0], reader="auto",
                            xdr_options={"postprocess": "separate"})
 print(checked.metadata()["xdr_options"])
 ```
+
+Use `decompression_backend="hardware"` with `reader="xdr"` to require native Gzip hardware decoding for compressed HDUs. It fails when the hardware engine, buffers or tile sizes are incompatible. Uncompressed HDUs need no decompression. See [hardware eligibility](https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md#hardware-eligibility-and-diagnostics) for supported devices and allocation requirements.
 
 The receipt records the requested choices, not the engine that ran. To load the same HDUs from many files of one shape, `batch_to_device` returns one CuPy array per HDU, shaped (file, y, x):
 
@@ -268,8 +270,8 @@ CPU runs of xFit, xPois and xRep turn `auto` into `astropy` before they read. Th
 `No module named 'cupy'`
 : `device=True` needs CuPy, even when Astropy decodes. Install the `gpu` profile.
 
-An explicit `gzip_decoder="gzip"` or `decompression_backend="cuda"` fails on a GPU host
-: The native extension is older than these choices. Rebuild it, as the [troubleshooting guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/troubleshooting.md#an-explicit-compression-choice-is-unavailable) describes.
+An explicit decoder or backend choice fails on a GPU host
+: The native extension may predate the requested choice. Rebuild it, as the [troubleshooting guide](https://github.com/NVIDIA/cuPhoton/blob/main/docs/troubleshooting.md#an-explicit-compression-choice-is-unavailable) describes. A `hardware` request also requires a supported device, compatible buffers and tile sizes.
 
 ## Next steps
 

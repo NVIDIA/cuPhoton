@@ -9,7 +9,7 @@ from collections.abc import Mapping
 XDR_OPTION_CHOICES = {
     "postprocess": frozenset({"auto", "fused", "separate", "native"}),
     "gzip_decoder": frozenset({"auto", "gzip", "deflate"}),
-    "decompression_backend": frozenset({"auto", "cuda"}),
+    "decompression_backend": frozenset({"auto", "cuda", "hardware"}),
 }
 
 
@@ -32,6 +32,14 @@ def normalize_xdr_options(
             choices = ", ".join(sorted(XDR_OPTION_CHOICES[name]))
             raise ValueError(f"xDR {name} must be one of: {choices}")
         result[name] = value
+    if (
+        result.get("decompression_backend") == "hardware"
+        and result.get("gzip_decoder") == "deflate"
+    ):
+        raise ValueError(
+            "xDR decompression_backend='hardware' requires "
+            "gzip_decoder='auto' or 'gzip'"
+        )
     return result
 
 
@@ -40,4 +48,6 @@ def merge_xdr_options(
     overrides: Mapping[str, str] | None,
 ) -> dict[str, str]:
     """Override only supplied keys and preserve other manifest choices."""
-    return {**normalize_xdr_options(base), **normalize_xdr_options(overrides)}
+    return normalize_xdr_options(
+        {**normalize_xdr_options(base), **normalize_xdr_options(overrides)}
+    )

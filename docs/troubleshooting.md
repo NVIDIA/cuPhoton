@@ -71,6 +71,9 @@ error. GPUDirect Storage also requires host and storage configuration; use
 
 `--xdr-gzip-decoder gzip` requires native Gzip support;
 `--xdr-decompression-backend cuda` requires an extension with backend selection.
+`--xdr-decompression-backend hardware` additionally requires native Gzip
+hardware selection, a supported GPU, compatible pooled buffers and tile sizes.
+Use `auto` or `gzip` as the Gzip decoder for this mode.
 An importable extension may predate those entry points. After updating a source
 checkout, rebuild it with the [native build instructions](components/xdr.md#native-extension-availability)
 in the environment running your command. Use `auto` when capability fallback
@@ -81,7 +84,9 @@ reader, decoder and backend policies.
 
 ### Confirm the decompression engine
 
-Enable [nvCOMP logging](https://docs.nvidia.com/cuda/nvcomp/getting_started.html#logging)
+Use `--xdr-decompression-backend hardware` to require hardware execution
+for compressed xDR reads. It fails if the hardware engine cannot be used.
+To inspect automatic selection, enable [nvCOMP logging](https://docs.nvidia.com/cuda/nvcomp/getting_started.html#logging)
 for a diagnostic run. Level 5 includes API calls as well as informational
 messages; use a separate log file to keep them out of the command output:
 

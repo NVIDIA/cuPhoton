@@ -1771,8 +1771,9 @@ def batch_to_device_stream(
         "gzip" requires native Gzip support; "deflate" selects raw DEFLATE.
     decompression_backend
         "auto" lets Gzip select compatible hardware with CUDA fallback. "cuda"
-        requires a rebuilt native helper and uses CUDA kernels. Native raw
-        DEFLATE uses CUDA in either mode.
+        requires a rebuilt native helper and uses CUDA kernels. "hardware"
+        requires native Gzip on the hardware engine without CUDA fallback.
+        Native raw DEFLATE supports only "auto" and "cuda".
     section
         Optional 2D ROI applied uniformly to CompImageHDUs.
     stream

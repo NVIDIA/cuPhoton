@@ -78,11 +78,12 @@ def batch_to_device(
     gzip_decoder : {"auto", "gzip", "deflate"}
         ``auto`` prefers native Gzip, with aligned raw DEFLATE fallback.
         ``gzip`` requires native Gzip support; ``deflate`` selects raw decode.
-    decompression_backend : {"auto", "cuda"}
+    decompression_backend : {"auto", "cuda", "hardware"}
         ``auto`` lets native Gzip select compatible hardware with CUDA
         fallback. ``cuda`` requires a native helper with backend selection.
-        Native raw DEFLATE uses CUDA in either mode. All three runtime
-        controls apply with either value of ``parallel``.
+        ``hardware`` requires native Gzip on the hardware engine without CUDA
+        fallback. Native raw DEFLATE supports only ``auto`` and ``cuda``.
+        All three runtime controls apply with either value of ``parallel``.
 
     Returns
     -------
