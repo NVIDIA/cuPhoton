@@ -284,12 +284,9 @@ z
    <text style="fill: #172631; font: 19px 'DejaVu Sans'; text-anchor: start" x="67.32" y="826.488" transform="rotate(-0 67.32 826.488)">Pipeline: read FITS, subtract images, fit candidates and score them.</text>
   </g>
   <g id="text_31">
-   <text style="fill: #536671; font: 17px 'DejaVu Sans'; text-anchor: start" x="67.32" y="856.44" transform="rotate(-0 67.32 856.44)">Eight workers share one GPU using CUDA MPS. Warm medians across six launches; startup excluded.</text>
+   <text style="fill: #536671; font: 17px 'DejaVu Sans'; text-anchor: start" x="67.32" y="856.44" transform="rotate(-0 67.32 856.44)">Warm runtime; eight workers share one GB200 GPU using CUDA MPS.</text>
   </g>
   <g id="text_32">
-   <text style="fill: #536671; font: 17px 'DejaVu Sans'; text-anchor: start" x="67.32" y="886.392" transform="rotate(-0 67.32 886.392)">The earlier solver is opt-in in v0.2 and retains its known convergence and uncertainty limitations.</text>
-  </g>
-  <g id="text_33">
    <text style="fill: #536671; font: 15px 'DejaVu Sans'; text-anchor: start" x="67.32" y="915.408" transform="rotate(-0 67.32 915.408)">cuPhoton 0.2  ·  nvidia.github.io/cuPhoton</text>
   </g>
  </g>
