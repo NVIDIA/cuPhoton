@@ -773,6 +773,7 @@ cutile = [
 ]
 dev = [
     { name = "coverage" },
+    { name = "filelock" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pydantic" },
@@ -790,6 +791,7 @@ gpu = [
     { name = "cuda-pathfinder" },
     { name = "cuda-toolkit", extra = ["cufile"], marker = "extra == 'extra-8-cuphoton-gpu'" },
     { name = "cupy-cuda13x", extra = ["ctk"], marker = "extra == 'extra-8-cuphoton-gpu'" },
+    { name = "filelock" },
     { name = "kvikio-cu13" },
     { name = "libkvikio-cu13" },
     { name = "nvidia-libnvcomp-cu13" },
@@ -817,6 +819,7 @@ rubin = [
     { name = "lsst-images", extra = ["https"] },
 ]
 torch = [
+    { name = "filelock" },
     { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-cuphoton-gpu' or extra != 'group-8-cuphoton-docs'" },
     { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "extra == 'group-8-cuphoton-docs'" },
 ]
@@ -826,6 +829,7 @@ viz = [
     { name = "tornado" },
 ]
 ximage = [
+    { name = "filelock" },
     { name = "photutils" },
     { name = "pydantic" },
     { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-cuphoton-gpu' or extra != 'group-8-cuphoton-docs'" },
@@ -838,6 +842,7 @@ xlens-inference = [
 
 [package.dev-dependencies]
 docs = [
+    { name = "filelock" },
     { name = "ipykernel" },
     { name = "matplotlib" },
     { name = "nbclient" },
@@ -868,6 +873,9 @@ requires-dist = [
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "sys_platform == 'linux' and extra == 'cutile'", specifier = ">=14,<15" },
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=14,<15" },
     { name = "dragonhpc", marker = "extra == 'dragon'", specifier = ">=0.14.2,<0.15" },
+    { name = "filelock", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.2.1" },
+    { name = "filelock", marker = "extra == 'dev'", specifier = ">=4.2.1" },
+    { name = "filelock", marker = "extra == 'torch'", specifier = ">=4.2.1" },
     { name = "h5py", specifier = ">=3.10" },
     { name = "httpx", marker = "extra == 'xlens-inference'", specifier = ">=0.28,<1" },
     { name = "kvikio-cu13", marker = "sys_platform == 'linux' and extra == 'io'", specifier = "==26.6.*" },
@@ -902,6 +910,7 @@ provides-extras = ["catalog", "ximage", "rubin", "xlens-inference", "photometry"
 
 [package.metadata.requires-dev]
 docs = [
+    { name = "filelock", specifier = ">=4.2.1" },
     { name = "ipykernel", specifier = ">=6,<8" },
     { name = "matplotlib", specifier = ">=3.10,<4" },
     { name = "nbclient", specifier = ">=0.10,<1" },
@@ -1044,11 +1053,11 @@ wheels = [
 
 [[package]]
 name = "filelock"
-version = "3.29.4"
+version = "4.2.10"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e6/dc/be6cbe99670cd6e4ad387123647cb08e0c32975e223f82551e914c5568a6/filelock-3.29.4.tar.gz", hash = "sha256:10cdb3656fc44541cdf30652a93fb10ec6b05325620eb316bd26893e4201538a", size = 63028, upload-time = "2026-06-13T16:12:00.744Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/cf/05bcdacabdc0aec7dc8e19d76281bd82325df62dae3b6430e9ba57397689/filelock-4.2.10.tar.gz", hash = "sha256:fcc3c0cb8bfe7f4b3bb0e231c04b15dbad068cb3c2515f343d8fde4dce93bd5d", size = 670595, upload-time = "2026-11-09T18:58:00.54Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/37/a065dc3bd6e49423a6532c642ca7378d3f467b1ef44c2800c937af7f9739/filelock-3.29.4-py3-none-any.whl", hash = "sha256:dac1648087d5115554850d113e7dd8c83ab2d38e3435dde2d4f163847e57b767", size = 42757, upload-time = "2026-06-13T16:11:59.582Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/90/5d0096a325aa0f83ba7a3968bfb485b67e32c947bdf9cd0fcb4b485be718/filelock-4.2.10-py3-none-any.whl", hash = "sha256:9479aaeb4db20b5a53e3da28493edd24720b66b8a0b84030aa56ccdf243d6857", size = 218040, upload-time = "2026-11-09T18:57:59.088Z" },
 ]
 
 [[package]]
