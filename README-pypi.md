@@ -1,0 +1,30 @@
+# cuPhoton
+
+cuPhoton provides GPU-accelerated reference workflows for astronomical imaging,
+signal correlation and X-ray trace analysis.
+
+## Installation
+
+Choose the extras for your workflow:
+
+```bash
+# FITS I/O
+python -m pip install 'cuphoton[io]==0.2.0'
+# GPU imaging and fitting
+python -m pip install 'cuphoton[gpu]==0.2.0'
+# GPU workflows with visualization and catalogs
+python -m pip install 'cuphoton[gpu,viz,catalog]==0.2.0'
+# Scene reconstruction
+python -m pip install 'cuphoton[ximage]==0.2.0'
+```
+
+Linux wheels support CPython 3.12–3.14 on x86-64 and ARM64. GPU execution
+requires a CUDA 13-compatible NVIDIA driver. See the
+[installation guide](https://nvidia.github.io/cuPhoton/install.html) for
+environment setup and optional dependencies.
+
+## Documentation and source
+
+- [cuPhoton User Guide](https://nvidia.github.io/cuPhoton/)
+- [v0.2.0 source](https://github.com/NVIDIA/cuPhoton/tree/v0.2.0)
+- [v0.2.0 release notes](https://github.com/NVIDIA/cuPhoton/releases/tag/v0.2.0)
