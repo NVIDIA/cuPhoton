@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
   "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="612pt" viewBox="0 0 1224 612" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="576pt" height="169.2pt" viewBox="0 0 576 169.2" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <metadata>
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
@@ -20,139 +20,133 @@
  </defs>
  <g id="figure_1">
   <g id="patch_1">
-   <path d="M 0 612
-L 1224 612
-L 1224 0
+   <path d="M 0 169.2
+L 576 169.2
+L 576 0
 L 0 0
 z
 " style="fill: #ffffff"/>
   </g>
   <g id="axes_1">
    <g id="patch_2">
-    <path d="M 342.72 459
-L 1126.08 459
-L 1126.08 238.68
-L 342.72 238.68
+    <path d="M 138.24 129.438
+L 541.44 129.438
+L 541.44 51.606
+L 138.24 51.606
 z
 " style="fill: #ffffff"/>
    </g>
    <g id="matplotlib.axis_1">
     <g id="xtick_1">
      <g id="line2d_1">
-      <path d="M 342.72 459
-L 342.72 238.68
-" clip-path="url(#pfa8af23135)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+      <path d="M 138.24 129.438
+L 138.24 51.606
+" clip-path="url(#p4c1c63eb3d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_2"/>
      <g id="text_1">
-      <text style="fill: #536671; font: 18px 'DejaVu Sans'; text-anchor: middle" x="342.72" y="484.677188" transform="rotate(-0 342.72 484.677188)">0</text>
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="138.24" y="141.896672" transform="rotate(-0 138.24 141.896672)">0</text>
      </g>
     </g>
     <g id="xtick_2">
      <g id="line2d_3">
-      <path d="M 481.408538 459
-L 481.408538 238.68
-" clip-path="url(#pfa8af23135)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+      <path d="M 209.623806 129.438
+L 209.623806 51.606
+" clip-path="url(#p4c1c63eb3d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_4"/>
      <g id="text_2">
-      <text style="fill: #536671; font: 18px 'DejaVu Sans'; text-anchor: middle" x="481.408538" y="484.677188" transform="rotate(-0 481.408538 484.677188)">60</text>
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="209.623806" y="141.896672" transform="rotate(-0 209.623806 141.896672)">60</text>
      </g>
     </g>
     <g id="xtick_3">
      <g id="line2d_5">
-      <path d="M 620.097075 459
-L 620.097075 238.68
-" clip-path="url(#pfa8af23135)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+      <path d="M 281.007612 129.438
+L 281.007612 51.606
+" clip-path="url(#p4c1c63eb3d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_6"/>
      <g id="text_3">
-      <text style="fill: #536671; font: 18px 'DejaVu Sans'; text-anchor: middle" x="620.097075" y="484.677188" transform="rotate(-0 620.097075 484.677188)">120</text>
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="281.007612" y="141.896672" transform="rotate(-0 281.007612 141.896672)">120</text>
      </g>
     </g>
     <g id="xtick_4">
      <g id="line2d_7">
-      <path d="M 758.785613 459
-L 758.785613 238.68
-" clip-path="url(#pfa8af23135)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+      <path d="M 352.391418 129.438
+L 352.391418 51.606
+" clip-path="url(#p4c1c63eb3d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_8"/>
      <g id="text_4">
-      <text style="fill: #536671; font: 18px 'DejaVu Sans'; text-anchor: middle" x="758.785613" y="484.677188" transform="rotate(-0 758.785613 484.677188)">180</text>
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="352.391418" y="141.896672" transform="rotate(-0 352.391418 141.896672)">180</text>
      </g>
     </g>
     <g id="xtick_5">
      <g id="line2d_9">
-      <path d="M 897.47415 459
-L 897.47415 238.68
-" clip-path="url(#pfa8af23135)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+      <path d="M 423.775224 129.438
+L 423.775224 51.606
+" clip-path="url(#p4c1c63eb3d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_10"/>
      <g id="text_5">
-      <text style="fill: #536671; font: 18px 'DejaVu Sans'; text-anchor: middle" x="897.47415" y="484.677188" transform="rotate(-0 897.47415 484.677188)">240</text>
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="423.775224" y="141.896672" transform="rotate(-0 423.775224 141.896672)">240</text>
      </g>
     </g>
     <g id="text_6">
-     <text style="fill: #536671; font: 17px 'DejaVu Sans'; text-anchor: middle" x="734.4" y="513.337969" transform="rotate(-0 734.4 513.337969)">Minutes  ·  shorter is faster</text>
+     <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="339.84" y="155.123078" transform="rotate(-0 339.84 155.123078)">Minutes  ·  shorter is faster</text>
     </g>
    </g>
    <g id="matplotlib.axis_2">
     <g id="ytick_1">
      <g id="line2d_11"/>
      <g id="text_7">
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'; text-anchor: end" x="330.72" y="303.601373" transform="rotate(-0 330.72 303.601373)">Earlier xRay</text>
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'; text-anchor: end" x="132.24" y="75.599829" transform="rotate(-0 132.24 75.599829)">Earlier xRay</text>
      </g>
     </g>
     <g id="ytick_2">
      <g id="line2d_12"/>
      <g id="text_8">
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(237.465625 399.32144)">xRay with</text>
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(168.860781 420.597283)">structured solver</text>
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(85.612813 108.065577)">xRay with</text>
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(51.310391 118.703499)">structured solver</text>
      </g>
     </g>
    </g>
    <g id="patch_3">
-    <path d="M 342.72 273.301714
-L 984.818361 273.301714
-L 984.818361 319.464
-L 342.72 319.464
+    <path d="M 138.24 64.578
+L 468.731803 64.578
+L 468.731803 79.403143
+L 138.24 79.403143
 z
-" clip-path="url(#pfa8af23135)" style="fill: #899ba7"/>
+" clip-path="url(#p4c1c63eb3d)" style="fill: #899ba7"/>
    </g>
    <g id="patch_4">
-    <path d="M 342.72 378.216
-L 356.43144 378.216
-L 356.43144 424.378286
-L 342.72 424.378286
+    <path d="M 138.24 101.640857
+L 145.297359 101.640857
+L 145.297359 116.466
+L 138.24 116.466
 z
-" clip-path="url(#pfa8af23135)" style="fill: #76b900"/>
+" clip-path="url(#p4c1c63eb3d)" style="fill: #76b900"/>
    </g>
    <g id="text_9">
-    <text style="fill: #172631; font: 700 21px 'DejaVu Sans'; text-anchor: start" x="996.376131" y="302.177545" transform="rotate(-0 996.376131 302.177545)">4 h 38 min</text>
+    <text style="fill: #172631; font: 700 10px 'DejaVu Sans'; text-anchor: start" x="474.680656" y="74.749946" transform="rotate(-0 474.680656 74.749946)">4 h 38 min</text>
    </g>
    <g id="text_10">
-    <text style="fill: #172631; font: 700 21px 'DejaVu Sans'; text-anchor: start" x="367.98921" y="407.09183" transform="rotate(-0 367.98921 407.09183)">5 min 56 s</text>
+    <text style="fill: #172631; font: 700 10px 'DejaVu Sans'; text-anchor: start" x="151.246211" y="111.812804" transform="rotate(-0 151.246211 111.812804)">5 min 56 s</text>
    </g>
   </g>
   <g id="text_11">
-   <text style="fill: #172631; font: 700 32px 'DejaVu Sans'; text-anchor: start" x="67.32" y="55.08" transform="rotate(-0 67.32 55.08)">DGX Spark: xRay in under six minutes</text>
+   <text style="fill: #172631; font: 700 13px 'DejaVu Sans'; text-anchor: start" x="23.04" y="18.612" transform="rotate(-0 23.04 18.612)">DGX Spark: xRay in under six minutes</text>
   </g>
   <g id="text_12">
-   <text style="fill: #536671; font: 21px 'DejaVu Sans'; text-anchor: start" x="67.32" y="94.248" transform="rotate(-0 67.32 94.248)">66,040 detector fits  ·  GB10 GPU</text>
+   <text style="fill: #536671; font: 9px 'DejaVu Sans'; text-anchor: start" x="23.04" y="35.532" transform="rotate(-0 23.04 35.532)">66,040 detector fits  ·  GB10 GPU</text>
   </g>
   <g id="text_13">
-   <text style="fill: #172631; font: 700 25px 'DejaVu Sans'; text-anchor: start" x="67.32" y="197.064" transform="rotate(-0 67.32 197.064)">Full detector processing</text>
-  </g>
-  <g id="text_14">
-   <text style="fill: #467800; font: 700 29px 'DejaVu Sans'; text-anchor: end" x="1156.68" y="197.064" transform="rotate(-0 1156.68 197.064)">47× faster</text>
-  </g>
-  <g id="text_15">
-   <text style="fill: #536671; font: 17px 'DejaVu Sans'; text-anchor: start" x="67.32" y="569.16" transform="rotate(-0 67.32 569.16)">cuPhoton 0.2  ·  nvidia.github.io/cuPhoton</text>
+   <text style="fill: #467800; font: 700 12px 'DejaVu Sans'; text-anchor: end" x="552.96" y="35.532" transform="rotate(-0 552.96 35.532)">47× faster</text>
   </g>
  </g>
  <defs>
-  <clipPath id="pfa8af23135">
-   <rect x="342.72" y="238.68" width="783.36" height="220.32"/>
+  <clipPath id="p4c1c63eb3d">
+   <rect x="138.24" y="51.606" width="403.2" height="77.832"/>
   </clipPath>
  </defs>
 </svg>
