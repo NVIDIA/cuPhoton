@@ -100,15 +100,14 @@ L 897.47415 238.68
     <g id="ytick_1">
      <g id="line2d_11"/>
      <g id="text_7">
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(204.500625 294.407154)">Original XANI</text>
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(245.611875 315.682998)">workflow</text>
+      <text style="fill: #172631; font: 19px 'DejaVu Sans'; text-anchor: end" x="330.72" y="303.601373" transform="rotate(-0 330.72 303.601373)">Earlier xRay</text>
      </g>
     </g>
     <g id="ytick_2">
      <g id="line2d_12"/>
      <g id="text_8">
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(165.880156 399.32144)">Structured-solver</text>
-      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(238.127656 420.597283)">prototype</text>
+      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(237.465625 399.32144)">xRay with</text>
+      <text style="fill: #172631; font: 19px 'DejaVu Sans'" transform="translate(168.860781 420.597283)">structured solver</text>
      </g>
     </g>
    </g>
