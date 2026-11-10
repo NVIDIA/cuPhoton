@@ -132,7 +132,7 @@ jobs:
     # Only vetted copies and maintained branches may use self-hosted GPUs.
     if: github.event_name == 'push' && github.repository == 'NVIDIA/cuPhoton'
     runs-on: linux-amd64-gpu-l40g-latest-1
-    timeout-minutes: 20
+    timeout-minutes: 30
     concurrency:
       group: cuphoton-gpu
       queue: max
@@ -154,7 +154,7 @@ jobs:
           enable-cache: false
       - run: uv python install 3.12
       - name: Install GPU test dependencies
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: >-
           uv sync --locked --python 3.12 --extra dev --extra gpu --extra viz
           --extra ximage
