@@ -943,8 +943,15 @@ def test_gpu_batch_rejects_invalid_backend_before_import(backend):
         )
 
 
-@pytest.mark.parametrize("backend", ["cuda", "hardware"])
-@pytest.mark.parametrize("extension", [None, SimpleNamespace()])
+@pytest.mark.parametrize(
+    "backend,extension",
+    [
+        (backend, extension)
+        for backend in ("cuda", "hardware")
+        for extension in (None, SimpleNamespace())
+    ]
+    + [("hardware", SimpleNamespace(supports_decompression_backend=True))],
+)
 def test_forced_backend_rejects_missing_native_capability(
     monkeypatch, extension, backend
 ):
@@ -969,7 +976,10 @@ def test_forced_backend_rejects_missing_native_capability(
     "kwargs,match",
     [
         ({"gzip_wrapped": False}, "requires native Gzip"),
-        ({"gzip_decoder": "deflate"}, "requires native Gzip"),
+        (
+            {"gzip_decoder": "deflate"},
+            "requires gzip_decoder='auto' or 'gzip'",
+        ),
         ({"use_native_pool": False}, "requires use_native_pool=True"),
         ({"use_cpp_helper": False}, "requires use_cpp_helper enabled"),
     ],
@@ -989,7 +999,10 @@ def test_hardware_rejects_extension_without_gzip(monkeypatch):
     monkeypatch.setattr(
         nvcomp_batch,
         "_try_get_cpp_ext",
-        lambda: SimpleNamespace(supports_decompression_backend=True),
+        lambda: SimpleNamespace(
+            supports_decompression_backend=True,
+            supports_hardware_decompression=True,
+        ),
     )
     with pytest.raises(RuntimeError, match="native extension with Gzip"):
         nvcomp_batch.gpu_gzip_decompress_batch(
@@ -1004,15 +1017,17 @@ def test_hardware_rejects_extension_without_gzip(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "backend,route",
+    "backend,route,retain_owners",
     [
-        (backend, route)
+        (backend, route, True)
         for backend in ("auto", "cuda")
         for route in ("gzip", "deflate", "deflate_pooled")
     ]
-    + [("hardware", "gzip_pooled")],
+    + [("hardware", "gzip_pooled", retain) for retain in (False, True)],
 )
-def test_native_backend_forwarding(monkeypatch, backend, route):
+def test_native_backend_forwarding(
+    monkeypatch, backend, route, retain_owners
+):
     calls = []
     output = SimpleNamespace(data=SimpleNamespace(ptr=200))
     owner = object()
@@ -1029,7 +1044,9 @@ def test_native_backend_forwarding(monkeypatch, backend, route):
         "deflate_pooled": "batch_deflate_decompress_pooled",
     }[route]
     extension = SimpleNamespace(
-        supports_decompression_backend=True, **{entrypoint: record}
+        supports_decompression_backend=True,
+        supports_hardware_decompression=True,
+        **{entrypoint: record},
     )
     monkeypatch.setattr(nvcomp_batch, "_try_get_cpp_ext", lambda: extension)
     monkeypatch.setattr(
@@ -1046,7 +1063,7 @@ def test_native_backend_forwarding(monkeypatch, backend, route):
             ),
         ),
     )
-    keepalive = [] if pooled else None
+    keepalive = [] if pooled and retain_owners else None
     actual, _ = nvcomp_batch.gpu_gzip_decompress_batch(
         SimpleNamespace(size=20, data=SimpleNamespace(ptr=100)),
         [0],
@@ -1065,6 +1082,9 @@ def test_native_backend_forwarding(monkeypatch, backend, route):
     assert args[6] == 300
     assert kwargs == {"decompression_backend": backend}
     if pooled:
-        assert keepalive == [output, owner]
+        if retain_owners:
+            assert keepalive == [output, owner]
+        else:
+            assert keepalive is None
         if route == "gzip_pooled":
             assert args[7] is True

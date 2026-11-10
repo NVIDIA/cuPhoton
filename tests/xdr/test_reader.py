@@ -28,6 +28,26 @@ def test_hardware_read_requires_stream_before_planning(monkeypatch):
         comp_reader.read(decompression_backend="hardware")
 
 
+@pytest.mark.parametrize("decode", [False, True])
+def test_hardware_device_heap_requires_keepalive_before_import(
+    monkeypatch, decode
+):
+    monkeypatch.setitem(sys.modules, "cupy", None)
+    with pytest.raises(ValueError, match="requires an explicit keepalive"):
+        if decode:
+            GpuCompImageReader.decode_from_device_heap(
+                None, [], {}, decompression_backend="hardware"
+            )
+        else:
+            GpuCompImageReader.inflate_device_heap(
+                None,
+                [],
+                lengths=[],
+                out_bytes=[],
+                decompression_backend="hardware",
+            )
+
+
 @pytest.mark.parametrize("use_loader", [False, True])
 @pytest.mark.parametrize(
     ("contiguous", "short_read"),

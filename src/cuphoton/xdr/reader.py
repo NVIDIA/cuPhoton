@@ -451,6 +451,7 @@ class GpuCompImageReader:
         offsets into that output buffer. ``gzip_decoder`` and
         ``decompression_backend`` use the choices documented by
         :func:`cuphoton.xdr.batch_to_device_stream`.
+        ``hardware`` requires an explicit ``keepalive`` owner list.
         """
         normalize_xdr_options(
             {
@@ -458,6 +459,11 @@ class GpuCompImageReader:
                 "decompression_backend": decompression_backend,
             }
         )
+        if decompression_backend == "hardware" and keepalive is None:
+            raise ValueError(
+                "decompression_backend='hardware' requires an explicit "
+                "keepalive owner list"
+            )
         import cupy as cp
 
         with stream or cp.cuda.Stream.null:
@@ -662,6 +668,7 @@ class GpuCompImageReader:
         consumer calls after staging its pinned host heap to device.
         ``postprocess``, ``gzip_decoder`` and ``decompression_backend`` use
         the choices documented by :func:`cuphoton.xdr.batch_to_device_stream`.
+        ``hardware`` requires an explicit ``keepalive`` owner list.
         """
         normalize_xdr_options(
             {
@@ -670,6 +677,11 @@ class GpuCompImageReader:
                 "decompression_backend": decompression_backend,
             }
         )
+        if decompression_backend == "hardware" and keepalive is None:
+            raise ValueError(
+                "decompression_backend='hardware' requires an explicit "
+                "keepalive owner list"
+            )
         if keepalive is not None:
             keepalive.append(d_concat)
         d_pixels, tile_byte_offsets_np = (

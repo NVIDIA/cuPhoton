@@ -274,7 +274,9 @@ def test_forced_hardware_roundtrip_or_unsupported_device(cp, deferred):
         data = nvcomp_batch._native_device_empty_uint8(sum(lengths))
         data.set(np.frombuffer(b"".join(payloads), dtype="u1"))
         if not supported:
-            with pytest.raises(RuntimeError, match="hardware Gzip"):
+            with pytest.raises(
+                RuntimeError, match="unavailable on this device"
+            ):
                 decode()
             return
         result, out_offsets = decode()
@@ -287,8 +289,14 @@ def test_forced_hardware_roundtrip_or_unsupported_device(cp, deferred):
     )
 
 
-@pytest.mark.parametrize("ineligible", ["allocation", "chunk_size"])
-def test_forced_hardware_rejects_ineligible_input(cp, ineligible):
+@pytest.mark.parametrize(
+    "ineligible,match",
+    [
+        ("allocation", "hardware-decompression-capable"),
+        ("chunk_size", "exceeds device limit"),
+    ],
+)
+def test_forced_hardware_rejects_ineligible_input(cp, ineligible, match):
     supported, maximum = _hardware_limits(cp)
     if not supported:
         pytest.skip("device has no hardware DEFLATE engine")
@@ -308,7 +316,7 @@ def test_forced_hardware_rejects_ineligible_input(cp, ineligible):
         else:
             data = nvcomp_batch._native_device_empty_uint8(len(payload))
             data.set(np.frombuffer(payload, dtype="u1"))
-        with pytest.raises(RuntimeError, match="hardware Gzip"):
+        with pytest.raises(RuntimeError, match=match):
             nvcomp_batch.gpu_gzip_decompress_batch(
                 data,
                 [0],

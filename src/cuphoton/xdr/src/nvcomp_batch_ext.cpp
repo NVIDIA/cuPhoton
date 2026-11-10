@@ -726,6 +726,7 @@ PYBIND11_MODULE(_nvcomp_batch_ext, m) {
         "Batched Gzip/DEFLATE decompression — device-pointer interface to nvcomp.";
 
     m.attr("supports_decompression_backend") = true;
+    m.attr("supports_hardware_decompression") = true;
 
     xdr_gpu::bind_io(m);
     xdr_gpu::bind_memory_manager(m);

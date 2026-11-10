@@ -13,6 +13,7 @@ import pytest
 from astropy.io import fits
 
 from cuphoton.core import fits_io
+from cuphoton.core.fits_options import merge_xdr_options
 
 
 @pytest.mark.parametrize(
@@ -67,13 +68,33 @@ def test_xdr_options_reach_batch_dispatch(
 
 
 @pytest.mark.parametrize(
-    "options", ["fused", {"unknown": "auto"}, {"postprocess": True}]
+    "options",
+    [
+        "fused",
+        {"unknown": "auto"},
+        {"postprocess": True},
+        {"gzip_decoder": "deflate", "decompression_backend": "hardware"},
+    ],
 )
 def test_invalid_xdr_options_fail_before_input_access(tmp_path, options):
     with pytest.raises(ValueError, match="xDR|xdr_options"):
         fits_io.read_fits_images(
             tmp_path / "missing.fits", [1], xdr_options=options
         )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_merged_xdr_options_reject_incompatible_decoder(reverse):
+    options = [
+        {"gzip_decoder": "deflate"},
+        {"decompression_backend": "hardware"},
+    ]
+    if reverse:
+        options.reverse()
+    with pytest.raises(
+        ValueError, match="requires gzip_decoder='auto' or 'gzip'"
+    ):
+        merge_xdr_options(*options)
 
 
 def _write(tmp_path, array, *, compression=None, **kwargs):

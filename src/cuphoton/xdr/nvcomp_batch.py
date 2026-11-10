@@ -950,7 +950,12 @@ def gpu_gzip_decompress_batch(
     if gzip_decoder == "gzip" and not gzip_wrapped:
         raise ValueError("gzip_decoder='gzip' requires gzip_wrapped=True")
     if decompression_backend == "hardware":
-        if not gzip_wrapped or gzip_decoder == "deflate":
+        if gzip_decoder == "deflate":
+            raise ValueError(
+                "decompression_backend='hardware' requires "
+                "gzip_decoder='auto' or 'gzip'"
+            )
+        if not gzip_wrapped:
             raise ValueError(
                 "decompression_backend='hardware' requires native Gzip "
                 "decoding of gzip-wrapped inputs"
@@ -1045,7 +1050,10 @@ def gpu_gzip_decompress_batch(
             _warn_python_fallback_once()
 
     backend_selection = getattr(ext, "supports_decompression_backend", False)
-    if decompression_backend != "auto" and not backend_selection:
+    if (decompression_backend != "auto" and not backend_selection) or (
+        decompression_backend == "hardware"
+        and not getattr(ext, "supports_hardware_decompression", False)
+    ):
         raise RuntimeError(
             f"decompression_backend={decompression_backend!r} requires a "
             "rebuilt native extension with backend selection and "
