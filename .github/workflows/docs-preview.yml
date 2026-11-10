@@ -7,7 +7,7 @@ run-name: docs preview PR ${{ github.event.number }} / ${{ github.sha }}
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 0.1.x, 0.2.x]
     paths:
       - .github/workflows/docs-preview.yml
       - .github/workflows/docs.yml
