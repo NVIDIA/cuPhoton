@@ -34,6 +34,7 @@ recursive-include examples *.py *.yaml
 recursive-include examples/distributed-pipeline *.json *.txt *.license
 recursive-include tests *.py
 recursive-include tests/xbeam/native *.cpp
+exclude tests/test_ci_changes.py
 recursive-include src/cuphoton/xdr/src *.cpp *.h *.sh
 recursive-include src/cuphoton/xfit/src *.cpp *.cu *.cuh *.h
 recursive-include src/cuphoton/core/src *.cpp *.cu *.h

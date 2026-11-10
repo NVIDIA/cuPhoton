@@ -59,6 +59,11 @@ test:
 test-cpu:
 	CUDA_VISIBLE_DEVICES= CUPHOTON_XREP_TORCH_DEVICE=cpu $(UV_RUN) $(CPU_EXTRAS) $(PYTEST) -rs
 
+.PHONY: test-docs
+test-docs:
+	$(UV_RUN) --extra dev $(PYTEST) -q tests/xray/test_docs.py \
+		tests/test_xfit_build.py::test_wheel_architectures_match_documented_cubin_targets
+
 test-cpu-coverage:
 	$(UV_RUN) --extra dev coverage erase
 	$(MAKE) test-cpu PYTEST="coverage run -m pytest"
