@@ -56,9 +56,39 @@ window produces a degree-597 polynomial and 200 singular values. Other
 dimensions and distributed shards are rejected. Both dense and tile-row
 output layouts retain the existing masks and publication behavior.
 
-`--structured-host-workers` controls P1, refinement and P2 workers;
-`--structured-root-workers` controls native CPU root workers. Set the BLAS
-thread count before launching the command to avoid nested oversubscription.
+`--structured-host-workers` controls P1, refinement and P2 workers
+(default 8); `--structured-root-workers` controls native CPU root workers.
+For an initial run on x86-64 or AArch64, keep eight host workers and set one
+BLAS/OpenMP thread per fit before starting Python:
+
+```bash
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+```
+
+Append `--structured-host-workers 8` to the detector command. Some OpenBLAS
+builds contend on shared scratch-buffer locks when many host threads call
+SVD concurrently, even with one BLAS thread per fit. Higher host-worker counts
+can consume more CPU without improving throughput. Benchmark a representative
+batch before increasing the worker count; eight is a conservative starting
+point, not a universal optimum. Explicit worker settings are honored.
+
+The NumPy Hankel copy eliminates a per-row Python loop while retaining the
+fitting arithmetic. An affected BLAS provider can still limit throughput.
+NumPy wheels can bundle their own BLAS library, so changing the system BLAS
+alone may not change the library used by NumPy.
+
+On Grace/AArch64, an optional NVPL-backed NumPy build can avoid the affected
+OpenBLAS path. NVIDIA documents [NVPL-backed NumPy/SciPy builds](https://docs.nvidia.com/nvpl/26.10/numerical-python.html)
+and [Conda environments](https://docs.nvidia.com/nvpl/26.10/conda.html).
+Select a compatible Python, NumPy and CUDA 13 environment, verify the loaded
+provider with `numpy.show_config()`, and keep one OpenMP thread per fit.
+Compare fitted outputs when changing providers: close numerical results need
+not be byte-identical. cuPhoton does not require NVPL or distribute a patched
+BLAS library. See the [OpenBLAS host-scaling issue](https://github.com/NVIDIA/cuPhoton/issues/178)
+for measurements and provider workarounds.
+
 The GPU overlap schedule keeps at most two host chunks and one device batch.
 `--structured-batch-rows` sets the active-row target (default 33,024);
 whole tiles stay together, so a batch can exceed its target by at most 15

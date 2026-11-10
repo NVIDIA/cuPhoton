@@ -2719,7 +2719,9 @@ class DetectorArtifactsCommand(_XRayCommand):
     class StructuredHostWorkersArg(IntegerInvariant):
         _arg = "--structured-host-workers"
         _help = (
-            "Host workers for structured P1, DD refinement and P2 (1..64)."
+            "Host workers for structured P1, DD refinement and P2 (1..64; "
+            "default 8). Higher counts can regress with affected OpenBLAS "
+            "builds; set BLAS/OpenMP threads to 1 and benchmark your runtime."
         )
         _required = False
         _default = 8
