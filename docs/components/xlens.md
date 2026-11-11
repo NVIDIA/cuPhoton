@@ -4,7 +4,8 @@
 evidence references. It provides a dashboard, JSON API and standalone HTML
 export. Applications own input formats, scientific rules, units, thresholds
 and detailed views. Optional model investigation reads selected scalar evidence
-and writes separate advisory reports.
+and writes separate advisory reports. The optional NOOA backend can choose
+evidence queries and run isolated Python during an investigation.
 
 ## Run the invented-measurement example
 
@@ -152,15 +153,34 @@ coordination, distributed execution or power-loss durability guarantee.
 
 ## Configure optional investigation
 
-Install `cuphoton[xlens-inference]` for model investigation on Python
-3.12–3.14. From a checkout, use `uv sync --locked --extra xlens-inference`.
-Each investigation sends one bounded scalar snapshot to an explicitly
-configured OpenAI-compatible Chat Completions endpoint and validates its response.
+Monitoring and export work with the base package. Select an inference profile
+only when you want model-generated reports:
+
+| Backend | Installation | Execution |
+| --- | --- | --- |
+| `basic` (default) | `cuphoton[xlens-inference]` | One bounded scalar snapshot and response; Python 3.12–3.14 |
+| `nooa` | `cuphoton[xlens-nooa]` | Iterative evidence queries and isolated Python; Linux, Python 3.12/3.13 |
+
+NOOA is installed from its upstream Python distribution only when its extra is
+selected. The base, GPU and Dragon profiles do not select it. From a checkout:
+
+```bash
+uv sync --locked --python 3.13 --extra xlens-nooa
+```
+
+The extra pins NOOA 0.0.12 and includes the HTTP client. Install your Linux
+distribution's `bubblewrap` package separately, with working unprivileged user
+namespaces, and run as a non-root user. The backend reports an error if its
+interpreter, package version or isolation requirements are unavailable.
+Python 3.14 supports the basic
+backend; it cannot run the NOOA worker.
 
 Supply a TOML file with the exact model identifier accepted by your endpoint:
 
 ```toml
 [inference]
+backend = "nooa"
+api = "chat_completions"
 base_url = "http://127.0.0.1:8000/v1"
 model = "institution-model"
 auth = "none"
@@ -172,9 +192,13 @@ max_samples = 64
 max_context_bytes = 262144
 max_response_bytes = 65536
 max_concurrent = 1
+max_iterations = 8
+max_tool_calls = 32
+max_evidence_bytes = 8388608
 ```
 
-For bearer authentication, set `auth = "bearer"` and
+Use `backend = "basic"` for a single-request investigation. For bearer
+authentication, set `auth = "bearer"` and
 `api_key_env = "CUPHOTON_XLENS_API_KEY"`, then inject the secret through your
 institution's secret-management procedure. The config contains the variable
 name, never the value. No-auth mode requires omitting `api_key_env` and ignores
@@ -184,6 +208,8 @@ for non-loopback endpoints; plain HTTP is accepted for loopback endpoints.
 HTTPS uses normal Python certificate verification, including
 `SSL_CERT_FILE`/`SSL_CERT_DIR`; xLens configuration cannot disable verification.
 Ambient proxies and HTTP redirects are disabled.
+
+Save the configuration as `inference.toml`, then ask about saved measurements:
 
 ```bash
 cuphoton xlens ask --state xlens-demo/state --config inference.toml \
@@ -199,39 +225,115 @@ Use the live session's question box to retain a report in that run.
 Applications can await
 `Investigator(config).investigate(monitor, sample_ids, question=..., instructions=...)`.
 Instructions supply domain terminology and interpretation limits. The request
-contains the selected samples' measurements, findings, observation times, units
-and revisions. Run-scoped questions include the run's current samples within
-the configured sample and byte limits.
+for the basic backend contains the selected samples' measurements, findings,
+observation times, units and revisions. Run-scoped questions include the run's
+current samples within the configured sample and byte limits.
 
-Metadata and artifact paths are excluded; full artifacts, evaluation truth and
-previous model reports are never added automatically. Applications choose the
-contents of measurements, findings, instructions and questions. The selected
-revisions determine report staleness.
+NOOA starts with the selected identities and can inspect the bounded scalar
+catalog through `status`, `get_sample`, `metric_series`, `compare_samples` and
+`recent_findings`. Applications can expose additional diagnostics with a
+`domain_views` name/description mapping and a trusted
+`domain_query(sample_id, query_name) -> dict` callback. The callback must perform
+bounded reads promptly, verify artifact provenance and return JSON: at most
+16 KiB per view and 64 KiB total. It runs in the application process and should
+not launch long-running work.
+
+The parent brokers queries against a detached evidence snapshot. Metadata and
+artifact paths are excluded; full artifacts, evaluation truth and previous model
+reports are never added automatically. Applications choose the contents of
+measurements, findings, diagnostics, instructions and questions, and must exclude
+evaluation truth from those inputs. Selected and queried revisions, plus final
+citations, determine report staleness.
 Reports remain separate from deterministic results. Every citation must match
 an available sample revision, measurement name, value and unit. Reference
 validation does not establish the correctness of scientific interpretation.
 
-### Model and execution boundary
+### Choose the model API
 
-Each investigation sends a nonstreaming `POST <base_url>/chat/completions`
-request with the exact configured `model`, `messages`, `stream=false`, and
-token-limit field. Choose `max_completion_tokens` when required by the endpoint.
-The response contains JSON in ordinary text; `response_format="json_object"`
-requests optional JSON mode. A JSON-schema structured-output API and model
-enumeration are not required. Unsupported endpoint/model/capability combinations
-fail visibly without switching the configured destination or model.
+Both backends use the exact configured endpoint and model, with nonstreaming
+requests. Select the API your endpoint supports:
+
+| `api` | Request path | Token limit |
+| --- | --- | --- |
+| `chat_completions` (default) | `<base_url>/chat/completions` | `max_tokens` or `max_completion_tokens`, selected by `token_parameter` |
+| `responses` | `<base_url>/responses` | `max_tokens` is sent as `max_output_tokens` |
+
+NOOA uses function tools for `execute_python` and `return_result`; the selected
+model must support those calls through the chosen API. The basic backend
+requests JSON in ordinary text; `response_format="json_object"` selects JSON
+mode when supported. Neither backend requires model enumeration. Unsupported
+endpoint/model/capability combinations fail visibly without changing the
+configured destination, API or model.
+
+Responses requests use `store=false`. During a NOOA investigation, the client
+passes returned reasoning items, including encrypted reasoning content, back to
+the endpoint along with tool results so it can continue the same investigation.
+Those items are not added to xLens reports. The inference service receives the
+requested evidence and applies its own data-handling policy; `store=false` is
+not a statement about every form of provider retention.
 
 An institution's [vLLM OpenAI-compatible server](https://docs.vllm.ai/en/stable/serving/online_serving/openai_compatible_server/)
 can supply the endpoint when configured for the selected model and required
-chat capabilities. xLens does not deploy a model server. The
+chat/tool capabilities. xLens does not deploy a model server. The
 [Chat Completions API](https://developers.openai.com/api/reference/resources/chat)
-describes the wire format; compatibility depends on the actual server and model.
+and [Responses API](https://developers.openai.com/api/reference/resources/responses)
+describe the wire formats; compatibility depends on the actual server and model.
 
-The client enforces request and response byte limits, sample limits, bounded
-concurrency and a total-time limit. Cancellation closes the client request;
-the remote model server may continue work it already accepted. The configured
-inference service receives the selected evidence and controls its own retention.
-Model responses cannot execute code or tools.
+### Optional GPT-6 Rosalind configuration
+
+OpenAI lists `gpt-6-rosalind` for organizations approved through its trusted-access
+program for authorized internal research. See the
+[October 2026 API announcement](https://developers.openai.com/api/docs/changelog#october-2026)
+for availability and access guidance. Select it explicitly if your API
+organization has access and the endpoint supports the required function tools:
+
+```toml
+[inference]
+backend = "nooa"
+api = "responses"
+base_url = "https://api.openai.com/v1"
+model = "gpt-6-rosalind"
+auth = "bearer"
+api_key_env = "CUPHOTON_XLENS_API_KEY"
+timeout_seconds = 120
+max_tokens = 4096
+max_context_bytes = 262144
+max_response_bytes = 262144
+max_iterations = 8
+max_tool_calls = 32
+```
+
+Provide the credential through the named environment variable, then use the
+same `cuphoton xlens ask` or live-session commands. This is an opt-in
+configuration example: cuPhoton does not provide API access, select Rosalind
+automatically or distribute model weights. A live Rosalind tool-call round trip
+has not been qualified for this integration. Test a small synthetic
+investigation with your endpoint before relying on it for scientific work.
+
+### NOOA execution boundary
+
+NOOA runs its CodeAct loop and generated Python in a separate Linux process.
+Bubblewrap isolates filesystem, process and network namespaces. The worker sees
+read-only Python runtime, declared NOOA dependencies and system libraries, plus
+a 16 MiB temporary workspace. It starts without ambient environment variables,
+host home directories, monitor storage or application files. Only the parent
+HTTP client holds model credentials and endpoint settings. The adapter suppresses
+NOOA's automatic tracing initialization and unused LiteLLM journal flush, and
+the worker has no network access.
+Installed interpreter and dependency files remain trusted runtime inputs.
+
+The parent enforces model-turn, tool/read, byte, sample, concurrency and
+total-time limits. The worker has per-process address-space, CPU-time and
+file-descriptor limits, and cannot create child processes or threads. Its root
+and device filesystems are read-only; temporary writes share the bounded
+workspace. Cancellation terminates the isolated session and its
+descendants; the remote model server may continue work it already accepted.
+These controls do not provide an aggregate host-resource quota or qualify the
+viewer as a public service for arbitrary untrusted code.
+
+The worker can analyze the evidence exposed to it. It does not automatically
+acquire archive access, application files, GPU access or job-submission tools.
+The basic backend performs no code or tool execution.
 
 ## Live monitoring and browser questions
 

@@ -47,9 +47,8 @@ def endpoint():
                     "body": payload,
                 }
             )
-            evidence = json.loads(payload["messages"][-1]["content"])[
-                "evidence"
-            ]
+            messages = payload.get("messages", payload.get("input"))
+            evidence = json.loads(messages[-1]["content"])["evidence"]
             sample = evidence["samples"][0]
             name, measurement = next(iter(sample["measurements"].items()))
             answer = {
@@ -66,16 +65,31 @@ def endpoint():
                     }
                 ],
             }
-            body = json.dumps(
-                {
-                    "choices": [
+            result = {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps(answer)},
+                    }
+                ]
+            }
+            if self.path.endswith("/responses"):
+                result = {
+                    "status": "completed",
+                    "output": [
                         {
-                            "finish_reason": "stop",
-                            "message": {"content": json.dumps(answer)},
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(answer),
+                                }
+                            ],
                         }
-                    ]
+                    ],
                 }
-            ).encode()
+            body = json.dumps(result).encode()
             if behavior["large"]:
                 body += b" " * 5000
             time.sleep(behavior["delay"])
@@ -114,8 +128,9 @@ def make_monitor(tmp_path):
 
 
 @pytest.mark.parametrize("auth", ["none", "bearer"])
+@pytest.mark.parametrize("api", ["chat_completions", "responses"])
 def test_portable_client_auth_model_and_report_separation(
-    tmp_path, monkeypatch, endpoint, auth
+    tmp_path, monkeypatch, endpoint, auth, api
 ):
     url, seen, _ = endpoint
     monkeypatch.setenv("CUPHOTON_XLENS_API_KEY", "fixture-credential")
@@ -127,12 +142,18 @@ def test_portable_client_auth_model_and_report_separation(
         "institution/exact-model-id",
         auth=auth,
         api_key_env="CUPHOTON_XLENS_API_KEY" if auth == "bearer" else None,
+        api=api,
     )
     report = asyncio.run(
         Investigator(config).investigate(monitor, ["observation"])
     )
     assert report["status"] == "completed"
-    assert seen[0]["path"] == "/v1/chat/completions"
+    assert seen[0]["path"] == (
+        "/v1/responses" if api == "responses" else "/v1/chat/completions"
+    )
+    if api == "responses":
+        assert seen[0]["body"]["store"] is False
+        assert seen[0]["body"]["max_output_tokens"] == config.max_tokens
     assert seen[0]["body"]["model"] == "institution/exact-model-id"
     assert seen[0]["authorization"] == (
         "Bearer fixture-credential" if auth == "bearer" else None

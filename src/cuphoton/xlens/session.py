@@ -19,6 +19,7 @@ from typing import Any
 
 from .inference import InferenceConfig, Investigator
 from .monitor import Monitor, now
+from .nooa_backend import NooaError, _command
 
 
 class MonitorSession:
@@ -40,6 +41,8 @@ class MonitorSession:
         poll: Callable[[], None] | None = None,
         poll_interval: float = 1.0,
         auto_investigate: bool = False,
+        domain_query: Callable[[str, str], dict[str, Any]] | None = None,
+        domain_views: dict[str, str] | None = None,
         access_token_env: str | None = None,
     ) -> None:
         if not 0.05 <= poll_interval <= 3600:
@@ -60,6 +63,8 @@ class MonitorSession:
         self.poll = poll
         self.poll_interval = poll_interval
         self.auto_investigate = auto_investigate
+        self.domain_query = domain_query
+        self.domain_views = domain_views or {}
         self._token = (
             os.environ.get(access_token_env, "") if access_token_env else ""
         )
@@ -80,6 +85,11 @@ class MonitorSession:
                 self.reason = (
                     "Install cuphoton[xlens-inference] for investigation."
                 )
+            elif config.backend == "nooa":
+                try:
+                    _command()
+                except NooaError as exc:
+                    self.reason = str(exc)
         self._investigator = Investigator(config) if config else None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -117,6 +127,7 @@ class MonitorSession:
             "reason": self.reason,
             "authentication_required": self.authentication_required,
             "refresh_seconds": 1,
+            "backend": self.config.backend if self.config else "",
         }
 
     def start(self) -> None:
@@ -202,6 +213,7 @@ class MonitorSession:
             "trigger": trigger,
             "status": "queued",
             "started_at": now(),
+            "backend": self.config.backend if self.config else "",
             "events": [],
             "evidence": {
                 key: state["samples"][key]["sample"]["revision"]
@@ -258,6 +270,8 @@ class MonitorSession:
                 scope=report["scope"],
                 report_id=report["id"],
                 trigger=report["trigger"],
+                domain_query=self.domain_query,
+                domain_views=self.domain_views,
             )
         except asyncio.CancelledError:
             current = next(

@@ -7,6 +7,9 @@ requirements, compiled header code, and the CFITSIO library bundled in Linux
 wheels are documented below. `uv.lock` records the reproducible resolution for
 the project Python dependency profiles and the `native-build` and `notebook`
 groups, including the optional DragonHPC and mpi4py packages.
+The optional NOOA investigation profile is also recorded in the lock; its
+Python dependencies and the system bubblewrap executable are installed
+separately and are not bundled in cuPhoton artifacts.
 The site-provided MPI implementation is not part of that lock. Isolated
 PEP 517 builds resolve build-system requirements separately from `uv.lock`;
 their `build` rows are labeled `not locked` below.
@@ -87,6 +90,8 @@ more than one license.
 | `ximage`, `dev` | `pydantic>=2.11,<3` | `2.14.1` | `MIT` | [Pydantic](https://github.com/pydantic/pydantic) | `uv / PyPI` |
 | `ximage` | `zarr>=3,<4` | `3.4.1` | `MIT` | [Zarr](https://github.com/zarr-developers/zarr-python) | `uv / PyPI` |
 | `rubin` | `lsst-images[https]==30.0.10` | `30.0.10` | `BSD-3-Clause`; optional dependency tree includes `starlink-pyast` under `LGPL-3.0-or-later` | [LSST Images](https://github.com/lsst/images) | `uv / PyPI` |
+| `xlens-inference` | `httpx>=0.28,<1` | `0.28.1` | `BSD-3-Clause` | [HTTPX](https://github.com/encode/httpx) | `uv / PyPI; also selected by xlens-nooa` |
+| `xlens-nooa` | `nooa==0.0.12` | `0.0.12` | `Apache-2.0`; upstream distribution includes its own third-party notices | [NVIDIA OO Agents](https://github.com/NVIDIA-NeMo/labs-OO-Agents) | `uv / PyPI; Linux, Python 3.12/3.13 only` |
 | `base` | `PyYAML>=6.0` | `6.0.3` | `MIT` | [PyYAML](https://github.com/yaml/pyyaml) | `uv / PyPI` |
 | `base` | `scipy>=1.13` | `1.18.0` | `BSD-3-Clause`; distributions include separately licensed components | [SciPy](https://github.com/scipy/scipy) | `uv / PyPI` |
 | `torch` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
@@ -113,6 +118,30 @@ more than one license.
 | `dev` | `mypy==1.19.1` | `1.19.1` | `MIT` | [mypy](https://github.com/python/mypy) | `uv / PyPI` |
 | `dev` | `types-PyYAML>=6.0.12` | `6.0.12.20260906` | `Apache-2.0` | [typeshed](https://github.com/python/typeshed) | `uv / PyPI` |
 | `dev` | `coverage>=7.10.6,<8` | `7.16.2` | `Apache-2.0` | [Coverage.py](https://github.com/coveragepy/coveragepy/tree/7.16.2) | `uv / PyPI; development only` |
+
+## Optional NOOA investigation runtime
+
+The `xlens-nooa` extra installs NOOA and its declared Python dependencies from
+upstream distributions. cuPhoton loads NOOA in an isolated worker for iterative
+evidence queries and Python execution. NOOA source, model weights and dependency
+package trees are not bundled in cuPhoton wheels or source archives.
+
+NOOA 0.0.12 is Apache-2.0 licensed. Its declared dependencies include AnyIO,
+HTTPX, LiteLLM, MessagePack, OpenInference instrumentation, Pydantic and urllib3;
+their dependencies and licenses are separate. In particular:
+
+| Component | Reference version | License and upstream notice | Use |
+| --- | --- | --- | --- |
+| NOOA | `0.0.12` | [Apache-2.0](https://github.com/NVIDIA-NeMo/labs-OO-Agents/blob/main/LICENSE); NVIDIA Corporation & Affiliates | Agent loop in the worker. Its distribution includes additional third-party notices. |
+| LiteLLM | `1.109.0` | [MIT](https://github.com/BerriAI/litellm/blob/main/LICENSE); its distribution also contains tokenizer assets with their own notices | NOOA dependency, installed separately. Model requests in this integration are brokered by cuPhoton's HTTP client. |
+| OpenInference LiteLLM instrumentation | `0.1.55` | [Apache-2.0](https://github.com/Arize-ai/openinference/blob/main/LICENSE) | NOOA dependency, installed separately; the cuPhoton adapter suppresses NOOA's automatic tracing initialization. |
+| bubblewrap | Site-provided | [LGPL-2.0-or-later](https://github.com/containers/bubblewrap/blob/main/COPYING) | Separate Linux executable used to start the isolated worker. It is not linked into or bundled with cuPhoton. |
+
+The Python versions above reflect the inspected distributions and lock. Consult
+each installed distribution's license files and third-party notices for its
+complete contents. Bubblewrap comes from the user's operating-system provider;
+its package and system dependencies are outside `uv.lock`. See the
+[xLens installation and execution requirements](docs/components/xlens.md#configure-optional-investigation).
 
 ## Optional distributed runtime inventory
 

@@ -2,13 +2,20 @@
 
 ## Unreleased
 
+### xLens
+
+- Restore NOOA as an opt-in `xlens-nooa` extra for iterative evidence queries
+  and isolated Python on Linux with Python 3.12/3.13 and bubblewrap. Basic
+  inference remains the default. This supersedes the earlier development
+  removal of NOOA and restores `backend`, `max_iterations`, `max_tool_calls`
+  and `max_evidence_bytes` configuration.
+- Add an explicit Responses API transport alongside Chat Completions, with
+  documentation for optional `gpt-6-rosalind` configuration. Model access and
+  endpoint compatibility depend on the user's provider; a live Rosalind
+  integration has not been qualified.
+
 ### Breaking changes
 
-- Remove the optional NOOA xLens engine, its installation extra, and its
-  backend and generated-code configuration. xLens uses its built-in
-  evidence-based inference engine. Remove `backend`, `max_iterations`,
-  `max_tool_calls`, and `max_evidence_bytes` from existing `[inference]`
-  tables, including `backend = "basic"`; these settings are no longer accepted.
 - Move Pandas and NumExpr into the `catalog` extra for xScan ingestion,
   and Pydantic into the `ximage` extra for xImage configuration. Select
   these extras for the corresponding workflows.

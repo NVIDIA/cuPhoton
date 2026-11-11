@@ -2,10 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional bounded investigations of recorded scalar evidence.
+"""Optional bounded basic and isolated NOOA investigations.
 
-The application owns configuration, credentials and report validation.
-The configured endpoint controls its own retention.
+The application owns configuration, credentials and report validation. NOOA
+queries scalar evidence and application diagnostic views through a bounded
+parent broker. The configured endpoint controls its own retention.
 """
 
 from __future__ import annotations
@@ -25,7 +26,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ._responses import ResponsesAdapter
 from .monitor import Monitor, now
+from .nooa_backend import NooaError, _command
 from .records import encode
 
 
@@ -49,6 +52,11 @@ class InferenceConfig:
     max_context_bytes: int = 65536
     max_response_bytes: int = 65536
     max_concurrent: int = 1
+    backend: str = "basic"
+    max_iterations: int = 8
+    max_tool_calls: int = 32
+    max_evidence_bytes: int = 8388608
+    api: str = "chat_completions"
 
     def __post_init__(self) -> None:
         url = urlsplit(self.base_url)
@@ -65,6 +73,10 @@ class InferenceConfig:
             )
         if not self.model or len(self.model) > 256:
             raise ValueError("supply the endpoint's exact model identifier")
+        if self.backend not in {"basic", "nooa"}:
+            raise ValueError("backend must be basic or nooa")
+        if self.api not in {"chat_completions", "responses"}:
+            raise ValueError("api must be chat_completions or responses")
         if self.auth not in {"none", "bearer"}:
             raise ValueError("auth must be none or bearer")
         if self.auth == "none" and self.api_key_env is not None:
@@ -101,6 +113,9 @@ class InferenceConfig:
             ("max_context_bytes", 256, 262144),
             ("max_response_bytes", 256, 262144),
             ("max_concurrent", 1, 4),
+            ("max_iterations", 1, 20),
+            ("max_tool_calls", 1, 128),
+            ("max_evidence_bytes", 1024, 16777216),
         ):
             value = getattr(self, name)
             if (
@@ -171,7 +186,7 @@ def _validate_answer(answer: Any, evidence: dict[str, Any]) -> dict[str, Any]:
 
 
 class Investigator:
-    """Explicit model investigation with bounded admission.
+    """Explicit basic or NOOA investigation with bounded admission.
 
     The object is owned by one asyncio event loop. Busy calls are rejected;
     there is no unbounded queue. Cancellation closes the client request but
@@ -188,6 +203,8 @@ class Investigator:
             raise InferenceError(
                 "Install cuphoton[xlens-inference] for investigation."
             )
+        if self.config.backend == "nooa":
+            _command()
 
     async def _request(
         self, evidence: dict[str, Any], question: str, instructions: str
@@ -236,8 +253,13 @@ class Investigator:
                 "model response failed evidence validation"
             ) from exc
 
-    async def _chat(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Send one bounded request using configured credentials."""
+    async def _chat(
+        self,
+        request: dict[str, Any],
+        *,
+        adapter: ResponsesAdapter | None = None,
+    ) -> dict[str, Any]:
+        """Send one bounded request; only this parent resolves credentials."""
         try:
             import httpx
         except ImportError as exc:
@@ -245,14 +267,30 @@ class Investigator:
                 "install cuphoton[xlens-inference] to enable investigation"
             ) from exc
         config = self.config
-        allowed = {"messages", "response_format"}
+        allowed = {
+            "messages",
+            "tools",
+            "tool_choice",
+            "temperature",
+            "top_p",
+            "parallel_tool_calls",
+            "response_format",
+        }
         payload = {
             key: value for key, value in request.items() if key in allowed
         }
         payload.update(model=config.model, stream=False)
         payload[config.token_parameter] = config.max_tokens
         if not isinstance(payload.get("messages"), list):
-            raise InferenceError("inference request requires chat messages")
+            raise InferenceError("agent request requires chat messages")
+        path = "/chat/completions"
+        if config.api == "responses":
+            adapter = adapter or ResponsesAdapter()
+            try:
+                payload = adapter.request(payload)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise InferenceError("invalid Responses request") from exc
+            path = "/responses"
         if len(encode(payload).encode()) > config.max_context_bytes:
             raise InferenceError(
                 "model request exceeds configured context limit"
@@ -273,14 +311,14 @@ class Investigator:
         ) as client:
             async with client.stream(
                 "POST",
-                config.base_url.rstrip("/") + "/chat/completions",
+                config.base_url.rstrip("/") + path,
                 headers=headers,
                 json=payload,
             ) as response:
                 if response.status_code != 200:
                     if response.status_code in {400, 404, 405, 422, 501}:
                         raise InferenceError(
-                            "endpoint rejected chat/model/output contract "
+                            "endpoint rejected API/model/output contract "
                             f"(HTTP {response.status_code}); "
                             "check capabilities and configuration"
                         )
@@ -298,11 +336,19 @@ class Investigator:
             response_json = json.loads(body)
             if not isinstance(response_json, dict):
                 raise ValueError("response is not an object")
-            return response_json
         except (TypeError, ValueError) as exc:
             raise InferenceError(
-                "endpoint returned invalid chat JSON"
+                "endpoint returned invalid inference JSON"
             ) from exc
+        if adapter is not None:
+            try:
+                return adapter.response(response_json)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise InferenceError(
+                    "endpoint returned an incomplete or invalid "
+                    "Responses result"
+                ) from exc
+        return response_json
 
     async def investigate(
         self,
@@ -314,6 +360,8 @@ class Investigator:
         scope: str = "selected",
         report_id: str | None = None,
         trigger: str = "question",
+        domain_query: Callable[[str, str], dict[str, Any]] | None = None,
+        domain_views: dict[str, str] | None = None,
         progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Persist a report; deterministic records are never changed."""
@@ -351,7 +399,7 @@ class Investigator:
                     )
                 }
             )
-        if scope == "run":
+        if self.config.backend == "nooa" or scope == "run":
             selected = [
                 {
                     key: record["sample"][key]
@@ -371,9 +419,14 @@ class Investigator:
         if not selected:
             raise ValueError("no evidence is available yet")
         evidence = {"run_id": snapshot["run_id"], "samples": selected}
-        if (
-            len(encode(evidence).encode()) > self.config.max_context_bytes
-            or len(selected) > self.config.max_samples
+        limit = (
+            self.config.max_evidence_bytes
+            if self.config.backend == "nooa"
+            else self.config.max_context_bytes
+        )
+        if len(encode(evidence).encode()) > limit or (
+            self.config.backend == "basic"
+            and len(selected) > self.config.max_samples
         ):
             raise ValueError(
                 "selected evidence exceeds configured context limit"
@@ -382,12 +435,16 @@ class Investigator:
             "id": report_id or uuid.uuid4().hex,
             "kind": "model_interpretation",
             "evidence": {
-                sample["id"]: sample["revision"] for sample in selected
+                sample["id"]: sample["revision"]
+                for sample in selected
+                if self.config.backend == "basic"
+                or sample["id"] in sample_ids
             },
             "question": question,
             "status": "running",
             "started_at": now(),
             "trigger": trigger,
+            "backend": self.config.backend,
             "scope": scope,
             "events": [],
         }
@@ -398,9 +455,14 @@ class Investigator:
         }
 
         def emit(event: dict[str, Any]) -> None:
+            revisions = event.get("evidence", {})
+            available = {item["id"]: item["revision"] for item in selected}
+            for identifier, revision in revisions.items():
+                if available.get(identifier) == revision:
+                    report["evidence"][identifier] = revision
             item = {
                 key: str(event[key])[:500]
-                for key in ("kind", "message")
+                for key in ("kind", "message", "tool")
                 if key in event
             }
             item["at"] = now()
@@ -408,6 +470,35 @@ class Investigator:
             monitor.save_report(report)
             if progress:
                 progress(item)
+
+        def diagnostic(sample_id: str, query: str) -> dict[str, Any]:
+            if domain_query is None:
+                raise NooaError("no application diagnostics are configured")
+            expected = next(
+                item["revision"]
+                for item in selected
+                if item["id"] == sample_id
+            )
+            report["evidence"][sample_id] = expected
+            monitor.save_report(report)
+
+            def current_revision() -> int:
+                return int(
+                    monitor.snapshot()["samples"][sample_id]["sample"][
+                        "revision"
+                    ]
+                )
+
+            if current_revision() != expected:
+                raise NooaError(
+                    "diagnostic evidence changed; start another investigation"
+                )
+            result = domain_query(sample_id, query)
+            if current_revision() != expected:
+                raise NooaError(
+                    "diagnostic evidence changed; start another investigation"
+                )
+            return result
 
         if self._active >= self.config.max_concurrent:
             report.update(
@@ -420,13 +511,61 @@ class Investigator:
         try:
             monitor.save_report(report)
             async with asyncio.timeout(self.config.timeout_seconds):
-                emit(
-                    {
-                        "kind": "model",
-                        "message": "Reviewing selected measurements.",
-                    }
-                )
-                answer = await self._request(evidence, question, instructions)
+                if self.config.backend == "nooa":
+                    from .nooa_backend import run_nooa
+
+                    # Provider reasoning belongs to this investigation only;
+                    # it never crosses into the generated-code worker.
+                    adapter = (
+                        ResponsesAdapter()
+                        if self.config.api == "responses"
+                        else None
+                    )
+
+                    async def request(
+                        payload: dict[str, Any],
+                    ) -> dict[str, Any]:
+                        if adapter is None:
+                            return await self._chat(payload)
+                        return await self._chat(payload, adapter=adapter)
+
+                    answer = await run_nooa(
+                        {**evidence, "selected_ids": sample_ids},
+                        question,
+                        instructions,
+                        request=request,
+                        progress=emit,
+                        max_iterations=self.config.max_iterations,
+                        max_tool_calls=self.config.max_tool_calls,
+                        timeout_seconds=self.config.timeout_seconds,
+                        max_context_bytes=self.config.max_context_bytes,
+                        max_response_bytes=self.config.max_response_bytes,
+                        domain_query=diagnostic if domain_query else None,
+                        domain_views=domain_views,
+                    )
+                    try:
+                        answer = _validate_answer(answer, evidence)
+                    except ValueError as exc:
+                        # These validator messages are fixed descriptions,
+                        # never model response content.
+                        raise InferenceError(
+                            f"NOOA response failed evidence validation: {exc}"
+                        ) from exc
+                    except (KeyError, TypeError) as exc:
+                        raise InferenceError(
+                            "NOOA response failed evidence validation: "
+                            "invalid answer structure"
+                        ) from exc
+                else:
+                    emit(
+                        {
+                            "kind": "model",
+                            "message": "Reviewing selected measurements.",
+                        }
+                    )
+                    answer = await self._request(
+                        evidence, question, instructions
+                    )
             for citation in answer["citations"]:
                 report["evidence"][citation["sample_id"]] = citation[
                     "revision"
@@ -441,7 +580,7 @@ class Investigator:
                 status="timed_out",
                 diagnostic="investigation deadline exceeded",
             )
-        except InferenceError as exc:
+        except (InferenceError, NooaError) as exc:
             report.update(status="failed", diagnostic=str(exc))
         except Exception:
             report.update(

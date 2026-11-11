@@ -6,7 +6,7 @@ cuPhoton supports CPython 3.12 through 3.14 on Linux for the base, GPU, CPU
 PyTorch, and visualization profiles. CPU workflows do not require CUDA. The
 GPU profile targets CUDA 13 and requires a compatible NVIDIA driver. The
 experimental cuTile profile supports the same Python versions. Dragon
-currently requires Python 3.12 or 3.13.
+and optional NOOA investigation currently require Python 3.12 or 3.13.
 
 Install [uv](https://docs.astral.sh/uv/) before working from a checkout. uv is
 the supported environment and lock-file tool; editable pip installation is
@@ -65,6 +65,8 @@ The extras are composable:
 | `torch` | CPU-capable PyTorch |
 | `ximage` | PyTorch, photometry, Pydantic configuration, and Zarr bundles |
 | `rubin` | Offline Rubin image archive reader |
+| `xlens-inference` | HTTP client for optional xLens model reports |
+| `xlens-nooa` | NOOA 0.0.12 investigation and HTTP client; Linux, Python 3.12/3.13; requires system bubblewrap |
 | `gpu` | `io`, `photometry`, and CUDA 13 PyTorch |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `mpi` | mpi4py bindings; an MPI runtime and launcher are also required |
@@ -90,6 +92,25 @@ uv sync --locked --extra dev --extra gpu --extra cutile
 ```
 
 ## Optional runtimes
+
+### xLens investigation
+
+xLens monitoring and export work with the base package. For model reports,
+select `xlens-inference`; for iterative evidence queries and isolated Python,
+select `xlens-nooa` and install your distribution's `bubblewrap` package with
+working unprivileged user namespaces. Run the worker as a non-root user:
+
+```bash
+uv sync --locked --python 3.13 --extra xlens-nooa
+```
+
+NOOA is installed separately from upstream when that extra is selected. The
+base, GPU and Dragon profiles do not select it. Configure the endpoint, model
+and authentication explicitly using the [xLens guide](components/xlens.md#configure-optional-investigation).
+The guide also includes an optional GPT-6 Rosalind configuration for users with
+API access.
+
+### Dragon and MPI
 
 Extras compose: use `cuphoton[gpu,mpi]` or `cuphoton[gpu,dragon]` for the
 corresponding distributed GPU executor. From a checkout:
