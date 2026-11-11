@@ -165,7 +165,8 @@ def _probe_output_specs(
             dtype = np.dtype(dtype_char)
             scaled = hdu.image_bzero != 0.0 or hdu.image_bscale != 1.0
             if scaled and dtype.kind in ("i", "u"):
-                dtype_char = "f4" if hdu.image_itemsize <= 4 else "f8"
+                # Float32 holds 8- and 16-bit integers exactly, as in Astropy.
+                dtype_char = "f4" if hdu.image_itemsize <= 2 else "f8"
             specs.append(
                 _OutputSpec(
                     shape=tuple(int(v) for v in hdu.image_shape),
@@ -827,7 +828,7 @@ def _consume_image(
             if out.dtype.kind in ("i", "u"):
                 out = out.astype(
                     cp.float32
-                    if plan_item.image_itemsize <= 4
+                    if plan_item.image_itemsize <= 2
                     else cp.float64
                 )
                 if keepalive is not None:
