@@ -293,7 +293,7 @@ def _run_python_batches(
 
 @pytest.mark.parametrize(
     ("dtype_char", "itemsize", "expected"),
-    [("i2", 2, "f4"), ("i8", 8, "f8")],
+    [("i2", 2, "f4"), ("i4", 4, "f8"), ("i8", 8, "f8")],
 )
 def test_probe_output_specs_promotes_scaled_integer_images(
     monkeypatch, dtype_char, itemsize, expected
@@ -786,7 +786,17 @@ def test_consume_comp_batch_mixed_headers_fall_back_to_device_probe(
     assert captured["header_sizes"] is None
 
 
-def test_consume_image_stages_raw_bytes_before_scaling(monkeypatch):
+@pytest.mark.parametrize(
+    ("dtype_char", "raw_value", "bzero", "expected"),
+    [
+        ("i2", 0, 32768.0, np.array([32768.0], dtype="f4")),
+        # FITS unsigned 32-bit values need float64 to stay exact.
+        ("i4", 2**24 + 1, 2.0**31, np.array([2**31 + 2**24 + 1], "f8")),
+    ],
+)
+def test_consume_image_stages_raw_bytes_before_scaling(
+    monkeypatch, dtype_char, raw_value, bzero, expected
+):
     class NullStream:
         def __enter__(self):
             return self
@@ -821,19 +831,19 @@ def test_consume_image_stages_raw_bytes_before_scaling(monkeypatch):
         plan=None,
         heap_rel_offsets=None,
         heap_span_start=0,
-        heap_span_len=2,
+        heap_span_len=np.dtype(dtype_char).itemsize,
         image_shape=(1,),
-        image_dtype_char="i2",
-        image_itemsize=2,
-        image_bzero=32768.0,
+        image_dtype_char=dtype_char,
+        image_itemsize=np.dtype(dtype_char).itemsize,
+        image_bzero=bzero,
     )
-    raw = np.array([0], dtype=">i2").view(np.uint8)
-    target = np.empty(1, dtype=np.float32)
+    raw = np.array([raw_value], dtype=f">{dtype_char}").view(np.uint8)
+    target = np.empty(1, dtype=expected.dtype)
 
     result = prefetch._consume_image(image, raw, target, stream=None)
 
     assert result is target
-    np.testing.assert_array_equal(target, np.array([32768.0], dtype="f4"))
+    np.testing.assert_array_equal(target, expected)
 
 
 def test_native_plan_stages_image_when_output_dtype_is_promoted():
