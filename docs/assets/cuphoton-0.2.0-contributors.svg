@@ -154,16 +154,16 @@ L 410.08 62.01
    </g>
    <g id="patch_3">
     <path d="M 146.88 67.53825
-L 383.76 67.53825
-L 383.76 74.38275
+L 402.56 67.53825
+L 402.56 74.38275
 L 146.88 74.38275
 z
 " clip-path="url(#p522dc4fb20)" style="fill: #76b900"/>
    </g>
    <g id="patch_4">
     <path d="M 146.88 93.86325
-L 222.08 93.86325
-L 222.08 100.70775
+L 225.84 93.86325
+L 225.84 100.70775
 L 146.88 100.70775
 z
 " clip-path="url(#p522dc4fb20)" style="fill: #76b900"/>
@@ -185,10 +185,10 @@ z
 " clip-path="url(#p522dc4fb20)" style="fill: #76b900"/>
    </g>
    <g id="text_13">
-    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="386.768" y="73.581906" transform="rotate(-0 386.768 73.581906)">63</text>
+    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="405.568" y="73.581906" transform="rotate(-0 405.568 73.581906)">68</text>
    </g>
    <g id="text_14">
-    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="225.088" y="99.906906" transform="rotate(-0 225.088 99.906906)">20</text>
+    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="228.848" y="99.906906" transform="rotate(-0 228.848 99.906906)">21</text>
    </g>
    <g id="text_15">
     <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="164.928" y="126.231906" transform="rotate(-0 164.928 126.231906)">4</text>
@@ -198,16 +198,16 @@ z
    </g>
    <g id="patch_7">
     <path d="M 146.88 75.96225
-L 233.36 75.96225
-L 233.36 82.80675
+L 237.12 75.96225
+L 237.12 82.80675
 L 146.88 82.80675
 z
 " clip-path="url(#p522dc4fb20)" style="fill: #899ba7"/>
    </g>
    <g id="patch_8">
     <path d="M 146.88 102.28725
-L 244.64 102.28725
-L 244.64 109.13175
+L 248.4 102.28725
+L 248.4 109.13175
 L 146.88 109.13175
 z
 " clip-path="url(#p522dc4fb20)" style="fill: #899ba7"/>
@@ -229,10 +229,10 @@ z
 " clip-path="url(#p522dc4fb20)" style="fill: #899ba7"/>
    </g>
    <g id="text_17">
-    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="236.368" y="82.005906" transform="rotate(-0 236.368 82.005906)">23</text>
+    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="240.128" y="82.005906" transform="rotate(-0 240.128 82.005906)">24</text>
    </g>
    <g id="text_18">
-    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="247.648" y="108.330906" transform="rotate(-0 247.648 108.330906)">26</text>
+    <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="251.408" y="108.330906" transform="rotate(-0 251.408 108.330906)">27</text>
    </g>
    <g id="text_19">
     <text style="fill: #172631; font: 700 9.5px 'DejaVu Sans'; text-anchor: start" x="157.408" y="134.655906" transform="rotate(-0 157.408 134.655906)">2</text>
@@ -271,22 +271,22 @@ L 434.88 62.01
    <text style="fill: #172631; font: 700 13px 'DejaVu Sans'; text-anchor: start" x="23.04" y="17.55" transform="rotate(-0 23.04 17.55)">cuPhoton 0.2.0 contributors</text>
   </g>
   <g id="text_23">
-   <text style="fill: #536671; font: 9px 'DejaVu Sans'; text-anchor: start" x="23.04" y="33.93" transform="rotate(-0 23.04 33.93)">89 release pull requests · 51 assist credits</text>
+   <text style="fill: #536671; font: 9px 'DejaVu Sans'; text-anchor: start" x="23.04" y="33.93" transform="rotate(-0 23.04 33.93)">95 release pull requests · 53 assist credits</text>
   </g>
   <g id="text_24">
    <text style="fill: #172631; font: 700 9px 'DejaVu Sans'; text-anchor: middle" x="498.24" y="52.65" transform="rotate(-0 498.24 52.65)">Primary PR diff stats</text>
   </g>
   <g id="text_25">
-   <text style="fill: #26743a; font: 9px 'DejaVu Sans Mono'; text-anchor: end" x="498.24" y="77.679844" transform="rotate(-0 498.24 77.679844)">+83,138</text>
+   <text style="fill: #26743a; font: 9px 'DejaVu Sans Mono'; text-anchor: end" x="498.24" y="77.679844" transform="rotate(-0 498.24 77.679844)">+83,847</text>
   </g>
   <g id="text_26">
-   <text style="fill: #b84949; font: 9px 'DejaVu Sans Mono'; text-anchor: start" x="506.88" y="77.679844" transform="rotate(-0 506.88 77.679844)">−8,183</text>
+   <text style="fill: #b84949; font: 9px 'DejaVu Sans Mono'; text-anchor: start" x="506.88" y="77.679844" transform="rotate(-0 506.88 77.679844)">−8,275</text>
   </g>
   <g id="text_27">
-   <text style="fill: #26743a; font: 9px 'DejaVu Sans Mono'; text-anchor: end" x="498.24" y="104.004844" transform="rotate(-0 498.24 104.004844)">+23,217</text>
+   <text style="fill: #26743a; font: 9px 'DejaVu Sans Mono'; text-anchor: end" x="498.24" y="104.004844" transform="rotate(-0 498.24 104.004844)">+28,763</text>
   </g>
   <g id="text_28">
-   <text style="fill: #b84949; font: 9px 'DejaVu Sans Mono'; text-anchor: start" x="506.88" y="104.004844" transform="rotate(-0 506.88 104.004844)">−1,029</text>
+   <text style="fill: #b84949; font: 9px 'DejaVu Sans Mono'; text-anchor: start" x="506.88" y="104.004844" transform="rotate(-0 506.88 104.004844)">−1,076</text>
   </g>
   <g id="text_29">
    <text style="fill: #26743a; font: 9px 'DejaVu Sans Mono'; text-anchor: end" x="498.24" y="130.329844" transform="rotate(-0 498.24 130.329844)">+72,634</text>
@@ -305,9 +305,6 @@ L 434.88 62.01
   </g>
   <g id="text_34">
    <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: start" x="23.04" y="209.43" transform="rotate(-0 23.04 209.43)">Pull requests may credit multiple people. Diff totals cover primary PRs only.</text>
-  </g>
-  <g id="text_35">
-   <text style="fill: #172631; font: 9px 'DejaVu Sans'; text-anchor: start" x="23.04" y="225.81" transform="rotate(-0 23.04 225.81)">New user guide (#173): Carmelo Gonzales and Trent Nelson</text>
   </g>
  </g>
  <defs>

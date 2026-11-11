@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="576pt" height="216pt" viewBox="0 0 576 216" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.6.3, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 216
+L 576 216
+L 576 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 158.4 171.72
+L 538.56 171.72
+L 538.56 57.24
+L 158.4 57.24
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 158.4 171.72
+L 158.4 57.24
+" clip-path="url(#p26e04c692d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_2"/>
+     <g id="text_1">
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="158.4" y="184.178672" transform="rotate(-0 158.4 184.178672)">0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 253.44 171.72
+L 253.44 57.24
+" clip-path="url(#p26e04c692d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_4"/>
+     <g id="text_2">
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="253.44" y="184.178672" transform="rotate(-0 253.44 184.178672)">60</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 348.48 171.72
+L 348.48 57.24
+" clip-path="url(#p26e04c692d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_6"/>
+     <g id="text_3">
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="348.48" y="184.178672" transform="rotate(-0 348.48 184.178672)">120</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 443.52 171.72
+L 443.52 57.24
+" clip-path="url(#p26e04c692d)" style="fill: none; stroke: #e4e9ed; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_8"/>
+     <g id="text_4">
+      <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="443.52" y="184.178672" transform="rotate(-0 443.52 184.178672)">180</text>
+     </g>
+    </g>
+    <g id="text_5">
+     <text style="fill: #536671; font: 8.5px 'DejaVu Sans'; text-anchor: middle" x="348.48" y="197.405078" transform="rotate(-0 348.48 197.405078)">Minutes · shorter is faster</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_9"/>
+     <g id="text_6">
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(130.474297 76.563116)">DiFX</text>
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(46.065313 87.201038)">2 Grace CPUs · 1 node</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_10"/>
+     <g id="text_7">
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(83.314219 113.492148)">4 GB200 GPUs</text>
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(119.626484 124.13007)">1 node</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_11"/>
+     <g id="text_8">
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(77.269844 150.421181)">64 GB200 GPUs</text>
+      <text style="fill: #172631; font: 9.5px 'DejaVu Sans'" transform="translate(108.633203 161.059103)">16 nodes</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 158.4 70.534452
+L 467.62848 70.534452
+L 467.62848 84.567484
+L 158.4 84.567484
+z
+" clip-path="url(#p26e04c692d)" style="fill: #899ba7"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 158.4 107.463484
+L 170.126508 107.463484
+L 170.126508 121.496516
+L 158.4 121.496516
+z
+" clip-path="url(#p26e04c692d)" style="fill: #a4c970"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 158.4 144.392516
+L 160.229598 144.392516
+L 160.229598 158.425548
+L 158.4 158.425548
+z
+" clip-path="url(#p26e04c692d)" style="fill: #76b900"/>
+   </g>
+   <g id="text_9">
+    <text style="fill: #172631; font: 700 10px 'DejaVu Sans'; text-anchor: start" x="473.17248" y="80.310343" transform="rotate(-0 473.17248 80.310343)">3 h 15 min</text>
+   </g>
+   <g id="text_10">
+    <text style="fill: #172631; font: 700 10px 'DejaVu Sans'; text-anchor: start" x="175.670508" y="117.239375" transform="rotate(-0 175.670508 117.239375)">7 min 24 s</text>
+   </g>
+   <g id="text_11">
+    <text style="fill: #172631; font: 700 10px 'DejaVu Sans'; text-anchor: start" x="165.773598" y="154.168407" transform="rotate(-0 165.773598 154.168407)">1 min 9 s</text>
+   </g>
+  </g>
+  <g id="text_12">
+   <text style="fill: #172631; font: 700 13px 'DejaVu Sans'; text-anchor: start" x="23.04" y="19.44" transform="rotate(-0 23.04 19.44)">xBeam: 10 TB in 69 seconds</text>
+  </g>
+  <g id="text_13">
+   <text style="fill: #536671; font: 9px 'DejaVu Sans'; text-anchor: start" x="23.04" y="37.8" transform="rotate(-0 23.04 37.8)">Synthetic radio data · xBeam uses GPUDirect Storage</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p26e04c692d">
+   <rect x="158.4" y="57.24" width="380.16" height="114.48"/>
+  </clipPath>
+ </defs>
+</svg>
