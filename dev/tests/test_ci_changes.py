@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/ci/dev_changes.py"
 SPEC = importlib.util.spec_from_file_location("dev_changes", SCRIPT)
@@ -31,6 +32,7 @@ SPEC.loader.exec_module(changes)
         "tests/conftest.py",
         "docs/guide/install.qmd",
         ".github/workflows/release-docs.yml",
+        ".github/workflows/docs-preview.yml",
         "new-unknown-build-file",
     ],
 )
@@ -121,3 +123,20 @@ def test_git_ranges_cover_divergence_renames_and_deletions(
     assert changes.changed_paths(head, git("rev-parse", "HEAD"), False) == [
         "moved.py"
     ]
+
+
+def test_preview_cancellation_is_separate_from_publication_lock():
+    workflows = SCRIPT.parents[2] / ".github/workflows"
+    preview = yaml.safe_load((workflows / "docs-preview.yml").read_text())
+    publication = yaml.safe_load((workflows / "docs.yml").read_text())
+    # PyYAML interprets the Actions `on` key as YAML 1.1's boolean true.
+    assert set(preview[True]) == {"pull_request"}
+    assert "pull_request" not in publication[True]
+    assert preview["permissions"] == {"contents": "read"}
+    assert preview["concurrency"]["cancel-in-progress"] is True
+    assert "queue" not in preview["concurrency"]
+    assert publication["concurrency"]["cancel-in-progress"] is False
+    assert publication["concurrency"]["queue"] == "max"
+    assert (
+        preview["concurrency"]["group"] != publication["concurrency"]["group"]
+    )

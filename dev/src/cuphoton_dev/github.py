@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 import uuid
@@ -28,10 +29,25 @@ class PublicationError(RuntimeError):
         self.result = {**result, "error": message}
 
 
+class GitHubRequestError(RuntimeError):
+    """Failed GitHub request, retaining an HTTP status when one arrived."""
+
+    def __init__(self, message: str, status_code: int | None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def api(
     path: str, *, data: dict[str, Any] | None = None, missing_ok: bool = False
 ) -> Any:
-    args = ["gh", "api", "-H", "X-GitHub-Api-Version: 2026-03-10", path]
+    args = [
+        "gh",
+        "api",
+        "--include",
+        "-H",
+        "X-GitHub-Api-Version: 2026-03-10",
+        path,
+    ]
     if data is not None:
         args.extend(["--method", "POST", "--input", "-"])
     result = subprocess.run(
@@ -41,11 +57,19 @@ def api(
         encoding="utf-8",
         capture_output=True,
     )
+    # --include exposes the response status independently of gh's error prose.
+    response = result.stdout
+    status = re.match(r"HTTP/\S+ ([0-9]{3})[^\n]*\n", response)
+    status_code = int(status[1]) if status else None
+    if status:
+        _, _, response = response.partition("\n\n")
     if result.returncode:
-        if missing_ok and "HTTP 404" in result.stderr:
+        if missing_ok and status_code == 404:
             return None
-        raise RuntimeError(f"GitHub request failed: {result.stderr.strip()}")
-    return json.loads(result.stdout) if result.stdout.strip() else None
+        raise GitHubRequestError(
+            f"GitHub request failed: {result.stderr.strip()}", status_code
+        )
+    return json.loads(response) if response.strip() else None
 
 
 def releases(repository: str = REPOSITORY) -> list[dict[str, Any]]:
@@ -211,14 +235,28 @@ def docs_publish(
             },
         )
     except (RuntimeError, OSError, ValueError) as exc:
+        rejected = (
+            isinstance(exc, GitHubRequestError)
+            and exc.status_code is not None
+            and 400 <= exc.status_code < 500
+            and exc.status_code not in {408, 429}
+        )
+        message = (
+            f"GitHub rejected dispatch request {request_id}: {exc}. "
+            "Correct the reported error before retrying."
+            if rejected
+            else f"Dispatch outcome unknown for request {request_id}: {exc}. "
+            "Inspect that request before redispatching."
+        )
         raise PublicationError(
-            f"Dispatch outcome unknown for request {request_id}: {exc}. "
-            "Inspect that request before redispatching.",
+            message,
             {
                 "request_id": request_id,
                 "run_id": None,
                 "url": None,
-                "status": "dispatch_unknown",
+                "status": "dispatch_rejected"
+                if rejected
+                else "dispatch_unknown",
                 "conclusion": None,
                 "controller_sha": None,
             },

@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from xml.etree import ElementTree as ET
 
 import pytest
 
 from cuphoton_dev.archive import assemble, check_archive, redirect_html
-from cuphoton_dev.transforms import file_hashes
+from cuphoton_dev.transforms import SITE_URL, SITEMAP_NAMESPACE, file_hashes
 
 from .test_transforms import snapshot
 
@@ -126,3 +127,58 @@ def test_removed_main_chapter_keeps_legacy_redirect(tmp_path):
     )
     assert catalog["aliases"]["nested/example.html"] == "../main/index.html"
     assert check_archive(archive) == catalog
+
+
+def test_root_sitemap_retains_snapshots_when_release_loses_eligibility(
+    tmp_path,
+):
+    archive = tmp_path / "site"
+    main = snapshot(tmp_path / "main")
+    release = snapshot(tmp_path / "release", "v0.2.0")
+    assemble(archive, main, eligible_releases=set())
+    namespace = {"s": SITEMAP_NAMESPACE}
+    index = ET.parse(archive / "sitemap.xml").getroot()
+    assert index.tag == f"{{{SITEMAP_NAMESPACE}}}sitemapindex"
+    assert [
+        loc.text for loc in index.findall("s:sitemap/s:loc", namespace)
+    ] == [SITE_URL + "main/sitemap.xml"]
+    assemble(archive, release, eligible_releases={"v0.2.0"})
+    release_hashes = file_hashes(archive / "v0.2.0")
+    catalog = assemble(archive, main, eligible_releases=set())
+    assert catalog["stable"] is None
+    assert catalog["preferred"] == "main"
+    index = ET.parse(archive / "sitemap.xml").getroot()
+    assert {
+        loc.text for loc in index.findall("s:sitemap/s:loc", namespace)
+    } == {
+        SITE_URL + "main/sitemap.xml",
+        SITE_URL + "v0.2.0/sitemap.xml",
+    }
+    assert file_hashes(archive / "v0.2.0") == release_hashes
+    assert check_archive(archive) == catalog
+
+
+@pytest.mark.parametrize(
+    "corruption", ["missing", "namespace", "target", "entry", "duplicate"]
+)
+def test_archive_rejects_invalid_root_sitemap(tmp_path, corruption):
+    archive = tmp_path / "site"
+    main = snapshot(tmp_path / "main")
+    assemble(archive, main, eligible_releases=set())
+    sitemap = archive / "sitemap.xml"
+    if corruption == "missing":
+        sitemap.unlink()
+    else:
+        tree = ET.parse(sitemap)
+        index = tree.getroot()
+        if corruption == "namespace":
+            index.tag = "{https://example.invalid/namespace}sitemapindex"
+        elif corruption == "target":
+            index[0][0].text = SITE_URL + "v0.0.1/sitemap.xml"
+        elif corruption == "entry":
+            index.remove(index[0])
+        else:
+            index.append(index[0])
+        tree.write(sitemap, encoding="utf-8", xml_declaration=True)
+    with pytest.raises(ValueError, match="sitemap"):
+        check_archive(archive)

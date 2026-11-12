@@ -28,13 +28,14 @@ RENDERERS = {
 }
 
 
-def _version(executable: Path) -> str | None:
+def _version(executable: Path, *, env: dict[str, str]) -> str | None:
     try:
         result = subprocess.run(
             [str(executable), "--version"],
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=env,
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -42,7 +43,7 @@ def _version(executable: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def renderer_for(version: str, scratch: Path) -> Path:
+def renderer_for(version: str, scratch: Path, *, env: dict[str, str]) -> Path:
     """Reuse a matching renderer or extract a verified one beneath scratch.
 
     The caller owns scratch and its lifetime. No global installation or
@@ -53,8 +54,8 @@ def renderer_for(version: str, scratch: Path) -> Path:
             f"Unsupported Quarto {version}; add its verified release hashes "
             "to the main controller's renderer table"
         )
-    installed = shutil.which("quarto")
-    if installed and _version(Path(installed)) == version:
+    installed = shutil.which("quarto", path=env.get("PATH", ""))
+    if installed and _version(Path(installed), env=env) == version:
         return Path(installed).resolve()
     machine = platform.machine().lower()
     architecture = {
@@ -85,7 +86,7 @@ def renderer_for(version: str, scratch: Path) -> Path:
     with tarfile.open(archive, "r:gz") as package:
         package.extractall(destination, filter="data")
     executable = destination / f"quarto-{version}" / "bin/quarto"
-    if _version(executable) != version:
+    if _version(executable, env=env) != version:
         raise ValueError(
             f"Extracted Quarto does not report version {version}"
         )

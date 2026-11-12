@@ -48,8 +48,7 @@ class ComponentSpec:
             )
         ):
             raise ValueError(
-                "component import_name must be within the cuphoton namespace "
-                "or use the dedicated cuphoton_dev specification"
+                "component import_name must be within the cuphoton namespace"
             )
         if self.parser_style not in {"optparse", "argparse"}:
             raise ValueError(f"unknown parser style: {self.parser_style!r}")

@@ -257,3 +257,54 @@ def test_remote_tag_change_during_render_cannot_publish(
         == initial["archive_sha"]
     )
     assert git(publication.source, "rev-parse", "v0.2.0") == publication.sha
+
+
+def test_prepare_missing_skips_releases_without_a_guide(
+    publication, monkeypatch
+):
+    git(publication.source, "tag", "v0.1.3")
+    monkeypatch.setattr(
+        publisher, "releases", lambda: [release(), release("v0.1.3")]
+    )
+    monkeypatch.setattr(publisher, "has_guide", lambda tag: tag == "v0.2.0")
+    output = publication.root / "backfill"
+    result = publisher.prepare(tag="missing", output=output)
+    assert publication.builds == [publication.sha, "v0.2.0"]
+    assert {entry["version"] for entry in result["catalog"]["versions"]} == {
+        "main",
+        "v0.2.0",
+    }
+    assert result["catalog"]["stable"] == "v0.2.0"
+    assert not (output / "v0.1.3").exists()
+    publisher.docs_check(output)
+
+
+def test_prepare_empty_backfill_refreshes_withdrawn_release(
+    publication, monkeypatch
+):
+    first = publication.root / "first"
+    initial = publisher.prepare(tag="v0.2.0", output=first)
+    assert initial["catalog"]["stable"] == "v0.2.0"
+    retained_hashes = {
+        version: file_hashes(first / version)
+        for version in ("main", "v0.2.0")
+    }
+    release_receipt = (first / "v0.2.0/build.json").read_bytes()
+    monkeypatch.setattr(
+        publisher, "releases", lambda: [release(prerelease=True)]
+    )
+    monkeypatch.setattr(
+        publisher, "docs_build", lambda **kwargs: pytest.fail("must retain")
+    )
+    refreshed = publication.root / "refreshed"
+    result = publisher.prepare(tag="missing", output=refreshed)
+    assert result["catalog"]["stable"] is None
+    assert result["catalog"]["preferred"] == "main"
+    entries = {e["version"]: e for e in result["catalog"]["versions"]}
+    assert not entries["v0.2.0"]["released"]
+    assert {
+        v: file_hashes(refreshed / v) for v in retained_hashes
+    } == retained_hashes
+    assert (refreshed / "v0.2.0/build.json").read_bytes() == release_receipt
+    assert result["archive_sha"] != initial["archive_sha"]
+    assert publisher.docs_check(refreshed)["stable"] is None

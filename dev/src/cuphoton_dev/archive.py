@@ -14,8 +14,9 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
+from xml.etree import ElementTree as ET
 
-from cuphoton_dev.transforms import RELEASE, check_snapshot
+from cuphoton_dev.transforms import RELEASE, SITEMAP_NAMESPACE, check_snapshot
 
 
 def _json(path: Path, value: Any) -> None:
@@ -132,7 +133,7 @@ def _catalog(
     }
 
 
-def _generate(archive: Path, catalog: dict[str, Any]) -> None:
+def _generate(archive: Path, catalog: dict[str, Any], site_url: str) -> None:
     _json(archive / "versions.json", catalog)
     for alias, target in catalog["aliases"].items():
         file = archive / alias
@@ -155,6 +156,17 @@ def _generate(archive: Path, catalog: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     (archive / ".nojekyll").touch()
+    # Keep the former root sitemap discoverable after the versioned cutover.
+    index = ET.Element(f"{{{SITEMAP_NAMESPACE}}}sitemapindex")
+    for entry in catalog["versions"]:
+        sitemap = ET.SubElement(index, f"{{{SITEMAP_NAMESPACE}}}sitemap")
+        location = ET.SubElement(sitemap, f"{{{SITEMAP_NAMESPACE}}}loc")
+        location.text = site_url + entry["path"] + "sitemap.xml"
+    ET.register_namespace("", SITEMAP_NAMESPACE)
+    ET.indent(index)
+    ET.ElementTree(index).write(
+        archive / "sitemap.xml", encoding="utf-8", xml_declaration=True
+    )
 
 
 def assemble(
@@ -224,7 +236,7 @@ def assemble(
             shutil.copytree(snapshot, destination)
         retained = _snapshots(staged)
         catalog = _catalog(retained, eligible_releases, legacy_pages)
-        _generate(staged, catalog)
+        _generate(staged, catalog, incoming["site_url"])
         check_archive(staged)
         # All validation has completed before the first mutation. Preserve Git
         # metadata and copy ordinary files, which native Pages accepts.
@@ -233,7 +245,7 @@ def assemble(
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(staged / version, destination)
-        _generate(archive, catalog)
+        _generate(archive, catalog, incoming["site_url"])
     return catalog
 
 
@@ -259,6 +271,33 @@ def check_archive(path: Path) -> dict[str, Any]:
     expected = _catalog(receipts, eligible, set(catalog["legacy_pages"]))
     if catalog != expected:
         raise ValueError("Catalog does not match retained snapshots")
+    try:
+        index = ET.parse(path / "sitemap.xml").getroot()
+    except (FileNotFoundError, ET.ParseError) as exc:
+        raise ValueError(
+            "Archive sitemap index is missing or malformed"
+        ) from exc
+    if index.tag != f"{{{SITEMAP_NAMESPACE}}}sitemapindex" or any(
+        entry.tag != f"{{{SITEMAP_NAMESPACE}}}sitemap" for entry in index
+    ):
+        raise ValueError("Archive sitemap index has an invalid namespace")
+    locations = []
+    for sitemap_entry in index:
+        location = sitemap_entry.findall(f"{{{SITEMAP_NAMESPACE}}}loc")
+        if len(location) != 1:
+            raise ValueError("Archive sitemap entry needs one location")
+        locations.append(location[0].text)
+    expected_locations = {
+        receipt["site_url"] + version + "/sitemap.xml"
+        for version, receipt in receipts.items()
+    }
+    if (
+        len(locations) != len(expected_locations)
+        or set(locations) != expected_locations
+    ):
+        raise ValueError(
+            "Archive sitemap index differs from retained snapshots"
+        )
     for alias, target in catalog["aliases"].items():
         redirect = path / alias
         if not redirect.is_file() or redirect.read_text(

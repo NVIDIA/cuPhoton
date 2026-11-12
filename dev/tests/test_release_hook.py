@@ -66,3 +66,21 @@ def test_hook_dispatches_only_final_tags_on_main(tmp_path, tag, dispatch):
             f"tag={tag}",
         ]
     assert not (tmp_path / "injected").exists()
+
+
+@pytest.mark.parametrize(
+    ("actions", "dispatches"),
+    [
+        (["created", "published", "released"], 1),
+        (["edited", "released"], 1),
+        (["created", "published", "prereleased"], 0),
+        (["created", "edited"], 0),
+    ],
+    ids=["initial-final", "promotion", "prerelease", "draft"],
+)
+def test_hook_selects_one_event_per_final_release(actions, dispatches):
+    # GitHub's release event contract; live event delivery is qualified
+    # separately. Subscribing to published as well duplicates initial finals.
+    workflow = yaml.safe_load(HOOK.read_text())
+    subscribed = workflow[True]["release"]["types"]
+    assert sum(action in subscribed for action in actions) == dispatches

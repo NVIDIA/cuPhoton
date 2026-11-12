@@ -19,8 +19,9 @@ from xml.etree import ElementTree as ET
 from bs4 import BeautifulSoup, NavigableString
 
 SITE_URL = "https://nvidia.github.io/cuPhoton/"
-RELEASE = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
+RELEASE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 RECEIPT = "build.json"
+SITEMAP_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9"
 _INSTALL = (
     "This clones the development branch, which this guide describes. "
     "To use a published version instead, pick its tag from Releases, "
@@ -316,6 +317,7 @@ def postprocess(
     for location in tree.iter():
         if location.tag.rsplit("}", 1)[-1] == "loc" and location.text:
             location.text = _owned_url(location.text, version, site_url)
+    ET.register_namespace("", SITEMAP_NAMESPACE)
     tree.write(sitemap_path, encoding="utf-8", xml_declaration=True)
     asset_dir = output / "_version"
     asset_dir.mkdir(exist_ok=True)

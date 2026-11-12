@@ -18,18 +18,6 @@ on:
       - pyproject.toml
       - uv.lock
       - setup.py
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/docs.yml
-      - .github/workflows/release-docs.yml
-      - dev/**
-      - docs/**
-      - src/**
-      - examples/**
-      - pyproject.toml
-      - uv.lock
-      - setup.py
   workflow_dispatch:
     inputs:
       # Existing release tags retain their hook. Preserve this name and type.
@@ -48,7 +36,7 @@ permissions:
 # Keep the lock from archive read through deployment. Queue every publication;
 # a newer main run must not cancel a pending release or an active deployment.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('docs-preview-{0}', github.event.number) || 'cuphoton-docs-publication' }}
+  group: cuphoton-docs-publication
   queue: max
   cancel-in-progress: false
 
@@ -60,49 +48,11 @@ env:
   UV_HTTP_TIMEOUT: "300"
 
 jobs:
-  preview:
-    name: preview user guide
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.1"
-          enable-cache: true
-      - name: Install developer tools
-        run: uv sync --project dev --locked --python 3.12
-      - name: Install Quarto
-        run: |
-          curl --fail --location --retry 3 --output "$RUNNER_TEMP/quarto.deb" \
-            https://github.com/quarto-dev/quarto-cli/releases/download/v1.9.36/quarto-1.9.36-linux-amd64.deb
-          printf '%s  %s\n' \
-            8c47762e78fe58642246a94d18f67eb332c1778b711e5bef991ef3c15490d83a \
-            "$RUNNER_TEMP/quarto.deb" | sha256sum --check
-          sudo dpkg --install "$RUNNER_TEMP/quarto.deb"
-      - name: Render exact PR source in isolation
-        run: >-
-          uv run --project dev --locked cuphoton dev docs-build
-          --ref "$GITHUB_SHA" --repo . --output "$RUNNER_TEMP/preview"
-      - name: Check the rendered preview
-        run: uv run --project dev --locked cuphoton dev docs-check "$RUNNER_TEMP/preview"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: docs-preview-${{ github.sha }}
-          path: ${{ runner.temp }}/preview
-          if-no-files-found: error
-          retention-days: 14
-
   publish:
     name: publish user guide
     if: >-
       github.repository == 'NVIDIA/cuPhoton' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name != 'pull_request'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:

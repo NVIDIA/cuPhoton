@@ -60,7 +60,10 @@ class DocsBuildCommand(_DocsCommand):
     class RefArg(StringInvariant):
         _arg = "--ref"
         _required = True
-        _help = "Main revision or full release tag to render."
+        _help = (
+            "Committed Git ref to render. Final tags use their release "
+            "label; other refs, including HEAD, render as main."
+        )
 
     class OutputDirArg(PathValueInvariant):
         _arg = "--output"

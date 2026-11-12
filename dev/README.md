@@ -76,8 +76,14 @@ isolated source checkout and uses the target's locked Python dependencies.
 CPU examples execute from that checkout. The output includes build provenance
 and hashes; authored source remains unchanged.
 
+Use `--ref HEAD` to preview the committed changes on your current branch.
+Any ref other than a final release tag renders under the `main` label.
+Uncommitted changes are excluded. Final tags accept the bare `vX.Y.Z` spelling
+and the equivalent `tags/vX.Y.Z` and `refs/tags/vX.Y.Z` forms.
+
 ```sh
 uv run --project dev --locked cuphoton dev docs-build --ref main --output /tmp/cuphoton-main
+uv run --project dev --locked cuphoton dev docs-build --ref HEAD --output /tmp/cuphoton-preview
 uv run --project dev --locked cuphoton dev docs-build --ref v0.2.0 --output /tmp/cuphoton-v0.2.0
 uv run --project dev --locked cuphoton dev docs-check /tmp/cuphoton-v0.2.0 --json
 uv run --project dev --locked cuphoton dev docs-status --json
@@ -129,6 +135,21 @@ status. An accepted dispatch whose run is not yet discoverable reports its
 request ID with null run fields; use that ID before attempting a new dispatch.
 If submission fails before confirmation, `dispatch_unknown` preserves the
 request ID without claiming acceptance; inspect that request before retrying.
+Definite HTTP client errors report `dispatch_rejected`; correct the reported
+error before retrying. Timeouts, rate limits and server or transport failures
+retain the unknown outcome.
+
+For an accepted or uncertain dispatch, replace `REQUEST_ID` with its returned
+identifier to find the run:
+
+```sh
+gh run list --repo NVIDIA/cuPhoton --workflow docs.yml --event workflow_dispatch \
+  --limit 100 --json databaseId,displayTitle,url \
+  --jq '.[] | select(.displayTitle | contains("REQUEST_ID"))'
+```
+
+If the run is older than those results, increase `--limit`. An absent match
+does not confirm rejection; allow time for an accepted run to appear.
 
 ```sh
 uv run --project dev --locked cuphoton dev docs-publish --ref main --json
@@ -150,6 +171,10 @@ after retaining the assembled site, retry the workflow or repeat the same CLI
 command. Matching release snapshots are reused, so duplicate requests are safe.
 Use `--missing` for deliberate reconciliation of eligible missing releases.
 
+PR builds run in `docs-preview.yml` with read-only permissions and cancel
+superseded previews. `docs.yml` queues every publication without cancellation
+and holds the publication lock through Pages deployment.
+
 If validation rejects a retained snapshot or tag identity, inspect the failing
 run and provenance before retrying. Do not repair this by moving a release tag,
 copying current-main chapters, or editing generated catalog entries. A change
@@ -169,9 +194,9 @@ Before cutting a release, verify that its branch contains
 For the existing `0.2.x` branch, add only this hook before its next tag; no
 developer package or documentation-content backport is needed.
 
-The hook responds to `published` and `released`, including promotion of a
-prerelease to a final Release. It accepts only the canonical repository and a
-published final semantic-version tag, then dispatches `docs.yml` with
+The hook responds to `released`, which covers initial final publication and
+promotion of a prerelease to a final Release. It accepts only the canonical
+repository and a published final semantic-version tag, then dispatches `docs.yml` with
 `ref: main` and the string `tag` input. The receiving publisher independently
 checks eligibility and the exact tag. Keep that workflow filename and input
 compatible with hooks already stored in historical tags.

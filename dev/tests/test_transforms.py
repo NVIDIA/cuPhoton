@@ -9,11 +9,17 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pytest
 from bs4 import BeautifulSoup
 
-from cuphoton_dev.transforms import SITE_URL, check_snapshot, postprocess
+from cuphoton_dev.transforms import (
+    SITE_URL,
+    check_snapshot,
+    file_hashes,
+    postprocess,
+)
 
 
 def rendered_guide(path: Path, *, extra_page: bool = False) -> Path:
@@ -399,3 +405,54 @@ assert "nested/caf\u00e9.html" in redirect.read_text(encoding="utf-8")
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("schema", "Unsupported documentation receipt schema"),
+        ("version", "Not a documentation version"),
+        ("required-output", "missing required guide output"),
+        ("page-inventory", "HTML inventory is incomplete"),
+        ("canonical", "Wrong canonical URL"),
+        ("anchor-inventory", "Wrong anchor inventory"),
+        ("search-target", "Search target is outside snapshot"),
+        ("sitemap", "Sitemap does not describe"),
+    ],
+)
+def test_snapshot_rejects_inconsistent_metadata(
+    tmp_path, corruption, message
+):
+    path = snapshot(tmp_path / "snapshot", "v0.2.0")
+    receipt_path = path / "build.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if corruption == "schema":
+        receipt["schema"] = 2
+    elif corruption == "version":
+        receipt["version"] = "v0.2.3\u0663"
+    elif corruption == "required-output":
+        (path / "search.json").unlink()
+    elif corruption == "page-inventory":
+        receipt["pages"].pop("install.html")
+    elif corruption == "canonical":
+        index = path / "index.html"
+        soup = BeautifulSoup(index.read_text(encoding="utf-8"), "html.parser")
+        soup.select_one('link[rel="canonical"]')["href"] = SITE_URL + "main/"
+        index.write_text(str(soup), encoding="utf-8")
+    elif corruption == "anchor-inventory":
+        receipt["pages"]["install.html"].append("unrendered-anchor")
+    elif corruption == "search-target":
+        search = path / "search.json"
+        records = json.loads(search.read_text(encoding="utf-8"))
+        records[0]["href"] = "not-a-chapter.html"
+        search.write_text(json.dumps(records), encoding="utf-8")
+    else:
+        sitemap = path / "sitemap.xml"
+        tree = ET.parse(sitemap)
+        tree.getroot().remove(tree.getroot()[0])
+        tree.write(sitemap, encoding="utf-8", xml_declaration=True)
+    # Exercise semantic checks even when the receipt matches the file bytes.
+    receipt["files"] = file_hashes(path)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        check_snapshot(path)

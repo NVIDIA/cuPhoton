@@ -366,6 +366,58 @@ def test_unconfirmed_dispatch_preserves_request_without_redispatch(
     assert result["error"] in err.getvalue()
 
 
+@pytest.mark.parametrize(
+    ("http_status", "expected"),
+    [
+        (403, "dispatch_rejected"),
+        (404, "dispatch_rejected"),
+        (422, "dispatch_rejected"),
+        (408, "dispatch_unknown"),
+        (429, "dispatch_unknown"),
+        (500, "dispatch_unknown"),
+    ],
+)
+def test_dispatch_http_rejection_is_distinct_from_uncertain_submission(
+    monkeypatch: pytest.MonkeyPatch, http_status: int, expected: str
+) -> None:
+    from cuphoton_dev import github
+
+    submitted = []
+
+    def gh(args, **kwargs):
+        submitted.append(json.loads(kwargs["input"])["inputs"]["request_id"])
+        body = '{"message":"Request failed"}'
+        stdout = (
+            f"HTTP/2.0 {http_status} Request failed\n"
+            f"Content-Type: application/json\n\n{body}"
+            if "--include" in args
+            else body
+        )
+        return subprocess.CompletedProcess(
+            args, 1, stdout, "gh: Request failed"
+        )
+
+    monkeypatch.setattr(github.subprocess, "run", gh)
+    out, err = io.StringIO(), io.StringIO()
+    assert (
+        product_cli.main(
+            ["dev", "docs-publish", "--ref", "main", "--json"],
+            out=out,
+            err=err,
+        )
+        == 1
+    )
+    result = json.loads(out.getvalue())
+    assert len(submitted) == 1
+    assert result["request_id"] == submitted[0]
+    assert result["status"] == expected
+    assert result["run_id"] is None
+    assert result["error"] in err.getvalue()
+    assert ("Inspect that request" in result["error"]) == (
+        expected == "dispatch_unknown"
+    )
+
+
 def test_module_entrypoint() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "cuphoton_dev", "--help"],

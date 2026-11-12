@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Publication eligibility, isolated builds, and workflow correlation."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ def release(tag="v0.2.0", **changes):
         {"published_at": None},
         {"tag_name": "v0.2.0rc0"},
         {"tag_name": "v01.2.0"},
+        {"tag_name": "v0.2.3\u0663"},
     ],
 )
 def test_ineligible(changes):
@@ -185,6 +187,25 @@ def test_release_pagination(monkeypatch):
     pages = iter([[release()] * 100, [release("v0.1.3")]])
     monkeypatch.setattr(github, "api", lambda *a: next(pages))
     assert len(github.releases()) == 101
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [(200, '{"value":1}', {"value": 1}), (204, "", None), (404, "{}", None)],
+)
+def test_api_reads_status_separately_from_json(
+    monkeypatch, status, body, expected
+):
+    def gh(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args,
+            1 if status == 404 else 0,
+            f"HTTP/2.0 {status}\nContent-Type: application/json\n\n{body}",
+            "gh: Not Found" if status == 404 else "",
+        )
+
+    monkeypatch.setattr(github.subprocess, "run", gh)
+    assert github.api("repos/NVIDIA/cuPhoton", missing_ok=True) == expected
 
 
 def test_prepare_rejects_tag_workflow(monkeypatch, tmp_path):

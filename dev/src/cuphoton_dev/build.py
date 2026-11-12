@@ -17,7 +17,9 @@ from typing import Any
 
 from cuphoton_dev.renderers import renderer_for
 
-FINAL_TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
+FINAL_TAG = re.compile(
+    r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z"
+)
 
 
 def run(
@@ -72,7 +74,7 @@ def resolve(repo: Path, ref: str) -> str:
 
 
 def render_environment(checkout: Path) -> dict[str, str]:
-    """Do not inherit the controller's Python or uv project selection."""
+    """Isolate Python, uv and Quarto from the controller's configuration."""
     env = dict(os.environ)
     for key in (
         "PYTHONPATH",
@@ -82,7 +84,6 @@ def render_environment(checkout: Path) -> dict[str, str]:
         "UV_PROJECT_ENVIRONMENT",
         "UV_PROJECT",
         "UV_WORKING_DIR",
-        "QUARTO_PROFILE",
         "JUPYTER_PATH",
         "JUPYTER_CONFIG_DIR",
         "JUPYTER_DATA_DIR",
@@ -93,7 +94,7 @@ def render_environment(checkout: Path) -> dict[str, str]:
     ):
         env.pop(key, None)
     for key in tuple(env):
-        if key.startswith("SETUPTOOLS_SCM_"):
+        if key.startswith(("SETUPTOOLS_SCM_", "QUARTO_")):
             env.pop(key)
     env.update(
         UV_PROJECT_ENVIRONMENT=str(checkout / ".venv"),
@@ -126,7 +127,12 @@ def docs_build(
     if output.exists():
         raise ValueError(f"Output already exists: {output}")
     source_sha = resolve(repo, ref)
-    version = ref if FINAL_TAG.fullmatch(ref) else "main"
+    tag = (
+        ref.removeprefix("refs/tags/")
+        if ref.startswith("refs/tags/")
+        else ref.removeprefix("tags/")
+    )
+    version = tag if FINAL_TAG.fullmatch(tag) else "main"
     controller_repo = Path(__file__).resolve().parents[3]
     controller_sha = resolve(controller_repo, "HEAD")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -152,14 +158,14 @@ def docs_build(
         workflow = (checkout / ".github/workflows/docs.yml").read_text(
             encoding="utf-8"
         )
-        pin = re.search(r"releases/download/v([\d.]+)/quarto", workflow)
+        pin = re.search(r"releases/download/v([0-9.]+)/quarto", workflow)
         if not pin:
             raise ValueError(
                 "Target has no recognized pinned Quarto renderer"
             )
         renderer = pin[1]
-        quarto = renderer_for(renderer, Path(temporary))
         env = render_environment(checkout)
+        quarto = renderer_for(renderer, Path(temporary), env=env)
         # Allow a site-specific environment provisioning wrapper.
         uv = os.environ.get("CUPHOTON_DOCS_UV", "uv")
         run(
@@ -207,7 +213,7 @@ def docs_build(
             env=env,
             capture=False,
         )
-        git(checkout, "diff", "--exit-code")
+        git(checkout, "diff", "--exit-code", "HEAD")
         rendered = guide / "_book"
         receipt = postprocess(
             rendered,
