@@ -136,8 +136,8 @@ request ID with null run fields; use that ID before attempting a new dispatch.
 If submission fails before confirmation, `dispatch_unknown` preserves the
 request ID without claiming acceptance; inspect that request before retrying.
 Definite HTTP client errors report `dispatch_rejected`; correct the reported
-error before retrying. Timeouts, rate limits and server or transport failures
-retain the unknown outcome.
+error before retrying. HTTP 408 and 429 responses, server errors and transport
+failures retain an unknown outcome.
 
 For an accepted or uncertain dispatch, replace `REQUEST_ID` with its returned
 identifier to find the run:
