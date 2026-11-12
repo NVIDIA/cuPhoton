@@ -213,7 +213,11 @@ def test_prepare_rejects_tag_workflow(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_REF", "refs/tags/v0.2.0")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "release")
     with pytest.raises(ValueError, match="canonical main"):
-        publisher.prepare(tag="v0.2.0", output=tmp_path / "site")
+        publisher.prepare(
+            tag="v0.2.0",
+            snapshots=tmp_path / "bundle",
+            output=tmp_path / "site",
+        )
 
 
 def test_build_failure_preserves_existing_output(tmp_path):

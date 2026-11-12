@@ -17,6 +17,11 @@ Scope: the independent `dev/` project and its documentation publishing workflows
 - Every publication must validate formal-release eligibility, retained hashes,
   tag identity and the complete catalog. Hold the shared publication lock from
   reading the archive through native Pages deployment. Keep PR jobs read-only.
+- Execute target source only in the read-only render job. The archive job must
+  run only main's controller, validate transferred snapshots and avoid render
+  caches. Keep archive-write and Pages/OIDC credentials in separate jobs.
+  Preserve the dedicated writer identity, main-only environments and archive
+  creation/update/deletion/force-push protections documented in the runbook.
 - Keep transformation fixtures synchronized with guide markup, install examples,
   link structure and search output. Unexpected version-sensitive markup should
   fail validation rather than silently publish stale main instructions.

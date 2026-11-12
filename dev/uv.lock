@@ -156,6 +156,7 @@ requires-dist = [
     { name = "cuda-toolkit", extras = ["cufile"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=13,<14" },
     { name = "cuphoton", extras = ["io", "photometry"], marker = "extra == 'gpu'" },
     { name = "cuphoton", extras = ["photometry", "torch"], marker = "extra == 'ximage'" },
+    { name = "cuphoton", extras = ["xlens-inference"], marker = "extra == 'xlens-nooa'" },
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "sys_platform == 'linux' and extra == 'cutile'", specifier = ">=14,<15" },
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "sys_platform == 'linux' and extra == 'io'", specifier = ">=14,<15" },
     { name = "dragonhpc", marker = "extra == 'dragon'", specifier = ">=0.14.2,<0.15" },
@@ -169,6 +170,7 @@ requires-dist = [
     { name = "lsst-images", extras = ["https"], marker = "extra == 'rubin'", specifier = "==30.0.10" },
     { name = "mpi4py", marker = "extra == 'mpi'", specifier = ">=4.1.2,<5" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.19.1" },
+    { name = "nooa", marker = "python_full_version < '3.14' and sys_platform == 'linux' and extra == 'xlens-nooa'", specifier = "==0.0.12" },
     { name = "numexpr", marker = "extra == 'catalog'", specifier = ">=2.10" },
     { name = "numpy", specifier = ">=2.0,<2.6" },
     { name = "nvidia-libnvcomp-cu13", marker = "sys_platform == 'linux' and extra == 'io'", specifier = "==5.2.*" },
@@ -192,7 +194,7 @@ requires-dist = [
     { name = "virtualenv", marker = "extra == 'dev'", specifier = ">=21.15.4" },
     { name = "zarr", marker = "extra == 'ximage'", specifier = ">=3,<4" },
 ]
-provides-extras = ["catalog", "ximage", "rubin", "xlens-inference", "photometry", "torch", "viz", "io", "gpu", "cutile", "mpi", "dragon", "dev"]
+provides-extras = ["catalog", "ximage", "rubin", "xlens-inference", "xlens-nooa", "photometry", "torch", "viz", "io", "gpu", "cutile", "mpi", "dragon", "dev"]
 
 [package.metadata.requires-dev]
 docs = [

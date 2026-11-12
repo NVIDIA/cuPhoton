@@ -33,6 +33,8 @@ uv run --project dev --locked ruff check dev scripts/ci
 uv run --project dev --locked ruff format --check dev scripts/ci
 uv run --project dev --locked mypy --config-file dev/pyproject.toml dev/src/cuphoton_dev
 uv run --project dev --locked pytest -c dev/pyproject.toml dev/tests
+npm ci --prefix dev/workflow-lint --ignore-scripts
+npm run --prefix dev/workflow-lint check
 ```
 
 CI writes developer coverage separately from product coverage. The changes
@@ -54,6 +56,10 @@ uv lock --project dev --check
 Beautiful Soup and Soup Sieve are MIT-licensed developer-only dependencies.
 Keep dependency/license review and `dev/uv.lock` synchronized when updating
 them; they are not product dependencies or product payloads.
+The workflow schema check uses GitHub's pinned `@actions/workflow-parser`
+and its own npm lockfile. Its parser, expressions and cron dependencies are
+MIT-licensed; YAML is ISC-licensed. Keep that lockfile and schema check current
+when changing workflow syntax. These tools are also excluded from products.
 
 Keep new dependency paths in `scripts/ci/dev_changes.py`. Changes to guide
 markup, install wording, source URLs or search output also require review of
@@ -91,7 +97,8 @@ uv run --project dev --locked cuphoton dev docs-status --json
 
 A draft release can be built and checked locally. Publication additionally
 requires a published, non-prerelease GitHub Release whose tag is a full final
-version such as `v0.2.0`. Older tags without the guide are reported as
+version such as `v0.2.0`, with its commit on `main`, `0.1.x` or `0.2.x`, matching
+the package release policy. Older tags without the guide are reported as
 unavailable; they are not populated from newer content.
 
 ## Site layout and ownership
@@ -122,6 +129,30 @@ The publisher records this generated output with GitHub Actions bot commits.
 These archive commits are exempt from source-contribution identity, signature
 and DCO requirements; each snapshot records the source and controller commit
 SHAs. Source changes continue to follow the contributor signing rules.
+
+Before the first publication, configure a dedicated GitHub App installed only
+on `NVIDIA/cuPhoton` with repository contents write permission. Store its app
+ID as `DOCS_ARCHIVE_APP_ID` and its private key as `DOCS_ARCHIVE_PRIVATE_KEY`
+in the `docs-archive` environment, restricted to the `main` deployment branch.
+The workflow mints a short-lived token for this repository and revokes it when
+the archive job ends. Keep the existing `github-pages` environment restricted
+to main as well.
+
+Apply two active rulesets targeting exactly `refs/heads/gh-pages` before that
+branch is created:
+
+- Prohibit deletion and force pushes, with no bypass actors.
+- Restrict creation and updates, with only the dedicated App as an always
+  allowed integration bypass actor.
+
+Keeping these separate prevents the writer from bypassing the history rules.
+Do not grant the shared GitHub Actions identity a bypass. Rulesets identify
+the App, not the workflow filename; reviewed main code and the environment's
+branch restriction control access to its key. Repository administrators
+remain responsible for maintaining these policies. The archive job checks
+that all four rule types apply and fails before obtaining a write token if
+they do not. An administrator must also verify the exact bypass identities
+and main-only environment configuration during setup and after policy edits.
 
 ## Publish, bootstrap and recover
 
@@ -163,12 +194,22 @@ Keep its tag unchanged. Before eligibility, finish the local render and check
 and leave this command ready; documentation rollout does not authorize release
 publication.
 
-The workflow serializes archive updates through Pages deployment. It re-reads
-retained state under the lock, rejects a moved tag or stale main rollback,
-validates the complete site and publishes through native Pages actions. A
+The workflow serializes archive updates through Pages deployment. Its render
+job has read-only repository access and no publication environment or write
+credentials. It uploads the new snapshots. A fresh archive job installs only
+the trusted main controller, with caches disabled, verifies the artifact's
+run, source and digest, and independently checks each snapshot's provenance
+against Git source. It re-reads retained state under the lock, rejects a moved
+tag or stale main rollback, validates the complete site and pushes the archive.
+Only the final job receives Pages and OIDC write permissions; it runs native
+Pages actions without checking out or executing the target source. A
 failed render leaves the live site and catalog intact. If deployment fails
 after retaining the assembled site, retry the workflow or repeat the same CLI
 command. Matching release snapshots are reused, so duplicate requests are safe.
+Downstream retries can reuse the original render artifact from the same run.
+If that artifact has expired, dispatch a new publication. A deployment-only
+retry checks the retained commit and fails if another publication has advanced
+the archive; dispatch a new publication in that case too.
 Use `--missing` for deliberate reconciliation of eligible missing releases.
 
 PR builds run in `docs-preview.yml` with read-only permissions and cancel

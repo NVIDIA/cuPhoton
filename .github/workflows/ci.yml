@@ -86,6 +86,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+      - name: Install the workflow schema validator
+        run: npm ci --prefix dev/workflow-lint --ignore-scripts --no-audit --no-fund
+      - name: Validate GitHub Actions workflows
+        run: npm run --prefix dev/workflow-lint check
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.1"
