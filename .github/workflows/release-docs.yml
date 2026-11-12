@@ -8,7 +8,8 @@ name: release documentation
 
 on:
   release:
-    types: [published, released]
+    # Covers initial final publication and promotion from prerelease.
+    types: [released]
 
 permissions:
   actions: write
