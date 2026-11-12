@@ -37,7 +37,10 @@ class ComponentSpec:
                 "contain only lowercase letters and digits"
             )
         import_suffix = self.import_name.removeprefix("cuphoton.")
-        if (
+        developer_tool = (
+            self.group == "dev" and self.import_name == "cuphoton_dev"
+        )
+        if not developer_tool and (
             not self.import_name.startswith("cuphoton.")
             or not import_suffix
             or any(
@@ -45,7 +48,8 @@ class ComponentSpec:
             )
         ):
             raise ValueError(
-                "component import_name must be within the cuphoton namespace"
+                "component import_name must be within the cuphoton namespace "
+                "or use the dedicated cuphoton_dev specification"
             )
         if self.parser_style not in {"optparse", "argparse"}:
             raise ValueError(f"unknown parser style: {self.parser_style!r}")

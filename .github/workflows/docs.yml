@@ -3,12 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: user guide
+run-name: docs ${{ inputs.tag || 'main' }} / ${{ inputs.request_id || github.sha }}
 
 on:
   push:
     branches: [main]
     paths:
       - .github/workflows/docs.yml
+      - .github/workflows/release-docs.yml
+      - dev/**
       - docs/**
       - src/**
       - examples/**
@@ -19,6 +22,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/docs.yml
+      - .github/workflows/release-docs.yml
+      - dev/**
       - docs/**
       - src/**
       - examples/**
@@ -26,25 +31,40 @@ on:
       - uv.lock
       - setup.py
   workflow_dispatch:
+    inputs:
+      # Existing release tags retain their hook. Preserve this name and type.
+      tag:
+        description: "Release tag, main, or missing for eligible backfills"
+        type: string
+        default: main
+      request_id:
+        description: "Optional client request identifier for run tracking"
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+# Keep the lock from archive read through deployment. Queue every publication;
+# a newer main run must not cancel a pending release or an active deployment.
 concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.event_name == 'pull_request' && format('docs-preview-{0}', github.event.number) || 'cuphoton-docs-publication' }}
+  queue: max
+  cancel-in-progress: false
+
+env:
+  CUPHOTON_XDR_BUILD_EXT: "0"
+  CUPHOTON_XREP_TORCH_DEVICE: cpu
+  CUDA_VISIBLE_DEVICES: ""
+  MPLBACKEND: Agg
+  UV_HTTP_TIMEOUT: "300"
 
 jobs:
-  build:
-    name: render user guide
+  preview:
+    name: preview user guide
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CUPHOTON_XDR_BUILD_EXT: "0"
-      CUPHOTON_XREP_TORCH_DEVICE: cpu
-      CUDA_VISIBLE_DEVICES: ""
-      MPLBACKEND: Agg
-      UV_HTTP_TIMEOUT: "300"
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -54,6 +74,8 @@ jobs:
         with:
           version: "0.12.1"
           enable-cache: true
+      - name: Install developer tools
+        run: uv sync --project dev --locked --python 3.12
       - name: Install Quarto
         run: |
           curl --fail --location --retry 3 --output "$RUNNER_TEMP/quarto.deb" \
@@ -62,35 +84,71 @@ jobs:
             8c47762e78fe58642246a94d18f67eb332c1778b711e5bef991ef3c15490d83a \
             "$RUNNER_TEMP/quarto.deb" | sha256sum --check
           sudo dpkg --install "$RUNNER_TEMP/quarto.deb"
-      - name: Install documentation dependencies
-        run: uv sync --locked --python 3.12 --group docs --extra ximage --extra catalog
-      - name: Render the guide and execute its CPU examples
-        env:
-          CUPHOTON_REPO: ${{ github.workspace }}
-          QUARTO_PYTHON: ${{ github.workspace }}/.venv/bin/python
-        run: quarto render docs/guide
-      - name: Upload the rendered site
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      - name: Render exact PR source in isolation
+        run: >-
+          uv run --project dev --locked cuphoton dev docs-build
+          --ref "$GITHUB_SHA" --repo . --output "$RUNNER_TEMP/preview"
+      - name: Check the rendered preview
+        run: uv run --project dev --locked cuphoton dev docs-check "$RUNNER_TEMP/preview"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: docs/guide/_book
+          name: docs-preview-${{ github.sha }}
+          path: ${{ runner.temp }}/preview
+          if-no-files-found: error
+          retention-days: 14
 
-  deploy:
-    name: deploy user guide
-    needs: build
+  publish:
+    name: publish user guide
     if: >-
       github.repository == 'NVIDIA/cuPhoton' &&
       github.ref == 'refs/heads/main' &&
       github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 90
     permissions:
+      contents: write
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          # Controller code is always the main SHA that started this workflow.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - name: Install developer tools
+        run: uv sync --project dev --locked --python 3.12
+      - name: Install Quarto
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/quarto.deb" \
+            https://github.com/quarto-dev/quarto-cli/releases/download/v1.9.36/quarto-1.9.36-linux-amd64.deb
+          printf '%s  %s\n' \
+            8c47762e78fe58642246a94d18f67eb332c1778b711e5bef991ef3c15490d83a \
+            "$RUNNER_TEMP/quarto.deb" | sha256sum --check
+          sudo dpkg --install "$RUNNER_TEMP/quarto.deb"
+      - name: Retain snapshots and assemble the complete site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_TAG: ${{ inputs.tag }}
+          DOCS_REQUEST_ID: ${{ inputs.request_id }}
+        run: >-
+          uv run --project dev --locked python -m cuphoton_dev.publisher prepare
+          --tag "$DOCS_TAG" --request-id "$DOCS_REQUEST_ID"
+          --output "$RUNNER_TEMP/site"
+      - name: Check the complete publication
+        run: uv run --project dev --locked cuphoton dev docs-check "$RUNNER_TEMP/site"
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Upload the complete retained site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
