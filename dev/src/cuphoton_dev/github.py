@@ -20,6 +20,14 @@ REPOSITORY = "NVIDIA/cuPhoton"
 SITE = "https://nvidia.github.io/cuPhoton/"
 
 
+class PublicationError(RuntimeError):
+    """Publication failure retaining the known request and workflow state."""
+
+    def __init__(self, message: str, result: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.result = {**result, "error": message}
+
+
 def api(
     path: str, *, data: dict[str, Any] | None = None, missing_ok: bool = False
 ) -> Any:
@@ -30,6 +38,7 @@ def api(
         args,
         input=json.dumps(data) if data is not None else None,
         text=True,
+        encoding="utf-8",
         capture_output=True,
     )
     if result.returncode:
@@ -127,8 +136,22 @@ def wait_for_run(
     repository: str, run_id: int, *, wait: bool, request_id: str
 ) -> dict[str, Any]:
     deadline = time.monotonic() + 7200
+    result: dict[str, Any] = {
+        "request_id": request_id,
+        "run_id": run_id,
+        "url": None,
+        "status": "unknown",
+        "conclusion": None,
+        "controller_sha": None,
+    }
     while True:
-        run = api(f"repos/{repository}/actions/runs/{run_id}")
+        try:
+            run = api(f"repos/{repository}/actions/runs/{run_id}")
+        except (RuntimeError, OSError, ValueError) as exc:
+            raise PublicationError(
+                f"Cannot read documentation publication run {run_id}: {exc}",
+                result,
+            ) from exc
         result = {
             "request_id": request_id,
             "run_id": run_id,
@@ -139,16 +162,18 @@ def wait_for_run(
         }
         if run["status"] == "completed":
             if run["conclusion"] != "success":
-                raise RuntimeError(
+                raise PublicationError(
                     f"Documentation publication {run['conclusion']}: "
-                    f"{run['html_url']}"
+                    f"{run['html_url']}",
+                    result,
                 )
             return result
         if not wait:
             return result
         if time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"Publication still running; inspect {run['html_url']}"
+            raise PublicationError(
+                f"Publication still running; inspect {run['html_url']}",
+                result,
             )
         time.sleep(5)
 
@@ -188,25 +213,43 @@ def docs_publish(
     if run_id is None:
         # Older API deployments return 204. Correlate our unique request
         # instead of selecting another caller's latest run.
+        accepted = {
+            "request_id": request_id,
+            "run_id": None,
+            "url": None,
+            "status": "dispatch_accepted",
+            "conclusion": None,
+            "controller_sha": None,
+        }
         deadline = time.monotonic() + 180
         while run_id is None:
-            runs = api(
-                f"repos/{repository}/actions/workflows/docs.yml/runs"
-                "?event=workflow_dispatch&branch=main&per_page=100"
-            )
+            try:
+                runs = api(
+                    f"repos/{repository}/actions/workflows/docs.yml/runs"
+                    "?event=workflow_dispatch&branch=main&per_page=100"
+                )
+            except (RuntimeError, OSError, ValueError) as exc:
+                raise PublicationError(
+                    f"Dispatch accepted; cannot find request {request_id}: "
+                    f"{exc}. Do not redispatch blindly.",
+                    accepted,
+                ) from exc
             matches = [
                 r
                 for r in runs["workflow_runs"]
                 if request_id in r["display_title"]
             ]
             if len(matches) > 1:
-                raise RuntimeError(f"Ambiguous workflow request {request_id}")
+                raise PublicationError(
+                    f"Ambiguous workflow request {request_id}", accepted
+                )
             if matches:
                 run_id = matches[0]["id"]
             elif time.monotonic() >= deadline:
-                raise RuntimeError(
+                raise PublicationError(
                     f"Dispatch accepted; run not found for {request_id}. "
-                    "Do not redispatch blindly."
+                    "Do not redispatch blindly.",
+                    accepted,
                 )
             else:
                 time.sleep(3)

@@ -131,18 +131,24 @@ class DocsPublishCommand(_RemoteDocsCommand):
         )
 
     def run(self) -> None:
+        from .github import PublicationError
         from .publisher import docs_publish
 
         if (self.ref is None) == (not self.missing):
             raise ValueError("supply exactly one of --ref or --missing")
-        self.emit(
-            docs_publish(
-                ref=self.ref,
-                missing=self.missing,
-                wait=not self.no_wait,
-                repository=self.repository,
+        try:
+            self.emit(
+                docs_publish(
+                    ref=self.ref,
+                    missing=self.missing,
+                    wait=not self.no_wait,
+                    repository=self.repository,
+                )
             )
-        )
+        except PublicationError as exc:
+            if self.json:
+                self.emit(exc.result)
+            raise
 
 
 def main(

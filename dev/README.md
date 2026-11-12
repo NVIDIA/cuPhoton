@@ -114,8 +114,8 @@ replace only `main/`; release publications retain existing release bytes.
 Catalogs and redirects are generated, not hand-maintained.
 The publisher records this generated output with GitHub Actions bot commits.
 These archive commits are exempt from source-contribution identity, signature
-and DCO requirements; each snapshot records its signed source and controller
-revisions. Source changes continue to follow the contributor signing rules.
+and DCO requirements; each snapshot records the source and controller commit
+SHAs. Source changes continue to follow the contributor signing rules.
 
 ## Publish, bootstrap and recover
 
@@ -123,7 +123,10 @@ Authenticate `gh` with access to dispatch repository Actions. For a normal
 publication, the CLI dispatches `docs.yml` explicitly on main and reports the
 exact run URL. It waits for completion and returns a failing exit status when
 the workflow fails. Use `--json` for machine-readable results or `--no-wait`
-to return after dispatch.
+to return after dispatch. Failed runs and wait timeouts retain the known
+request and workflow fields in JSON output while returning a failing exit
+status. An accepted dispatch whose run is not yet discoverable reports its
+request ID with null run fields; use that ID before attempting a new dispatch.
 
 ```sh
 uv run --project dev --locked cuphoton dev docs-publish --ref main --json

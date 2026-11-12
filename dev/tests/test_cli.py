@@ -196,6 +196,140 @@ def test_workflow_failure_propagates(publisher: types.ModuleType) -> None:
     assert "https://example.org/run/123" in err.getvalue()
 
 
+@pytest.mark.parametrize(
+    "conclusion", ["failure", "cancelled", "timed_out", None]
+)
+def test_tracked_publication_failure_keeps_json_and_nonzero_status(
+    monkeypatch: pytest.MonkeyPatch, conclusion: str | None
+) -> None:
+    from cuphoton_dev import github
+
+    request_id = ""
+
+    def api(path: str, *, data=None, **kwargs):
+        nonlocal request_id
+        if data:
+            request_id = data["inputs"]["request_id"]
+            return {"workflow_run_id": 123}
+        assert path.endswith("/123")
+        return {
+            "status": "completed" if conclusion else "in_progress",
+            "conclusion": conclusion,
+            "head_sha": "a" * 40,
+            "html_url": "https://example.org/run/123",
+        }
+
+    monkeypatch.setattr(github, "api", api)
+    if conclusion is None:
+        clock = iter([0, 7201])
+        monkeypatch.setattr(
+            github.time, "monotonic", lambda: next(clock, 7201)
+        )
+    out, err = io.StringIO(), io.StringIO()
+    assert (
+        product_cli.main(
+            ["dev", "docs-publish", "--ref", "main", "--json"],
+            out=out,
+            err=err,
+        )
+        == 1
+    )
+    result = json.loads(out.getvalue())
+    assert result["request_id"] == request_id
+    assert result["run_id"] == 123
+    assert result["url"] == "https://example.org/run/123"
+    assert result["controller_sha"] == "a" * 40
+    assert result["conclusion"] == conclusion
+    assert result["status"] == ("completed" if conclusion else "in_progress")
+    assert result["error"] in err.getvalue()
+    assert result["url"] in result["error"]
+
+
+def test_dispatch_discovery_timeout_reports_recovery_request_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cuphoton_dev import github
+
+    request_id = ""
+
+    def api(path: str, *, data=None, **kwargs):
+        nonlocal request_id
+        if data:
+            request_id = data["inputs"]["request_id"]
+            return None
+        assert "workflow_dispatch" in path
+        return {"workflow_runs": []}
+
+    clock = iter([0, 181])
+    monkeypatch.setattr(github, "api", api)
+    monkeypatch.setattr(github.time, "monotonic", lambda: next(clock, 181))
+    out, err = io.StringIO(), io.StringIO()
+    assert (
+        product_cli.main(
+            ["dev", "docs-publish", "--ref", "main", "--json"],
+            out=out,
+            err=err,
+        )
+        == 1
+    )
+    result = json.loads(out.getvalue())
+    assert request_id and result["request_id"] == request_id
+    assert result["status"] == "dispatch_accepted"
+    assert result["run_id"] is None
+    assert result["url"] is None
+    assert request_id in result["error"]
+    assert result["error"] in err.getvalue()
+
+
+@pytest.mark.parametrize("known_run", [False, True])
+def test_api_failure_after_dispatch_retains_last_known_json_state(
+    monkeypatch: pytest.MonkeyPatch, known_run: bool
+) -> None:
+    from cuphoton_dev import github
+
+    request_id = ""
+    polls = 0
+
+    def api(path: str, *, data=None, **kwargs):
+        nonlocal request_id, polls
+        if data:
+            request_id = data["inputs"]["request_id"]
+            return {"workflow_run_id": 123} if known_run else None
+        polls += 1
+        if known_run and polls == 1:
+            return {
+                "status": "in_progress",
+                "conclusion": None,
+                "head_sha": "a" * 40,
+                "html_url": "https://example.org/run/123",
+            }
+        raise RuntimeError("temporary API outage")
+
+    monkeypatch.setattr(github, "api", api)
+    monkeypatch.setattr(github.time, "sleep", lambda _: None)
+    out, err = io.StringIO(), io.StringIO()
+    assert (
+        product_cli.main(
+            ["dev", "docs-publish", "--ref", "main", "--json"],
+            out=out,
+            err=err,
+        )
+        == 1
+    )
+    result = json.loads(out.getvalue())
+    assert request_id and result["request_id"] == request_id
+    assert result["status"] == (
+        "in_progress" if known_run else "dispatch_accepted"
+    )
+    assert result["run_id"] == (123 if known_run else None)
+    assert result["url"] == (
+        "https://example.org/run/123" if known_run else None
+    )
+    assert result["controller_sha"] == ("a" * 40 if known_run else None)
+    assert "temporary API outage" in result["error"]
+    assert result["error"] in err.getvalue()
+
+
 def test_module_entrypoint() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "cuphoton_dev", "--help"],

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -175,7 +177,7 @@ def test_checks_detect_tampering_and_external_asset_escape(tmp_path):
         .read_text()
         .replace("</main>", '<img src="../main/image.png"></main>')
     )
-    with pytest.raises(ValueError, match="Missing local target"):
+    with pytest.raises(ValueError, match="escapes selected version"):
         postprocess(
             path2,
             version="v0.2.0",
@@ -256,3 +258,144 @@ def test_snapshot_rejects_missing_bookmarks(tmp_path, location):
             controller_sha="b",
             renderer="test",
         )
+
+
+def test_directory_links_resolve_index_pages_and_bookmarks(tmp_path):
+    path = rendered_guide(tmp_path / "render", extra_page=True)
+    (path / "nested/example.html").rename(path / "nested/index.html")
+    for name in ("sitemap.xml", "search.json"):
+        file = path / name
+        file.write_text(
+            file.read_text(encoding="utf-8").replace(
+                "nested/example.html", "nested/index.html"
+            ),
+            encoding="utf-8",
+        )
+    root_links = (
+        "./",
+        "nested/",
+        "nested/./",
+        "nested/../",
+        ".",
+        "/cuPhoton/nested/",
+        SITE_URL + "nested/",
+    )
+    index = path / "index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "</main>",
+            "".join(f'<a href="{link}">Directory</a>' for link in root_links)
+            + "</main>",
+        ),
+        encoding="utf-8",
+    )
+    nested = path / "nested/index.html"
+    nested.write_text(
+        nested.read_text(encoding="utf-8").replace(
+            "</main>",
+            '<a href="../">Root</a><a href="..">Root dot segment</a>'
+            '<a href="./#new-topic">Same directory bookmark</a></main>',
+        ),
+        encoding="utf-8",
+    )
+    search = path / "search.json"
+    records = json.loads(search.read_text(encoding="utf-8"))
+    records[-1]["href"] = "nested/?search=1#new-topic"
+    search.write_text(json.dumps(records), encoding="utf-8")
+    postprocess(
+        path,
+        version="v0.2.0",
+        source_sha="a",
+        controller_sha="b",
+        renderer="test",
+    )
+    assert "nested/index.html" in check_snapshot(path)["pages"]
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "../",
+        "/cuPhoton/main/../",
+        SITE_URL + "main/../",
+    ],
+)
+def test_directory_links_cannot_escape_snapshot(tmp_path, href):
+    path = rendered_guide(tmp_path / "render")
+    index = path / "index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "</main>", f'<a href="{href}">Outside</a></main>'
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="escapes selected version"):
+        postprocess(
+            path,
+            version="main",
+            source_sha="a",
+            controller_sha="b",
+            renderer="test",
+        )
+
+
+def test_utf8_snapshot_and_archive_under_ascii_locale(tmp_path):
+    path = rendered_guide(tmp_path / "render", extra_page=True)
+    (path / "nested/example.html").rename(path / "nested/café.html")
+    for name in ("sitemap.xml", "search.json"):
+        file = path / name
+        file.write_text(
+            file.read_text(encoding="utf-8").replace(
+                "nested/example.html", "nested/café.html"
+            ),
+            encoding="utf-8",
+        )
+    index = path / "index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "</main>", '<p id="café">μ and café</p></main>'
+        ),
+        encoding="utf-8",
+    )
+    script = r"""
+import locale
+import sys
+from pathlib import Path
+from cuphoton_dev.archive import assemble, check_archive
+from cuphoton_dev.transforms import postprocess, check_snapshot
+assert not sys.flags.utf8_mode
+locale.setlocale(locale.LC_CTYPE, "C")
+assert locale.getencoding().lower() in {"ascii", "ansi_x3.4-1968"}
+source, archive = map(Path, sys.argv[1:])
+postprocess(source, version="v0.2.0", source_sha="a", controller_sha="b",
+            renderer="test")
+assert "caf\u00e9" in check_snapshot(source)["pages"]["index.html"]
+text = (source / "index.html").read_text(encoding="utf-8")
+assert "\u03bc and caf\u00e9" in text
+assemble(archive, source, eligible_releases={"v0.2.0"})
+assemble(archive, source, eligible_releases={"v0.2.0"})
+assert check_archive(archive)["stable"] == "v0.2.0"
+redirect = archive / "nested/caf\u00e9.html"
+assert "nested/caf\u00e9.html" in redirect.read_text(encoding="utf-8")
+"""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8=0",
+            "-c",
+            script,
+            str(path),
+            str(tmp_path / "archive"),
+        ],
+        env={
+            **os.environ,
+            # Keep UTF-8 filesystem paths, then switch text IO to ASCII above.
+            "LC_ALL": "C.UTF-8",
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr

@@ -132,11 +132,15 @@ def test_failed_run_propagates_url(monkeypatch):
         },
     )
     with pytest.raises(
-        RuntimeError, match="failure: https://example.test/runs/123"
-    ):
+        github.PublicationError,
+        match="failure: https://example.test/runs/123",
+    ) as error:
         github.wait_for_run(
             github.REPOSITORY, 123, wait=True, request_id="test"
         )
+    assert error.value.result["request_id"] == "test"
+    assert error.value.result["run_id"] == 123
+    assert error.value.result["conclusion"] == "failure"
 
 
 def test_draft_cannot_dispatch(monkeypatch):

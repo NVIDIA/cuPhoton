@@ -19,7 +19,9 @@ from cuphoton_dev.transforms import RELEASE, check_snapshot
 
 
 def _json(path: Path, value: Any) -> None:
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _release_key(version: str) -> tuple[int, ...]:
@@ -135,7 +137,7 @@ def _generate(archive: Path, catalog: dict[str, Any]) -> None:
     for alias, target in catalog["aliases"].items():
         file = archive / alias
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(redirect_html(target))
+        file.write_text(redirect_html(target), encoding="utf-8")
     items = "".join(
         f'<li><a href="{entry["path"]}index.html">'
         f"{html.escape(entry['version'])}"
@@ -149,7 +151,8 @@ def _generate(archive: Path, catalog: dict[str, Any]) -> None:
         "<title>cuPhoton documentation versions</title></head><body>"
         "<main><h1>cuPhoton documentation versions</h1><ul>"
         + items
-        + "</ul></main></body></html>\n"
+        + "</ul></main></body></html>\n",
+        encoding="utf-8",
     )
     (archive / ".nojekyll").touch()
 
@@ -180,7 +183,9 @@ def assemble(
     receipts = _snapshots(archive)
     legacy_pages: set[str] = set()
     if (archive / "versions.json").is_file():
-        previous_catalog = json.loads((archive / "versions.json").read_text())
+        previous_catalog = json.loads(
+            (archive / "versions.json").read_text(encoding="utf-8")
+        )
         legacy_pages.update(previous_catalog["legacy_pages"])
     previous = receipts.get(version)
     reuse = False
@@ -242,7 +247,9 @@ def check_archive(path: Path) -> dict[str, Any]:
             entry.is_file() and entry.stat().st_nlink != 1
         ):
             raise ValueError(f"Archive contains a link: {entry}")
-    catalog: dict[str, Any] = json.loads((path / "versions.json").read_text())
+    catalog: dict[str, Any] = json.loads(
+        (path / "versions.json").read_text(encoding="utf-8")
+    )
     if catalog.get("schema") != 1:
         raise ValueError("Unsupported documentation catalog schema")
     receipts = _snapshots(path)
@@ -254,9 +261,9 @@ def check_archive(path: Path) -> dict[str, Any]:
         raise ValueError("Catalog does not match retained snapshots")
     for alias, target in catalog["aliases"].items():
         redirect = path / alias
-        if not redirect.is_file() or redirect.read_text() != redirect_html(
-            target
-        ):
+        if not redirect.is_file() or redirect.read_text(
+            encoding="utf-8"
+        ) != redirect_html(target):
             raise ValueError(f"Invalid legacy redirect: {alias}")
         resolved = (redirect.parent / target).resolve()
         if (

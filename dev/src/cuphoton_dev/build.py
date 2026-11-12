@@ -34,6 +34,7 @@ def run(
             cwd=cwd,
             env=env,
             text=True,
+            encoding="utf-8",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         ) as process:
@@ -49,6 +50,7 @@ def run(
         cwd=cwd,
         env=env,
         text=True,
+        encoding="utf-8",
         capture_output=True,
     )
     if result.returncode:
@@ -147,7 +149,9 @@ def docs_build(
             raise ValueError(
                 f"Documentation is unavailable at {ref} ({source_sha})"
             )
-        workflow = (checkout / ".github/workflows/docs.yml").read_text()
+        workflow = (checkout / ".github/workflows/docs.yml").read_text(
+            encoding="utf-8"
+        )
         pin = re.search(r"releases/download/v([\d.]+)/quarto", workflow)
         if not pin:
             raise ValueError(

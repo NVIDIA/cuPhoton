@@ -34,6 +34,7 @@ def _version(executable: Path) -> str | None:
             [str(executable), "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):

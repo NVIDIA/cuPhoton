@@ -41,10 +41,34 @@ def is_ancestor(repo: Path, older: str, newer: str) -> bool:
         ["git", "-C", str(repo), "merge-base", "--is-ancestor", older, newer],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     if result.returncode not in (0, 1):
         raise RuntimeError(f"Cannot establish main ancestry: {result.stderr}")
     return result.returncode == 0
+
+
+def remote_tag_commit(tag: str) -> str:
+    """Read the canonical tag, peeling annotated tags to their target."""
+    if not FINAL_TAG.fullmatch(tag):
+        raise ValueError(f"Expected a full release tag: {tag}")
+    ref = f"refs/tags/{tag}"
+    rows = run(
+        [
+            "git",
+            "ls-remote",
+            "--tags",
+            f"https://github.com/{REPOSITORY}.git",
+            ref,
+            ref + "^{}",
+        ]
+    )
+    refs = {
+        name: sha for sha, name in (row.split() for row in rows.splitlines())
+    }
+    if ref not in refs:
+        raise ValueError(f"Release tag is missing from the remote: {tag}")
+    return refs.get(ref + "^{}", refs[ref])
 
 
 def clone_archive(destination: Path) -> None:
@@ -127,11 +151,14 @@ def prepare(
             and "main" not in targets
         ):
             targets.insert(0, "main")
+        release_sources: dict[str, str] = {}
         for target in targets:
             source_ref = (
                 controller if target == "main" else f"refs/tags/{target}"
             )
             source_sha = resolve(repo, source_ref)
+            if target != "main":
+                release_sources[target] = source_sha
             prior = retained / target
             receipt = check_snapshot(prior) if prior.exists() else None
             if (
@@ -188,7 +215,8 @@ def prepare(
             )
         catalog = check_archive(retained)
         git(retained, "add", "--all")
-        if git(retained, "status", "--porcelain"):
+        changed = bool(git(retained, "status", "--porcelain"))
+        if changed:
             git(
                 retained,
                 "-c",
@@ -201,6 +229,14 @@ def prepare(
                 "-m",
                 "Retain validated documentation and refresh version routes",
             )
+        # Tags can move independently of Release eligibility. Re-read them
+        # after rendering and before pushing or deploying retained output.
+        for release_tag, source_sha in release_sources.items():
+            if remote_tag_commit(release_tag) != source_sha:
+                raise ValueError(
+                    f"Release tag moved during publication: {release_tag}"
+                )
+        if changed:
             # Scope credentials to this push. No credential is written
             # to repository files, command arguments, logs or rendered output.
             git(

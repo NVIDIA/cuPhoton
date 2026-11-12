@@ -47,7 +47,9 @@ def validate_version(version: str) -> None:
 
 
 def _write_json(path: Path, value: Any) -> None:
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def file_hashes(path: Path) -> dict[str, str]:
@@ -182,7 +184,7 @@ def postprocess(
     converted = {"clone": 0, "install": 0, "reference": 0}
     for file in sorted(output.rglob("*.html")):
         relative = file.relative_to(output).as_posix()
-        soup = BeautifulSoup(file.read_text(), "html.parser")
+        soup = BeautifulSoup(file.read_text(encoding="utf-8"), "html.parser")
         if soup.head is None or soup.body is None:
             raise ValueError(f"Missing HTML head/body: {relative}")
         for node in soup.find_all(True):
@@ -293,7 +295,7 @@ def postprocess(
         pages[relative] = sorted(
             {str(tag["id"]) for tag in soup.find_all(id=True)}
         )
-        file.write_text(str(soup))
+        file.write_text(str(soup), encoding="utf-8")
     if version != "main" and converted != {
         "clone": 1,
         "install": 1,
@@ -302,11 +304,13 @@ def postprocess(
         raise ValueError(f"Release conversion contracts changed: {converted}")
     search_path = output / "search.json"
     search = _transform_json(
-        json.loads(search_path.read_text()), version, site_url
+        json.loads(search_path.read_text(encoding="utf-8")), version, site_url
     )
     _write_json(search_path, search)
     if version != "main":
-        _assert_release_text(search_path.read_text(), "search.json")
+        _assert_release_text(
+            search_path.read_text(encoding="utf-8"), "search.json"
+        )
     sitemap_path = output / "sitemap.xml"
     tree = ET.parse(sitemap_path)
     for location in tree.iter():
@@ -345,23 +349,37 @@ def _local_target(
             return None
         if not url.path.startswith(prefix):
             raise ValueError(f"Link escapes selected version: {value}")
-        return unquote(url.path[len(prefix) :]) or "index.html"
-    if url.path.startswith("/"):
+        target = unquote(url.path[len(prefix) :])
+    elif url.path.startswith("/"):
         if not url.path.startswith(prefix):
             raise ValueError(f"Link escapes selected version: {value}")
-        return unquote(url.path[len(prefix) :]) or "index.html"
-    if not url.path:
+        target = unquote(url.path[len(prefix) :])
+    elif not url.path:
         return relative
-    target = posixpath.normpath(
-        posixpath.join(posixpath.dirname(relative), unquote(url.path))
+    else:
+        target = posixpath.join(
+            posixpath.dirname(relative), unquote(url.path)
+        )
+    # Keep directory URL semantics before normpath removes the trailing slash.
+    directory = (
+        not target
+        or target.endswith(("/", "/.", "/.."))
+        or target in {".", ".."}
     )
-    return target + "index.html" if target.endswith("/") else target
+    target = posixpath.normpath(target)
+    if target == ".." or target.startswith(("../", "/")):
+        raise ValueError(f"Link escapes selected version: {value}")
+    if directory:
+        return posixpath.normpath(posixpath.join(target, "index.html"))
+    return target
 
 
 def check_snapshot(path: Path) -> dict[str, Any]:
     """Check receipt integrity and the browser-facing version boundary."""
     path = Path(path)
-    receipt: dict[str, Any] = json.loads((path / RECEIPT).read_text())
+    receipt: dict[str, Any] = json.loads(
+        (path / RECEIPT).read_text(encoding="utf-8")
+    )
     if receipt.get("schema") != 1:
         raise ValueError("Unsupported documentation receipt schema")
     validate_version(receipt["version"])
@@ -374,7 +392,7 @@ def check_snapshot(path: Path) -> dict[str, Any]:
     if set(inventory) != {f for f in actual if f.endswith(".html")}:
         raise ValueError("Snapshot HTML inventory is incomplete")
     for relative, anchors in inventory.items():
-        text = (path / relative).read_text()
+        text = (path / relative).read_text(encoding="utf-8")
         soup = BeautifulSoup(text, "html.parser")
         canonical = soup.select('link[rel="canonical"]')
         expected = receipt["site_url"] + receipt["version"] + "/" + relative
@@ -411,7 +429,7 @@ def check_snapshot(path: Path) -> dict[str, Any]:
                     raise ValueError(
                         f"Missing local bookmark in {relative}: {value}"
                     )
-    search_text = (path / "search.json").read_text()
+    search_text = (path / "search.json").read_text(encoding="utf-8")
     if receipt["version"] != "main":
         _assert_release_text(search_text, "search.json")
     for record in json.loads(search_text):

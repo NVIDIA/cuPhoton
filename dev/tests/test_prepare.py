@@ -84,6 +84,11 @@ def publication(tmp_path, monkeypatch):
     monkeypatch.setattr(publisher, "docs_build", build)
     monkeypatch.setattr(publisher, "releases", lambda: [release()])
     monkeypatch.setattr(publisher, "has_guide", lambda tag: True)
+    monkeypatch.setattr(
+        publisher,
+        "remote_tag_commit",
+        lambda tag: git(source, "rev-parse", f"refs/tags/{tag}^{{commit}}"),
+    )
     return SimpleNamespace(
         source=source,
         remote=remote,
@@ -188,3 +193,67 @@ def test_prepare_failure_does_not_change_retained_site(
         git(publication.remote, "rev-parse", "gh-pages")
         == original["archive_sha"]
     )
+
+
+@pytest.mark.parametrize("annotated", [False, True])
+def test_remote_tag_commit_prefers_peeled_annotated_target(
+    tmp_path, monkeypatch, annotated
+):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.name", "Test")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "commit.gpgsign", "false")
+    (tmp_path / "source.txt").write_text("release source\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "release source")
+    sha = git(tmp_path, "rev-parse", "HEAD")
+    if annotated:
+        git(tmp_path, "tag", "-a", "v0.2.0", "-m", "release")
+        assert git(tmp_path, "rev-parse", "v0.2.0") != sha
+    else:
+        git(tmp_path, "tag", "v0.2.0")
+    actual_run = publisher.run
+    calls = []
+
+    def local_remote(args):
+        calls.append(args)
+        assert args[3] == "https://github.com/NVIDIA/cuPhoton.git"
+        return actual_run([*args[:3], str(tmp_path), *args[4:]])
+
+    monkeypatch.setattr(publisher, "run", local_remote)
+    assert publisher.remote_tag_commit("v0.2.0") == sha
+    assert calls[0][-2:] == ["refs/tags/v0.2.0", "refs/tags/v0.2.0^{}"]
+    with pytest.raises(ValueError, match="missing from the remote"):
+        publisher.remote_tag_commit("v0.2.1")
+
+
+@pytest.mark.parametrize("remote_change", ["moved", "missing"])
+def test_remote_tag_change_during_render_cannot_publish(
+    publication, monkeypatch, remote_change
+):
+    initial = publisher.prepare(tag="main", output=publication.root / "first")
+    real_build = publisher.docs_build
+    remote_sha = publication.sha
+
+    def build_then_change_tag(**kwargs):
+        nonlocal remote_sha
+        result = real_build(**kwargs)
+        remote_sha = "f" * 40 if remote_change == "moved" else None
+        return result
+
+    def current_remote_tag(tag):
+        if remote_sha is None:
+            raise ValueError(f"Release tag is missing from the remote: {tag}")
+        return remote_sha
+
+    monkeypatch.setattr(publisher, "docs_build", build_then_change_tag)
+    monkeypatch.setattr(publisher, "remote_tag_commit", current_remote_tag)
+    output = publication.root / "rejected-remote"
+    with pytest.raises(ValueError, match="moved|missing"):
+        publisher.prepare(tag="v0.2.0", output=output)
+    assert not output.exists()
+    assert (
+        git(publication.remote, "rev-parse", "gh-pages")
+        == initial["archive_sha"]
+    )
+    assert git(publication.source, "rev-parse", "v0.2.0") == publication.sha
