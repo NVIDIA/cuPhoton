@@ -35,6 +35,7 @@ def publication(tmp_path, monkeypatch):
     git(source, "config", "user.name", "Test")
     git(source, "config", "user.email", "test@example.com")
     git(source, "config", "commit.gpgsign", "false")
+    git(source, "config", "tag.gpgsign", "false")
     (source / "source.txt").write_text("first source\n")
     (source / "uv.lock").write_text("# exact lock bytes\n", encoding="utf-8")
     workflow = source / ".github/workflows/docs.yml"
@@ -229,6 +230,7 @@ def test_remote_tag_commit_prefers_peeled_annotated_target(
     git(tmp_path, "config", "user.name", "Test")
     git(tmp_path, "config", "user.email", "test@example.com")
     git(tmp_path, "config", "commit.gpgsign", "false")
+    git(tmp_path, "config", "tag.gpgsign", "false")
     (tmp_path / "source.txt").write_text("release source\n")
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-qm", "release source")
