@@ -259,6 +259,12 @@ git commit -sS -m "Short imperative summary"
 - Write commit titles in imperative mood.
 - Target the `main` branch.
 
+These commit requirements apply to source contributions. The generated
+`gh-pages` documentation archive uses GitHub Actions bot commits, exempt from
+source identity, signature and DCO requirements. The
+[publication runbook](dev/README.md#site-layout-and-ownership) describes its
+source and controller provenance.
+
 ## Developer Certificate of Origin
 
 By making a contribution to this project, you certify the Developer Certificate

@@ -112,6 +112,10 @@ release links, install examples, labels, search data and canonical URLs.
 The `gh-pages` branch retains complete validated output. Main publications
 replace only `main/`; release publications retain existing release bytes.
 Catalogs and redirects are generated, not hand-maintained.
+The publisher records this generated output with GitHub Actions bot commits.
+These archive commits are exempt from source-contribution identity, signature
+and DCO requirements; each snapshot records its signed source and controller
+revisions. Source changes continue to follow the contributor signing rules.
 
 ## Publish, bootstrap and recover
 

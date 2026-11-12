@@ -27,5 +27,7 @@ Scope: the independent `dev/` project and its documentation publishing workflows
   Exercise real main and release renders, navigation, search, themes and bookmark
   redirects when changing transformations or publication behavior. Inspect
   deployed URLs and hashes before reporting a rollout complete.
-- Follow the repository's Apache-2.0 SPDX/copyright, signed-commit and DCO rules.
+- Follow the repository's Apache-2.0 SPDX/copyright, signed-commit and DCO rules
+  for source changes. Generated `gh-pages` output uses GitHub Actions bot
+  commits and is exempt from source identity, signature and DCO requirements.
   Keep local environments, output trees, review notes and credentials untracked.
