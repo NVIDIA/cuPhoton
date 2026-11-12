@@ -108,7 +108,10 @@ def build_source(tmp_path, monkeypatch):
     workflow = source / ".github/workflows/docs.yml"
     workflow.parent.mkdir(parents=True)
     workflow.write_text(
-        "# https://github.com/quarto-dev/quarto-cli/releases/download/"
+        "jobs:\n  build:\n    steps:\n"
+        "      # https://github.com/quarto-dev/quarto-cli/releases/download/"
+        "v1.8.0/quarto-1.8.0-linux-amd64.tar.gz\n"
+        "      - run: curl https://github.com/quarto-dev/quarto-cli/releases/download/"
         "v1.9.36/quarto-1.9.36-linux-amd64.tar.gz\n",
         encoding="utf-8",
     )
@@ -169,13 +172,20 @@ def test_build_uses_committed_source_and_isolated_locked_environment(
     build_source, ref
 ):
     fixture = build_source
+    # Both the branch and a higher-precedence ref differ from the actual tag.
+    git(fixture.source, "branch", "v0.2.0", "HEAD")
+    git(fixture.source, "update-ref", "refs/v0.2.0", "HEAD")
     before = git(fixture.source, "status", "--porcelain")
     result = build.docs_build(
         ref=ref, output=fixture.output, repo=fixture.source
     )
     expected_version = "main" if ref == "HEAD" else "v0.2.0"
     assert result["version"] == expected_version
-    assert result["source_sha"] == git(fixture.source, "rev-parse", ref)
+    expected_ref = "HEAD" if ref == "HEAD" else "refs/tags/v0.2.0"
+    assert result["source_sha"] == git(
+        fixture.source, "rev-parse", expected_ref
+    )
+    assert result["renderer"] == "1.9.36"
     assert (
         result["lock_sha256"]
         == hashlib.sha256(b"committed lock\n").hexdigest()
@@ -188,6 +198,37 @@ def test_build_uses_committed_source_and_isolated_locked_environment(
     assert (fixture.source / "source.txt").read_text(
         encoding="utf-8"
     ) == "dirty controller source\n"
+
+
+def test_semantic_version_branch_without_tag_is_a_main_preview(build_source):
+    fixture = build_source
+    git(fixture.source, "branch", "v0.2.1", "HEAD")
+    result = build.docs_build(
+        ref="v0.2.1", output=fixture.output, repo=fixture.source
+    )
+    assert result["version"] == "main"
+    assert result["source_sha"] == git(fixture.source, "rev-parse", "HEAD")
+    assert "/cuPhoton/main/index.html" in (
+        fixture.output / "index.html"
+    ).read_text(encoding="utf-8")
+
+
+def test_commented_renderer_pin_cannot_build(build_source):
+    fixture = build_source
+    workflow = fixture.source / ".github/workflows/docs.yml"
+    workflow.write_text(
+        "# https://github.com/quarto-dev/quarto-cli/releases/download/"
+        "v1.9.36/quarto-1.9.36-linux-amd64.tar.gz\n",
+        encoding="utf-8",
+    )
+    git(fixture.source, "add", str(workflow))
+    git(fixture.source, "commit", "-qm", "remove active renderer install")
+    with pytest.raises(ValueError, match="no recognized pinned Quarto"):
+        build.docs_build(
+            ref="HEAD", output=fixture.output, repo=fixture.source
+        )
+    assert not fixture.output.exists()
+    assert not fixture.log.exists()
 
 
 @pytest.mark.parametrize("mutation", ["unstaged", "staged"])

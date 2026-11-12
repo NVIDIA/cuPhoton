@@ -73,6 +73,19 @@ def resolve(repo: Path, ref: str) -> str:
     )
 
 
+def renderer_version(workflow: str) -> str:
+    """Read the target renderer pin, ignoring full-line comments."""
+    active = "\n".join(
+        line
+        for line in workflow.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    pin = re.search(r"releases/download/v([0-9.]+)/quarto", active)
+    if not pin:
+        raise ValueError("Target has no recognized pinned Quarto renderer")
+    return pin[1]
+
+
 def render_environment(checkout: Path) -> dict[str, str]:
     """Isolate Python, uv and Quarto from the controller's configuration."""
     env = dict(os.environ)
@@ -126,13 +139,21 @@ def docs_build(
     output = output.resolve()
     if output.exists():
         raise ValueError(f"Output already exists: {output}")
-    source_sha = resolve(repo, ref)
     tag = (
         ref.removeprefix("refs/tags/")
         if ref.startswith("refs/tags/")
         else ref.removeprefix("tags/")
     )
-    version = tag if FINAL_TAG.fullmatch(tag) else "main"
+    version = "main"
+    if FINAL_TAG.fullmatch(tag):
+        try:
+            source_sha = resolve(repo, f"refs/tags/{tag}")
+        except RuntimeError:
+            source_sha = resolve(repo, ref)
+        else:
+            version = tag
+    else:
+        source_sha = resolve(repo, ref)
     controller_repo = Path(__file__).resolve().parents[3]
     controller_sha = resolve(controller_repo, "HEAD")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -158,12 +179,7 @@ def docs_build(
         workflow = (checkout / ".github/workflows/docs.yml").read_text(
             encoding="utf-8"
         )
-        pin = re.search(r"releases/download/v([0-9.]+)/quarto", workflow)
-        if not pin:
-            raise ValueError(
-                "Target has no recognized pinned Quarto renderer"
-            )
-        renderer = pin[1]
+        renderer = renderer_version(workflow)
         env = render_environment(checkout)
         quarto = renderer_for(renderer, Path(temporary), env=env)
         # Allow a site-specific environment provisioning wrapper.
