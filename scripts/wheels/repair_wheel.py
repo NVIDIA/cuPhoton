@@ -85,7 +85,8 @@ def include_bundled_license(wheel: Path) -> None:
             content.replace(
                 original,
                 original + b" AND CFITSIO AND BSD-3-Clause "
-                b"AND Apache-2.0 WITH LLVM-exception",
+                b"AND Apache-2.0 WITH LLVM-exception "
+                b"AND GPL-3.0-or-later WITH Bison-exception-2.2",
                 1,
             )
         )

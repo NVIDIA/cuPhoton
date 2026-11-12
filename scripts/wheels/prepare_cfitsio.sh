@@ -25,7 +25,7 @@ cd "cfitsio-${cfitsio_commit}"
 patch --batch --forward --fuzz=0 -p1 \
   < "$wheel_script_dir/patches/cfitsio-version-string.patch"
 ./configure --prefix="$cfitsio_prefix" \
-  --enable-reentrant --disable-curl --without-bzip2 \
+  --enable-reentrant --disable-curl --without-bzip2 --without-fortran \
   --disable-static --enable-shared
 make -j"${CUPHOTON_WHEEL_BUILD_JOBS:-2}"
 make check
