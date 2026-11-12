@@ -358,13 +358,16 @@ host home directories, monitor storage or application files. Only the parent
 HTTP client holds model credentials and endpoint settings. The adapter suppresses
 NOOA's automatic tracing initialization and unused LiteLLM journal flush, and
 the worker has no network access.
-The worker has an empty, read-only `/proc`: process command lines and mount
-tables are unavailable, including the host paths used to construct its mounts.
-Installed interpreter and dependency files remain trusted runtime inputs.
+The worker uses the fixed hostname `xlens-nooa` and an empty, read-only `/proc`.
+Procfs command lines and mount tables are unavailable. Interpreter and dependency
+files remain trusted runtime inputs and can include host installation paths
+and build metadata.
 
 The parent uses system libseccomp to build a syscall deny list that bubblewrap
 installs before starting Python. It blocks selected process-inspection,
 mount-management and kernel-management calls, including mount metadata queries.
+Socket creation is limited to Unix-domain sockets for local event-loop control;
+other socket families, including IP, netlink and VSOCK, are denied.
 This adds a layer to the namespace and resource restrictions; it is not a
 complete syscall allow list. NOOA is unavailable if the filter cannot be built
 or installed. The basic backend does not load libseccomp.

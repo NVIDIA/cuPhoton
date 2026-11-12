@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import socket
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -20,6 +21,21 @@ from contextlib import contextmanager
 
 class SeccompError(RuntimeError):
     """A fixed diagnostic that does not expose host loader paths."""
+
+
+class _ArgCmp(ctypes.Structure):
+    """The libseccomp scmp_arg_cmp layout for argument-filtered rules."""
+
+    _fields_ = [
+        ("arg", ctypes.c_uint),
+        ("op", ctypes.c_int),
+        ("datum_a", ctypes.c_uint64),
+        ("datum_b", ctypes.c_uint64),
+    ]
+
+
+# SCMP_ACT_ERRNO(EPERM).
+_DENIED_ACTION = 0x00050000 | errno.EPERM
 
 
 _DENIED_SYSCALLS = (
@@ -93,6 +109,14 @@ def seccomp_filter() -> Iterator[int]:
             ctypes.c_uint,
         ]
         library.seccomp_rule_add.restype = ctypes.c_int
+        library.seccomp_rule_add_array.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.c_uint,
+            ctypes.POINTER(_ArgCmp),
+        ]
+        library.seccomp_rule_add_array.restype = ctypes.c_int
         library.seccomp_export_bpf.argtypes = [ctypes.c_void_p, ctypes.c_int]
         library.seccomp_export_bpf.restype = ctypes.c_int
     except (OSError, AttributeError) as exc:
@@ -126,11 +150,27 @@ def seccomp_filter() -> Iterator[int]:
                 raise SeccompError(
                     "NOOA requires a newer system libseccomp library"
                 )
-            # SCMP_ACT_ERRNO(EPERM). Negative pseudo-syscall numbers are valid
+            # Negative pseudo-syscall numbers are valid
             # libseccomp inputs for calls absent from the native architecture.
             if (
-                library.seccomp_rule_add(
-                    context, 0x00050000 | errno.EPERM, number, 0
+                library.seccomp_rule_add(context, _DENIED_ACTION, number, 0)
+                != 0
+            ):
+                raise SeccompError(
+                    "NOOA could not configure syscall filtering"
+                )
+        # SCMP_CMP_NE = 1. asyncio needs Unix socketpairs, but other address
+        # families (including AF_VSOCK) need not follow network namespaces.
+        family = _ArgCmp(0, 1, socket.AF_UNIX, 0)
+        for name in ("socket", "socketpair"):
+            number = library.seccomp_syscall_resolve_name(name.encode())
+            if number == -1:
+                raise SeccompError(
+                    "NOOA requires a newer system libseccomp library"
+                )
+            if (
+                library.seccomp_rule_add_array(
+                    context, _DENIED_ACTION, number, 1, ctypes.byref(family)
                 )
                 != 0
             ):

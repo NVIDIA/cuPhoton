@@ -100,6 +100,8 @@ def _package_mounts() -> list[str]:
 
 _NAMESPACE_FLAGS = [
     "--unshare-all",
+    "--hostname",
+    "xlens-nooa",
     "--unshare-user",
     "--disable-userns",
     "--die-with-parent",

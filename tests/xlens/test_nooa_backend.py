@@ -188,6 +188,7 @@ def test_sandbox_hides_host_files_environment_and_network(monkeypatch):
     monkeypatch.setenv("XLENS_PARENT_SECRET", "fixture-parent-only")
     script = (
         "import errno,json,os,pathlib,socket,sys\n"
+        "assert socket.gethostname() == 'xlens-nooa'\n"
         "assert list(pathlib.Path('/proc').iterdir()) == []\n"
         "for prefix in ('self', 'thread-self', '1', str(os.getpid())):\n"
         "    for entry in ('mountinfo', 'mounts', 'mountstats', 'cmdline',\n"
