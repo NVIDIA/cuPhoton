@@ -19,6 +19,7 @@ recursive-include scripts/conda *.py
 recursive-include packaging/conda *.yaml *.sh
 include LICENSE
 include licenses/CCCL-3.1.2.txt
+include licenses/CFITSIO-4.7.0-Bison.txt
 include CITATION.cff
 include Makefile
 include pyproject.toml
