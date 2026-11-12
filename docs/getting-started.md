@@ -66,7 +66,7 @@ The extras are composable:
 | `ximage` | PyTorch, photometry, Pydantic configuration, and Zarr bundles |
 | `rubin` | Offline Rubin image archive reader |
 | `xlens-inference` | HTTP client for optional xLens model reports |
-| `xlens-nooa` | NOOA 0.0.12 investigation and HTTP client; Linux, Python 3.12/3.13; requires system bubblewrap |
+| `xlens-nooa` | NOOA 0.0.12 investigation and HTTP client; Linux x86-64/AArch64, Python 3.12/3.13; requires system bubblewrap and libseccomp |
 | `gpu` | `io`, `photometry`, and CUDA 13 PyTorch |
 | `cutile` | experimental `cuda.tile` and its CuPy bridge |
 | `mpi` | mpi4py bindings; an MPI runtime and launcher are also required |
@@ -97,8 +97,9 @@ uv sync --locked --extra dev --extra gpu --extra cutile
 
 xLens monitoring and export work with the base package. For model reports,
 select `xlens-inference`; for iterative evidence queries and isolated Python,
-select `xlens-nooa` and install your distribution's `bubblewrap` package with
-working unprivileged user namespaces. Run the worker as a non-root user:
+select `xlens-nooa` and install your distribution's `bubblewrap` and libseccomp
+runtime packages (`bubblewrap` and `libseccomp2` on Ubuntu), with working
+unprivileged user namespaces. Run the worker as a non-root user:
 
 ```bash
 uv sync --locked --python 3.13 --extra xlens-nooa

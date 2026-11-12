@@ -11,9 +11,11 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -184,9 +186,25 @@ def test_real_iterative_queries_and_application_view(monkeypatch):
 @requires_nooa
 def test_sandbox_hides_host_files_environment_and_network(monkeypatch):
     monkeypatch.setenv("XLENS_PARENT_SECRET", "fixture-parent-only")
-    host_network = os.readlink("/proc/self/ns/net")
     script = (
-        "import errno,json,os,pathlib,sys\n"
+        "import errno,json,os,pathlib,socket,sys\n"
+        "assert list(pathlib.Path('/proc').iterdir()) == []\n"
+        "for prefix in ('self', 'thread-self', '1', str(os.getpid())):\n"
+        "    for entry in ('mountinfo', 'mounts', 'mountstats', 'cmdline',\n"
+        "                  f'task/{os.getpid()}/mountinfo'):\n"
+        "        try:\n"
+        "            (pathlib.Path('/proc') / prefix / entry).read_bytes()\n"
+        "        except FileNotFoundError:\n"
+        "            pass\n"
+        "        else:\n"
+        "            raise AssertionError('process metadata exposed')\n"
+        "try:\n"
+        "    connection = socket.create_connection(ENDPOINT, timeout=1)\n"
+        "except OSError:\n"
+        "    pass\n"
+        "else:\n"
+        "    connection.close()\n"
+        "    raise AssertionError('host loopback reachable')\n"
         "for directory in ('/', '/dev', '/dev/shm'):\n"
         "    assert os.statvfs(directory).f_flag & os.ST_RDONLY\n"
         "    try:\n"
@@ -204,21 +222,35 @@ def test_sandbox_hides_host_files_environment_and_network(monkeypatch):
         "'roots':sorted(os.listdir('/')),"
         "'host_visible':pathlib.Path(SENTINEL).exists(),"
         "'unrelated_package':pathlib.Path('/packages/pytest').exists(),"
-        "'network':os.readlink('/proc/self/ns/net'),"
         "'paths':sys.path}))"
     )
     # Keep this outside /tmp, which is independently hidden by /work.
-    with tempfile.NamedTemporaryFile(dir=Path(__file__).parent) as sentinel:
-        command = backend._command()
-        command[-1:] = ["-c", script.replace("SENTINEL", repr(sentinel.name))]
-        completed = subprocess.run(
-            command,
-            env=dict(os.environ),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+    with (
+        tempfile.NamedTemporaryFile(dir=Path(__file__).parent) as sentinel,
+        socket.socket() as listener,
+    ):
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        endpoint = listener.getsockname()
+        # Prove that this exact endpoint is reachable in the parent namespace.
+        with socket.create_connection(endpoint, timeout=1):
+            pass
+        with backend._worker_command() as (command, pass_fds):
+            command[-1:] = [
+                "-c",
+                script.replace("SENTINEL", repr(sentinel.name)).replace(
+                    "ENDPOINT", repr(endpoint)
+                ),
+            ]
+            completed = subprocess.run(
+                command,
+                pass_fds=pass_fds,
+                env=dict(os.environ),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
     assert completed.returncode == 0, completed.stderr
     observed = json.loads(completed.stdout)
     expected_roots = {
@@ -239,15 +271,25 @@ def test_sandbox_hides_host_files_environment_and_network(monkeypatch):
     assert not observed["host_visible"]
     assert not observed["unrelated_package"]
     assert "XLENS_PARENT_SECRET" not in observed["environment"]
-    assert observed["network"] != host_network
     assert all(path.startswith("/runtime/") for path in observed["paths"])
 
 
 @requires_nooa
 def test_generated_code_cannot_spawn_or_exceed_address_space():
-    code = """import errno, mmap, os, resource, threading
+    code = """import ctypes, errno, mmap, os, resource, threading
 assert os.getuid() != 0
-thread_count = len(os.listdir('/proc/self/task'))
+libc = ctypes.CDLL(None, use_errno=True)
+assert libc.prctl(21, 0, 0, 0, 0) == 2  # PR_GET_SECCOMP: filter mode
+libc.personality.argtypes = [ctypes.c_ulong]
+ctypes.set_errno(0)
+assert libc.personality(0xffffffff) == -1
+assert ctypes.get_errno() == errno.EPERM
+# statmount/listmount have these UAPI numbers on both supported architectures.
+libc.syscall.argtypes = [ctypes.c_long]
+for number in (457, 458):
+    ctypes.set_errno(0)
+    assert libc.syscall(number, 0, 0, 0, 0) == -1
+    assert ctypes.get_errno() == errno.EPERM
 assert resource.getrlimit(resource.RLIMIT_NPROC) == (0, 0)
 try:
     resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
@@ -269,7 +311,6 @@ except RuntimeError as error:
 else:
     thread.join()
     raise AssertionError('worker created a thread')
-assert len(os.listdir('/proc/self/task')) == thread_count
 limit = 2 * 1024**3
 assert resource.getrlimit(resource.RLIMIT_AS) == (limit, limit)
 try:
@@ -431,7 +472,9 @@ def stdio_worker(monkeypatch):
             ]
         )
         monkeypatch.setattr(
-            backend, "_command", lambda: [sys.executable, "-I", "-c", script]
+            backend,
+            "_worker_command",
+            lambda: nullcontext(([sys.executable, "-I", "-c", script], ())),
         )
         requests, events = [], []
 
@@ -695,7 +738,9 @@ def test_worker_start_failure_is_consistent(monkeypatch, failure):
     async def launch(*args, **kwargs):
         return Process()
 
-    monkeypatch.setattr(backend, "_command", lambda: [])
+    monkeypatch.setattr(
+        backend, "_worker_command", lambda: nullcontext(([], ()))
+    )
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     monkeypatch.setattr(os, "killpg", lambda *args: None)
     events = []
@@ -721,6 +766,7 @@ def test_namespace_probe_reports_bwrap_cause_without_host_paths(monkeypatch):
         )
 
     monkeypatch.setattr(subprocess, "run", probe)
+    monkeypatch.setattr(backend, "seccomp_filter", lambda: nullcontext(123))
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(sys, "version_info", (3, 12))
     monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)

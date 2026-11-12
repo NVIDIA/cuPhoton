@@ -8,8 +8,8 @@ wheels are documented below. `uv.lock` records the reproducible resolution for
 the project Python dependency profiles and the `native-build` and `notebook`
 groups, including the optional DragonHPC and mpi4py packages.
 The optional NOOA investigation profile is also recorded in the lock; its
-Python dependencies and the system bubblewrap executable are installed
-separately and are not bundled in cuPhoton artifacts.
+Python dependencies, system bubblewrap executable and libseccomp library are
+installed separately and are not bundled in cuPhoton artifacts.
 The site-provided MPI implementation is not part of that lock. Isolated
 PEP 517 builds resolve build-system requirements separately from `uv.lock`;
 their `build` rows are labeled `not locked` below.
@@ -136,11 +136,12 @@ their dependencies and licenses are separate. In particular:
 | LiteLLM | `1.109.0` | [MIT](https://github.com/BerriAI/litellm/blob/main/LICENSE); its distribution also contains tokenizer assets with their own notices | NOOA dependency, installed separately. Model requests in this integration are brokered by cuPhoton's HTTP client. |
 | OpenInference LiteLLM instrumentation | `0.1.55` | [Apache-2.0](https://github.com/Arize-ai/openinference/blob/main/LICENSE) | NOOA dependency, installed separately; the cuPhoton adapter suppresses NOOA's automatic tracing initialization. |
 | bubblewrap | Site-provided | [LGPL-2.0-or-later](https://github.com/containers/bubblewrap/blob/main/COPYING) | Separate Linux executable used to start the isolated worker. It is not linked into or bundled with cuPhoton. |
+| libseccomp | Site-provided | [LGPL-2.1-only](https://github.com/seccomp/libseccomp/blob/main/LICENSE) | System shared library loaded through Python ctypes only for NOOA, to build the worker's syscall filter. Not bundled with cuPhoton. |
 
 The Python versions above reflect the inspected distributions and lock. Consult
 each installed distribution's license files and third-party notices for its
-complete contents. Bubblewrap comes from the user's operating-system provider;
-its package and system dependencies are outside `uv.lock`. See the
+complete contents. Bubblewrap and libseccomp come from the user's operating-system
+provider; their packages and system dependencies are outside `uv.lock`. See the
 [xLens installation and execution requirements](docs/components/xlens.md#configure-optional-investigation).
 
 ## Optional distributed runtime inventory

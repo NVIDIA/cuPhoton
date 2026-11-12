@@ -21,9 +21,12 @@ import shutil
 import signal
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from ._nooa_seccomp import SeccompError, seccomp_filter
 
 
 class NooaError(RuntimeError):
@@ -113,22 +116,28 @@ _WORKER_STOPPED = (
 def _probe_namespaces(executable: str) -> None:
     """Check host isolation policy without launching generated code."""
     try:
-        completed = subprocess.run(
-            [
-                executable,
-                *_NAMESPACE_FLAGS,
-                "--ro-bind",
-                "/",
-                "/",
-                "/bin/true",
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            env={},
-            timeout=5,
-            check=False,
-        )
+        with seccomp_filter() as descriptor:
+            completed = subprocess.run(
+                [
+                    executable,
+                    "--seccomp",
+                    str(descriptor),
+                    *_NAMESPACE_FLAGS,
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "/bin/true",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env={},
+                timeout=5,
+                check=False,
+                pass_fds=(descriptor,),
+            )
+    except SeccompError as exc:
+        raise NooaError(str(exc)) from exc
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise NooaError("NOOA bubblewrap namespace check failed") from exc
     if completed.returncode:
@@ -207,7 +216,9 @@ def _command() -> list[str]:
         ) from exc
     command.extend(
         (
-            "--proc",
+            # Procfs exposes host source paths through mountinfo and the
+            # bubblewrap PID 1 command line. The worker needs no procfs.
+            "--dir",
             "/proc",
             "--dev",
             "/dev",
@@ -233,6 +244,20 @@ def _command() -> list[str]:
         )
     )
     return command
+
+
+@contextmanager
+def _worker_command() -> Iterator[tuple[list[str], tuple[int, ...]]]:
+    """Keep the filter open until the child inherits its descriptor."""
+    command = _command()
+    try:
+        with seccomp_filter() as descriptor:
+            yield (
+                [command[0], "--seccomp", str(descriptor), *command[1:]],
+                (descriptor,),
+            )
+    except SeccompError as exc:
+        raise NooaError(str(exc)) from exc
 
 
 def _query(evidence: dict[str, Any], name: str, args: Any) -> Any:
@@ -317,7 +342,6 @@ async def run_nooa(
     application code; domain callbacks must return promptly and perform only
     bounded reads. Cancellation kills the isolated session and descendants.
     """
-    command = _command()
     # A serialization round trip prevents mutation of live caller records.
     evidence = json.loads(_json(evidence, 16 * 1024 * 1024))
     views = domain_views or {}
@@ -334,15 +358,17 @@ async def run_nooa(
     initial_bytes = _json(initial, max_context_bytes)
     frame_limit = max(max_context_bytes, max_response_bytes) + 4096
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env={},
-            start_new_session=True,
-            limit=frame_limit,
-        )
+        with _worker_command() as (command, descriptors):
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                env={},
+                start_new_session=True,
+                limit=frame_limit,
+                pass_fds=descriptors,
+            )
     except OSError as exc:
         raise NooaError(_WORKER_STOPPED) from exc
     assert process.stdin is not None and process.stdout is not None

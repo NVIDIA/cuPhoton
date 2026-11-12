@@ -5,8 +5,8 @@
 ### xLens
 
 - Add NOOA as an opt-in `xlens-nooa` extra for iterative evidence queries
-  and isolated Python on Linux with Python 3.12/3.13 and bubblewrap. Select it
-  with `backend = "nooa"`; basic inference remains the default.
+  and isolated Python on Linux with Python 3.12/3.13, bubblewrap and libseccomp.
+  Select it with `backend = "nooa"`; basic inference remains the default.
 - Add `api = "responses"` alongside the default Chat Completions transport, with
   documentation for optional `gpt-6-rosalind` configuration. Model access and
   endpoint compatibility depend on the user's provider; a live Rosalind

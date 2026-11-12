@@ -159,7 +159,7 @@ only when you want model-generated reports:
 | Backend | Installation | Execution |
 | --- | --- | --- |
 | `basic` (default) | `cuphoton[xlens-inference]` | One bounded scalar snapshot and response; Python 3.12–3.14 |
-| `nooa` | `cuphoton[xlens-nooa]` | Iterative evidence queries and isolated Python; Linux, Python 3.12/3.13 |
+| `nooa` | `cuphoton[xlens-nooa]` | Iterative evidence queries and isolated Python; Linux x86-64/AArch64, Python 3.12/3.13 |
 
 NOOA is installed from its upstream Python distribution only when its extra is
 selected. The base, GPU and Dragon profiles do not select it. From a checkout:
@@ -169,7 +169,8 @@ uv sync --locked --python 3.13 --extra xlens-nooa
 ```
 
 The extra pins NOOA 0.0.12 and includes the HTTP client. Install your Linux
-distribution's `bubblewrap` package separately and run as a non-root user.
+distribution's `bubblewrap` and libseccomp runtime packages separately
+(`bubblewrap` and `libseccomp2` on Ubuntu), and run as a non-root user.
 Check that the host permits the required namespaces:
 
 ```bash
@@ -196,8 +197,8 @@ This profile grants the namespace permission to `/usr/bin/bwrap`. See the
 [Ubuntu namespace guidance](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions)
 and [AppArmor documentation](https://gitlab.com/apparmor/apparmor/-/wikis/unprivileged_userns_restriction)
 for site policy and administrator alternatives. The CLI and live session check
-the interpreter, package version and namespace support before enabling
-investigation.
+the interpreter, package version, namespace support and syscall filter before
+enabling investigation.
 Python 3.14 supports the basic backend; it cannot run the NOOA worker.
 
 For a basic investigation, supply a TOML file with the exact model identifier
@@ -357,7 +358,16 @@ host home directories, monitor storage or application files. Only the parent
 HTTP client holds model credentials and endpoint settings. The adapter suppresses
 NOOA's automatic tracing initialization and unused LiteLLM journal flush, and
 the worker has no network access.
+The worker has an empty, read-only `/proc`: process command lines and mount
+tables are unavailable, including the host paths used to construct its mounts.
 Installed interpreter and dependency files remain trusted runtime inputs.
+
+The parent uses system libseccomp to build a syscall deny list that bubblewrap
+installs before starting Python. It blocks selected process-inspection,
+mount-management and kernel-management calls, including mount metadata queries.
+This adds a layer to the namespace and resource restrictions; it is not a
+complete syscall allow list. NOOA is unavailable if the filter cannot be built
+or installed. The basic backend does not load libseccomp.
 
 The parent enforces model-turn, tool/read, byte, sample, concurrency and
 total-time limits. The worker has per-process address-space, CPU-time and

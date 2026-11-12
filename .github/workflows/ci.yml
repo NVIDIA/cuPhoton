@@ -128,13 +128,22 @@ jobs:
           --output-dir "${RUNNER_TEMP}/cuphoton-quickstart"
 
   test-nooa:
-    name: xLens NOOA / py${{ matrix.python }}
-    runs-on: ubuntu-24.04
+    name: xLens NOOA / ${{ matrix.name }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13"]
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            python: "3.12"
+          - name: linux-x64
+            runner: ubuntu-24.04
+            python: "3.13"
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            python: "3.13"
     env:
       CUPHOTON_REQUIRE_NOOA_TESTS: "1"
     steps:
@@ -148,7 +157,7 @@ jobs:
       - name: Install the isolated worker runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap apparmor
+          sudo apt-get install -y bubblewrap apparmor libseccomp2
           uv python install "${{ matrix.python }}"
           uv sync --locked --python "${{ matrix.python }}" --extra dev --extra xlens-nooa
       - name: Allow bubblewrap user namespaces on Ubuntu
