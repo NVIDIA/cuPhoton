@@ -96,6 +96,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "ximage",
         "rubin",
         "xlens-inference",
+        "xlens-nooa",
     }
 
 
@@ -126,6 +127,10 @@ def test_optional_runtime_requirements_are_not_silently_omitted(
     # rather than appear to install successfully without the runtime.
     assert "dragonhpc" in selected("dragon")
     assert not {"mpi4py", "dragonhpc", "cuda-tile"} & selected("gpu").keys()
+    for extra in ("", "gpu", "dragon", "xlens-inference"):
+        assert "nooa" not in selected(extra)
+    if python_version in {"3.12", "3.13"}:
+        assert str(selected("xlens-nooa")["nooa"].specifier) == "==0.0.12"
 
 
 def test_distribution_exposes_only_the_umbrella_console_script() -> None:
@@ -199,6 +204,8 @@ BLOCKED = (
     "httpx",
     "kvikio",
     "mpi4py",
+    "nooa",
+    "litellm",
     "photutils",
     "torch",
     "zarr",
