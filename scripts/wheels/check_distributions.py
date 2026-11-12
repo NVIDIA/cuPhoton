@@ -19,10 +19,17 @@ from pathlib import Path
 
 ABIS = ("cp312", "cp313", "cp314")
 ARCHITECTURES = ("x86_64", "aarch64")
-LICENSES = {"LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/CCCL-3.1.2.txt"}
-CCCL_LICENSE_SHA256 = (
-    "f96f51edda77fb9897de29d924d615e6bd153f4969db85fc6b7a22d7a624631e"
-)
+LICENSE_FILES = {
+    "licenses/CCCL-3.1.2.txt": (
+        "CCCL",
+        "f96f51edda77fb9897de29d924d615e6bd153f4969db85fc6b7a22d7a624631e",
+    ),
+    "licenses/CFITSIO-4.7.0-Bison.txt": (
+        "CFITSIO Bison",
+        "ae6fbb8ab8deee43b5e88602e929c6efa43511358d5590d26435f8ffefd40dee",
+    ),
+}
+LICENSES = {"LICENSE", "THIRD_PARTY_NOTICES.md"} | LICENSE_FILES.keys()
 # Complete notice blocks from pybind11 3.0.4 LICENSE and the CUB/LLVM
 # sections in CuPy 14.1.1's cupy/_core/include/cupy/_cccl/LICENSE.
 NATIVE_NOTICE_SHA256 = {
@@ -96,10 +103,11 @@ def check_native_notices(content, artifact):
         )
 
 
-def check_cccl_license(content, artifact):
+def check_license_file(content, name, artifact):
+    label, digest = LICENSE_FILES[name]
     require(
-        hashlib.sha256(content).hexdigest() == CCCL_LICENSE_SHA256,
-        f"{artifact}: missing or altered full CCCL license notice",
+        hashlib.sha256(content).hexdigest() == digest,
+        f"{artifact}: missing or altered full {label} license notice",
     )
 
 
@@ -143,6 +151,39 @@ def check_metadata(content, version, artifact, license_expression):
     require(
         {"io", "gpu"} <= set(metadata.get_all("Provides-Extra", [])),
         f"{artifact}: missing io/gpu extras",
+    )
+
+
+def check_cfitsio_symbols(content, artifact):
+    """Require the CFITSIO C API without the optional Fortran wrappers."""
+    with tempfile.TemporaryDirectory(prefix="cuphoton-cfitsio-") as directory:
+        library = Path(directory) / "libcfitsio.so"
+        library.write_bytes(content)
+        result = subprocess.run(
+            ["readelf", "--dyn-syms", "--wide", str(library)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    require(
+        result.returncode == 0, f"{artifact}: invalid CFITSIO ELF library"
+    )
+    symbols = {
+        fields[7]
+        for line in result.stdout.splitlines()
+        if len(fields := line.split()) >= 8 and fields[6] != "UND"
+    }
+    require(
+        {"ffopen", "ffclos", "fits_is_reentrant"} <= symbols,
+        f"{artifact}: missing CFITSIO C API symbols",
+    )
+    wrappers = sorted(
+        name for name in symbols if re.fullmatch(r"ft\w+_", name)
+    )
+    require(
+        not wrappers,
+        f"{artifact}: bundled CFITSIO contains Fortran wrappers: "
+        f"{wrappers[:5]}",
     )
 
 
@@ -194,7 +235,8 @@ def check_wheel(path):
             version,
             path.name,
             "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause "
-            "AND Apache-2.0 WITH LLVM-exception",
+            "AND Apache-2.0 WITH LLVM-exception "
+            "AND GPL-3.0-or-later WITH Bison-exception-2.2",
         )
         wheel = BytesParser().parsebytes(archive.read(info + "WHEEL"))
         require(
@@ -228,10 +270,10 @@ def check_wheel(path):
         )
         notices = archive.read(info + "licenses/THIRD_PARTY_NOTICES.md")
         check_native_notices(notices, path.name)
-        check_cccl_license(
-            archive.read(info + "licenses/licenses/CCCL-3.1.2.txt"),
-            path.name,
-        )
+        for name in LICENSE_FILES:
+            check_license_file(
+                archive.read(info + "licenses/" + name), name, path.name
+            )
         require(
             b"Permission to freely use, copy, modify, and distribute"
             in notices,
@@ -250,6 +292,8 @@ def check_wheel(path):
             check_cuda_libraries(
                 archive.read(extension), f"{path.name}:{extension}", libraries
             )
+        library = next(iter(cfitsio))
+        check_cfitsio_symbols(archive.read(library), f"{path.name}:{library}")
     return (abi, arch), version
 
 
@@ -278,10 +322,10 @@ def check_sdist(path):
             archive.extractfile(prefix + "THIRD_PARTY_NOTICES.md").read(),
             path.name,
         )
-        check_cccl_license(
-            archive.extractfile(prefix + "licenses/CCCL-3.1.2.txt").read(),
-            path.name,
-        )
+        for name in LICENSE_FILES:
+            check_license_file(
+                archive.extractfile(prefix + name).read(), name, path.name
+            )
         check_metadata(
             archive.extractfile(prefix + "PKG-INFO").read(),
             version,
