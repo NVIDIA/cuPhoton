@@ -4,12 +4,10 @@
 
 ### xLens
 
-- Restore NOOA as an opt-in `xlens-nooa` extra for iterative evidence queries
-  and isolated Python on Linux with Python 3.12/3.13 and bubblewrap. Basic
-  inference remains the default. This supersedes the earlier development
-  removal of NOOA and restores `backend`, `max_iterations`, `max_tool_calls`
-  and `max_evidence_bytes` configuration.
-- Add an explicit Responses API transport alongside Chat Completions, with
+- Add NOOA as an opt-in `xlens-nooa` extra for iterative evidence queries
+  and isolated Python on Linux with Python 3.12/3.13 and bubblewrap. Select it
+  with `backend = "nooa"`; basic inference remains the default.
+- Add `api = "responses"` alongside the default Chat Completions transport, with
   documentation for optional `gpt-6-rosalind` configuration. Model access and
   endpoint compatibility depend on the user's provider; a live Rosalind
   integration has not been qualified.

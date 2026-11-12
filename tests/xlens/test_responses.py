@@ -131,6 +131,54 @@ def test_multiturn_tools_preserve_opaque_outputs():
     )
 
 
+def test_multiple_calls_in_one_turn_keep_each_output_and_reasoning():
+    adapter = ResponsesAdapter()
+    history = [{"role": "user", "content": "Compare two samples."}]
+    adapter.request(payload(history))
+    raw = tool_result("first")
+    second = deepcopy(raw["output"][-1])
+    second.update(id="fc_2", call_id="second")
+    second["arguments"] = json.dumps({"code": 'self.get_sample("sample-2")'})
+    raw["output"].append(second)
+    history.append(adapter.response(raw)["choices"][0]["message"])
+    # Tool outputs may arrive in either order; each must keep its call ID.
+    outputs = [("second", "3.0"), ("first", "2.5")]
+    history.extend(
+        {"role": "tool", "tool_call_id": call_id, "content": value}
+        for call_id, value in outputs
+    )
+    request = adapter.request(payload(history))
+    assert request["input"] == [
+        history[0],
+        *raw["output"],
+        *[
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": value,
+            }
+            for call_id, value in outputs
+        ],
+    ]
+    final = text_result("The second measurement is higher.")
+    history.append(adapter.response(final)["choices"][0]["message"])
+    history.append({"role": "user", "content": "Explain the difference."})
+    continued = adapter.request(payload(history))
+    assert continued["input"] == [
+        *request["input"],
+        *final["output"],
+        history[-1],
+    ]
+
+
+@pytest.mark.parametrize("arguments", ['{"code":"print(1)"', "[]"])
+def test_tool_argument_json_is_left_to_the_shared_broker(arguments):
+    raw = tool_result()
+    raw["output"][-1]["arguments"] = arguments
+    message = ResponsesAdapter().response(raw)["choices"][0]["message"]
+    assert message["tool_calls"][0]["function"]["arguments"] == arguments
+
+
 def test_text_retry_preserves_reasoning_and_phase_and_translates_json_mode():
     adapter = ResponsesAdapter()
     history = [{"role": "user", "content": "Return JSON."}]
@@ -250,12 +298,11 @@ def test_incomplete_unsupported_and_refused_outputs_have_fixed_errors(raw):
     [
         {"call_id": ""},
         {"name": []},
-        {"arguments": "not JSON"},
-        {"arguments": "[]"},
+        {"arguments": []},
         {"status": "in_progress"},
     ],
 )
-def test_malformed_tool_calls_are_rejected_before_reaching_worker(change):
+def test_malformed_tool_fields_are_rejected(change):
     raw = tool_result()
     raw["output"][-1].update(change)
     with pytest.raises(ValueError, match="invalid or incomplete"):

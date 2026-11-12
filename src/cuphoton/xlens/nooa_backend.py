@@ -16,8 +16,10 @@ import asyncio
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import signal
+import subprocess
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -93,6 +95,59 @@ def _package_mounts() -> list[str]:
     return mounts
 
 
+_NAMESPACE_FLAGS = [
+    "--unshare-all",
+    "--unshare-user",
+    "--disable-userns",
+    "--die-with-parent",
+    "--new-session",
+    "--cap-drop",
+    "ALL",
+]
+_WORKER_STOPPED = (
+    "NOOA worker stopped; verify bubblewrap user namespace support "
+    "and the optional installation"
+)
+
+
+def _probe_namespaces(executable: str) -> None:
+    """Check host isolation policy without launching generated code."""
+    try:
+        completed = subprocess.run(
+            [
+                executable,
+                *_NAMESPACE_FLAGS,
+                "--ro-bind",
+                "/",
+                "/",
+                "/bin/true",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env={},
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise NooaError("NOOA bubblewrap namespace check failed") from exc
+    if completed.returncode:
+        # Only the trusted probe's bounded startup diagnostic is exposed.
+        # Worker stderr can contain generated output and stays private.
+        detail = completed.stderr.decode("utf-8", errors="replace")
+        detail = next(
+            (
+                line
+                for line in detail.splitlines()
+                if line.startswith("bwrap:")
+            ),
+            "bubblewrap namespace check failed",
+        )
+        detail = re.sub(r"/[^\s'\"]+", "<path>", detail)
+        detail = "".join(char for char in detail if char.isprintable())[:256]
+        raise NooaError(f"NOOA isolation unavailable: {detail}")
+
+
 def _command() -> list[str]:
     if sys.platform != "linux" or sys.version_info[:2] not in {
         (3, 12),
@@ -110,16 +165,11 @@ def _command() -> list[str]:
     executable = shutil.which("bwrap")
     if not executable:
         raise NooaError("NOOA requires bubblewrap with user namespaces")
+    _probe_namespaces(executable)
     prefix = Path(sys.base_prefix)
     command = [
         executable,
-        "--unshare-all",
-        "--unshare-user",
-        "--disable-userns",
-        "--die-with-parent",
-        "--new-session",
-        "--cap-drop",
-        "ALL",
+        *_NAMESPACE_FLAGS,
         "--clearenv",
         "--setenv",
         "HOME",
@@ -283,32 +333,40 @@ async def run_nooa(
     }
     initial_bytes = _json(initial, max_context_bytes)
     frame_limit = max(max_context_bytes, max_response_bytes) + 4096
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        env={},
-        start_new_session=True,
-        limit=frame_limit,
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={},
+            start_new_session=True,
+            limit=frame_limit,
+        )
+    except OSError as exc:
+        raise NooaError(_WORKER_STOPPED) from exc
     assert process.stdin is not None and process.stdout is not None
     iterations = 0
     tool_calls = 0
     domain_bytes = 0
+    started = False
+
+    async def send(data: bytes) -> None:
+        assert process.stdin is not None
+        try:
+            process.stdin.write(data + b"\n")
+            await process.stdin.drain()
+        except ConnectionError as exc:
+            raise NooaError(_WORKER_STOPPED) from exc
+
     try:
         async with asyncio.timeout(timeout_seconds):
-            process.stdin.write(initial_bytes + b"\n")
-            await process.stdin.drain()
-            progress({"kind": "started", "message": "NOOA worker started"})
+            await send(initial_bytes)
             while True:
                 try:
                     line = await process.stdout.readline()
                     if not line:
-                        raise NooaError(
-                            "NOOA worker stopped; verify bubblewrap user "
-                            "namespace support and the optional installation"
-                        )
+                        raise NooaError(_WORKER_STOPPED)
                     if len(line) > frame_limit:
                         raise ValueError("oversized frame")
                     frame = json.loads(line)
@@ -316,6 +374,11 @@ async def run_nooa(
                         raise ValueError("invalid frame")
                 except (ValueError, UnicodeError) as exc:
                     raise NooaError("invalid NOOA worker message") from exc
+                if not started:
+                    progress(
+                        {"kind": "started", "message": "NOOA worker started"}
+                    )
+                    started = True
                 kind = frame.get("kind")
                 reply: dict[str, Any]
                 if kind == "result":
@@ -350,7 +413,9 @@ async def run_nooa(
                     try:
                         choice = response["choices"][0]
                         message = choice["message"]
-                        calls = message.get("tool_calls", [])
+                        calls = message.get("tool_calls")
+                        if calls is None:
+                            calls = []
                         if not isinstance(calls, list):
                             raise ValueError("invalid tool calls")
                         tool_calls += len(calls)
@@ -370,6 +435,18 @@ async def run_nooa(
                                 call["function"]["arguments"], str
                             ):
                                 raise ValueError("invalid tool fields")
+                            try:
+                                arguments = json.loads(
+                                    call["function"]["arguments"]
+                                )
+                                if not isinstance(arguments, dict):
+                                    raise ValueError(
+                                        "tool arguments must be an object"
+                                    )
+                            except ValueError as exc:
+                                raise NooaError(
+                                    "model returned invalid tool arguments"
+                                ) from exc
                             clean_calls.append(
                                 {
                                     "id": call["id"],
@@ -482,8 +559,7 @@ async def run_nooa(
                     raise NooaError("unsupported NOOA worker message")
                 if tool_calls > max_tool_calls:
                     raise NooaError("NOOA tool limit reached")
-                process.stdin.write(_json(reply, frame_limit) + b"\n")
-                await process.stdin.drain()
+                await send(_json(reply, frame_limit))
     except TimeoutError as exc:
         raise NooaError("NOOA investigation deadline exceeded") from exc
     finally:

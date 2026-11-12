@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import importlib.util
 import os
 import secrets
 import threading
@@ -17,9 +16,9 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from .inference import InferenceConfig, Investigator
+from .inference import InferenceConfig, InferenceError, Investigator
 from .monitor import Monitor, now
-from .nooa_backend import NooaError, _command
+from .nooa_backend import NooaError
 
 
 class MonitorSession:
@@ -79,18 +78,13 @@ class MonitorSession:
         self.reason = (
             "No inference configuration; monitoring remains available."
         )
-        if config:
-            self.reason = ""
-            if importlib.util.find_spec("httpx") is None:
-                self.reason = (
-                    "Install cuphoton[xlens-inference] for investigation."
-                )
-            elif config.backend == "nooa":
-                try:
-                    _command()
-                except NooaError as exc:
-                    self.reason = str(exc)
         self._investigator = Investigator(config) if config else None
+        if self._investigator:
+            self.reason = ""
+            try:
+                self._investigator.check_available()
+            except (InferenceError, NooaError) as exc:
+                self.reason = str(exc)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()

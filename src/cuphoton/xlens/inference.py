@@ -199,12 +199,17 @@ class Investigator:
 
     def check_available(self) -> None:
         """Check optional runtime requirements before creating a report."""
-        if importlib.util.find_spec("httpx") is None:
-            raise InferenceError(
-                "Install cuphoton[xlens-inference] for investigation."
-            )
         if self.config.backend == "nooa":
             _command()
+        if importlib.util.find_spec("httpx") is None:
+            extra = (
+                "xlens-nooa"
+                if self.config.backend == "nooa"
+                else "xlens-inference"
+            )
+            raise InferenceError(
+                f"Install cuphoton[{extra}] for investigation."
+            )
 
     async def _request(
         self, evidence: dict[str, Any], question: str, instructions: str
@@ -263,8 +268,13 @@ class Investigator:
         try:
             import httpx
         except ImportError as exc:
+            extra = (
+                "xlens-nooa"
+                if self.config.backend == "nooa"
+                else "xlens-inference"
+            )
             raise InferenceError(
-                "install cuphoton[xlens-inference] to enable investigation"
+                f"Install cuphoton[{extra}] for investigation."
             ) from exc
         config = self.config
         allowed = {

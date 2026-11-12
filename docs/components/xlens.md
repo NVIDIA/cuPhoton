@@ -169,17 +169,43 @@ uv sync --locked --python 3.13 --extra xlens-nooa
 ```
 
 The extra pins NOOA 0.0.12 and includes the HTTP client. Install your Linux
-distribution's `bubblewrap` package separately, with working unprivileged user
-namespaces, and run as a non-root user. The backend reports an error if its
-interpreter, package version or isolation requirements are unavailable.
-Python 3.14 supports the basic
-backend; it cannot run the NOOA worker.
+distribution's `bubblewrap` package separately and run as a non-root user.
+Check that the host permits the required namespaces:
 
-Supply a TOML file with the exact model identifier accepted by your endpoint:
+```bash
+bwrap --unshare-all --unshare-user --disable-userns --die-with-parent \
+  --ro-bind / / true
+```
+
+The command should exit successfully without output. On Ubuntu 24.04, AppArmor
+restricts unprivileged user namespaces by default. Errors such as
+`bwrap: setting up uid map: Permission denied` or
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` can mean that
+bubblewrap needs an AppArmor profile allowing `userns`. An administrator can
+install the following profile as `/etc/apparmor.d/bwrap` and load it with
+`sudo apparmor_parser --replace /etc/apparmor.d/bwrap`, then rerun the check:
+
+```text
+abi <abi/4.0>,
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
+```
+
+This profile grants the namespace permission to `/usr/bin/bwrap`. See the
+[Ubuntu namespace guidance](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions)
+and [AppArmor documentation](https://gitlab.com/apparmor/apparmor/-/wikis/unprivileged_userns_restriction)
+for site policy and administrator alternatives. The CLI and live session check
+the interpreter, package version and namespace support before enabling
+investigation.
+Python 3.14 supports the basic backend; it cannot run the NOOA worker.
+
+For a basic investigation, supply a TOML file with the exact model identifier
+accepted by your endpoint:
 
 ```toml
 [inference]
-backend = "nooa"
+backend = "basic"
 api = "chat_completions"
 base_url = "http://127.0.0.1:8000/v1"
 model = "institution-model"
@@ -192,13 +218,24 @@ max_samples = 64
 max_context_bytes = 262144
 max_response_bytes = 65536
 max_concurrent = 1
+```
+
+After installing and checking NOOA, use this table for iterative investigation.
+The shared settings above also apply to this backend:
+
+```toml
+[inference]
+backend = "nooa"
+api = "chat_completions"
+base_url = "http://127.0.0.1:8000/v1"
+model = "institution-model"
+auth = "none"
 max_iterations = 8
 max_tool_calls = 32
 max_evidence_bytes = 8388608
 ```
 
-Use `backend = "basic"` for a single-request investigation. For bearer
-authentication, set `auth = "bearer"` and
+For bearer authentication, set `auth = "bearer"` and
 `api_key_env = "CUPHOTON_XLENS_API_KEY"`, then inject the secret through your
 institution's secret-management procedure. The config contains the variable
 name, never the value. No-auth mode requires omitting `api_key_env` and ignores

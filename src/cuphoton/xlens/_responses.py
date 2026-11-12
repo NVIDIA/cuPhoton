@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -24,6 +23,7 @@ def _assistant(message: dict[str, Any]) -> dict[str, Any]:
     clean = []
     for call in calls:
         function = call["function"]
+        # The shared broker validates argument JSON for both APIs.
         if (
             call.get("type") != "function"
             or not isinstance(call["id"], str)
@@ -31,7 +31,6 @@ def _assistant(message: dict[str, Any]) -> dict[str, Any]:
             or not isinstance(function["name"], str)
             or not function["name"]
             or not isinstance(function["arguments"], str)
-            or not isinstance(json.loads(function["arguments"]), dict)
         ):
             raise ValueError("invalid assistant tool call")
         clean.append(

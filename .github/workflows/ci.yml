@@ -148,9 +148,22 @@ jobs:
       - name: Install the isolated worker runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap apparmor
           uv python install "${{ matrix.python }}"
           uv sync --locked --python "${{ matrix.python }}" --extra dev --extra xlens-nooa
+      - name: Allow bubblewrap user namespaces on Ubuntu
+        run: |
+          sudo tee /etc/apparmor.d/cuphoton-ci-bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          profile cuphoton-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser --replace /etc/apparmor.d/cuphoton-ci-bwrap
+      - name: Verify bubblewrap namespace support
+        run: >-
+          bwrap --unshare-all --unshare-user --disable-userns --die-with-parent
+          --ro-bind / / true
       - name: Exercise real NOOA with local model fixtures
         run: uv run --no-sync pytest -q -rs tests/xlens
 

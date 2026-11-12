@@ -10,8 +10,11 @@ import importlib.metadata
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -179,11 +182,7 @@ def test_real_iterative_queries_and_application_view(monkeypatch):
 
 
 @requires_nooa
-def test_sandbox_hides_host_files_environment_and_network(
-    tmp_path, monkeypatch
-):
-    sentinel = tmp_path / "private.txt"
-    sentinel.write_text("parent-only")
+def test_sandbox_hides_host_files_environment_and_network(monkeypatch):
     monkeypatch.setenv("XLENS_PARENT_SECRET", "fixture-parent-only")
     host_network = os.readlink("/proc/self/ns/net")
     script = (
@@ -202,22 +201,41 @@ def test_sandbox_hides_host_files_environment_and_network(
         "space = os.statvfs('/work')\n"
         "assert space.f_blocks * space.f_frsize <= 16 * 1024**2\n"
         "print(json.dumps({'environment':dict(os.environ),"
-        f"'host_visible':pathlib.Path({str(sentinel)!r}).exists(),"
+        "'roots':sorted(os.listdir('/')),"
+        "'host_visible':pathlib.Path(SENTINEL).exists(),"
         "'unrelated_package':pathlib.Path('/packages/pytest').exists(),"
         "'network':os.readlink('/proc/self/ns/net'),"
         "'paths':sys.path}))"
     )
-    command = backend._command()
-    command[-1:] = ["-c", script]
-    completed = subprocess.run(
-        command,
-        env={},
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=True,
-    )
+    # Keep this outside /tmp, which is independently hidden by /work.
+    with tempfile.NamedTemporaryFile(dir=Path(__file__).parent) as sentinel:
+        command = backend._command()
+        command[-1:] = ["-c", script.replace("SENTINEL", repr(sentinel.name))]
+        completed = subprocess.run(
+            command,
+            env=dict(os.environ),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    assert completed.returncode == 0, completed.stderr
     observed = json.loads(completed.stdout)
+    expected_roots = {
+        "dev",
+        "packages",
+        "proc",
+        "runtime",
+        "tmp",
+        "work",
+        "worker.py",
+    }
+    expected_roots.update(
+        directory.lstrip("/")
+        for directory in ("/lib", "/lib64", "/usr")
+        if Path(directory).exists()
+    )
+    assert set(observed["roots"]) == expected_roots
     assert not observed["host_visible"]
     assert not observed["unrelated_package"]
     assert "XLENS_PARENT_SECRET" not in observed["environment"]
@@ -343,13 +361,14 @@ def test_deadline_and_cancel_reap_worker(monkeypatch, cancel):
             await asyncio.wait_for(entered.wait(), 7)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
+                await bounded(task, processes)
         else:
             with pytest.raises(backend.NooaError, match="deadline"):
-                await task
+                await bounded(task, processes)
 
     asyncio.run(exercise())
-    assert len(processes) == 1 and processes[0].returncode is not None
+    assert len(processes) == 1
+    assert processes[0].returncode == -signal.SIGKILL
 
 
 @requires_nooa
@@ -363,96 +382,357 @@ def test_missing_isolation_fails_before_model_call(monkeypatch):
         asyncio.run(run(request))
 
 
-@pytest.mark.skipif(
-    os.name != "posix", reason="parent broker uses POSIX process groups"
-)
-@pytest.mark.parametrize(
-    "probe",
-    [
-        "get_sample",
-        "unknown_query",
-        "query_bound",
-        "domain_allowlist",
-        "model_allowlist",
-        "iteration_limit",
-    ],
-)
-def test_parent_broker_with_stdio_worker(monkeypatch, probe):
-    # Exercise the real parent protocol without NOOA, bubblewrap, or a model.
-    frames = {
-        "get_sample": {
-            "kind": "query",
-            "name": "get_sample",
-            "args": {"sample_id": "second"},
-        },
-        "unknown_query": {
-            "kind": "query",
-            "name": "read_file",
-            "args": {"path": "/etc/passwd"},
-        },
-        "query_bound": {
-            "kind": "query",
-            "name": "recent_findings",
-            "args": {"limit": 21},
-        },
-        "domain_allowlist": {
-            "kind": "query",
-            "name": "domain_view",
-            "args": {"sample_id": "second", "query": "unlisted"},
-        },
-        "model_allowlist": {
-            "kind": "model",
-            "payload": {"messages": [], "tools": []},
-        },
-        "iteration_limit": {
-            "kind": "model",
-            "payload": {"messages": [], "tools": []},
-        },
+async def bounded(awaitable, processes, timeout=12):
+    """Fail promptly even if production cleanup forgets to kill the worker."""
+    task = asyncio.ensure_future(awaitable)
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if not done:
+        for process in processes:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.gather(*(process.wait() for process in processes))
+        pytest.fail("NOOA worker did not stop within the test deadline")
+    return task.result()
+
+
+@pytest.fixture
+def stdio_worker(monkeypatch):
+    """Run the actual broker with an independent, blocking protocol peer."""
+    if os.name != "posix":
+        pytest.skip("parent broker uses POSIX process groups")
+    processes = []
+    launch = asyncio.create_subprocess_exec
+
+    async def capture(*args, **kwargs):
+        process = await launch(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
+
+    def exercise(frames, model_response=None, **options):
+        script = "\n".join(
+            [
+                "import json,os,sys",
+                "settings = json.loads(sys.stdin.readline())",
+                "replies = []",
+                f"for frame in {frames!r}:",
+                "    print(json.dumps(frame), flush=True)",
+                "    replies.append(json.loads(sys.stdin.readline()))",
+                "print(json.dumps({'kind':'result', 'answer':{",
+                "    'replies':replies, 'environment':dict(os.environ)",
+                "}}), flush=True)",
+                # Deliberately stay alive: success and failure must kill us.
+                "sys.stdin.read()",
+            ]
+        )
+        monkeypatch.setattr(
+            backend, "_command", lambda: [sys.executable, "-I", "-c", script]
+        )
+        requests, events = [], []
+
+        async def request(payload):
+            requests.append(payload)
+            return model_response or response(
+                "execute_python", {"code": "pass"}
+            )
+
+        async def invoke():
+            return await bounded(
+                run(request, events.append, **options), processes, 3
+            )
+
+        try:
+            result = asyncio.run(invoke())
+        finally:
+            assert processes[-1].returncode == -signal.SIGKILL
+        return result, requests, events
+
+    return exercise
+
+
+def model_frame(**extra):
+    return {
+        "kind": "model",
+        "payload": {"messages": [], "tools": [], **extra},
     }
-    script = "\n".join(
+
+
+def query_frame(name, **args):
+    return {"kind": "query", "name": name, "args": args}
+
+
+def test_parent_broker_reads_detached_evidence(stdio_worker, monkeypatch):
+    monkeypatch.setenv("XLENS_PARENT_SECRET", "parent-only")
+    result, requests, events = stdio_worker(
         [
-            "import json,sys",
-            "json.loads(sys.stdin.readline())",
-            f"frame = {frames[probe]!r}",
-            f"for _ in range({3 if probe == 'iteration_limit' else 1}):",
-            "    print(json.dumps(frame), flush=True)",
-            "    reply = json.loads(sys.stdin.readline())",
-            "print(json.dumps({'kind':'result','answer':reply}), flush=True)",
+            query_frame("get_sample", sample_id="second"),
+            query_frame("compare_samples", sample_ids=["first", "second"]),
+            query_frame("metric_series", measurement="flux"),
+            query_frame("recent_findings", limit=1),
         ]
     )
-    monkeypatch.setattr(
-        backend, "_command", lambda: [sys.executable, "-I", "-c", script]
-    )
-    domain_calls, requests = [], []
+    assert result["replies"][0]["value"]["id"] == "second"
+    assert [sample["id"] for sample in result["replies"][1]["value"]] == [
+        "first",
+        "second",
+    ]
+    assert [sample["value"] for sample in result["replies"][2]["value"]] == [
+        2.0,
+        5.0,
+    ]
+    assert result["replies"][3]["value"][0]["sample_id"] == "second"
+    assert "XLENS_PARENT_SECRET" not in result["environment"]
+    assert not requests
+    assert events[0] == {"kind": "started", "message": "NOOA worker started"}
+    assert [event["evidence"] for event in events[1:]] == [
+        {"second": 1},
+        {"first": 1, "second": 1},
+        {"first": 1, "second": 1},
+        {"second": 1},
+    ]
 
-    async def request(payload):
-        requests.append(payload)
-        return response(
-            "forbidden_tool"
-            if probe == "model_allowlist"
-            else "execute_python",
-            {"code": "pass"},
-        )
 
-    options = dict(
-        max_iterations=2,
+@pytest.mark.parametrize(
+    "frame",
+    [
+        query_frame("read_file", path="/etc/passwd"),
+        query_frame("status", path="/etc/passwd"),
+        query_frame("recent_findings", limit=21),
+        query_frame("recent_findings", limit=True),
+        query_frame("compare_samples", sample_ids=["second"] * 9),
+        query_frame("domain_view", sample_id="second", query="unlisted"),
+        query_frame("domain_view", sample_id="unknown", query="residual"),
+    ],
+)
+def test_parent_broker_rejects_unavailable_queries(stdio_worker, frame):
+    domain_calls = []
+    result, requests, events = stdio_worker(
+        [frame],
         domain_views={"residual": "Allowed view"},
         domain_query=lambda *args: domain_calls.append(args),
     )
-    if probe in {"model_allowlist", "iteration_limit"}:
-        with pytest.raises(
-            backend.NooaError,
-            match="invalid NOOA model response"
-            if probe == "model_allowlist"
-            else "iteration limit",
-        ):
-            asyncio.run(run(request, **options))
-        assert len(requests) == (1 if probe == "model_allowlist" else 2)
+    assert result["replies"] == [{"error": "unavailable evidence query"}]
+    assert events[-1]["evidence"] == {}
+    assert not domain_calls and not requests
+
+
+@pytest.mark.parametrize(
+    ("frames", "options", "diagnostic"),
+    [
+        ([model_frame(model="untrusted")], {}, "invalid NOOA model request"),
+        (
+            [model_frame(messages=["x" * 2048])],
+            {"max_context_bytes": 1024},
+            "byte limit",
+        ),
+        (
+            [query_frame("compare_samples", sample_ids=["first", "second"])],
+            {"max_context_bytes": 250},
+            "byte limit",
+        ),
+        (
+            [{"kind": "result", "answer": {"text": "x" * 2048}}],
+            {"max_response_bytes": 1024},
+            "byte limit",
+        ),
+        (
+            [{"kind": "result", "answer": "not an object"}],
+            {},
+            "invalid NOOA answer",
+        ),
+        (
+            [{"kind": "result", "answer": {"text": "x" * 8192}}],
+            {"max_context_bytes": 1024, "max_response_bytes": 1024},
+            "invalid NOOA worker message",
+        ),
+        ([model_frame()] * 3, {"max_iterations": 2}, "iteration limit"),
+        ([query_frame("status")] * 2, {"max_tool_calls": 1}, "tool limit"),
+        (
+            [{"kind": "error", "message": "private generated output"}],
+            {},
+            "NOOA could not complete the investigation",
+        ),
+        ([{"kind": "unrecognized"}], {}, "unsupported NOOA worker message"),
+    ],
+)
+def test_parent_broker_enforces_protocol_and_limits(
+    stdio_worker, frames, options, diagnostic
+):
+    with pytest.raises(backend.NooaError, match=diagnostic):
+        stdio_worker(frames, **options)
+
+
+@pytest.mark.parametrize("total", [False, True])
+def test_parent_broker_bounds_domain_results(stdio_worker, total):
+    calls = []
+
+    def query(*args):
+        calls.append(args)
+        return {"summary": "x" * (16000 if total else 16384)}
+
+    with pytest.raises(
+        backend.NooaError,
+        match="domain evidence limit" if total else "byte limit",
+    ):
+        stdio_worker(
+            [query_frame("domain_view", sample_id="second", query="residual")]
+            * (5 if total else 1),
+            domain_views={"residual": "Summary"},
+            domain_query=query,
+        )
+    assert len(calls) == (5 if total else 1)
+
+
+@pytest.mark.parametrize("calls", [None, [], "omitted"])
+def test_parent_broker_accepts_text_only_turn(stdio_worker, calls):
+    message = {"role": "assistant", "content": "Considering the evidence."}
+    if calls != "omitted":
+        message["tool_calls"] = calls
+    result, requests, _ = stdio_worker(
+        [model_frame()], model_response={"choices": [{"message": message}]}
+    )
+    assert len(requests) == 1
+    forwarded = result["replies"][0]["response"]["choices"][0]["message"]
+    assert forwarded == {**message, "tool_calls": []}
+
+
+@pytest.mark.parametrize("api", ["chat", "responses"])
+@pytest.mark.parametrize("arguments", ['{"code": "print(1)"', "[]"])
+def test_parent_broker_rejects_invalid_tool_arguments(
+    stdio_worker, api, arguments
+):
+    model_response = response("execute_python", {})
+    model_response["choices"][0]["message"]["tool_calls"][0]["function"][
+        "arguments"
+    ] = arguments
+    if api == "responses":
+        from cuphoton.xlens._responses import ResponsesAdapter
+
+        model_response = ResponsesAdapter().response(
+            {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call",
+                        "name": "execute_python",
+                        "arguments": arguments,
+                    }
+                ],
+            }
+        )
+    with pytest.raises(
+        backend.NooaError, match="^model returned invalid tool arguments$"
+    ):
+        stdio_worker([model_frame()], model_response=model_response)
+
+
+@pytest.mark.parametrize(
+    "failure", ["name", "second_name", "id", "tool_limit", "response_bytes"]
+)
+def test_parent_broker_checks_model_output(stdio_worker, failure):
+    model_response = response("execute_python", {"code": "pass"})
+    calls = model_response["choices"][0]["message"]["tool_calls"]
+    options = {}
+    diagnostic = "invalid NOOA model response"
+    if failure == "name":
+        calls[0]["function"]["name"] = "forbidden_tool"
+    elif failure == "second_name":
+        calls.append(
+            {
+                "id": "second_call",
+                "type": "function",
+                "function": {"name": "forbidden_tool", "arguments": "{}"},
+            }
+        )
+    elif failure == "id":
+        calls[0]["id"] = 42
+    elif failure == "tool_limit":
+        calls.append({**calls[0], "id": "second_call"})
+        options["max_tool_calls"] = 1
+        diagnostic = "tool limit"
     else:
-        result = asyncio.run(run(request, **options))
-        if probe == "get_sample":
-            assert result["value"]["id"] == "second"
-        else:
-            assert result == {"error": "unavailable evidence query"}
-        assert not requests
-    assert not domain_calls
+        model_response["metadata"] = "x" * 2048
+        options["max_response_bytes"] = 1024
+        diagnostic = "byte limit"
+    with pytest.raises(backend.NooaError, match=diagnostic):
+        stdio_worker(
+            [model_frame()], model_response=model_response, **options
+        )
+
+
+@pytest.mark.parametrize("failure", ["eof", "initial_write", "reply_write"])
+def test_worker_start_failure_is_consistent(monkeypatch, failure):
+    class Pipe:
+        writes = 0
+
+        def write(self, data):
+            self.writes += 1
+
+        async def drain(self):
+            if failure == "initial_write" or self.writes == 2:
+                raise BrokenPipeError("private path or worker output")
+
+    class Reader:
+        async def readline(self):
+            if failure == "reply_write":
+                return json.dumps(query_frame("status")).encode() + b"\n"
+            return b""
+
+    class Process:
+        stdin = Pipe()
+        stdout = Reader()
+        pid = 123
+
+        async def wait(self):
+            pass
+
+    async def launch(*args, **kwargs):
+        return Process()
+
+    monkeypatch.setattr(backend, "_command", lambda: [])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(os, "killpg", lambda *args: None)
+    events = []
+    with pytest.raises(backend.NooaError, match="^NOOA worker stopped;"):
+        asyncio.run(run(lambda payload: None, events.append))
+    assert bool(events) == (failure == "reply_write")
+
+
+def test_namespace_probe_reports_bwrap_cause_without_host_paths(monkeypatch):
+    calls = []
+
+    def probe(command, **kwargs):
+        calls.append(command)
+        assert kwargs["timeout"] == 5 and kwargs["env"] == {}
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stderr=(
+                b"unrelated output\nbwrap: /private/host/path: "
+                b"setting up uid map: Permission denied\n"
+                b"private follow-up line\n"
+            ),
+        )
+
+    monkeypatch.setattr(subprocess, "run", probe)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "version_info", (3, 12))
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.0.12")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
+    with pytest.raises(backend.NooaError) as caught:
+        backend._command()
+    assert str(caught.value) == (
+        "NOOA isolation unavailable: bwrap: <path> "
+        "setting up uid map: Permission denied"
+    )
+    assert calls[0][-1] == "/bin/true"
+    assert {"--unshare-all", "--unshare-user", "--disable-userns"} <= set(
+        calls[0]
+    )
