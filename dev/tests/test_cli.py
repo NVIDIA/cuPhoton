@@ -330,6 +330,42 @@ def test_api_failure_after_dispatch_retains_last_known_json_state(
     assert result["error"] in err.getvalue()
 
 
+def test_unconfirmed_dispatch_preserves_request_without_redispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cuphoton_dev import github
+
+    submitted = []
+
+    def api(path: str, *, data=None, **kwargs):
+        assert path.endswith("/dispatches") and data is not None
+        submitted.append(data["inputs"]["request_id"])
+        # The server may create the run before the client loses its response.
+        raise OSError("connection closed after request was sent")
+
+    monkeypatch.setattr(github, "api", api)
+    out, err = io.StringIO(), io.StringIO()
+    assert (
+        product_cli.main(
+            ["dev", "docs-publish", "--ref", "main", "--json"],
+            out=out,
+            err=err,
+        )
+        == 1
+    )
+    result = json.loads(out.getvalue())
+    assert len(submitted) == 1
+    assert result["request_id"] == submitted[0]
+    assert result["status"] == "dispatch_unknown"
+    assert result["run_id"] is None
+    assert result["url"] is None
+    assert result["conclusion"] is None
+    assert result["controller_sha"] is None
+    assert submitted[0] in result["error"]
+    assert "Inspect that request before redispatching" in result["error"]
+    assert result["error"] in err.getvalue()
+
+
 def test_module_entrypoint() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "cuphoton_dev", "--help"],

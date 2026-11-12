@@ -127,6 +127,8 @@ to return after dispatch. Failed runs and wait timeouts retain the known
 request and workflow fields in JSON output while returning a failing exit
 status. An accepted dispatch whose run is not yet discoverable reports its
 request ID with null run fields; use that ID before attempting a new dispatch.
+If submission fails before confirmation, `dispatch_unknown` preserves the
+request ID without claiming acceptance; inspect that request before retrying.
 
 ```sh
 uv run --project dev --locked cuphoton dev docs-publish --ref main --json

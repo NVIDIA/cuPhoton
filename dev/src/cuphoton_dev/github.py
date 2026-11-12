@@ -202,13 +202,27 @@ def docs_publish(
         if not has_guide(tag, repository):
             raise ValueError(f"Documentation is unavailable at {tag}")
     request_id = uuid.uuid4().hex
-    response = api(
-        f"repos/{repository}/actions/workflows/docs.yml/dispatches",
-        data={
-            "ref": "main",
-            "inputs": {"tag": tag, "request_id": request_id},
-        },
-    )
+    try:
+        response = api(
+            f"repos/{repository}/actions/workflows/docs.yml/dispatches",
+            data={
+                "ref": "main",
+                "inputs": {"tag": tag, "request_id": request_id},
+            },
+        )
+    except (RuntimeError, OSError, ValueError) as exc:
+        raise PublicationError(
+            f"Dispatch outcome unknown for request {request_id}: {exc}. "
+            "Inspect that request before redispatching.",
+            {
+                "request_id": request_id,
+                "run_id": None,
+                "url": None,
+                "status": "dispatch_unknown",
+                "conclusion": None,
+                "controller_sha": None,
+            },
+        ) from exc
     run_id = response.get("workflow_run_id") if response else None
     if run_id is None:
         # Older API deployments return 204. Correlate our unique request
