@@ -195,7 +195,13 @@ def test_singleton_visibility_rejects_wrong_placed_device(
         _singleton_cuda_visibility(2)
 
 
-def test_hostname_validation_accepts_short_fqdn_aliases() -> None:
+def test_hostname_validation_accepts_short_fqdn_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        dragon_module.socket, "gethostname", lambda: "gpu-node"
+    )
+
     assert _hostnames_match("gpu-node", "gpu-node.example.com")
     assert _hostnames_match("GPU-NODE.EXAMPLE.COM.", "gpu-node")
     assert not _hostnames_match(
