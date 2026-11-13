@@ -140,9 +140,10 @@ class GpuImageReader:
             byteswap_inplace(out, self.itemsize)
             if self.bzero != 0.0 or self.bscale != 1.0:
                 # BZERO/BSCALE may be integer-coded; promote for scaling.
+                # Like Astropy, keep float32 only for 8- and 16-bit data.
                 if out.dtype.kind in ("i", "u"):
                     out = out.astype(
-                        cp.float32 if self.itemsize <= 4 else cp.float64
+                        cp.float32 if self.itemsize <= 2 else cp.float64
                     )
                 apply_bzero_bscale(out, self.bzero, self.bscale)
 

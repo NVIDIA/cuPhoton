@@ -116,6 +116,48 @@ def test_image_reader_validates_output_before_io(
         assert calls == []
 
 
+@pytest.mark.parametrize(
+    ("data", "bzero"),
+    [
+        # Astropy writes the FITS unsigned convention, BZERO = 2**31.
+        (np.array([[0, 2**24 + 1, 2**32 - 1]], dtype=np.uint32), None),
+        (np.array([[2**24 + 1, -3]], dtype=np.int32), 0.5),
+    ],
+)
+def test_image_reader_scales_int32_images_without_rounding(
+    tmp_path, data, bzero
+):
+    cp = pytest.importorskip("cupy")
+    kvikio = pytest.importorskip("kvikio")
+    defaults = pytest.importorskip("kvikio.defaults")
+    try:
+        if cp.cuda.runtime.getDeviceCount() == 0:
+            pytest.skip("CUDA device unavailable")
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("CUDA runtime unavailable")
+    from astropy.io import fits
+
+    from cuphoton.xdr import GpuImageReader
+
+    hdu = fits.ImageHDU(data)
+    if bzero is not None:
+        hdu.header["BZERO"] = bzero
+    path = tmp_path / "image.fits"
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path)
+
+    with (
+        defaults.set("compat_mode", kvikio.CompatMode.ON),
+        fits.open(path) as hdus,
+    ):
+        # Read on the GPU first: loading .data makes Astropy rewrite the
+        # in-memory header (BITPIX -64, no BZERO) for non-integer scaling.
+        actual = cp.asnumpy(GpuImageReader(hdus[1]).read())
+        expected = np.asarray(hdus[1].data, dtype=np.float64)
+
+    assert actual.dtype == np.float64
+    np.testing.assert_array_equal(actual, expected)
+
+
 @pytest.mark.parametrize("decode_fails", [False, True])
 @pytest.mark.parametrize("sync_fails", [False, True])
 @pytest.mark.parametrize("owns_loader", [False, True])
