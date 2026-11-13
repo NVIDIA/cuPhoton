@@ -192,7 +192,7 @@ cuPhoton wheels.
 
 | Package | Version or version range | License identifier | Upstream | Use in cuPhoton | Distribution |
 | --- | --- | --- | --- | --- | --- |
-| `CFITSIO` | The local wheel recipe bundles `4.7.0`, built with reentrant support. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html) | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
+| `CFITSIO` | The local wheel recipe bundles `4.7.0`, built with reentrant support and without Fortran wrappers. Source builds require a reentrant system or user-provided library. | [`CFITSIO`](https://spdx.org/licenses/CFITSIO.html); generated parser: `GPL-3.0-or-later WITH Bison-exception-2.2` | [NASA HEASARC CFITSIO](https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html) | FITS header, HDU, binary-table, and heap-descriptor parsing used to construct native read plans for `cuphoton.xdr`. CFITSIO does not perform the GDS data transfer or GPU decompression. | Linux wheels include a privately renamed shared library in `cuphoton.libs`; its copyright and warranty disclaimer follow below. The generated parser notice and license are in [`licenses/CFITSIO-4.7.0-Bison.txt`](licenses/CFITSIO-4.7.0-Bison.txt). The source archive includes a checksum-pinned download/build recipe, not CFITSIO source. |
 | `pybind11` | Native wheel builds use `3.0.4`. | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11/tree/v3.0.4) | C++ bindings for the xDR extension. | Header code is compiled into the native extension; its copyright and license notice follow below. No separate pybind11 runtime package is bundled. |
 | `KvikIO` | `26.6.0` headers from the pinned `libkvikio-cu13` build wheel. | `Apache-2.0` | [KvikIO](https://github.com/rapidsai/kvikio) | File I/O and thread-pool wrappers for native xDR. | Header code is compiled into the xDR extension. The KvikIO shared library is installed separately; the included BS::thread_pool header has the MIT notice below. |
 | `BS::thread_pool` | `4.1.0`, included in the pinned KvikIO headers. | `MIT` | [BS::thread_pool 4.1.0](https://github.com/bshoshany/thread-pool/tree/v4.1.0) | Worker scheduling used by KvikIO in native xDR. | Header code is compiled into the xDR extension; its copyright and full license notice follow below. |
@@ -331,8 +331,12 @@ Software.
 
 ### CFITSIO copyright and license notice
 
-The bundled library includes a local patch that adds a readable version
-string. The patch is included in the cuPhoton source distribution.
+The Linux wheel recipe builds the CFITSIO C API with `--without-fortran`,
+excluding the cfortran-based Fortran wrappers. The bundled library includes
+a local patch that adds a readable version string. The patch is included in
+the cuPhoton source distribution. Source builds and Conda packages link to
+an externally supplied CFITSIO library, whose distribution supplies its own
+applicable notices.
 
 The following notice is reproduced from `licenses/License.txt` in the
 CFITSIO 4.7.0 distribution bundled by the local wheel recipe:
@@ -364,6 +368,23 @@ PERSONS OR PROPERTY OR OTHERWISE, AND WHETHER OR NOT LOSS WAS SUSTAINED
 FROM, OR AROSE OUT OF THE RESULTS OF, OR USE OF, THE SOFTWARE OR
 SERVICES PROVIDED HEREUNDER.
 ```
+
+### CFITSIO generated parser notice
+
+CFITSIO 4.7.0 includes Bison-generated code in
+[`eval_y.c`](https://github.com/HEASARC/cfitsio/blob/d6d27653740864a0483e74cff23c53e34e1dceee/eval_y.c)
+and
+[`eval_tab.h`](https://github.com/HEASARC/cfitsio/blob/d6d27653740864a0483e74cff23c53e34e1dceee/eval_tab.h).
+The parser remains part of the bundled library when Fortran wrappers are
+disabled. Its upstream notice specifies
+`GPL-3.0-or-later WITH Bison-exception-2.2`. The exception permits distribution
+of a larger work under terms of the distributor's choice, subject to the
+conditions in that exception.
+
+[`licenses/CFITSIO-4.7.0-Bison.txt`](licenses/CFITSIO-4.7.0-Bison.txt) preserves
+the upstream copyright, license notice, and complete exception, followed by
+the GNU General Public License version 3 text. This notice file is included
+in cuPhoton source and wheel distributions.
 
 ## Transitive dependencies and reproduction
 
@@ -407,7 +428,8 @@ privately renamed CFITSIO shared library. The xDR extension contains compiled
 pybind11, KvikIO and BS::thread_pool header code; the xFit and core imaging
 extensions contain compiled CCCL header code. The source archive and wheels
 include `LICENSE` and this notice file, including the CFITSIO, pybind11,
-BS::thread_pool, CUB, and LLVM exception notices above.
+BS::thread_pool, CUB, and LLVM exception notices above, plus the CFITSIO
+generated parser notice and license in `licenses/CFITSIO-4.7.0-Bison.txt`.
 
 DragonHPC, `mpi4py`, MPI, and CUDA runtime libraries are installed separately.
 A development source build links against the available CFITSIO and CUDA
