@@ -27,6 +27,7 @@ distributions = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(distributions)
 NOTICES = (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes()
 CCCL_LICENSE = (ROOT / "licenses/CCCL-3.1.2.txt").read_bytes()
+BISON_LICENSE = (ROOT / "licenses/CFITSIO-4.7.0-Bison.txt").read_bytes()
 PYBIND11_NOTICE = next(
     block
     for block in re.findall(rb"```text\n(.*?)```", NOTICES, re.DOTALL)
@@ -43,11 +44,13 @@ def make_archive(
     xfit_elf=b"",
     imaging_elf=None,
     cccl_license=CCCL_LICENSE,
+    bison_license=BISON_LICENSE,
 ):
     version = "0.1.4"
     expression = expression or (
         "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause "
-        "AND Apache-2.0 WITH LLVM-exception"
+        "AND Apache-2.0 WITH LLVM-exception "
+        "AND GPL-3.0-or-later WITH Bison-exception-2.2"
         if kind == "wheel"
         else "Apache-2.0 AND MIT"
     )
@@ -69,6 +72,7 @@ def make_archive(
             info + "licenses/LICENSE": (ROOT / "LICENSE").read_bytes(),
             info + "licenses/THIRD_PARTY_NOTICES.md": notices,
             info + "licenses/licenses/CCCL-3.1.2.txt": cccl_license,
+            info + "licenses/licenses/CFITSIO-4.7.0-Bison.txt": bison_license,
             (
                 "cuphoton/xdr/_nvcomp_batch_ext."
                 "cpython-312-x86_64-linux-gnu.so"
@@ -99,6 +103,7 @@ def make_archive(
                     "PKG-INFO": metadata,
                     "THIRD_PARTY_NOTICES.md": notices,
                     "licenses/CCCL-3.1.2.txt": cccl_license,
+                    "licenses/CFITSIO-4.7.0-Bison.txt": bison_license,
                 }.get(name, b"source\n")
                 member = tarfile.TarInfo(f"cuphoton-{version}/{name}")
                 member.size = len(content)
@@ -109,7 +114,14 @@ def make_archive(
 @pytest.mark.parametrize("kind", ["wheel", "sdist"])
 def test_archives_include_complete_pybind11_notice(tmp_path, kind, request):
     xfit_elf = request.getfixturevalue("xfit_elf") if kind == "wheel" else b""
-    path = make_archive(tmp_path, kind, NOTICES, xfit_elf=xfit_elf)
+    cfitsio = (
+        request.getfixturevalue("cfitsio_elfs")["c-only"]
+        if kind == "wheel"
+        else b""
+    )
+    path = make_archive(
+        tmp_path, kind, NOTICES, xfit_elf=xfit_elf, cfitsio=cfitsio
+    )
     check = getattr(distributions, f"check_{kind}")
     check(path)
 
@@ -137,6 +149,8 @@ def test_archives_reject_incomplete_pybind11_notice(tmp_path, kind, removed):
     [
         "Apache-2.0 AND MIT AND CFITSIO",
         "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause",
+        "Apache-2.0 AND MIT AND CFITSIO AND BSD-3-Clause "
+        "AND Apache-2.0 WITH LLVM-exception",
     ],
 )
 def test_native_wheel_requires_header_license_expression(
@@ -185,6 +199,78 @@ def test_native_wheel_rejects_vendored_cuda_libraries(tmp_path, library):
     with zipfile.ZipFile(path, "a") as archive:
         archive.writestr(f"cuphoton.libs/{library}-12345678.so.13", b"")
     with pytest.raises(ValueError, match="unexpected bundled binaries"):
+        distributions.check_wheel(path)
+
+
+@pytest.fixture(scope="module")
+def cfitsio_elfs(tmp_path_factory):
+    """Real ELF exports cover C-only, Fortran and incomplete C API builds."""
+    if sys.platform != "linux" or shutil.which("readelf") is None:
+        pytest.skip("ELF symbol checks require Linux and readelf")
+    compiler = shutil.which("cc")
+    if compiler is None:
+        pytest.skip("ELF symbol checks require a C compiler")
+    directory = tmp_path_factory.mktemp("cfitsio-elf")
+    variants = {}
+    for variant in ("c-only", "fortran", "missing-reentrant"):
+        source = directory / "cfitsio.c"
+        source.write_text(
+            'const char version[] = "CFITSIO 4.7.0";\n'
+            "void ffopen(void) {}\n"
+            "void ffclos(void) {}\n"
+            + (
+                "int fits_is_reentrant(void) { return 1; }\n"
+                if variant != "missing-reentrant"
+                else ""
+            )
+            + ("void ftopen_(void) {}\n" if variant == "fortran" else "")
+        )
+        library = directory / "libcfitsio.so"
+        subprocess.run(
+            [compiler, "-shared", "-fPIC", str(source), "-o", str(library)],
+            check=True,
+        )
+        variants[variant] = library.read_bytes()
+    return variants
+
+
+def test_native_wheel_rejects_cfitsio_fortran_wrappers(
+    tmp_path, xfit_elf, cfitsio_elfs
+):
+    path = make_archive(
+        tmp_path,
+        "wheel",
+        NOTICES,
+        cfitsio=cfitsio_elfs["fortran"],
+        xfit_elf=xfit_elf,
+    )
+    with pytest.raises(ValueError, match="CFITSIO contains Fortran wrappers"):
+        distributions.check_wheel(path)
+
+
+def test_native_wheel_requires_cfitsio_c_api(
+    tmp_path, xfit_elf, cfitsio_elfs
+):
+    path = make_archive(
+        tmp_path,
+        "wheel",
+        NOTICES,
+        cfitsio=cfitsio_elfs["missing-reentrant"],
+        xfit_elf=xfit_elf,
+    )
+    with pytest.raises(ValueError, match="missing CFITSIO C API symbols"):
+        distributions.check_wheel(path)
+
+
+def test_native_wheel_rejects_invalid_cfitsio_elf(tmp_path, xfit_elf):
+    path = make_archive(
+        tmp_path,
+        "wheel",
+        NOTICES,
+        cfitsio=b"CFITSIO 4.7.0\0",
+        xfit_elf=xfit_elf,
+    )
+    with pytest.raises(ValueError, match="invalid CFITSIO ELF library"):
         distributions.check_wheel(path)
 
 
@@ -267,16 +353,25 @@ def test_wheel_rejects_wrong_cuda_linkage(
 
 
 @pytest.mark.parametrize("kind", ["wheel", "sdist"])
-def test_archives_reject_truncated_cccl_license(tmp_path, kind, request):
+@pytest.mark.parametrize(
+    "argument, content, label",
+    [
+        ("cccl_license", CCCL_LICENSE, "CCCL"),
+        ("bison_license", BISON_LICENSE, "CFITSIO Bison"),
+    ],
+)
+def test_archives_reject_truncated_license(
+    tmp_path, kind, request, argument, content, label
+):
     xfit_elf = request.getfixturevalue("xfit_elf") if kind == "wheel" else b""
     path = make_archive(
         tmp_path,
         kind,
         NOTICES,
         xfit_elf=xfit_elf,
-        cccl_license=CCCL_LICENSE[:200],
+        **{argument: content[:200]},
     )
-    with pytest.raises(ValueError, match="full CCCL license notice"):
+    with pytest.raises(ValueError, match=f"full {label} license notice"):
         getattr(distributions, f"check_{kind}")(path)
 
 
@@ -313,7 +408,8 @@ def test_native_wheel_requires_cfitsio_identity(tmp_path, cfitsio):
 def test_archives_require_mit_license_expression(tmp_path, kind):
     expression = (
         "Apache-2.0 AND CFITSIO AND BSD-3-Clause "
-        "AND Apache-2.0 WITH LLVM-exception"
+        "AND Apache-2.0 WITH LLVM-exception "
+        "AND GPL-3.0-or-later WITH Bison-exception-2.2"
         if kind == "wheel"
         else "Apache-2.0"
     )
