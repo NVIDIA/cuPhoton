@@ -22,11 +22,10 @@ from cuphoton.xlens import (
     Sample,
 )
 
-pytest.importorskip("httpx")
-
 
 @pytest.fixture
 def endpoint():
+    pytest.importorskip("httpx")
     seen = []
     behavior = {
         "status": 200,
@@ -47,9 +46,8 @@ def endpoint():
                     "body": payload,
                 }
             )
-            evidence = json.loads(payload["messages"][-1]["content"])[
-                "evidence"
-            ]
+            messages = payload.get("messages", payload.get("input"))
+            evidence = json.loads(messages[-1]["content"])["evidence"]
             sample = evidence["samples"][0]
             name, measurement = next(iter(sample["measurements"].items()))
             answer = {
@@ -66,16 +64,31 @@ def endpoint():
                     }
                 ],
             }
-            body = json.dumps(
-                {
-                    "choices": [
+            result = {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps(answer)},
+                    }
+                ]
+            }
+            if self.path.endswith("/responses"):
+                result = {
+                    "status": "completed",
+                    "output": [
                         {
-                            "finish_reason": "stop",
-                            "message": {"content": json.dumps(answer)},
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(answer),
+                                }
+                            ],
                         }
-                    ]
+                    ],
                 }
-            ).encode()
+            body = json.dumps(result).encode()
             if behavior["large"]:
                 body += b" " * 5000
             time.sleep(behavior["delay"])
@@ -114,8 +127,9 @@ def make_monitor(tmp_path):
 
 
 @pytest.mark.parametrize("auth", ["none", "bearer"])
+@pytest.mark.parametrize("api", ["chat_completions", "responses"])
 def test_portable_client_auth_model_and_report_separation(
-    tmp_path, monkeypatch, endpoint, auth
+    tmp_path, monkeypatch, endpoint, auth, api
 ):
     url, seen, _ = endpoint
     monkeypatch.setenv("CUPHOTON_XLENS_API_KEY", "fixture-credential")
@@ -127,12 +141,18 @@ def test_portable_client_auth_model_and_report_separation(
         "institution/exact-model-id",
         auth=auth,
         api_key_env="CUPHOTON_XLENS_API_KEY" if auth == "bearer" else None,
+        api=api,
     )
     report = asyncio.run(
         Investigator(config).investigate(monitor, ["observation"])
     )
     assert report["status"] == "completed"
-    assert seen[0]["path"] == "/v1/chat/completions"
+    assert seen[0]["path"] == (
+        "/v1/responses" if api == "responses" else "/v1/chat/completions"
+    )
+    if api == "responses":
+        assert seen[0]["body"]["store"] is False
+        assert seen[0]["body"]["max_output_tokens"] == config.max_tokens
     assert seen[0]["body"]["model"] == "institution/exact-model-id"
     assert seen[0]["authorization"] == (
         "Bearer fixture-credential" if auth == "bearer" else None
@@ -364,3 +384,179 @@ def test_response_contract_validates_answers(tmp_path, monkeypatch, invalid):
         assert report["diagnostic"] == expected_error
         assert "narrative" not in report
         assert "citations" not in report
+
+
+@pytest.mark.parametrize(
+    ("backend", "runtime_error", "expected"),
+    [
+        (
+            "basic",
+            None,
+            "Install cuphoton[xlens-inference] for investigation.",
+        ),
+        (
+            "nooa",
+            "NOOA requires Linux and Python 3.12 or 3.13",
+            "NOOA requires Linux and Python 3.12 or 3.13",
+        ),
+        (
+            "nooa",
+            "install cuphoton[xlens-nooa] for NOOA",
+            "install cuphoton[xlens-nooa] for NOOA",
+        ),
+        (
+            "nooa",
+            "NOOA sandbox unavailable: permission denied",
+            "NOOA sandbox unavailable: permission denied",
+        ),
+        (
+            "nooa",
+            None,
+            "Install cuphoton[xlens-nooa] for investigation.",
+        ),
+    ],
+)
+def test_missing_runtime_is_reported_before_creating_a_report(
+    tmp_path, monkeypatch, backend, runtime_error, expected
+):
+    from cuphoton.xlens import MonitorSession, inference
+    from cuphoton.xlens.inference import InferenceError
+    from cuphoton.xlens.nooa_backend import NooaError
+
+    calls = []
+
+    def command():
+        calls.append("runtime")
+        if runtime_error:
+            raise NooaError(runtime_error)
+        return []
+
+    monkeypatch.setattr(inference, "_command", command)
+    monkeypatch.setattr(
+        inference.importlib.util, "find_spec", lambda name: None
+    )
+    config = InferenceConfig(
+        "http://localhost:1/v1", "fixture", backend=backend
+    )
+    with pytest.raises((InferenceError, NooaError)) as error:
+        Investigator(config).check_available()
+    assert str(error.value) == expected
+    monitor = make_monitor(tmp_path)
+    session = MonitorSession(monitor, config=config)
+    assert session.reason == expected
+    assert not session.can_ask
+    assert monitor.snapshot()["reports"] == []
+    assert calls == (["runtime", "runtime"] if backend == "nooa" else [])
+
+
+@pytest.mark.parametrize("api", ["chat_completions", "responses"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["complete", "changed_before", "changed_during", "bad_citation"],
+)
+def test_nooa_diagnostic_bridge_and_answer_validation_without_worker(
+    tmp_path, monkeypatch, api, outcome
+):
+    from cuphoton.xlens import nooa_backend
+    from cuphoton.xlens._responses import ResponsesAdapter
+
+    monitor = make_monitor(tmp_path)
+    context = Sample("context", 4, {"flux": Measurement(3.0, "arb")})
+    monitor.publish(context)
+    calls = []
+    adapters = []
+    progress = []
+    answer = {
+        "narrative": "Compare the recorded flux.",
+        "citations": [
+            {
+                "sample_id": "context",
+                "revision": 1,
+                "measurement": "flux",
+                "value": 999 if outcome == "bad_citation" else 3.0,
+                "unit": "arb",
+            }
+        ],
+    }
+
+    def revise():
+        monitor.publish(replace(context, revision=2))
+
+    def domain_query(sample_id, query):
+        calls.append((sample_id, query))
+        if outcome == "changed_during":
+            revise()
+        return {"peak": 3.0}
+
+    async def chat(self, payload, *, adapter=None):
+        assert payload == {
+            "messages": [{"role": "user", "content": "Inspect"}]
+        }
+        adapters.append(adapter)
+        return {"choices": [{"message": {"content": json.dumps(answer)}}]}
+
+    async def worker(evidence, question, instructions, **kwargs):
+        assert evidence["selected_ids"] == ["observation"]
+        assert {s["id"] for s in evidence["samples"]} == {
+            "observation",
+            "context",
+        }
+        assert question == "Compare flux"
+        assert instructions == "Cite measurements."
+        assert kwargs["domain_views"] == {"profile": "Measured profile"}
+        if outcome == "changed_before":
+            revise()
+        assert kwargs["domain_query"]("context", "profile") == {"peak": 3.0}
+        kwargs["progress"]({"kind": "tool", "message": "Read profile."})
+        payload = {"messages": [{"role": "user", "content": "Inspect"}]}
+        await kwargs["request"](payload)
+        response = await kwargs["request"](payload)
+        return json.loads(response["choices"][0]["message"]["content"])
+
+    monkeypatch.setattr(Investigator, "_chat", chat)
+    monkeypatch.setattr(nooa_backend, "run_nooa", worker)
+    config = InferenceConfig(
+        "http://localhost:1/v1", "fixture", backend="nooa", api=api
+    )
+    report = asyncio.run(
+        Investigator(config).investigate(
+            monitor,
+            ["observation"],
+            question="Compare flux",
+            instructions="Cite measurements.",
+            domain_query=domain_query,
+            domain_views={"profile": "Measured profile"},
+            progress=progress.append,
+        )
+    )
+    assert report["selected_evidence"] == {"observation": 1}
+    assert report["evidence"] == {"observation": 1, "context": 1}
+    assert calls == (
+        [] if outcome == "changed_before" else [("context", "profile")]
+    )
+    if outcome.startswith("changed_"):
+        assert report["status"] == "stale"
+        assert report["diagnostic"] == (
+            "diagnostic evidence changed; start another investigation"
+        )
+        assert not adapters and not progress
+    else:
+        assert len(adapters) == 2
+        assert adapters[0] is adapters[1]
+        if api == "responses":
+            assert isinstance(adapters[0], ResponsesAdapter)
+        else:
+            assert adapters == [None, None]
+        assert progress[0]["message"] == "Read profile."
+        assert report["events"] == progress
+        if outcome == "complete":
+            assert report["status"] == "completed"
+            assert report["citations"] == answer["citations"]
+        else:
+            assert report["status"] == "failed"
+            assert report["diagnostic"] == (
+                "NOOA response failed evidence validation: "
+                "citation does not match the recorded measurement"
+            )
+    if outcome != "complete":
+        assert "citations" not in report and "narrative" not in report

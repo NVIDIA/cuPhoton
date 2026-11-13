@@ -278,12 +278,13 @@
       home.textContent = "← " + (ui.home_label || "Back to site");
     }
     if (ui.description) byId("description").textContent = ui.description;
+    byId("backend").textContent = ui.can_ask && ui.backend ? ui.backend : "";
     byId("access-control").hidden = !ui.live || !ui.can_ask || !ui.authentication_required;
     byId("interaction-status").textContent = !ui.live ?
       "Offline snapshot. Questions and cancellation require a connected monitor; saved reports remain available below." :
       !ui.can_ask ? ui.reason || "Read-only monitor. Investigation is not configured." :
       ui.authentication_required && !canInteract() ? "Enter the monitor access token to enable investigation." :
-      "Questions use recorded evidence. New results and reports appear automatically.";
+      "Questions use recorded evidence. New results and investigator actions appear automatically.";
     const disabled = !canInteract();
     byId("question").disabled = disabled;
     byId("scope").disabled = disabled;
@@ -335,12 +336,12 @@
         const actions = element("details");
         actions.dataset.detail = report.id + ":actions";
         actions.open = activeStatus(report.status) || opened.has(actions.dataset.detail);
-        actions.append(element("summary", "Progress · " + events.length));
+        actions.append(element("summary", "Actions and progress · " + events.length));
         const list = element("ol", undefined, "report-events");
         events.forEach(event => {
           const row = element("li");
           if (event.at) row.append(element("time", clockText(event.at)));
-          row.append(element("span", event.message || event.kind || "Update"));
+          row.append(element("span", (event.tool ? event.tool + " · " : "") + (event.message || event.kind || "Update")));
           list.append(row);
         });
         actions.append(list);
