@@ -1,0 +1,1340 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>13  Correlate signals – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./scale.html" rel="next"/>
+<link href="./xray-traces.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link href="https://nvidia.github.io/cuPhoton/main/correlate.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="correlate.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./correlate.html"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#make-two-signals-with-a-known-delay" href="#make-two-signals-with-a-known-delay" id="toc-make-two-signals-with-a-known-delay"><span class="header-section-number">13.1</span> Make two signals with a known delay</a></li>
+<li><a class="nav-link" data-scroll-target="#wrap-the-signals-in-a-source" href="#wrap-the-signals-in-a-source" id="toc-wrap-the-signals-in-a-source"><span class="header-section-number">13.2</span> Wrap the signals in a source</a></li>
+<li><a class="nav-link" data-scroll-target="#correlate-the-pair" href="#correlate-the-pair" id="toc-correlate-the-pair"><span class="header-section-number">13.3</span> Correlate the pair</a></li>
+<li><a class="nav-link" data-scroll-target="#read-the-delay-from-the-lag-correlation" href="#read-the-delay-from-the-lag-correlation" id="toc-read-the-delay-from-the-lag-correlation"><span class="header-section-number">13.4</span> Read the delay from the lag correlation</a></li>
+<li><a class="nav-link" data-scroll-target="#read-the-delay-from-the-cross-spectrum" href="#read-the-delay-from-the-cross-spectrum" id="toc-read-the-delay-from-the-cross-spectrum"><span class="header-section-number">13.5</span> Read the delay from the cross-spectrum</a></li>
+<li><a class="nav-link" data-scroll-target="#sec-correlate-hdf5" href="#sec-correlate-hdf5" id="toc-sec-correlate-hdf5"><span class="header-section-number">13.6</span> Correlate signals stored in HDF5</a></li>
+<li><a class="nav-link" data-scroll-target="#shard-a-long-series" href="#shard-a-long-series" id="toc-shard-a-long-series"><span class="header-section-number">13.7</span> Shard a long series</a></li>
+<li><a class="nav-link" data-scroll-target="#sec-correlate-options" href="#sec-correlate-options" id="toc-sec-correlate-options"><span class="header-section-number">13.8</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#on-a-gpu" href="#on-a-gpu" id="toc-on-a-gpu"><span class="header-section-number">13.9</span> On a GPU</a></li>
+<li><a class="nav-link" data-scroll-target="#command-line" href="#command-line" id="toc-command-line"><span class="header-section-number">13.10</span> Command line</a></li>
+<li><a class="nav-link" data-scroll-target="#sec-correlate-radio" href="#sec-correlate-radio" id="toc-sec-correlate-radio"><span class="header-section-number">13.11</span> Correlate radio recordings</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">13.12</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">13.13</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./correlate.html"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-correlate"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>xBeam (<code>cuphoton.xbeam</code>) correlates sampled signals. Two sensors that record one source, such as two microphones or two radio telescopes, share a delayed copy of it. xBeam measures how much the recordings share and at what delay, frequency by frequency. <code>correlate_series</code> cuts each signal into windows, takes the fast Fourier transform (FFT) of each window, multiplies one transform by the conjugate of the other and averages. It returns cross-spectra, lag correlations, or both. For radio astronomy, <code>cuphoton xbeam correlate</code> turns VDIF recordings into visibilities (<a class="quarto-xref" href="#sec-correlate-radio"><span>Section 13.11</span></a>).</p>
+<p><strong>You need:</strong></p>
+<ul>
+<li>cuPhoton with the CPU profile (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). xBeam needs no extra on the CPU.</li>
+<li>The <code>gpu</code> profile and an NVIDIA GPU for the GPU paths.</li>
+<li>Two or more uniformly sampled signals on one time grid, or the sample pair below.</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on a small synthetic pair. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<section class="level2" data-number="13.1" id="make-two-signals-with-a-known-delay">
+<h2 class="anchored" data-anchor-id="make-two-signals-with-a-known-delay" data-number="13.1"><span class="header-section-number">13.1</span> Make two signals with a known delay</h2>
+<p>Signal <code>b</code> below is a copy of signal <code>a</code> that arrives 7 samples later, plus noise of its own:</p>
+<div class="cell" data-execution_count="1" id="adefd38d">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a></span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">2026</span>)</span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a>sample_rate <span class="op">=</span> <span class="fl">1024.0</span>  <span class="co"># Hz</span></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a>a <span class="op">=</span> rng.normal(size<span class="op">=</span><span class="dv">8192</span>).astype(np.float32)</span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a>b <span class="op">=</span> np.zeros_like(a)</span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a>b[<span class="dv">7</span>:] <span class="op">=</span> a[:<span class="op">-</span><span class="dv">7</span>]  <span class="co"># b hears a 7 samples late</span></span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a>b <span class="op">+=</span> <span class="fl">0.5</span> <span class="op">*</span> rng.normal(size<span class="op">=</span>b.size).astype(np.float32)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+</section>
+<section class="level2" data-number="13.2" id="wrap-the-signals-in-a-source">
+<h2 class="anchored" data-anchor-id="wrap-the-signals-in-a-source" data-number="13.2"><span class="header-section-number">13.2</span> Wrap the signals in a source</h2>
+<p>A source names each signal and holds the shared sample grid. <code>ArraySource</code> wraps NumPy or CuPy vectors:</p>
+<div class="cell" data-execution_count="2" id="3f3f9632">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> ArraySource</span>
+<span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a></span>
+<span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a>source <span class="op">=</span> ArraySource({<span class="st">"a"</span>: a, <span class="st">"b"</span>: b}, sample_rate_hz<span class="op">=</span>sample_rate)</span>
+<span id="cb2-4"><a aria-hidden="true" href="#cb2-4" tabindex="-1"></a><span class="bu">print</span>(source.signal_ids, source.sample_count, source.sample_rate_hz)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>('a', 'b') 8192 1024.0</code></pre>
+</div>
+</div>
+<p>All signals in a source share one length, sample rate and time origin. Resample or correct clocks before you correlate. <code>Hdf5Source</code> reads signals from an HDF5 file instead (<a class="quarto-xref" href="#sec-correlate-hdf5"><span>Section 13.6</span></a>).</p>
+</section>
+<section class="level2" data-number="13.3" id="correlate-the-pair">
+<h2 class="anchored" data-anchor-id="correlate-the-pair" data-number="13.3"><span class="header-section-number">13.3</span> Correlate the pair</h2>
+<p>A <code>CorrelationSpec</code> names the pairs to correlate and sets how to cut the signals into windows (<a class="quarto-xref" href="#sec-correlate-options"><span>Section 13.8</span></a>). <code>correlate_series</code> yields one result per group of <code>windows_per_result</code> windows:</p>
+<div class="cell" data-execution_count="3" id="40ff0220">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> CorrelationSpec, correlate_series</span>
+<span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
+<span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a>spec <span class="op">=</span> CorrelationSpec(pairs<span class="op">=</span>((<span class="st">"a"</span>, <span class="st">"b"</span>),), window_samples<span class="op">=</span><span class="dv">1024</span>, windows_per_result<span class="op">=</span><span class="dv">4</span>, output<span class="op">=</span><span class="st">"both"</span>)</span>
+<span id="cb4-4"><a aria-hidden="true" href="#cb4-4" tabindex="-1"></a>results <span class="op">=</span> <span class="bu">list</span>(correlate_series(source, spec))</span>
+<span id="cb4-5"><a aria-hidden="true" href="#cb4-5" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> results:</span>
+<span id="cb4-6"><a aria-hidden="true" href="#cb4-6" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"result </span><span class="sc">{</span>r<span class="sc">.</span>result_index<span class="sc">}</span><span class="ss">: samples </span><span class="sc">{</span>r<span class="sc">.</span>sample_start<span class="sc">}</span><span class="ss"> to </span><span class="sc">{</span>r<span class="sc">.</span>sample_stop<span class="sc">}</span><span class="ss">, "</span></span>
+<span id="cb4-7"><a aria-hidden="true" href="#cb4-7" tabindex="-1"></a>          <span class="ss">f"spectrum </span><span class="sc">{</span>r<span class="sc">.</span>spectrum<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">, lag </span><span class="sc">{</span>r<span class="sc">.</span>lag<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>result 0: samples 0 to 4096, spectrum (1, 2048), lag (1, 2047)
+result 1: samples 4096 to 8192, spectrum (1, 2048), lag (1, 2047)</code></pre>
+</div>
+</div>
+<p>The 8,192 samples make eight windows of 1,024, and therefore two results of four windows. Each array has one row per pair. A <code>SeriesResult</code> holds these fields as host NumPy arrays:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Field</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>spectrum</code>, <code>frequencies_hz</code></td>
+<td>the cross-spectrum per pair, and its frequencies in standard FFT order</td>
+</tr>
+<tr class="even">
+<td><code>lag</code>, <code>lag_samples</code></td>
+<td>the lag correlation per pair, and its lags in samples</td>
+</tr>
+<tr class="odd">
+<td><code>lag_valid_samples</code></td>
+<td>the valid sample pairs at each lag, summed over the windows</td>
+</tr>
+<tr class="even">
+<td><code>simultaneous_valid_samples</code>, <code>contributing_windows</code>, <code>valid</code></td>
+<td>coverage counts per pair, and whether the pair had any valid data</td>
+</tr>
+<tr class="odd">
+<td><code>result_index</code>, <code>sample_start</code>, <code>sample_stop</code>, <code>window_starts</code></td>
+<td>the result’s position in the series</td>
+</tr>
+</tbody>
+</table>
+<p>Products are raw sums averaged over the windows. xBeam applies no taper, mean removal or normalization. Add the pair <code>("a", "a")</code> for an autocorrelation to normalize by.</p>
+</section>
+<section class="level2" data-number="13.4" id="read-the-delay-from-the-lag-correlation">
+<h2 class="anchored" data-anchor-id="read-the-delay-from-the-lag-correlation" data-number="13.4"><span class="header-section-number">13.4</span> Read the delay from the lag correlation</h2>
+<p>The lag correlation is <code>R(k) = sum_n a[n] * conj(b[n + k])</code>. It peaks at the delay. A positive lag means the second signal of the pair arrives later:</p>
+<div class="cell" data-execution_count="4" id="3b1c3a6f">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> results:</span>
+<span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a>    peak <span class="op">=</span> r.lag_samples[np.argmax(np.<span class="bu">abs</span>(r.lag[<span class="dv">0</span>]))]</span>
+<span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"result </span><span class="sc">{</span>r<span class="sc">.</span>result_index<span class="sc">}</span><span class="ss">: b arrives </span><span class="sc">{</span>peak<span class="sc">}</span><span class="ss"> samples (</span><span class="sc">{</span><span class="fl">1e3</span> <span class="op">*</span> peak <span class="op">/</span> r<span class="sc">.</span>sample_rate_hz<span class="sc">:.2f}</span><span class="ss"> ms) after a"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>result 0: b arrives 7 samples (6.84 ms) after a
+result 1: b arrives 7 samples (6.84 ms) after a</code></pre>
+</div>
+</div>
+<p>Divide <code>lag_samples</code> by <code>sample_rate_hz</code> for seconds. The peak gives a whole number of samples.</p>
+</section>
+<section class="level2" data-number="13.5" id="read-the-delay-from-the-cross-spectrum">
+<h2 class="anchored" data-anchor-id="read-the-delay-from-the-cross-spectrum" data-number="13.5"><span class="header-section-number">13.5</span> Read the delay from the cross-spectrum</h2>
+<p>The cross-spectrum is <code>FFT(a) * conj(FFT(b))</code>. When <code>b</code> arrives τ seconds late, the phase at frequency f is 2πfτ. The slope of the phase against frequency therefore measures the delay, including fractions of a sample. Average the results, then fit a line to the unwrapped phase at positive frequencies:</p>
+<div class="cell" data-execution_count="5" id="4c0a4e9f">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a>spectrum <span class="op">=</span> np.mean([r.spectrum[<span class="dv">0</span>] <span class="cf">for</span> r <span class="kw">in</span> results], axis<span class="op">=</span><span class="dv">0</span>)</span>
+<span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a>freq <span class="op">=</span> results[<span class="dv">0</span>].frequencies_hz</span>
+<span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>positive <span class="op">=</span> freq <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb8-4"><a aria-hidden="true" href="#cb8-4" tabindex="-1"></a>phase <span class="op">=</span> np.unwrap(np.angle(spectrum[positive]))</span>
+<span id="cb8-5"><a aria-hidden="true" href="#cb8-5" tabindex="-1"></a>slope <span class="op">=</span> np.polyfit(freq[positive], phase, <span class="dv">1</span>)[<span class="dv">0</span>]  <span class="co"># radians per Hz</span></span>
+<span id="cb8-6"><a aria-hidden="true" href="#cb8-6" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"phase slope: </span><span class="sc">{</span>slope <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> np.pi) <span class="op">*</span> sample_rate<span class="sc">:.2f}</span><span class="ss"> samples"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>phase slope: 7.00 samples</code></pre>
+</div>
+</div>
+<p><a class="quarto-xref" href="#fig-correlate">Figure <span>13.1</span></a> shows both readings.</p>
+<div class="cell" data-execution_count="6" id="cell-fig-correlate">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a></span>
+<span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a>near <span class="op">=</span> np.<span class="bu">abs</span>(results[<span class="dv">0</span>].lag_samples) <span class="op">&lt;=</span> <span class="dv">20</span></span>
+<span id="cb10-4"><a aria-hidden="true" href="#cb10-4" tabindex="-1"></a>fig, (ax_lag, ax_phase) <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">2</span>, figsize<span class="op">=</span>(<span class="fl">6.5</span>, <span class="fl">2.6</span>))</span>
+<span id="cb10-5"><a aria-hidden="true" href="#cb10-5" tabindex="-1"></a>ax_lag.bar(results[<span class="dv">0</span>].lag_samples[near], results[<span class="dv">0</span>].lag[<span class="dv">0</span>, near].real, color<span class="op">=</span><span class="st">"#2A78D6"</span>, width<span class="op">=</span><span class="fl">0.8</span>)</span>
+<span id="cb10-6"><a aria-hidden="true" href="#cb10-6" tabindex="-1"></a>ax_lag.set_xlabel(<span class="st">"Lag (samples)"</span>)</span>
+<span id="cb10-7"><a aria-hidden="true" href="#cb10-7" tabindex="-1"></a>ax_lag.set_ylabel(<span class="st">"Lag correlation"</span>)</span>
+<span id="cb10-8"><a aria-hidden="true" href="#cb10-8" tabindex="-1"></a>ax_phase.plot(freq[positive], phase, color<span class="op">=</span><span class="st">"#2A78D6"</span>, lw<span class="op">=</span><span class="fl">0.8</span>)</span>
+<span id="cb10-9"><a aria-hidden="true" href="#cb10-9" tabindex="-1"></a>line <span class="op">=</span> np.polyval(np.polyfit(freq[positive], phase, <span class="dv">1</span>), freq[positive])</span>
+<span id="cb10-10"><a aria-hidden="true" href="#cb10-10" tabindex="-1"></a>ax_phase.plot(freq[positive], line, <span class="st">"--"</span>, color<span class="op">=</span><span class="st">"#EB6834"</span>, lw<span class="op">=</span><span class="fl">1.4</span>)</span>
+<span id="cb10-11"><a aria-hidden="true" href="#cb10-11" tabindex="-1"></a>ax_phase.set_xlabel(<span class="st">"Frequency (Hz)"</span>)</span>
+<span id="cb10-12"><a aria-hidden="true" href="#cb10-12" tabindex="-1"></a>ax_phase.set_ylabel(<span class="st">"Phase (rad)"</span>)</span>
+<span id="cb10-13"><a aria-hidden="true" href="#cb10-13" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb10-14"><a aria-hidden="true" href="#cb10-14" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb10-15"><a aria-hidden="true" href="#cb10-15" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb10-16"><a aria-hidden="true" href="#cb10-16" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="Two panels. Left: blue bars of correlation against lag, near zero except one tall bar at lag 7. Right: a blue line of phase rising steadily with frequency from 0 to 512 Hz, with a dashed orange line on top of it." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-correlate">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-correlate-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="correlate_files/figure-html/fig-correlate-output-1.png" title="Figure 13.1: The two readings of the delay between the sample signals. Left: the first result’s lag correlation for lags from -20 to 20 samples. It peaks at the lag where b matches a. Right: the unwrapped phase of the averaged cross-spectrum (blue) and the fitted line (dashed orange). Its slope is 2π times the delay in seconds. Synthetic data, for demonstration only."><img alt="Two panels. Left: blue bars of correlation against lag, near zero except one tall bar at lag 7. Right: a blue line of phase rising steadily with frequency from 0 to 512 Hz, with a dashed orange line on top of it." class="figure-img" height="412" src="correlate_files/figure-html/fig-correlate-output-1.png" width="985"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-correlate-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 13.1: The two readings of the delay between the sample signals. Left: the first result’s lag correlation for lags from -20 to 20 samples. It peaks at the lag where <code>b</code> matches <code>a</code>. Right: the unwrapped phase of the averaged cross-spectrum (blue) and the fitted line (dashed orange). Its slope is 2π times the delay in seconds. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section class="level2" data-number="13.6" id="sec-correlate-hdf5">
+<h2 class="anchored" data-anchor-id="sec-correlate-hdf5" data-number="13.6"><span class="header-section-number">13.6</span> Correlate signals stored in HDF5</h2>
+<p><code>Hdf5Source</code> reads each signal from a one-dimensional dataset in an HDF5 file (Hierarchical Data Format 5, a format for named arrays). Each dataset has scalar <code>sample_rate_hz</code> and <code>origin_seconds</code> attributes. Write the sample pair to <code>signals.h5</code>:</p>
+<div class="cell" data-execution_count="7" id="c7b25230">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">import</span> h5py</span>
+<span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a></span>
+<span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a><span class="cf">with</span> h5py.File(<span class="st">"signals.h5"</span>, <span class="st">"w"</span>) <span class="im">as</span> h5:</span>
+<span id="cb11-4"><a aria-hidden="true" href="#cb11-4" tabindex="-1"></a>    <span class="cf">for</span> name, samples <span class="kw">in</span> ((<span class="st">"a"</span>, a), (<span class="st">"b"</span>, b)):</span>
+<span id="cb11-5"><a aria-hidden="true" href="#cb11-5" tabindex="-1"></a>        dataset <span class="op">=</span> h5.create_dataset(<span class="ss">f"signals/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">"</span>, data<span class="op">=</span>samples)</span>
+<span id="cb11-6"><a aria-hidden="true" href="#cb11-6" tabindex="-1"></a>        dataset.attrs[<span class="st">"sample_rate_hz"</span>] <span class="op">=</span> sample_rate</span>
+<span id="cb11-7"><a aria-hidden="true" href="#cb11-7" tabindex="-1"></a>        dataset.attrs[<span class="st">"origin_seconds"</span>] <span class="op">=</span> <span class="fl">0.0</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p><code>Hdf5Source</code> reads bounded slices, not the whole file. Use it as a context manager and consume the results inside the <code>with</code> block:</p>
+<div class="cell" data-execution_count="8" id="998e10cf">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> Hdf5Source</span>
+<span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a></span>
+<span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a><span class="cf">with</span> Hdf5Source(<span class="st">"signals.h5"</span>, {<span class="st">"a"</span>: <span class="st">"/signals/a"</span>, <span class="st">"b"</span>: <span class="st">"/signals/b"</span>}) <span class="im">as</span> file_source:</span>
+<span id="cb12-4"><a aria-hidden="true" href="#cb12-4" tabindex="-1"></a>    peaks <span class="op">=</span> [<span class="bu">int</span>(r.lag_samples[np.argmax(np.<span class="bu">abs</span>(r.lag[<span class="dv">0</span>]))]) <span class="cf">for</span> r <span class="kw">in</span> correlate_series(file_source, spec)]</span>
+<span id="cb12-5"><a aria-hidden="true" href="#cb12-5" tabindex="-1"></a><span class="bu">print</span>(peaks)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[7, 7]</code></pre>
+</div>
+</div>
+<p>By default, the source reads the next batch of windows on a background thread. Set <code>prefetch_batches=0</code> in the spec for synchronous reads.</p>
+</section>
+<section class="level2" data-number="13.7" id="shard-a-long-series">
+<h2 class="anchored" data-anchor-id="shard-a-long-series" data-number="13.7"><span class="header-section-number">13.7</span> Shard a long series</h2>
+<p>To split a long recording among independent tasks, give every task the same spec with a common <code>shard_count</code> and its own <code>shard_index</code>. <code>plan_series_shards</code> shows which results and samples each shard covers:</p>
+<div class="cell" data-execution_count="9" id="66486f1c">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> plan_series_shards</span>
+<span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a></span>
+<span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>sharded <span class="op">=</span> CorrelationSpec(pairs<span class="op">=</span>((<span class="st">"a"</span>, <span class="st">"b"</span>),), window_samples<span class="op">=</span><span class="dv">1024</span>, windows_per_result<span class="op">=</span><span class="dv">4</span>,</span>
+<span id="cb14-4"><a aria-hidden="true" href="#cb14-4" tabindex="-1"></a>                          output<span class="op">=</span><span class="st">"lag"</span>, shard_count<span class="op">=</span><span class="dv">2</span>, shard_index<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb14-5"><a aria-hidden="true" href="#cb14-5" tabindex="-1"></a><span class="cf">for</span> shard <span class="kw">in</span> plan_series_shards(source.sample_count, sharded):</span>
+<span id="cb14-6"><a aria-hidden="true" href="#cb14-6" tabindex="-1"></a>    <span class="bu">print</span>(shard)</span>
+<span id="cb14-7"><a aria-hidden="true" href="#cb14-7" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"shard 1 yields results"</span>, [r.result_index <span class="cf">for</span> r <span class="kw">in</span> correlate_series(source, sharded)])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>SeriesShard(index=0, first_result=0, stop_result=1, sample_start=0, sample_stop=4096)
+SeriesShard(index=1, first_result=1, stop_result=2, sample_start=4096, sample_stop=8192)
+shard 1 yields results [1]</code></pre>
+</div>
+</div>
+<p>Each shard keeps the global <code>result_index</code>. Write each shard to its own output and combine the results by that index. Do not average shard outputs. With overlapping windows (<code>hop_samples</code> below <code>window_samples</code>), shards read a few shared samples and still emit each result once.</p>
+</section>
+<section class="level2" data-number="13.8" id="sec-correlate-options">
+<h2 class="anchored" data-anchor-id="sec-correlate-options" data-number="13.8"><span class="header-section-number">13.8</span> Options</h2>
+<p><code>CorrelationSpec</code> takes these fields:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>pairs</code></td>
+<td>required</td>
+<td>Signal-name pairs to correlate. <code>("a", "a")</code> gives an autocorrelation.</td>
+</tr>
+<tr class="even">
+<td><code>window_samples</code></td>
+<td>required</td>
+<td>Samples per FFT window</td>
+</tr>
+<tr class="odd">
+<td><code>hop_samples</code></td>
+<td><code>None</code></td>
+<td>Step between window starts. <code>None</code> uses <code>window_samples</code>.</td>
+</tr>
+<tr class="even">
+<td><code>windows_per_result</code></td>
+<td><code>1</code></td>
+<td>Windows averaged into one result</td>
+</tr>
+<tr class="odd">
+<td><code>output</code></td>
+<td><code>"spectrum"</code></td>
+<td><code>"spectrum"</code>, <code>"lag"</code> or <code>"both"</code></td>
+</tr>
+<tr class="even">
+<td><code>lag_mode</code></td>
+<td><code>"linear"</code></td>
+<td><code>"linear"</code> zero-pads each window. Lags run from <code>-(window_samples - 1)</code> to <code>window_samples - 1</code>. <code>"circular"</code> uses a <code>window_samples</code>-point FFT, and the correlation wraps.</td>
+</tr>
+<tr class="odd">
+<td><code>precision</code></td>
+<td><code>None</code></td>
+<td><code>"float32"</code> or <code>"float64"</code>. <code>None</code> keeps the input float precision and uses <code>float64</code> for integers.</td>
+</tr>
+<tr class="even">
+<td><code>batch_windows</code></td>
+<td><code>16</code></td>
+<td>Windows per transform batch. Bounds working memory.</td>
+</tr>
+<tr class="odd">
+<td><code>backend</code></td>
+<td><code>"numpy"</code></td>
+<td><code>"cupy"</code> runs the transforms and products on the GPU</td>
+</tr>
+<tr class="even">
+<td><code>shard_index</code>, <code>shard_count</code></td>
+<td><code>0</code>, <code>1</code></td>
+<td>This task’s shard, and the number of shards</td>
+</tr>
+<tr class="odd">
+<td><code>prefetch_batches</code></td>
+<td><code>1</code></td>
+<td><code>1</code> reads the next HDF5 batch ahead, <code>0</code> reads synchronously</td>
+</tr>
+</tbody>
+</table>
+<p>To mark gaps, pass Boolean <code>validity</code> vectors to the source, such as <code>ArraySource(..., validity={"b": mask})</code>. xBeam sets invalid samples to zero before the transforms and reports the coverage counts. Where <code>lag_valid_samples</code> is above zero, the mean over valid sample pairs is <code>len(window_starts) * lag / lag_valid_samples</code>.</p>
+</section>
+<section class="level2" data-number="13.9" id="on-a-gpu">
+<h2 class="anchored" data-anchor-id="on-a-gpu" data-number="13.9"><span class="header-section-number">13.9</span> On a GPU</h2>
+<p>With the <code>gpu</code> profile, or the smaller <code>io</code> extra, set <code>backend="cupy"</code> in the spec. The transforms and products run on the GPU, and the results are host NumPy arrays:</p>
+<div class="cell" data-execution_count="10" id="9774452e">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
+<span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a></span>
+<span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>gpu_source <span class="op">=</span> ArraySource({<span class="st">"a"</span>: cp.asarray(a), <span class="st">"b"</span>: cp.asarray(b)}, sample_rate_hz<span class="op">=</span>sample_rate)</span>
+<span id="cb16-4"><a aria-hidden="true" href="#cb16-4" tabindex="-1"></a>gpu_spec <span class="op">=</span> CorrelationSpec(pairs<span class="op">=</span>((<span class="st">"a"</span>, <span class="st">"b"</span>),), window_samples<span class="op">=</span><span class="dv">1024</span>, windows_per_result<span class="op">=</span><span class="dv">4</span>,</span>
+<span id="cb16-5"><a aria-hidden="true" href="#cb16-5" tabindex="-1"></a>                           output<span class="op">=</span><span class="st">"both"</span>, backend<span class="op">=</span><span class="st">"cupy"</span>)</span>
+<span id="cb16-6"><a aria-hidden="true" href="#cb16-6" tabindex="-1"></a>gpu_results <span class="op">=</span> <span class="bu">list</span>(correlate_series(gpu_source, gpu_spec))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>Add <code>result_location="device"</code> to the spec to keep the products on the GPU as CuPy arrays. Before consuming them on a CUDA stream, call <code>result.wait(stream)</code> to order that stream after the result’s work. <code>result.to_host()</code> waits and copies one result to the host.</p>
+<p>For HDF5 input, <code>Hdf5Source</code> reads slices on the host and uploads them asynchronously. With <code>io_backend="cufile"</code>, it reads them into GPU memory through GPUDirect Storage. That path needs a working GDS installation and supported filesystem, plus the HDF5 <code>sec2</code> driver and contiguous, uncompressed datasets with native numeric types. Every signal and validity dataset must belong to the opened file, with an offset and byte size divisible by 4096.</p>
+<p>The sample file above uses ordinary HDF5 allocation and is not guaranteed to meet those alignment requirements. To create an aligned version, use <code>h5py.File("signals.h5", "w", alignment_threshold=1, alignment_interval=4096)</code> in its creation block and choose array lengths whose byte sizes are divisible by 4096. The sample’s 8192-element <code>float32</code> arrays meet the size requirement. Unsupported layouts raise an error instead of switching to POSIX reads.</p>
+<p>On the command line, add <code>--backend cupy</code>, and set <code>io_backend</code> at the top level of the JSON file. <code>--upload-workers</code> caps the input workers, at <code>auto</code> or 1 to 16. Select one GPU per shard task through <code>CUDA_VISIBLE_DEVICES</code>.</p>
+</section>
+<section class="level2" data-number="13.10" id="command-line">
+<h2 class="anchored" data-anchor-id="command-line" data-number="13.10"><span class="header-section-number">13.10</span> Command line</h2>
+<p><code>correlate-series</code> reads a JSON file. Its <code>correlation</code> object holds the <code>CorrelationSpec</code> fields except <code>backend</code>, which the command sets. The input path is relative to the JSON file:</p>
+<div class="cell" data-execution_count="11" id="e185bd32">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="im">import</span> json</span>
+<span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a></span>
+<span id="cb17-4"><a aria-hidden="true" href="#cb17-4" tabindex="-1"></a>config <span class="op">=</span> {</span>
+<span id="cb17-5"><a aria-hidden="true" href="#cb17-5" tabindex="-1"></a>    <span class="st">"input"</span>: <span class="st">"signals.h5"</span>,</span>
+<span id="cb17-6"><a aria-hidden="true" href="#cb17-6" tabindex="-1"></a>    <span class="st">"datasets"</span>: {<span class="st">"a"</span>: <span class="st">"/signals/a"</span>, <span class="st">"b"</span>: <span class="st">"/signals/b"</span>},</span>
+<span id="cb17-7"><a aria-hidden="true" href="#cb17-7" tabindex="-1"></a>    <span class="st">"correlation"</span>: {<span class="st">"pairs"</span>: [[<span class="st">"a"</span>, <span class="st">"b"</span>]], <span class="st">"window_samples"</span>: <span class="dv">1024</span>, <span class="st">"windows_per_result"</span>: <span class="dv">4</span>, <span class="st">"output"</span>: <span class="st">"both"</span>},</span>
+<span id="cb17-8"><a aria-hidden="true" href="#cb17-8" tabindex="-1"></a>}</span>
+<span id="cb17-9"><a aria-hidden="true" href="#cb17-9" tabindex="-1"></a>Path(<span class="st">"series.json"</span>).write_text(json.dumps(config, indent<span class="op">=</span><span class="dv">2</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="10">
+<pre><code>258</code></pre>
+</div>
+</div>
+<p>Run it. The command prints nothing on success and never overwrites an existing output file:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="ex">cuphoton</span> xbeam correlate-series series.json <span class="at">--output</span> results.h5 <span class="at">--backend</span> numpy</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell" data-execution_count="12" id="21f99757">
+<div class="cell-output cell-output-stdout">
+<pre><code></code></pre>
+</div>
+</div>
+<p>The file stores each result under <code>/results/&lt;result_index&gt;</code>, with arrays named after the <code>SeriesResult</code> fields:</p>
+<div class="cell" data-execution_count="13" id="30dd183b">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="cf">with</span> h5py.File(<span class="st">"results.h5"</span>) <span class="im">as</span> h5:</span>
+<span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a>    <span class="bu">print</span>(h5.attrs[<span class="st">"schema"</span>], <span class="st">"complete:"</span>, h5.attrs[<span class="st">"complete"</span>], <span class="st">"results:"</span>, <span class="bu">list</span>(h5[<span class="st">"results"</span>]))</span>
+<span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a>    first <span class="op">=</span> h5[<span class="st">"results/0"</span>]</span>
+<span id="cb21-4"><a aria-hidden="true" href="#cb21-4" tabindex="-1"></a>    <span class="bu">print</span>(first.attrs[<span class="st">"pairs_json"</span>], first[<span class="st">"lag"</span>].shape, first[<span class="st">"spectrum"</span>].shape)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>cuphoton-series-v1 complete: True results: ['0', '1']
+[["a", "b"]] (1, 2047) (1, 2048)</code></pre>
+</div>
+</div>
+<p>An interrupted write leaves <code>complete</code> false. For sharded runs, put <code>shard_count</code> and <code>shard_index</code> in the <code>correlation</code> object and give each task its own JSON file and output.</p>
+</section>
+<section class="level2" data-number="13.11" id="sec-correlate-radio">
+<h2 class="anchored" data-anchor-id="sec-correlate-radio" data-number="13.11"><span class="header-section-number">13.11</span> Correlate radio recordings</h2>
+<p>The radio path correlates recordings from radio telescopes (stations) and writes visibilities, the averaged cross-spectra from which interferometry makes images. It needs two inputs:</p>
+<ul>
+<li>A job, as a normalized JSON file or as supported <code>.input</code> metadata from the DiFX software correlator. The job lists the stations, clocks, frequency bands, baselines and delay models.</li>
+<li>The recordings, as VDIF files (the data format of very long baseline interferometry). A VDIF file holds frames of packed samples behind headers. xBeam reads file-backed, two-bit, non-legacy VDIF with oversampling and decimation factors of one.</li>
+</ul>
+<p>Replace <code>job.json</code>, <code>AA.vdif</code> and <code>BB.vdif</code> with your files. This page does not run these commands:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="co"># Check a recording's frame headers</span></span>
+<span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a><span class="ex">cuphoton</span> xbeam inspect-vdif AA.vdif <span class="at">--json</span></span>
+<span id="cb23-3"><a aria-hidden="true" href="#cb23-3" tabindex="-1"></a></span>
+<span id="cb23-4"><a aria-hidden="true" href="#cb23-4" tabindex="-1"></a><span class="co"># Index each recording once, with POSIX reads</span></span>
+<span id="cb23-5"><a aria-hidden="true" href="#cb23-5" tabindex="-1"></a><span class="ex">cuphoton</span> xbeam build-vdif-sidecar AA.vdif BB.vdif <span class="at">--index-dir</span> sidecars <span class="at">--backend</span> posix</span>
+<span id="cb23-6"><a aria-hidden="true" href="#cb23-6" tabindex="-1"></a></span>
+<span id="cb23-7"><a aria-hidden="true" href="#cb23-7" tabindex="-1"></a><span class="co"># Correlate on the CPU into a new directory</span></span>
+<span id="cb23-8"><a aria-hidden="true" href="#cb23-8" tabindex="-1"></a><span class="ex">cuphoton</span> xbeam correlate job.json <span class="at">--output</span> visibilities <span class="at">--backend</span> numpy <span class="at">--index-dir</span> sidecars</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p><code>build-vdif-sidecar</code> writes a header index (a sidecar, <code>.vdix</code>) for each recording. Its <code>--backend</code> selects the read path and defaults to <code>cufile</code>, which needs GPUDirect Storage. Correlation does not build missing sidecars. Without one, pass <code>--assume-ordered</code> only for recordings you checked are in time order. For <code>correlate</code>, <code>--backend</code> selects NumPy or CuPy and <code>--vdif-io</code> the GPU read path.</p>
+<p>The output directory must be new. It holds the native <code>xbeam-v1</code> format (<code>metadata.jsonl</code> and <code>spectra.c64</code>), or the DiFX SWIN format if the job selects it, plus <code>ingest-manifest.json</code>. Each record holds a spectrum, its time, weight, station pair and baseline coordinates. From Python, <code>correlate(load_job("job.json"), backend="numpy", index_dir="sidecars")</code> yields the same records. <code>read_xbeam_v1</code> in <code>cuphoton.xbeam.adapters.radio.output</code> reads a native output directory.</p>
+<p>On a GPU, add <code>--backend cupy</code>. <code>--vdif-io cufile</code> reads through GPUDirect Storage. <code>--devices</code> splits a scan window into contiguous time shards across the listed devices:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb24"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb24-1"><a aria-hidden="true" href="#cb24-1" tabindex="-1"></a><span class="ex">cuphoton</span> xbeam correlate job.json <span class="at">--output</span> visibilities-gpu <span class="at">--backend</span> cupy <span class="at">--index-dir</span> sidecars <span class="dt">\</span></span>
+<span id="cb24-2"><a aria-hidden="true" href="#cb24-2" tabindex="-1"></a>  <span class="at">--scan</span> SCAN <span class="at">--first-integration</span> 0 <span class="at">--integration-count</span> 100 <span class="at">--devices</span> 0,1</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>Time sharding needs <code>--scan</code>, <code>--first-integration</code> and <code>--integration-count</code> together. To run shards under an external scheduler, give each task that same parent scan window and <code>--shard-count</code>, its own <code>--shard-index</code>, and a separate output directory. Assemble the complete set of parts with <code>merge-shards</code>.</p>
+</section>
+<section class="level2" data-number="13.12" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="13.12"><span class="header-section-number">13.12</span> Troubleshooting</h2>
+<ul>
+<li><strong>No results.</strong> Only complete groups of <code>windows_per_result</code> windows produce results. Use a shorter window or fewer windows per result.</li>
+<li><strong><code>nonfinite valid samples in 'b'</code>.</strong> A sample marked valid is NaN or infinite. Mark it invalid with a <code>validity</code> vector.</li>
+<li><strong><code>requested pair contains an unavailable signal</code>.</strong> A name in <code>pairs</code> is not in the source.</li>
+<li><strong><code>signals do not share a common sample grid</code>.</strong> The HDF5 datasets differ in <code>sample_rate_hz</code> or <code>origin_seconds</code>. Resample them first.</li>
+<li><strong><code>File exists</code> from <code>correlate-series</code>.</strong> The command never overwrites. Choose a new <code>--output</code>.</li>
+<li><strong>The lag peak is at the wrong place.</strong> The delay can exceed the window. Linear mode covers lags up to <code>window_samples - 1</code>. Use longer windows.</li>
+</ul>
+</section>
+<section class="level2" data-number="13.13" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="13.13"><span class="header-section-number">13.13</span> Next steps</h2>
+<ul>
+<li>Time-series reference, with the HDF5 layout and conventions: <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/xbeam/time-series.md">time-series correlation</a>.</li>
+<li>Radio jobs and outputs: the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/xbeam/README.md">xBeam guide</a>, the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/xbeam/data-contract.md">data contract</a>, <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/xbeam/sidecars.md">sidecars</a> and <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/xbeam/conformance.md">compatibility profiles</a>.</li>
+<li>Run shards on many GPUs or nodes: <a class="quarto-xref" href="scale.html"><span>Chapter 14</span></a>.</li>
+<li>Fit damped oscillations in one signal instead: <a class="quarto-xref" href="xray-traces.html"><span>Chapter 12</span></a>.</li>
+</ul>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Analyze X-ray detector traces" class="pagination-link" href="./xray-traces.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Scale out to many GPUs" class="pagination-link" href="./scale.html">
+<span class="nav-page-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

@@ -1,0 +1,1772 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>9  Run the transient chain – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./uncertainty.html" rel="next"/>
+<link href="./classify.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link href="https://nvidia.github.io/cuPhoton/main/transient-chain.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="transient-chain.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./transient-chain.html"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#make-a-sample-pair" href="#make-a-sample-pair" id="toc-make-a-sample-pair"><span class="header-section-number">9.1</span> Make a sample pair</a></li>
+<li><a class="nav-link" data-scroll-target="#install-the-example" href="#install-the-example" id="toc-install-the-example"><span class="header-section-number">9.2</span> Install the example</a></li>
+<li><a class="nav-link" data-scroll-target="#read-the-shipped-configurations" href="#read-the-shipped-configurations" id="toc-read-the-shipped-configurations"><span class="header-section-number">9.3</span> Read the shipped configurations</a></li>
+<li><a class="nav-link" data-scroll-target="#describe-your-files-to-the-survey-adapter" href="#describe-your-files-to-the-survey-adapter" id="toc-describe-your-files-to-the-survey-adapter"><span class="header-section-number">9.4</span> Describe your files to the survey adapter</a></li>
+<li><a class="nav-link" data-scroll-target="#give-each-image-a-variance-plane" href="#give-each-image-a-variance-plane" id="toc-give-each-image-a-variance-plane"><span class="header-section-number">9.5</span> Give each image a variance plane</a></li>
+<li><a class="nav-link" data-scroll-target="#write-a-configuration-for-your-files" href="#write-a-configuration-for-your-files" id="toc-write-a-configuration-for-your-files"><span class="header-section-number">9.6</span> Write a configuration for your files</a></li>
+<li><a class="nav-link" data-scroll-target="#write-the-selections-file" href="#write-the-selections-file" id="toc-write-the-selections-file"><span class="header-section-number">9.7</span> Write the selections file</a></li>
+<li><a class="nav-link" data-scroll-target="#check-the-inputs" href="#check-the-inputs" id="toc-check-the-inputs"><span class="header-section-number">9.8</span> Check the inputs</a></li>
+<li><a class="nav-link" data-scroll-target="#look-at-what-the-adapter-reads" href="#look-at-what-the-adapter-reads" id="toc-look-at-what-the-adapter-reads"><span class="header-section-number">9.9</span> Look at what the adapter reads</a></li>
+<li><a class="nav-link" data-scroll-target="#run-the-chain-on-a-gpu" href="#run-the-chain-on-a-gpu" id="toc-run-the-chain-on-a-gpu"><span class="header-section-number">9.10</span> Run the chain on a GPU</a></li>
+<li><a class="nav-link" data-scroll-target="#read-the-catalog-and-the-summary" href="#read-the-catalog-and-the-summary" id="toc-read-the-catalog-and-the-summary"><span class="header-section-number">9.11</span> Read the catalog and the summary</a>
+<ul class="collapse">
+<li><a class="nav-link" data-scroll-target="#sec-transient-chain-errors" href="#sec-transient-chain-errors" id="toc-sec-transient-chain-errors"><span class="header-section-number">9.11.1</span> Error bars</a></li>
+</ul></li>
+<li><a class="nav-link" data-scroll-target="#turn-the-error-budget-on-or-off" href="#turn-the-error-budget-on-or-off" id="toc-turn-the-error-budget-on-or-off"><span class="header-section-number">9.12</span> Turn the error budget on or off</a></li>
+<li><a class="nav-link" data-scroll-target="#options" href="#options" id="toc-options"><span class="header-section-number">9.13</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">9.14</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">9.15</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./transient-chain.html"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-transient-chain"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>The cuPhoton checkout ships an end-to-end pipeline in <code>examples/transient-chain/</code>. It takes a target image and its reference from FITS files to a catalog of candidates, each with a position, a flux, their error bars and, with a classifier checkpoint, a real-or-bogus score. Each GPU worker keeps the main image calculations on the device. Astropy reads begin on the host, and WCS work, optional host star finding, diagnostics and final catalog columns can cross the host/device boundary. Use it to run the whole pipeline on your own images instead of calling each module as in <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>. The chain needs an NVIDIA GPU. Its configuration, input checks and file loaders run on a CPU, and this page runs them on the sample pair.</p>
+<p>The worker runs these steps for each target image:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Step</th>
+<th>Stages in <code>summary.json</code></th>
+<th>Module</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Read</td>
+<td><code>read</code></td>
+<td>Core, xDR</td>
+<td>reads the target and reference planes with the reader set in <code>io.reader</code></td>
+</tr>
+<tr class="even">
+<td>Align</td>
+<td><code>template</code>, <code>refine</code></td>
+<td>xRep</td>
+<td>reprojects the reference onto the target grid, then corrects the mapping with matched stars</td>
+</tr>
+<tr class="odd">
+<td>Subtract</td>
+<td><code>mask</code>, <code>xpois</code></td>
+<td>xPois</td>
+<td>masks bad pixels, fits the blur-matching kernel and subtracts</td>
+</tr>
+<tr class="even">
+<td>Detect</td>
+<td><code>detect</code>, <code>stamps</code></td>
+<td>the example</td>
+<td>finds residual hotspots and cuts target, kernel-matched reference (including fitted background), and difference stamps around each</td>
+</tr>
+<tr class="odd">
+<td>Measure</td>
+<td><code>xfit</code>, <code>uncertainty</code></td>
+<td>xFit</td>
+<td>fits a dipole to each candidate, sets quality flags and measures a PSF flux</td>
+</tr>
+<tr class="even">
+<td>Error bars</td>
+<td><code>uq</code></td>
+<td>xPois, xRep</td>
+<td>adds the noise terms that the fit leaves out</td>
+</tr>
+<tr class="odd">
+<td>Classify</td>
+<td><code>xscan</code></td>
+<td>xScan</td>
+<td>scores the cutouts, only when you pass a checkpoint</td>
+</tr>
+</tbody>
+</table>
+<p><strong>You need:</strong></p>
+<ul>
+<li>A cuPhoton source checkout with any profile (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). Run the blocks from its root, or set <code>CUPHOTON_REPO</code> to its path.</li>
+<li>For the chain: a Linux host with an NVIDIA GPU and the <code>gpu</code> and <code>catalog</code> extras, plus <code>dragon</code> or <code>mpi</code> for those executors.</li>
+<li>A target and a reference image as FITS files with WCS headers (world coordinate system: the mapping from pixel to sky position). Most of the error budget also needs a variance plane for each.</li>
+<li>Optional: an xScan checkpoint (<a class="quarto-xref" href="classify.html"><span>Chapter 8</span></a>).</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on a small synthetic pair. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<section class="level2" data-number="9.1" id="make-a-sample-pair">
+<h2 class="anchored" data-anchor-id="make-a-sample-pair" data-number="9.1"><span class="header-section-number">9.1</span> Make a sample pair</h2>
+<p>The block below writes <code>sample/reference.fits</code> and <code>sample/target.fits</code>, the pair of <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>.</p>
+<div class="cell" data-execution_count="1" id="cf7eb97e">
+<details class="code-fold">
+<summary>Create the sample pair (NumPy and Astropy only)</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="co"># of the same sky on different pixel grids, with different blur and sky level.</span></span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="co"># The target also holds one new source and one star three times brighter.</span></span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a><span class="co"># Noise is independent Gaussian noise with variance expected_image / gain;</span></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a><span class="co"># this teaching sample has no read noise, saturation, or detector artifacts.</span></span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a></span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a><span class="im">from</span> astropy.io <span class="im">import</span> fits</span>
+<span id="cb1-10"><a aria-hidden="true" href="#cb1-10" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
+<span id="cb1-11"><a aria-hidden="true" href="#cb1-11" tabindex="-1"></a></span>
+<span id="cb1-12"><a aria-hidden="true" href="#cb1-12" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">7</span>)</span>
+<span id="cb1-13"><a aria-hidden="true" href="#cb1-13" tabindex="-1"></a></span>
+<span id="cb1-14"><a aria-hidden="true" href="#cb1-14" tabindex="-1"></a></span>
+<span id="cb1-15"><a aria-hidden="true" href="#cb1-15" tabindex="-1"></a><span class="kw">def</span> make_wcs(shape, scale_arcsec, rotation_deg, crpix_shift):</span>
+<span id="cb1-16"><a aria-hidden="true" href="#cb1-16" tabindex="-1"></a>    w <span class="op">=</span> WCS(naxis<span class="op">=</span><span class="dv">2</span>)</span>
+<span id="cb1-17"><a aria-hidden="true" href="#cb1-17" tabindex="-1"></a>    w.wcs.ctype <span class="op">=</span> [<span class="st">"RA---TAN"</span>, <span class="st">"DEC--TAN"</span>]</span>
+<span id="cb1-18"><a aria-hidden="true" href="#cb1-18" tabindex="-1"></a>    w.wcs.crval <span class="op">=</span> [<span class="fl">150.0</span>, <span class="fl">2.0</span>]</span>
+<span id="cb1-19"><a aria-hidden="true" href="#cb1-19" tabindex="-1"></a>    w.wcs.crpix <span class="op">=</span> [shape[<span class="dv">1</span>] <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> crpix_shift[<span class="dv">0</span>], shape[<span class="dv">0</span>] <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> crpix_shift[<span class="dv">1</span>]]</span>
+<span id="cb1-20"><a aria-hidden="true" href="#cb1-20" tabindex="-1"></a>    c, s <span class="op">=</span> np.cos(np.radians(rotation_deg)), np.sin(np.radians(rotation_deg))</span>
+<span id="cb1-21"><a aria-hidden="true" href="#cb1-21" tabindex="-1"></a>    w.wcs.cd <span class="op">=</span> scale_arcsec <span class="op">/</span> <span class="dv">3600</span> <span class="op">*</span> np.array([[<span class="op">-</span>c, s], [s, c]])</span>
+<span id="cb1-22"><a aria-hidden="true" href="#cb1-22" tabindex="-1"></a>    <span class="cf">return</span> w</span>
+<span id="cb1-23"><a aria-hidden="true" href="#cb1-23" tabindex="-1"></a></span>
+<span id="cb1-24"><a aria-hidden="true" href="#cb1-24" tabindex="-1"></a></span>
+<span id="cb1-25"><a aria-hidden="true" href="#cb1-25" tabindex="-1"></a><span class="kw">def</span> render(shape, wcs, ra, dec, flux, sigma, sky, gain):</span>
+<span id="cb1-26"><a aria-hidden="true" href="#cb1-26" tabindex="-1"></a>    x, y <span class="op">=</span> wcs.world_to_pixel_values(ra, dec)</span>
+<span id="cb1-27"><a aria-hidden="true" href="#cb1-27" tabindex="-1"></a>    yy, xx <span class="op">=</span> np.mgrid[: shape[<span class="dv">0</span>], : shape[<span class="dv">1</span>]]</span>
+<span id="cb1-28"><a aria-hidden="true" href="#cb1-28" tabindex="-1"></a>    image <span class="op">=</span> np.full(shape, sky, dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb1-29"><a aria-hidden="true" href="#cb1-29" tabindex="-1"></a>    <span class="cf">for</span> xi, yi, fi <span class="kw">in</span> <span class="bu">zip</span>(x, y, flux):</span>
+<span id="cb1-30"><a aria-hidden="true" href="#cb1-30" tabindex="-1"></a>        image <span class="op">+=</span> fi <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> np.pi <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>) <span class="op">*</span> np.exp(<span class="op">-</span>((xx <span class="op">-</span> xi) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (yy <span class="op">-</span> yi) <span class="op">**</span> <span class="dv">2</span>) <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>))</span>
+<span id="cb1-31"><a aria-hidden="true" href="#cb1-31" tabindex="-1"></a>    <span class="cf">return</span> rng.normal(image, np.sqrt(image <span class="op">/</span> gain)).astype(np.float32)</span>
+<span id="cb1-32"><a aria-hidden="true" href="#cb1-32" tabindex="-1"></a></span>
+<span id="cb1-33"><a aria-hidden="true" href="#cb1-33" tabindex="-1"></a></span>
+<span id="cb1-34"><a aria-hidden="true" href="#cb1-34" tabindex="-1"></a>ra <span class="op">=</span> <span class="fl">150.0</span> <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.016</span>, <span class="fl">0.016</span>, <span class="dv">150</span>)</span>
+<span id="cb1-35"><a aria-hidden="true" href="#cb1-35" tabindex="-1"></a>dec <span class="op">=</span> <span class="fl">2.0</span> <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.016</span>, <span class="fl">0.016</span>, <span class="dv">150</span>)</span>
+<span id="cb1-36"><a aria-hidden="true" href="#cb1-36" tabindex="-1"></a>flux <span class="op">=</span> <span class="dv">10</span> <span class="op">**</span> rng.uniform(<span class="fl">2.5</span>, <span class="fl">4.5</span>, <span class="dv">150</span>)</span>
+<span id="cb1-37"><a aria-hidden="true" href="#cb1-37" tabindex="-1"></a>target_flux <span class="op">=</span> np.r_[<span class="dv">3</span> <span class="op">*</span> flux[<span class="dv">0</span>], flux[<span class="dv">1</span>:], <span class="fl">4000.0</span>]  <span class="co"># star 0 brightens; one new source</span></span>
+<span id="cb1-38"><a aria-hidden="true" href="#cb1-38" tabindex="-1"></a>target_ra, target_dec <span class="op">=</span> np.r_[ra, <span class="fl">150.004</span>], np.r_[dec, <span class="fl">2.003</span>]</span>
+<span id="cb1-39"><a aria-hidden="true" href="#cb1-39" tabindex="-1"></a></span>
+<span id="cb1-40"><a aria-hidden="true" href="#cb1-40" tabindex="-1"></a>Path(<span class="st">"sample"</span>).mkdir(exist_ok<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-41"><a aria-hidden="true" href="#cb1-41" tabindex="-1"></a><span class="cf">for</span> name, shape, wcs, sky_coords, fl, sigma, sky, gain <span class="kw">in</span> [</span>
+<span id="cb1-42"><a aria-hidden="true" href="#cb1-42" tabindex="-1"></a>    (<span class="st">"reference"</span>, (<span class="dv">300</span>, <span class="dv">300</span>), make_wcs((<span class="dv">300</span>, <span class="dv">300</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="dv">0</span>, <span class="dv">0</span>)), (ra, dec), flux, <span class="fl">1.2</span>, <span class="fl">100.0</span>, <span class="fl">8.0</span>),</span>
+<span id="cb1-43"><a aria-hidden="true" href="#cb1-43" tabindex="-1"></a>    (<span class="st">"target"</span>, (<span class="dv">256</span>, <span class="dv">256</span>), make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.27</span>, <span class="fl">3.0</span>, (<span class="fl">4.3</span>, <span class="op">-</span><span class="fl">2.7</span>)), (target_ra, target_dec), target_flux, <span class="fl">1.8</span>, <span class="fl">120.0</span>, <span class="fl">2.0</span>),</span>
+<span id="cb1-44"><a aria-hidden="true" href="#cb1-44" tabindex="-1"></a>]:</span>
+<span id="cb1-45"><a aria-hidden="true" href="#cb1-45" tabindex="-1"></a>    header <span class="op">=</span> wcs.to_header()</span>
+<span id="cb1-46"><a aria-hidden="true" href="#cb1-46" tabindex="-1"></a>    header[<span class="st">"GAIN"</span>] <span class="op">=</span> (gain, <span class="st">"electrons per data number (DN)"</span>)</span>
+<span id="cb1-47"><a aria-hidden="true" href="#cb1-47" tabindex="-1"></a>    header[<span class="st">"PSFSIG"</span>] <span class="op">=</span> (sigma, <span class="st">"Gaussian PSF sigma [px]"</span>)</span>
+<span id="cb1-48"><a aria-hidden="true" href="#cb1-48" tabindex="-1"></a>    fits.writeto(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.fits"</span>, render(shape, wcs, <span class="op">*</span>sky_coords, fl, sigma, sky, gain), header, overwrite<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+</div>
+<p>The correlation term of the chain’s error budget requires a locally translation-only mapping. When that term is active, a rotated or rescaled grid gives undefined error bars (<a class="quarto-xref" href="#sec-transient-chain-errors"><span>Section 9.11.1</span></a>). Write a second target that keeps the reference’s pixel scale and orientation, with the same two changes:</p>
+<div class="cell" data-execution_count="2" id="eee0184b">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a>wcs <span class="op">=</span> make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="fl">4.3</span>, <span class="fl">6.3</span>))  <span class="co"># the reference's scale, no rotation, shifted by a few pixels</span></span>
+<span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a>header <span class="op">=</span> wcs.to_header()</span>
+<span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a>header[<span class="st">"GAIN"</span>], header[<span class="st">"PSFSIG"</span>] <span class="op">=</span> <span class="fl">2.0</span>, <span class="fl">1.8</span></span>
+<span id="cb2-4"><a aria-hidden="true" href="#cb2-4" tabindex="-1"></a>image <span class="op">=</span> render((<span class="dv">256</span>, <span class="dv">256</span>), wcs, target_ra, target_dec, target_flux, <span class="fl">1.8</span>, <span class="fl">120.0</span>, <span class="fl">2.0</span>)</span>
+<span id="cb2-5"><a aria-hidden="true" href="#cb2-5" tabindex="-1"></a>fits.writeto(<span class="st">"sample/chain-target.fits"</span>, image, header, overwrite<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+</section>
+<section class="level2" data-number="9.2" id="install-the-example">
+<h2 class="anchored" data-anchor-id="install-the-example" data-number="9.2"><span class="header-section-number">9.2</span> Install the example</h2>
+<p>The example is a separate package inside the checkout. Start with the GPU environment from <a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>, which includes the catalog dependencies, then install the example from the checkout root. For a distributed executor, include <code>--extra dragon</code> or <code>--extra mpi</code> in that environment’s sync command. A later <code>uv sync</code> removes the example, so install it again after each sync.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="ex">uv</span> pip install <span class="at">-e</span> examples/transient-chain</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>On a CPU machine you can skip the install. The block below imports the example from the checkout, as <code>launch.py</code> does.</p>
+<div class="cell" data-execution_count="3" id="e8546865">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">import</span> os</span>
+<span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a><span class="im">import</span> sys</span>
+<span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb4-4"><a aria-hidden="true" href="#cb4-4" tabindex="-1"></a></span>
+<span id="cb4-5"><a aria-hidden="true" href="#cb4-5" tabindex="-1"></a>REPO <span class="op">=</span> Path(os.environ.get(<span class="st">"CUPHOTON_REPO"</span>, <span class="st">"."</span>))</span>
+<span id="cb4-6"><a aria-hidden="true" href="#cb4-6" tabindex="-1"></a>EXAMPLE <span class="op">=</span> REPO <span class="op">/</span> <span class="st">"examples"</span> <span class="op">/</span> <span class="st">"transient-chain"</span></span>
+<span id="cb4-7"><a aria-hidden="true" href="#cb4-7" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="bu">str</span>(EXAMPLE))  <span class="co"># not needed after you install the example</span></span>
+<span id="cb4-8"><a aria-hidden="true" href="#cb4-8" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(p.name <span class="cf">for</span> p <span class="kw">in</span> EXAMPLE.iterdir() <span class="cf">if</span> p.suffix <span class="kw">in</span> (<span class="st">".py"</span>, <span class="st">".yaml"</span>)))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>['compare_catalogs.py', 'config-generic.yaml', 'config.yaml', 'launch.py', 'repeat_catalogs.py']</code></pre>
+</div>
+</div>
+<p><code>launch.py</code> starts a run, and the two YAML files hold every step’s parameters.</p>
+</section>
+<section class="level2" data-number="9.3" id="read-the-shipped-configurations">
+<h2 class="anchored" data-anchor-id="read-the-shipped-configurations" data-number="9.3"><span class="header-section-number">9.3</span> Read the shipped configurations</h2>
+<p><code>load_config</code> reads a configuration file as <code>launch.py</code> does. It fills in defaults, rejects unknown keys and checks each value. Load both files and compare the settings you are most likely to change:</p>
+<div class="cell" data-execution_count="4" id="b9fc9a9c">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a><span class="im">from</span> transient_chain.config <span class="im">import</span> load_config</span>
+<span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a></span>
+<span id="cb6-4"><a aria-hidden="true" href="#cb6-4" tabindex="-1"></a>configs <span class="op">=</span> {name: load_config(EXAMPLE <span class="op">/</span> name) <span class="cf">for</span> name <span class="kw">in</span> (<span class="st">"config.yaml"</span>, <span class="st">"config-generic.yaml"</span>)}</span>
+<span id="cb6-5"><a aria-hidden="true" href="#cb6-5" tabindex="-1"></a>keys <span class="op">=</span> [<span class="st">"io.reader"</span>, <span class="st">"align.star_finder"</span>, <span class="st">"subtract.kernel_height"</span>, <span class="st">"subtract.basis_sigmas"</span>,</span>
+<span id="cb6-6"><a aria-hidden="true" href="#cb6-6" tabindex="-1"></a>        <span class="st">"detect.threshold_sigma"</span>, <span class="st">"stamps.stamp_size"</span>, <span class="st">"xfit.psf_sigma_px"</span>, <span class="st">"uq.enabled"</span>]</span>
+<span id="cb6-7"><a aria-hidden="true" href="#cb6-7" tabindex="-1"></a>rows <span class="op">=</span> {key: [cfg[block][name] <span class="cf">for</span> cfg <span class="kw">in</span> configs.values()] <span class="cf">for</span> key <span class="kw">in</span> keys <span class="cf">for</span> block, name <span class="kw">in</span> [key.split(<span class="st">"."</span>)]}</span>
+<span id="cb6-8"><a aria-hidden="true" href="#cb6-8" tabindex="-1"></a><span class="bu">print</span>(pd.DataFrame.from_dict(rows, orient<span class="op">=</span><span class="st">"index"</span>, columns<span class="op">=</span><span class="bu">list</span>(configs)).to_string())</span>
+<span id="cb6-9"><a aria-hidden="true" href="#cb6-9" tabindex="-1"></a>shipped, generic <span class="op">=</span> configs.values()</span>
+<span id="cb6-10"><a aria-hidden="true" href="#cb6-10" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"blocks that differ:"</span>, [block <span class="cf">for</span> block <span class="kw">in</span> shipped <span class="cf">if</span> shipped[block] <span class="op">!=</span> generic[block]])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                            config.yaml config-generic.yaml
+io.reader                          auto                auto
+align.star_finder                   gpu                 gpu
+subtract.kernel_height               15                  15
+subtract.basis_sigmas   [1.5, 3.0, 6.0]     [1.5, 3.0, 6.0]
+detect.threshold_sigma              5.0                 5.0
+stamps.stamp_size                    51                  51
+xfit.psf_sigma_px                  None                None
+uq.enabled                         True                True
+blocks that differ: ['survey']</code></pre>
+</div>
+</div>
+<p><code>config.yaml</code> is set up for one survey’s public data release. <code>config-generic.yaml</code> reads any FITS pair that its <code>survey</code> block describes. After loading, that block is the only difference. Start from <code>config-generic.yaml</code> for your own images.</p>
+</section>
+<section class="level2" data-number="9.4" id="describe-your-files-to-the-survey-adapter">
+<h2 class="anchored" data-anchor-id="describe-your-files-to-the-survey-adapter" data-number="9.4"><span class="header-section-number">9.4</span> Describe your files to the survey adapter</h2>
+<p>The <code>survey</code> block picks an adapter, the code that turns one entry of the selections file into image planes. The <code>generic</code> adapter reads each plane from a file and an HDU (header/data unit; here, an image inside a FITS file) that you name. The template is the reference image. Print the layout that <code>config-generic.yaml</code> ships:</p>
+<div class="cell" data-execution_count="5" id="29aad336">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a>params <span class="op">=</span> generic[<span class="st">"survey"</span>][<span class="st">"params"</span>]</span>
+<span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a><span class="bu">print</span>(pd.DataFrame({<span class="st">"target"</span>: params[<span class="st">"target"</span>], <span class="st">"template"</span>: params[<span class="st">"template"</span>]}).to_string(na_rep<span class="op">=</span><span class="st">""</span>))</span>
+<span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"identity:"</span>, params[<span class="st">"identity"</span>], <span class="st">" extra_keys:"</span>, params.get(<span class="st">"extra_keys"</span>), <span class="st">" mask_policy:"</span>, params[<span class="st">"mask_policy"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                             target    template
+path_key                      image    template
+image_hdu                         0           0
+mask_path_key                  mask        None
+mask_hdu                          0        None
+variance_path_key            weight        None
+variance_hdu                      0        None
+variance_kind      inverse_variance    variance
+on_target_grid                            False
+pieces                               correlated
+identity: {'exposure_id': 'expnum', 'ccd_id': 'ccdnum', 'band': 'band'}  extra_keys: ['field']  mask_policy: strict</code></pre>
+</div>
+</div>
+<p>A key that you leave out takes the adapter’s default, not the shipped value. Replacing the whole <code>params</code> block, as the next steps do, therefore drops the shipped <code>identity</code>, <code>extra_keys</code> and <code>variance_kind</code>. The defaults are the following.</p>
+<div class="quarto-float quarto-figure quarto-figure-center anchored" id="tbl-tc-adapter-defaults">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-tc-adapter-defaults-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table 9.1: Defaults of the generic adapter, from <code>transient_chain/surveys/generic.py</code>.
+</figcaption>
+<div aria-describedby="tbl-tc-adapter-defaults-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>target.path_key</code>, <code>template.path_key</code></td>
+<td><code>image</code>, <code>template</code></td>
+</tr>
+<tr class="even">
+<td><code>image_hdu</code></td>
+<td>null: the first 2D image in the file</td>
+</tr>
+<tr class="odd">
+<td><code>mask_path_key</code>, <code>mask_hdu</code>, <code>variance_path_key</code>, <code>variance_hdu</code></td>
+<td>null: no mask, no variance plane</td>
+</tr>
+<tr class="even">
+<td><code>variance_kind</code></td>
+<td><code>variance</code> (the shipped target block uses <code>inverse_variance</code>)</td>
+</tr>
+<tr class="odd">
+<td><code>template.on_target_grid</code>, <code>template.pieces</code></td>
+<td><code>false</code>, <code>correlated</code></td>
+</tr>
+<tr class="even">
+<td><code>identity</code></td>
+<td><code>exposure_id</code>, <code>ccd_id</code> and <code>band</code> read from the entry keys of the same names</td>
+</tr>
+<tr class="odd">
+<td><code>extra_keys</code></td>
+<td>none</td>
+</tr>
+<tr class="even">
+<td><code>mask_policy</code></td>
+<td><code>strict</code>: any nonzero mask value marks a bad pixel</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>path_key</code>, <code>mask_path_key</code>, <code>variance_path_key</code></td>
+<td>the key of a selections entry that holds the file path</td>
+</tr>
+<tr class="even">
+<td><code>image_hdu</code>, <code>mask_hdu</code>, <code>variance_hdu</code></td>
+<td>an HDU index, an <code>EXTNAME</code>, or null for the first 2D image. An HDU without a path key reads the image’s own file. A plane with both null is absent</td>
+</tr>
+<tr class="odd">
+<td><code>variance_kind</code></td>
+<td><code>variance</code>, <code>inverse_variance</code> (a weight map) or <code>none</code></td>
+</tr>
+<tr class="even">
+<td><code>on_target_grid</code></td>
+<td><code>false</code> reprojects the reference through its WCS. <code>true</code> takes a reference already on the target grid</td>
+</tr>
+<tr class="odd">
+<td><code>pieces</code></td>
+<td>how the variances of overlapping reference pieces combine: <code>correlated</code> or <code>independent</code></td>
+</tr>
+<tr class="even">
+<td><code>identity</code></td>
+<td>the entry keys that fill the catalog’s <code>exposure_id</code>, <code>ccd_id</code> and <code>band</code></td>
+</tr>
+<tr class="odd">
+<td><code>mask_policy</code></td>
+<td>the mask bits that mark a bad pixel: <code>none</code>, <code>strict</code> (any nonzero bit), a survey preset, <code>{planes: [...]}</code> or <code>{bits: N}</code></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="9.5" id="give-each-image-a-variance-plane">
+<h2 class="anchored" data-anchor-id="give-each-image-a-variance-plane" data-number="9.5"><span class="header-section-number">9.5</span> Give each image a variance plane</h2>
+<p>The sample pair has no variance planes. Approximate its Gaussian noise variance from the positive, sky-inclusive image and gain (electrons per data number), as in <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>. Real data need their calibrated noise model, including sky and read noise:</p>
+<div class="cell" data-execution_count="6" id="8e43d4f4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a><span class="im">from</span> astropy.io <span class="im">import</span> fits</span>
+<span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a></span>
+<span id="cb10-4"><a aria-hidden="true" href="#cb10-4" tabindex="-1"></a><span class="cf">for</span> name <span class="kw">in</span> (<span class="st">"chain-target"</span>, <span class="st">"reference"</span>):</span>
+<span id="cb10-5"><a aria-hidden="true" href="#cb10-5" tabindex="-1"></a>    image, header <span class="op">=</span> fits.getdata(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.fits"</span>, header<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb10-6"><a aria-hidden="true" href="#cb10-6" tabindex="-1"></a>    fits.writeto(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">_variance.fits"</span>, np.clip(image, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> header[<span class="st">"GAIN"</span>], overwrite<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+</section>
+<section class="level2" data-number="9.6" id="write-a-configuration-for-your-files">
+<h2 class="anchored" data-anchor-id="write-a-configuration-for-your-files" data-number="9.6"><span class="header-section-number">9.6</span> Write a configuration for your files</h2>
+<p>Copy <code>config-generic.yaml</code> and replace its survey parameters. Each sample image sits in its primary HDU, with one variance file and no mask. Keys that you leave out take the adapter’s defaults.</p>
+<div class="cell" data-execution_count="7" id="6f689d44">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">import</span> yaml</span>
+<span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a></span>
+<span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a>config <span class="op">=</span> yaml.safe_load((EXAMPLE <span class="op">/</span> <span class="st">"config-generic.yaml"</span>).read_text())</span>
+<span id="cb11-4"><a aria-hidden="true" href="#cb11-4" tabindex="-1"></a>config[<span class="st">"survey"</span>][<span class="st">"params"</span>] <span class="op">=</span> {</span>
+<span id="cb11-5"><a aria-hidden="true" href="#cb11-5" tabindex="-1"></a>    <span class="st">"target"</span>: {<span class="st">"path_key"</span>: <span class="st">"image"</span>, <span class="st">"variance_path_key"</span>: <span class="st">"image_variance"</span>},</span>
+<span id="cb11-6"><a aria-hidden="true" href="#cb11-6" tabindex="-1"></a>    <span class="st">"template"</span>: {<span class="st">"path_key"</span>: <span class="st">"template"</span>, <span class="st">"variance_path_key"</span>: <span class="st">"template_variance"</span>},</span>
+<span id="cb11-7"><a aria-hidden="true" href="#cb11-7" tabindex="-1"></a>    <span class="st">"mask_policy"</span>: <span class="st">"none"</span>,</span>
+<span id="cb11-8"><a aria-hidden="true" href="#cb11-8" tabindex="-1"></a>}</span>
+<span id="cb11-9"><a aria-hidden="true" href="#cb11-9" tabindex="-1"></a>config[<span class="st">"align"</span>][<span class="st">"xcorr_window_px"</span>] <span class="op">=</span> <span class="dv">128</span>  <span class="co"># keep the alignment check's central window inside the 256 px target</span></span>
+<span id="cb11-10"><a aria-hidden="true" href="#cb11-10" tabindex="-1"></a>config[<span class="st">"stamps"</span>][<span class="st">"stamp_size"</span>] <span class="op">=</span> <span class="dv">31</span>  <span class="co"># the default 51 drops candidates within 25 px of the edge of this small image</span></span>
+<span id="cb11-11"><a aria-hidden="true" href="#cb11-11" tabindex="-1"></a>Path(<span class="st">"sample/chain.yaml"</span>).write_text(yaml.safe_dump(config, sort_keys<span class="op">=</span><span class="va">False</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="7">
+<pre><code>1402</code></pre>
+</div>
+</div>
+</section>
+<section class="level2" data-number="9.7" id="write-the-selections-file">
+<h2 class="anchored" data-anchor-id="write-the-selections-file" data-number="9.7"><span class="header-section-number">9.7</span> Write the selections file</h2>
+<p>The selections file lists one entry per target image. Each entry holds the identity keys (<code>exposure_id</code>, <code>ccd_id</code> and <code>band</code> by default) and the path keys that you named. Each process reads a relative path from the directory it starts in. Write absolute paths.</p>
+<div class="cell" data-execution_count="8" id="9cbf9e94">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a><span class="im">import</span> json</span>
+<span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a></span>
+<span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>entry <span class="op">=</span> {<span class="st">"exposure_id"</span>: <span class="dv">1</span>, <span class="st">"ccd_id"</span>: <span class="st">"S1"</span>, <span class="st">"band"</span>: <span class="st">"r"</span>}</span>
+<span id="cb13-4"><a aria-hidden="true" href="#cb13-4" tabindex="-1"></a><span class="cf">for</span> key, name <span class="kw">in</span> [(<span class="st">"image"</span>, <span class="st">"chain-target"</span>), (<span class="st">"image_variance"</span>, <span class="st">"chain-target_variance"</span>),</span>
+<span id="cb13-5"><a aria-hidden="true" href="#cb13-5" tabindex="-1"></a>                  (<span class="st">"template"</span>, <span class="st">"reference"</span>), (<span class="st">"template_variance"</span>, <span class="st">"reference_variance"</span>)]:</span>
+<span id="cb13-6"><a aria-hidden="true" href="#cb13-6" tabindex="-1"></a>    entry[key] <span class="op">=</span> <span class="bu">str</span>(Path(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.fits"</span>).resolve())</span>
+<span id="cb13-7"><a aria-hidden="true" href="#cb13-7" tabindex="-1"></a>Path(<span class="st">"sample/selections.json"</span>).write_text(json.dumps({<span class="st">"selections"</span>: [entry]}, indent<span class="op">=</span><span class="dv">1</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="8">
+<pre><code>466</code></pre>
+</div>
+</div>
+</section>
+<section class="level2" data-number="9.8" id="check-the-inputs">
+<h2 class="anchored" data-anchor-id="check-the-inputs" data-number="9.8"><span class="header-section-number">9.8</span> Check the inputs</h2>
+<p><code>prepare_workload</code> runs the input checks that <code>launch.py</code> runs before it starts a worker. It loads the configuration, builds the adapter, and checks each entry for missing keys and files. The third argument is the checkpoint directory.</p>
+<div class="cell" data-execution_count="9" id="ebfe2f1d">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="im">from</span> transient_chain.workload <span class="im">import</span> prepare_workload</span>
+<span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a></span>
+<span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>spec <span class="op">=</span> prepare_workload(Path(<span class="st">"sample/selections.json"</span>), Path(<span class="st">"sample/chain.yaml"</span>), <span class="va">None</span>)</span>
+<span id="cb15-4"><a aria-hidden="true" href="#cb15-4" tabindex="-1"></a><span class="bu">print</span>(spec.manifest_payload[<span class="st">"survey"</span>], spec.manifest_payload[<span class="st">"reader"</span>], spec.manifest_payload[<span class="st">"items"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>generic auto ['S1-v1']</code></pre>
+</div>
+</div>
+<p>Each item is named <code>&lt;ccd_id&gt;-v&lt;exposure_id&gt;</code>. <code>--only S1/1</code> runs that item alone, and <code>--only S1</code> every exposure of detector <code>S1</code>.</p>
+</section>
+<section class="level2" data-number="9.9" id="look-at-what-the-adapter-reads">
+<h2 class="anchored" data-anchor-id="look-at-what-the-adapter-reads" data-number="9.9"><span class="header-section-number">9.9</span> Look at what the adapter reads</h2>
+<p>Run the adapter’s loaders with a host reader. <code>load_target</code> returns the target planes. <code>template</code> returns a provider whose <code>build</code> reprojects the reference onto the target grid with xRep, as the worker does on the GPU.</p>
+<div class="cell" data-execution_count="10" id="1593170f">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="im">from</span> transient_chain.fitsio <span class="im">import</span> PlaneReader</span>
+<span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="im">from</span> transient_chain.surveys <span class="im">import</span> make_adapter</span>
+<span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a></span>
+<span id="cb17-4"><a aria-hidden="true" href="#cb17-4" tabindex="-1"></a>cfg <span class="op">=</span> load_config(<span class="st">"sample/chain.yaml"</span>)</span>
+<span id="cb17-5"><a aria-hidden="true" href="#cb17-5" tabindex="-1"></a>adapter <span class="op">=</span> make_adapter(cfg[<span class="st">"survey"</span>])</span>
+<span id="cb17-6"><a aria-hidden="true" href="#cb17-6" tabindex="-1"></a>reader <span class="op">=</span> PlaneReader(<span class="st">"astropy"</span>, device<span class="op">=</span><span class="va">False</span>)  <span class="co"># NumPy arrays; the worker reads to the GPU</span></span>
+<span id="cb17-7"><a aria-hidden="true" href="#cb17-7" tabindex="-1"></a>target <span class="op">=</span> adapter.load_target(entry, reader)</span>
+<span id="cb17-8"><a aria-hidden="true" href="#cb17-8" tabindex="-1"></a>provider <span class="op">=</span> adapter.template(entry, target, reader, mapping_grid_step<span class="op">=</span>cfg[<span class="st">"align"</span>][<span class="st">"mapping_grid_step"</span>])</span>
+<span id="cb17-9"><a aria-hidden="true" href="#cb17-9" tabindex="-1"></a>template, template_bad, coverage <span class="op">=</span> provider.build()</span>
+<span id="cb17-10"><a aria-hidden="true" href="#cb17-10" tabindex="-1"></a><span class="bu">print</span>(target.shape, template.shape, <span class="st">"variance planes:"</span>, target.variance <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>, provider.has_variance)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>(256, 256) (256, 256) variance planes: True True</code></pre>
+</div>
+</div>
+<p>Check that the template has the target’s shape and that both variance planes are there. Without a reference variance plane, the chain leaves out the <code>corr</code> error term; the remaining errors then omit that contribution. <a class="quarto-xref" href="#fig-transient-chain-inputs">Figure <span>9.1</span></a> shows the two planes.</p>
+<div class="cell" data-execution_count="11" id="cell-fig-transient-chain-inputs">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a></span>
+<span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">2</span>, figsize<span class="op">=</span>(<span class="dv">5</span>, <span class="fl">2.6</span>))</span>
+<span id="cb19-4"><a aria-hidden="true" href="#cb19-4" tabindex="-1"></a><span class="cf">for</span> ax, image, title <span class="kw">in</span> [(axes[<span class="dv">0</span>], target.image, <span class="st">"Target"</span>), (axes[<span class="dv">1</span>], template, <span class="st">"Template on the target grid"</span>)]:</span>
+<span id="cb19-5"><a aria-hidden="true" href="#cb19-5" tabindex="-1"></a>    lo, hi <span class="op">=</span> np.percentile(image, [<span class="dv">1</span>, <span class="fl">99.5</span>])</span>
+<span id="cb19-6"><a aria-hidden="true" href="#cb19-6" tabindex="-1"></a>    ax.imshow(image, origin<span class="op">=</span><span class="st">"lower"</span>, cmap<span class="op">=</span><span class="st">"magma"</span>, vmin<span class="op">=</span>lo, vmax<span class="op">=</span>hi)</span>
+<span id="cb19-7"><a aria-hidden="true" href="#cb19-7" tabindex="-1"></a>    ax.set_title(title, fontsize<span class="op">=</span><span class="dv">9</span>)</span>
+<span id="cb19-8"><a aria-hidden="true" href="#cb19-8" tabindex="-1"></a>    ax.set_xticks([])<span class="op">;</span> ax.set_yticks([])</span>
+<span id="cb19-9"><a aria-hidden="true" href="#cb19-9" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb19-10"><a aria-hidden="true" href="#cb19-10" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb19-11"><a aria-hidden="true" href="#cb19-11" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb19-12"><a aria-hidden="true" href="#cb19-12" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="Two square panels of the same star field on the same pixel grid, the right one sharper." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-transient-chain-inputs">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-transient-chain-inputs-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="transient-chain_files/figure-html/fig-transient-chain-inputs-output-1.png" title="Figure 9.1: What the generic adapter hands the chain for the sample pair, read on the CPU. Left: the target. Right: the reference after the template provider reprojected it onto the target grid. Each panel has its own color scale. Apart from the two changes, the same stars sit at the same pixels in both panels. Synthetic data, for demonstration only."><img alt="Two square panels of the same star field on the same pixel grid, the right one sharper." class="figure-img" height="412" src="transient-chain_files/figure-html/fig-transient-chain-inputs-output-1.png" width="755"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-transient-chain-inputs-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 9.1: What the generic adapter hands the chain for the sample pair, read on the CPU. Left: the target. Right: the reference after the template provider reprojected it onto the target grid. Each panel has its own color scale. Apart from the two changes, the same stars sit at the same pixels in both panels. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section class="level2" data-number="9.10" id="run-the-chain-on-a-gpu">
+<h2 class="anchored" data-anchor-id="run-the-chain-on-a-gpu" data-number="9.10"><span class="header-section-number">9.10</span> Run the chain on a GPU</h2>
+<p>On the GPU host, run the blocks above, then start the chain from the root of the checkout. The <code>local</code> executor runs the items in turn, in this process, on one GPU. This command needs a GPU and is not run here.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb20"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a><span class="ex">python</span> examples/transient-chain/launch.py <span class="at">--executor</span> local <span class="dt">\</span></span>
+<span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a>    <span class="at">--config</span> sample/chain.yaml <span class="at">--selections</span> sample/selections.json <span class="at">--output-dir</span> out</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>Without <code>--checkpoint-dir</code>, the chain skips the classify step. To score the cutouts, pass the directory that holds an xScan <code>checkpoint.pt</code>. To change one value for one run, add <code>--set block.key=value</code>, such as <code>--set io.reader=astropy</code>.</p>
+<p>For many images on several GPUs, pick another executor (<a class="quarto-xref" href="scale.html"><span>Chapter 14</span></a>):</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Executor</th>
+<th>Start it with</th>
+<th>Workers</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>local</code></td>
+<td><code>python launch.py</code></td>
+<td>this process, one GPU</td>
+</tr>
+<tr class="even">
+<td><code>dragon</code></td>
+<td>the <code>dragon</code> launcher</td>
+<td>one persistent worker per GPU, placed by DragonHPC</td>
+</tr>
+<tr class="odd">
+<td><code>mpi</code></td>
+<td><code>mpirun</code> and <code>cuphoton-openmpi-rank-exec</code></td>
+<td>one worker per MPI rank, one GPU each</td>
+</tr>
+</tbody>
+</table>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="co"># Dragon, one node, one worker per GPU</span></span>
+<span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a><span class="ex">dragon</span> <span class="at">-s</span> <span class="at">-t</span> tcp <span class="at">-o</span> tcp examples/transient-chain/launch.py <span class="at">--executor</span> dragon <span class="dt">\</span></span>
+<span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a>    <span class="at">--config</span> chain.yaml <span class="at">--selections</span> sel.json <span class="at">--output-dir</span> runs <span class="at">--name</span> probe <span class="at">--max-workers</span> 4</span>
+<span id="cb21-4"><a aria-hidden="true" href="#cb21-4" tabindex="-1"></a></span>
+<span id="cb21-5"><a aria-hidden="true" href="#cb21-5" tabindex="-1"></a><span class="co"># MPI (Open MPI), one GPU per rank</span></span>
+<span id="cb21-6"><a aria-hidden="true" href="#cb21-6" tabindex="-1"></a><span class="va">CUDA_VISIBLE_DEVICES</span><span class="op">=</span>0,1,2,3 <span class="ex">mpirun</span> <span class="at">-n</span> 4 <span class="at">--map-by</span> slot <span class="at">--bind-to</span> none <span class="at">-x</span> CUDA_VISIBLE_DEVICES <span class="dt">\</span></span>
+<span id="cb21-7"><a aria-hidden="true" href="#cb21-7" tabindex="-1"></a>    cuphoton-openmpi-rank-exec <span class="at">--</span> python examples/transient-chain/launch.py <span class="at">--executor</span> mpi <span class="dt">\</span></span>
+<span id="cb21-8"><a aria-hidden="true" href="#cb21-8" tabindex="-1"></a>    <span class="at">--config</span> chain.yaml <span class="at">--selections</span> sel.json <span class="at">--output-dir</span> runs <span class="at">--name</span> probe-mpi</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</section>
+<section class="level2" data-number="9.11" id="read-the-catalog-and-the-summary">
+<h2 class="anchored" data-anchor-id="read-the-catalog-and-the-summary" data-number="9.11"><span class="header-section-number">9.11</span> Read the catalog and the summary</h2>
+<p>The <code>local</code> run writes <code>out/items/&lt;item&gt;/catalog.parquet</code> and <code>summary.json</code> for each item, and <code>out/catalog.parquet</code> with the rows of all items. Dragon and MPI write the same files under <code>&lt;output-dir&gt;/&lt;name&gt;/</code>. Every item writes the same columns with the same types, also when it finds no candidates. Print the column count, the flux columns and the error terms:</p>
+<div class="cell" data-execution_count="12" id="e5423846">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> GaussianDipoleModel</span>
+<span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a><span class="im">from</span> transient_chain <span class="im">import</span> catalog</span>
+<span id="cb22-3"><a aria-hidden="true" href="#cb22-3" tabindex="-1"></a></span>
+<span id="cb22-4"><a aria-hidden="true" href="#cb22-4" tabindex="-1"></a>columns <span class="op">=</span> catalog.schema(GaussianDipoleModel((<span class="dv">51</span>, <span class="dv">51</span>)).parameter_names)  <span class="co"># the worker's dipole model</span></span>
+<span id="cb22-5"><a aria-hidden="true" href="#cb22-5" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">len</span>(columns), <span class="st">"columns"</span>)</span>
+<span id="cb22-6"><a aria-hidden="true" href="#cb22-6" tabindex="-1"></a><span class="bu">print</span>([name <span class="cf">for</span> name <span class="kw">in</span> columns <span class="cf">if</span> name.startswith(<span class="st">"psf_flux"</span>)])</span>
+<span id="cb22-7"><a aria-hidden="true" href="#cb22-7" tabindex="-1"></a><span class="cf">for</span> term, meaning <span class="kw">in</span> catalog.BUDGET_TERMS.items():</span>
+<span id="cb22-8"><a aria-hidden="true" href="#cb22-8" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>term<span class="sc">:7}</span><span class="ss"> </span><span class="sc">{</span>meaning<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>93 columns
+['psf_flux', 'psf_flux_err_fit', 'psf_flux_err', 'psf_flux_err_corr', 'psf_flux_err_kfit', 'psf_flux_err_kmatch', 'psf_flux_err_mis']
+corr    correlated reference noise through the resampling and the kernel
+kfit    the kernel fit's own uncertainty
+kmatch  kernel mismatch times the reference flux (psf_flux only; 0 for positions)
+mis     residual misalignment (0 for psf_flux)</code></pre>
+</div>
+</div>
+<p>The columns you are most likely to use:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>candidate_id</code></td>
+<td><code>cu-&lt;exposure_id&gt;-&lt;ccd_id&gt;-&lt;index&gt;</code></td>
+</tr>
+<tr class="even">
+<td><code>x</code>, <code>y</code></td>
+<td>rounded hotspot centroid on the target grid, in zero-based pixels</td>
+</tr>
+<tr class="odd">
+<td><code>ra</code>, <code>dec</code></td>
+<td>sky position in degrees, from the target header WCS at (<code>x</code>, <code>y</code>), rather than the fitted source position</td>
+</tr>
+<tr class="even">
+<td><code>sign</code></td>
+<td>sign of the hotspot’s peak residual: +1 for a positive excursion, -1 for a negative excursion</td>
+</tr>
+<tr class="odd">
+<td><code>source_x</code>, <code>source_y</code></td>
+<td>position of the measured source in pixels, relative to (<code>x</code>, <code>y</code>)</td>
+</tr>
+<tr class="even">
+<td><code>psf_flux</code></td>
+<td>difference flux at the source, in target image units; normally forced PSF (point spread function) photometry. It requires a variance plane and an independent PSF width. Without that width, an accepted one-lobe fit supplies its fitted flux; other rows are NaN</td>
+</tr>
+<tr class="odd">
+<td><code>fit_model</code></td>
+<td><code>"dipole"</code>, or <code>"single"</code> for a candidate refit with one lobe</td>
+</tr>
+<tr class="even">
+<td><code>quality_flags</code></td>
+<td>bits of <code>cuphoton.xfit.DipoleQualityFlag</code>, 0 when none is set</td>
+</tr>
+<tr class="odd">
+<td><code>probability</code>, <code>decision</code></td>
+<td>classifier output, NaN and false without a checkpoint</td>
+</tr>
+</tbody>
+</table>
+<section class="level3" data-number="9.11.1" id="sec-transient-chain-errors">
+<h3 class="anchored" data-anchor-id="sec-transient-chain-errors" data-number="9.11.1"><span class="header-section-number">9.11.1</span> Error bars</h3>
+<p>The budget covers <code>center_x</code>, <code>center_y</code>, <code>positive_x</code>, <code>positive_y</code> and, when forced photometry runs, <code>psf_flux</code>. For each computed quantity <code>q</code>, use <code>&lt;q&gt;_err</code>: the quadrature sum of <code>&lt;q&gt;_err_fit</code> and the available terms above. It is NaN where fewer than half the pixels in a required window are usable, the correlation factor is undefined, or the total uncertainty is non-finite. A center needs both lobe windows to pass.</p>
+<p>With the budget enabled, <code>uq_valid</code> means that every computed budget quantity has a defined error. It does not certify that every term was available, that the source model is appropriate, or that unavailable PSF photometry has a valid error. If a one-lobe fitted flux stands in for missing forced photometry, it keeps its fit-only error. Inspect <code>summary.json</code> for excluded terms and <code>quality_flags</code> for fit problems.</p>
+<p><code>source_x_err</code> and <code>source_y_err</code> normally copy the <code>positive_*</code> bars. For a fading candidate identified by the lobe-support flags whose one-lobe refit was not accepted, <code>source_*</code> instead selects the dipole’s negative lobe and its position errors are NaN: the budget was computed for the positive lobe.</p>
+<p>When <code>corr</code> is active, its factor is undefined where the grid mapping between the two images is not locally a shift, for example a reference that is rotated or has a different pixel scale. The affected computed quantities get NaN error bars and <code>uq_valid</code> is false. <code>summary.json</code> counts them under <code>uq.undefined_factor</code>, and those on a rotated grid under <code>uq.rotated_grid</code>. The example’s README explains why. This page’s sample target shares the reference’s pixel scale and orientation for that reason.</p>
+<p>After a GPU run, inspect the rows and read how the item’s bars were built. This block needs a finished run and is not run here.</p>
+<div class="cell" data-execution_count="13" id="f30fd99e">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a aria-hidden="true" href="#cb24-1" tabindex="-1"></a>table <span class="op">=</span> pd.read_parquet(<span class="st">"out/catalog.parquet"</span>)</span>
+<span id="cb24-2"><a aria-hidden="true" href="#cb24-2" tabindex="-1"></a>columns <span class="op">=</span> [<span class="st">"x"</span>, <span class="st">"y"</span>, <span class="st">"fit_model"</span>, <span class="st">"quality_flags"</span>, <span class="st">"psf_flux"</span>, <span class="st">"psf_flux_err"</span>, <span class="st">"source_x_err"</span>, <span class="st">"uq_valid"</span>]</span>
+<span id="cb24-3"><a aria-hidden="true" href="#cb24-3" tabindex="-1"></a><span class="bu">print</span>(table[columns].to_string())</span>
+<span id="cb24-4"><a aria-hidden="true" href="#cb24-4" tabindex="-1"></a></span>
+<span id="cb24-5"><a aria-hidden="true" href="#cb24-5" tabindex="-1"></a>summary <span class="op">=</span> json.loads(Path(<span class="st">"out/items/S1-v1/summary.json"</span>).read_text())</span>
+<span id="cb24-6"><a aria-hidden="true" href="#cb24-6" tabindex="-1"></a><span class="bu">print</span>(summary[<span class="st">"candidates"</span>], summary[<span class="st">"psf_sigma_source"</span>], summary[<span class="st">"uq_terms"</span>])</span>
+<span id="cb24-7"><a aria-hidden="true" href="#cb24-7" tabindex="-1"></a><span class="cf">if</span> summary[<span class="st">"uq"</span>] <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>:  <span class="co"># null when there are no candidates</span></span>
+<span id="cb24-8"><a aria-hidden="true" href="#cb24-8" tabindex="-1"></a>    <span class="bu">print</span>(summary[<span class="st">"uq"</span>][<span class="st">"excluded"</span>])  <span class="co"># each term left out, with the reason</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>A candidate can have a finite flux error and still have <code>uq_valid=False</code> because a position error is undefined. Check <code>quality_flags</code> and <code>fit_model</code> before quoting a position. The one-lobe refit is attempted only when exactly one lobe is unsupported, and its result replaces the dipole position only when the refit covariance is valid. Rows with both lobes unsupported keep their dipole values and need further inspection.</p>
+<p><code>psf_sigma_source</code> reports where the PSF width came from. If <code>uq.excluded</code> reports <code>mis: no misalignment model</code>, inspect <code>diagnostics.align.refine.misalignment.reason</code> for the cause. These GPU result fields are described from the implementation; this page’s executable examples validate the CPU setup and input loading.</p>
+<p><code>summary.json</code> also records the reader each file took (<code>diagnostics.read.receipts</code>), the time per stage (<code>timings_sec</code>) and the bytes copied to the host (<code>transfers</code>).</p>
+</section>
+</section>
+<section class="level2" data-number="9.12" id="turn-the-error-budget-on-or-off">
+<h2 class="anchored" data-anchor-id="turn-the-error-budget-on-or-off" data-number="9.12"><span class="header-section-number">9.12</span> Turn the error budget on or off</h2>
+<p>The <code>uq</code> block controls the error budget, which is on by default. The second argument of <code>load_config</code> takes the same overrides as <code>--set</code>. Compare the shipped block with the one that <code>uq.enabled=false</code> gives:</p>
+<div class="cell" data-execution_count="14" id="c812d843">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a>fit_only <span class="op">=</span> load_config(EXAMPLE <span class="op">/</span> <span class="st">"config-generic.yaml"</span>, [<span class="st">"uq.enabled=false"</span>])</span>
+<span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a><span class="bu">print</span>(pd.DataFrame({<span class="st">"shipped"</span>: generic[<span class="st">"uq"</span>], <span class="st">"uq.enabled=false"</span>: fit_only[<span class="st">"uq"</span>]}).to_string())</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                      shipped uq.enabled=false
+enabled                  True            False
+kernel_fit               True             True
+max_lobe_reach_px          32               32
+measure_correlation      True             True
+correlation_positions    1000             1000
+sky_astrometry_arcsec    None             None
+sky_astrometry_source    None             None
+single_source_refit      True             True</code></pre>
+</div>
+</div>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Effect when <code>false</code> (or set)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>enabled</code></td>
+<td>every <code>&lt;q&gt;_err</code> equals <code>&lt;q&gt;_err_fit</code>, the term columns are 0, <code>uq_valid</code> is true, no candidate is refit with one lobe, and <code>summary.json</code> lists only <code>fit</code> under <code>uq_terms</code></td>
+</tr>
+<tr class="even">
+<td><code>kernel_fit</code></td>
+<td>leaves out the <code>kfit</code> term</td>
+</tr>
+<tr class="odd">
+<td><code>measure_correlation</code></td>
+<td>skips the per-image measurement of the correlation factor</td>
+</tr>
+<tr class="even">
+<td><code>single_source_refit</code></td>
+<td>keeps the dipole fit for candidates with one supported lobe</td>
+</tr>
+<tr class="odd">
+<td><code>sky_astrometry_arcsec</code>, <code>sky_astrometry_source</code></td>
+<td>set together, copy an outside sky-position error into <code>sky_err_arcsec</code>, never added to the pixel error bars</td>
+</tr>
+</tbody>
+</table>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb27"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb27-1"><a aria-hidden="true" href="#cb27-1" tabindex="-1"></a><span class="ex">python</span> examples/transient-chain/launch.py <span class="at">--executor</span> local <span class="at">--config</span> sample/chain.yaml <span class="dt">\</span></span>
+<span id="cb27-2"><a aria-hidden="true" href="#cb27-2" tabindex="-1"></a>    <span class="at">--selections</span> sample/selections.json <span class="at">--output-dir</span> out-fit-only <span class="at">--set</span> uq.enabled=false</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>With <code>uq.enabled=false</code>, <code>uq_valid</code> is always true; inspect the fit validity flags and finite error values before using those fit-only errors.</p>
+<p>A term also needs its inputs. <code>corr</code> needs both variance planes, and <code>kmatch</code> and <code>mis</code> need stars that the align step matched. <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md">Uncertainty quantification</a> explains each term.</p>
+</section>
+<section class="level2" data-number="9.13" id="options">
+<h2 class="anchored" data-anchor-id="options" data-number="9.13"><span class="header-section-number">9.13</span> Options</h2>
+<p>Common <code>launch.py</code> flags are listed below. Run <code>python examples/transient-chain/launch.py --help</code> for the complete list, including worker and rank timeouts.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>--executor</code></td>
+<td>required</td>
+<td><code>local</code>, <code>dragon</code> or <code>mpi</code></td>
+</tr>
+<tr class="even">
+<td><code>--selections</code>, <code>--output-dir</code></td>
+<td>required</td>
+<td>the selections file and the output folder</td>
+</tr>
+<tr class="odd">
+<td><code>--config</code></td>
+<td><code>config.yaml</code> next to <code>launch.py</code></td>
+<td>the configuration file</td>
+</tr>
+<tr class="even">
+<td><code>--set BLOCK.KEY=VALUE</code></td>
+<td>none</td>
+<td>overrides one configuration value, repeatable</td>
+</tr>
+<tr class="odd">
+<td><code>--checkpoint-dir</code></td>
+<td>none</td>
+<td>folder with an xScan <code>checkpoint.pt</code>. Without it the chain does not classify</td>
+</tr>
+<tr class="even">
+<td><code>--only CCD[/EXPOSURE]</code></td>
+<td>every entry</td>
+<td>runs only the matching items, repeatable</td>
+</tr>
+<tr class="odd">
+<td><code>--name</code></td>
+<td>a timestamped id</td>
+<td>run id, <code>dragon</code> and <code>mpi</code> only</td>
+</tr>
+<tr class="even">
+<td><code>--max-workers</code></td>
+<td>one per visible GPU</td>
+<td><code>dragon</code> only</td>
+</tr>
+<tr class="odd">
+<td><code>--warmup-rounds</code>, <code>--measure-rounds</code></td>
+<td>none</td>
+<td>benchmark rounds under <code>rounds/</code>, <code>dragon</code> and <code>mpi</code> only</td>
+</tr>
+</tbody>
+</table>
+<p>Check these configuration keys for new data.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>io.reader</code></td>
+<td><code>auto</code></td>
+<td><code>auto</code> decodes on the GPU with xDR when the file allows it, else with Astropy. <code>xdr</code> insists on the GPU decoder. <code>astropy</code> decodes on the host</td>
+</tr>
+<tr class="even">
+<td><code>align.star_finder</code></td>
+<td><code>gpu</code></td>
+<td><code>daofind</code> finds stars with Photutils on host copies</td>
+</tr>
+<tr class="odd">
+<td><code>xfit.psf_sigma_px</code></td>
+<td>null</td>
+<td>PSF width in pixels. Null measures it from the stars that the align step matched</td>
+</tr>
+<tr class="even">
+<td><code>stamps.stamp_size</code></td>
+<td><code>51</code> in both files</td>
+<td>odd cutout size, equal to the checkpoint’s <code>image_size</code>. Candidates closer than half of it to the image edge are dropped</td>
+</tr>
+<tr class="odd">
+<td><code>align.xcorr_window_px</code></td>
+<td><code>512</code></td>
+<td>side of the central window of the alignment check. It must fit inside the target</td>
+</tr>
+<tr class="even">
+<td><code>align.star_fwhm_px</code>, <code>align.star_threshold_sigma</code>, <code>align.match_radius_px</code></td>
+<td><code>4.0</code>, <code>20.0</code>, <code>8.0</code></td>
+<td>star finding and matching for the alignment refinement and the PSF measurement. Set them for your seeing, depth and astrometric accuracy</td>
+</tr>
+<tr class="odd">
+<td><code>subtract.basis_sigmas</code></td>
+<td><code>[1.5, 3.0, 6.0]</code></td>
+<td>the kernel’s Gaussian widths in pixels. <a class="quarto-xref" href="subtract.html"><span>Chapter 6</span></a> shows how to pick them from the two PSF widths</td>
+</tr>
+<tr class="even">
+<td><code>subtract.template_bad_dilation_px</code></td>
+<td><code>0</code></td>
+<td>grows the reference’s bad-pixel mask by this many pixels. The README’s “Known issues” says when to set it</td>
+</tr>
+<tr class="odd">
+<td><code>classify.noise_reference_sigma</code></td>
+<td>set for the checkpoint the chain was built with</td>
+<td>change it with the checkpoint, or set <code>classify.apply_noise_match: false</code></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="9.14" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="9.14"><span class="header-section-number">9.14</span> Troubleshooting</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Message</th>
+<th>Cause and fix</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>ModuleNotFoundError: No module named 'cupy'</code></td>
+<td>The host has no GPU stack. Install the <code>gpu</code> extra on a GPU host</td>
+</tr>
+<tr class="even">
+<td><code>config block 'uq' has unknown keys ['enable']</code></td>
+<td>A misspelled key, in the file or in <code>--set</code>. The message lists the valid keys</td>
+</tr>
+<tr class="odd">
+<td><code>selection 0 (S1-v1): 1 input file(s) not found</code></td>
+<td>The chain checks every path before it starts. The message names the first missing file</td>
+</tr>
+<tr class="even">
+<td><code>selection 0 lacks keys [...]</code></td>
+<td>The entry misses a key that the adapter needs. The message lists every key the adapter needs</td>
+</tr>
+<tr class="odd">
+<td><code>--only [...] matched nothing</code></td>
+<td>A token is <code>CCD</code> or <code>CCD/EXPOSURE</code>, such as <code>S1</code> or <code>S1/1</code></td>
+</tr>
+<tr class="even">
+<td><code>checkpoint image_size ... != stamps.stamp_size ...</code></td>
+<td>Set <code>stamps.stamp_size</code> to the checkpoint’s image size</td>
+</tr>
+</tbody>
+</table>
+<p>With <code>io.reader: xdr</code>, a RICE-compressed, scaled or quantized image fails before any pixel is read. Use <code>auto</code>.</p>
+</section>
+<section class="level2" data-number="9.15" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="9.15"><span class="header-section-number">9.15</span> Next steps</h2>
+<ul>
+<li><a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a> runs the same steps by hand, one module at a time.</li>
+<li><a class="quarto-xref" href="classify.html"><span>Chapter 8</span></a> trains the checkpoint that <code>--checkpoint-dir</code> takes.</li>
+<li><a class="quarto-xref" href="scale.html"><span>Chapter 14</span></a> explains the Dragon and MPI executors.</li>
+<li><a class="quarto-xref" href="uncertainty.html"><span>Chapter 10</span></a> explains each error-budget term and how to check the error bars on your own data.</li>
+</ul>
+<p>To check a finished catalog against a reference catalog, or its error bars on repeated exposures of one detector, run:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb28"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb28-1"><a aria-hidden="true" href="#cb28-1" tabindex="-1"></a><span class="ex">python</span> examples/transient-chain/compare_catalogs.py <span class="at">--ours</span> out/catalog.parquet <span class="at">--reference</span> reference.csv <span class="at">--out</span> report.json</span>
+<span id="cb28-2"><a aria-hidden="true" href="#cb28-2" tabindex="-1"></a><span class="ex">python</span> examples/transient-chain/repeat_catalogs.py out/items/<span class="pp">*</span>/catalog.parquet <span class="at">--out</span> repeat.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>The example’s <a href="https://github.com/NVIDIA/cuPhoton/blob/main/examples/transient-chain/README.md">README</a> lists every configuration key and column, the shipped survey adapter’s parameters, and how to add an adapter for another survey. <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md">Uncertainty quantification</a> explains how to check the error bars. <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/distributed-execution.md">Distributed execution</a> and <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/dragon.md">Dragon</a> cover the executors.</p>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Classify candidates" class="pagination-link" href="./classify.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Uncertainty Quantification" class="pagination-link" href="./uncertainty.html">
+<span class="nav-page-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

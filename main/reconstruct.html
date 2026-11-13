@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>11  Reconstruct from many frames – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./xray-traces.html" rel="next"/>
+<link href="./uncertainty.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link href="https://nvidia.github.io/cuPhoton/main/reconstruct.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reconstruct.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./reconstruct.html"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#make-the-frames" href="#make-the-frames" id="toc-make-the-frames"><span class="header-section-number">11.1</span> Make the frames</a></li>
+<li><a class="nav-link" data-scroll-target="#save-and-validate-a-bundle" href="#save-and-validate-a-bundle" id="toc-save-and-validate-a-bundle"><span class="header-section-number">11.2</span> Save and validate a bundle</a></li>
+<li><a class="nav-link" data-scroll-target="#write-a-configuration" href="#write-a-configuration" id="toc-write-a-configuration"><span class="header-section-number">11.3</span> Write a configuration</a></li>
+<li><a class="nav-link" data-scroll-target="#run-the-reconstruction" href="#run-the-reconstruction" id="toc-run-the-reconstruction"><span class="header-section-number">11.4</span> Run the reconstruction</a></li>
+<li><a class="nav-link" data-scroll-target="#read-the-run-directory" href="#read-the-run-directory" id="toc-read-the-run-directory"><span class="header-section-number">11.5</span> Read the run directory</a></li>
+<li><a class="nav-link" data-scroll-target="#evaluate-the-run" href="#evaluate-the-run" id="toc-evaluate-the-run"><span class="header-section-number">11.6</span> Evaluate the run</a></li>
+<li><a class="nav-link" data-scroll-target="#calibrate-the-psfs" href="#calibrate-the-psfs" id="toc-calibrate-the-psfs"><span class="header-section-number">11.7</span> Calibrate the PSFs</a></li>
+<li><a class="nav-link" data-scroll-target="#look-at-the-result" href="#look-at-the-result" id="toc-look-at-the-result"><span class="header-section-number">11.8</span> Look at the result</a></li>
+<li><a class="nav-link" data-scroll-target="#options" href="#options" id="toc-options"><span class="header-section-number">11.9</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#on-a-gpu" href="#on-a-gpu" id="toc-on-a-gpu"><span class="header-section-number">11.10</span> On a GPU</a></li>
+<li><a class="nav-link" data-scroll-target="#command-line" href="#command-line" id="toc-command-line"><span class="header-section-number">11.11</span> Command line</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">11.12</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">11.13</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./reconstruct.html"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-reconstruct"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>xImage makes one sharp image from many registered frames with known PSFs (point spread functions: the blur pattern of a point of light in each frame). It fits one nonnegative scene that, blurred by each frame’s PSF, matches every frame within its noise. Use it when you have several exposures of the same field on one pixel grid, each with its own blur and noise. xImage runs on PyTorch, on a CPU or a CUDA GPU. Each workflow reads a bundle of arrays and a YAML configuration, then writes a run directory with a receipt.</p>
+<p><strong>You need:</strong></p>
+<ul>
+<li>cuPhoton with the <code>ximage</code> extra, which adds PyTorch, Photutils and Zarr (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>).</li>
+<li>Frames already on one pixel grid (<a class="quarto-xref" href="align.html"><span>Chapter 5</span></a>), a variance plane per frame and one PSF per frame.</li>
+<li>The cuPhoton checkout, for its example configurations. Run from the root of your checkout, or set <code>CUPHOTON_REPO</code> to its path.</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on a small synthetic bundle. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<section class="level2" data-number="11.1" id="make-the-frames">
+<h2 class="anchored" data-anchor-id="make-the-frames" data-number="11.1"><span class="header-section-number">11.1</span> Make the frames</h2>
+<p>The block below makes three noisy 64 by 64 frames of three point sources. Each frame has its own Gaussian PSF, 0.8, 1.0 and 1.2 pixels wide. These are the same arrays that the repository’s <code>examples/ximage/make_synthetic_bundle.py</code> writes.</p>
+<div class="cell" data-execution_count="1" id="229396dd">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="im">from</span> scipy.signal <span class="im">import</span> convolve2d</span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a></span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a>scene <span class="op">=</span> np.full((<span class="dv">64</span>, <span class="dv">64</span>), <span class="fl">0.1</span>)  <span class="co"># faint sky</span></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a>scene[<span class="dv">20</span>, <span class="dv">22</span>], scene[<span class="dv">35</span>, <span class="dv">40</span>], scene[<span class="dv">44</span>, <span class="dv">18</span>] <span class="op">=</span> <span class="fl">30.0</span>, <span class="fl">50.0</span>, <span class="fl">20.0</span>  <span class="co"># three point sources</span></span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a>y, x <span class="op">=</span> np.indices((<span class="dv">9</span>, <span class="dv">9</span>)) <span class="op">-</span> <span class="dv">4</span></span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">0</span>)</span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a>psfs <span class="op">=</span> np.empty((<span class="dv">9</span>, <span class="dv">9</span>, <span class="dv">1</span>, <span class="dv">3</span>))</span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a>images <span class="op">=</span> np.empty((<span class="dv">1</span>, <span class="dv">64</span>, <span class="dv">64</span>, <span class="dv">3</span>))</span>
+<span id="cb1-10"><a aria-hidden="true" href="#cb1-10" tabindex="-1"></a><span class="cf">for</span> k, sigma <span class="kw">in</span> <span class="bu">enumerate</span>((<span class="fl">0.8</span>, <span class="fl">1.0</span>, <span class="fl">1.2</span>)):</span>
+<span id="cb1-11"><a aria-hidden="true" href="#cb1-11" tabindex="-1"></a>    psf <span class="op">=</span> np.exp(<span class="op">-</span>(x<span class="op">**</span><span class="dv">2</span> <span class="op">+</span> y<span class="op">**</span><span class="dv">2</span>) <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>))</span>
+<span id="cb1-12"><a aria-hidden="true" href="#cb1-12" tabindex="-1"></a>    psfs[:, :, <span class="dv">0</span>, k] <span class="op">=</span> psf <span class="op">/</span> psf.<span class="bu">sum</span>()</span>
+<span id="cb1-13"><a aria-hidden="true" href="#cb1-13" tabindex="-1"></a>    images[<span class="dv">0</span>, :, :, k] <span class="op">=</span> convolve2d(scene, psfs[:, :, <span class="dv">0</span>, k], mode<span class="op">=</span><span class="st">"same"</span>) <span class="op">+</span> rng.normal(<span class="dv">0</span>, <span class="fl">0.01</span>, scene.shape)</span>
+<span id="cb1-14"><a aria-hidden="true" href="#cb1-14" tabindex="-1"></a><span class="bu">print</span>(images.shape, psfs.shape)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>(1, 64, 64, 3) (9, 9, 1, 3)</code></pre>
+</div>
+</div>
+<p>The frame index is the last axis of both arrays.</p>
+</section>
+<section class="level2" data-number="11.2" id="save-and-validate-a-bundle">
+<h2 class="anchored" data-anchor-id="save-and-validate-a-bundle" data-number="11.2"><span class="header-section-number">11.2</span> Save and validate a bundle</h2>
+<p>A bundle is a set of named arrays in one NPY directory, HDF5 file or Zarr store. Three arrays are required:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Axes</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>images</code></td>
+<td><code>(batch, y, x, frame)</code></td>
+<td>the registered frames</td>
+</tr>
+<tr class="even">
+<td><code>variances</code></td>
+<td><code>(batch, y, x, frame)</code></td>
+<td>the variance of every pixel, finite and positive</td>
+</tr>
+<tr class="odd">
+<td><code>psfs</code></td>
+<td><code>(psf_y, psf_x, channel, frame)</code></td>
+<td>one PSF per frame, square, odd-sized, one channel</td>
+</tr>
+</tbody>
+</table>
+<p>An NPY bundle is a directory with one <code>&lt;key&gt;.npy</code> file per array. <code>validate_bundle</code> checks the array layout, mask dtype and exposure times and returns a list of issues. An empty list does not check every pixel value; check that the image and variance values are usable before reconstruction. <code>summarize_bundle</code> returns each array’s shape, dtype and axes.</p>
+<div class="cell" data-execution_count="2" id="a1673985">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a><span class="im">from</span> cuphoton.ximage <span class="im">import</span> load_ximage_bundle, summarize_bundle, validate_bundle</span>
+<span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
+<span id="cb3-4"><a aria-hidden="true" href="#cb3-4" tabindex="-1"></a>bundle_dir <span class="op">=</span> Path(<span class="st">"sample/ximage"</span>)</span>
+<span id="cb3-5"><a aria-hidden="true" href="#cb3-5" tabindex="-1"></a>bundle_dir.mkdir(parents<span class="op">=</span><span class="va">True</span>, exist_ok<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb3-6"><a aria-hidden="true" href="#cb3-6" tabindex="-1"></a>np.save(bundle_dir <span class="op">/</span> <span class="st">"images.npy"</span>, images)</span>
+<span id="cb3-7"><a aria-hidden="true" href="#cb3-7" tabindex="-1"></a>np.save(bundle_dir <span class="op">/</span> <span class="st">"variances.npy"</span>, np.full_like(images, <span class="fl">0.01</span><span class="op">**</span><span class="dv">2</span>))</span>
+<span id="cb3-8"><a aria-hidden="true" href="#cb3-8" tabindex="-1"></a>np.save(bundle_dir <span class="op">/</span> <span class="st">"psfs.npy"</span>, psfs)</span>
+<span id="cb3-9"><a aria-hidden="true" href="#cb3-9" tabindex="-1"></a></span>
+<span id="cb3-10"><a aria-hidden="true" href="#cb3-10" tabindex="-1"></a><span class="cf">with</span> load_ximage_bundle(bundle_dir) <span class="im">as</span> bundle:</span>
+<span id="cb3-11"><a aria-hidden="true" href="#cb3-11" tabindex="-1"></a>    <span class="bu">print</span>(<span class="st">"issues:"</span>, validate_bundle(bundle))</span>
+<span id="cb3-12"><a aria-hidden="true" href="#cb3-12" tabindex="-1"></a>    <span class="cf">for</span> key, info <span class="kw">in</span> summarize_bundle(bundle).items():</span>
+<span id="cb3-13"><a aria-hidden="true" href="#cb3-13" tabindex="-1"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>key<span class="sc">:9s}</span><span class="ss"> </span><span class="sc">{</span>info[<span class="st">'shape'</span>]<span class="sc">}</span><span class="ss"> </span><span class="sc">{</span>info[<span class="st">'axes'</span>]<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>issues: []
+images    [1, 64, 64, 3] ['batch', 'y', 'x', 'frame']
+variances [1, 64, 64, 3] ['batch', 'y', 'x', 'frame']
+psfs      [9, 9, 1, 3] ['psf_y', 'psf_x', 'channel', 'frame']</code></pre>
+</div>
+</div>
+<p>Optional arrays use the same naming. <code>masks</code> is a boolean array shaped like <code>images</code>, <code>True</code> for a good pixel. <code>exp_times</code> holds one positive value per frame. xImage divides each frame by its exposure time and each variance by its square. The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md#ximage-reconstruction-bundles">data contract</a> lists every array.</p>
+</section>
+<section class="level2" data-number="11.3" id="write-a-configuration">
+<h2 class="anchored" data-anchor-id="write-a-configuration" data-number="11.3"><span class="header-section-number">11.3</span> Write a configuration</h2>
+<p>A workflow reads its settings from a YAML file. xImage validates the file strictly. A misspelled key is an error. The repository has annotated examples in <code>examples/ximage/</code>. Copy the L2 example, point it at the bundle, and give the run a name that later runs can overwrite:</p>
+<div class="cell" data-execution_count="3" id="f9a5c818">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">import</span> os</span>
+<span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a><span class="im">import</span> yaml</span>
+<span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a></span>
+<span id="cb5-4"><a aria-hidden="true" href="#cb5-4" tabindex="-1"></a>REPO <span class="op">=</span> Path(os.environ.get(<span class="st">"CUPHOTON_REPO"</span>, <span class="st">"."</span>))</span>
+<span id="cb5-5"><a aria-hidden="true" href="#cb5-5" tabindex="-1"></a>config <span class="op">=</span> yaml.safe_load((REPO <span class="op">/</span> <span class="st">"examples/ximage/reconstruct-l2.example.yaml"</span>).read_text())</span>
+<span id="cb5-6"><a aria-hidden="true" href="#cb5-6" tabindex="-1"></a>config[<span class="st">"data"</span>][<span class="st">"base"</span>] <span class="op">=</span> <span class="st">"sample/ximage"</span></span>
+<span id="cb5-7"><a aria-hidden="true" href="#cb5-7" tabindex="-1"></a>config[<span class="st">"output"</span>] <span class="op">=</span> {<span class="st">"root_dir"</span>: <span class="st">"sample/runs"</span>, <span class="st">"name"</span>: <span class="st">"l2"</span>, <span class="st">"overwrite"</span>: <span class="va">True</span>}</span>
+<span id="cb5-8"><a aria-hidden="true" href="#cb5-8" tabindex="-1"></a>Path(<span class="st">"sample/reconstruct-l2.yaml"</span>).write_text(yaml.safe_dump(config, sort_keys<span class="op">=</span><span class="va">False</span>))</span>
+<span id="cb5-9"><a aria-hidden="true" href="#cb5-9" tabindex="-1"></a><span class="bu">print</span>(config[<span class="st">"algorithm"</span>], config[<span class="st">"device"</span>], config[<span class="st">"dtype"</span>], config[<span class="st">"max_iter"</span>], config[<span class="st">"padding"</span>], config[<span class="st">"roi"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>l2 auto float64 75 VALID {'center': None, 'height': 48, 'width': 48}</code></pre>
+</div>
+</div>
+<p>The example reconstructs the central 48 by 48 pixels. With <code>VALID</code> padding, the frames must hold real pixels half a PSF beyond each edge of the region, 4 pixels for these 9 by 9 PSFs. <code>device: auto</code> runs on CUDA when PyTorch sees a GPU and on the CPU otherwise. <a class="quarto-xref" href="#tbl-reconstruct-options">Table <span>11.1</span></a> lists the keys you change first.</p>
+</section>
+<section class="level2" data-number="11.4" id="run-the-reconstruction">
+<h2 class="anchored" data-anchor-id="run-the-reconstruction" data-number="11.4"><span class="header-section-number">11.4</span> Run the reconstruction</h2>
+<p><code>run_reconstruction</code> takes the configuration’s path as a <code>Path</code>. It returns a <code>WorkflowResult</code> with the run directory and the summary, which the run also saves as its receipt.</p>
+<div class="cell" data-execution_count="4" id="0a27952a">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">from</span> cuphoton.ximage.workflows <span class="im">import</span> run_reconstruction</span>
+<span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
+<span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a>result <span class="op">=</span> run_reconstruction(Path(<span class="st">"sample/reconstruct-l2.yaml"</span>))</span>
+<span id="cb7-4"><a aria-hidden="true" href="#cb7-4" tabindex="-1"></a>summary <span class="op">=</span> result.summary</span>
+<span id="cb7-5"><a aria-hidden="true" href="#cb7-5" tabindex="-1"></a><span class="bu">print</span>(result.run_dir.name, summary[<span class="st">"backend"</span>], summary[<span class="st">"performance"</span>][<span class="st">"device"</span>][<span class="st">"device"</span>], summary[<span class="st">"dtype"</span>])</span>
+<span id="cb7-6"><a aria-hidden="true" href="#cb7-6" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"saved image:"</span>, summary[<span class="st">"image_shape"</span>])</span>
+<span id="cb7-7"><a aria-hidden="true" href="#cb7-7" tabindex="-1"></a>trace <span class="op">=</span> summary[<span class="st">"trace_summary"</span>]</span>
+<span id="cb7-8"><a aria-hidden="true" href="#cb7-8" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>trace[<span class="st">'iterations_count'</span>]<span class="sc">}</span><span class="ss"> iterations, loss </span><span class="sc">{</span>trace[<span class="st">'loss_last'</span>]<span class="sc">:.2f}</span><span class="ss">, u_score </span><span class="sc">{</span>trace[<span class="st">'u_score_last'</span>]<span class="sc">:.1e}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>l2 torch cpu float64
+saved image: [1, 56, 56, 1]
+75 iterations, loss 2.97, u_score 7.9e-06</code></pre>
+</div>
+</div>
+<p>The saved image is the 48-pixel region plus the 4-pixel PSF border on each side. A run stops after <code>max_iter</code> iterations, or earlier once the update score <code>u_score</code> falls below <code>stop_tol</code>. The <code>loss</code> is the mean, over good pixels, of the squared residual divided by the variance.</p>
+</section>
+<section class="level2" data-number="11.5" id="read-the-run-directory">
+<h2 class="anchored" data-anchor-id="read-the-run-directory" data-number="11.5"><span class="header-section-number">11.5</span> Read the run directory</h2>
+<p>This reconstruction writes the following files:</p>
+<div class="cell" data-execution_count="5" id="04f64d1e">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(<span class="bu">str</span>(p.relative_to(result.run_dir)) <span class="cf">for</span> p <span class="kw">in</span> result.run_dir.rglob(<span class="st">"*"</span>) <span class="cf">if</span> p.is_file()))</span>
+<span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a>image <span class="op">=</span> np.load(summary[<span class="st">"saved"</span>][<span class="st">"image"</span>])</span>
+<span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a>scene_l2 <span class="op">=</span> image[<span class="dv">0</span>, <span class="dv">4</span>:<span class="op">-</span><span class="dv">4</span>, <span class="dv">4</span>:<span class="op">-</span><span class="dv">4</span>, <span class="dv">0</span>]  <span class="co"># drop the 4-pixel PSF border</span></span>
+<span id="cb9-4"><a aria-hidden="true" href="#cb9-4" tabindex="-1"></a><span class="bu">print</span>(image.shape, <span class="st">"-&gt;"</span>, scene_l2.shape)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>['artifacts/image.npy', 'config.yaml', 'summary.json', 'trace/iterations.npy', 'trace/loss.npy', 'trace/u_score.npy']
+(1, 56, 56, 1) -&gt; (48, 48)</code></pre>
+</div>
+</div>
+<p>The files are the following:</p>
+<ul>
+<li><code>config.yaml</code>: the configuration as the run resolved it, with every default filled in.</li>
+<li><code>summary.json</code>: the receipt. It records the backend, device, dtype, cuPhoton version, input store, region, saved paths, a trace summary and timings.</li>
+<li><code>artifacts/image.npy</code>: the scene on the region plus its border.</li>
+<li><code>trace/</code>: the loss and update score at each iteration.</li>
+</ul>
+<p>Crop the border before you use the scene, as the evaluation does. The scene is in exposure-time-normalized units. The run returns no output variance and no effective PSF for the scene. <code>summary.json</code> holds input paths and metadata. Review it before you share it.</p>
+</section>
+<section class="level2" data-number="11.6" id="evaluate-the-run">
+<h2 class="anchored" data-anchor-id="evaluate-the-run" data-number="11.6"><span class="header-section-number">11.6</span> Evaluate the run</h2>
+<p><code>evaluate_reconstruction_run</code> crops the scene to the region and compares it with a median coadd (the pixel-by-pixel median of the frames). It reports sharpness, sky scatter, PSNR and SSIM (two image-similarity scores), and the flux of detected sources.</p>
+<div class="cell" data-execution_count="6" id="c815ba3a">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">from</span> cuphoton.ximage.evaluation <span class="im">import</span> evaluate_reconstruction_run</span>
+<span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a></span>
+<span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a>evaluation <span class="op">=</span> evaluate_reconstruction_run(result.run_dir, metrics_backend<span class="op">=</span><span class="st">"auto"</span>)</span>
+<span id="cb11-4"><a aria-hidden="true" href="#cb11-4" tabindex="-1"></a><span class="bu">print</span>(evaluation[<span class="st">"metrics_backend"</span>], evaluation[<span class="st">"projection_shape"</span>])</span>
+<span id="cb11-5"><a aria-hidden="true" href="#cb11-5" tabindex="-1"></a><span class="cf">for</span> name <span class="kw">in</span> (<span class="st">"restoration"</span>, <span class="st">"synthetic_coadd"</span>):</span>
+<span id="cb11-6"><a aria-hidden="true" href="#cb11-6" tabindex="-1"></a>    <span class="bu">print</span>(name, {key: <span class="bu">round</span>(value, <span class="dv">3</span>) <span class="cf">for</span> key, value <span class="kw">in</span> evaluation[name].items() <span class="cf">if</span> <span class="bu">isinstance</span>(value, <span class="bu">float</span>)})</span>
+<span id="cb11-7"><a aria-hidden="true" href="#cb11-7" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"matched sources:"</span>, evaluation[<span class="st">"photometry"</span>][<span class="st">"matched_aperture_count"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>cpu [48, 48]
+restoration {'sharpness_sf': 3.75, 'sky_sigma': 0.024, 'finite_pixel_fraction': 1.0}
+synthetic_coadd {'sharpness_sf': 1.048, 'sky_sigma': 0.007, 'finite_pixel_fraction': 1.0, 'psnr_vs_restoration': 33.457, 'ssim_vs_restoration': 0.956}
+matched sources: 3</code></pre>
+</div>
+</div>
+<p><code>restoration</code> describes the scene and <code>synthetic_coadd</code> the median. Both come from the same frames and share their noise. Similarity or sharpness alone therefore does not show that a reconstruction is accurate.</p>
+</section>
+<section class="level2" data-number="11.7" id="calibrate-the-psfs">
+<h2 class="anchored" data-anchor-id="calibrate-the-psfs" data-number="11.7"><span class="header-section-number">11.7</span> Calibrate the PSFs</h2>
+<p>With the frame PSFs, xImage aims for the scene itself, with point sources as single pixels. PSF calibration instead fits, for each frame, the kernel that blurs a narrow Gaussian of width <code>sigma_g</code> (0.55 pixels in the example) into that frame’s PSF. A reconstruction with these kernels returns the scene as seen through that Gaussian. <code>run_psf_solve</code> fits them with multiplicative updates (<code>method: mm</code>) or the Adam optimizer (<code>method: adam</code>).</p>
+<div class="cell" data-execution_count="7" id="ca7489e8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a><span class="im">from</span> cuphoton.ximage.workflows <span class="im">import</span> run_psf_solve</span>
+<span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a></span>
+<span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>psf_config <span class="op">=</span> yaml.safe_load((REPO <span class="op">/</span> <span class="st">"examples/ximage/psf-mm.example.yaml"</span>).read_text())</span>
+<span id="cb13-4"><a aria-hidden="true" href="#cb13-4" tabindex="-1"></a>psf_config[<span class="st">"data"</span>][<span class="st">"base"</span>] <span class="op">=</span> <span class="st">"sample/ximage"</span></span>
+<span id="cb13-5"><a aria-hidden="true" href="#cb13-5" tabindex="-1"></a>psf_config[<span class="st">"output"</span>] <span class="op">=</span> {<span class="st">"root_dir"</span>: <span class="st">"sample/runs"</span>, <span class="st">"name"</span>: <span class="st">"psf-mm"</span>, <span class="st">"overwrite"</span>: <span class="va">True</span>}</span>
+<span id="cb13-6"><a aria-hidden="true" href="#cb13-6" tabindex="-1"></a>Path(<span class="st">"sample/psf-mm.yaml"</span>).write_text(yaml.safe_dump(psf_config, sort_keys<span class="op">=</span><span class="va">False</span>))</span>
+<span id="cb13-7"><a aria-hidden="true" href="#cb13-7" tabindex="-1"></a>kernels <span class="op">=</span> run_psf_solve(Path(<span class="st">"sample/psf-mm.yaml"</span>))</span>
+<span id="cb13-8"><a aria-hidden="true" href="#cb13-8" tabindex="-1"></a><span class="bu">print</span>(kernels.summary[<span class="st">"method"</span>], kernels.summary[<span class="st">"psfs_shape"</span>])</span>
+<span id="cb13-9"><a aria-hidden="true" href="#cb13-9" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(p.name <span class="cf">for</span> p <span class="kw">in</span> (kernels.run_dir <span class="op">/</span> <span class="st">"artifacts"</span>).iterdir()))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>mm [9, 9, 1, 3]
+['gaussian_psf.npy', 'psfs.npy', 'psfs_padded.npy']</code></pre>
+</div>
+</div>
+<p><code>psfs.npy</code> holds the kernels, <code>psfs_padded.npy</code> the kernels before their final crop, and <code>gaussian_psf.npy</code> the Gaussian. To reconstruct with the kernels, set <code>psf_path</code> to the saved <code>psfs.npy</code>:</p>
+<div class="cell" data-execution_count="8" id="3bab99d5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a>config[<span class="st">"psf_path"</span>] <span class="op">=</span> kernels.summary[<span class="st">"saved"</span>][<span class="st">"psfs"</span>]</span>
+<span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a>config[<span class="st">"output"</span>][<span class="st">"name"</span>] <span class="op">=</span> <span class="st">"l2-calibrated"</span></span>
+<span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>Path(<span class="st">"sample/reconstruct-l2-calibrated.yaml"</span>).write_text(yaml.safe_dump(config, sort_keys<span class="op">=</span><span class="va">False</span>))</span>
+<span id="cb15-4"><a aria-hidden="true" href="#cb15-4" tabindex="-1"></a>calibrated <span class="op">=</span> run_reconstruction(Path(<span class="st">"sample/reconstruct-l2-calibrated.yaml"</span>))</span>
+<span id="cb15-5"><a aria-hidden="true" href="#cb15-5" tabindex="-1"></a>scene_calibrated <span class="op">=</span> np.load(calibrated.summary[<span class="st">"saved"</span>][<span class="st">"image"</span>])[<span class="dv">0</span>, <span class="dv">4</span>:<span class="op">-</span><span class="dv">4</span>, <span class="dv">4</span>:<span class="op">-</span><span class="dv">4</span>, <span class="dv">0</span>]</span>
+<span id="cb15-6"><a aria-hidden="true" href="#cb15-6" tabindex="-1"></a><span class="bu">print</span>(calibrated.run_dir.name, calibrated.summary[<span class="st">"image_shape"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>l2-calibrated [1, 56, 56, 1]</code></pre>
+</div>
+</div>
+<p>With <code>psf_path: null</code>, a reconstruction uses the bundle’s PSFs.</p>
+</section>
+<section class="level2" data-number="11.8" id="look-at-the-result">
+<h2 class="anchored" data-anchor-id="look-at-the-result" data-number="11.8"><span class="header-section-number">11.8</span> Look at the result</h2>
+<p><a class="quarto-xref" href="#fig-reconstruct">Figure <span>11.1</span></a> compares one frame and the median of the frames with the two reconstructions.</p>
+<div class="cell" data-execution_count="9" id="cell-fig-reconstruct">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="im">from</span> matplotlib.colors <span class="im">import</span> LogNorm</span>
+<span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a></span>
+<span id="cb17-4"><a aria-hidden="true" href="#cb17-4" tabindex="-1"></a>panels <span class="op">=</span> [(images[<span class="dv">0</span>, <span class="dv">8</span>:<span class="dv">56</span>, <span class="dv">8</span>:<span class="dv">56</span>, <span class="dv">2</span>], <span class="st">"One frame"</span>), (np.median(images[<span class="dv">0</span>, <span class="dv">8</span>:<span class="dv">56</span>, <span class="dv">8</span>:<span class="dv">56</span>], axis<span class="op">=-</span><span class="dv">1</span>), <span class="st">"Median of frames"</span>),</span>
+<span id="cb17-5"><a aria-hidden="true" href="#cb17-5" tabindex="-1"></a>          (scene_l2, <span class="st">"xImage, frame PSFs"</span>), (scene_calibrated, <span class="st">"xImage, calibrated"</span>)]</span>
+<span id="cb17-6"><a aria-hidden="true" href="#cb17-6" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">4</span>, figsize<span class="op">=</span>(<span class="fl">6.5</span>, <span class="fl">1.9</span>))</span>
+<span id="cb17-7"><a aria-hidden="true" href="#cb17-7" tabindex="-1"></a>norm <span class="op">=</span> LogNorm(vmin<span class="op">=</span><span class="fl">0.05</span>, vmax<span class="op">=</span><span class="bu">max</span>(panel.<span class="bu">max</span>() <span class="cf">for</span> panel, _ <span class="kw">in</span> panels))</span>
+<span id="cb17-8"><a aria-hidden="true" href="#cb17-8" tabindex="-1"></a><span class="cf">for</span> ax, (panel, title) <span class="kw">in</span> <span class="bu">zip</span>(axes, panels):</span>
+<span id="cb17-9"><a aria-hidden="true" href="#cb17-9" tabindex="-1"></a>    ax.imshow(np.clip(panel, <span class="fl">0.05</span>, <span class="va">None</span>), origin<span class="op">=</span><span class="st">"lower"</span>, cmap<span class="op">=</span><span class="st">"magma"</span>, norm<span class="op">=</span>norm)</span>
+<span id="cb17-10"><a aria-hidden="true" href="#cb17-10" tabindex="-1"></a>    ax.set_title(title, fontsize<span class="op">=</span><span class="dv">8</span>)</span>
+<span id="cb17-11"><a aria-hidden="true" href="#cb17-11" tabindex="-1"></a>    ax.set_xticks([])<span class="op">;</span> ax.set_yticks([])</span>
+<span id="cb17-12"><a aria-hidden="true" href="#cb17-12" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb17-13"><a aria-hidden="true" href="#cb17-13" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb17-14"><a aria-hidden="true" href="#cb17-14" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb17-15"><a aria-hidden="true" href="#cb17-15" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="Four square panels of the same three point sources. The first two show soft blobs. The third shows bright single points inside dark rings. The fourth shows small compact spots." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-reconstruct">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-reconstruct-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="reconstruct_files/figure-html/fig-reconstruct-output-1.png" title="Figure 11.1: The central 48 by 48 pixels of the sample bundle on one logarithmic color scale, brighter for higher intensity. From left: the frame with the widest PSF, the median of the three frames, the L2 reconstruction with the frame PSFs, and the L2 reconstruction with calibrated kernels. With the frame PSFs, each source shrinks to a few pixels inside a dark ring where the scene falls below the sky level. The calibrated reconstruction shows each source as a slightly wider spot. Synthetic data, for demonstration only."><img alt="Four square panels of the same three point sources. The first two show soft blobs. The third shows bright single points inside dark rings. The fourth shows small compact spots." class="figure-img" height="295" src="reconstruct_files/figure-html/fig-reconstruct-output-1.png" width="983"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-reconstruct-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 11.1: The central 48 by 48 pixels of the sample bundle on one logarithmic color scale, brighter for higher intensity. From left: the frame with the widest PSF, the median of the three frames, the L2 reconstruction with the frame PSFs, and the L2 reconstruction with calibrated kernels. With the frame PSFs, each source shrinks to a few pixels inside a dark ring where the scene falls below the sky level. The calibrated reconstruction shows each source as a slightly wider spot. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section class="level2" data-number="11.9" id="options">
+<h2 class="anchored" data-anchor-id="options" data-number="11.9"><span class="header-section-number">11.9</span> Options</h2>
+<div class="quarto-float quarto-figure quarto-figure-center anchored" id="tbl-reconstruct-options">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-reconstruct-options-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table 11.1: Reconstruction keys to change first. The examples set <code>roi</code> to 48 by 48 and <code>mask.mode</code> to <code>none</code>.
+</figcaption>
+<div aria-describedby="tbl-reconstruct-options-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>algorithm</code></td>
+<td>set by the command</td>
+<td><code>l2</code> (variance-weighted least squares) or <code>rho</code> (robust loss)</td>
+</tr>
+<tr class="even">
+<td><code>device</code></td>
+<td><code>auto</code></td>
+<td><code>cpu</code>, <code>cuda</code>, or <code>auto</code> (CUDA when PyTorch sees a GPU)</td>
+</tr>
+<tr class="odd">
+<td><code>dtype</code></td>
+<td><code>float64</code></td>
+<td><code>float32</code> or <code>float64</code></td>
+</tr>
+<tr class="even">
+<td><code>data.base</code></td>
+<td><code>data</code></td>
+<td>the bundle path, relative to the working directory</td>
+</tr>
+<tr class="odd">
+<td><code>data.exposure_indices</code>, <code>data.max_exposures</code></td>
+<td><code>null</code></td>
+<td>use a subset of the frames (set one, not both)</td>
+</tr>
+<tr class="even">
+<td><code>output.root_dir</code></td>
+<td><code>~/.local/state/cuphoton/ximage/runs</code></td>
+<td>where runs go (under <code>$XDG_STATE_HOME</code> when set)</td>
+</tr>
+<tr class="odd">
+<td><code>output.name</code>, <code>output.overwrite</code></td>
+<td><code>null</code>, <code>false</code></td>
+<td>the run directory name (timestamped when <code>null</code>), and whether to replace it</td>
+</tr>
+<tr class="even">
+<td><code>roi.center</code>, <code>roi.height</code>, <code>roi.width</code></td>
+<td><code>null</code></td>
+<td>the region in pixels, <code>center</code> as <code>(row, column)</code>. <code>null</code> means the whole frame and its middle</td>
+</tr>
+<tr class="odd">
+<td><code>mask.mode</code></td>
+<td><code>provided</code></td>
+<td><code>provided</code> uses the bundle’s <code>masks</code>, <code>none</code> ignores them</td>
+</tr>
+<tr class="even">
+<td><code>psf_path</code></td>
+<td><code>null</code></td>
+<td>calibrated kernels from a PSF run, or <code>null</code> for the bundle’s PSFs</td>
+</tr>
+<tr class="odd">
+<td><code>max_iter</code>, <code>stop_tol</code></td>
+<td><code>75</code>, <code>1e-6</code></td>
+<td>the iteration cap, and the update score below which a run stops early</td>
+</tr>
+<tr class="even">
+<td><code>padding</code></td>
+<td><code>VALID</code></td>
+<td><code>VALID</code> needs real pixels half a PSF beyond the region, <code>SAME</code> treats them as zero</td>
+</tr>
+<tr class="odd">
+<td><code>exposure_batch_size</code></td>
+<td><code>null</code></td>
+<td>frames per convolution call, <code>null</code> for all at once</td>
+</tr>
+<tr class="even">
+<td><code>rho_loss</code></td>
+<td><code>huber</code></td>
+<td>the loss for <code>rho</code> runs. <code>cauchy</code>, <code>bisquare</code> and <code>damped_rl</code> are experimental</td>
+</tr>
+<tr class="odd">
+<td><code>delta_rho_start</code>, <code>delta_rho_end</code></td>
+<td><code>2.0</code>, <code>1.0</code></td>
+<td>the Huber threshold in standard deviations, lowered linearly over the iterations</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<p><code>rho</code> applies the Huber loss to each residual divided by its noise. The loss is quadratic up to the threshold and linear beyond it. A few large residuals therefore pull less on the scene. <code>reconstruct-rho.example.yaml</code> sets it up. For the PSF calibration keys, refer to the annotated <code>psf-mm.example.yaml</code> and <code>psf-adam.example.yaml</code>.</p>
+</section>
+<section class="level2" data-number="11.10" id="on-a-gpu">
+<h2 class="anchored" data-anchor-id="on-a-gpu" data-number="11.10"><span class="header-section-number">11.10</span> On a GPU</h2>
+<p>Use the GPU environment from <a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>, which includes <code>ximage</code> and the plotting dependencies.</p>
+<p><code>device_override="cuda"</code> (or <code>device: cuda</code>) requires a GPU. <code>metrics_backend="cupy"</code> computes the evaluation metrics on it:</p>
+<div class="cell" data-execution_count="10" id="840708eb">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a>result <span class="op">=</span> run_reconstruction(Path(<span class="st">"sample/reconstruct-l2.yaml"</span>), device_override<span class="op">=</span><span class="st">"cuda"</span>)</span>
+<span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a><span class="bu">print</span>(result.summary[<span class="st">"performance"</span>][<span class="st">"device"</span>])  <span class="co"># GPU name, peak memory, cuDNN settings</span></span>
+<span id="cb18-3"><a aria-hidden="true" href="#cb18-3" tabindex="-1"></a>evaluation <span class="op">=</span> evaluate_reconstruction_run(result.run_dir, metrics_backend<span class="op">=</span><span class="st">"cupy"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>To reduce convolution working memory, set <code>exposure_batch_size</code> to a positive number of frames. The selected input images, variances and masks still reside on the device together. Use a smaller region, fewer frames or tiling to reduce that input footprint. The receipt records the resolved device, precision and timings. The evaluation records <code>metrics_backend</code> separately from the reconstruction backend.</p>
+</section>
+<section class="level2" data-number="11.11" id="command-line">
+<h2 class="anchored" data-anchor-id="command-line" data-number="11.11"><span class="header-section-number">11.11</span> Command line</h2>
+<p>The <code>cuphoton ximage</code> commands run the same workflows. From the root of the checkout, the repository’s example runs end to end:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> python examples/ximage/make_synthetic_bundle.py <span class="at">--output</span> data</span>
+<span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> cuphoton ximage data-validate <span class="at">--base</span> data</span>
+<span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> cuphoton ximage reconstruct-l2 <span class="at">--config</span> examples/ximage/reconstruct-l2.example.yaml</span>
+<span id="cb19-4"><a aria-hidden="true" href="#cb19-4" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> cuphoton ximage psf-solve-mm <span class="at">--config</span> examples/ximage/psf-mm.example.yaml</span>
+<span id="cb19-5"><a aria-hidden="true" href="#cb19-5" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> cuphoton ximage evaluate-reconstruction <span class="at">--run-dir</span> runs/reconstruct-l2-example</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p><code>data-validate</code> prints each array’s shape or the list of issues. The reconstruction and PSF commands print the run summary and accept <code>--device</code>, <code>--backend</code> and <code>--output-dir</code> overrides. <code>evaluate-reconstruction</code> also writes <code>evaluation/evaluation_summary.json</code> into the run directory. The example script and configurations do not overwrite earlier output. To repeat them, use a new bundle path and run names, or remove only the outputs created by this example. To time a workflow on the CPU and the GPU, run <code>benchmark-devices</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb20"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> cuphoton ximage benchmark-devices <span class="at">--config</span> examples/ximage/reconstruct-l2.example.yaml <span class="dt">\</span></span>
+<span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a>  <span class="at">--workflow</span> reconstruct-l2 <span class="at">--devices</span> cpu,cuda <span class="at">--warmup</span> 1 <span class="at">--repeats</span> 3</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>It times whole workflow calls, input loading and artifact writing included. It does not compare the CPU and GPU images.</p>
+</section>
+<section class="level2" data-number="11.12" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="11.12"><span class="header-section-number">11.12</span> Troubleshooting</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Error</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>FileExistsError: ... already exists. Set overwrite=true to reuse it.</code></td>
+<td>Set <code>output.overwrite: true</code> or a new <code>output.name</code>.</td>
+</tr>
+<tr class="even">
+<td><code>ValueError: Padded ROI exceeds the input image bounds; the requested PSF and srf require 4 input pixels beyond each ROI edge.</code></td>
+<td>Shrink or move <code>roi</code>, or use <code>padding: SAME</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>ValidationError: ... Extra inputs are not permitted</code></td>
+<td>Fix the misspelled key named in the message.</td>
+</tr>
+<tr class="even">
+<td><code>PSF kernels must have positive, square, odd spatial dimensions</code></td>
+<td>Crop or pad each PSF to an odd square, such as 9 by 9.</td>
+</tr>
+<tr class="odd">
+<td><code>RuntimeError: CUDA was requested but Torch cannot access a CUDA device.</code></td>
+<td>Install the <code>gpu</code> extra, or set <code>device: auto</code> or <code>cpu</code>.</td>
+</tr>
+<tr class="even">
+<td><code>AttributeError: 'str' object has no attribute 'read_text'</code></td>
+<td>Pass the configuration path as a <code>Path</code>, not a string.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="11.13" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="11.13"><span class="header-section-number">11.13</span> Next steps</h2>
+<ul>
+<li>Put frames on one pixel grid before you reconstruct: <a class="quarto-xref" href="align.html"><span>Chapter 5</span></a>.</li>
+<li>Variance planes, masks and receipts: <a class="quarto-xref" href="concepts.html"><span>Chapter 3</span></a>.</li>
+<li>The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/ximage.md">xImage reference</a> covers HDF5 and Zarr bundles, tiling, the survey adapters and the evaluation’s catalog comparisons.</li>
+<li>xImage adapts the ImageMM method of <a href="https://doi.org/10.3847/1538-3881/adfb72">Sukurdeep et al. (2025)</a>. If you publish results, cite ImageMM and your cuPhoton version, as the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/CITATION.md#ximage">citation guide</a> describes.</li>
+</ul>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Uncertainty Quantification" class="pagination-link" href="./uncertainty.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Analyze X-ray detector traces" class="pagination-link" href="./xray-traces.html">
+<span class="nav-page-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

@@ -1,0 +1,1727 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>6  Subtract two images – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./measure.html" rel="next"/>
+<link href="./align.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+<script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+<link href="https://nvidia.github.io/cuPhoton/main/subtract.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="subtract.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./subtract.html"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#put-the-pair-on-one-grid" href="#put-the-pair-on-one-grid" id="toc-put-the-pair-on-one-grid"><span class="header-section-number">6.1</span> Put the pair on one grid</a></li>
+<li><a class="nav-link" data-scroll-target="#sec-subtract-basis" href="#sec-subtract-basis" id="toc-sec-subtract-basis"><span class="header-section-number">6.2</span> Choose the kernel basis</a></li>
+<li><a class="nav-link" data-scroll-target="#fit-the-kernel-and-subtract" href="#fit-the-kernel-and-subtract" id="toc-fit-the-kernel-and-subtract"><span class="header-section-number">6.3</span> Fit the kernel and subtract</a></li>
+<li><a class="nav-link" data-scroll-target="#predict-the-noise-of-the-difference" href="#predict-the-noise-of-the-difference" id="toc-predict-the-noise-of-the-difference"><span class="header-section-number">6.4</span> Predict the noise of the difference</a></li>
+<li><a class="nav-link" data-scroll-target="#find-the-candidates" href="#find-the-candidates" id="toc-find-the-candidates"><span class="header-section-number">6.5</span> Find the candidates</a></li>
+<li><a class="nav-link" data-scroll-target="#keep-changed-pixels-out-of-the-fit" href="#keep-changed-pixels-out-of-the-fit" id="toc-keep-changed-pixels-out-of-the-fit"><span class="header-section-number">6.6</span> Keep changed pixels out of the fit</a></li>
+<li><a class="nav-link" data-scroll-target="#look-at-the-result" href="#look-at-the-result" id="toc-look-at-the-result"><span class="header-section-number">6.7</span> Look at the result</a></li>
+<li><a class="nav-link" data-scroll-target="#sec-subtract-bad-pixels" href="#sec-subtract-bad-pixels" id="toc-sec-subtract-bad-pixels"><span class="header-section-number">6.8</span> Keep bad pixels out of the subtraction</a></li>
+<li><a class="nav-link" data-scroll-target="#choose-a-solver" href="#choose-a-solver" id="toc-choose-a-solver"><span class="header-section-number">6.9</span> Choose a solver</a></li>
+<li><a class="nav-link" data-scroll-target="#options" href="#options" id="toc-options"><span class="header-section-number">6.10</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#on-a-gpu" href="#on-a-gpu" id="toc-on-a-gpu"><span class="header-section-number">6.11</span> On a GPU</a></li>
+<li><a class="nav-link" data-scroll-target="#command-line" href="#command-line" id="toc-command-line"><span class="header-section-number">6.12</span> Command line</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">6.13</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">6.14</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./subtract.html"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-subtract"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>Subtracting two images of the same scene shows what changed. xPois fits a convolution kernel that blurs the reference until it matches the target, plus a smooth background, then subtracts. It also predicts the noise of every difference pixel and finds the candidates. Use it once the two images share one pixel grid.</p>
+<p><strong>You need:</strong> cuPhoton installed with the CPU profile (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>), and two images on one pixel grid with a variance plane for each. This page makes a sample pair and aligns it.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on a small synthetic pair. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<div class="cell" data-execution_count="1" id="173dc264">
+<details class="code-fold">
+<summary>Create the sample pair (NumPy and Astropy only)</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="co"># of the same sky on different pixel grids, with different blur and sky level.</span></span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="co"># The target also holds one new source and one star three times brighter.</span></span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a><span class="co"># Noise is independent Gaussian noise with variance expected_image / gain;</span></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a><span class="co"># this teaching sample has no read noise, saturation, or detector artifacts.</span></span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a></span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a><span class="im">from</span> astropy.io <span class="im">import</span> fits</span>
+<span id="cb1-10"><a aria-hidden="true" href="#cb1-10" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
+<span id="cb1-11"><a aria-hidden="true" href="#cb1-11" tabindex="-1"></a></span>
+<span id="cb1-12"><a aria-hidden="true" href="#cb1-12" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">7</span>)</span>
+<span id="cb1-13"><a aria-hidden="true" href="#cb1-13" tabindex="-1"></a></span>
+<span id="cb1-14"><a aria-hidden="true" href="#cb1-14" tabindex="-1"></a></span>
+<span id="cb1-15"><a aria-hidden="true" href="#cb1-15" tabindex="-1"></a><span class="kw">def</span> make_wcs(shape, scale_arcsec, rotation_deg, crpix_shift):</span>
+<span id="cb1-16"><a aria-hidden="true" href="#cb1-16" tabindex="-1"></a>    w <span class="op">=</span> WCS(naxis<span class="op">=</span><span class="dv">2</span>)</span>
+<span id="cb1-17"><a aria-hidden="true" href="#cb1-17" tabindex="-1"></a>    w.wcs.ctype <span class="op">=</span> [<span class="st">"RA---TAN"</span>, <span class="st">"DEC--TAN"</span>]</span>
+<span id="cb1-18"><a aria-hidden="true" href="#cb1-18" tabindex="-1"></a>    w.wcs.crval <span class="op">=</span> [<span class="fl">150.0</span>, <span class="fl">2.0</span>]</span>
+<span id="cb1-19"><a aria-hidden="true" href="#cb1-19" tabindex="-1"></a>    w.wcs.crpix <span class="op">=</span> [shape[<span class="dv">1</span>] <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> crpix_shift[<span class="dv">0</span>], shape[<span class="dv">0</span>] <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> crpix_shift[<span class="dv">1</span>]]</span>
+<span id="cb1-20"><a aria-hidden="true" href="#cb1-20" tabindex="-1"></a>    c, s <span class="op">=</span> np.cos(np.radians(rotation_deg)), np.sin(np.radians(rotation_deg))</span>
+<span id="cb1-21"><a aria-hidden="true" href="#cb1-21" tabindex="-1"></a>    w.wcs.cd <span class="op">=</span> scale_arcsec <span class="op">/</span> <span class="dv">3600</span> <span class="op">*</span> np.array([[<span class="op">-</span>c, s], [s, c]])</span>
+<span id="cb1-22"><a aria-hidden="true" href="#cb1-22" tabindex="-1"></a>    <span class="cf">return</span> w</span>
+<span id="cb1-23"><a aria-hidden="true" href="#cb1-23" tabindex="-1"></a></span>
+<span id="cb1-24"><a aria-hidden="true" href="#cb1-24" tabindex="-1"></a></span>
+<span id="cb1-25"><a aria-hidden="true" href="#cb1-25" tabindex="-1"></a><span class="kw">def</span> render(shape, wcs, ra, dec, flux, sigma, sky, gain):</span>
+<span id="cb1-26"><a aria-hidden="true" href="#cb1-26" tabindex="-1"></a>    x, y <span class="op">=</span> wcs.world_to_pixel_values(ra, dec)</span>
+<span id="cb1-27"><a aria-hidden="true" href="#cb1-27" tabindex="-1"></a>    yy, xx <span class="op">=</span> np.mgrid[: shape[<span class="dv">0</span>], : shape[<span class="dv">1</span>]]</span>
+<span id="cb1-28"><a aria-hidden="true" href="#cb1-28" tabindex="-1"></a>    image <span class="op">=</span> np.full(shape, sky, dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb1-29"><a aria-hidden="true" href="#cb1-29" tabindex="-1"></a>    <span class="cf">for</span> xi, yi, fi <span class="kw">in</span> <span class="bu">zip</span>(x, y, flux):</span>
+<span id="cb1-30"><a aria-hidden="true" href="#cb1-30" tabindex="-1"></a>        image <span class="op">+=</span> fi <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> np.pi <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>) <span class="op">*</span> np.exp(<span class="op">-</span>((xx <span class="op">-</span> xi) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (yy <span class="op">-</span> yi) <span class="op">**</span> <span class="dv">2</span>) <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>))</span>
+<span id="cb1-31"><a aria-hidden="true" href="#cb1-31" tabindex="-1"></a>    <span class="cf">return</span> rng.normal(image, np.sqrt(image <span class="op">/</span> gain)).astype(np.float32)</span>
+<span id="cb1-32"><a aria-hidden="true" href="#cb1-32" tabindex="-1"></a></span>
+<span id="cb1-33"><a aria-hidden="true" href="#cb1-33" tabindex="-1"></a></span>
+<span id="cb1-34"><a aria-hidden="true" href="#cb1-34" tabindex="-1"></a>ra <span class="op">=</span> <span class="fl">150.0</span> <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.016</span>, <span class="fl">0.016</span>, <span class="dv">150</span>)</span>
+<span id="cb1-35"><a aria-hidden="true" href="#cb1-35" tabindex="-1"></a>dec <span class="op">=</span> <span class="fl">2.0</span> <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.016</span>, <span class="fl">0.016</span>, <span class="dv">150</span>)</span>
+<span id="cb1-36"><a aria-hidden="true" href="#cb1-36" tabindex="-1"></a>flux <span class="op">=</span> <span class="dv">10</span> <span class="op">**</span> rng.uniform(<span class="fl">2.5</span>, <span class="fl">4.5</span>, <span class="dv">150</span>)</span>
+<span id="cb1-37"><a aria-hidden="true" href="#cb1-37" tabindex="-1"></a>target_flux <span class="op">=</span> np.r_[<span class="dv">3</span> <span class="op">*</span> flux[<span class="dv">0</span>], flux[<span class="dv">1</span>:], <span class="fl">4000.0</span>]  <span class="co"># star 0 brightens; one new source</span></span>
+<span id="cb1-38"><a aria-hidden="true" href="#cb1-38" tabindex="-1"></a>target_ra, target_dec <span class="op">=</span> np.r_[ra, <span class="fl">150.004</span>], np.r_[dec, <span class="fl">2.003</span>]</span>
+<span id="cb1-39"><a aria-hidden="true" href="#cb1-39" tabindex="-1"></a></span>
+<span id="cb1-40"><a aria-hidden="true" href="#cb1-40" tabindex="-1"></a>Path(<span class="st">"sample"</span>).mkdir(exist_ok<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-41"><a aria-hidden="true" href="#cb1-41" tabindex="-1"></a><span class="cf">for</span> name, shape, wcs, sky_coords, fl, sigma, sky, gain <span class="kw">in</span> [</span>
+<span id="cb1-42"><a aria-hidden="true" href="#cb1-42" tabindex="-1"></a>    (<span class="st">"reference"</span>, (<span class="dv">300</span>, <span class="dv">300</span>), make_wcs((<span class="dv">300</span>, <span class="dv">300</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="dv">0</span>, <span class="dv">0</span>)), (ra, dec), flux, <span class="fl">1.2</span>, <span class="fl">100.0</span>, <span class="fl">8.0</span>),</span>
+<span id="cb1-43"><a aria-hidden="true" href="#cb1-43" tabindex="-1"></a>    (<span class="st">"target"</span>, (<span class="dv">256</span>, <span class="dv">256</span>), make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.27</span>, <span class="fl">3.0</span>, (<span class="fl">4.3</span>, <span class="op">-</span><span class="fl">2.7</span>)), (target_ra, target_dec), target_flux, <span class="fl">1.8</span>, <span class="fl">120.0</span>, <span class="fl">2.0</span>),</span>
+<span id="cb1-44"><a aria-hidden="true" href="#cb1-44" tabindex="-1"></a>]:</span>
+<span id="cb1-45"><a aria-hidden="true" href="#cb1-45" tabindex="-1"></a>    header <span class="op">=</span> wcs.to_header()</span>
+<span id="cb1-46"><a aria-hidden="true" href="#cb1-46" tabindex="-1"></a>    header[<span class="st">"GAIN"</span>] <span class="op">=</span> (gain, <span class="st">"electrons per data number (DN)"</span>)</span>
+<span id="cb1-47"><a aria-hidden="true" href="#cb1-47" tabindex="-1"></a>    header[<span class="st">"PSFSIG"</span>] <span class="op">=</span> (sigma, <span class="st">"Gaussian PSF sigma [px]"</span>)</span>
+<span id="cb1-48"><a aria-hidden="true" href="#cb1-48" tabindex="-1"></a>    fits.writeto(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.fits"</span>, render(shape, wcs, <span class="op">*</span>sky_coords, fl, sigma, sky, gain), header, overwrite<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+</div>
+<section class="level2" data-number="6.1" id="put-the-pair-on-one-grid">
+<h2 class="anchored" data-anchor-id="put-the-pair-on-one-grid" data-number="6.1"><span class="header-section-number">6.1</span> Put the pair on one grid</h2>
+<p>xPois needs a reference and a target on one grid. The block repeats the alignment of <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>, which <a class="quarto-xref" href="align.html"><span>Chapter 5</span></a> explains.</p>
+<div class="cell" data-execution_count="2" id="a3da8017">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
+<span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
+<span id="cb2-4"><a aria-hidden="true" href="#cb2-4" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> BBox, ReprojectionSpec, make_wcs_pair_transform, reproject_masked_array</span>
+<span id="cb2-5"><a aria-hidden="true" href="#cb2-5" tabindex="-1"></a></span>
+<span id="cb2-6"><a aria-hidden="true" href="#cb2-6" tabindex="-1"></a>target_read <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>])</span>
+<span id="cb2-7"><a aria-hidden="true" href="#cb2-7" tabindex="-1"></a>reference_read <span class="op">=</span> read_fits_images(<span class="st">"sample/reference.fits"</span>, [<span class="dv">0</span>])</span>
+<span id="cb2-8"><a aria-hidden="true" href="#cb2-8" tabindex="-1"></a>target, reference <span class="op">=</span> (r.arrays[<span class="dv">0</span>].astype(np.float64) <span class="cf">for</span> r <span class="kw">in</span> (target_read, reference_read))</span>
+<span id="cb2-9"><a aria-hidden="true" href="#cb2-9" tabindex="-1"></a>target_header, reference_header <span class="op">=</span> target_read.infos[<span class="dv">0</span>].header, reference_read.infos[<span class="dv">0</span>].header</span>
+<span id="cb2-10"><a aria-hidden="true" href="#cb2-10" tabindex="-1"></a>target_variance <span class="op">=</span> np.clip(target, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> target_header[<span class="st">"GAIN"</span>]</span>
+<span id="cb2-11"><a aria-hidden="true" href="#cb2-11" tabindex="-1"></a>reference_variance <span class="op">=</span> np.clip(reference, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> reference_header[<span class="st">"GAIN"</span>]</span>
+<span id="cb2-12"><a aria-hidden="true" href="#cb2-12" tabindex="-1"></a></span>
+<span id="cb2-13"><a aria-hidden="true" href="#cb2-13" tabindex="-1"></a>mapping <span class="op">=</span> make_wcs_pair_transform(WCS(target_header), WCS(reference_header))  <span class="co"># maps (x, y) positions</span></span>
+<span id="cb2-14"><a aria-hidden="true" href="#cb2-14" tabindex="-1"></a><span class="co"># BBox takes the (x, y) origin, then the width and the height</span></span>
+<span id="cb2-15"><a aria-hidden="true" href="#cb2-15" tabindex="-1"></a>spec <span class="op">=</span> ReprojectionSpec(mapping<span class="op">=</span>mapping, output_bbox<span class="op">=</span>BBox(<span class="dv">0</span>, <span class="dv">0</span>, target.shape[<span class="dv">1</span>], target.shape[<span class="dv">0</span>]))</span>
+<span id="cb2-16"><a aria-hidden="true" href="#cb2-16" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, np.zeros(reference.shape, dtype<span class="op">=</span><span class="bu">bool</span>), spec, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb2-17"><a aria-hidden="true" href="#cb2-17" tabindex="-1"></a><span class="bu">print</span>(target.shape, aligned.image.shape)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>(256, 256) (256, 256)</code></pre>
+</div>
+</div>
+<p><code>aligned.image</code> and <code>aligned.variance</code> are the reference and its variance on the target grid.</p>
+</section>
+<section class="level2" data-number="6.2" id="sec-subtract-basis">
+<h2 class="anchored" data-anchor-id="sec-subtract-basis" data-number="6.2"><span class="header-section-number">6.2</span> Choose the kernel basis</h2>
+<p>The kernel must turn the reference PSF (point spread function: the blur pattern of a point of light) into the target PSF. When the target is blurrier than the reference and both PSFs are Gaussian, the matching kernel is a Gaussian of width <span class="math inline">\(\sqrt{\sigma_T^2 - \sigma_R^2}\)</span> with both widths in target pixels. xPois builds the kernel from basis functions. Each <code>GaussianBasisComponent(sigma, degree)</code> is a Gaussian of width <code>sigma</code> pixels times every polynomial up to total degree <code>degree</code>. The example places a narrow, a matching and a wide Gaussian around the needed width. For real images, inspect the residuals and adjust the basis; resampling and non-Gaussian PSFs change the matching problem. If the target is sharper, swap the subtraction roles or choose a sharper reference instead of taking the square root of a negative width difference.</p>
+<div class="cell" data-execution_count="3" id="89d14e54">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> astropy.wcs.utils <span class="im">import</span> proj_plane_pixel_scales</span>
+<span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> GaussianBasisComponent</span>
+<span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a></span>
+<span id="cb4-4"><a aria-hidden="true" href="#cb4-4" tabindex="-1"></a><span class="co"># Reference PSF width in target pixels, then the width the kernel must add</span></span>
+<span id="cb4-5"><a aria-hidden="true" href="#cb4-5" tabindex="-1"></a>scale <span class="op">=</span> proj_plane_pixel_scales(WCS(reference_header))[<span class="dv">0</span>] <span class="op">/</span> proj_plane_pixel_scales(WCS(target_header))[<span class="dv">0</span>]</span>
+<span id="cb4-6"><a aria-hidden="true" href="#cb4-6" tabindex="-1"></a>kernel_sigma <span class="op">=</span> np.sqrt(target_header[<span class="st">"PSFSIG"</span>] <span class="op">**</span> <span class="dv">2</span> <span class="op">-</span> (scale <span class="op">*</span> reference_header[<span class="st">"PSFSIG"</span>]) <span class="op">**</span> <span class="dv">2</span>)</span>
+<span id="cb4-7"><a aria-hidden="true" href="#cb4-7" tabindex="-1"></a>widths <span class="op">=</span> np.<span class="bu">round</span>(kernel_sigma <span class="op">*</span> np.array([<span class="fl">0.5</span>, <span class="fl">1.0</span>, <span class="fl">2.0</span>]), <span class="dv">1</span>)</span>
+<span id="cb4-8"><a aria-hidden="true" href="#cb4-8" tabindex="-1"></a>basis <span class="op">=</span> [GaussianBasisComponent(sigma, degree) <span class="cf">for</span> sigma, degree <span class="kw">in</span> <span class="bu">zip</span>(widths, (<span class="dv">4</span>, <span class="dv">2</span>, <span class="dv">2</span>))]</span>
+<span id="cb4-9"><a aria-hidden="true" href="#cb4-9" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"kernel sigma </span><span class="sc">{</span>kernel_sigma<span class="sc">:.2f}</span><span class="ss"> px, basis widths </span><span class="sc">{</span>widths<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>kernel sigma 1.38 px, basis widths [0.7 1.4 2.8]</code></pre>
+</div>
+</div>
+<p>The kernel shape must be odd in both axes. Make it reach about three widths of the widest Gaussian on each side of the center, so that the Gaussian is not cut off. Here that is 19 × 19.</p>
+</section>
+<section class="level2" data-number="6.3" id="fit-the-kernel-and-subtract">
+<h2 class="anchored" data-anchor-id="fit-the-kernel-and-subtract" data-number="6.3"><span class="header-section-number">6.3</span> Fit the kernel and subtract</h2>
+<p><code>solve_constant_kernel</code> fits one kernel for the whole image by least squares, with each pixel weighted by one over its target variance.</p>
+<div class="cell" data-execution_count="4" id="e2d63839">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> solve_constant_kernel</span>
+<span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a></span>
+<span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>fit <span class="op">=</span> solve_constant_kernel(aligned.image, target, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>),</span>
+<span id="cb6-4"><a aria-hidden="true" href="#cb6-4" tabindex="-1"></a>                            variance<span class="op">=</span>target_variance, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb6-5"><a aria-hidden="true" href="#cb6-5" tabindex="-1"></a>difference <span class="op">=</span> fit.residual  <span class="co"># target minus the matched reference</span></span>
+<span id="cb6-6"><a aria-hidden="true" href="#cb6-6" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"backend </span><span class="sc">{</span>fit<span class="sc">.</span>backend<span class="sc">}</span><span class="ss">, </span><span class="sc">{</span><span class="bu">len</span>(fit.basis_terms)<span class="sc">}</span><span class="ss"> basis terms, kernel sum </span><span class="sc">{</span>fit<span class="sc">.</span>kernel<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">"</span>)</span>
+<span id="cb6-7"><a aria-hidden="true" href="#cb6-7" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"chi2/dof </span><span class="sc">{</span>fit<span class="sc">.</span>chi2 <span class="op">/</span> fit<span class="sc">.</span>dof<span class="sc">:.3f}</span><span class="ss"> over </span><span class="sc">{</span>fit<span class="sc">.</span>fit_pixel_count<span class="sc">}</span><span class="ss"> pixels"</span>)</span>
+<span id="cb6-8"><a aria-hidden="true" href="#cb6-8" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">int</span>(np.isnan(difference).<span class="bu">sum</span>()), <span class="st">"NaN pixels"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>backend cpu, 27 basis terms, kernel sum 1.0129
+chi2/dof 1.289 over 56644 pixels
+8892 NaN pixels</code></pre>
+</div>
+</div>
+<p>The kernel sum is the flux ratio from the reference to the target. The NaN pixels form an edge band half a kernel wide, where the kernel reaches past the image. The difference is also NaN where the kernel footprint holds a non-finite reference pixel, or where the target or its variance is not finite. The result holds these fields:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Field</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>kernel</code></td>
+<td>the fitted kernel, of shape <code>kernel_shape</code></td>
+</tr>
+<tr class="even">
+<td><code>matched</code></td>
+<td>the reference convolved with the kernel, plus the background</td>
+</tr>
+<tr class="odd">
+<td><code>residual</code></td>
+<td>the difference image, <code>target - matched</code></td>
+</tr>
+<tr class="even">
+<td><code>background</code></td>
+<td>the fitted background image</td>
+</tr>
+<tr class="odd">
+<td><code>fit_mask</code></td>
+<td>the pixels that entered the fit</td>
+</tr>
+<tr class="even">
+<td><code>kernel_coefficients</code>, <code>background_coefficients</code></td>
+<td>the fitted coefficients</td>
+</tr>
+<tr class="odd">
+<td><code>basis_kernels</code>, <code>basis_terms</code></td>
+<td>each basis image and its width and polynomial powers</td>
+</tr>
+<tr class="even">
+<td><code>chi2</code>, <code>dof</code>, <code>fit_pixel_count</code></td>
+<td>the weighted residual sum, the degrees of freedom and the number of fitted pixels</td>
+</tr>
+<tr class="odd">
+<td><code>backend</code></td>
+<td>the backend that ran the fit</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="6.4" id="predict-the-noise-of-the-difference">
+<h2 class="anchored" data-anchor-id="predict-the-noise-of-the-difference" data-number="6.4"><span class="header-section-number">6.4</span> Predict the noise of the difference</h2>
+<p>The difference holds noise from both images. <code>standardize_constant_kernel_residual</code> predicts the variance of every difference pixel. It adds the target variance and the reference variance convolved with the squared kernel. Then it divides the difference by the square root of that sum.</p>
+<div class="cell" data-execution_count="5" id="68fa8b7b">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> standardize_constant_kernel_residual</span>
+<span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
+<span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>noise <span class="op">=</span> standardize_constant_kernel_residual(difference, kernel<span class="op">=</span>fit.kernel, target_variance<span class="op">=</span>target_variance,</span>
+<span id="cb8-4"><a aria-hidden="true" href="#cb8-4" tabindex="-1"></a>                                             reference_variance<span class="op">=</span>aligned.variance)</span>
+<span id="cb8-5"><a aria-hidden="true" href="#cb8-5" tabindex="-1"></a>z <span class="op">=</span> noise.standardized_residual</span>
+<span id="cb8-6"><a aria-hidden="true" href="#cb8-6" tabindex="-1"></a>inside <span class="op">=</span> noise.valid_mask</span>
+<span id="cb8-7"><a aria-hidden="true" href="#cb8-7" tabindex="-1"></a>spread <span class="op">=</span> <span class="fl">1.4826</span> <span class="op">*</span> np.median(np.<span class="bu">abs</span>(z[inside] <span class="op">-</span> np.median(z[inside])))</span>
+<span id="cb8-8"><a aria-hidden="true" href="#cb8-8" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="bu">int</span>(inside.<span class="bu">sum</span>())<span class="sc">}</span><span class="ss"> valid pixels, robust spread of z </span><span class="sc">{</span>spread<span class="sc">:.3f}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>56644 valid pixels, robust spread of z 1.001</code></pre>
+</div>
+</div>
+<p>A spread near one is expected when the fixed-kernel, independent-input noise model is adequate. The result holds four arrays:</p>
+<ul>
+<li><code>marginal_residual_variance</code>: the predicted variance of each difference pixel.</li>
+<li><code>propagated_reference_variance</code>: the reference part of that variance alone.</li>
+<li><code>standardized_residual</code>: the difference over the square root of the predicted variance.</li>
+<li><code>valid_mask</code>: the pixels with a complete, finite reference-variance footprint, a positive target variance and a finite difference. If you pass your own <code>valid_mask</code>, the result keeps only pixels inside it.</li>
+</ul>
+<p>The three floating-point arrays are NaN outside <code>valid_mask</code>. The prediction assumes independent reference pixels, independent target pixels and independence between the two images. It treats the kernel as fixed, omitting the uncertainty in the fitted kernel and background. The result records <code>covariance_represented=False</code> and <code>fit_parameter_uncertainty_represented=False</code>. In this example, the reference was resampled: its pixels are already correlated, so the diagonal prediction is approximate even for the variance of an individual difference pixel. Standardization also does not remove correlations between difference pixels. The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md#correlation-factor-of-weighted-sums">xPois reference</a> and <a class="quarto-xref" href="uncertainty.html"><span>Chapter 10</span></a> explain how to account for correlation and other terms in measurements such as a flux.</p>
+</section>
+<section class="level2" data-number="6.5" id="find-the-candidates">
+<h2 class="anchored" data-anchor-id="find-the-candidates" data-number="6.5"><span class="header-section-number">6.5</span> Find the candidates</h2>
+<p><code>identify_residual_hotspots</code> divides an image by <code>robust_sigma</code> and marks every pixel whose absolute value reaches <code>threshold_sigma</code>. It groups marked pixels that touch horizontally or vertically into regions, and sorts the regions by peak significance, then by size. Using <code>robust_sigma=1.0</code> thresholds the supplied <code>z</code> values directly; it does not calibrate their statistical significance.</p>
+<div class="cell" data-execution_count="6" id="1cec1f6f">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> identify_residual_hotspots</span>
+<span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a></span>
+<span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a>regions <span class="op">=</span> identify_residual_hotspots(z, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, threshold_sigma<span class="op">=</span><span class="fl">5.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span>
+<span id="cb10-4"><a aria-hidden="true" href="#cb10-4" tabindex="-1"></a><span class="cf">for</span> region <span class="kw">in</span> regions:  <span class="co"># peak_yx is (y, x)</span></span>
+<span id="cb10-5"><a aria-hidden="true" href="#cb10-5" tabindex="-1"></a>    <span class="bu">print</span>(region[<span class="st">"peak_yx"</span>], <span class="ss">f"</span><span class="sc">{</span>region[<span class="st">'peak_residual'</span>]<span class="sc">:+.1f}</span><span class="ss"> sigma,"</span>, region[<span class="st">"pixel_count"</span>], <span class="st">"pixels,"</span>,</span>
+<span id="cb10-6"><a aria-hidden="true" href="#cb10-6" tabindex="-1"></a>          <span class="st">"box"</span>, region[<span class="st">"bbox_y0y1x0x1"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[21, 72] +26.8 sigma, 50 pixels, box [17, 26, 69, 77]
+[167, 80] +15.3 sigma, 30 pixels, box [164, 171, 77, 84]</code></pre>
+</div>
+</div>
+<p>The two regions are the brightened star and the new source. Each record also holds <code>centroid_yx</code>, <code>peak_abs_sigma</code> and <code>mean_residual</code>. Positions are <code>(y, x)</code> and the box is half-open, <code>(y0, y1, x0, x1)</code>. The test uses the absolute value. A fading source therefore also forms a region, and touching positive and negative lobes join into one. <code>residual_hotspot_table</code> returns the same rows as columns.</p>
+<p>On the plain difference, pass a noise estimate as <code>robust_sigma</code>. One number then stands for the noise everywhere, although bright stars are noisier.</p>
+</section>
+<section class="level2" data-number="6.6" id="keep-changed-pixels-out-of-the-fit">
+<h2 class="anchored" data-anchor-id="keep-changed-pixels-out-of-the-fit" data-number="6.6"><span class="header-section-number">6.6</span> Keep changed pixels out of the fit</h2>
+<p>A source that changed is not a blur difference, and inside the fit it pulls the kernel. Mask each region with a margin, then fit again. <code>fit_mask</code> is a boolean image of the pixels to fit. The solver also drops the edge band and invalid pixels.</p>
+<div class="cell" data-execution_count="7" id="5f3c810a">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a>fit_mask <span class="op">=</span> np.ones(target.shape, dtype<span class="op">=</span><span class="bu">bool</span>)</span>
+<span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a><span class="cf">for</span> region <span class="kw">in</span> regions:</span>
+<span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a>    y0, y1, x0, x1 <span class="op">=</span> region[<span class="st">"bbox_y0y1x0x1"</span>]  <span class="co"># rows y0 to y1, columns x0 to x1</span></span>
+<span id="cb12-4"><a aria-hidden="true" href="#cb12-4" tabindex="-1"></a>    fit_mask[<span class="bu">max</span>(y0 <span class="op">-</span> <span class="dv">5</span>, <span class="dv">0</span>):y1 <span class="op">+</span> <span class="dv">5</span>, <span class="bu">max</span>(x0 <span class="op">-</span> <span class="dv">5</span>, <span class="dv">0</span>):x1 <span class="op">+</span> <span class="dv">5</span>] <span class="op">=</span> <span class="va">False</span></span>
+<span id="cb12-5"><a aria-hidden="true" href="#cb12-5" tabindex="-1"></a></span>
+<span id="cb12-6"><a aria-hidden="true" href="#cb12-6" tabindex="-1"></a>refit <span class="op">=</span> solve_constant_kernel(aligned.image, target, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>), variance<span class="op">=</span>target_variance,</span>
+<span id="cb12-7"><a aria-hidden="true" href="#cb12-7" tabindex="-1"></a>                              fit_mask<span class="op">=</span>fit_mask, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb12-8"><a aria-hidden="true" href="#cb12-8" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"kernel sum </span><span class="sc">{</span>fit<span class="sc">.</span>kernel<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss"> -&gt; </span><span class="sc">{</span>refit<span class="sc">.</span>kernel<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">"</span>)</span>
+<span id="cb12-9"><a aria-hidden="true" href="#cb12-9" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"chi2/dof </span><span class="sc">{</span>fit<span class="sc">.</span>chi2 <span class="op">/</span> fit<span class="sc">.</span>dof<span class="sc">:.3f}</span><span class="ss"> -&gt; </span><span class="sc">{</span>refit<span class="sc">.</span>chi2 <span class="op">/</span> refit<span class="sc">.</span>dof<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb12-10"><a aria-hidden="true" href="#cb12-10" tabindex="-1"></a>noise <span class="op">=</span> standardize_constant_kernel_residual(refit.residual, kernel<span class="op">=</span>refit.kernel,</span>
+<span id="cb12-11"><a aria-hidden="true" href="#cb12-11" tabindex="-1"></a>                                             target_variance<span class="op">=</span>target_variance, reference_variance<span class="op">=</span>aligned.variance)</span>
+<span id="cb12-12"><a aria-hidden="true" href="#cb12-12" tabindex="-1"></a>z <span class="op">=</span> noise.standardized_residual</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>kernel sum 1.0129 -&gt; 0.9999
+chi2/dof 1.289 -&gt; 1.021</code></pre>
+</div>
+</div>
+<p>The difference still covers the masked pixels. The reported <code>chi2</code> continues to use target-only variance; the later noise calculation does not change the solver weights or its <code>chi2</code>. To fit only a few bright, isolated stars instead, build the mask with <code>build_compact_source_stamp_mask</code>.</p>
+</section>
+<section class="level2" data-number="6.7" id="look-at-the-result">
+<h2 class="anchored" data-anchor-id="look-at-the-result" data-number="6.7"><span class="header-section-number">6.7</span> Look at the result</h2>
+<p><a class="quarto-xref" href="#fig-subtract">Figure <span>6.1</span></a> shows the fitted kernel and the standardized difference.</p>
+<div class="cell" data-execution_count="8" id="cell-fig-subtract">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a><span class="im">from</span> matplotlib.patches <span class="im">import</span> Rectangle</span>
+<span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a></span>
+<span id="cb14-4"><a aria-hidden="true" href="#cb14-4" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">2</span>, figsize<span class="op">=</span>(<span class="fl">6.5</span>, <span class="fl">3.2</span>), width_ratios<span class="op">=</span>[<span class="dv">1</span>, <span class="fl">1.6</span>])</span>
+<span id="cb14-5"><a aria-hidden="true" href="#cb14-5" tabindex="-1"></a>axes[<span class="dv">0</span>].imshow(refit.kernel, origin<span class="op">=</span><span class="st">"lower"</span>, cmap<span class="op">=</span><span class="st">"magma"</span>)</span>
+<span id="cb14-6"><a aria-hidden="true" href="#cb14-6" tabindex="-1"></a>axes[<span class="dv">0</span>].set_title(<span class="st">"Kernel"</span>, fontsize<span class="op">=</span><span class="dv">9</span>)</span>
+<span id="cb14-7"><a aria-hidden="true" href="#cb14-7" tabindex="-1"></a>axes[<span class="dv">1</span>].imshow(z, origin<span class="op">=</span><span class="st">"lower"</span>, cmap<span class="op">=</span><span class="st">"RdBu_r"</span>, vmin<span class="op">=-</span><span class="dv">6</span>, vmax<span class="op">=</span><span class="dv">6</span>)</span>
+<span id="cb14-8"><a aria-hidden="true" href="#cb14-8" tabindex="-1"></a><span class="cf">for</span> region <span class="kw">in</span> regions:</span>
+<span id="cb14-9"><a aria-hidden="true" href="#cb14-9" tabindex="-1"></a>    y0, y1, x0, x1 <span class="op">=</span> region[<span class="st">"bbox_y0y1x0x1"</span>]</span>
+<span id="cb14-10"><a aria-hidden="true" href="#cb14-10" tabindex="-1"></a>    axes[<span class="dv">1</span>].add_patch(Rectangle((x0 <span class="op">-</span> <span class="fl">3.5</span>, y0 <span class="op">-</span> <span class="fl">3.5</span>), x1 <span class="op">-</span> x0 <span class="op">+</span> <span class="dv">6</span>, y1 <span class="op">-</span> y0 <span class="op">+</span> <span class="dv">6</span>, fill<span class="op">=</span><span class="va">False</span>, lw<span class="op">=</span><span class="dv">1</span>, ec<span class="op">=</span><span class="st">"black"</span>))</span>
+<span id="cb14-11"><a aria-hidden="true" href="#cb14-11" tabindex="-1"></a>axes[<span class="dv">1</span>].set_title(<span class="st">"Difference over its noise, $z$"</span>, fontsize<span class="op">=</span><span class="dv">9</span>)</span>
+<span id="cb14-12"><a aria-hidden="true" href="#cb14-12" tabindex="-1"></a><span class="cf">for</span> ax <span class="kw">in</span> axes:</span>
+<span id="cb14-13"><a aria-hidden="true" href="#cb14-13" tabindex="-1"></a>    ax.set_xticks([])<span class="op">;</span> ax.set_yticks([])</span>
+<span id="cb14-14"><a aria-hidden="true" href="#cb14-14" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb14-15"><a aria-hidden="true" href="#cb14-15" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb14-16"><a aria-hidden="true" href="#cb14-16" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb14-17"><a aria-hidden="true" href="#cb14-17" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="Two panels. Left: a small square image with one round bright spot in the middle. Right: a square of flat noise with two red spots, each inside a black box, and a white border." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-subtract">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-subtract-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="subtract_files/figure-html/fig-subtract-output-1.png" title="Figure 6.1: The subtraction of the sample pair after the refit. Left: the fitted 19 × 19 kernel. Right: the standardized difference z on a red-blue scale from -6 to 6, with each candidate region boxed. Red is brighter in the target. The white frame is the edge band the kernel cannot reach. Synthetic data, for demonstration only."><img alt="Two panels. Left: a small square image with one round bright spot in the middle. Right: a square of flat noise with two red spots, each inside a black box, and a white border." class="figure-img" height="502" src="subtract_files/figure-html/fig-subtract-output-1.png" width="983"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-subtract-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 6.1: The subtraction of the sample pair after the refit. Left: the fitted 19 × 19 kernel. Right: the standardized difference <span class="math inline">\(z\)</span> on a red-blue scale from -6 to 6, with each candidate region boxed. Red is brighter in the target. The white frame is the edge band the kernel cannot reach. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section class="level2" data-number="6.8" id="sec-subtract-bad-pixels">
+<h2 class="anchored" data-anchor-id="sec-subtract-bad-pixels" data-number="6.8"><span class="header-section-number">6.8</span> Keep bad pixels out of the subtraction</h2>
+<p>A bad-pixel mask flags pixels whose values are wrong, such as a hot column. Set those pixels to NaN in the image and its variance. <code>solve_constant_kernel</code> then leaves out each non-finite target pixel, and every pixel whose kernel footprint holds a non-finite reference pixel. This block flags a hot column in the reference and a hot pixel in the target. It aligns the reference with its mask, which puts both masks on the target grid (<a class="quarto-xref" href="align.html"><span>Chapter 5</span></a>).</p>
+<div class="cell" data-execution_count="9" id="3731cf25">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a>flagged_reference, reference_mask <span class="op">=</span> reference.copy(), np.zeros(reference.shape, dtype<span class="op">=</span>np.int32)</span>
+<span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a>flagged_reference[:, <span class="dv">120</span>] <span class="op">+=</span> <span class="fl">500.0</span>  <span class="co"># a hot column at x = 120 (NumPy indexes [y, x])</span></span>
+<span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>reference_mask[:, <span class="dv">120</span>] <span class="op">|=</span> <span class="dv">2</span></span>
+<span id="cb15-4"><a aria-hidden="true" href="#cb15-4" tabindex="-1"></a>flagged_target, target_mask <span class="op">=</span> target.copy(), np.zeros(target.shape, dtype<span class="op">=</span>np.int32)</span>
+<span id="cb15-5"><a aria-hidden="true" href="#cb15-5" tabindex="-1"></a>flagged_target[<span class="dv">60</span>, <span class="dv">200</span>] <span class="op">+=</span> <span class="fl">5e4</span>  <span class="co"># a hot pixel at (y, x) = (60, 200)</span></span>
+<span id="cb15-6"><a aria-hidden="true" href="#cb15-6" tabindex="-1"></a>target_mask[<span class="dv">60</span>, <span class="dv">200</span>] <span class="op">|=</span> <span class="dv">4</span></span>
+<span id="cb15-7"><a aria-hidden="true" href="#cb15-7" tabindex="-1"></a></span>
+<span id="cb15-8"><a aria-hidden="true" href="#cb15-8" tabindex="-1"></a>flagged <span class="op">=</span> reproject_masked_array(flagged_reference, reference_variance, reference_mask, spec, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb15-9"><a aria-hidden="true" href="#cb15-9" tabindex="-1"></a>reference_bad, target_bad <span class="op">=</span> flagged.mask <span class="op">!=</span> <span class="dv">0</span>, target_mask <span class="op">!=</span> <span class="dv">0</span></span>
+<span id="cb15-10"><a aria-hidden="true" href="#cb15-10" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">int</span>(reference_bad.<span class="bu">sum</span>()), <span class="st">"flagged reference pixels,"</span>, <span class="bu">int</span>(target_bad.<span class="bu">sum</span>()), <span class="st">"flagged target pixel"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>1479 flagged reference pixels, 1 flagged target pixel</code></pre>
+</div>
+</div>
+<p>Fit the pair twice with the <code>fit_mask</code> of the refit. The first fit leaves the flagged values in. The second sets them to NaN.</p>
+<div class="cell" data-execution_count="10" id="3e0b2b37">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="kw">def</span> fit_and_search(reference_image, reference_var, target_image, target_var):</span>
+<span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a>    result <span class="op">=</span> solve_constant_kernel(reference_image, target_image, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>), variance<span class="op">=</span>target_var,</span>
+<span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a>                                   fit_mask<span class="op">=</span>fit_mask, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb17-4"><a aria-hidden="true" href="#cb17-4" tabindex="-1"></a>    scaled <span class="op">=</span> standardize_constant_kernel_residual(result.residual, kernel<span class="op">=</span>result.kernel,</span>
+<span id="cb17-5"><a aria-hidden="true" href="#cb17-5" tabindex="-1"></a>                                                  target_variance<span class="op">=</span>target_var, reference_variance<span class="op">=</span>reference_var)</span>
+<span id="cb17-6"><a aria-hidden="true" href="#cb17-6" tabindex="-1"></a>    <span class="cf">return</span> result, identify_residual_hotspots(scaled.standardized_residual, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span>
+<span id="cb17-7"><a aria-hidden="true" href="#cb17-7" tabindex="-1"></a></span>
+<span id="cb17-8"><a aria-hidden="true" href="#cb17-8" tabindex="-1"></a></span>
+<span id="cb17-9"><a aria-hidden="true" href="#cb17-9" tabindex="-1"></a>ignored_fit, ignored <span class="op">=</span> fit_and_search(flagged.image, flagged.variance, flagged_target, target_variance)</span>
+<span id="cb17-10"><a aria-hidden="true" href="#cb17-10" tabindex="-1"></a>masked_fit, kept <span class="op">=</span> fit_and_search(np.where(reference_bad, np.nan, flagged.image),</span>
+<span id="cb17-11"><a aria-hidden="true" href="#cb17-11" tabindex="-1"></a>                                  np.where(reference_bad, np.nan, flagged.variance),</span>
+<span id="cb17-12"><a aria-hidden="true" href="#cb17-12" tabindex="-1"></a>                                  np.where(target_bad, np.nan, flagged_target), np.where(target_bad, np.nan, target_variance))</span>
+<span id="cb17-13"><a aria-hidden="true" href="#cb17-13" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"flags ignored: kernel sum </span><span class="sc">{</span>ignored_fit<span class="sc">.</span>kernel<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">, </span><span class="sc">{</span><span class="bu">len</span>(ignored)<span class="sc">}</span><span class="ss"> candidates"</span>)</span>
+<span id="cb17-14"><a aria-hidden="true" href="#cb17-14" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"flags as NaN:  kernel sum </span><span class="sc">{</span>masked_fit<span class="sc">.</span>kernel<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">, </span><span class="sc">{</span><span class="bu">len</span>(kept)<span class="sc">}</span><span class="ss"> candidates at (y, x)"</span>,</span>
+<span id="cb17-15"><a aria-hidden="true" href="#cb17-15" tabindex="-1"></a>      [region[<span class="st">"peak_yx"</span>] <span class="cf">for</span> region <span class="kw">in</span> kept])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>flags ignored: kernel sum 0.6129, 40 candidates
+flags as NaN:  kernel sum 1.0005, 2 candidates at (y, x) [[21, 72], [167, 80]]</code></pre>
+</div>
+</div>
+<p>With NaN, the candidates are again the brightened star and the new source. With the flags left in, the bad values pull the kernel, and stars across the image become candidates.</p>
+<p>The cost is the kernel size. A flagged target pixel removes only itself, because the target is not convolved. A flagged reference pixel removes every difference pixel within half a kernel of it:</p>
+<div class="cell" data-execution_count="11" id="3829b752">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a>excluded <span class="op">=</span> np.isnan(masked_fit.residual) <span class="op">&amp;</span> <span class="op">~</span>np.isnan(refit.residual)  <span class="co"># outside the edge band</span></span>
+<span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="bu">int</span>(reference_bad.<span class="bu">sum</span>() <span class="op">+</span> target_bad.<span class="bu">sum</span>())<span class="sc">}</span><span class="ss"> flagged pixels remove </span><span class="sc">{</span><span class="bu">int</span>(excluded.<span class="bu">sum</span>())<span class="sc">}</span><span class="ss"> difference pixels"</span>)</span>
+<span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"fit pixels: </span><span class="sc">{</span>refit<span class="sc">.</span>fit_pixel_count<span class="sc">}</span><span class="ss"> -&gt; </span><span class="sc">{</span>masked_fit<span class="sc">.</span>fit_pixel_count<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>1480 flagged pixels remove 5884 difference pixels
+fit pixels: 56013 -&gt; 50129</code></pre>
+</div>
+</div>
+<p>Use <code>fit_mask</code> instead for a pixel whose value is right but must not steer the kernel, such as a changed source. It leaves the fit and keeps its difference.</p>
+</section>
+<section class="level2" data-number="6.9" id="choose-a-solver">
+<h2 class="anchored" data-anchor-id="choose-a-solver" data-number="6.9"><span class="header-section-number">6.9</span> Choose a solver</h2>
+<p>xPois has five kernel solvers:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Solver</th>
+<th>Kernel model</th>
+<th>Backends</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>solve_constant_kernel</code></td>
+<td>one two-dimensional kernel for the whole image</td>
+<td><code>auto</code>, <code>cpu</code>, <code>cupy</code>, <code>cutile</code>, <code>native</code></td>
+<td>the blur difference is the same across the image</td>
+</tr>
+<tr class="even">
+<td><code>solve_constant_kernel_device</code></td>
+<td>the same, with results kept on the GPU</td>
+<td><code>cupy</code>, <code>native</code></td>
+<td>the next step also runs on the GPU</td>
+</tr>
+<tr class="odd">
+<td><code>solve_separable_kernel</code></td>
+<td>one kernel that is the outer product of two one-dimensional profiles</td>
+<td>NumPy only, no <code>backend</code> argument</td>
+<td>the kernel is close to separable, such as a round Gaussian</td>
+</tr>
+<tr class="even">
+<td><code>solve_spatial_als</code></td>
+<td>a separable kernel whose profiles change smoothly across the image</td>
+<td><code>auto</code>, <code>cpu</code>, <code>cupy</code></td>
+<td>the blur difference changes across the image</td>
+</tr>
+<tr class="odd">
+<td><code>solve_spatial_gaussian_polynomial_kernel</code></td>
+<td>a two-dimensional kernel whose shape, sum and background change smoothly across the image (experimental)</td>
+<td><code>auto</code>, <code>cpu</code>, <code>cupy</code>, <code>native</code></td>
+<td>the blur difference changes across the image and the kernel is not close to separable</td>
+</tr>
+</tbody>
+</table>
+<p><code>solve_spatial_als</code> takes its settings in a <code>SpatialALSConfig</code>. ALS stands for alternating least squares. The solver fits the vertical and horizontal profiles in turn.</p>
+<div class="cell" data-execution_count="12" id="7c01fe84">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> SpatialALSConfig, solve_spatial_als</span>
+<span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a></span>
+<span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a>config <span class="op">=</span> SpatialALSConfig(spatial_degree<span class="op">=</span><span class="dv">1</span>, background_degree<span class="op">=</span><span class="dv">1</span>, flux_conserve<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb21-4"><a aria-hidden="true" href="#cb21-4" tabindex="-1"></a>als <span class="op">=</span> solve_spatial_als(aligned.image, target, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>), variance<span class="op">=</span>target_variance,</span>
+<span id="cb21-5"><a aria-hidden="true" href="#cb21-5" tabindex="-1"></a>                        fit_mask<span class="op">=</span>fit_mask, config<span class="op">=</span>config, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb21-6"><a aria-hidden="true" href="#cb21-6" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"converged </span><span class="sc">{</span>als<span class="sc">.</span>converged<span class="sc">}</span><span class="ss"> after </span><span class="sc">{</span>als<span class="sc">.</span>iterations<span class="sc">}</span><span class="ss"> sweeps"</span>)</span>
+<span id="cb21-7"><a aria-hidden="true" href="#cb21-7" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"kernel sum at the image center </span><span class="sc">{</span>als<span class="sc">.</span>kernel_at(<span class="fl">127.5</span>, <span class="fl">127.5</span>)<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">"</span>)  <span class="co"># kernel_at(y, x)</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>converged True after 7 sweeps
+kernel sum at the image center 1.0000</code></pre>
+</div>
+</div>
+<p><code>spatial_degree</code> is the total degree of the polynomials that describe how the profiles change across the image. <code>kernel_at(y, x)</code> returns the kernel at one pixel position. A fit that runs out of sweeps returns <code>converged=False</code> without an error. Check it.</p>
+<p>The spatial Gaussian-polynomial model is experimental. Import it from its submodule. It fits all basis terms in one linear solve, with separate polynomial fields for the kernel shape, the kernel sum and the background:</p>
+<div class="cell" data-execution_count="13" id="db3d7555">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois.spatial_gaussian_polynomial <span class="im">import</span> (SpatialGaussianPolynomialKernelConfig,</span>
+<span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a>                                                        solve_spatial_gaussian_polynomial_kernel)</span>
+<span id="cb23-3"><a aria-hidden="true" href="#cb23-3" tabindex="-1"></a></span>
+<span id="cb23-4"><a aria-hidden="true" href="#cb23-4" tabindex="-1"></a>config <span class="op">=</span> SpatialGaussianPolynomialKernelConfig(shape_degree<span class="op">=</span><span class="dv">2</span>, photometric_degree<span class="op">=</span><span class="dv">0</span>, background_degree<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb23-5"><a aria-hidden="true" href="#cb23-5" tabindex="-1"></a>spatial <span class="op">=</span> solve_spatial_gaussian_polynomial_kernel(aligned.image, target, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>),</span>
+<span id="cb23-6"><a aria-hidden="true" href="#cb23-6" tabindex="-1"></a>                                                   variance<span class="op">=</span>target_variance, fit_mask<span class="op">=</span>fit_mask,</span>
+<span id="cb23-7"><a aria-hidden="true" href="#cb23-7" tabindex="-1"></a>                                                   config<span class="op">=</span>config, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb23-8"><a aria-hidden="true" href="#cb23-8" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"backend </span><span class="sc">{</span>spatial<span class="sc">.</span>backend<span class="sc">}</span><span class="ss">, objective/dof </span><span class="sc">{</span>spatial<span class="sc">.</span>fit_objective <span class="op">/</span> spatial<span class="sc">.</span>dof<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb23-9"><a aria-hidden="true" href="#cb23-9" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"kernel sum at the image center </span><span class="sc">{</span>spatial<span class="sc">.</span>kernel_at_local(<span class="fl">127.5</span>, <span class="fl">127.5</span>)<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">"</span>)  <span class="co"># (y, x)</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>backend cpu, objective/dof 1.021
+kernel sum at the image center 1.0001</code></pre>
+</div>
+</div>
+<p>The first basis term sets the kernel sum, and the other terms change only the shape. The model therefore takes no <code>flux_conserve</code>. <code>fit_objective</code> takes the place of <code>chi2</code>. It is the residual sum weighted by one over <code>variance</code>. An ill-conditioned fit raises an error instead of being regularized. Pass <code>source_variance</code> to also predict the noise of the difference, as <code>marginal_standardized_residual</code>.</p>
+</section>
+<section class="level2" data-number="6.10" id="options">
+<h2 class="anchored" data-anchor-id="options" data-number="6.10"><span class="header-section-number">6.10</span> Options</h2>
+<p>The options of <code>solve_constant_kernel</code>:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>kernel_shape</code></td>
+<td><code>(15, 15)</code></td>
+<td>odd kernel size in pixels. It also sets the edge band.</td>
+</tr>
+<tr class="even">
+<td><code>variance</code></td>
+<td><code>None</code></td>
+<td>target variance. The fit weights each pixel by its inverse. <code>None</code> weights every pixel equally.</td>
+</tr>
+<tr class="odd">
+<td><code>fit_mask</code></td>
+<td><code>None</code></td>
+<td>the pixels to fit. <code>None</code> fits every valid pixel outside the edge band.</td>
+</tr>
+<tr class="even">
+<td><code>background_degree</code></td>
+<td><code>0</code></td>
+<td>total degree of the background polynomial. 0 is a constant, 1 a plane.</td>
+</tr>
+<tr class="odd">
+<td><code>flux_conserve</code></td>
+<td><code>False</code></td>
+<td>rewrites the basis into one unit-sum term and zero-sum terms. <code>kernel_coefficients[0]</code> is then the kernel sum.</td>
+</tr>
+<tr class="even">
+<td><code>flux_reference_index</code></td>
+<td><code>0</code></td>
+<td>the basis term that carries the flux scale under <code>flux_conserve</code></td>
+</tr>
+<tr class="odd">
+<td><code>backend</code></td>
+<td><code>"auto"</code></td>
+<td><code>auto</code> tries <code>cupy</code>, then <code>cpu</code>. <code>cutile</code> and <code>native</code> run only when you name them.</td>
+</tr>
+</tbody>
+</table>
+<p>The options of <code>identify_residual_hotspots</code>:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>robust_sigma</code></td>
+<td>required</td>
+<td>the noise unit the image is divided by</td>
+</tr>
+<tr class="even">
+<td><code>threshold_sigma</code></td>
+<td><code>5.0</code></td>
+<td>the absolute value, in noise units, that marks a pixel</td>
+</tr>
+<tr class="odd">
+<td><code>max_regions</code></td>
+<td><code>8</code></td>
+<td>the number of regions kept, strongest first. <code>None</code> keeps all.</td>
+</tr>
+</tbody>
+</table>
+<p>The fields of <code>SpatialGaussianPolynomialKernelConfig</code>, and their flags under <code>--solver spatial-gaussian-polynomial</code>:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Flag</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>shape_degree</code></td>
+<td><code>--spatial-degree</code></td>
+<td><code>2</code></td>
+<td>total degree of the polynomials that change the kernel shape across the image</td>
+</tr>
+<tr class="even">
+<td><code>photometric_degree</code></td>
+<td><code>--photometric-degree</code></td>
+<td><code>0</code></td>
+<td>total degree of the kernel sum across the image. 0 is one flux ratio.</td>
+</tr>
+<tr class="odd">
+<td><code>background_degree</code></td>
+<td><code>--background-degree</code></td>
+<td><code>0</code></td>
+<td>total degree of the background polynomial</td>
+</tr>
+<tr class="even">
+<td><code>condition_limit</code></td>
+<td><code>--condition-limit</code></td>
+<td><code>1e12</code></td>
+<td>the largest condition number the solve accepts before it raises an error</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="6.11" id="on-a-gpu">
+<h2 class="anchored" data-anchor-id="on-a-gpu" data-number="6.11"><span class="header-section-number">6.11</span> On a GPU</h2>
+<p>With the <code>gpu</code> profile, pass <code>backend="cupy"</code>. <code>solve_constant_kernel</code> still returns NumPy arrays, while <code>solve_constant_kernel_device</code> keeps them on the GPU. The noise prediction and the hotspot search run in CuPy on CuPy inputs, and the search returns host records. <code>backend="cutile"</code> is experimental and needs the <code>cutile</code> extra.</p>
+<p><code>backend="native"</code> runs the constant-kernel and spatial Gaussian-polynomial fits with precompiled kernels. It needs the native extension (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). A native constant-kernel fit needs a kernel wider than one pixel in each axis and a background degree of at most 31. Use <code>cupy</code> otherwise.</p>
+<div class="cell" data-execution_count="14" id="607806f7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
+<span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> solve_constant_kernel_device</span>
+<span id="cb25-3"><a aria-hidden="true" href="#cb25-3" tabindex="-1"></a></span>
+<span id="cb25-4"><a aria-hidden="true" href="#cb25-4" tabindex="-1"></a>device_fit <span class="op">=</span> solve_constant_kernel_device(cp.asarray(aligned.image), cp.asarray(target), basis,</span>
+<span id="cb25-5"><a aria-hidden="true" href="#cb25-5" tabindex="-1"></a>                                          kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>), variance<span class="op">=</span>cp.asarray(target_variance),</span>
+<span id="cb25-6"><a aria-hidden="true" href="#cb25-6" tabindex="-1"></a>                                          fit_mask<span class="op">=</span>cp.asarray(fit_mask), background_degree<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb25-7"><a aria-hidden="true" href="#cb25-7" tabindex="-1"></a>noise <span class="op">=</span> standardize_constant_kernel_residual(device_fit.residual, kernel<span class="op">=</span>device_fit.kernel,</span>
+<span id="cb25-8"><a aria-hidden="true" href="#cb25-8" tabindex="-1"></a>                                             target_variance<span class="op">=</span>cp.asarray(target_variance),</span>
+<span id="cb25-9"><a aria-hidden="true" href="#cb25-9" tabindex="-1"></a>                                             reference_variance<span class="op">=</span>cp.asarray(aligned.variance))</span>
+<span id="cb25-10"><a aria-hidden="true" href="#cb25-10" tabindex="-1"></a>regions <span class="op">=</span> identify_residual_hotspots(noise.standardized_residual, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+</section>
+<section class="level2" data-number="6.12" id="command-line">
+<h2 class="anchored" data-anchor-id="command-line" data-number="6.12"><span class="header-section-number">6.12</span> Command line</h2>
+<p><code>cuphoton xpois subtract</code> runs the same fit on FITS or NPY files that share one grid. Save the aligned reference, the target variance and the fit mask first:</p>
+<div class="cell" data-execution_count="15" id="1702d2a9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a aria-hidden="true" href="#cb26-1" tabindex="-1"></a>np.save(<span class="st">"sample/reference_aligned.npy"</span>, aligned.image)</span>
+<span id="cb26-2"><a aria-hidden="true" href="#cb26-2" tabindex="-1"></a>np.save(<span class="st">"sample/target_variance.npy"</span>, target_variance)</span>
+<span id="cb26-3"><a aria-hidden="true" href="#cb26-3" tabindex="-1"></a>np.save(<span class="st">"sample/fit_mask.npy"</span>, fit_mask)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>Run these from the directory that holds <code>sample/</code>, with the cuPhoton environment active:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb27"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb27-1"><a aria-hidden="true" href="#cb27-1" tabindex="-1"></a><span class="ex">cuphoton</span> xpois subtract <span class="at">--reference</span> sample/reference_aligned.npy <span class="at">--target</span> sample/target.fits <span class="dt">\</span></span>
+<span id="cb27-2"><a aria-hidden="true" href="#cb27-2" tabindex="-1"></a>  <span class="at">--variance</span> sample/target_variance.npy <span class="at">--fit-mask</span> sample/fit_mask.npy <span class="dt">\</span></span>
+<span id="cb27-3"><a aria-hidden="true" href="#cb27-3" tabindex="-1"></a>  <span class="at">--kernel-height</span> 19 <span class="at">--kernel-width</span> 19 <span class="at">--basis-sigmas</span> 0.7,1.4,2.8 <span class="at">--basis-degrees</span> 4,2,2 <span class="dt">\</span></span>
+<span id="cb27-4"><a aria-hidden="true" href="#cb27-4" tabindex="-1"></a>  <span class="at">--background-degree</span> 1 <span class="at">--backend</span> cpu <span class="at">--no-review</span> <span class="at">--output-dir</span> runs <span class="at">--name</span> sample</span>
+<span id="cb27-5"><a aria-hidden="true" href="#cb27-5" tabindex="-1"></a><span class="ex">cuphoton</span> xpois evaluate-subtraction <span class="at">--run-dir</span> runs/sample</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>The first command writes the arrays as NPY files under <code>runs/sample/artifacts/</code> and prints its receipt, <code>summary.json</code>. The second prints residual statistics of the saved run:</p>
+<div class="cell" data-execution_count="16" id="bca8c150">
+<div class="cell-output cell-output-stdout">
+<pre><code>{
+  "run_dir": "runs/sample",
+  "solver": "constant",
+  "residual_mean": 0.5100083261685159,
+  "residual_std": 7.954808497289716,
+  "residual_rms": 7.971140866984718,
+  "residual_median": 0.5121798447923283,
+  "robust_sigma": 7.834784540726859,
+  "abs_residual_max": 49.06033034955544,
+  "all_pixels_residual_mean": 0.79932434321538,
+  "all_pixels_residual_std": 11.695412345466368,
+  "all_pixels_residual_rms": 11.722695480824527,
+  "all_pixels_residual_median": 0.5397546424814621,
+  "all_pixels_abs_residual_max": 609.7532102766145,
+  "pixels_gt_3sigma": 223,
+  "pixels_gt_5sigma": 11,
+  "fit_region_residual_mean": 0.5100083261685159,
+  "fit_region_residual_std": 7.954808497289716,
+  "fit_region_residual_rms": 7.971140866984718,
+  "fit_region_residual_median": 0.5121798447923283,
+  "fit_region_pixel_count": 56013,
+  "kernel_sum": 0.9999480806104099
+}</code></pre>
+</div>
+</div>
+<p><code>robust_sigma</code> is 1.4826 times the median absolute deviation of the residual inside the fit region, a noise estimate that is less sensitive to outliers than a standard deviation. The receipt matches the Python refit:</p>
+<div class="cell" data-execution_count="17" id="0f111907">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a aria-hidden="true" href="#cb29-1" tabindex="-1"></a><span class="im">import</span> json</span>
+<span id="cb29-2"><a aria-hidden="true" href="#cb29-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb29-3"><a aria-hidden="true" href="#cb29-3" tabindex="-1"></a></span>
+<span id="cb29-4"><a aria-hidden="true" href="#cb29-4" tabindex="-1"></a>summary <span class="op">=</span> json.loads(Path(<span class="st">"runs/sample/summary.json"</span>).read_text())</span>
+<span id="cb29-5"><a aria-hidden="true" href="#cb29-5" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"CLI kernel sum </span><span class="sc">{</span>summary[<span class="st">'kernel_sum'</span>]<span class="sc">:.4f}</span><span class="ss">, Python </span><span class="sc">{</span>refit<span class="sc">.</span>kernel<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:.4f}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>CLI kernel sum 0.9999, Python 0.9999</code></pre>
+</div>
+</div>
+<p>To keep bad pixels out (<a class="quarto-xref" href="#sec-subtract-bad-pixels"><span>Section 6.8</span></a>), pass <code>--reference-mask</code>, <code>--target-mask</code> and a <code>--mask-policy</code>. Both masks are FITS or NPY files on the shared grid. Save the flagged pair with the aligned reference mask:</p>
+<div class="cell" data-execution_count="18" id="8d3bacf9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a aria-hidden="true" href="#cb31-1" tabindex="-1"></a>np.save(<span class="st">"sample/flagged_reference.npy"</span>, flagged.image)</span>
+<span id="cb31-2"><a aria-hidden="true" href="#cb31-2" tabindex="-1"></a>np.save(<span class="st">"sample/flagged_reference_mask.npy"</span>, flagged.mask)</span>
+<span id="cb31-3"><a aria-hidden="true" href="#cb31-3" tabindex="-1"></a>np.save(<span class="st">"sample/flagged_target.npy"</span>, flagged_target)</span>
+<span id="cb31-4"><a aria-hidden="true" href="#cb31-4" tabindex="-1"></a>np.save(<span class="st">"sample/target_mask.npy"</span>, target_mask)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb32-1"><a aria-hidden="true" href="#cb32-1" tabindex="-1"></a><span class="ex">cuphoton</span> xpois subtract <span class="at">--reference</span> sample/flagged_reference.npy <span class="at">--target</span> sample/flagged_target.npy <span class="dt">\</span></span>
+<span id="cb32-2"><a aria-hidden="true" href="#cb32-2" tabindex="-1"></a>  <span class="at">--reference-mask</span> sample/flagged_reference_mask.npy <span class="at">--target-mask</span> sample/target_mask.npy <span class="at">--mask-policy</span> strict <span class="dt">\</span></span>
+<span id="cb32-3"><a aria-hidden="true" href="#cb32-3" tabindex="-1"></a>  <span class="at">--variance</span> sample/target_variance.npy <span class="at">--fit-mask</span> sample/fit_mask.npy <span class="dt">\</span></span>
+<span id="cb32-4"><a aria-hidden="true" href="#cb32-4" tabindex="-1"></a>  <span class="at">--kernel-height</span> 19 <span class="at">--kernel-width</span> 19 <span class="at">--basis-sigmas</span> 0.7,1.4,2.8 <span class="at">--basis-degrees</span> 4,2,2 <span class="dt">\</span></span>
+<span id="cb32-5"><a aria-hidden="true" href="#cb32-5" tabindex="-1"></a>  <span class="at">--background-degree</span> 1 <span class="at">--backend</span> cpu <span class="at">--no-review</span> <span class="at">--output-dir</span> runs <span class="at">--name</span> sample-masked</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>The receipt records the policy and the flagged fraction of each image:</p>
+<div class="cell" data-execution_count="19" id="8238da10">
+<div class="cell-output cell-output-stdout">
+<pre><code>{
+  "mask_policy": "strict",
+  "reference_mask_fraction": 0.0225677490234375,
+  "target_mask_fraction": 1.52587890625e-05,
+  "fit_pixel_count": 50129,
+  "kernel_sum": 1.0005372100095427
+}</code></pre>
+</div>
+</div>
+<p>The fit pixel count and the kernel sum match <code>masked_fit</code>. <code>--mask-policy</code> takes these values:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Value</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>none</code></td>
+<td>the default. The command reads no mask, and a mask flag is an error.</td>
+</tr>
+<tr class="even">
+<td><code>strict</code></td>
+<td>sets every pixel with a nonzero mask value to NaN</td>
+</tr>
+<tr class="odd">
+<td><code>masklite</code></td>
+<td>sets the pixels of the mask planes <code>BAD</code>, <code>SAT</code>, <code>INTRP</code>, <code>CR</code>, <code>EDGE</code>, <code>SUSPECT</code>, <code>NO_DATA</code>, <code>CROSSTALK</code> and <code>UNMASKEDNAN</code> to NaN. It reads the bit of each plane from the <code>MP_</code> cards of a FITS mask header.</td>
+</tr>
+<tr class="even">
+<td>survey presets</td>
+<td>the <code>masklite</code> rule under a survey’s name. An unknown value prints every accepted name.</td>
+</tr>
+</tbody>
+</table>
+<p>The target variance becomes NaN wherever the target mask flags a pixel. On FITS input, a mask defaults to the HDU named <code>MASK</code> in the image file. <code>--reference-mask-hdu</code> and <code>--target-mask-hdu</code> select an HDU by index.</p>
+<p>In place of <code>--fit-mask</code>, <code>--auto-stamp-mask</code> fits a few compact stars. <code>--solver spatial-als</code> and <code>--solver spatial-gaussian-polynomial</code> select the spatial models. The second takes the flags in the Options table. <code>fit-batch</code> does not run it. <code>cuphoton xpois help subtract</code> lists every flag.</p>
+</section>
+<section class="level2" data-number="6.13" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="6.13"><span class="header-section-number">6.13</span> Troubleshooting</h2>
+<dl>
+<dt><code>ValueError: reference and target must share the same shape</code></dt>
+<dd>
+Align the images first (<a class="quarto-xref" href="align.html"><span>Chapter 5</span></a>).
+</dd>
+<dt><code>ValueError: kernel_shape must use odd dimensions</code></dt>
+<dd>
+Use odd sizes, such as <code>(19, 19)</code>.
+</dd>
+<dt><code>ValueError: variance must be strictly positive</code></dt>
+<dd>
+The variance holds zeros or negative values. Set those pixels to <code>np.nan</code> to leave them out of the fit.
+</dd>
+<dt><code>ValueError: fit normal equations are ill-conditioned for the requested basis</code></dt>
+<dd>
+Two basis components are the same or nearly so, or the fit pixels hold too little structure to tell the basis terms apart, such as blank sky. Drop a component, lower a degree, or fit pixels that include stars.
+</dd>
+<dt><code>ValueError: fit region is underdetermined for the requested basis</code></dt>
+<dd>
+The fit mask selects fewer pixels than the fit has coefficients. Select more pixels.
+</dd>
+<dt><code>converged</code> is <code>False</code> after <code>solve_spatial_als</code></dt>
+<dd>
+Raise <code>max_iterations</code> in <code>SpatialALSConfig</code> (<code>--als-iterations</code> on the command line), or set <code>flux_conserve=True</code>. <code>SpatialALSConfig</code> defaults to <code>flux_conserve=False</code>.
+</dd>
+<dt><code>flux_conserve</code> behaves differently in <code>solve_separable_kernel</code></dt>
+<dd>
+There it divides the kernel by its sum, which forces the sum to one. In the other solvers it rewrites the basis and the sum stays a fitted value.
+</dd>
+<dt><code>ERROR: mask FITS is ambiguous; specify a mask HDU explicitly</code></dt>
+<dd>
+The image file has no HDU named <code>MASK</code>. Pass the mask file, or the HDU index with <code>--reference-mask-hdu</code> or <code>--target-mask-hdu</code>.
+</dd>
+<dt><code>ERROR: [Errno 17] File exists</code></dt>
+<dd>
+The run directory exists already. Pass a new <code>--name</code>, or remove the old run.
+</dd>
+<dt>A GPU fit reports <code>backend</code> <code>cpu</code></dt>
+<dd>
+<code>auto</code> falls back to the CPU when no GPU backend is usable. Check <code>fit.backend</code>, or pass <code>backend="cupy"</code> to raise an error instead.
+</dd>
+</dl>
+</section>
+<section class="level2" data-number="6.14" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="6.14"><span class="header-section-number">6.14</span> Next steps</h2>
+<ul>
+<li>Measure the candidates, including dipoles: <a class="quarto-xref" href="measure.html"><span>Chapter 7</span></a>.</li>
+<li>Align images, with masks and stacks: <a class="quarto-xref" href="align.html"><span>Chapter 5</span></a>.</li>
+<li>Run the shipped end-to-end pipeline: <a class="quarto-xref" href="transient-chain.html"><span>Chapter 9</span></a>.</li>
+<li>Turn the predicted noise into error bars you can trust: <a class="quarto-xref" href="uncertainty.html"><span>Chapter 10</span></a>.</li>
+<li>The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md">xPois reference</a> covers kernel-fit covariance, correlated noise, the spatial Gaussian-polynomial model in full, batch runs on many GPUs and the review commands.</li>
+</ul>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Align images" class="pagination-link" href="./align.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Measure candidates" class="pagination-link" href="./measure.html">
+<span class="nav-page-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

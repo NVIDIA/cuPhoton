@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>15  Monitor runs – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./reference.html" rel="next"/>
+<link href="./scale.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link href="https://nvidia.github.io/cuPhoton/main/monitor.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="monitor.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./monitor.html"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#save-some-results-to-monitor" href="#save-some-results-to-monitor" id="toc-save-some-results-to-monitor"><span class="header-section-number">15.1</span> Save some results to monitor</a></li>
+<li><a class="nav-link" data-scroll-target="#turn-one-result-into-a-sample" href="#turn-one-result-into-a-sample" id="toc-turn-one-result-into-a-sample"><span class="header-section-number">15.2</span> Turn one result into a sample</a></li>
+<li><a class="nav-link" data-scroll-target="#replay-the-results-into-a-monitor" href="#replay-the-results-into-a-monitor" id="toc-replay-the-results-into-a-monitor"><span class="header-section-number">15.3</span> Replay the results into a monitor</a></li>
+<li><a class="nav-link" data-scroll-target="#look-at-the-measurements" href="#look-at-the-measurements" id="toc-look-at-the-measurements"><span class="header-section-number">15.4</span> Look at the measurements</a></li>
+<li><a class="nav-link" data-scroll-target="#revise-a-sample" href="#revise-a-sample" id="toc-revise-a-sample"><span class="header-section-number">15.5</span> Revise a sample</a></li>
+<li><a class="nav-link" data-scroll-target="#open-a-saved-run" href="#open-a-saved-run" id="toc-open-a-saved-run"><span class="header-section-number">15.6</span> Open a saved run</a></li>
+<li><a class="nav-link" data-scroll-target="#export-or-serve-the-dashboard" href="#export-or-serve-the-dashboard" id="toc-export-or-serve-the-dashboard"><span class="header-section-number">15.7</span> Export or serve the dashboard</a></li>
+<li><a class="nav-link" data-scroll-target="#what-the-dashboard-shows" href="#what-the-dashboard-shows" id="toc-what-the-dashboard-shows"><span class="header-section-number">15.8</span> What the dashboard shows</a></li>
+<li><a class="nav-link" data-scroll-target="#options" href="#options" id="toc-options"><span class="header-section-number">15.9</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#command-line" href="#command-line" id="toc-command-line"><span class="header-section-number">15.10</span> Command line</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">15.11</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">15.12</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./monitor.html"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-monitor"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>xLens records what your code measured during a run and shows it in a dashboard. Your code computes each value and applies its own rules. xLens stores the results as samples, one per subject, such as an image, a candidate or a time window. It keeps every revision, and it serves the run as a web page or exports it as one HTML file. Use it to watch a long, unattended run or to review one after it ends. Monitoring and export need no GPU and no outside service.</p>
+<p><strong>You need:</strong> cuPhoton with any profile (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>), and the values your code measures. Questions to a language model about a run are optional and need an extra. Refer to the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xlens.md#configure-optional-investigation">xLens reference</a>.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on synthetic measurements. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<section class="level2" data-number="15.1" id="save-some-results-to-monitor">
+<h2 class="anchored" data-anchor-id="save-some-results-to-monitor" data-number="15.1"><span class="header-section-number">15.1</span> Save some results to monitor</h2>
+<p>A pipeline often writes one small result file per image. The block below writes ten such files with two synthetic measurements each. The first is the image’s noise in DN (data numbers, the detector’s count unit). The second is its zero-point ratio. This ratio is the image’s flux scale relative to a reference image, computed from their zero points (the calibration that converts counts to brightness). Image 6 has a bright sky, image 3 has no zero point, and one file is corrupt.</p>
+<div class="cell" data-execution_count="1" id="2eb1649a">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> json</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="im">import</span> shutil</span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a></span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a>shutil.rmtree(<span class="st">"runs/monitor"</span>, ignore_errors<span class="op">=</span><span class="va">True</span>)  <span class="co"># a new monitor needs an empty directory</span></span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a>results <span class="op">=</span> Path(<span class="st">"runs/monitor/results"</span>)</span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a>results.mkdir(parents<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-10"><a aria-hidden="true" href="#cb1-10" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">4</span>)</span>
+<span id="cb1-11"><a aria-hidden="true" href="#cb1-11" tabindex="-1"></a>start <span class="op">=</span> np.sort(rng.uniform(<span class="dv">0</span>, <span class="dv">8</span>, <span class="dv">10</span>))  <span class="co"># hours since the start of the night</span></span>
+<span id="cb1-12"><a aria-hidden="true" href="#cb1-12" tabindex="-1"></a>noise <span class="op">=</span> rng.normal(<span class="fl">12.0</span>, <span class="fl">0.3</span>, <span class="dv">10</span>)</span>
+<span id="cb1-13"><a aria-hidden="true" href="#cb1-13" tabindex="-1"></a>noise[<span class="dv">6</span>] <span class="op">=</span> <span class="fl">19.0</span>  <span class="co"># a bright sky</span></span>
+<span id="cb1-14"><a aria-hidden="true" href="#cb1-14" tabindex="-1"></a>ratio <span class="op">=</span> rng.normal(<span class="fl">1.0</span>, <span class="fl">0.01</span>, <span class="dv">10</span>)</span>
+<span id="cb1-15"><a aria-hidden="true" href="#cb1-15" tabindex="-1"></a><span class="cf">for</span> i <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">10</span>):</span>
+<span id="cb1-16"><a aria-hidden="true" href="#cb1-16" tabindex="-1"></a>    result <span class="op">=</span> {<span class="st">"image"</span>: <span class="ss">f"image-</span><span class="sc">{</span>i<span class="sc">:02d}</span><span class="ss">"</span>, <span class="st">"start_h"</span>: start[i], <span class="st">"exposure_h"</span>: <span class="fl">0.1</span>,</span>
+<span id="cb1-17"><a aria-hidden="true" href="#cb1-17" tabindex="-1"></a>              <span class="st">"noise_dn"</span>: noise[i], <span class="st">"zero_point_ratio"</span>: <span class="va">None</span> <span class="cf">if</span> i <span class="op">==</span> <span class="dv">3</span> <span class="cf">else</span> ratio[i]}</span>
+<span id="cb1-18"><a aria-hidden="true" href="#cb1-18" tabindex="-1"></a>    (results <span class="op">/</span> <span class="ss">f"image-</span><span class="sc">{</span>i<span class="sc">:02d}</span><span class="ss">.json"</span>).write_text(json.dumps(result))</span>
+<span id="cb1-19"><a aria-hidden="true" href="#cb1-19" tabindex="-1"></a>(results <span class="op">/</span> <span class="st">"image-10.json"</span>).write_text(<span class="st">'{"image": "image-10", "noi'</span>)  <span class="co"># a truncated file</span></span>
+<span id="cb1-20"><a aria-hidden="true" href="#cb1-20" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(path.name <span class="cf">for</span> path <span class="kw">in</span> results.iterdir())[<span class="op">-</span><span class="dv">3</span>:])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>['image-08.json', 'image-09.json', 'image-10.json']</code></pre>
+</div>
+</div>
+</section>
+<section class="level2" data-number="15.2" id="turn-one-result-into-a-sample">
+<h2 class="anchored" data-anchor-id="turn-one-result-into-a-sample" data-number="15.2"><span class="header-section-number">15.2</span> Turn one result into a sample</h2>
+<p>Write an analyzer, a function that takes one input and returns a <code>Sample</code>. The sample holds the subject’s measurements, the findings of your rules, and references to its files. <code>sequence</code> sets the display order. The observation times use your own unit and origin.</p>
+<div class="cell" data-execution_count="2" id="d2f9b87f">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.artifacts <span class="im">import</span> file_sha256</span>
+<span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> Artifact, Finding, Measurement, Sample</span>
+<span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
+<span id="cb3-4"><a aria-hidden="true" href="#cb3-4" tabindex="-1"></a></span>
+<span id="cb3-5"><a aria-hidden="true" href="#cb3-5" tabindex="-1"></a><span class="kw">def</span> analyze(path):</span>
+<span id="cb3-6"><a aria-hidden="true" href="#cb3-6" tabindex="-1"></a>    result <span class="op">=</span> json.loads(path.read_text())</span>
+<span id="cb3-7"><a aria-hidden="true" href="#cb3-7" tabindex="-1"></a>    findings <span class="op">=</span> []</span>
+<span id="cb3-8"><a aria-hidden="true" href="#cb3-8" tabindex="-1"></a>    <span class="cf">if</span> result[<span class="st">"noise_dn"</span>] <span class="op">&gt;</span> <span class="dv">15</span>:</span>
+<span id="cb3-9"><a aria-hidden="true" href="#cb3-9" tabindex="-1"></a>        findings.append(Finding(<span class="st">"high_noise"</span>, <span class="st">"Noise is above 15 DN."</span>, category<span class="op">=</span><span class="st">"data_quality"</span>))</span>
+<span id="cb3-10"><a aria-hidden="true" href="#cb3-10" tabindex="-1"></a>    <span class="cf">if</span> result[<span class="st">"zero_point_ratio"</span>] <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb3-11"><a aria-hidden="true" href="#cb3-11" tabindex="-1"></a>        findings.append(Finding(<span class="st">"no_zero_point"</span>, <span class="st">"Calibration gave no zero point."</span>,</span>
+<span id="cb3-12"><a aria-hidden="true" href="#cb3-12" tabindex="-1"></a>                                category<span class="op">=</span><span class="st">"processing"</span>, severity<span class="op">=</span><span class="st">"error"</span>))</span>
+<span id="cb3-13"><a aria-hidden="true" href="#cb3-13" tabindex="-1"></a>    <span class="cf">return</span> Sample(</span>
+<span id="cb3-14"><a aria-hidden="true" href="#cb3-14" tabindex="-1"></a>        <span class="bu">id</span><span class="op">=</span>result[<span class="st">"image"</span>], sequence<span class="op">=</span><span class="bu">int</span>(result[<span class="st">"image"</span>][<span class="op">-</span><span class="dv">2</span>:]),</span>
+<span id="cb3-15"><a aria-hidden="true" href="#cb3-15" tabindex="-1"></a>        observed_start<span class="op">=</span>result[<span class="st">"start_h"</span>], observed_end<span class="op">=</span>result[<span class="st">"start_h"</span>] <span class="op">+</span> result[<span class="st">"exposure_h"</span>], time_unit<span class="op">=</span><span class="st">"h"</span>,</span>
+<span id="cb3-16"><a aria-hidden="true" href="#cb3-16" tabindex="-1"></a>        measurements<span class="op">=</span>{<span class="st">"noise"</span>: Measurement(result[<span class="st">"noise_dn"</span>], <span class="st">"DN"</span>),</span>
+<span id="cb3-17"><a aria-hidden="true" href="#cb3-17" tabindex="-1"></a>                      <span class="st">"zero_point_ratio"</span>: Measurement(result[<span class="st">"zero_point_ratio"</span>])},</span>
+<span id="cb3-18"><a aria-hidden="true" href="#cb3-18" tabindex="-1"></a>        findings<span class="op">=</span><span class="bu">tuple</span>(findings),</span>
+<span id="cb3-19"><a aria-hidden="true" href="#cb3-19" tabindex="-1"></a>        artifacts<span class="op">=</span>(Artifact(<span class="st">"result"</span>, <span class="ss">f"results/</span><span class="sc">{</span>path<span class="sc">.</span>name<span class="sc">}</span><span class="ss">"</span>, file_sha256(path), <span class="st">"application/json"</span>),),</span>
+<span id="cb3-20"><a aria-hidden="true" href="#cb3-20" tabindex="-1"></a>    )</span>
+<span id="cb3-21"><a aria-hidden="true" href="#cb3-21" tabindex="-1"></a></span>
+<span id="cb3-22"><a aria-hidden="true" href="#cb3-22" tabindex="-1"></a></span>
+<span id="cb3-23"><a aria-hidden="true" href="#cb3-23" tabindex="-1"></a><span class="bu">print</span>(analyze(results <span class="op">/</span> <span class="st">"image-03.json"</span>).measurements[<span class="st">"zero_point_ratio"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Measurement(value=None, unit='', status='missing', coverage=None, note='')</code></pre>
+</div>
+</div>
+<p>A <code>Measurement</code> holds one scalar with its unit and status. A <code>None</code> value gets the status <code>missing</code>, and NaN becomes <code>invalid</code>. A <code>Finding</code> is the result of one rule. Its category (<code>scientific</code>, <code>data_quality</code> or <code>processing</code>) is separate from its severity (<code>info</code>, <code>warning</code> or <code>error</code>). An <code>Artifact</code> names a file by relative path and SHA-256. xLens never opens it. Keep arrays and images in such files.</p>
+</section>
+<section class="level2" data-number="15.3" id="replay-the-results-into-a-monitor">
+<h2 class="anchored" data-anchor-id="replay-the-results-into-a-monitor" data-number="15.3"><span class="header-section-number">15.3</span> Replay the results into a monitor</h2>
+<p>A <code>Monitor</code> owns one state directory and rewrites <code>state.json</code> there after every change. <code>replay</code> passes each input to the analyzer in order and publishes the returned samples. When the analyzer raises, xLens records the error and goes on with the next input.</p>
+<div class="cell" data-execution_count="3" id="f6695814">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> Monitor</span>
+<span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a></span>
+<span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a>monitor <span class="op">=</span> Monitor(<span class="st">"runs/monitor/state"</span>, run_id<span class="op">=</span><span class="st">"night-1"</span>)</span>
+<span id="cb5-4"><a aria-hidden="true" href="#cb5-4" tabindex="-1"></a>monitor.replay(<span class="bu">sorted</span>(results.glob(<span class="st">"*.json"</span>)), analyze)</span>
+<span id="cb5-5"><a aria-hidden="true" href="#cb5-5" tabindex="-1"></a>state <span class="op">=</span> monitor.snapshot()</span>
+<span id="cb5-6"><a aria-hidden="true" href="#cb5-6" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">len</span>(monitor.samples), <span class="st">"samples, collector"</span>, state[<span class="st">"collector"</span>])</span>
+<span id="cb5-7"><a aria-hidden="true" href="#cb5-7" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"errors:"</span>, [(error[<span class="st">"source_id"</span>], error[<span class="st">"error_type"</span>]) <span class="cf">for</span> error <span class="kw">in</span> state[<span class="st">"errors"</span>]])</span>
+<span id="cb5-8"><a aria-hidden="true" href="#cb5-8" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"flagged:"</span>, {sample.<span class="bu">id</span>: [f.code <span class="cf">for</span> f <span class="kw">in</span> sample.findings] <span class="cf">for</span> sample <span class="kw">in</span> monitor.samples <span class="cf">if</span> sample.findings})</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>10 samples, collector complete
+errors: [('input-10', 'JSONDecodeError')]
+flagged: {'image-03': ['no_zero_point'], 'image-06': ['high_noise']}</code></pre>
+</div>
+</div>
+<p>The corrupt file became an ingestion error, not a sample. The error record keeps the exception class and a source ID, here the input’s position <code>input-10</code>, but not the message. To ingest one input at a time, for example as files arrive, call <code>monitor.ingest(item, analyze, source_id=...)</code> with a source ID you choose.</p>
+</section>
+<section class="level2" data-number="15.4" id="look-at-the-measurements">
+<h2 class="anchored" data-anchor-id="look-at-the-measurements" data-number="15.4"><span class="header-section-number">15.4</span> Look at the measurements</h2>
+<p><a class="quarto-xref" href="#fig-monitor-history">Figure <span>15.1</span></a> plots the samples the way the dashboard’s measurement history does.</p>
+<div class="cell" data-execution_count="4" id="cell-fig-monitor-history">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
+<span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a>samples <span class="op">=</span> monitor.samples</span>
+<span id="cb7-4"><a aria-hidden="true" href="#cb7-4" tabindex="-1"></a>hours <span class="op">=</span> np.array([sample.observed_start <span class="cf">for</span> sample <span class="kw">in</span> samples])</span>
+<span id="cb7-5"><a aria-hidden="true" href="#cb7-5" tabindex="-1"></a>flagged <span class="op">=</span> np.array([<span class="bu">bool</span>(sample.findings) <span class="cf">for</span> sample <span class="kw">in</span> samples])</span>
+<span id="cb7-6"><a aria-hidden="true" href="#cb7-6" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">2</span>, <span class="dv">1</span>, figsize<span class="op">=</span>(<span class="fl">6.5</span>, <span class="fl">3.6</span>), sharex<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb7-7"><a aria-hidden="true" href="#cb7-7" tabindex="-1"></a><span class="cf">for</span> ax, name <span class="kw">in</span> <span class="bu">zip</span>(axes, [<span class="st">"noise"</span>, <span class="st">"zero_point_ratio"</span>]):</span>
+<span id="cb7-8"><a aria-hidden="true" href="#cb7-8" tabindex="-1"></a>    values <span class="op">=</span> np.array([np.nan <span class="cf">if</span> s.measurements[name].value <span class="kw">is</span> <span class="va">None</span> <span class="cf">else</span> s.measurements[name].value <span class="cf">for</span> s <span class="kw">in</span> samples])</span>
+<span id="cb7-9"><a aria-hidden="true" href="#cb7-9" tabindex="-1"></a>    ax.plot(hours, values, <span class="st">"o-"</span>, color<span class="op">=</span><span class="st">"#2A78D6"</span>, ms<span class="op">=</span><span class="dv">4</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb7-10"><a aria-hidden="true" href="#cb7-10" tabindex="-1"></a>    ax.scatter(hours[flagged], values[flagged], s<span class="op">=</span><span class="dv">120</span>, facecolors<span class="op">=</span><span class="st">"none"</span>, edgecolors<span class="op">=</span><span class="st">"#EB6834"</span>, linewidths<span class="op">=</span><span class="fl">1.5</span>)</span>
+<span id="cb7-11"><a aria-hidden="true" href="#cb7-11" tabindex="-1"></a>    unit <span class="op">=</span> samples[<span class="dv">0</span>].measurements[name].unit</span>
+<span id="cb7-12"><a aria-hidden="true" href="#cb7-12" tabindex="-1"></a>    ax.set_ylabel(name <span class="op">+</span> (<span class="ss">f" [</span><span class="sc">{</span>unit<span class="sc">}</span><span class="ss">]"</span> <span class="cf">if</span> unit <span class="cf">else</span> <span class="st">""</span>), fontsize<span class="op">=</span><span class="dv">8</span>)</span>
+<span id="cb7-13"><a aria-hidden="true" href="#cb7-13" tabindex="-1"></a>axes[<span class="op">-</span><span class="dv">1</span>].set_xlabel(<span class="st">"Observation start [h]"</span>)</span>
+<span id="cb7-14"><a aria-hidden="true" href="#cb7-14" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb7-15"><a aria-hidden="true" href="#cb7-15" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb7-16"><a aria-hidden="true" href="#cb7-16" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb7-17"><a aria-hidden="true" href="#cb7-17" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="Two stacked line plots with blue points against observation start in hours. The upper one is flat near 12 DN with one spike near 19 DN. The lower one stays near 1.0 with one gap. Orange rings mark the spike, the lower point at the same time, and the upper point at the time of the gap." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-monitor-history">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-monitor-history-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="monitor_files/figure-html/fig-monitor-history-output-1.png" title="Figure 15.1: The two measurements of the ten recorded samples against their observation start. Orange rings mark samples with findings: the high noise of image 6, and image 3, whose missing zero-point ratio leaves a gap in the lower panel. Synthetic data, for demonstration only."><img alt="Two stacked line plots with blue points against observation start in hours. The upper one is flat near 12 DN with one spike near 19 DN. The lower one stays near 1.0 with one gap. Orange rings mark the spike, the lower point at the same time, and the upper point at the time of the gap." class="figure-img" height="562" src="monitor_files/figure-html/fig-monitor-history-output-1.png" width="983"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-monitor-history-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 15.1: The two measurements of the ten recorded samples against their observation start. Orange rings mark samples with findings: the high noise of image 6, and image 3, whose missing zero-point ratio leaves a gap in the lower panel. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section class="level2" data-number="15.5" id="revise-a-sample">
+<h2 class="anchored" data-anchor-id="revise-a-sample" data-number="15.5"><span class="header-section-number">15.5</span> Revise a sample</h2>
+<p>When you reprocess an image, publish the new evidence under the same <code>id</code> with a higher <code>revision</code>. xLens keeps the old revision in the history. Publishing the same evidence again changes nothing and returns <code>False</code>. Changed evidence with the same revision raises an error.</p>
+<div class="cell" data-execution_count="5" id="016942cd">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> dataclasses <span class="im">import</span> replace</span>
+<span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
+<span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>old <span class="op">=</span> <span class="bu">next</span>(sample <span class="cf">for</span> sample <span class="kw">in</span> monitor.samples <span class="cf">if</span> sample.<span class="bu">id</span> <span class="op">==</span> <span class="st">"image-03"</span>)</span>
+<span id="cb8-4"><a aria-hidden="true" href="#cb8-4" tabindex="-1"></a>new <span class="op">=</span> replace(old, revision<span class="op">=</span><span class="dv">2</span>, findings<span class="op">=</span>(),</span>
+<span id="cb8-5"><a aria-hidden="true" href="#cb8-5" tabindex="-1"></a>              measurements<span class="op">=</span>{<span class="op">**</span>old.measurements, <span class="st">"zero_point_ratio"</span>: Measurement(<span class="fl">0.998</span>)})</span>
+<span id="cb8-6"><a aria-hidden="true" href="#cb8-6" tabindex="-1"></a><span class="bu">print</span>(monitor.publish(new), monitor.publish(new))</span>
+<span id="cb8-7"><a aria-hidden="true" href="#cb8-7" tabindex="-1"></a><span class="cf">try</span>:</span>
+<span id="cb8-8"><a aria-hidden="true" href="#cb8-8" tabindex="-1"></a>    monitor.publish(replace(new, findings<span class="op">=</span>old.findings))  <span class="co"># changed, same revision</span></span>
+<span id="cb8-9"><a aria-hidden="true" href="#cb8-9" tabindex="-1"></a><span class="cf">except</span> <span class="pp">ValueError</span> <span class="im">as</span> error:</span>
+<span id="cb8-10"><a aria-hidden="true" href="#cb8-10" tabindex="-1"></a>    <span class="bu">print</span>(<span class="st">"ValueError:"</span>, error)</span>
+<span id="cb8-11"><a aria-hidden="true" href="#cb8-11" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">len</span>(monitor.samples), <span class="st">"samples,"</span>, <span class="bu">len</span>(monitor.snapshot()[<span class="st">"history"</span>]), <span class="st">"revisions"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>True False
+ValueError: changed evidence requires an increasing revision
+10 samples, 11 revisions</code></pre>
+</div>
+</div>
+<p>Recompute any totals you keep from <code>monitor.samples</code>, which always holds the current revisions.</p>
+</section>
+<section class="level2" data-number="15.6" id="open-a-saved-run">
+<h2 class="anchored" data-anchor-id="open-a-saved-run" data-number="15.6"><span class="header-section-number">15.6</span> Open a saved run</h2>
+<p>The state directory is the saved run. <code>Monitor.load</code> opens it again. With <code>recover=False</code>, loading reads without writing, for example while the run’s own process still writes. Default recovery marks unfinished collection as interrupted. Use it only when you own the writer role: loading does not acquire an exclusive lock. Keep one writer per state directory.</p>
+<div class="cell" data-execution_count="6" id="323f2247">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a>viewer <span class="op">=</span> Monitor.load(<span class="st">"runs/monitor/state"</span>, recover<span class="op">=</span><span class="va">False</span>)</span>
+<span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a>image_03 <span class="op">=</span> viewer.samples[<span class="dv">3</span>]</span>
+<span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a><span class="bu">print</span>(viewer.snapshot()[<span class="st">"run_id"</span>], <span class="bu">len</span>(viewer.samples), <span class="st">"samples"</span>)</span>
+<span id="cb10-4"><a aria-hidden="true" href="#cb10-4" tabindex="-1"></a><span class="bu">print</span>(image_03.<span class="bu">id</span>, <span class="st">"revision"</span>, image_03.revision, image_03.measurements[<span class="st">"zero_point_ratio"</span>].value)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>night-1 10 samples
+image-03 revision 2 0.998</code></pre>
+</div>
+</div>
+</section>
+<section class="level2" data-number="15.7" id="export-or-serve-the-dashboard">
+<h2 class="anchored" data-anchor-id="export-or-serve-the-dashboard" data-number="15.7"><span class="header-section-number">15.7</span> Export or serve the dashboard</h2>
+<p><code>Dashboard.export</code> writes the run into one HTML file that opens in a browser without a server. The file is a fixed snapshot, and its content security policy blocks network requests.</p>
+<div class="cell" data-execution_count="7" id="111b43fb">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> Dashboard</span>
+<span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a></span>
+<span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a>page <span class="op">=</span> Dashboard(viewer, title<span class="op">=</span><span class="st">"Night 1 images"</span>).export(<span class="st">"runs/monitor/report.html"</span>)</span>
+<span id="cb12-4"><a aria-hidden="true" href="#cb12-4" tabindex="-1"></a><span class="bu">print</span>(page, <span class="ss">f"</span><span class="sc">{</span>page<span class="sc">.</span>stat()<span class="sc">.</span>st_size <span class="op">/</span> <span class="dv">1024</span><span class="sc">:.0f}</span><span class="ss"> KiB"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>runs/monitor/report.html 49 KiB</code></pre>
+</div>
+</div>
+<p>To follow a run while it is written, serve the state directory instead, then open <code>http://127.0.0.1:8765</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb14"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="ex">cuphoton</span> xlens serve <span class="at">--state</span> runs/monitor/state <span class="at">--port</span> 8765</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>The server rereads the saved state on every request and stops with Ctrl+C. It answers only the address it listens on, which includes <code>localhost</code> for the default loopback address, and the names you add with <code>--allowed-host</code>. Besides the page, it serves JSON for scripts:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Route</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>/</code></td>
+<td>the dashboard</td>
+</tr>
+<tr class="even">
+<td><code>/api/state</code></td>
+<td>the whole saved state</td>
+</tr>
+<tr class="odd">
+<td><code>/api/dashboard?sample_id=ID</code></td>
+<td>the display data, with one sample’s domain view</td>
+</tr>
+<tr class="even">
+<td><code>/health</code></td>
+<td>the collector status and a storage-error flag</td>
+</tr>
+</tbody>
+</table>
+<p><code>make_server</code> builds the same server in Python. The block below starts it on a free port, reads <code>/health</code>, and stops it:</p>
+<div class="cell" data-execution_count="8" id="34b16dc2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="im">import</span> threading</span>
+<span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a><span class="im">import</span> urllib.request</span>
+<span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a></span>
+<span id="cb15-4"><a aria-hidden="true" href="#cb15-4" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens.dashboard <span class="im">import</span> make_server</span>
+<span id="cb15-5"><a aria-hidden="true" href="#cb15-5" tabindex="-1"></a></span>
+<span id="cb15-6"><a aria-hidden="true" href="#cb15-6" tabindex="-1"></a><span class="cf">with</span> make_server(Dashboard(viewer), host<span class="op">=</span><span class="st">"127.0.0.1"</span>, port<span class="op">=</span><span class="dv">0</span>) <span class="im">as</span> server:  <span class="co"># port 0 picks a free port</span></span>
+<span id="cb15-7"><a aria-hidden="true" href="#cb15-7" tabindex="-1"></a>    thread <span class="op">=</span> threading.Thread(target<span class="op">=</span>server.serve_forever, daemon<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb15-8"><a aria-hidden="true" href="#cb15-8" tabindex="-1"></a>    thread.start()</span>
+<span id="cb15-9"><a aria-hidden="true" href="#cb15-9" tabindex="-1"></a>    <span class="cf">try</span>:</span>
+<span id="cb15-10"><a aria-hidden="true" href="#cb15-10" tabindex="-1"></a>        <span class="cf">with</span> urllib.request.urlopen(<span class="ss">f"http://127.0.0.1:</span><span class="sc">{</span>server<span class="sc">.</span>server_port<span class="sc">}</span><span class="ss">/health"</span>) <span class="im">as</span> response:</span>
+<span id="cb15-11"><a aria-hidden="true" href="#cb15-11" tabindex="-1"></a>            <span class="bu">print</span>(response.read().decode())</span>
+<span id="cb15-12"><a aria-hidden="true" href="#cb15-12" tabindex="-1"></a>    <span class="cf">finally</span>:</span>
+<span id="cb15-13"><a aria-hidden="true" href="#cb15-13" tabindex="-1"></a>        server.shutdown()</span>
+<span id="cb15-14"><a aria-hidden="true" href="#cb15-14" tabindex="-1"></a>        thread.join()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>{"collector": "complete", "storage_error": false}</code></pre>
+</div>
+</div>
+<p>In a pipeline that writes results as it runs, let a <code>MonitorSession</code> poll for new inputs in the process that owns the monitor, and serve the dashboard from there. This poller processes each filename once. Have the producer write a temporary file and rename it to <code>.json</code> only when complete, then leave that file unchanged. Handle reprocessing separately by publishing a higher sample revision.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> MonitorSession, serve</span>
+<span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a></span>
+<span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a>seen <span class="op">=</span> <span class="bu">set</span>()</span>
+<span id="cb17-4"><a aria-hidden="true" href="#cb17-4" tabindex="-1"></a></span>
+<span id="cb17-5"><a aria-hidden="true" href="#cb17-5" tabindex="-1"></a></span>
+<span id="cb17-6"><a aria-hidden="true" href="#cb17-6" tabindex="-1"></a><span class="kw">def</span> poll():  <span class="co"># called every poll_interval seconds</span></span>
+<span id="cb17-7"><a aria-hidden="true" href="#cb17-7" tabindex="-1"></a>    <span class="cf">for</span> path <span class="kw">in</span> <span class="bu">sorted</span>(results.glob(<span class="st">"*.json"</span>)):</span>
+<span id="cb17-8"><a aria-hidden="true" href="#cb17-8" tabindex="-1"></a>        <span class="cf">if</span> path.name <span class="kw">not</span> <span class="kw">in</span> seen:</span>
+<span id="cb17-9"><a aria-hidden="true" href="#cb17-9" tabindex="-1"></a>            seen.add(path.name)</span>
+<span id="cb17-10"><a aria-hidden="true" href="#cb17-10" tabindex="-1"></a>            monitor.ingest(path, analyze, source_id<span class="op">=</span>path.name)</span>
+<span id="cb17-11"><a aria-hidden="true" href="#cb17-11" tabindex="-1"></a></span>
+<span id="cb17-12"><a aria-hidden="true" href="#cb17-12" tabindex="-1"></a></span>
+<span id="cb17-13"><a aria-hidden="true" href="#cb17-13" tabindex="-1"></a>serve(Dashboard(monitor, title<span class="op">=</span><span class="st">"Night 1 images"</span>), session<span class="op">=</span>MonitorSession(monitor, poll<span class="op">=</span>poll, poll_interval<span class="op">=</span><span class="fl">10.0</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</section>
+<section class="level2" data-number="15.8" id="what-the-dashboard-shows">
+<h2 class="anchored" data-anchor-id="what-the-dashboard-shows" data-number="15.8"><span class="header-section-number">15.8</span> What the dashboard shows</h2>
+<p>The page has these parts:</p>
+<ul>
+<li><strong>Run status</strong>: the run ID, the sample count, the collector status (<code>idle</code>, <code>running</code>, <code>complete</code>, <code>stopped</code>, <code>failed</code> or <code>interrupted</code>) and the number of revisions.</li>
+<li><strong>Samples</strong>: the list in sequence order, with a text filter and a finding-category filter.</li>
+<li><strong>Measurement history</strong>: up to six measurements at a time, against sample sequence or observation time, on a linear or log scale. Samples with findings are outlined. Missing and invalid values leave gaps.</li>
+<li><strong>Selected sample</strong>: its findings, a table of measurements with value, unit, status and coverage, your domain view, and its configuration, provenance and artifacts.</li>
+<li><strong>Investigate this run</strong>: questions to a language model. They need a live session with an inference configuration.</li>
+<li><strong>Ingestion diagnostics</strong>: the errors that <code>ingest</code> and <code>replay</code> recorded.</li>
+</ul>
+<p>The page shows the last 256 samples in sequence order. <code>state.json</code> keeps them all.</p>
+</section>
+<section class="level2" data-number="15.9" id="options">
+<h2 class="anchored" data-anchor-id="options" data-number="15.9"><span class="header-section-number">15.9</span> Options</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>Sample(revision=...)</code></td>
+<td><code>1</code></td>
+<td>version of the evidence. Raise it to publish changed evidence under the same <code>id</code></td>
+</tr>
+<tr class="even">
+<td><code>Sample(time_unit=...)</code></td>
+<td><code>"s"</code></td>
+<td>unit of <code>observed_start</code> and <code>observed_end</code></td>
+</tr>
+<tr class="odd">
+<td><code>Sample(metadata=...)</code></td>
+<td><code>{}</code></td>
+<td>JSON for configuration or provenance, at most 16 KiB</td>
+</tr>
+<tr class="even">
+<td><code>Measurement(status=...)</code></td>
+<td><code>"valid"</code></td>
+<td><code>valid</code>, <code>missing</code>, <code>invalid</code> or <code>unavailable</code>. Missing and unavailable values must be <code>None</code></td>
+</tr>
+<tr class="odd">
+<td><code>Measurement(coverage=...)</code></td>
+<td><code>None</code></td>
+<td>fraction in [0, 1] that your code defines. xLens does not rescale the value</td>
+</tr>
+<tr class="even">
+<td><code>Measurement(note=...)</code></td>
+<td><code>""</code></td>
+<td>free text</td>
+</tr>
+<tr class="odd">
+<td><code>Finding(category=...)</code></td>
+<td><code>"scientific"</code></td>
+<td><code>scientific</code>, <code>data_quality</code> or <code>processing</code></td>
+</tr>
+<tr class="even">
+<td><code>Finding(severity=...)</code></td>
+<td><code>"warning"</code></td>
+<td><code>info</code>, <code>warning</code> or <code>error</code></td>
+</tr>
+<tr class="odd">
+<td><code>Dashboard(title=...)</code></td>
+<td><code>"cuPhoton xLens"</code></td>
+<td>page title</td>
+</tr>
+<tr class="even">
+<td><code>Dashboard(render_sample=...)</code></td>
+<td><code>None</code></td>
+<td>your callable that returns HTML for one sample, shown in the sample panel (at most 2 MiB). Escape any outside text</td>
+</tr>
+<tr class="odd">
+<td><code>serve(host=..., port=...)</code></td>
+<td><code>"127.0.0.1"</code>, <code>8765</code></td>
+<td>listen address and port</td>
+</tr>
+<tr class="even">
+<td><code>MonitorSession(poll_interval=...)</code></td>
+<td><code>1.0</code></td>
+<td>seconds between calls to <code>poll</code>, from 0.05 to 3600</td>
+</tr>
+</tbody>
+</table>
+<p>A sample is at most 64 KiB with at most 128 measurements. A run holds at most 10,000 samples, 50,000 revisions and 1,000 reports, and keeps the latest 100 ingestion errors. Start another run when you reach a limit.</p>
+</section>
+<section class="level2" data-number="15.10" id="command-line">
+<h2 class="anchored" data-anchor-id="command-line" data-number="15.10"><span class="header-section-number">15.10</span> Command line</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb18"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a><span class="ex">cuphoton</span> xlens quickstart <span class="at">--output-dir</span> xlens-demo                   <span class="co"># an invented run and its report.html</span></span>
+<span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a><span class="ex">cuphoton</span> xlens export <span class="at">--state</span> runs/monitor/state <span class="at">--output-file</span> runs/monitor/report-cli.html</span>
+<span id="cb18-3"><a aria-hidden="true" href="#cb18-3" tabindex="-1"></a><span class="ex">cuphoton</span> xlens serve <span class="at">--state</span> runs/monitor/state <span class="at">--port</span> 8765</span>
+<span id="cb18-4"><a aria-hidden="true" href="#cb18-4" tabindex="-1"></a><span class="co"># Backend for a reverse proxy on this machine</span></span>
+<span id="cb18-5"><a aria-hidden="true" href="#cb18-5" tabindex="-1"></a><span class="ex">cuphoton</span> xlens serve <span class="at">--state</span> runs/monitor/state <span class="at">--host</span> 127.0.0.1 <span class="at">--port</span> 8765 <span class="at">--allowed-host</span> monitor.example</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p><code>serve</code> takes exactly one of <code>--state</code> and <code>--site</code>. <code>--site</code> serves an installed application’s own collection of monitors. <code>--prefix</code> mounts the page under a URL path.</p>
+<p>The server does not configure TLS or authenticate dashboard viewers. When sharing a dashboard, use a proxy that provides both. Bind the backend to <code>127.0.0.1</code> for a proxy on the same machine, as shown above. If the proxy runs elsewhere, bind a private interface and restrict access to the backend port to that proxy. Set <code>--allowed-host</code> to the HTTP Host value the proxy forwards, including its port when present; this header check does not authenticate the viewer.</p>
+</section>
+<section class="level2" data-number="15.11" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="15.11"><span class="header-section-number">15.11</span> Troubleshooting</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Message or symptom</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>FileExistsError: state exists; use Monitor.load or a new directory</code></td>
+<td>A new <code>Monitor</code> needs an empty directory. Open the run with <code>Monitor.load</code>, or choose a new directory.</td>
+</tr>
+<tr class="even">
+<td><code>ValueError: changed evidence requires an increasing revision</code></td>
+<td>Publish the changed sample with a higher <code>revision</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>ValueError: sample exceeds 64 KiB; use referenced artifacts</code></td>
+<td>Move arrays and long text into files, and reference them with <code>Artifact</code>.</td>
+</tr>
+<tr class="even">
+<td>The browser shows <code>421 Unrecognized monitor host</code></td>
+<td>Add the name you browse with: <code>--allowed-host name[:port]</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>supply exactly one of --state or --site</code></td>
+<td>Pass one of the two to <code>cuphoton xlens serve</code>.</td>
+</tr>
+<tr class="even">
+<td>An input is missing from the samples</td>
+<td>Look at the ingestion diagnostics. The analyzer raised, or the sample broke a limit.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="15.12" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="15.12"><span class="header-section-number">15.12</span> Next steps</h2>
+<ul>
+<li>Produce the values to monitor with the end-to-end pipeline: <a class="quarto-xref" href="transient-chain.html"><span>Chapter 9</span></a>.</li>
+<li>Run long batches on many GPUs: <a class="quarto-xref" href="scale.html"><span>Chapter 14</span></a>.</li>
+<li>To ask a language model about saved evidence, install the <code>xlens-inference</code> extra and use <code>cuphoton xlens ask</code>. Refer to the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xlens.md">xLens reference</a>, which also covers application sites and domain views.</li>
+</ul>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Scale out to many GPUs" class="pagination-link" href="./scale.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Reference" class="pagination-link" href="./reference.html">
+<span class="nav-page-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

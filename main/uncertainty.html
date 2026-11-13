@@ -1,0 +1,1758 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>10  Uncertainty Quantification – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./reconstruct.html" rel="next"/>
+<link href="./transient-chain.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+<script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+<link href="https://nvidia.github.io/cuPhoton/main/uncertainty.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="uncertainty.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./uncertainty.html"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#make-a-sample-pair" href="#make-a-sample-pair" id="toc-make-a-sample-pair"><span class="header-section-number">10.1</span> Make a sample pair</a></li>
+<li><a class="nav-link" data-scroll-target="#follow-the-noise-through-the-pipeline" href="#follow-the-noise-through-the-pipeline" id="toc-follow-the-noise-through-the-pipeline"><span class="header-section-number">10.2</span> Follow the noise through the pipeline</a></li>
+<li><a class="nav-link" data-scroll-target="#measure-the-candidates" href="#measure-the-candidates" id="toc-measure-the-candidates"><span class="header-section-number">10.3</span> Measure the candidates</a></li>
+<li><a class="nav-link" data-scroll-target="#correct-for-correlated-noise" href="#correct-for-correlated-noise" id="toc-correct-for-correlated-noise"><span class="header-section-number">10.4</span> Correct for correlated noise</a>
+<ul class="collapse">
+<li><a class="nav-link" data-scroll-target="#measure-the-factor-at-empty-positions" href="#measure-the-factor-at-empty-positions" id="toc-measure-the-factor-at-empty-positions"><span class="header-section-number">10.4.1</span> Measure the factor at empty positions</a></li>
+<li><a class="nav-link" data-scroll-target="#apply-the-factor" href="#apply-the-factor" id="toc-apply-the-factor"><span class="header-section-number">10.4.2</span> Apply the factor</a></li>
+<li><a class="nav-link" data-scroll-target="#compute-the-factor-in-closed-form" href="#compute-the-factor-in-closed-form" id="toc-compute-the-factor-in-closed-form"><span class="header-section-number">10.4.3</span> Compute the factor in closed form</a></li>
+</ul></li>
+<li><a class="nav-link" data-scroll-target="#read-the-transient-chains-error-budget" href="#read-the-transient-chains-error-budget" id="toc-read-the-transient-chains-error-budget"><span class="header-section-number">10.5</span> Read the transient chain’s error budget</a></li>
+<li><a class="nav-link" data-scroll-target="#check-your-error-bars-with-injected-sources" href="#check-your-error-bars-with-injected-sources" id="toc-check-your-error-bars-with-injected-sources"><span class="header-section-number">10.6</span> Check your error bars with injected sources</a></li>
+<li><a class="nav-link" data-scroll-target="#limits" href="#limits" id="toc-limits"><span class="header-section-number">10.7</span> Limits</a></li>
+<li><a class="nav-link" data-scroll-target="#options" href="#options" id="toc-options"><span class="header-section-number">10.8</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#on-a-gpu" href="#on-a-gpu" id="toc-on-a-gpu"><span class="header-section-number">10.9</span> On a GPU</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">10.10</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">10.11</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./uncertainty.html"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-uncertainty"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>The xFit measurements on this page report uncertainties from a fitted covariance or a fixed-PSF flux estimate. xRep resamples your variance planes, xPois propagates them into the difference image, and xFit uses them as weights. Use this page to assess correlated noise, read the transient chain’s error budget, and check error bars on your own data. Failed or unsupported uncertainty estimates can be NaN.</p>
+<p><strong>You need:</strong></p>
+<ul>
+<li>cuPhoton with the CPU profile (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>), and Matplotlib for the figure.</li>
+<li>A target and a reference image with variance planes. This page makes a sample pair.</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on a small synthetic pair. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<section class="level2" data-number="10.1" id="make-a-sample-pair">
+<h2 class="anchored" data-anchor-id="make-a-sample-pair" data-number="10.1"><span class="header-section-number">10.1</span> Make a sample pair</h2>
+<p>The block below writes the pair of <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>. The target is rotated by 3 degrees against the reference and has slightly larger pixels.</p>
+<div class="cell" data-execution_count="1" id="a17b2d43">
+<details class="code-fold">
+<summary>Create the sample pair (NumPy and Astropy only)</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="co"># of the same sky on different pixel grids, with different blur and sky level.</span></span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="co"># The target also holds one new source and one star three times brighter.</span></span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a><span class="co"># Noise is independent Gaussian noise with variance expected_image / gain;</span></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a><span class="co"># this teaching sample has no read noise, saturation, or detector artifacts.</span></span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a></span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a><span class="im">from</span> astropy.io <span class="im">import</span> fits</span>
+<span id="cb1-10"><a aria-hidden="true" href="#cb1-10" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
+<span id="cb1-11"><a aria-hidden="true" href="#cb1-11" tabindex="-1"></a></span>
+<span id="cb1-12"><a aria-hidden="true" href="#cb1-12" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">7</span>)</span>
+<span id="cb1-13"><a aria-hidden="true" href="#cb1-13" tabindex="-1"></a></span>
+<span id="cb1-14"><a aria-hidden="true" href="#cb1-14" tabindex="-1"></a></span>
+<span id="cb1-15"><a aria-hidden="true" href="#cb1-15" tabindex="-1"></a><span class="kw">def</span> make_wcs(shape, scale_arcsec, rotation_deg, crpix_shift):</span>
+<span id="cb1-16"><a aria-hidden="true" href="#cb1-16" tabindex="-1"></a>    w <span class="op">=</span> WCS(naxis<span class="op">=</span><span class="dv">2</span>)</span>
+<span id="cb1-17"><a aria-hidden="true" href="#cb1-17" tabindex="-1"></a>    w.wcs.ctype <span class="op">=</span> [<span class="st">"RA---TAN"</span>, <span class="st">"DEC--TAN"</span>]</span>
+<span id="cb1-18"><a aria-hidden="true" href="#cb1-18" tabindex="-1"></a>    w.wcs.crval <span class="op">=</span> [<span class="fl">150.0</span>, <span class="fl">2.0</span>]</span>
+<span id="cb1-19"><a aria-hidden="true" href="#cb1-19" tabindex="-1"></a>    w.wcs.crpix <span class="op">=</span> [shape[<span class="dv">1</span>] <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> crpix_shift[<span class="dv">0</span>], shape[<span class="dv">0</span>] <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> crpix_shift[<span class="dv">1</span>]]</span>
+<span id="cb1-20"><a aria-hidden="true" href="#cb1-20" tabindex="-1"></a>    c, s <span class="op">=</span> np.cos(np.radians(rotation_deg)), np.sin(np.radians(rotation_deg))</span>
+<span id="cb1-21"><a aria-hidden="true" href="#cb1-21" tabindex="-1"></a>    w.wcs.cd <span class="op">=</span> scale_arcsec <span class="op">/</span> <span class="dv">3600</span> <span class="op">*</span> np.array([[<span class="op">-</span>c, s], [s, c]])</span>
+<span id="cb1-22"><a aria-hidden="true" href="#cb1-22" tabindex="-1"></a>    <span class="cf">return</span> w</span>
+<span id="cb1-23"><a aria-hidden="true" href="#cb1-23" tabindex="-1"></a></span>
+<span id="cb1-24"><a aria-hidden="true" href="#cb1-24" tabindex="-1"></a></span>
+<span id="cb1-25"><a aria-hidden="true" href="#cb1-25" tabindex="-1"></a><span class="kw">def</span> render(shape, wcs, ra, dec, flux, sigma, sky, gain):</span>
+<span id="cb1-26"><a aria-hidden="true" href="#cb1-26" tabindex="-1"></a>    x, y <span class="op">=</span> wcs.world_to_pixel_values(ra, dec)</span>
+<span id="cb1-27"><a aria-hidden="true" href="#cb1-27" tabindex="-1"></a>    yy, xx <span class="op">=</span> np.mgrid[: shape[<span class="dv">0</span>], : shape[<span class="dv">1</span>]]</span>
+<span id="cb1-28"><a aria-hidden="true" href="#cb1-28" tabindex="-1"></a>    image <span class="op">=</span> np.full(shape, sky, dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb1-29"><a aria-hidden="true" href="#cb1-29" tabindex="-1"></a>    <span class="cf">for</span> xi, yi, fi <span class="kw">in</span> <span class="bu">zip</span>(x, y, flux):</span>
+<span id="cb1-30"><a aria-hidden="true" href="#cb1-30" tabindex="-1"></a>        image <span class="op">+=</span> fi <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> np.pi <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>) <span class="op">*</span> np.exp(<span class="op">-</span>((xx <span class="op">-</span> xi) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (yy <span class="op">-</span> yi) <span class="op">**</span> <span class="dv">2</span>) <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> sigma<span class="op">**</span><span class="dv">2</span>))</span>
+<span id="cb1-31"><a aria-hidden="true" href="#cb1-31" tabindex="-1"></a>    <span class="cf">return</span> rng.normal(image, np.sqrt(image <span class="op">/</span> gain)).astype(np.float32)</span>
+<span id="cb1-32"><a aria-hidden="true" href="#cb1-32" tabindex="-1"></a></span>
+<span id="cb1-33"><a aria-hidden="true" href="#cb1-33" tabindex="-1"></a></span>
+<span id="cb1-34"><a aria-hidden="true" href="#cb1-34" tabindex="-1"></a>ra <span class="op">=</span> <span class="fl">150.0</span> <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.016</span>, <span class="fl">0.016</span>, <span class="dv">150</span>)</span>
+<span id="cb1-35"><a aria-hidden="true" href="#cb1-35" tabindex="-1"></a>dec <span class="op">=</span> <span class="fl">2.0</span> <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.016</span>, <span class="fl">0.016</span>, <span class="dv">150</span>)</span>
+<span id="cb1-36"><a aria-hidden="true" href="#cb1-36" tabindex="-1"></a>flux <span class="op">=</span> <span class="dv">10</span> <span class="op">**</span> rng.uniform(<span class="fl">2.5</span>, <span class="fl">4.5</span>, <span class="dv">150</span>)</span>
+<span id="cb1-37"><a aria-hidden="true" href="#cb1-37" tabindex="-1"></a>target_flux <span class="op">=</span> np.r_[<span class="dv">3</span> <span class="op">*</span> flux[<span class="dv">0</span>], flux[<span class="dv">1</span>:], <span class="fl">4000.0</span>]  <span class="co"># star 0 brightens; one new source</span></span>
+<span id="cb1-38"><a aria-hidden="true" href="#cb1-38" tabindex="-1"></a>target_ra, target_dec <span class="op">=</span> np.r_[ra, <span class="fl">150.004</span>], np.r_[dec, <span class="fl">2.003</span>]</span>
+<span id="cb1-39"><a aria-hidden="true" href="#cb1-39" tabindex="-1"></a></span>
+<span id="cb1-40"><a aria-hidden="true" href="#cb1-40" tabindex="-1"></a>Path(<span class="st">"sample"</span>).mkdir(exist_ok<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-41"><a aria-hidden="true" href="#cb1-41" tabindex="-1"></a><span class="cf">for</span> name, shape, wcs, sky_coords, fl, sigma, sky, gain <span class="kw">in</span> [</span>
+<span id="cb1-42"><a aria-hidden="true" href="#cb1-42" tabindex="-1"></a>    (<span class="st">"reference"</span>, (<span class="dv">300</span>, <span class="dv">300</span>), make_wcs((<span class="dv">300</span>, <span class="dv">300</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="dv">0</span>, <span class="dv">0</span>)), (ra, dec), flux, <span class="fl">1.2</span>, <span class="fl">100.0</span>, <span class="fl">8.0</span>),</span>
+<span id="cb1-43"><a aria-hidden="true" href="#cb1-43" tabindex="-1"></a>    (<span class="st">"target"</span>, (<span class="dv">256</span>, <span class="dv">256</span>), make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.27</span>, <span class="fl">3.0</span>, (<span class="fl">4.3</span>, <span class="op">-</span><span class="fl">2.7</span>)), (target_ra, target_dec), target_flux, <span class="fl">1.8</span>, <span class="fl">120.0</span>, <span class="fl">2.0</span>),</span>
+<span id="cb1-44"><a aria-hidden="true" href="#cb1-44" tabindex="-1"></a>]:</span>
+<span id="cb1-45"><a aria-hidden="true" href="#cb1-45" tabindex="-1"></a>    header <span class="op">=</span> wcs.to_header()</span>
+<span id="cb1-46"><a aria-hidden="true" href="#cb1-46" tabindex="-1"></a>    header[<span class="st">"GAIN"</span>] <span class="op">=</span> (gain, <span class="st">"electrons per data number (DN)"</span>)</span>
+<span id="cb1-47"><a aria-hidden="true" href="#cb1-47" tabindex="-1"></a>    header[<span class="st">"PSFSIG"</span>] <span class="op">=</span> (sigma, <span class="st">"Gaussian PSF sigma [px]"</span>)</span>
+<span id="cb1-48"><a aria-hidden="true" href="#cb1-48" tabindex="-1"></a>    fits.writeto(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.fits"</span>, render(shape, wcs, <span class="op">*</span>sky_coords, fl, sigma, sky, gain), header, overwrite<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+</div>
+</section>
+<section class="level2" data-number="10.2" id="follow-the-noise-through-the-pipeline">
+<h2 class="anchored" data-anchor-id="follow-the-noise-through-the-pipeline" data-number="10.2"><span class="header-section-number">10.2</span> Follow the noise through the pipeline</h2>
+<p>These calls propagate and use the per-pixel variance planes:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+<col style="width: 25%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Step</th>
+<th>Call</th>
+<th>Noise it returns</th>
+<th>Guide</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Your input</td>
+<td>a variance plane per image</td>
+<td>the expected squared error of each pixel, in squared image units</td>
+<td><a class="quarto-xref" href="concepts.html"><span>Chapter 3</span></a></td>
+</tr>
+<tr class="even">
+<td>Align</td>
+<td><code>reproject_masked_array</code> (xRep)</td>
+<td>the reference variance on the target grid, through the squared interpolation weights</td>
+<td><a class="quarto-xref" href="align.html"><span>Chapter 5</span></a></td>
+</tr>
+<tr class="odd">
+<td>Subtract</td>
+<td><code>standardize_constant_kernel_residual</code> (xPois)</td>
+<td><code>marginal_residual_variance</code>, the target variance plus the reference variance convolved with the squared kernel, and <code>standardized_residual</code>, the difference over its square root</td>
+<td><a class="quarto-xref" href="subtract.html"><span>Chapter 6</span></a></td>
+</tr>
+<tr class="even">
+<td>Measure</td>
+<td><code>fit_single_sources</code>, <code>forced_psf_photometry</code>, <code>fit_dipoles</code> (xFit)</td>
+<td>the errors of each call, such as <code>flux_error</code>, <code>covariance</code>, <code>standard_errors</code> and <code>uncertainty_valid</code></td>
+<td><a class="quarto-xref" href="measure.html"><span>Chapter 7</span></a></td>
+</tr>
+</tbody>
+</table>
+<p>These variance planes store one variance per pixel, without covariances between pixels. The subtraction diagnostic below treats the fitted kernel as fixed, and the xFit errors initially assume independent pixels. The blocks align and subtract as in <a class="quarto-xref" href="measure.html"><span>Chapter 7</span></a>, and print the median variance after each step.</p>
+<div class="cell" data-execution_count="2" id="5c2f8e11">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
+<span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
+<span id="cb2-4"><a aria-hidden="true" href="#cb2-4" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> BBox, ReprojectionSpec, make_wcs_pair_transform, prepare_reprojection, reproject_masked_array</span>
+<span id="cb2-5"><a aria-hidden="true" href="#cb2-5" tabindex="-1"></a></span>
+<span id="cb2-6"><a aria-hidden="true" href="#cb2-6" tabindex="-1"></a>target_read, reference_read <span class="op">=</span> (read_fits_images(<span class="ss">f"sample/</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.fits"</span>, [<span class="dv">0</span>]) <span class="cf">for</span> name <span class="kw">in</span> (<span class="st">"target"</span>, <span class="st">"reference"</span>))</span>
+<span id="cb2-7"><a aria-hidden="true" href="#cb2-7" tabindex="-1"></a>target, reference <span class="op">=</span> (r.arrays[<span class="dv">0</span>].astype(np.float64) <span class="cf">for</span> r <span class="kw">in</span> (target_read, reference_read))</span>
+<span id="cb2-8"><a aria-hidden="true" href="#cb2-8" tabindex="-1"></a>target_header, reference_header <span class="op">=</span> target_read.infos[<span class="dv">0</span>].header, reference_read.infos[<span class="dv">0</span>].header</span>
+<span id="cb2-9"><a aria-hidden="true" href="#cb2-9" tabindex="-1"></a>target_variance <span class="op">=</span> np.clip(target, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> target_header[<span class="st">"GAIN"</span>]  <span class="co"># your own variance planes go here</span></span>
+<span id="cb2-10"><a aria-hidden="true" href="#cb2-10" tabindex="-1"></a>reference_variance <span class="op">=</span> np.clip(reference, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> reference_header[<span class="st">"GAIN"</span>]</span>
+<span id="cb2-11"><a aria-hidden="true" href="#cb2-11" tabindex="-1"></a>spec <span class="op">=</span> ReprojectionSpec(mapping<span class="op">=</span>make_wcs_pair_transform(WCS(target_header), WCS(reference_header)),</span>
+<span id="cb2-12"><a aria-hidden="true" href="#cb2-12" tabindex="-1"></a>                        output_bbox<span class="op">=</span>BBox(<span class="dv">0</span>, <span class="dv">0</span>, target.shape[<span class="dv">1</span>], target.shape[<span class="dv">0</span>]))  <span class="co"># (x, y) origin, then the size</span></span>
+<span id="cb2-13"><a aria-hidden="true" href="#cb2-13" tabindex="-1"></a>prepared <span class="op">=</span> prepare_reprojection(spec, source_shape<span class="op">=</span>reference.shape)</span>
+<span id="cb2-14"><a aria-hidden="true" href="#cb2-14" tabindex="-1"></a>no_bad_pixels <span class="op">=</span> np.zeros(reference.shape, dtype<span class="op">=</span><span class="bu">bool</span>)</span>
+<span id="cb2-15"><a aria-hidden="true" href="#cb2-15" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, no_bad_pixels, spec, backend<span class="op">=</span><span class="st">"cpu"</span>, prepared<span class="op">=</span>prepared)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<div class="cell" data-execution_count="3" id="e90457aa">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> (GaussianBasisComponent, identify_residual_hotspots, solve_constant_kernel,</span>
+<span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a>                            standardize_constant_kernel_residual)</span>
+<span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
+<span id="cb3-4"><a aria-hidden="true" href="#cb3-4" tabindex="-1"></a>basis <span class="op">=</span> [GaussianBasisComponent(<span class="fl">0.7</span>, <span class="dv">4</span>), GaussianBasisComponent(<span class="fl">1.4</span>, <span class="dv">2</span>), GaussianBasisComponent(<span class="fl">2.8</span>, <span class="dv">2</span>)]</span>
+<span id="cb3-5"><a aria-hidden="true" href="#cb3-5" tabindex="-1"></a>fit <span class="op">=</span> solve_constant_kernel(aligned.image, target, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>),</span>
+<span id="cb3-6"><a aria-hidden="true" href="#cb3-6" tabindex="-1"></a>                            variance<span class="op">=</span>target_variance, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb3-7"><a aria-hidden="true" href="#cb3-7" tabindex="-1"></a>noise <span class="op">=</span> standardize_constant_kernel_residual(fit.residual, kernel<span class="op">=</span>fit.kernel, target_variance<span class="op">=</span>target_variance,</span>
+<span id="cb3-8"><a aria-hidden="true" href="#cb3-8" tabindex="-1"></a>                                             reference_variance<span class="op">=</span>aligned.variance)</span>
+<span id="cb3-9"><a aria-hidden="true" href="#cb3-9" tabindex="-1"></a>difference, difference_variance, inside <span class="op">=</span> fit.residual, noise.marginal_residual_variance, noise.valid_mask</span>
+<span id="cb3-10"><a aria-hidden="true" href="#cb3-10" tabindex="-1"></a><span class="cf">for</span> name, plane <span class="kw">in</span> [(<span class="st">"reference"</span>, reference_variance), (<span class="st">"reference, aligned"</span>, aligned.variance),</span>
+<span id="cb3-11"><a aria-hidden="true" href="#cb3-11" tabindex="-1"></a>                    (<span class="st">"reference, through the kernel"</span>, noise.propagated_reference_variance),</span>
+<span id="cb3-12"><a aria-hidden="true" href="#cb3-12" tabindex="-1"></a>                    (<span class="st">"target"</span>, target_variance), (<span class="st">"difference"</span>, difference_variance)]:</span>
+<span id="cb3-13"><a aria-hidden="true" href="#cb3-13" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">:30s}</span><span class="ss"> median variance </span><span class="sc">{</span>np<span class="sc">.</span>nanmedian(plane)<span class="sc">:6.2f}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>reference                      median variance  12.52
+reference, aligned             median variance  11.54
+reference, through the kernel  median variance   0.49
+target                         median variance  60.29
+difference                     median variance  60.78</code></pre>
+</div>
+</div>
+<p>In this example, alignment and the kernel reduce the reference’s median variance by combining input pixels. Resampling and convolution also correlate neighboring output pixels, which a per-pixel variance does not describe. The variance need not decrease for other interpolation weights, pixel-area scalings or kernels.</p>
+</section>
+<section class="level2" data-number="10.3" id="measure-the-candidates">
+<h2 class="anchored" data-anchor-id="measure-the-candidates" data-number="10.3"><span class="header-section-number">10.3</span> Measure the candidates</h2>
+<p>Find the two candidates and fit them with xFit. The window, <span class="math inline">\(2\lceil 5\sigma\rceil + 1\)</span> pixels for a PSF (point spread function) width <span class="math inline">\(\sigma\)</span>, is the one the transient chain uses.</p>
+<div class="cell" data-execution_count="4" id="24d1aa50">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> fit_single_sources</span>
+<span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> window_stamps</span>
+<span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a></span>
+<span id="cb5-4"><a aria-hidden="true" href="#cb5-4" tabindex="-1"></a>regions <span class="op">=</span> identify_residual_hotspots(noise.standardized_residual, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span>
+<span id="cb5-5"><a aria-hidden="true" href="#cb5-5" tabindex="-1"></a>candidates <span class="op">=</span> np.array([region[<span class="st">"peak_yx"</span>][::<span class="op">-</span><span class="dv">1</span>] <span class="cf">for</span> region <span class="kw">in</span> regions], dtype<span class="op">=</span><span class="bu">float</span>)  <span class="co"># (x, y)</span></span>
+<span id="cb5-6"><a aria-hidden="true" href="#cb5-6" tabindex="-1"></a>psf_sigma <span class="op">=</span> target_header[<span class="st">"PSFSIG"</span>]</span>
+<span id="cb5-7"><a aria-hidden="true" href="#cb5-7" tabindex="-1"></a>size <span class="op">=</span> <span class="dv">2</span> <span class="op">*</span> <span class="bu">int</span>(np.ceil(<span class="dv">5</span> <span class="op">*</span> psf_sigma)) <span class="op">+</span> <span class="dv">1</span></span>
+<span id="cb5-8"><a aria-hidden="true" href="#cb5-8" tabindex="-1"></a>cutout_variance <span class="op">=</span> window_stamps(difference_variance, candidates, size)</span>
+<span id="cb5-9"><a aria-hidden="true" href="#cb5-9" tabindex="-1"></a>sources <span class="op">=</span> fit_single_sources(window_stamps(difference, candidates, size), cutout_variance,</span>
+<span id="cb5-10"><a aria-hidden="true" href="#cb5-10" tabindex="-1"></a>                             np.zeros((<span class="bu">len</span>(candidates), <span class="dv">2</span>)), psf_sigma, mask<span class="op">=</span>np.isfinite(cutout_variance),</span>
+<span id="cb5-11"><a aria-hidden="true" href="#cb5-11" tabindex="-1"></a>                             sign<span class="op">=</span><span class="dv">1</span>)  <span class="co"># both candidates brightened</span></span>
+<span id="cb5-12"><a aria-hidden="true" href="#cb5-12" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"window"</span>, size, <span class="st">"px, uncertainty_valid"</span>, sources.uncertainty_valid)</span>
+<span id="cb5-13"><a aria-hidden="true" href="#cb5-13" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"flux error      "</span>, sources.flux_error.<span class="bu">round</span>(<span class="dv">1</span>))</span>
+<span id="cb5-14"><a aria-hidden="true" href="#cb5-14" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"x position error"</span>, sources.position_error_x.<span class="bu">round</span>(<span class="dv">4</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>window 19 px, uncertainty_valid [ True  True]
+flux error       [113.5  70.6]
+x position error [0.0194 0.0393]</code></pre>
+</div>
+</div>
+<p>The errors come from the fit covariance and are NaN where <code>uncertainty_valid</code> is false.</p>
+</section>
+<section class="level2" data-number="10.4" id="correct-for-correlated-noise">
+<h2 class="anchored" data-anchor-id="correct-for-correlated-noise" data-number="10.4"><span class="header-section-number">10.4</span> Correct for correlated noise</h2>
+<p>A fixed-PSF flux is a weighted sum of difference pixels; a fitted position can be approximated by one after linearizing the fit. The correlation factor <span class="math inline">\(f\)</span> is the variance of that sum including covariance, divided by the variance predicted from independent pixels. Multiply its error bar by <span class="math inline">\(\sqrt{f}\)</span> to account for that covariance. The factor depends on the estimator’s weights and can be below one, especially for signed derivative weights.</p>
+<section class="level3" data-number="10.4.1" id="measure-the-factor-at-empty-positions">
+<h3 class="anchored" data-anchor-id="measure-the-factor-at-empty-positions" data-number="10.4.1"><span class="header-section-number">10.4.1</span> Measure the factor at empty positions</h3>
+<p><code>empty_positions</code> picks pixels more than one window from every candidate and every loud pixel. <code>empirical_correlation_factor</code> divides the weighted sum of the difference at each by its predicted error, and returns the squared robust spread (1.4826 times the median absolute deviation) of the ratios. <code>psf_weights</code> builds a Gaussian PSF and its derivatives. These approximate flux and position weights for a symmetric PSF in uniform noise; inverse-variance weighting, masks and joint parameter fitting change the actual weights.</p>
+<div class="cell" data-execution_count="5" id="e6ab6a8d">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> empirical_correlation_factor, empty_positions, psf_weights</span>
+<span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
+<span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a><span class="co"># loud: pixels more than 5 robust sigmas from the median of the difference</span></span>
+<span id="cb7-4"><a aria-hidden="true" href="#cb7-4" tabindex="-1"></a>empty, _ <span class="op">=</span> empty_positions(inside, exclude_xy<span class="op">=</span>candidates, window<span class="op">=</span>size, count<span class="op">=</span><span class="dv">500</span>, loud<span class="op">=</span>(difference, <span class="fl">5.0</span>))</span>
+<span id="cb7-5"><a aria-hidden="true" href="#cb7-5" tabindex="-1"></a>weights <span class="op">=</span> np.stack([psf_weights(psf_sigma, size), psf_weights(psf_sigma, size, derivative<span class="op">=</span><span class="st">"x"</span>),</span>
+<span id="cb7-6"><a aria-hidden="true" href="#cb7-6" tabindex="-1"></a>                    psf_weights(psf_sigma, size, derivative<span class="op">=</span><span class="st">"y"</span>)])  <span class="co"># a flux, an x and a y position</span></span>
+<span id="cb7-7"><a aria-hidden="true" href="#cb7-7" tabindex="-1"></a>measured <span class="op">=</span> empirical_correlation_factor(difference, difference_variance, weights, empty)</span>
+<span id="cb7-8"><a aria-hidden="true" href="#cb7-8" tabindex="-1"></a>n <span class="op">=</span> measured.positions_used</span>
+<span id="cb7-9"><a aria-hidden="true" href="#cb7-9" tabindex="-1"></a>standard_error <span class="op">=</span> measured.factor <span class="op">*</span> np.sqrt(<span class="dv">2</span> <span class="op">/</span> (<span class="fl">0.3675</span> <span class="op">*</span> (n <span class="op">-</span> <span class="dv">1</span>)))  <span class="co"># as the transient chain computes it</span></span>
+<span id="cb7-10"><a aria-hidden="true" href="#cb7-10" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> positions. Factors for the flux, x and y: </span><span class="sc">{</span>measured<span class="sc">.</span>factor<span class="sc">.</span><span class="bu">round</span>(<span class="dv">3</span>)<span class="sc">}</span><span class="ss">; nominal SE </span><span class="sc">{</span>standard_error<span class="sc">.</span><span class="bu">round</span>(<span class="dv">3</span>)<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>415 positions. Factors for the flux, x and y: [1.138 1.065 1.026]; nominal SE [0.131 0.122 0.118]</code></pre>
+</div>
+</div>
+<p>The printed standard error is the chain’s approximation for independent Gaussian samples. Empty windows can overlap and share noise, so increasing their count does not necessarily add independent information. Use separated positions or repeated independent images to assess the sampling uncertainty.</p>
+</section>
+<section class="level3" data-number="10.4.2" id="apply-the-factor">
+<h3 class="anchored" data-anchor-id="apply-the-factor" data-number="10.4.2"><span class="header-section-number">10.4.2</span> Apply the factor</h3>
+<p>The following scaling illustrates an approximate adjustment to the fitted errors. A factor measured with background PSF weights need not describe a bright source or a joint nonlinear fit exactly. For a particular estimator, use its weights and variance, as the forced-photometry example below does. Flooring the factor at one is the chain’s conservative policy, not a mathematical bound on <span class="math inline">\(f\)</span>.</p>
+<div class="cell" data-execution_count="6" id="6c23f38c">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a>f_flux, f_x, f_y <span class="op">=</span> np.maximum(measured.factor, <span class="fl">1.0</span>)</span>
+<span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"flux error      "</span>, sources.flux_error.<span class="bu">round</span>(<span class="dv">1</span>), <span class="st">"-&gt;"</span>, (sources.flux_error <span class="op">*</span> np.sqrt(f_flux)).<span class="bu">round</span>(<span class="dv">1</span>))</span>
+<span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"x position error"</span>, sources.position_error_x.<span class="bu">round</span>(<span class="dv">4</span>), <span class="st">"-&gt;"</span>, (sources.position_error_x <span class="op">*</span> np.sqrt(f_x)).<span class="bu">round</span>(<span class="dv">4</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>flux error       [113.5  70.6] -&gt; [121.1  75.3]
+x position error [0.0194 0.0393] -&gt; [0.02   0.0405]</code></pre>
+</div>
+</div>
+</section>
+<section class="level3" data-number="10.4.3" id="compute-the-factor-in-closed-form">
+<h3 class="anchored" data-anchor-id="compute-the-factor-in-closed-form" data-number="10.4.3"><span class="header-section-number">10.4.3</span> Compute the factor in closed form</h3>
+<p><code>correlation_factor</code> estimates <span class="math inline">\(f\)</span> at each position from the kernel, both variance planes and the interpolation weights that xRep applied there, which <code>resampling_weights_at</code> returns. It assumes independent target and reference input noise, a fixed kernel, and locally stationary resampling. It infers a local reference-noise level from the resampled variance; this is not exact propagation of an arbitrary spatially varying input covariance. Pass <code>resampling_weights_at</code> the prepared mapping of the alignment.</p>
+<div class="cell" data-execution_count="7" id="ca314cf3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> correlation_factor</span>
+<span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> resampling_weights_at</span>
+<span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a></span>
+<span id="cb11-4"><a aria-hidden="true" href="#cb11-4" tabindex="-1"></a>taps <span class="op">=</span> resampling_weights_at(spec, candidates[:, <span class="dv">0</span>], candidates[:, <span class="dv">1</span>], prepared<span class="op">=</span>prepared, source_shape<span class="op">=</span>reference.shape)</span>
+<span id="cb11-5"><a aria-hidden="true" href="#cb11-5" tabindex="-1"></a>closed <span class="op">=</span> correlation_factor(weights[<span class="dv">0</span>], kernel<span class="op">=</span>fit.kernel, target_variance<span class="op">=</span>target_variance,</span>
+<span id="cb11-6"><a aria-hidden="true" href="#cb11-6" tabindex="-1"></a>                            reference_variance<span class="op">=</span>aligned.variance, resampling_weights<span class="op">=</span>taps.weights,</span>
+<span id="cb11-7"><a aria-hidden="true" href="#cb11-7" tabindex="-1"></a>                            positions<span class="op">=</span>candidates, residual_variance<span class="op">=</span>difference_variance,</span>
+<span id="cb11-8"><a aria-hidden="true" href="#cb11-8" tabindex="-1"></a>                            is_translation<span class="op">=</span>taps.is_translation)</span>
+<span id="cb11-9"><a aria-hidden="true" href="#cb11-9" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_translation"</span>, taps.is_translation, <span class="st">"factor"</span>, closed.factor, <span class="st">"n_rotated"</span>, closed.n_rotated)</span>
+<span id="cb11-10"><a aria-hidden="true" href="#cb11-10" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"local Jacobian, reference pixels per target pixel:</span><span class="ch">\n</span><span class="st">"</span>, taps.jacobian[<span class="dv">0</span>].<span class="bu">round</span>(<span class="dv">3</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>is_translation [False False] factor [nan nan] n_rotated 2
+local Jacobian, reference pixels per target pixel:
+ [[ 1.037 -0.054]
+ [ 0.054  1.037]]</code></pre>
+</div>
+</div>
+<p>The closed form is supported only where the mapping between the grids is locally a shift. <code>is_translation</code> is false where the local Jacobian, the change of reference pixel per target pixel, differs from the identity by more than <code>1e-3</code>. Here it shows the rotation and the change of pixel scale. On such a pair, a measured factor can still diagnose the noise. When the chain’s correlation term is active, an undefined closed-form factor leaves the affected computed error bars NaN; the measured factor does not replace it (<a class="quarto-xref" href="transient-chain.html#sec-transient-chain-errors"><span>Section 9.11.1</span></a>).</p>
+<p>Write a target that only a shift separates from the reference, and subtract it. <code>make_wcs</code> and <code>render</code> come from the sample-pair block.</p>
+<div class="cell" data-execution_count="8" id="0441f836">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a>shift_wcs <span class="op">=</span> make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="fl">4.3</span>, <span class="fl">6.3</span>))  <span class="co"># the reference's scale and orientation</span></span>
+<span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a>shifted <span class="op">=</span> render((<span class="dv">256</span>, <span class="dv">256</span>), shift_wcs, target_ra, target_dec, target_flux, psf_sigma, <span class="fl">120.0</span>,</span>
+<span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>                 target_header[<span class="st">"GAIN"</span>]).astype(np.float64)</span>
+<span id="cb13-4"><a aria-hidden="true" href="#cb13-4" tabindex="-1"></a>shifted_variance <span class="op">=</span> np.clip(shifted, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> target_header[<span class="st">"GAIN"</span>]</span>
+<span id="cb13-5"><a aria-hidden="true" href="#cb13-5" tabindex="-1"></a>shift_spec <span class="op">=</span> ReprojectionSpec(mapping<span class="op">=</span>make_wcs_pair_transform(shift_wcs, WCS(reference_header)),</span>
+<span id="cb13-6"><a aria-hidden="true" href="#cb13-6" tabindex="-1"></a>                              output_bbox<span class="op">=</span>BBox(<span class="dv">0</span>, <span class="dv">0</span>, <span class="dv">256</span>, <span class="dv">256</span>))</span>
+<span id="cb13-7"><a aria-hidden="true" href="#cb13-7" tabindex="-1"></a>shift_prepared <span class="op">=</span> prepare_reprojection(shift_spec, source_shape<span class="op">=</span>reference.shape)</span>
+<span id="cb13-8"><a aria-hidden="true" href="#cb13-8" tabindex="-1"></a>shift_aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, no_bad_pixels, shift_spec, backend<span class="op">=</span><span class="st">"cpu"</span>,</span>
+<span id="cb13-9"><a aria-hidden="true" href="#cb13-9" tabindex="-1"></a>                                       prepared<span class="op">=</span>shift_prepared)</span>
+<span id="cb13-10"><a aria-hidden="true" href="#cb13-10" tabindex="-1"></a>shift_fit <span class="op">=</span> solve_constant_kernel(shift_aligned.image, shifted, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>),</span>
+<span id="cb13-11"><a aria-hidden="true" href="#cb13-11" tabindex="-1"></a>                                  variance<span class="op">=</span>shifted_variance, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb13-12"><a aria-hidden="true" href="#cb13-12" tabindex="-1"></a>shift_noise <span class="op">=</span> standardize_constant_kernel_residual(shift_fit.residual, kernel<span class="op">=</span>shift_fit.kernel,</span>
+<span id="cb13-13"><a aria-hidden="true" href="#cb13-13" tabindex="-1"></a>                                                   target_variance<span class="op">=</span>shifted_variance,</span>
+<span id="cb13-14"><a aria-hidden="true" href="#cb13-14" tabindex="-1"></a>                                                   reference_variance<span class="op">=</span>shift_aligned.variance)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>Read the resampling weights at empty positions of the new difference:</p>
+<div class="cell" data-execution_count="9" id="5bb93940">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a>shift_regions <span class="op">=</span> identify_residual_hotspots(shift_noise.standardized_residual, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span>
+<span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a>shift_candidates <span class="op">=</span> np.array([region[<span class="st">"peak_yx"</span>][::<span class="op">-</span><span class="dv">1</span>] <span class="cf">for</span> region <span class="kw">in</span> shift_regions], dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>shift_empty, _ <span class="op">=</span> empty_positions(shift_noise.valid_mask, exclude_xy<span class="op">=</span>shift_candidates, window<span class="op">=</span>size, count<span class="op">=</span><span class="dv">500</span>,</span>
+<span id="cb14-4"><a aria-hidden="true" href="#cb14-4" tabindex="-1"></a>                                 loud<span class="op">=</span>(shift_fit.residual, <span class="fl">5.0</span>))</span>
+<span id="cb14-5"><a aria-hidden="true" href="#cb14-5" tabindex="-1"></a>shift_taps <span class="op">=</span> resampling_weights_at(shift_spec, shift_empty[:, <span class="dv">0</span>], shift_empty[:, <span class="dv">1</span>], prepared<span class="op">=</span>shift_prepared,</span>
+<span id="cb14-6"><a aria-hidden="true" href="#cb14-6" tabindex="-1"></a>                                   source_shape<span class="op">=</span>reference.shape)</span>
+<span id="cb14-7"><a aria-hidden="true" href="#cb14-7" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_translation everywhere"</span>, <span class="bu">bool</span>(shift_taps.is_translation.<span class="bu">all</span>()))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>is_translation everywhere True</code></pre>
+</div>
+</div>
+<p>Compute both factors at those positions. With weights of shape <code>(N, q, s, s)</code>, one call returns <code>q</code> factors per position.</p>
+<div class="cell" data-execution_count="10" id="252935e4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a>shift_closed <span class="op">=</span> correlation_factor(np.broadcast_to(weights, (<span class="bu">len</span>(shift_empty),) <span class="op">+</span> weights.shape),</span>
+<span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a>                                  kernel<span class="op">=</span>shift_fit.kernel, target_variance<span class="op">=</span>shifted_variance,</span>
+<span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>                                  reference_variance<span class="op">=</span>shift_aligned.variance, resampling_weights<span class="op">=</span>shift_taps.weights,</span>
+<span id="cb16-4"><a aria-hidden="true" href="#cb16-4" tabindex="-1"></a>                                  positions<span class="op">=</span>shift_empty, residual_variance<span class="op">=</span>shift_noise.marginal_residual_variance,</span>
+<span id="cb16-5"><a aria-hidden="true" href="#cb16-5" tabindex="-1"></a>                                  is_translation<span class="op">=</span>shift_taps.is_translation)</span>
+<span id="cb16-6"><a aria-hidden="true" href="#cb16-6" tabindex="-1"></a>shift_measured <span class="op">=</span> empirical_correlation_factor(shift_fit.residual, shift_noise.marginal_residual_variance,</span>
+<span id="cb16-7"><a aria-hidden="true" href="#cb16-7" tabindex="-1"></a>                                              weights, shift_empty)</span>
+<span id="cb16-8"><a aria-hidden="true" href="#cb16-8" tabindex="-1"></a>shift_error <span class="op">=</span> shift_measured.factor <span class="op">*</span> np.sqrt(<span class="dv">2</span> <span class="op">/</span> (<span class="fl">0.3675</span> <span class="op">*</span> (shift_measured.positions_used <span class="op">-</span> <span class="dv">1</span>)))</span>
+<span id="cb16-9"><a aria-hidden="true" href="#cb16-9" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"closed form, median"</span>, np.nanmedian(shift_closed.factor, axis<span class="op">=</span><span class="dv">0</span>).<span class="bu">round</span>(<span class="dv">3</span>))</span>
+<span id="cb16-10"><a aria-hidden="true" href="#cb16-10" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"measured           "</span>, shift_measured.factor.<span class="bu">round</span>(<span class="dv">3</span>), <span class="st">"nominal SE"</span>, shift_error.<span class="bu">round</span>(<span class="dv">3</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>closed form, median [1.129 1.081 1.081]
+measured            [1.069 1.237 1.222] nominal SE [0.123 0.143 0.141]</code></pre>
+</div>
+</div>
+<p>The closed form models the resampling and the kernel, but omits correlations already present in a coadd (a stack of resampled exposures). The chain accepts a measured factor when it exceeds one and the median closed form by more than two nominal standard errors. It then raises a candidate’s factor only if the candidate’s closed form is finite and smaller than that measured value.</p>
+</section>
+</section>
+<section class="level2" data-number="10.5" id="read-the-transient-chains-error-budget">
+<h2 class="anchored" data-anchor-id="read-the-transient-chains-error-budget" data-number="10.5"><span class="header-section-number">10.5</span> Read the transient chain’s error budget</h2>
+<p>The transient chain (<a class="quarto-xref" href="transient-chain.html"><span>Chapter 9</span></a>) runs these calls and adds three more terms. For each computed quantity <code>q</code>, one of <code>center_x</code>, <code>center_y</code>, <code>positive_x</code>, <code>positive_y</code> and <code>psf_flux</code>, it writes the error bar <code>&lt;q&gt;_err</code> and each term in its own column. The flux budget is available only when forced photometry ran:</p>
+<pre class="text"><code>&lt;q&gt;_err = sqrt(fit^2 + corr^2 + kfit^2 + kmatch^2 + mis^2)</code></pre>
+<div class="quarto-float quarto-figure quarto-figure-center anchored" id="tbl-uncertainty-terms">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-uncertainty-terms-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table 10.1: The terms of the chain’s error budget, from <code>docs/uncertainty-quantification.md</code> and <code>transient_chain/uq.py</code>.
+</figcaption>
+<div aria-describedby="tbl-uncertainty-terms-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 20%"/>
+<col style="width: 20%"/>
+<col style="width: 20%"/>
+<col style="width: 20%"/>
+<col style="width: 20%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Term</th>
+<th>Column</th>
+<th>What it adds</th>
+<th>Applies to</th>
+<th>Needs</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>fit</td>
+<td><code>&lt;q&gt;_err_fit</code></td>
+<td>xFit’s error, weighted by the target variance plane</td>
+<td>all five</td>
+<td>the fit. Without a target variance plane, xFit scales the covariance by the reduced chi-square</td>
+</tr>
+<tr class="even">
+<td>corr</td>
+<td><code>&lt;q&gt;_err_corr</code></td>
+<td>the reference’s noise and its correlation, <code>&lt;q&gt;_err_fit * sqrt(max(f, 1) - 1)</code>, with <code>f</code> relative to the target variance</td>
+<td>all five</td>
+<td>target and reference variance planes, and a PSF width</td>
+</tr>
+<tr class="odd">
+<td>kfit</td>
+<td><code>&lt;q&gt;_err_kfit</code></td>
+<td>the uncertainty of the fitted kernel and background, largest on a bright reference source</td>
+<td>all five</td>
+<td>a target variance plane, a PSF width and <code>uq.kernel_fit: true</code></td>
+</tr>
+<tr class="even">
+<td>kmatch</td>
+<td><code>&lt;q&gt;_err_kmatch</code></td>
+<td>reference flux the kernel did not match, <code>eta</code> times the matched reference flux at the source</td>
+<td><code>psf_flux</code>, 0 for positions</td>
+<td>a target variance plane, a PSF width and at least 5 stars matched by the refine stage</td>
+</tr>
+<tr class="odd">
+<td>mis</td>
+<td><code>&lt;q&gt;_err_mis</code></td>
+<td>the alignment error left after the refine stage</td>
+<td>positions, 0 for <code>psf_flux</code></td>
+<td>a misalignment model: <code>align.refine: true</code>, an affine refinement, a star finder other than <code>daofind</code>, and a reference that the chain reprojects or mosaics onto the target grid</td>
+</tr>
+<tr class="even">
+<td>sky</td>
+<td><code>sky_err_arcsec</code></td>
+<td>the absolute sky astrometry of the exposure</td>
+<td>reported apart, never added to <code>&lt;q&gt;_err</code></td>
+<td><code>uq.sky_astrometry_arcsec</code> and <code>uq.sky_astrometry_source</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<p>A term without its inputs is left out; that does not establish that its physical contribution is zero. Check the recorded exclusions when interpreting the result. The <code>uq</code> block of the configuration sets the budget:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>uq.enabled</code></td>
+<td><code>true</code></td>
+<td><code>false</code> sets every <code>&lt;q&gt;_err</code> to <code>&lt;q&gt;_err_fit</code> and every other term to 0</td>
+</tr>
+<tr class="even">
+<td><code>uq.kernel_fit</code></td>
+<td><code>true</code></td>
+<td>computes the kfit term</td>
+</tr>
+<tr class="odd">
+<td><code>uq.measure_correlation</code></td>
+<td><code>true</code></td>
+<td>measures the correlation factor at empty positions of each exposure</td>
+</tr>
+<tr class="even">
+<td><code>uq.correlation_positions</code></td>
+<td><code>1000</code></td>
+<td>the number of empty positions for that measurement, at least 20</td>
+</tr>
+<tr class="odd">
+<td><code>uq.max_lobe_reach_px</code></td>
+<td><code>32</code></td>
+<td>the largest center-to-lobe distance that keeps a center error bar</td>
+</tr>
+<tr class="even">
+<td><code>uq.single_source_refit</code></td>
+<td><code>true</code></td>
+<td>refits a candidate with one unsupported lobe with the one-lobe model</td>
+</tr>
+<tr class="odd">
+<td><code>uq.sky_astrometry_arcsec</code>, <code>uq.sky_astrometry_source</code></td>
+<td>null</td>
+<td>set together. They are copied to <code>sky_err_arcsec</code> and <code>sky_err_source</code></td>
+</tr>
+</tbody>
+</table>
+<p>With the budget enabled, quote <code>&lt;q&gt;_err</code>. It is NaN when its fit error is nonfinite, its required window is unusable or its active correlation factor is undefined. A window needs at least half its pixels usable, and center estimates require both lobes within the configured reach. <code>uq_valid</code> covers the quantities that the budget computed; it does not certify every catalog output or the availability of all terms. With <code>uq.enabled: false</code>, the flag is set true without those checks. The block below, which needs a finished run (<a class="quarto-xref" href="transient-chain.html#sec-transient-chain-errors"><span>Section 9.11.1</span></a>), rebuilds an error bar without one term.</p>
+<div class="cell" data-execution_count="11" id="cbbccd1a">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="im">import</span> json</span>
+<span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a></span>
+<span id="cb19-4"><a aria-hidden="true" href="#cb19-4" tabindex="-1"></a>table <span class="op">=</span> pd.read_parquet(<span class="st">"out/catalog.parquet"</span>)</span>
+<span id="cb19-5"><a aria-hidden="true" href="#cb19-5" tabindex="-1"></a>rows <span class="op">=</span> table[table[<span class="st">"uq_valid"</span>]]</span>
+<span id="cb19-6"><a aria-hidden="true" href="#cb19-6" tabindex="-1"></a>terms <span class="op">=</span> [<span class="st">"fit"</span>, <span class="st">"corr"</span>, <span class="st">"kfit"</span>, <span class="st">"kmatch"</span>, <span class="st">"mis"</span>]</span>
+<span id="cb19-7"><a aria-hidden="true" href="#cb19-7" tabindex="-1"></a><span class="bu">print</span>(rows[[<span class="st">"psf_flux"</span>, <span class="st">"psf_flux_err"</span>] <span class="op">+</span> [<span class="ss">f"psf_flux_err_</span><span class="sc">{</span>term<span class="sc">}</span><span class="ss">"</span> <span class="cf">for</span> term <span class="kw">in</span> terms]])</span>
+<span id="cb19-8"><a aria-hidden="true" href="#cb19-8" tabindex="-1"></a>without_kfit <span class="op">=</span> np.sqrt(<span class="bu">sum</span>(rows[<span class="ss">f"psf_flux_err_</span><span class="sc">{</span>term<span class="sc">}</span><span class="ss">"</span>] <span class="op">**</span> <span class="dv">2</span> <span class="cf">for</span> term <span class="kw">in</span> terms <span class="cf">if</span> term <span class="op">!=</span> <span class="st">"kfit"</span>))</span>
+<span id="cb19-9"><a aria-hidden="true" href="#cb19-9" tabindex="-1"></a></span>
+<span id="cb19-10"><a aria-hidden="true" href="#cb19-10" tabindex="-1"></a>summary <span class="op">=</span> json.load(<span class="bu">open</span>(<span class="st">"out/items/S1-v1/summary.json"</span>))</span>
+<span id="cb19-11"><a aria-hidden="true" href="#cb19-11" tabindex="-1"></a><span class="bu">print</span>(summary[<span class="st">"uq_terms"</span>])</span>
+<span id="cb19-12"><a aria-hidden="true" href="#cb19-12" tabindex="-1"></a>uq <span class="op">=</span> summary[<span class="st">"uq"</span>]</span>
+<span id="cb19-13"><a aria-hidden="true" href="#cb19-13" tabindex="-1"></a><span class="cf">if</span> uq <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>:  <span class="co"># no budget summary when no candidates were found</span></span>
+<span id="cb19-14"><a aria-hidden="true" href="#cb19-14" tabindex="-1"></a>    <span class="bu">print</span>(uq[<span class="st">"excluded"</span>])</span>
+<span id="cb19-15"><a aria-hidden="true" href="#cb19-15" tabindex="-1"></a>    correlation <span class="op">=</span> uq.get(<span class="st">"correlation"</span>)</span>
+<span id="cb19-16"><a aria-hidden="true" href="#cb19-16" tabindex="-1"></a>    <span class="cf">if</span> correlation <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>:  <span class="co"># absent when disabled or unavailable</span></span>
+<span id="cb19-17"><a aria-hidden="true" href="#cb19-17" tabindex="-1"></a>        <span class="bu">print</span>(correlation[<span class="st">"source"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>These fields record how the error bars were built:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Field</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>uq_terms</code> in <code>summary.json</code></td>
+<td>the terms that went into <code>&lt;q&gt;_err</code></td>
+</tr>
+<tr class="even">
+<td><code>uq.excluded</code></td>
+<td>each term left out, with the reason. <code>uq</code> is null for an item with no candidates</td>
+</tr>
+<tr class="odd">
+<td><code>uq.correlation</code></td>
+<td><code>closed_form</code>, <code>measured</code>, <code>measured_se</code>, <code>plain_ratio</code> and <code>source</code> for the flux and the two position weightings</td>
+</tr>
+<tr class="even">
+<td><code>uq.kernel_mismatch</code></td>
+<td><code>eta</code> and <code>n</code>, the number of stars it was fitted on</td>
+</tr>
+<tr class="odd">
+<td><code>uq.invalid_window</code>, <code>uq.masked_window</code>, <code>uq.undefined_factor</code>, <code>uq.rotated_grid</code>, <code>uq.sensitivity_capped</code></td>
+<td>the number of rows with each condition</td>
+</tr>
+<tr class="even">
+<td><code>uq_window_masked</code>, <code>uq_corr_measured</code> in the catalog</td>
+<td>rows whose window lost masked pixels, and rows that used the measured factor</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="10.6" id="check-your-error-bars-with-injected-sources">
+<h2 class="anchored" data-anchor-id="check-your-error-bars-with-injected-sources" data-number="10.6"><span class="header-section-number">10.6</span> Check your error bars with injected sources</h2>
+<p>Inject sources of known flux into your difference image and measure them as you measure your candidates. A source’s pull is its measured minus true flux, over its error bar. Unbiased estimates with calibrated errors should have pulls centered near zero with width near one in the tested regime.</p>
+<p>This example tests fixed-position forced photometry conditional on an already fitted subtraction. It does not test detection and selection, errors in fitted positions, or the effect of injected sources on alignment and kernel fitting. For those, inject into the input exposures and rerun the relevant stages.</p>
+<p>The correction matters when the reference’s noise is a large part of the difference image’s noise, and xRep resampled the reference onto the target grid. The sample reference is much deeper than the target, and its correction is small. Make a second reference as noisy as the target, on the same grid, and subtract it from the shifted target:</p>
+<div class="cell" data-execution_count="12" id="7e2117ae">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a>gain <span class="op">=</span> target_header[<span class="st">"GAIN"</span>]</span>
+<span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a><span class="co"># the sample reference's stars, grid and PSF, with the target's sky level and gain</span></span>
+<span id="cb20-3"><a aria-hidden="true" href="#cb20-3" tabindex="-1"></a>shallow <span class="op">=</span> render(reference.shape, WCS(reference_header), ra, dec, flux, reference_header[<span class="st">"PSFSIG"</span>], <span class="fl">120.0</span>,</span>
+<span id="cb20-4"><a aria-hidden="true" href="#cb20-4" tabindex="-1"></a>                 gain).astype(np.float64)</span>
+<span id="cb20-5"><a aria-hidden="true" href="#cb20-5" tabindex="-1"></a>shallow_variance <span class="op">=</span> np.clip(shallow, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> gain</span>
+<span id="cb20-6"><a aria-hidden="true" href="#cb20-6" tabindex="-1"></a>shallow_aligned <span class="op">=</span> reproject_masked_array(shallow, shallow_variance, no_bad_pixels, shift_spec, backend<span class="op">=</span><span class="st">"cpu"</span>,</span>
+<span id="cb20-7"><a aria-hidden="true" href="#cb20-7" tabindex="-1"></a>                                         prepared<span class="op">=</span>shift_prepared)</span>
+<span id="cb20-8"><a aria-hidden="true" href="#cb20-8" tabindex="-1"></a>shallow_fit <span class="op">=</span> solve_constant_kernel(shallow_aligned.image, shifted, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>),</span>
+<span id="cb20-9"><a aria-hidden="true" href="#cb20-9" tabindex="-1"></a>                                    variance<span class="op">=</span>shifted_variance, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
+<span id="cb20-10"><a aria-hidden="true" href="#cb20-10" tabindex="-1"></a>shallow_noise <span class="op">=</span> standardize_constant_kernel_residual(shallow_fit.residual, kernel<span class="op">=</span>shallow_fit.kernel,</span>
+<span id="cb20-11"><a aria-hidden="true" href="#cb20-11" tabindex="-1"></a>                                                     target_variance<span class="op">=</span>shifted_variance,</span>
+<span id="cb20-12"><a aria-hidden="true" href="#cb20-12" tabindex="-1"></a>                                                     reference_variance<span class="op">=</span>shallow_aligned.variance)</span>
+<span id="cb20-13"><a aria-hidden="true" href="#cb20-13" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"median variance: deep reference </span><span class="sc">{</span>np<span class="sc">.</span>median(reference_variance)<span class="sc">:.1f}</span><span class="ss">, "</span></span>
+<span id="cb20-14"><a aria-hidden="true" href="#cb20-14" tabindex="-1"></a>      <span class="ss">f"shallow reference </span><span class="sc">{</span>np<span class="sc">.</span>median(shallow_variance)<span class="sc">:.1f}</span><span class="ss">, target </span><span class="sc">{</span>np<span class="sc">.</span>median(shifted_variance)<span class="sc">:.1f}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>median variance: deep reference 12.5, shallow reference 60.1, target 60.3</code></pre>
+</div>
+</div>
+<p>Place one source per cell of an 11 pixel grid where the window is empty, adding a Gaussian approximation to photon noise. Both pairs get the same sources and noise. Their measurement windows overlap, so the pulls are not independent samples.</p>
+<div class="cell" data-execution_count="13" id="51cfa8af">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">0</span>)  <span class="co"># a new seed for the injection</span></span>
+<span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a>all_empty, _ <span class="op">=</span> empty_positions(shift_noise.valid_mask, exclude_xy<span class="op">=</span>shift_candidates, window<span class="op">=</span>size,</span>
+<span id="cb22-3"><a aria-hidden="true" href="#cb22-3" tabindex="-1"></a>                               count<span class="op">=</span>shifted.size, loud<span class="op">=</span>(shift_fit.residual, <span class="fl">5.0</span>))</span>
+<span id="cb22-4"><a aria-hidden="true" href="#cb22-4" tabindex="-1"></a>is_empty <span class="op">=</span> np.zeros(shifted.shape, dtype<span class="op">=</span><span class="bu">bool</span>)</span>
+<span id="cb22-5"><a aria-hidden="true" href="#cb22-5" tabindex="-1"></a>is_empty[all_empty[:, <span class="dv">1</span>].astype(<span class="bu">int</span>), all_empty[:, <span class="dv">0</span>].astype(<span class="bu">int</span>)] <span class="op">=</span> <span class="va">True</span></span>
+<span id="cb22-6"><a aria-hidden="true" href="#cb22-6" tabindex="-1"></a>gy, gx <span class="op">=</span> np.mgrid[size:shifted.shape[<span class="dv">0</span>] <span class="op">-</span> size:<span class="dv">11</span>, size:shifted.shape[<span class="dv">1</span>] <span class="op">-</span> size:<span class="dv">11</span>]</span>
+<span id="cb22-7"><a aria-hidden="true" href="#cb22-7" tabindex="-1"></a>keep <span class="op">=</span> is_empty[gy, gx]</span>
+<span id="cb22-8"><a aria-hidden="true" href="#cb22-8" tabindex="-1"></a>true_xy <span class="op">=</span> np.column_stack([gx[keep], gy[keep]]) <span class="op">+</span> rng.uniform(<span class="op">-</span><span class="fl">0.5</span>, <span class="fl">0.5</span>, (keep.<span class="bu">sum</span>(), <span class="dv">2</span>))  <span class="co"># (x, y)</span></span>
+<span id="cb22-9"><a aria-hidden="true" href="#cb22-9" tabindex="-1"></a>true_flux <span class="op">=</span> rng.uniform(<span class="dv">500</span>, <span class="dv">3000</span>, <span class="bu">len</span>(true_xy))</span>
+<span id="cb22-10"><a aria-hidden="true" href="#cb22-10" tabindex="-1"></a>half <span class="op">=</span> size <span class="op">//</span> <span class="dv">2</span></span>
+<span id="cb22-11"><a aria-hidden="true" href="#cb22-11" tabindex="-1"></a>rows <span class="op">=</span> np.rint(true_xy[:, <span class="dv">1</span>]).astype(<span class="bu">int</span>)[:, <span class="va">None</span>, <span class="va">None</span>] <span class="op">+</span> np.arange(<span class="op">-</span>half, half <span class="op">+</span> <span class="dv">1</span>)[:, <span class="va">None</span>]</span>
+<span id="cb22-12"><a aria-hidden="true" href="#cb22-12" tabindex="-1"></a>cols <span class="op">=</span> np.rint(true_xy[:, <span class="dv">0</span>]).astype(<span class="bu">int</span>)[:, <span class="va">None</span>, <span class="va">None</span>] <span class="op">+</span> np.arange(<span class="op">-</span>half, half <span class="op">+</span> <span class="dv">1</span>)</span>
+<span id="cb22-13"><a aria-hidden="true" href="#cb22-13" tabindex="-1"></a>model <span class="op">=</span> np.zeros_like(shifted)</span>
+<span id="cb22-14"><a aria-hidden="true" href="#cb22-14" tabindex="-1"></a>np.add.at(model, (rows, cols), true_flux[:, <span class="va">None</span>, <span class="va">None</span>] <span class="op">*</span> psf_weights(psf_sigma, size, offset<span class="op">=</span>true_xy <span class="op">-</span> np.rint(true_xy)))</span>
+<span id="cb22-15"><a aria-hidden="true" href="#cb22-15" tabindex="-1"></a>source_noise <span class="op">=</span> rng.normal(<span class="fl">0.0</span>, np.sqrt(model <span class="op">/</span> gain))</span>
+<span id="cb22-16"><a aria-hidden="true" href="#cb22-16" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">len</span>(true_xy), <span class="st">"sources"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>299 sources</code></pre>
+</div>
+</div>
+<p><code>injection_test</code> injects the sources into one difference and measures them with <code>forced_flux_at</code> at their true positions, without estimating a local sky. It adjusts each flux error with the closed-form factor for that forced estimator’s inverse-variance weights. It also measures the background factor at the empty positions.</p>
+<div class="cell" data-execution_count="14" id="c7ff44d8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a aria-hidden="true" href="#cb24-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> forced_flux_at</span>
+<span id="cb24-2"><a aria-hidden="true" href="#cb24-2" tabindex="-1"></a></span>
+<span id="cb24-3"><a aria-hidden="true" href="#cb24-3" tabindex="-1"></a>source_taps <span class="op">=</span> resampling_weights_at(shift_spec, true_xy[:, <span class="dv">0</span>], true_xy[:, <span class="dv">1</span>], prepared<span class="op">=</span>shift_prepared,</span>
+<span id="cb24-4"><a aria-hidden="true" href="#cb24-4" tabindex="-1"></a>                                    source_shape<span class="op">=</span>reference.shape)</span>
+<span id="cb24-5"><a aria-hidden="true" href="#cb24-5" tabindex="-1"></a></span>
+<span id="cb24-6"><a aria-hidden="true" href="#cb24-6" tabindex="-1"></a></span>
+<span id="cb24-7"><a aria-hidden="true" href="#cb24-7" tabindex="-1"></a><span class="kw">def</span> injection_test(aligned_reference, subtraction, subtraction_noise):</span>
+<span id="cb24-8"><a aria-hidden="true" href="#cb24-8" tabindex="-1"></a>    injected <span class="op">=</span> subtraction.residual <span class="op">+</span> model <span class="op">+</span> source_noise</span>
+<span id="cb24-9"><a aria-hidden="true" href="#cb24-9" tabindex="-1"></a>    injected_variance <span class="op">=</span> subtraction_noise.marginal_residual_variance <span class="op">+</span> model <span class="op">/</span> gain</span>
+<span id="cb24-10"><a aria-hidden="true" href="#cb24-10" tabindex="-1"></a>    photometry <span class="op">=</span> forced_flux_at(injected, true_xy, psf_sigma, window<span class="op">=</span>size, variance<span class="op">=</span>injected_variance, local_sky<span class="op">=</span><span class="va">False</span>)</span>
+<span id="cb24-11"><a aria-hidden="true" href="#cb24-11" tabindex="-1"></a>    pull <span class="op">=</span> (photometry.flux <span class="op">-</span> true_flux) <span class="op">/</span> photometry.flux_error</span>
+<span id="cb24-12"><a aria-hidden="true" href="#cb24-12" tabindex="-1"></a>    flux_weights <span class="op">=</span> (psf_weights(psf_sigma, size, offset<span class="op">=</span>true_xy <span class="op">-</span> np.rint(true_xy))</span>
+<span id="cb24-13"><a aria-hidden="true" href="#cb24-13" tabindex="-1"></a>                    <span class="op">/</span> window_stamps(injected_variance, true_xy, size))  <span class="co"># the weights of the forced flux</span></span>
+<span id="cb24-14"><a aria-hidden="true" href="#cb24-14" tabindex="-1"></a>    closed <span class="op">=</span> correlation_factor(flux_weights, kernel<span class="op">=</span>subtraction.kernel, target_variance<span class="op">=</span>shifted_variance <span class="op">+</span> model <span class="op">/</span> gain,</span>
+<span id="cb24-15"><a aria-hidden="true" href="#cb24-15" tabindex="-1"></a>                                reference_variance<span class="op">=</span>aligned_reference.variance, resampling_weights<span class="op">=</span>source_taps.weights,</span>
+<span id="cb24-16"><a aria-hidden="true" href="#cb24-16" tabindex="-1"></a>                                positions<span class="op">=</span>true_xy, residual_variance<span class="op">=</span>injected_variance,</span>
+<span id="cb24-17"><a aria-hidden="true" href="#cb24-17" tabindex="-1"></a>                                is_translation<span class="op">=</span>source_taps.is_translation).factor</span>
+<span id="cb24-18"><a aria-hidden="true" href="#cb24-18" tabindex="-1"></a>    measured <span class="op">=</span> empirical_correlation_factor(subtraction.residual, subtraction_noise.marginal_residual_variance,</span>
+<span id="cb24-19"><a aria-hidden="true" href="#cb24-19" tabindex="-1"></a>                                            weights[<span class="dv">0</span>], shift_empty)</span>
+<span id="cb24-20"><a aria-hidden="true" href="#cb24-20" tabindex="-1"></a>    <span class="cf">return</span> pull, pull <span class="op">/</span> np.sqrt(np.maximum(closed, <span class="fl">1.0</span>)), closed, measured</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>Run it on both pairs and compare:</p>
+<div class="cell" data-execution_count="15" id="8744aab1">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a>results <span class="op">=</span> {<span class="st">"deep reference"</span>: injection_test(shift_aligned, shift_fit, shift_noise),</span>
+<span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a>           <span class="st">"shallow reference"</span>: injection_test(shallow_aligned, shallow_fit, shallow_noise)}</span>
+<span id="cb25-3"><a aria-hidden="true" href="#cb25-3" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:18s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'measured factor'</span><span class="sc">:&gt;16s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'closed form'</span><span class="sc">:&gt;12s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'fit-only width'</span><span class="sc">:&gt;15s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'corrected width'</span><span class="sc">:&gt;16s}</span><span class="ss">"</span>)</span>
+<span id="cb25-4"><a aria-hidden="true" href="#cb25-4" tabindex="-1"></a><span class="cf">for</span> name, (pull, corrected, closed, measured) <span class="kw">in</span> results.items():</span>
+<span id="cb25-5"><a aria-hidden="true" href="#cb25-5" tabindex="-1"></a>    width <span class="op">=</span> [<span class="ss">f"</span><span class="sc">{</span>p<span class="sc">.</span>std(ddof<span class="op">=</span><span class="dv">1</span>)<span class="sc">:.2f}</span><span class="ss">"</span> <span class="cf">for</span> p <span class="kw">in</span> (pull, corrected)]</span>
+<span id="cb25-6"><a aria-hidden="true" href="#cb25-6" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">:18s}</span><span class="ss"> </span><span class="sc">{</span>measured<span class="sc">.</span>factor<span class="sc">:16.2f}</span><span class="ss"> </span><span class="sc">{</span>np<span class="sc">.</span>median(closed)<span class="sc">:12.2f}</span><span class="ss"> </span><span class="sc">{</span>width[<span class="dv">0</span>]<span class="sc">:&gt;15s}</span><span class="ss"> "</span></span>
+<span id="cb25-7"><a aria-hidden="true" href="#cb25-7" tabindex="-1"></a>          <span class="ss">f"</span><span class="sc">{</span>width[<span class="dv">1</span>]<span class="sc">:&gt;16s}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                    measured factor  closed form  fit-only width  corrected width
+deep reference                 1.07         1.10            1.01             0.96
+shallow reference              1.54         1.45            1.20             0.99</code></pre>
+</div>
+</div>
+<p>Here the closed form, a median over the sources, is smaller than the background measurement: the sources add independent photon noise, and their inverse-variance weights differ from the background weights. With the shallow reference, the fit-only pulls are wider than one and the corrected pulls sit nearer one. With the deep reference, the correction is small. <a class="quarto-xref" href="#fig-uncertainty-pulls">Figure <span>10.1</span></a> shows both cases; these overlapping samples do not establish an independent-sample significance for the width difference.</p>
+<div class="cell" data-execution_count="16" id="cell-fig-uncertainty-pulls">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a aria-hidden="true" href="#cb27-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb27-2"><a aria-hidden="true" href="#cb27-2" tabindex="-1"></a></span>
+<span id="cb27-3"><a aria-hidden="true" href="#cb27-3" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">2</span>, figsize<span class="op">=</span>(<span class="fl">6.5</span>, <span class="fl">2.8</span>), sharey<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb27-4"><a aria-hidden="true" href="#cb27-4" tabindex="-1"></a>bins, grid <span class="op">=</span> np.linspace(<span class="op">-</span><span class="dv">4</span>, <span class="dv">4</span>, <span class="dv">21</span>), np.linspace(<span class="op">-</span><span class="dv">4</span>, <span class="dv">4</span>, <span class="dv">200</span>)</span>
+<span id="cb27-5"><a aria-hidden="true" href="#cb27-5" tabindex="-1"></a><span class="cf">for</span> ax, (name, (pull, corrected, _, _)) <span class="kw">in</span> <span class="bu">zip</span>(axes, results.items()):</span>
+<span id="cb27-6"><a aria-hidden="true" href="#cb27-6" tabindex="-1"></a>    ax.hist(corrected, bins<span class="op">=</span>bins, density<span class="op">=</span><span class="va">True</span>, color<span class="op">=</span><span class="st">"#2A78D6"</span>, alpha<span class="op">=</span><span class="fl">0.8</span>, label<span class="op">=</span><span class="st">"corrected"</span>)</span>
+<span id="cb27-7"><a aria-hidden="true" href="#cb27-7" tabindex="-1"></a>    ax.hist(pull, bins<span class="op">=</span>bins, density<span class="op">=</span><span class="va">True</span>, histtype<span class="op">=</span><span class="st">"step"</span>, color<span class="op">=</span><span class="st">"0.5"</span>, lw<span class="op">=</span><span class="fl">1.5</span>, label<span class="op">=</span><span class="st">"fit error alone"</span>)</span>
+<span id="cb27-8"><a aria-hidden="true" href="#cb27-8" tabindex="-1"></a>    ax.plot(grid, np.exp(<span class="op">-</span>grid<span class="op">**</span><span class="dv">2</span> <span class="op">/</span> <span class="dv">2</span>) <span class="op">/</span> np.sqrt(<span class="dv">2</span> <span class="op">*</span> np.pi), color<span class="op">=</span><span class="st">"#EB6834"</span>, lw<span class="op">=</span><span class="dv">2</span>, label<span class="op">=</span><span class="st">"unit normal"</span>)</span>
+<span id="cb27-9"><a aria-hidden="true" href="#cb27-9" tabindex="-1"></a>    ax.set_title(name.capitalize(), fontsize<span class="op">=</span><span class="dv">9</span>)</span>
+<span id="cb27-10"><a aria-hidden="true" href="#cb27-10" tabindex="-1"></a>    ax.set_xlabel(<span class="st">"Pull"</span>)</span>
+<span id="cb27-11"><a aria-hidden="true" href="#cb27-11" tabindex="-1"></a>axes[<span class="dv">0</span>].set_ylabel(<span class="st">"Density"</span>)</span>
+<span id="cb27-12"><a aria-hidden="true" href="#cb27-12" tabindex="-1"></a>axes[<span class="dv">1</span>].legend(frameon<span class="op">=</span><span class="va">False</span>, fontsize<span class="op">=</span><span class="dv">7</span>)</span>
+<span id="cb27-13"><a aria-hidden="true" href="#cb27-13" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb27-14"><a aria-hidden="true" href="#cb27-14" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb27-15"><a aria-hidden="true" href="#cb27-15" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb27-16"><a aria-hidden="true" href="#cb27-16" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="Two histogram panels of pulls. In the left panel the gray outline and the blue bars both match the orange bell curve. In the right panel the gray outline is wider than the curve, and the blue bars match it." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-uncertainty-pulls">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-uncertainty-pulls-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="uncertainty_files/figure-html/fig-uncertainty-pulls-output-1.png" title="Figure 10.1: Pulls of the injected sources, measured minus true flux over the flux error, for the deep sample reference (left) and a reference as noisy as the target (right). Gray outline: with the fit error alone. Blue bars: with the closed-form correlation factor applied. Orange line: a unit normal for comparison with unbiased Gaussian errors. With the noisy reference, the fit-only pulls spread wider than the unit normal. Synthetic data, for demonstration only."><img alt="Two histogram panels of pulls. In the left panel the gray outline and the blue bars both match the orange bell curve. In the right panel the gray outline is wider than the curve, and the blue bars match it." class="figure-img" height="442" src="uncertainty_files/figure-html/fig-uncertainty-pulls-output-1.png" width="983"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-uncertainty-pulls-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 10.1: Pulls of the injected sources, measured minus true flux over the flux error, for the deep sample reference (left) and a reference as noisy as the target (right). Gray outline: with the fit error alone. Blue bars: with the closed-form correlation factor applied. Orange line: a unit normal for comparison with unbiased Gaussian errors. With the noisy reference, the fit-only pulls spread wider than the unit normal. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>Read the result like this:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Result</th>
+<th>What it means</th>
+<th>What to change</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>width near one, mean near zero</td>
+<td>the errors are consistent with the scatter in this test</td>
+<td>test other fluxes, positions and observing conditions</td>
+</tr>
+<tr class="even">
+<td>width above one</td>
+<td>possible missing variance, model error or outliers</td>
+<td>check covariance, gain, read noise, the PSF and the background; compare the chain’s full budget</td>
+</tr>
+<tr class="odd">
+<td>width below one</td>
+<td>possible excess variance or effects of selection and shared noise</td>
+<td>check for noise counted twice and measure the factor before applying it. A factor near one means little net correction for those weights, not proof that a variance plane contains covariance</td>
+</tr>
+<tr class="even">
+<td>mean away from zero</td>
+<td>the fluxes are biased, for example by a wrong PSF width or a background left in the difference</td>
+<td>measure the PSF width from your stars, and check the background fit</td>
+</tr>
+</tbody>
+</table>
+<p>For repeated exposures of one field, <code>repeat_catalogs.py</code> runs the same test on the chain’s catalogs, without injections. Run it from the root of your cuPhoton checkout:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb28"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb28-1"><a aria-hidden="true" href="#cb28-1" tabindex="-1"></a><span class="ex">python</span> examples/transient-chain/repeat_catalogs.py out/items/<span class="pp">*</span>/catalog.parquet <span class="at">--out</span> repeat.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>It scores <code>&lt;q&gt;_err</code> with and without each term. Reusing a reference correlates measurements across exposures: a common noise contribution can cancel in their differences, although changing PSFs or weights changes how it projects into each measurement. A score below one can therefore coexist with appropriate errors for individual measurements. A bias that every exposure shares passes the test unseen. The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md#repeat-test">repeat test</a> explains its report.</p>
+</section>
+<section class="level2" data-number="10.7" id="limits">
+<h2 class="anchored" data-anchor-id="limits" data-number="10.7"><span class="header-section-number">10.7</span> Limits</h2>
+<p>The error bars do not cover these cases:</p>
+<ul>
+<li>A PSF model that does not match the data. A wrong width biases a forced flux, and the flux error does not include the bias.</li>
+<li>The absolute sky astrometry (how well pixels map to sky positions), which the chain reports in <code>sky_err_arcsec</code>.</li>
+<li>Errors that are not small next to the PSF width and the lobe separation. The error bars are first order.</li>
+<li>Wrong variance planes. The fit term and the closed form assume that the planes describe the pixel noise.</li>
+<li>Unmatched reference light in a position. The kmatch term covers the flux only.</li>
+</ul>
+</section>
+<section class="level2" data-number="10.8" id="options">
+<h2 class="anchored" data-anchor-id="options" data-number="10.8"><span class="header-section-number">10.8</span> Options</h2>
+<p>The options of the calls that compute and measure the factor:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>correlation_factor(residual_variance=...)</code></td>
+<td>the target variance plus the reference variance times the kernel’s sum of squares</td>
+<td>the per-pixel variance that the factor compares against. Pass the variance your measurement used</td>
+</tr>
+<tr class="even">
+<td><code>correlation_factor(is_translation=...)</code></td>
+<td>none, no position is checked</td>
+<td>positions flagged false get NaN and count in <code>n_rotated</code></td>
+</tr>
+<tr class="odd">
+<td><code>correlation_factor(valid=...)</code></td>
+<td>none</td>
+<td>the window pixels to use. Masked pixels get zero weight, and <code>n_masked</code> counts them</td>
+</tr>
+<tr class="even">
+<td>weights of <code>correlation_factor</code></td>
+<td>required</td>
+<td><code>(N, s, s)</code>, <code>(N, q, s, s)</code> for <code>q</code> weightings, or with <code>positions</code> one <code>(s, s)</code> stamp for every position</td>
+</tr>
+<tr class="odd">
+<td><code>empty_positions(count=...)</code></td>
+<td>required</td>
+<td>the number of positions wanted, spread evenly over the empty pixels</td>
+</tr>
+<tr class="even">
+<td><code>empty_positions(loud=...)</code></td>
+<td>none</td>
+<td><code>(image, n_sigma)</code> also keeps windows away from pixels beyond <code>n_sigma</code> robust sigmas</td>
+</tr>
+<tr class="odd">
+<td><code>resampling_weights_at(translation_tolerance=...)</code></td>
+<td><code>1e-3</code></td>
+<td>the largest deviation of the local Jacobian from the identity that still counts as a shift</td>
+</tr>
+<tr class="even">
+<td><code>psf_weights(offset=..., derivative=...)</code></td>
+<td>none</td>
+<td>sub-pixel offsets of the source, and <code>"x"</code> or <code>"y"</code> for position weights</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="10.9" id="on-a-gpu">
+<h2 class="anchored" data-anchor-id="on-a-gpu" data-number="10.9"><span class="header-section-number">10.9</span> On a GPU</h2>
+<p><code>empty_positions</code>, <code>empirical_correlation_factor</code>, <code>correlation_factor</code> and <code>forced_flux_at</code> follow the array module of their inputs. With the <code>gpu</code> profile, pass CuPy arrays. They run on the GPU and return CuPy arrays:</p>
+<div class="cell" data-execution_count="17" id="9cc61263">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a aria-hidden="true" href="#cb29-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
+<span id="cb29-2"><a aria-hidden="true" href="#cb29-2" tabindex="-1"></a></span>
+<span id="cb29-3"><a aria-hidden="true" href="#cb29-3" tabindex="-1"></a>d_difference, d_variance <span class="op">=</span> cp.asarray(difference), cp.asarray(difference_variance)</span>
+<span id="cb29-4"><a aria-hidden="true" href="#cb29-4" tabindex="-1"></a>d_empty, _ <span class="op">=</span> empty_positions(cp.asarray(inside), exclude_xy<span class="op">=</span>cp.asarray(candidates), window<span class="op">=</span>size, count<span class="op">=</span><span class="dv">1000</span>,</span>
+<span id="cb29-5"><a aria-hidden="true" href="#cb29-5" tabindex="-1"></a>                             loud<span class="op">=</span>(d_difference, <span class="fl">5.0</span>))</span>
+<span id="cb29-6"><a aria-hidden="true" href="#cb29-6" tabindex="-1"></a>d_measured <span class="op">=</span> empirical_correlation_factor(d_difference, d_variance, cp.asarray(weights), d_empty)</span>
+<span id="cb29-7"><a aria-hidden="true" href="#cb29-7" tabindex="-1"></a>d_photometry <span class="op">=</span> forced_flux_at(d_difference, cp.asarray(candidates), psf_sigma, window<span class="op">=</span>size, variance<span class="op">=</span>d_variance,</span>
+<span id="cb29-8"><a aria-hidden="true" href="#cb29-8" tabindex="-1"></a>                              local_sky<span class="op">=</span><span class="va">False</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+</section>
+<section class="level2" data-number="10.10" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="10.10"><span class="header-section-number">10.10</span> Troubleshooting</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%"/>
+<col style="width: 50%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Symptom</th>
+<th>Cause and fix</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>correlation_factor</code> returns NaN, and <code>n_rotated</code> is above 0</td>
+<td>The grid mapping is not locally a shift. A measured factor can diagnose the noise in a separate analysis; the chain retains NaN for undefined closed-form factors</td>
+</tr>
+<tr class="even">
+<td><code>correlation_factor</code> returns NaN, and <code>n_rotated</code> is 0</td>
+<td>A window pixel is not finite, as in the edge band, or the reference does not cover the position and its resampling weights are all zero. Pass <code>valid</code>, or drop the position</td>
+</tr>
+<tr class="odd">
+<td><code>empirical_correlation_factor</code> returns NaN</td>
+<td>Fewer than two positions had a finite window. Check <code>positions_used</code>, and ask <code>empty_positions</code> for more positions</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="level2" data-number="10.11" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="10.11"><span class="header-section-number">10.11</span> Next steps</h2>
+<ul>
+<li>Predict the noise of a difference image: <a class="quarto-xref" href="subtract.html"><span>Chapter 6</span></a>.</li>
+<li>Fit candidates and read their covariance: <a class="quarto-xref" href="measure.html"><span>Chapter 7</span></a>.</li>
+<li>Run the transient chain and read its error bars: <a class="quarto-xref" href="transient-chain.html#sec-transient-chain-errors"><span>Section 9.11.1</span></a>.</li>
+<li><a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/uncertainty-quantification.md">Uncertainty quantification</a> builds a PSF-flux error bar with every library call, the kernel-fit term included.</li>
+<li>The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xpois.md#correlation-factor-of-weighted-sums">xPois</a> and <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xrep.md#python-api">xRep</a> references cover the factor and the resampling weights. The chain’s <a href="https://github.com/NVIDIA/cuPhoton/blob/main/examples/transient-chain/README.md#how-the-error-bar-is-built">README</a> defines every term.</li>
+</ul>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Run the transient chain" class="pagination-link" href="./transient-chain.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Reconstruct from many frames" class="pagination-link" href="./reconstruct.html">
+<span class="nav-page-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

@@ -1,0 +1,1553 @@
+<!DOCTYPE html>
+
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"/>
+<meta content="quarto-1.9.36" name="generator"/>
+<meta content="width=device-width, initial-scale=1.0, user-scalable=yes" name="viewport"/>
+<title>8  Classify candidates – cuPhoton User Guide · main (development)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta content="./" name="quarto:offset"/>
+<link href="./transient-chain.html" rel="next"/>
+<link href="./measure.html" rel="prev"/>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet"/>
+<link class="quarto-color-scheme" href="site_libs/quarto-html/quarto-syntax-highlighting-07a7212d8bc89f0076f3df5786252e12.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet"/>
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet"/>
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+<script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+<link href="https://nvidia.github.io/cuPhoton/main/classify.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="classify.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+<div id="quarto-search-results"></div>
+<header class="headroom fixed-top" id="quarto-header">
+<nav class="navbar navbar-expand-lg" data-bs-theme="dark">
+<div class="navbar-container container-fluid">
+<div class="navbar-brand-container mx-auto">
+<a class="navbar-brand navbar-brand-logo" href="./index.html">
+<img alt="NVIDIA" class="navbar-logo light-content" src="./assets/nvidia-logo.png"/>
+<img alt="NVIDIA" class="navbar-logo dark-content" src="./assets/nvidia-logo.png"/>
+</a>
+<a class="navbar-brand" href="./index.html">
+<span class="navbar-title">cuPhoton</span>
+</a>
+</div>
+<div class="" id="quarto-search" title="Search"></div>
+<button aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbarCollapse" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="menu" type="button">
+<span class="navbar-toggler-icon"></span>
+</button>
+<div class="collapse navbar-collapse" id="navbarCollapse">
+<ul class="navbar-nav navbar-nav-scroll ms-auto">
+<li class="nav-item">
+<a class="nav-link" href="https://github.com/NVIDIA/cuPhoton"> <i class="bi bi-github" role="img">
+</i>
+<span class="menu-text">Source</span></a>
+</li>
+</ul>
+</div> <!-- /navcollapse -->
+<div class="quarto-navbar-tools">
+<a class="quarto-color-scheme-toggle quarto-navigation-tool px-1" href="" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+</div> <!-- /container-fluid -->
+</nav>
+<nav class="quarto-secondary-nav">
+<div class="container-fluid d-flex">
+<button aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="quarto-btn-toggle btn" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="button" type="button">
+<i class="bi bi-layout-text-sidebar-reverse"></i>
+</button>
+<nav aria-label="breadcrumb" class="quarto-page-breadcrumbs"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./classify.html"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></a></li></ol></nav>
+<a aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" class="flex-grow-1" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }" role="navigation">
+</a>
+</div>
+</nav>
+</header>
+<!-- content -->
+<div class="quarto-container page-columns page-rows-contents page-layout-article page-navbar" id="quarto-content">
+<!-- sidebar -->
+<nav class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto" id="quarto-sidebar">
+<div class="sidebar-menu-container">
+<ul class="list-unstyled mt-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./index.html">
+<span class="menu-text">Welcome</span></a>
+</div>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Get started</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-1" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-1">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./install.html">
+<span class="menu-text"><span class="chapter-number">1</span>  <span class="chapter-title">Install cuPhoton</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./first-difference.html">
+<span class="menu-text"><span class="chapter-number">2</span>  <span class="chapter-title">Your first image difference</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./concepts.html">
+<span class="menu-text"><span class="chapter-number">3</span>  <span class="chapter-title">Concepts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">How-to guides</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-2" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-2">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./read-fits.html">
+<span class="menu-text"><span class="chapter-number">4</span>  <span class="chapter-title">Read FITS images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./align.html">
+<span class="menu-text"><span class="chapter-number">5</span>  <span class="chapter-title">Align images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./subtract.html">
+<span class="menu-text"><span class="chapter-number">6</span>  <span class="chapter-title">Subtract two images</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./measure.html">
+<span class="menu-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link active" href="./classify.html">
+<span class="menu-text"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./transient-chain.html">
+<span class="menu-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./uncertainty.html">
+<span class="menu-text"><span class="chapter-number">10</span>  <span class="chapter-title">Uncertainty Quantification</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reconstruct.html">
+<span class="menu-text"><span class="chapter-number">11</span>  <span class="chapter-title">Reconstruct from many frames</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./xray-traces.html">
+<span class="menu-text"><span class="chapter-number">12</span>  <span class="chapter-title">Analyze X-ray detector traces</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./correlate.html">
+<span class="menu-text"><span class="chapter-number">13</span>  <span class="chapter-title">Correlate signals</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./scale.html">
+<span class="menu-text"><span class="chapter-number">14</span>  <span class="chapter-title">Scale out to many GPUs</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./monitor.html">
+<span class="menu-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./reference.html">
+<span class="menu-text"><span class="chapter-number">A</span>  <span class="chapter-title">Reference</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</nav>
+<div class="quarto-sidebar-collapse-item" data-bs-target=".quarto-sidebar-collapse-item" data-bs-toggle="collapse" id="quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+<div class="sidebar margin-sidebar" id="quarto-margin-sidebar">
+<nav class="toc-active" id="TOC" role="doc-toc">
+<h2 id="toc-title">Table of contents</h2>
+<ul>
+<li><a class="nav-link active" data-scroll-target="#make-labeled-cutouts" href="#make-labeled-cutouts" id="toc-make-labeled-cutouts"><span class="header-section-number">8.1</span> Make labeled cutouts</a></li>
+<li><a class="nav-link" data-scroll-target="#write-the-dataset" href="#write-the-dataset" id="toc-write-the-dataset"><span class="header-section-number">8.2</span> Write the dataset</a></li>
+<li><a class="nav-link" data-scroll-target="#check-the-dataset" href="#check-the-dataset" id="toc-check-the-dataset"><span class="header-section-number">8.3</span> Check the dataset</a></li>
+<li><a class="nav-link" data-scroll-target="#train-a-model" href="#train-a-model" id="toc-train-a-model"><span class="header-section-number">8.4</span> Train a model</a></li>
+<li><a class="nav-link" data-scroll-target="#evaluate-on-the-test-split" href="#evaluate-on-the-test-split" id="toc-evaluate-on-the-test-split"><span class="header-section-number">8.5</span> Evaluate on the test split</a></li>
+<li><a class="nav-link" data-scroll-target="#predict" href="#predict" id="toc-predict"><span class="header-section-number">8.6</span> Predict</a></li>
+<li><a class="nav-link" data-scroll-target="#score-your-own-cutouts-in-python" href="#score-your-own-cutouts-in-python" id="toc-score-your-own-cutouts-in-python"><span class="header-section-number">8.7</span> Score your own cutouts in Python</a></li>
+<li><a class="nav-link" data-scroll-target="#handle-checkpoints" href="#handle-checkpoints" id="toc-handle-checkpoints"><span class="header-section-number">8.8</span> Handle checkpoints</a></li>
+<li><a class="nav-link" data-scroll-target="#queue-candidates-for-human-review" href="#queue-candidates-for-human-review" id="toc-queue-candidates-for-human-review"><span class="header-section-number">8.9</span> Queue candidates for human review</a></li>
+<li><a class="nav-link" data-scroll-target="#options" href="#options" id="toc-options"><span class="header-section-number">8.10</span> Options</a></li>
+<li><a class="nav-link" data-scroll-target="#on-a-gpu" href="#on-a-gpu" id="toc-on-a-gpu"><span class="header-section-number">8.11</span> On a GPU</a></li>
+<li><a class="nav-link" data-scroll-target="#what-is-survey-specific" href="#what-is-survey-specific" id="toc-what-is-survey-specific"><span class="header-section-number">8.12</span> What is survey-specific</a></li>
+<li><a class="nav-link" data-scroll-target="#troubleshooting" href="#troubleshooting" id="toc-troubleshooting"><span class="header-section-number">8.13</span> Troubleshooting</a></li>
+<li><a class="nav-link" data-scroll-target="#next-steps" href="#next-steps" id="toc-next-steps"><span class="header-section-number">8.14</span> Next steps</a></li>
+</ul>
+</nav>
+</div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><nav aria-label="Documentation version" class="cuphoton-version"><label for="cuphoton-version-select">Documentation: </label><select disabled="" id="cuphoton-version-select"><option value="main">main (development)</option></select><a href="../versions.html">Versions</a><span id="cuphoton-version-notice">Development documentation.</span></nav>
+<header class="quarto-title-block default" id="title-block-header"><nav aria-label="breadcrumb" class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./read-fits.html">How-to guides</a></li><li class="breadcrumb-item"><a href="./classify.html"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title"><span class="quarto-section-identifier" id="sec-classify"><span class="chapter-number">8</span>  <span class="chapter-title">Classify candidates</span></span></h1>
+</div>
+<div class="quarto-title-meta">
+</div>
+</header>
+<p>A real/bogus classifier scores cutouts around a candidate to distinguish the labeled real-source class from artifacts, such as cosmic rays or badly subtracted stars. xScan (<code>cuphoton.xscan</code>) trains and runs the transformer family of <a href="https://doi.org/10.3847/1538-3881/ae38d8">Inada et al. (2026)</a> with PyTorch. Pair models use target and reference cutouts; triplet models also use the difference image. Its command-line workflow packages cutouts as a dataset, checks it, trains, evaluates, predicts and queues candidates for human review. Use xScan after <a class="quarto-xref" href="subtract.html"><span>Chapter 6</span></a> has found the candidates.</p>
+<p>The output named <code>probability</code> is a sigmoid score between zero and one. Training does not calibrate it into an observed probability that a candidate is astrophysical. Check calibration and the operating threshold on representative held-out data before interpreting a score such as 0.9 as a 90% chance of being real.</p>
+<p><strong>You need:</strong></p>
+<ul>
+<li>cuPhoton with the <code>torch</code> extra on a CPU or the <code>gpu</code> extra on a GPU host (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). The review viewers also need <code>viz</code>.</li>
+<li>For this triplet example, three cutouts of the same square size, centered on each candidate. Training and evaluation also need labels: 1 for real, 0 for bogus.</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Sample data
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This page runs on a small synthetic set of cutouts. The printed values only demonstrate the API.</p>
+</div>
+</div>
+<section class="level2" data-number="8.1" id="make-labeled-cutouts">
+<h2 class="anchored" data-anchor-id="make-labeled-cutouts" data-number="8.1"><span class="header-section-number">8.1</span> Make labeled cutouts</h2>
+<p>The block below makes 240 synthetic candidates of 21 by 21 pixels, in units of the sky noise. Half are labeled real, with a new source in the target. The other half simulate artifacts: a stationary star misregistered by one pixel between the images, or a cosmic ray (one bright pixel in the target). A genuinely moving source can produce the same dipole shape; its label depends on your science target, not on the shape alone.</p>
+<div class="cell" data-execution_count="1" id="962e5f27">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a></span>
+<span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">0</span>)</span>
+<span id="cb1-4"><a aria-hidden="true" href="#cb1-4" tabindex="-1"></a>n, size <span class="op">=</span> <span class="dv">240</span>, <span class="dv">21</span></span>
+<span id="cb1-5"><a aria-hidden="true" href="#cb1-5" tabindex="-1"></a>yy, xx <span class="op">=</span> np.mgrid[:size, :size] <span class="op">-</span> size <span class="op">//</span> <span class="dv">2</span></span>
+<span id="cb1-6"><a aria-hidden="true" href="#cb1-6" tabindex="-1"></a></span>
+<span id="cb1-7"><a aria-hidden="true" href="#cb1-7" tabindex="-1"></a></span>
+<span id="cb1-8"><a aria-hidden="true" href="#cb1-8" tabindex="-1"></a><span class="kw">def</span> psf(dx):  <span class="co"># a Gaussian point source, shifted dx pixels to the right</span></span>
+<span id="cb1-9"><a aria-hidden="true" href="#cb1-9" tabindex="-1"></a>    <span class="cf">return</span> np.exp(<span class="op">-</span>(yy<span class="op">**</span><span class="dv">2</span> <span class="op">+</span> (xx <span class="op">-</span> dx) <span class="op">**</span> <span class="dv">2</span>) <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> <span class="fl">1.5</span><span class="op">**</span><span class="dv">2</span>))</span>
+<span id="cb1-10"><a aria-hidden="true" href="#cb1-10" tabindex="-1"></a></span>
+<span id="cb1-11"><a aria-hidden="true" href="#cb1-11" tabindex="-1"></a></span>
+<span id="cb1-12"><a aria-hidden="true" href="#cb1-12" tabindex="-1"></a>labels <span class="op">=</span> np.tile([<span class="dv">1</span>, <span class="dv">0</span>], n <span class="op">//</span> <span class="dv">2</span>)                          <span class="co"># 1 real, 0 bogus</span></span>
+<span id="cb1-13"><a aria-hidden="true" href="#cb1-13" tabindex="-1"></a>kind <span class="op">=</span> np.where(labels <span class="op">==</span> <span class="dv">1</span>, <span class="dv">0</span>, rng.integers(<span class="dv">1</span>, <span class="dv">3</span>, n))    <span class="co"># 0 new source, 1 misregistered star, 2 cosmic ray</span></span>
+<span id="cb1-14"><a aria-hidden="true" href="#cb1-14" tabindex="-1"></a>peak <span class="op">=</span> rng.uniform(<span class="dv">5</span>, <span class="dv">25</span>, n)[:, <span class="va">None</span>, <span class="va">None</span>]</span>
+<span id="cb1-15"><a aria-hidden="true" href="#cb1-15" tabindex="-1"></a>reference <span class="op">=</span> rng.normal(<span class="dv">0</span>, <span class="dv">1</span>, (n, size, size)).astype(np.float32)</span>
+<span id="cb1-16"><a aria-hidden="true" href="#cb1-16" tabindex="-1"></a>target <span class="op">=</span> rng.normal(<span class="dv">0</span>, <span class="dv">1</span>, (n, size, size)).astype(np.float32)</span>
+<span id="cb1-17"><a aria-hidden="true" href="#cb1-17" tabindex="-1"></a>target <span class="op">+=</span> np.where(kind[:, <span class="va">None</span>, <span class="va">None</span>] <span class="op">==</span> <span class="dv">0</span>, peak <span class="op">*</span> psf(<span class="dv">0</span>), <span class="dv">0</span>)</span>
+<span id="cb1-18"><a aria-hidden="true" href="#cb1-18" tabindex="-1"></a>reference <span class="op">+=</span> np.where(kind[:, <span class="va">None</span>, <span class="va">None</span>] <span class="op">==</span> <span class="dv">1</span>, peak <span class="op">*</span> psf(<span class="dv">0</span>), <span class="dv">0</span>)</span>
+<span id="cb1-19"><a aria-hidden="true" href="#cb1-19" tabindex="-1"></a>target <span class="op">+=</span> np.where(kind[:, <span class="va">None</span>, <span class="va">None</span>] <span class="op">==</span> <span class="dv">1</span>, peak <span class="op">*</span> psf(<span class="dv">1</span>), <span class="dv">0</span>)</span>
+<span id="cb1-20"><a aria-hidden="true" href="#cb1-20" tabindex="-1"></a>target[kind <span class="op">==</span> <span class="dv">2</span>, size <span class="op">//</span> <span class="dv">2</span>, size <span class="op">//</span> <span class="dv">2</span>] <span class="op">+=</span> peak[kind <span class="op">==</span> <span class="dv">2</span>, <span class="dv">0</span>, <span class="dv">0</span>]</span>
+<span id="cb1-21"><a aria-hidden="true" href="#cb1-21" tabindex="-1"></a>difference <span class="op">=</span> target <span class="op">-</span> reference</span>
+<span id="cb1-22"><a aria-hidden="true" href="#cb1-22" tabindex="-1"></a><span class="bu">print</span>(target.shape, target.dtype, <span class="st">"real:"</span>, labels.<span class="bu">sum</span>(), <span class="st">"bogus:"</span>, n <span class="op">-</span> labels.<span class="bu">sum</span>())</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>(240, 21, 21) float32 real: 120 bogus: 120</code></pre>
+</div>
+</div>
+<p>Training and prediction use the cutouts as stored. They do not align, subtract or rescale them. Prepare every cutout the same way.</p>
+</section>
+<section class="level2" data-number="8.2" id="write-the-dataset">
+<h2 class="anchored" data-anchor-id="write-the-dataset" data-number="8.2"><span class="header-section-number">8.2</span> Write the dataset</h2>
+<p>xScan reads a dataset directory with one NumPy file per array (<a class="quarto-xref" href="#tbl-xscan-files">Table <span>8.1</span></a>). It calls the target <code>search</code> and the reference <code>template</code>.</p>
+<div class="quarto-float quarto-figure quarto-figure-center anchored" id="tbl-xscan-files">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-xscan-files-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table 8.1: The files of an xScan dataset.
+</figcaption>
+<div aria-describedby="tbl-xscan-files-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Shape</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>search.npy</code></td>
+<td>(candidate, y, x)</td>
+<td>target cutouts</td>
+</tr>
+<tr class="even">
+<td><code>template.npy</code></td>
+<td>(candidate, y, x)</td>
+<td>reference cutouts</td>
+</tr>
+<tr class="odd">
+<td><code>difference.npy</code></td>
+<td>(candidate, y, x)</td>
+<td>difference cutouts, for triplet models</td>
+</tr>
+<tr class="even">
+<td><code>labels.npy</code></td>
+<td>(candidate,)</td>
+<td>1 real, 0 bogus</td>
+</tr>
+<tr class="odd">
+<td><code>split.npy</code></td>
+<td>(candidate,)</td>
+<td>0 train, 1 validation, 2 test</td>
+</tr>
+<tr class="even">
+<td><code>metadata.jsonl</code></td>
+<td>one JSON object per candidate</td>
+<td>identifiers, label source and split group</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<div class="cell" data-execution_count="2" id="90ed0e76">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">import</span> json</span>
+<span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
+<span id="cb3-4"><a aria-hidden="true" href="#cb3-4" tabindex="-1"></a>dataset <span class="op">=</span> Path(<span class="st">"sample/cutouts"</span>)</span>
+<span id="cb3-5"><a aria-hidden="true" href="#cb3-5" tabindex="-1"></a>dataset.mkdir(parents<span class="op">=</span><span class="va">True</span>, exist_ok<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb3-6"><a aria-hidden="true" href="#cb3-6" tabindex="-1"></a>split <span class="op">=</span> np.repeat([<span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">160</span>, <span class="dv">40</span>, <span class="dv">40</span>])</span>
+<span id="cb3-7"><a aria-hidden="true" href="#cb3-7" tabindex="-1"></a><span class="cf">for</span> name, array <span class="kw">in</span> [(<span class="st">"search"</span>, target), (<span class="st">"template"</span>, reference), (<span class="st">"difference"</span>, difference),</span>
+<span id="cb3-8"><a aria-hidden="true" href="#cb3-8" tabindex="-1"></a>                    (<span class="st">"labels"</span>, labels), (<span class="st">"split"</span>, split)]:</span>
+<span id="cb3-9"><a aria-hidden="true" href="#cb3-9" tabindex="-1"></a>    np.save(dataset <span class="op">/</span> <span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">.npy"</span>, array)</span>
+<span id="cb3-10"><a aria-hidden="true" href="#cb3-10" tabindex="-1"></a>rows <span class="op">=</span> [{<span class="st">"candidate_id"</span>: <span class="ss">f"cand-</span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">"</span>, <span class="st">"split_group"</span>: <span class="ss">f"cand-</span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">"</span>, <span class="st">"split"</span>: (<span class="st">"train"</span>, <span class="st">"val"</span>, <span class="st">"test"</span>)[s],</span>
+<span id="cb3-11"><a aria-hidden="true" href="#cb3-11" tabindex="-1"></a>         <span class="st">"label"</span>: <span class="bu">int</span>(y), <span class="st">"label_source"</span>: <span class="st">"synthetic"</span>, <span class="st">"exposure_id"</span>: <span class="dv">0</span>, <span class="st">"ccd_id"</span>: <span class="dv">0</span>, <span class="st">"band"</span>: <span class="st">"r"</span>,</span>
+<span id="cb3-12"><a aria-hidden="true" href="#cb3-12" tabindex="-1"></a>         <span class="st">"x"</span>: <span class="dv">10</span>, <span class="st">"y"</span>: <span class="dv">10</span>} <span class="cf">for</span> i, (s, y) <span class="kw">in</span> <span class="bu">enumerate</span>(<span class="bu">zip</span>(split, labels))]</span>
+<span id="cb3-13"><a aria-hidden="true" href="#cb3-13" tabindex="-1"></a>(dataset <span class="op">/</span> <span class="st">"metadata.jsonl"</span>).write_text(<span class="st">""</span>.join(json.dumps(row) <span class="op">+</span> <span class="st">"</span><span class="ch">\n</span><span class="st">"</span> <span class="cf">for</span> row <span class="kw">in</span> rows))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="2">
+<pre><code>42140</code></pre>
+</div>
+</div>
+<p><code>label_source</code> records where a label came from. <code>split_group</code> names the object a candidate belongs to. Keep all candidates of one object in one split. The dataset check also requires <code>exposure_id</code>, <code>ccd_id</code> (the detector chip), <code>band</code> (the filter) and the cutout center <code>x</code>, <code>y</code>. Use placeholders when your data has none.</p>
+</section>
+<section class="level2" data-number="8.3" id="check-the-dataset">
+<h2 class="anchored" data-anchor-id="check-the-dataset" data-number="8.3"><span class="header-section-number">8.3</span> Check the dataset</h2>
+<p><code>validate_dataset_dir</code> checks shapes, splits and metadata fields. The label guard, <code>check_training_label_provenance</code>, checks that the labels are binary, match the metadata, have a named source, cover both classes and keep each <code>split_group</code> in one split.</p>
+<div class="cell" data-execution_count="3" id="e486f433">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.dataset <span class="im">import</span> validate_dataset_dir</span>
+<span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.training <span class="im">import</span> check_training_label_provenance</span>
+<span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a></span>
+<span id="cb5-4"><a aria-hidden="true" href="#cb5-4" tabindex="-1"></a>report <span class="op">=</span> validate_dataset_dir(dataset)</span>
+<span id="cb5-5"><a aria-hidden="true" href="#cb5-5" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"valid:"</span>, report[<span class="st">"valid"</span>], <span class="st">"| input mode:"</span>, report[<span class="st">"input_mode"</span>])</span>
+<span id="cb5-6"><a aria-hidden="true" href="#cb5-6" tabindex="-1"></a><span class="bu">print</span>(report[<span class="st">"splits"</span>])</span>
+<span id="cb5-7"><a aria-hidden="true" href="#cb5-7" tabindex="-1"></a>guard <span class="op">=</span> check_training_label_provenance(dataset)</span>
+<span id="cb5-8"><a aria-hidden="true" href="#cb5-8" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"labels ok:"</span>, guard[<span class="st">"ok"</span>], guard[<span class="st">"errors"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>valid: True | input mode: triplet
+{'train': {'count': 160, 'positives': 80, 'negatives': 80}, 'val': {'count': 40, 'positives': 20, 'negatives': 20}, 'test': {'count': 40, 'positives': 20, 'negatives': 20}}
+labels ok: True []</code></pre>
+</div>
+</div>
+<p>The command-line equivalents print the full JSON reports. With <code>--require-ok</code>, the label check exits with an error when it fails:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan data-validate <span class="at">--dataset-dir</span> sample/cutouts</span>
+<span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a><span class="ex">cuphoton</span> xscan data-check-training-labels <span class="at">--dataset-dir</span> sample/cutouts <span class="at">--require-ok</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>Training runs the label guard again and stops when it fails.</p>
+</section>
+<section class="level2" data-number="8.4" id="train-a-model">
+<h2 class="anchored" data-anchor-id="train-a-model" data-number="8.4"><span class="header-section-number">8.4</span> Train a model</h2>
+<p>Training reads a YAML file. The model settings below make a tiny network that trains in seconds on a CPU. For the default network, which takes 51-pixel cutouts, start from the repository’s <code>examples/xscan/train-triplet.example.yaml</code>.</p>
+<div class="cell" data-execution_count="4" id="fa90482f">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">import</span> shutil</span>
+<span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
+<span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>Path(<span class="st">"runs"</span>).mkdir(exist_ok<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb8-4"><a aria-hidden="true" href="#cb8-4" tabindex="-1"></a>Path(<span class="st">"runs/classify-train.yaml"</span>).write_text(<span class="st">"""</span><span class="op">\</span></span>
+<span id="cb8-5"><a aria-hidden="true" href="#cb8-5" tabindex="-1"></a><span class="st">dataset_dir: sample/cutouts</span></span>
+<span id="cb8-6"><a aria-hidden="true" href="#cb8-6" tabindex="-1"></a><span class="st">output_root: runs</span></span>
+<span id="cb8-7"><a aria-hidden="true" href="#cb8-7" tabindex="-1"></a><span class="st">run_name: classify-demo</span></span>
+<span id="cb8-8"><a aria-hidden="true" href="#cb8-8" tabindex="-1"></a><span class="st">epochs: 2</span></span>
+<span id="cb8-9"><a aria-hidden="true" href="#cb8-9" tabindex="-1"></a><span class="st">batch_size: 16</span></span>
+<span id="cb8-10"><a aria-hidden="true" href="#cb8-10" tabindex="-1"></a><span class="st">early_stopping_metric: val_loss   # keep the epoch with the lowest validation loss</span></span>
+<span id="cb8-11"><a aria-hidden="true" href="#cb8-11" tabindex="-1"></a><span class="st">device: auto                      # CUDA when PyTorch finds a GPU, otherwise the CPU</span></span>
+<span id="cb8-12"><a aria-hidden="true" href="#cb8-12" tabindex="-1"></a><span class="st">model:</span></span>
+<span id="cb8-13"><a aria-hidden="true" href="#cb8-13" tabindex="-1"></a><span class="st">  image_size: 21                  # cutout side in pixels</span></span>
+<span id="cb8-14"><a aria-hidden="true" href="#cb8-14" tabindex="-1"></a><span class="st">  depths: [1, 1]                  # two small encoder stages, for this demo only</span></span>
+<span id="cb8-15"><a aria-hidden="true" href="#cb8-15" tabindex="-1"></a><span class="st">  num_heads: [1, 1]</span></span>
+<span id="cb8-16"><a aria-hidden="true" href="#cb8-16" tabindex="-1"></a><span class="st">  embed_dims: [16, 16]</span></span>
+<span id="cb8-17"><a aria-hidden="true" href="#cb8-17" tabindex="-1"></a><span class="st">  decoder_embedding_dim: 16</span></span>
+<span id="cb8-18"><a aria-hidden="true" href="#cb8-18" tabindex="-1"></a><span class="st">"""</span>)</span>
+<span id="cb8-19"><a aria-hidden="true" href="#cb8-19" tabindex="-1"></a>shutil.rmtree(<span class="st">"runs/classify-demo"</span>, ignore_errors<span class="op">=</span><span class="va">True</span>)  <span class="co"># xScan never writes into an existing run</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p>Train the triplet model, which reads all three channels. <code>train-inada-pair</code> reads the target and reference only. The command prints a JSON summary. Save it to a file:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan train-inada-triplet <span class="at">--config</span> runs/classify-train.yaml <span class="op">&gt;</span> runs/classify-train.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>The run directory <code>runs/classify-demo/</code> holds <code>checkpoint.pt</code>, the full configuration <code>config.yaml</code>, the per-epoch <code>history.json</code> and the run <code>summary.json</code>.</p>
+<div class="cell" data-execution_count="6" id="f3afb7e3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a>summary <span class="op">=</span> json.loads(Path(<span class="st">"runs/classify-train.json"</span>).read_text())</span>
+<span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"device:"</span>, summary[<span class="st">"device"</span>], <span class="st">"| saved epoch:"</span>, summary[<span class="st">"early_stopping"</span>][<span class="st">"best_epoch"</span>],</span>
+<span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a>      <span class="st">"| selected by:"</span>, summary[<span class="st">"best_metric"</span>][<span class="st">"name"</span>])</span>
+<span id="cb10-4"><a aria-hidden="true" href="#cb10-4" tabindex="-1"></a><span class="cf">for</span> epoch <span class="kw">in</span> json.loads(Path(<span class="st">"runs/classify-demo/history.json"</span>).read_text()):</span>
+<span id="cb10-5"><a aria-hidden="true" href="#cb10-5" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"epoch </span><span class="sc">{</span>epoch[<span class="st">'epoch'</span>]<span class="sc">:.0f}</span><span class="ss">: train loss </span><span class="sc">{</span>epoch[<span class="st">'train_loss'</span>]<span class="sc">:.3f}</span><span class="ss">, "</span></span>
+<span id="cb10-6"><a aria-hidden="true" href="#cb10-6" tabindex="-1"></a>          <span class="ss">f"validation loss </span><span class="sc">{</span>epoch[<span class="st">'val_loss'</span>]<span class="sc">:.3f}</span><span class="ss">, validation ROC AUC </span><span class="sc">{</span>epoch[<span class="st">'val_roc_auc'</span>]<span class="sc">:.3f}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>device: cpu | saved epoch: 2 | selected by: val_loss
+epoch 1: train loss 0.531, validation loss 0.596, validation ROC AUC 1.000
+epoch 2: train loss 0.069, validation loss 0.117, validation ROC AUC 1.000</code></pre>
+</div>
+</div>
+<p>The checkpoint holds the epoch with the best selection metric, which is not always the last epoch. When <code>early_stopping_metric</code> is unset, selection uses validation ROC AUC (defined in the next step), or validation loss for a single-class validation split. Early stopping remains disabled unless a metric or patience is set.</p>
+</section>
+<section class="level2" data-number="8.5" id="evaluate-on-the-test-split">
+<h2 class="anchored" data-anchor-id="evaluate-on-the-test-split" data-number="8.5"><span class="header-section-number">8.5</span> Evaluate on the test split</h2>
+<p><code>evaluate-real-bogus</code> scores one split, <code>test</code> by default, and writes metrics, curves and per-candidate predictions to <code>runs/classify-demo/evaluation/test/</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan evaluate-real-bogus <span class="at">--run-dir</span> runs/classify-demo <span class="at">--dataset-dir</span> sample/cutouts <span class="op">&gt;</span> runs/classify-evaluate.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell" data-execution_count="8" id="b0a3771c">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a>evaluation <span class="op">=</span> json.loads(Path(<span class="st">"runs/classify-evaluate.json"</span>).read_text())</span>
+<span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"ROC AUC </span><span class="sc">{</span>evaluation[<span class="st">'roc_auc'</span>]<span class="sc">:.3f}</span><span class="ss">, PR AUC </span><span class="sc">{</span>evaluation[<span class="st">'pr_auc'</span>]<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>thresholds <span class="op">=</span> evaluation[<span class="st">"threshold_diagnostics"</span>]</span>
+<span id="cb13-4"><a aria-hidden="true" href="#cb13-4" tabindex="-1"></a><span class="cf">for</span> name, result <span class="kw">in</span> [(<span class="st">"fixed"</span>, thresholds[<span class="st">"fixed_threshold"</span>]),</span>
+<span id="cb13-5"><a aria-hidden="true" href="#cb13-5" tabindex="-1"></a>                     (<span class="st">"validation-selected"</span>, thresholds[<span class="st">"validation_selected"</span>][<span class="st">"evaluated_split_metrics"</span>])]:</span>
+<span id="cb13-6"><a aria-hidden="true" href="#cb13-6" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss"> threshold </span><span class="sc">{</span>result[<span class="st">'threshold'</span>]<span class="sc">:.3f}</span><span class="ss">: accuracy </span><span class="sc">{</span>result[<span class="st">'accuracy'</span>]<span class="sc">:.3f}</span><span class="ss">, "</span></span>
+<span id="cb13-7"><a aria-hidden="true" href="#cb13-7" tabindex="-1"></a>          <span class="ss">f"real missed </span><span class="sc">{</span>result[<span class="st">'fn'</span>]<span class="sc">}</span><span class="ss">, bogus passed </span><span class="sc">{</span>result[<span class="st">'fp'</span>]<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>ROC AUC 1.000, PR AUC 1.000
+fixed threshold 0.500: accuracy 0.950, real missed 2, bogus passed 0
+validation-selected threshold 0.500: accuracy 0.950, real missed 2, bogus passed 0</code></pre>
+</div>
+</div>
+<p>ROC AUC measures how often a random labeled-real candidate outranks a labeled-bogus one, counting ties as half. PR AUC is the trapezoidal area under the precision-recall curve. A candidate is classified as real when its score reaches the threshold. Next to the fixed threshold of 0.5, the command picks the threshold with the best validation accuracy and applies it to the test split. <code>summary.md</code> in the same directory is a readable version of the report.</p>
+<p>These metrics describe this small synthetic test split. They do not establish survey performance or score calibration. On real data, choose a threshold on validation data for the missed-source and false-positive rates you can accept, then evaluate it once on an independent test split. Precision also depends on how common real sources are in the scored population.</p>
+</section>
+<section class="level2" data-number="8.6" id="predict">
+<h2 class="anchored" data-anchor-id="predict" data-number="8.6"><span class="header-section-number">8.6</span> Predict</h2>
+<p><code>infer-real-bogus</code> only scores. It writes the logits and probabilities of one split to <code>runs/classify-demo/inference/test/</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan infer-real-bogus <span class="at">--run-dir</span> runs/classify-demo <span class="at">--dataset-dir</span> sample/cutouts <span class="op">&gt;</span> runs/classify-infer.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell" data-execution_count="10" id="d63aa635">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a>probabilities <span class="op">=</span> np.load(<span class="st">"runs/classify-demo/inference/test/probabilities.npy"</span>)</span>
+<span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"p(real):"</span>, probabilities[:<span class="dv">6</span>].<span class="bu">round</span>(<span class="dv">3</span>))</span>
+<span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"labels: "</span>, labels[split <span class="op">==</span> <span class="dv">2</span>][:<span class="dv">6</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>p(real): [0.909 0.065 0.933 0.039 0.925 0.326]
+labels:  [1 0 1 0 1 0]</code></pre>
+</div>
+</div>
+<p>The arrays follow the order of the test split in the dataset.</p>
+</section>
+<section class="level2" data-number="8.7" id="score-your-own-cutouts-in-python">
+<h2 class="anchored" data-anchor-id="score-your-own-cutouts-in-python" data-number="8.7"><span class="header-section-number">8.7</span> Score your own cutouts in Python</h2>
+<p>For cutouts in memory, load the checkpoint and call the model. <code>load_model_from_checkpoint</code> rebuilds the network, loads the saved weights and sets evaluation mode. The triplet model takes a float32 tensor of shape (candidate, channel, y, x), with the channels target, reference, difference. It returns one logit per candidate. Its sigmoid is the model’s real-class score, exposed as <code>probabilities</code> by the inference commands.</p>
+<div class="cell" data-execution_count="11" id="91a8fc2c">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a><span class="im">import</span> torch</span>
+<span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.training <span class="im">import</span> load_model_from_checkpoint</span>
+<span id="cb18-3"><a aria-hidden="true" href="#cb18-3" tabindex="-1"></a></span>
+<span id="cb18-4"><a aria-hidden="true" href="#cb18-4" tabindex="-1"></a>model, checkpoint, performance <span class="op">=</span> load_model_from_checkpoint(Path(<span class="st">"runs/classify-demo"</span>), device<span class="op">=</span>torch.device(<span class="st">"cpu"</span>))</span>
+<span id="cb18-5"><a aria-hidden="true" href="#cb18-5" tabindex="-1"></a>cutouts <span class="op">=</span> np.stack([target, reference, difference], axis<span class="op">=</span><span class="dv">1</span>)[split <span class="op">==</span> <span class="dv">2</span>][:<span class="dv">6</span>]</span>
+<span id="cb18-6"><a aria-hidden="true" href="#cb18-6" tabindex="-1"></a><span class="cf">with</span> torch.no_grad():</span>
+<span id="cb18-7"><a aria-hidden="true" href="#cb18-7" tabindex="-1"></a>    logits <span class="op">=</span> model(torch.from_numpy(cutouts))</span>
+<span id="cb18-8"><a aria-hidden="true" href="#cb18-8" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"p(real):"</span>, torch.sigmoid(logits).numpy().<span class="bu">round</span>(<span class="dv">3</span>))</span>
+<span id="cb18-9"><a aria-hidden="true" href="#cb18-9" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"same as infer-real-bogus:"</span>, np.allclose(torch.sigmoid(logits).numpy(), probabilities[:<span class="dv">6</span>]))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>p(real): [0.909 0.065 0.933 0.039 0.925 0.326]
+same as infer-real-bogus: True</code></pre>
+</div>
+</div>
+<p><a class="quarto-xref" href="#fig-classify">Figure <span>8.1</span></a> shows test cutouts of each kind with these probabilities.</p>
+<div class="cell" data-execution_count="12" id="cell-fig-classify">
+<details class="code-fold">
+<summary>Plotting code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a></span>
+<span id="cb20-3"><a aria-hidden="true" href="#cb20-3" tabindex="-1"></a>test <span class="op">=</span> np.flatnonzero(split <span class="op">==</span> <span class="dv">2</span>)</span>
+<span id="cb20-4"><a aria-hidden="true" href="#cb20-4" tabindex="-1"></a>picks <span class="op">=</span> [i <span class="cf">for</span> k <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">3</span>) <span class="cf">for</span> i <span class="kw">in</span> test[kind[test] <span class="op">==</span> k][:<span class="dv">2</span>]]</span>
+<span id="cb20-5"><a aria-hidden="true" href="#cb20-5" tabindex="-1"></a>names <span class="op">=</span> [<span class="st">"new source"</span>, <span class="st">"misregistered"</span>, <span class="st">"cosmic ray"</span>]</span>
+<span id="cb20-6"><a aria-hidden="true" href="#cb20-6" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">3</span>, <span class="dv">6</span>, figsize<span class="op">=</span>(<span class="fl">6.5</span>, <span class="fl">3.8</span>))</span>
+<span id="cb20-7"><a aria-hidden="true" href="#cb20-7" tabindex="-1"></a><span class="cf">for</span> col, i <span class="kw">in</span> <span class="bu">enumerate</span>(picks):</span>
+<span id="cb20-8"><a aria-hidden="true" href="#cb20-8" tabindex="-1"></a>    top <span class="op">=</span> <span class="bu">max</span>(target[i].<span class="bu">max</span>(), reference[i].<span class="bu">max</span>())</span>
+<span id="cb20-9"><a aria-hidden="true" href="#cb20-9" tabindex="-1"></a>    <span class="cf">for</span> row, (image, cmap, lo, hi) <span class="kw">in</span> <span class="bu">enumerate</span>([(target[i], <span class="st">"magma"</span>, <span class="op">-</span><span class="dv">3</span>, top), (reference[i], <span class="st">"magma"</span>, <span class="op">-</span><span class="dv">3</span>, top),</span>
+<span id="cb20-10"><a aria-hidden="true" href="#cb20-10" tabindex="-1"></a>                                                 (difference[i], <span class="st">"RdBu_r"</span>, <span class="op">-</span>top <span class="op">/</span> <span class="dv">2</span>, top <span class="op">/</span> <span class="dv">2</span>)]):</span>
+<span id="cb20-11"><a aria-hidden="true" href="#cb20-11" tabindex="-1"></a>        axes[row, col].imshow(image, origin<span class="op">=</span><span class="st">"lower"</span>, cmap<span class="op">=</span>cmap, vmin<span class="op">=</span>lo, vmax<span class="op">=</span>hi)</span>
+<span id="cb20-12"><a aria-hidden="true" href="#cb20-12" tabindex="-1"></a>        axes[row, col].set_xticks([])<span class="op">;</span> axes[row, col].set_yticks([])</span>
+<span id="cb20-13"><a aria-hidden="true" href="#cb20-13" tabindex="-1"></a>    p <span class="op">=</span> probabilities[np.searchsorted(test, i)]</span>
+<span id="cb20-14"><a aria-hidden="true" href="#cb20-14" tabindex="-1"></a>    axes[<span class="dv">0</span>, col].set_title(<span class="ss">f"</span><span class="sc">{</span>names[kind[i]]<span class="sc">}</span><span class="ch">\n</span><span class="ss">$p$ = </span><span class="sc">{</span>p<span class="sc">:.2f}</span><span class="ss">"</span>, fontsize<span class="op">=</span><span class="dv">8</span>)</span>
+<span id="cb20-15"><a aria-hidden="true" href="#cb20-15" tabindex="-1"></a><span class="cf">for</span> row, label <span class="kw">in</span> <span class="bu">enumerate</span>([<span class="st">"Target"</span>, <span class="st">"Reference"</span>, <span class="st">"Difference"</span>]):</span>
+<span id="cb20-16"><a aria-hidden="true" href="#cb20-16" tabindex="-1"></a>    axes[row, <span class="dv">0</span>].set_ylabel(label, fontsize<span class="op">=</span><span class="dv">8</span>)</span>
+<span id="cb20-17"><a aria-hidden="true" href="#cb20-17" tabindex="-1"></a>fig.text(<span class="dv">1</span>, <span class="dv">1</span>, <span class="st">"Synthetic data, for demonstration only"</span>, ha<span class="op">=</span><span class="st">"right"</span>, va<span class="op">=</span><span class="st">"bottom"</span>,</span>
+<span id="cb20-18"><a aria-hidden="true" href="#cb20-18" tabindex="-1"></a>         fontsize<span class="op">=</span><span class="dv">7</span>, style<span class="op">=</span><span class="st">"italic"</span>, color<span class="op">=</span><span class="st">"0.4"</span>, transform<span class="op">=</span>fig.transFigure)</span>
+<span id="cb20-19"><a aria-hidden="true" href="#cb20-19" tabindex="-1"></a>fig.tight_layout()</span>
+<span id="cb20-20"><a aria-hidden="true" href="#cb20-20" tabindex="-1"></a>plt.show()</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-display">
+<div alt="A grid of three rows and six columns of small cutouts. Columns show a new source, a misregistered star with a two-lobed difference, and a single bright pixel, each titled with a model score." class="quarto-float quarto-figure quarto-figure-center anchored" id="fig-classify">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-classify-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<a class="lightbox" data-gallery="quarto-lightbox-gallery-1" href="classify_files/figure-html/fig-classify-output-1.png" title="Figure 8.1: Six test cutouts, two of each kind in the synthetic set, titled with the model’s real-class score p. Rows are the target, the reference and the difference. The target and reference share one magma scale per column, and the difference panels a red-blue scale centered on zero. A new source appears in the target and the difference only. A misregistered star leaves a positive and a negative lobe in the difference. A cosmic ray is one sharp pixel. Synthetic data, for demonstration only."><img alt="A grid of three rows and six columns of small cutouts. Columns show a new source, a misregistered star with a two-lobed difference, and a single bright pixel, each titled with a model score." class="figure-img" height="577" src="classify_files/figure-html/fig-classify-output-1.png" width="982"/></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-classify-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 8.1: Six test cutouts, two of each kind in the synthetic set, titled with the model’s real-class score <span class="math inline">\(p\)</span>. Rows are the target, the reference and the difference. The target and reference share one magma scale per column, and the difference panels a red-blue scale centered on zero. A new source appears in the target and the difference only. A misregistered star leaves a positive and a negative lobe in the difference. A cosmic ray is one sharp pixel. Synthetic data, for demonstration only.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section class="level2" data-number="8.8" id="handle-checkpoints">
+<h2 class="anchored" data-anchor-id="handle-checkpoints" data-number="8.8"><span class="header-section-number">8.8</span> Handle checkpoints</h2>
+<p>A checkpoint is a dictionary. <code>model_config</code> holds the network’s shape, <code>model_state</code> its weights, <code>train_config</code> the training configuration and <code>xfit_feature_bundle</code> the identity of optional xFit features.</p>
+<div class="cell" data-execution_count="13" id="55abf02c">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(checkpoint))</span>
+<span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a>config <span class="op">=</span> checkpoint[<span class="st">"model_config"</span>]</span>
+<span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a><span class="bu">print</span>(config[<span class="st">"input_mode"</span>], config[<span class="st">"image_size"</span>], config[<span class="st">"embed_dims"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>['model_config', 'model_state', 'train_config', 'xfit_feature_bundle']
+triplet 21 [16, 16]</code></pre>
+</div>
+</div>
+<p><code>load_model_from_checkpoint</code> passes <code>model_config</code> to <code>build_model</code> and loads <code>model_state</code> into the result. Call <code>build_model(**checkpoint["model_config"])</code> to build the same network in your own PyTorch code. A checkpoint only works on cutouts with its input mode, size and preprocessing. A wrong size fails late, inside the network. To reject a checkpoint before any model is built, pass a <code>checkpoint_validator</code>, a function that raises <code>ValueError</code>:</p>
+<div class="cell" data-execution_count="14" id="7b1e22b0">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="kw">def</span> require_triplet(size):</span>
+<span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a>    <span class="kw">def</span> check(checkpoint):</span>
+<span id="cb23-3"><a aria-hidden="true" href="#cb23-3" tabindex="-1"></a>        config <span class="op">=</span> checkpoint[<span class="st">"model_config"</span>]</span>
+<span id="cb23-4"><a aria-hidden="true" href="#cb23-4" tabindex="-1"></a>        <span class="cf">if</span> config[<span class="st">"input_mode"</span>] <span class="op">!=</span> <span class="st">"triplet"</span> <span class="kw">or</span> config[<span class="st">"image_size"</span>] <span class="op">!=</span> size:</span>
+<span id="cb23-5"><a aria-hidden="true" href="#cb23-5" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="ss">f"need a triplet model for </span><span class="sc">{</span>size<span class="sc">}</span><span class="ss"> px cutouts, got "</span></span>
+<span id="cb23-6"><a aria-hidden="true" href="#cb23-6" tabindex="-1"></a>                             <span class="ss">f"</span><span class="sc">{</span>config[<span class="st">'input_mode'</span>]<span class="sc">}</span><span class="ss"> for </span><span class="sc">{</span>config[<span class="st">'image_size'</span>]<span class="sc">}</span><span class="ss"> px"</span>)</span>
+<span id="cb23-7"><a aria-hidden="true" href="#cb23-7" tabindex="-1"></a>    <span class="cf">return</span> check</span>
+<span id="cb23-8"><a aria-hidden="true" href="#cb23-8" tabindex="-1"></a></span>
+<span id="cb23-9"><a aria-hidden="true" href="#cb23-9" tabindex="-1"></a></span>
+<span id="cb23-10"><a aria-hidden="true" href="#cb23-10" tabindex="-1"></a><span class="cf">try</span>:</span>
+<span id="cb23-11"><a aria-hidden="true" href="#cb23-11" tabindex="-1"></a>    load_model_from_checkpoint(Path(<span class="st">"runs/classify-demo"</span>), checkpoint_validator<span class="op">=</span>require_triplet(<span class="dv">51</span>))</span>
+<span id="cb23-12"><a aria-hidden="true" href="#cb23-12" tabindex="-1"></a><span class="cf">except</span> <span class="pp">ValueError</span> <span class="im">as</span> error:</span>
+<span id="cb23-13"><a aria-hidden="true" href="#cb23-13" tabindex="-1"></a>    <span class="bu">print</span>(<span class="st">"ValueError:"</span>, error)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>ValueError: need a triplet model for 51 px cutouts, got triplet for 21 px</code></pre>
+</div>
+</div>
+</section>
+<section class="level2" data-number="8.9" id="queue-candidates-for-human-review">
+<h2 class="anchored" data-anchor-id="queue-candidates-for-human-review" data-number="8.9"><span class="header-section-number">8.9</span> Queue candidates for human review</h2>
+<p>Reviewers correct and extend labels through a review queue. <code>review-queue</code> ranks the predictions of one split. The default strategy, <code>hybrid</code>, favors candidates near the decision threshold most.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan review-queue <span class="at">--run-dir</span> runs/classify-demo <span class="at">--dataset-dir</span> sample/cutouts <span class="at">--output-dir</span> runs/classify-demo/review <span class="at">--max-items</span> 8 <span class="op">&gt;</span> runs/classify-review.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell" data-execution_count="16" id="e7067333">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a aria-hidden="true" href="#cb26-1" tabindex="-1"></a>queue <span class="op">=</span> Path(<span class="st">"runs/classify-demo/review/queue.jsonl"</span>).read_text().splitlines()</span>
+<span id="cb26-2"><a aria-hidden="true" href="#cb26-2" tabindex="-1"></a><span class="cf">for</span> item <span class="kw">in</span> <span class="bu">map</span>(json.loads, queue[:<span class="dv">4</span>]):</span>
+<span id="cb26-3"><a aria-hidden="true" href="#cb26-3" tabindex="-1"></a>    <span class="bu">print</span>(item[<span class="st">"rank"</span>], item[<span class="st">"candidate_id"</span>], <span class="ss">f"p(real) </span><span class="sc">{</span>item[<span class="st">'probability'</span>]<span class="sc">:.2f}</span><span class="ss">"</span>, <span class="st">"|"</span>, item[<span class="st">"rank_reason"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>1 cand-214 p(real) 0.41 | uncertainty
+2 cand-220 p(real) 0.36 | uncertainty
+3 cand-206 p(real) 0.65 | uncertainty
+4 cand-205 p(real) 0.33 | audit</code></pre>
+</div>
+</div>
+<p>The other review commands take the review directory (<code>--review-dir</code>) and follow <a class="quarto-xref" href="#tbl-xscan-review">Table <span>8.2</span></a>.</p>
+<div class="quarto-float quarto-figure quarto-figure-center anchored" id="tbl-xscan-review">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-xscan-review-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table 8.2: The human review commands after <code>review-queue</code>, in order.
+</figcaption>
+<div aria-describedby="tbl-xscan-review-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Step</th>
+<th>Command</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Look</td>
+<td><code>review-bokeh</code>, <code>review-contact-sheet</code></td>
+<td>serves the queue in a browser, or writes PNG sheets (both need <code>viz</code>)</td>
+</tr>
+<tr class="even">
+<td>Annotate offline</td>
+<td><code>review-annotation-template</code>, <code>review-import-annotations</code></td>
+<td>writes a CSV to fill in, then validates it into <code>annotations.jsonl</code></td>
+</tr>
+<tr class="odd">
+<td>Check</td>
+<td><code>review-status</code></td>
+<td>reports whether every item has enough agreeing reviews (by default two, unanimous)</td>
+</tr>
+<tr class="even">
+<td>Decide</td>
+<td><code>review-aggregate</code></td>
+<td>turns each reviewer’s latest annotation into a decision</td>
+</tr>
+<tr class="odd">
+<td>Apply</td>
+<td><code>review-apply</code></td>
+<td>writes a new dataset with the reviewed labels</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<p>The queue and the append-only <code>annotations.jsonl</code> are the review record. <code>review-apply</code> writes to a new <code>--output-dir</code> and leaves the source dataset unchanged.</p>
+</section>
+<section class="level2" data-number="8.10" id="options">
+<h2 class="anchored" data-anchor-id="options" data-number="8.10"><span class="header-section-number">8.10</span> Options</h2>
+<p><a class="quarto-xref" href="#tbl-xscan-options">Table <span>8.3</span></a> lists the main settings of the training YAML file and the commands.</p>
+<div class="quarto-float quarto-figure quarto-figure-center anchored" id="tbl-xscan-options">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-xscan-options-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table 8.3: Main options. The first rows go in the training YAML file, the last four are command flags.
+</figcaption>
+<div aria-describedby="tbl-xscan-options-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+<col style="width: 33%"/>
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>epochs</code></td>
+<td><code>4</code></td>
+<td>passes over the training split</td>
+</tr>
+<tr class="even">
+<td><code>batch_size</code></td>
+<td><code>16</code></td>
+<td>candidates per training step</td>
+</tr>
+<tr class="odd">
+<td><code>learning_rate</code></td>
+<td><code>0.001</code></td>
+<td>optimizer step size</td>
+</tr>
+<tr class="even">
+<td><code>device</code></td>
+<td><code>auto</code></td>
+<td>CUDA when available, otherwise the CPU</td>
+</tr>
+<tr class="odd">
+<td><code>early_stopping_metric</code></td>
+<td>none</td>
+<td>Set to <code>val_roc_auc</code>, <code>val_pr_auc</code> or <code>val_loss</code> to select the saved epoch and turn on early stopping. When unset, selection uses <code>val_roc_auc</code>, or <code>val_loss</code> for a single-class validation split.</td>
+</tr>
+<tr class="even">
+<td><code>early_stopping_patience</code></td>
+<td>none</td>
+<td>epochs without improvement before training stops (0 when only the metric is set)</td>
+</tr>
+<tr class="odd">
+<td><code>model.image_size</code></td>
+<td><code>51</code></td>
+<td>cutout side in pixels</td>
+</tr>
+<tr class="even">
+<td><code>model.depths</code>, <code>num_heads</code>, <code>embed_dims</code></td>
+<td>six stages, 64 to 512 wide</td>
+<td>network size</td>
+</tr>
+<tr class="odd">
+<td><code>use_xfit_features</code>, <code>xfit_feature_dir</code></td>
+<td>off</td>
+<td>adds xFit fit features of each difference cutout</td>
+</tr>
+<tr class="even">
+<td><code>performance.amp_dtype</code></td>
+<td><code>off</code></td>
+<td><code>bf16</code> or <code>fp16</code> mixed precision, GPU only</td>
+</tr>
+<tr class="odd">
+<td><code>--split</code> (infer, evaluate, review-queue)</td>
+<td><code>test</code></td>
+<td>split to score</td>
+</tr>
+<tr class="even">
+<td><code>--batch-size</code> (infer, evaluate)</td>
+<td><code>32</code></td>
+<td>candidates per inference batch</td>
+</tr>
+<tr class="odd">
+<td><code>--strategy</code> (review-queue)</td>
+<td><code>hybrid</code></td>
+<td>queue ranking, also <code>uncertainty</code> or <code>known-errors</code></td>
+</tr>
+<tr class="even">
+<td><code>--max-items</code> (review-queue)</td>
+<td><code>200</code></td>
+<td>queue length</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+</section>
+<section class="level2" data-number="8.11" id="on-a-gpu">
+<h2 class="anchored" data-anchor-id="on-a-gpu" data-number="8.11"><span class="header-section-number">8.11</span> On a GPU</h2>
+<p>With the <code>gpu</code> extra, the same commands run on CUDA, which <code>device: auto</code> selects. GPU settings go in the <code>performance</code> section of the YAML file. They are off by default. On a CPU, xScan ignores mixed precision and pinned memory.</p>
+<div class="cell" data-execution_count="17" id="d38c6d0d">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a aria-hidden="true" href="#cb28-1" tabindex="-1"></a><span class="im">import</span> yaml</span>
+<span id="cb28-2"><a aria-hidden="true" href="#cb28-2" tabindex="-1"></a></span>
+<span id="cb28-3"><a aria-hidden="true" href="#cb28-3" tabindex="-1"></a>config <span class="op">=</span> yaml.safe_load(Path(<span class="st">"runs/classify-train.yaml"</span>).read_text())</span>
+<span id="cb28-4"><a aria-hidden="true" href="#cb28-4" tabindex="-1"></a>config.update(run_name<span class="op">=</span><span class="st">"classify-gpu"</span>, device<span class="op">=</span><span class="st">"cuda"</span>, performance<span class="op">=</span>{</span>
+<span id="cb28-5"><a aria-hidden="true" href="#cb28-5" tabindex="-1"></a>    <span class="st">"amp_dtype"</span>: <span class="st">"bf16"</span>, <span class="st">"allow_tf32"</span>: <span class="va">True</span>, <span class="st">"cudnn_benchmark"</span>: <span class="va">True</span>, <span class="st">"num_workers"</span>: <span class="dv">2</span>,</span>
+<span id="cb28-6"><a aria-hidden="true" href="#cb28-6" tabindex="-1"></a>    <span class="st">"worker_start_method"</span>: <span class="st">"spawn"</span>, <span class="st">"pin_memory"</span>: <span class="va">True</span>, <span class="st">"persistent_workers"</span>: <span class="va">True</span>,</span>
+<span id="cb28-7"><a aria-hidden="true" href="#cb28-7" tabindex="-1"></a>    <span class="st">"non_blocking_transfers"</span>: <span class="va">True</span>})</span>
+<span id="cb28-8"><a aria-hidden="true" href="#cb28-8" tabindex="-1"></a>Path(<span class="st">"runs/classify-gpu.yaml"</span>).write_text(yaml.safe_dump(config, sort_keys<span class="op">=</span><span class="va">False</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb29-1"><a aria-hidden="true" href="#cb29-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan train-inada-triplet <span class="at">--config</span> runs/classify-gpu.yaml <span class="op">&gt;</span> runs/classify-gpu.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+<p>For cutouts already on the GPU, <code>predict_tensors</code> scores a contiguous float32 tensor on an explicit CUDA device and returns logits and probabilities on it:</p>
+<div class="cell" data-execution_count="18" id="46491083">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a aria-hidden="true" href="#cb30-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.training <span class="im">import</span> predict_tensors</span>
+<span id="cb30-2"><a aria-hidden="true" href="#cb30-2" tabindex="-1"></a></span>
+<span id="cb30-3"><a aria-hidden="true" href="#cb30-3" tabindex="-1"></a>device <span class="op">=</span> torch.device(<span class="st">"cuda:0"</span>)</span>
+<span id="cb30-4"><a aria-hidden="true" href="#cb30-4" tabindex="-1"></a>model, _, performance <span class="op">=</span> load_model_from_checkpoint(Path(<span class="st">"runs/classify-gpu"</span>), device<span class="op">=</span>device)</span>
+<span id="cb30-5"><a aria-hidden="true" href="#cb30-5" tabindex="-1"></a>result <span class="op">=</span> predict_tensors(model<span class="op">=</span>model, images<span class="op">=</span>torch.from_numpy(cutouts).to(device), device<span class="op">=</span>device,</span>
+<span id="cb30-6"><a aria-hidden="true" href="#cb30-6" tabindex="-1"></a>                         performance<span class="op">=</span>performance)</span>
+<span id="cb30-7"><a aria-hidden="true" href="#cb30-7" tabindex="-1"></a><span class="bu">print</span>(result[<span class="st">"probabilities"</span>].cpu())</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+<p><code>predict_fits</code> cuts and scores cutouts straight from aligned FITS images on the GPU, without a dataset directory. It needs CuPy and an explicit CUDA device, and the cutout sides in <code>stamp_shape</code> must be odd. It does not align, subtract or normalize the images.</p>
+<div class="cell" data-execution_count="19" id="d472ef87">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a aria-hidden="true" href="#cb31-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.fits_inference <span class="im">import</span> FitsPlane, predict_fits</span>
+<span id="cb31-2"><a aria-hidden="true" href="#cb31-2" tabindex="-1"></a></span>
+<span id="cb31-3"><a aria-hidden="true" href="#cb31-3" tabindex="-1"></a>result <span class="op">=</span> predict_fits(</span>
+<span id="cb31-4"><a aria-hidden="true" href="#cb31-4" tabindex="-1"></a>    model<span class="op">=</span>model, device<span class="op">=</span>device, performance<span class="op">=</span>performance,</span>
+<span id="cb31-5"><a aria-hidden="true" href="#cb31-5" tabindex="-1"></a>    search<span class="op">=</span>FitsPlane(<span class="st">"target.fits"</span>, hdu<span class="op">=</span><span class="dv">1</span>), template<span class="op">=</span>FitsPlane(<span class="st">"reference-aligned.fits"</span>, hdu<span class="op">=</span><span class="dv">1</span>),</span>
+<span id="cb31-6"><a aria-hidden="true" href="#cb31-6" tabindex="-1"></a>    difference<span class="op">=</span>FitsPlane(<span class="st">"difference.fits"</span>, hdu<span class="op">=</span><span class="dv">1</span>),</span>
+<span id="cb31-7"><a aria-hidden="true" href="#cb31-7" tabindex="-1"></a>    centers_yx<span class="op">=</span>[(<span class="dv">200</span>, <span class="dv">300</span>), (<span class="dv">450</span>, <span class="dv">600</span>)], candidate_ids<span class="op">=</span>[<span class="st">"candidate-a"</span>, <span class="st">"candidate-b"</span>], stamp_shape<span class="op">=</span>(<span class="dv">21</span>, <span class="dv">21</span>),</span>
+<span id="cb31-8"><a aria-hidden="true" href="#cb31-8" tabindex="-1"></a>)</span>
+<span id="cb31-9"><a aria-hidden="true" href="#cb31-9" tabindex="-1"></a><span class="bu">print</span>(result.candidate_ids, result.probabilities)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
+</div>
+</section>
+<section class="level2" data-number="8.12" id="what-is-survey-specific">
+<h2 class="anchored" data-anchor-id="what-is-survey-specific" data-number="8.12"><span class="header-section-number">8.12</span> What is survey-specific</h2>
+<p>The array format, the model and the checkpoints are generic. These parts depend on the survey:</p>
+<ul>
+<li><strong>Cutout preparation.</strong> Size, centering, scaling and masking are your choice. A checkpoint is valid only for cutouts prepared like its training set.</li>
+<li><strong>Dataset builders.</strong> <code>cuphoton xscan --help</code> lists builders for several surveys’ products, such as <code>data-build-autoscan</code>. Example manifests are in <code>examples/xscan/</code>.</li>
+<li><strong>Labels.</strong> Define which astrophysical changes count as real for your task. The label guard rejects placeholder labels from survey smoke datasets and survey object IDs that appear in two splits; it cannot verify that a human label is scientifically correct.</li>
+<li><strong>Thresholds and calibration.</strong> Choose the threshold on a representative validation split, and check performance and score calibration on held-out data with the class balance and observing conditions you expect to encounter.</li>
+</ul>
+</section>
+<section class="level2" data-number="8.13" id="troubleshooting">
+<h2 class="anchored" data-anchor-id="troubleshooting" data-number="8.13"><span class="header-section-number">8.13</span> Troubleshooting</h2>
+<dl>
+<dt><code>ERROR: [Errno 17] File exists: '.../runs/classify-demo'</code></dt>
+<dd>
+Each training run needs a new directory. Change <code>run_name</code> or delete the old run.
+</dd>
+<dt><code>ERROR: refusing to train with group leakage across train/validation/test splits</code>, or <code>refusing to train on labels that are not real-bogus usable: label_source_untrusted</code></dt>
+<dd>
+The label guard failed. Run <code>data-check-training-labels</code> and fix the listed metadata. A <code>label_source</code> that is empty or contains “placeholder” or “unlabeled” is untrusted.
+</dd>
+<dt><code>RuntimeError: The expanded size of the tensor (676) must match the existing size (121)</code></dt>
+<dd>
+The cutouts differ in size from the checkpoint’s <code>image_size</code>. Use a <code>checkpoint_validator</code> to catch this at load time.
+</dd>
+<dt><code>ValueError: triplet model expects 3-channel stacked input</code></dt>
+<dd>
+Stack the channels target, reference and difference, in that order. A pair model takes the first two.
+</dd>
+</dl>
+</section>
+<section class="level2" data-number="8.14" id="next-steps">
+<h2 class="anchored" data-anchor-id="next-steps" data-number="8.14"><span class="header-section-number">8.14</span> Next steps</h2>
+<ul>
+<li>Add xFit dipole-fit features to the classifier: <a class="quarto-xref" href="measure.html"><span>Chapter 7</span></a> and <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md#optional-xfit-fusion">Optional xFit fusion</a>.</li>
+<li>Classify every candidate of an image pair in one GPU pipeline: <a class="quarto-xref" href="transient-chain.html"><span>Chapter 9</span></a>.</li>
+<li>Spread <code>infer-real-bogus</code> over many GPUs: <a class="quarto-xref" href="scale.html"><span>Chapter 14</span></a>.</li>
+<li>Full reference: the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xscan.md">xScan component guide</a> and the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/data-artifacts.md#xscan-datasets">dataset contract</a>.</li>
+</ul>
+</section>
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/nvidia\.github\.io\/cuPhoton\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+<div class="nav-page nav-page-previous">
+<a aria-label="Measure candidates" class="pagination-link" href="./measure.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">7</span>  <span class="chapter-title">Measure candidates</span></span>
+</a>
+</div>
+<div class="nav-page nav-page-next">
+<a aria-label="Run the transient chain" class="pagination-link" href="./transient-chain.html">
+<span class="nav-page-text"><span class="chapter-number">9</span>  <span class="chapter-title">Run the transient chain</span></span> <i class="bi bi-arrow-right-short"></i>
+</a>
+</div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+<div class="nav-footer">
+<div class="nav-footer-left">
+<p>NVIDIA · cuPhoton</p>
+</div>
+<div class="nav-footer-center">
+       
+    </div>
+<div class="nav-footer-right">
+<p>Built with Quarto</p>
+</div>
+</div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+</body></html>

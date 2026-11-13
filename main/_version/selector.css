@@ -1,0 +1,24 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0 */
+.cuphoton-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem .8rem;
+  border: 1px solid currentColor;
+  border-radius: .3rem;
+  margin: 0 0 1.5rem;
+  padding: .65rem .85rem;
+  font-size: .9rem;
+}
+.cuphoton-version label { margin: 0; }
+.cuphoton-version select {
+  color: inherit;
+  background: var(--bs-body-bg, Canvas);
+  border: 1px solid currentColor;
+  border-radius: .2rem;
+  padding: .2rem .4rem;
+  max-width: 100%;
+}
+.cuphoton-version select:focus-visible { outline: 3px solid #76b900; }
+#cuphoton-version-notice { flex-basis: 100%; }
