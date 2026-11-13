@@ -115,7 +115,7 @@ def make_archive(
 def test_archives_include_complete_pybind11_notice(tmp_path, kind, request):
     xfit_elf = request.getfixturevalue("xfit_elf") if kind == "wheel" else b""
     cfitsio = (
-        request.getfixturevalue("cfitsio_elfs")[False]
+        request.getfixturevalue("cfitsio_elfs")["c-only"]
         if kind == "wheel"
         else b""
     )
@@ -204,7 +204,7 @@ def test_native_wheel_rejects_vendored_cuda_libraries(tmp_path, library):
 
 @pytest.fixture(scope="module")
 def cfitsio_elfs(tmp_path_factory):
-    """Real ELF exports distinguish C-only builds from Fortran wrappers."""
+    """Real ELF exports cover C-only, Fortran and incomplete C API builds."""
     if sys.platform != "linux" or shutil.which("readelf") is None:
         pytest.skip("ELF symbol checks require Linux and readelf")
     compiler = shutil.which("cc")
@@ -212,21 +212,25 @@ def cfitsio_elfs(tmp_path_factory):
         pytest.skip("ELF symbol checks require a C compiler")
     directory = tmp_path_factory.mktemp("cfitsio-elf")
     variants = {}
-    for fortran in (False, True):
+    for variant in ("c-only", "fortran", "missing-reentrant"):
         source = directory / "cfitsio.c"
         source.write_text(
             'const char version[] = "CFITSIO 4.7.0";\n'
             "void ffopen(void) {}\n"
             "void ffclos(void) {}\n"
-            "int fits_is_reentrant(void) { return 1; }\n"
-            + ("void ftopen_(void) {}\n" if fortran else "")
+            + (
+                "int fits_is_reentrant(void) { return 1; }\n"
+                if variant != "missing-reentrant"
+                else ""
+            )
+            + ("void ftopen_(void) {}\n" if variant == "fortran" else "")
         )
         library = directory / "libcfitsio.so"
         subprocess.run(
             [compiler, "-shared", "-fPIC", str(source), "-o", str(library)],
             check=True,
         )
-        variants[fortran] = library.read_bytes()
+        variants[variant] = library.read_bytes()
     return variants
 
 
@@ -237,10 +241,36 @@ def test_native_wheel_rejects_cfitsio_fortran_wrappers(
         tmp_path,
         "wheel",
         NOTICES,
-        cfitsio=cfitsio_elfs[True],
+        cfitsio=cfitsio_elfs["fortran"],
         xfit_elf=xfit_elf,
     )
     with pytest.raises(ValueError, match="CFITSIO contains Fortran wrappers"):
+        distributions.check_wheel(path)
+
+
+def test_native_wheel_requires_cfitsio_c_api(
+    tmp_path, xfit_elf, cfitsio_elfs
+):
+    path = make_archive(
+        tmp_path,
+        "wheel",
+        NOTICES,
+        cfitsio=cfitsio_elfs["missing-reentrant"],
+        xfit_elf=xfit_elf,
+    )
+    with pytest.raises(ValueError, match="missing CFITSIO C API symbols"):
+        distributions.check_wheel(path)
+
+
+def test_native_wheel_rejects_invalid_cfitsio_elf(tmp_path, xfit_elf):
+    path = make_archive(
+        tmp_path,
+        "wheel",
+        NOTICES,
+        cfitsio=b"CFITSIO 4.7.0\0",
+        xfit_elf=xfit_elf,
+    )
+    with pytest.raises(ValueError, match="invalid CFITSIO ELF library"):
         distributions.check_wheel(path)
 
 
