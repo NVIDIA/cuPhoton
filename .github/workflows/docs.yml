@@ -3,22 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: user guide
+run-name: docs ${{ inputs.tag || 'main' }} / ${{ inputs.request_id || github.sha }}
 
 on:
   push:
     branches: [main]
     paths:
       - .github/workflows/docs.yml
-      - docs/**
-      - src/**
-      - examples/**
-      - pyproject.toml
-      - uv.lock
-      - setup.py
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/docs.yml
+      - .github/workflows/release-docs.yml
+      - dev/**
       - docs/**
       - src/**
       - examples/**
@@ -26,34 +19,59 @@ on:
       - uv.lock
       - setup.py
   workflow_dispatch:
+    inputs:
+      # Existing release tags retain their hook. Preserve this name and type.
+      tag:
+        description: "Release tag, main, or missing for eligible backfills"
+        type: string
+        default: main
+      request_id:
+        description: "Optional client request identifier for run tracking"
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+# Keep the lock from archive read through deployment. Queue every publication;
+# a newer main run must not cancel a pending release or an active deployment.
 concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: cuphoton-docs-publication
+  queue: max
+  cancel-in-progress: false
+
+env:
+  CUPHOTON_XDR_BUILD_EXT: "0"
+  CUPHOTON_XREP_TORCH_DEVICE: cpu
+  CUDA_VISIBLE_DEVICES: ""
+  MPLBACKEND: Agg
+  UV_HTTP_TIMEOUT: "300"
 
 jobs:
-  build:
+  render:
     name: render user guide
+    if: >-
+      github.repository == 'NVIDIA/cuPhoton' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CUPHOTON_XDR_BUILD_EXT: "0"
-      CUPHOTON_XREP_TORCH_DEVICE: cpu
-      CUDA_VISIBLE_DEVICES: ""
-      MPLBACKEND: Agg
-      UV_HTTP_TIMEOUT: "300"
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.snapshots.outputs.artifact-id }}
+      artifact_digest: ${{ steps.snapshots.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.1"
           enable-cache: true
+      - name: Install developer tools
+        run: uv sync --project dev --locked --python 3.12
       - name: Install Quarto
         run: |
           curl --fail --location --retry 3 --output "$RUNNER_TEMP/quarto.deb" \
@@ -62,35 +80,125 @@ jobs:
             8c47762e78fe58642246a94d18f67eb332c1778b711e5bef991ef3c15490d83a \
             "$RUNNER_TEMP/quarto.deb" | sha256sum --check
           sudo dpkg --install "$RUNNER_TEMP/quarto.deb"
-      - name: Install documentation dependencies
-        run: uv sync --locked --python 3.12 --group docs --extra ximage --extra catalog
-      - name: Render the guide and execute its CPU examples
+      - name: Render missing snapshots
         env:
-          CUPHOTON_REPO: ${{ github.workspace }}
-          QUARTO_PYTHON: ${{ github.workspace }}/.venv/bin/python
-        run: quarto render docs/guide
-      - name: Upload the rendered site
+          GH_TOKEN: ${{ github.token }}
+          DOCS_TAG: ${{ inputs.tag }}
+          DOCS_REQUEST_ID: ${{ inputs.request_id }}
+        run: >-
+          uv run --project dev --locked python -m cuphoton_dev.publisher render
+          --tag "$DOCS_TAG" --request-id "$DOCS_REQUEST_ID"
+          --output "$RUNNER_TEMP/snapshots"
+      - name: Upload rendered snapshots
+        id: snapshots
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docs-snapshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/snapshots
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  retain:
+    name: retain and assemble user guide
+    needs: render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    environment: docs-archive
+    outputs:
+      archive_sha: ${{ steps.archive.outputs.sha }}
+      pages_artifact: ${{ steps.archive.outputs.pages_artifact }}
+    env:
+      # Never restore a cache populated by target-source execution.
+      UV_NO_CACHE: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          # Only the reviewed main controller runs in this fresh job.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: false
+      - name: Install trusted main controller
+        run: uv sync --project dev --locked --python 3.12
+      - name: Download and verify this run's snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.render.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.render.outputs.artifact_digest }}
+        run: >-
+          uv run --project dev --locked python -m cuphoton_dev.artifacts download
+          --artifact-id "$ARTIFACT_ID" --digest "$ARTIFACT_DIGEST"
+          --output "$RUNNER_TEMP/snapshots"
+      - name: Require archive protection before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/NVIDIA/cuPhoton/rules/branches/gh-pages > "$RUNNER_TEMP/archive-rules.json"
+          jq --exit-status '
+            map(.type) as $types |
+            ["creation", "update", "deletion", "non_fast_forward"] |
+            all(. as $rule | $types | index($rule) != null)
+          ' "$RUNNER_TEMP/archive-rules.json"
+      - name: Create repository-scoped archive writer token
+        id: writer
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.DOCS_ARCHIVE_APP_ID }}
+          private-key: ${{ secrets.DOCS_ARCHIVE_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Retain snapshots and assemble the complete site
+        id: archive
+        env:
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          DOCS_TAG: ${{ inputs.tag }}
+          DOCS_REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          uv run --project dev --locked python -m cuphoton_dev.publisher prepare \
+            --tag "$DOCS_TAG" --request-id "$DOCS_REQUEST_ID" \
+            --snapshots "$RUNNER_TEMP/snapshots" --output "$RUNNER_TEMP/site" \
+            > "$RUNNER_TEMP/publication.json"
+          jq -r '"sha=" + .archive_sha' "$RUNNER_TEMP/publication.json" >> "$GITHUB_OUTPUT"
+          echo "pages_artifact=github-pages-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Upload the complete retained site
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: docs/guide/_book
+          name: ${{ steps.archive.outputs.pages_artifact }}
+          path: ${{ runner.temp }}/site
+          include-hidden-files: true
 
   deploy:
     name: deploy user guide
-    needs: build
-    if: >-
-      github.repository == 'NVIDIA/cuPhoton' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name != 'pull_request'
+    needs: retain
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
+      contents: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Refuse a stale deployment retry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE_SHA: ${{ needs.retain.outputs.archive_sha }}
+        run: |
+          current=$(gh api repos/NVIDIA/cuPhoton/git/ref/heads/gh-pages --jq .object.sha)
+          if [ -z "$ARCHIVE_SHA" ] || [ "$current" != "$ARCHIVE_SHA" ]; then
+            echo "Archive has advanced; dispatch a new publication instead of retrying this deployment."
+            exit 1
+          fi
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          artifact_name: ${{ needs.retain.outputs.pages_artifact }}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.metadata
 import sys
 from collections.abc import Mapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
@@ -541,7 +542,7 @@ def main(
     environ: Mapping[str, str] | None = None,
     program_name: str = "cuphoton",
 ) -> int:
-    """Route the root executable to one of the six public components."""
+    """Route the root executable to a product or installed developer group."""
 
     args = list(sys.argv[1:] if argv is None else argv)
     output = sys.stdout if out is None else out
@@ -558,6 +559,28 @@ def main(
     routed = args
     if args[0] == "help" and len(args) > 1:
         routed = [args[1], "help", *args[2:]]
+    if routed[0] == "dev":
+        if not _developer_tools_installed():
+            error.write(
+                "ERROR: Developer tools are not installed. From a cuPhoton "
+                "checkout, run 'uv sync --project dev --locked', then "
+                "'uv run --project dev --locked cuphoton dev --help'.\n"
+            )
+            return 2
+        try:
+            developer_cli = importlib.import_module("cuphoton_dev.cli")
+            return int(
+                developer_cli.main(
+                    routed[1:],
+                    out=output,
+                    err=error,
+                    environ=environ,
+                    program_name=f"{program_name} dev",
+                )
+            )
+        except ImportError as exc:
+            error.write(f"ERROR: Cannot load developer tools: {exc}\n")
+            return 1
     spec = COMPONENT_REGISTRY.get(routed[0])
     if spec is None:
         error.write(f"ERROR: Unknown component group '{routed[0]}'\n")
@@ -601,7 +624,19 @@ def _print_root_help(out: TextIO, program_name: str) -> None:
     out.write("Available groups:\n")
     for component in COMPONENTS:
         out.write(f"  {component.group}  {component.description}\n")
+    if _developer_tools_installed():
+        out.write("  dev  Repository development and documentation tools.\n")
     out.write(f"\nUse '{program_name} GROUP --help' for group help.\n")
+
+
+def _developer_tools_installed() -> bool:
+    """Require explicit installation without importing developer code."""
+
+    try:
+        importlib.metadata.distribution("cuphoton-dev")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
 
 
 __all__ = [

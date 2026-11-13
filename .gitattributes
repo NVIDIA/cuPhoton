@@ -20,6 +20,7 @@
 
 # Publish the user guide separately from release source archives.
 /docs/guide export-ignore
+/dev export-ignore
 
 # Large or review-heavy artifacts should not enter the clean repo accidentally.
 *.fits filter=lfs diff=lfs merge=lfs -text

@@ -23,10 +23,13 @@ Do not report security vulnerabilities through GitHub. Follow `SECURITY.md`.
 
 ## Coding Guidelines
 
-All Python code ships in one distribution and must live under `cuphoton.*`.
+Product Python code ships in one distribution and lives under `cuphoton.*`.
 Shared CLI, application-context, logging, and invariant framework code belongs
 in `cuphoton.core`. Workflow-specific configuration remains in the component
-that owns the workflow. Do not add top-level Python packages.
+that owns the workflow. The explicit repository-only exception is the
+independently installed `dev/` project (`cuphoton-dev`, module `cuphoton_dev`).
+It is excluded from product wheels, sdists, Conda payloads and Git source
+archives. Do not add other top-level Python packages.
 
 Keep pull requests concise:
 
@@ -70,6 +73,14 @@ uv sync --locked --extra dev --extra gpu --extra viz
 Use the smallest profile that exercises the change. The experimental `cutile`
 extra supports Python 3.12–3.14; use a CUDA 13.2 or newer TileIR compiler
 for the supported setup. The `dragon` extra currently supports Python 3.12 and 3.13.
+
+### Documentation developer tools
+
+Versioned documentation uses the independent, explicitly installed `dev/`
+project. See its [installation and publication runbook](dev/README.md) and
+[agent instructions](dev/AGENTS.md). Product installs and the existing `dev`
+extra do not include these tools. Keep both dependency locks synchronized when
+root dependencies change, and verify release-hook inheritance before tagging.
 
 ## Checks
 
@@ -247,6 +258,12 @@ git commit -sS -m "Short imperative summary"
   signature and `-s` adds the DCO trailer.
 - Write commit titles in imperative mood.
 - Target the `main` branch.
+
+These commit requirements apply to source contributions. The generated
+`gh-pages` documentation archive uses GitHub Actions bot commits, exempt from
+source identity, signature and DCO requirements. The
+[publication runbook](dev/README.md#site-layout-and-ownership) describes its
+source and controller provenance.
 
 ## Developer Certificate of Origin
 

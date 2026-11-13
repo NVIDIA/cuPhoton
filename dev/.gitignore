@@ -1,0 +1,4 @@
+.venv
+.coverage*
+coverage*.xml
+/workflow-lint/node_modules

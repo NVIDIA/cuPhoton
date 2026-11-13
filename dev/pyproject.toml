@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuphoton-dev"
+version = "0.1.0"
+description = "Repository development tools for cuPhoton contributors."
+requires-python = ">=3.12,<3.15"
+license = "Apache-2.0"
+dependencies = ["cuphoton", "beautifulsoup4>=4.14,<5"]
+
+[dependency-groups]
+dev = [
+  "coverage>=7.10.6,<8",
+  "mypy==1.19.1",
+  "pytest>=8.3",
+  "ruff>=0.15.12",
+  "types-beautifulsoup4>=4.12",
+]
+
+[tool.uv.sources]
+cuphoton = { path = "..", editable = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cuphoton_dev*"]
+
+[tool.setuptools.package-data]
+cuphoton_dev = ["assets/*.js", "assets/*.css"]
+
+[tool.ruff]
+extend = "../pyproject.toml"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src/cuphoton_dev"]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/../src"
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["cuphoton.*"]
+follow_imports = "silent"
+
+[tool.coverage.run]
+branch = true
+source = ["cuphoton_dev"]
+data_file = ".coverage-dev"
+
+[tool.coverage.xml]
+output = "coverage-dev.xml"

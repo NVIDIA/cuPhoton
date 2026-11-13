@@ -23,6 +23,61 @@ env:
   UV_HTTP_TIMEOUT: "300"
 
 jobs:
+  changes:
+    name: classify developer dependencies
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      dev: ${{ steps.classify.outputs.dev }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Compare the actual source range
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci/dev_changes.py
+
+  developer-tools:
+    name: developer tools / CPU
+    needs: changes
+    if: needs.changes.outputs.dev == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+      CUPHOTON_XREP_TORCH_DEVICE: cpu
+      COVERAGE_FILE: ${{ github.workspace }}/dev/.coverage
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - run: uv sync --project dev --locked --python 3.12
+      - run: uv run --project dev --locked ruff check dev scripts/ci
+      - run: uv run --project dev --locked ruff format --check dev scripts/ci
+      - run: uv run --project dev --locked mypy --config-file dev/pyproject.toml dev/src/cuphoton_dev
+      - name: Test developer tools with separate coverage
+        run: |
+          uv run --project dev --locked coverage run --rcfile=dev/pyproject.toml \
+            -m pytest -c dev/pyproject.toml dev/tests
+          uv run --project dev --locked coverage xml --rcfile=dev/pyproject.toml \
+            -o dev/coverage.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: developer-coverage-${{ github.sha }}
+          path: dev/coverage.xml
+          if-no-files-found: error
+          retention-days: 14
+
   lint:
     timeout-minutes: 15
     name: lint
@@ -31,6 +86,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+      - name: Install the workflow schema validator
+        run: npm ci --prefix dev/workflow-lint --ignore-scripts --no-audit --no-fund
+      - name: Validate GitHub Actions workflows
+        run: npm run --prefix dev/workflow-lint check
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.1"
@@ -546,13 +605,16 @@ jobs:
   ci-required:
     # PR checks do not satisfy the merge gate before package and GPU qualification.
     name: ${{ github.event_name == 'pull_request' && 'ci-pr-checks' || 'ci-required' }}
-    needs: [lint, test-cpu, test-nooa, test-gpu, coverage, package, conda]
+    needs: [changes, developer-tools, lint, test-cpu, test-nooa, test-gpu, coverage, package, conda]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every CI job to succeed
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DEV_REQUIRED: ${{ needs.changes.outputs.dev }}
+          DEV_RESULT: ${{ needs.developer-tools.result }}
           LINT_RESULT: ${{ needs.lint.result }}
           CPU_RESULT: ${{ needs.test-cpu.result }}
           NOOA_RESULT: ${{ needs.test-nooa.result }}
@@ -562,6 +624,11 @@ jobs:
           PACKAGE_RESULT: ${{ needs.package.result }}
           CONDA_RESULT: ${{ needs.conda.result }}
         run: |
+          test "${CHANGES_RESULT}" = success || exit 1
+          case "${DEV_REQUIRED}:${DEV_RESULT}" in
+            true:success|false:skipped) ;;
+            *) exit 1 ;;
+          esac
           for result in "${LINT_RESULT}" "${CPU_RESULT}" "${NOOA_RESULT}" "${COVERAGE_RESULT}" "${CONDA_RESULT}"; do
             test "${result}" = success || exit 1
           done

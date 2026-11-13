@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Keep this hook on release branches before tagging. All publisher code lives
+# on main; existing tags keep dispatching the compatible docs.yml tag input.
+name: release documentation
+
+on:
+  release:
+    # Covers initial final publication and promotion from prerelease.
+    types: [released]
+
+permissions:
+  actions: write
+
+jobs:
+  forward:
+    if: >-
+      github.repository == 'NVIDIA/cuPhoton' &&
+      !github.event.release.draft &&
+      !github.event.release.prerelease &&
+      github.event.release.published_at != null
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch the main publisher for a final release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          # Both initial final publication and prerelease promotion reach here.
+          # Ignore non-semantic and prerelease tags even if marked final.
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            exit 0
+          fi
+          gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            --field "tag=$RELEASE_TAG"
