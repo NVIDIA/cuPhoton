@@ -105,6 +105,19 @@ logging for timings. See [hardware eligibility](components/xdr.md#hardware-eligi
 for buffer and tile-size requirements. FITS receipts retain requested choices,
 including choices that did not apply when the selected reader was Astropy.
 
+## cuFile input on tmpfs fails to register
+
+cuFile (GPUDirect Storage) needs files on a disk-backed filesystem. If the
+input is on `tmpfs` or `ramfs`, such as `/tmp` on many systems, opening or
+reading it can fail with `HANDLE_NOT_REGISTERED`. Check the filesystem:
+
+```bash
+findmnt -T "$TMPDIR" -o TARGET,FSTYPE
+```
+
+If it reports `tmpfs` or `ramfs`, point `TMPDIR` (or the input path) at local
+disk storage and rerun.
+
 ## A command rejected the input
 
 Use the component inspection or validation command before the expensive step.
