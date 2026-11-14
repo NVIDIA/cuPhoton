@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -23,6 +24,8 @@ class CuFileUnavailable(RuntimeError):
 
 
 _RAM_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
+# The kernel escapes space, tab, newline and backslash in mountinfo as \ooo.
+_MOUNTINFO_ESCAPE = re.compile(r"\\([0-7]{3})")
 
 
 def _filesystem_type(
@@ -40,7 +43,9 @@ def _filesystem_type(
                 fields = head.split()
                 if not separator or len(fields) < 5 or not tail.split():
                     continue
-                mount = fields[4].encode().decode("unicode_escape")
+                mount = _MOUNTINFO_ESCAPE.sub(
+                    lambda match: chr(int(match[1], 8)), fields[4]
+                )
                 inside = target == mount or target.startswith(
                     mount.rstrip("/") + "/"
                 )
@@ -380,6 +385,7 @@ class CuFileSession:
             raise OSError(
                 f"cuFile read failed for {file.path} at byte "
                 f"{file_offset}: status {received}"
+                f"{_ram_filesystem_hint(file.path)}"
             )
         return received
 

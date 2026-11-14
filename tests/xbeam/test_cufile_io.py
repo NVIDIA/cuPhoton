@@ -368,3 +368,40 @@ def test_filesystem_type_uses_longest_mount_prefix(tmp_path):
     assert _filesystem_type(tmp_path / "a", mountinfo) == "tmpfs"
     assert _filesystem_type(tmp_path / "disk" / "a", mountinfo) == "xfs"
     assert _filesystem_type(tmp_path / "a", tmp_path / "missing") is None
+
+
+def test_filesystem_type_prefers_later_entry_for_same_mount(tmp_path):
+    from cuphoton.xbeam.cufile_io import _filesystem_type
+
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        f"2 1 0:30 / {tmp_path} rw - xfs /dev/sdb rw\n"
+        f"3 1 0:31 / {tmp_path} rw - tmpfs tmpfs rw\n"
+    )
+    assert _filesystem_type(tmp_path / "a", mountinfo) == "tmpfs"
+
+
+def test_filesystem_type_decodes_escaped_mount_points(tmp_path):
+    from cuphoton.xbeam.cufile_io import _filesystem_type
+
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        "2 1 0:30 / /mnt/données\\040raw rw - tmpfs tmpfs rw\n"
+    )
+    assert _filesystem_type("/mnt/données raw/a", mountinfo) == "tmpfs"
+
+
+def test_negative_read_status_on_tmpfs_names_filesystem(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    handle = CuFileHandle(path, 3, 17)
+    session._cufile.read = lambda *args: -5
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
+    )
+    with pytest.raises(OSError, match="status -5.*tmpfs.*TMPDIR"):
+        session.read(handle, 0, 16, 0)
