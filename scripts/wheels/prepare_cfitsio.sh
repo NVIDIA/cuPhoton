@@ -24,6 +24,8 @@ tar -xzf cfitsio.tar.gz
 cd "cfitsio-${cfitsio_commit}"
 patch --batch --forward --fuzz=0 -p1 \
   < "$wheel_script_dir/patches/cfitsio-version-string.patch"
+patch --batch --forward --fuzz=0 -p1 \
+  < "$wheel_script_dir/patches/cfitsio-iraffits-card-bounds.patch"
 ./configure --prefix="$cfitsio_prefix" \
   --enable-reentrant --disable-curl --without-bzip2 --without-fortran \
   --disable-static --enable-shared
