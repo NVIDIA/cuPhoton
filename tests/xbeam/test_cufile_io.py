@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import errno
 import os
 from collections import OrderedDict
 from contextlib import ExitStack
@@ -298,3 +299,130 @@ def test_registered_reads_support_device_offsets(tmp_path):
     with pytest.raises(RuntimeError, match="not open"):
         session.read(handle, 65536, 4096, 8192)
     assert len(calls) == 2
+
+
+def test_register_failure_on_tmpfs_names_filesystem(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    path.touch()
+
+    def refuse(_):
+        raise Exception("HANDLE_NOT_REGISTERED")
+
+    session._cufile.handle_register = refuse
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
+    )
+    with pytest.raises(CuFileUnavailable, match="tmpfs.*TMPDIR"):
+        session.open(path)
+
+
+def test_open_failure_on_tmpfs_names_filesystem(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    path.touch()
+
+    def refuse(*args):
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.setattr("cuphoton.xbeam.cufile_io.os.open", refuse)
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
+    )
+    with pytest.raises(
+        CuFileUnavailable, match="Invalid argument.*tmpfs.*TMPDIR"
+    ):
+        session.open(path)
+
+
+def test_read_failure_on_tmpfs_names_filesystem(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    handle = CuFileHandle(path, 3, 17)
+
+    def fail(*args):
+        raise OSError("cuFile error")
+
+    session._cufile.read = fail
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
+    )
+    with pytest.raises(OSError, match="tmpfs.*TMPDIR"):
+        session.read(handle, 0, 16, 0)
+
+
+def test_failure_on_disk_filesystem_keeps_original_message(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    path.touch()
+
+    def refuse(_):
+        raise Exception("HANDLE_NOT_REGISTERED")
+
+    session._cufile.handle_register = refuse
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "ext4"
+    )
+    with pytest.raises(CuFileUnavailable) as raised:
+        session.open(path)
+    assert "tmpfs" not in str(raised.value)
+
+
+def test_filesystem_type_uses_longest_mount_prefix(tmp_path):
+    from cuphoton.xbeam.cufile_io import _filesystem_type
+
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        f"2 1 0:30 / {tmp_path} rw - tmpfs tmpfs rw\n"
+        f"3 2 0:31 / {tmp_path}/disk rw - xfs /dev/sdb rw\n"
+    )
+    (tmp_path / "disk").mkdir()
+    assert _filesystem_type(tmp_path / "a", mountinfo) == "tmpfs"
+    assert _filesystem_type(tmp_path / "disk" / "a", mountinfo) == "xfs"
+    assert _filesystem_type(tmp_path / "a", tmp_path / "missing") is None
+
+
+def test_filesystem_type_prefers_later_entry_for_same_mount(tmp_path):
+    from cuphoton.xbeam.cufile_io import _filesystem_type
+
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        f"2 1 0:30 / {tmp_path} rw - xfs /dev/sdb rw\n"
+        f"3 1 0:31 / {tmp_path} rw - tmpfs tmpfs rw\n"
+    )
+    assert _filesystem_type(tmp_path / "a", mountinfo) == "tmpfs"
+
+
+def test_filesystem_type_decodes_escaped_mount_points(tmp_path):
+    from cuphoton.xbeam.cufile_io import _filesystem_type
+
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        "2 1 0:30 / /mnt/données\\040raw rw - tmpfs tmpfs rw\n"
+    )
+    assert _filesystem_type("/mnt/données raw/a", mountinfo) == "tmpfs"
+
+
+def test_negative_read_status_on_tmpfs_names_filesystem(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    handle = CuFileHandle(path, 3, 17)
+    session._cufile.read = lambda *args: -5
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
+    )
+    with pytest.raises(OSError, match="status -5.*tmpfs.*TMPDIR"):
+        session.read(handle, 0, 16, 0)

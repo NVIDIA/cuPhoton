@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -20,6 +21,51 @@ from .profiling import nvtx_range
 
 class CuFileUnavailable(RuntimeError):
     """The requested cuFile data path cannot be initialized."""
+
+
+_RAM_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
+# The kernel escapes space, tab, newline and backslash in mountinfo as \ooo.
+_MOUNTINFO_ESCAPE = re.compile(r"\\([0-7]{3})")
+
+
+def _filesystem_type(
+    path: str | os.PathLike[str],
+    mountinfo: str | os.PathLike[str] = "/proc/self/mountinfo",
+) -> str | None:
+    """Return the filesystem type mounted at path, or None if unknown."""
+    try:
+        target = os.path.realpath(path)
+        best_mount = ""
+        best_type = None
+        with open(mountinfo, encoding="utf-8") as lines:
+            for line in lines:
+                head, separator, tail = line.partition(" - ")
+                fields = head.split()
+                if not separator or len(fields) < 5 or not tail.split():
+                    continue
+                mount = _MOUNTINFO_ESCAPE.sub(
+                    lambda match: chr(int(match[1], 8)), fields[4]
+                )
+                inside = target == mount or target.startswith(
+                    mount.rstrip("/") + "/"
+                )
+                if inside and len(mount) >= len(best_mount):
+                    best_mount, best_type = mount, tail.split()[0]
+        return best_type
+    except (OSError, UnicodeError):
+        return None
+
+
+def _ram_filesystem_hint(path: str | os.PathLike[str]) -> str:
+    """Explain a cuFile failure when the file lives in RAM-backed storage."""
+    kind = _filesystem_type(path)
+    if kind not in _RAM_FILESYSTEMS:
+        return ""
+    return (
+        f"; {path} is on {kind}, which cuFile does not support. Use a "
+        "disk-backed filesystem, for example by pointing TMPDIR (or the "
+        "input path) at local disk storage"
+    )
 
 
 _DRIVER_LOCK = Lock()
@@ -109,6 +155,7 @@ class CuFileSession:
         except OSError as error:
             raise CuFileUnavailable(
                 f"cannot open {selected} for direct cuFile input: {error}"
+                f"{_ram_filesystem_hint(selected)}"
             ) from error
         try:
             descriptor = self._cufile.Descr()
@@ -122,6 +169,7 @@ class CuFileSession:
             os.close(fd)
             raise CuFileUnavailable(
                 f"cuFile cannot register {selected}: {error}"
+                f"{_ram_filesystem_hint(selected)}"
             ) from error
         result = CuFileHandle(selected, fd, handle)
         self._files.append(result)
@@ -332,12 +380,13 @@ class CuFileSession:
         except Exception as error:
             raise OSError(
                 f"cuFile read failed for {file.path} at byte "
-                f"{file_offset}: {error}"
+                f"{file_offset}: {error}{_ram_filesystem_hint(file.path)}"
             ) from error
         if received < 0:
             raise OSError(
                 f"cuFile read failed for {file.path} at byte "
                 f"{file_offset}: status {received}"
+                f"{_ram_filesystem_hint(file.path)}"
             )
         return received
 
