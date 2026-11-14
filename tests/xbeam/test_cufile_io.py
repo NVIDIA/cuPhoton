@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import errno
 import os
 from collections import OrderedDict
 from contextlib import ExitStack
@@ -315,6 +316,26 @@ def test_register_failure_on_tmpfs_names_filesystem(
         "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
     )
     with pytest.raises(CuFileUnavailable, match="tmpfs.*TMPDIR"):
+        session.open(path)
+
+
+def test_open_failure_on_tmpfs_names_filesystem(
+    fake_session, tmp_path, monkeypatch
+):
+    session, _ = fake_session
+    path = tmp_path / "source.vdif"
+    path.touch()
+
+    def refuse(*args):
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.setattr("cuphoton.xbeam.cufile_io.os.open", refuse)
+    monkeypatch.setattr(
+        "cuphoton.xbeam.cufile_io._filesystem_type", lambda _: "tmpfs"
+    )
+    with pytest.raises(
+        CuFileUnavailable, match="Invalid argument.*tmpfs.*TMPDIR"
+    ):
         session.open(path)
 
 
