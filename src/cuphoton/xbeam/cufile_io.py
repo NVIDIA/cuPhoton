@@ -22,6 +22,47 @@ class CuFileUnavailable(RuntimeError):
     """The requested cuFile data path cannot be initialized."""
 
 
+_RAM_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
+
+
+def _filesystem_type(
+    path: str | os.PathLike[str],
+    mountinfo: str | os.PathLike[str] = "/proc/self/mountinfo",
+) -> str | None:
+    """Return the filesystem type mounted at path, or None if unknown."""
+    try:
+        target = os.path.realpath(path)
+        best_mount = ""
+        best_type = None
+        with open(mountinfo, encoding="utf-8") as lines:
+            for line in lines:
+                head, separator, tail = line.partition(" - ")
+                fields = head.split()
+                if not separator or len(fields) < 5 or not tail.split():
+                    continue
+                mount = fields[4].encode().decode("unicode_escape")
+                inside = target == mount or target.startswith(
+                    mount.rstrip("/") + "/"
+                )
+                if inside and len(mount) >= len(best_mount):
+                    best_mount, best_type = mount, tail.split()[0]
+        return best_type
+    except (OSError, UnicodeError):
+        return None
+
+
+def _ram_filesystem_hint(path: str | os.PathLike[str]) -> str:
+    """Explain a cuFile failure when the file lives in RAM-backed storage."""
+    kind = _filesystem_type(path)
+    if kind not in _RAM_FILESYSTEMS:
+        return ""
+    return (
+        f"; {path} is on {kind}, which cuFile does not support. Use a "
+        "disk-backed filesystem, for example by pointing TMPDIR (or the "
+        "input path) at local disk storage"
+    )
+
+
 _DRIVER_LOCK = Lock()
 _DRIVER_USERS = 0
 
@@ -122,6 +163,7 @@ class CuFileSession:
             os.close(fd)
             raise CuFileUnavailable(
                 f"cuFile cannot register {selected}: {error}"
+                f"{_ram_filesystem_hint(selected)}"
             ) from error
         result = CuFileHandle(selected, fd, handle)
         self._files.append(result)
@@ -332,7 +374,7 @@ class CuFileSession:
         except Exception as error:
             raise OSError(
                 f"cuFile read failed for {file.path} at byte "
-                f"{file_offset}: {error}"
+                f"{file_offset}: {error}{_ram_filesystem_hint(file.path)}"
             ) from error
         if received < 0:
             raise OSError(
