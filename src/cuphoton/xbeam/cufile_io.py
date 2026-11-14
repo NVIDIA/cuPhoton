@@ -155,6 +155,7 @@ class CuFileSession:
         except OSError as error:
             raise CuFileUnavailable(
                 f"cannot open {selected} for direct cuFile input: {error}"
+                f"{_ram_filesystem_hint(selected)}"
             ) from error
         try:
             descriptor = self._cufile.Descr()
