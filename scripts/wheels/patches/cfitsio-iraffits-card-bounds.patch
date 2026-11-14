@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+Terminate the copied FITS card before searching it for quotes. A stale quote
+past the card can move the comment pointer outside the 80-byte card and turn
+the clipped copy length negative. Also skip comments when a closing quote
+leaves no room for the comment separator.
+
+--- a/iraffits.c
++++ b/iraffits.c
+@@ -2071,0 +2072 @@
++	    line[80] = 0;
+@@ -2084,0 +2086,3 @@
++	    if (c0 > v2 - 2)
++		return;
++
+--- a/tests/test_iraffits.c
++++ b/tests/test_iraffits.c
+@@ -869,0 +870,23 @@
++static void
++test_iraf2mem_long_header_filename(void)
++{
++	char long_imh[] = "test_iraffits_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.imh";
++	int status = 0;
++	char *buffer = NULL;
++	size_t buffsize = 0, filesize = 0;
++	int dims[2] = {10, 10};
++
++	fail_if(strlen(long_imh) != 67);
++	remove(long_imh);
++	cleanup_files();
++	fail_if(create_iraf_v1_header(long_imh, "HDR$test_iraffits.pix",
++		TY_SHORT, 2, dims) != 0);
++	fail_if(create_iraf_v1_pixfile(test_pix_path, TY_SHORT, 100) != 0);
++	iraf2mem(long_imh, &buffer, &buffsize, &filesize, &status);
++	fail_if(status != 0);
++	fail_if(buffer == NULL);
++	free(buffer);
++	remove(long_imh);
++	cleanup_files();
++}
++
+@@ -889,0 +913 @@
++	test_iraf2mem_long_header_filename();

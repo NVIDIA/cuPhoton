@@ -77,6 +77,7 @@ SOURCES = {
     "src/cuphoton/xray/src/structured_roots.cu",
     "scripts/wheels/prepare_cfitsio.sh",
     "scripts/wheels/patches/cfitsio-version-string.patch",
+    "scripts/wheels/patches/cfitsio-iraffits-card-bounds.patch",
     "scripts/wheels/install_build_dependencies.sh",
     "scripts/wheels/build-requirements.txt",
     "scripts/wheels/repair_wheel.py",
