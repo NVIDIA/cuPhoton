@@ -88,6 +88,7 @@ def prepare_training(
         raw_rows=len(rows),
         selected_rows=len(selected),
         ambiguous_rows=sum(r["ambiguous"] for r in rows),
+        overlapping_cause_rows=sum(r["overlapping_causes"] for r in rows),
         challenge_rows=sum(r["challenge"] for r in rows),
         selected_raw_indices=selected.tolist(),
     )
@@ -136,6 +137,7 @@ def train_development(
         seed=seed,
         device=device,
         early_stopping_metric="val_loss",
+        early_stopping_patience=epochs,
         use_xfit_features=xfit_feature_dir is not None,
         xfit_feature_dir=str(xfit_feature_dir) if xfit_feature_dir else None,
         model=ModelConfig(
@@ -185,6 +187,11 @@ def train_development(
         validation_fpr_interval=interval["a"],
         validation_fields=int(len(np.unique(fields))),
         epochs_completed=summary["epochs_completed"],
+        early_stopping=summary["early_stopping"],
+        selection_split="val",
+        threshold_split="val",
+        validation_reused=True,
+        uncertainty_scope="conditional development precision heuristic",
     )
     np.savez(
         run_dir / "validation.npz",

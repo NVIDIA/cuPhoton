@@ -28,3 +28,14 @@ def test_measured_statistics_have_no_mask_or_clipping_signature():
     assert features.shape == (5, 7)
     assert np.isfinite(features).all()
     np.testing.assert_array_equal(features[:, -2:], 0)
+
+
+def test_signature_statistics_detect_clipped_and_missing_pixels():
+    images = np.random.default_rng(3).normal(size=(2, 3, 31, 31))
+    images[0] = np.clip(images[0], -1, 1)
+    images[1, 0, 0, 0] = np.nan
+    features = measured_features(images, [4, 5])
+    assert features[0, -1] > 0.2
+    assert features[1, -2] > 0
+    assert features[0, -2] == 0
+    assert np.isfinite(features).all()

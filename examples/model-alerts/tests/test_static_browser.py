@@ -26,7 +26,8 @@ def test_static_callback_keeps_raw_pixels_and_handles_empty_filter(tmp_path):
     from bokeh.resources import INLINE
 
     rows = [
-        dict(candidate_id=i, snr=8.0, family="appearance") for i in range(4)
+        dict(candidate_id=i, snr=8.0, family="a" if i % 2 == 0 else "b")
+        for i in range(4)
     ]
     layout, _ = candidate_explorer(
         np.random.default_rng(13).normal(size=(4, 3, 31, 31)),
@@ -72,10 +73,27 @@ try {
   return Math.abs(m.low*sigma+center-limits[i][0])<1e-10 &&
          Math.abs(m.high*sigma+center-limits[i][1])<1e-10;
  });
+ get('Gallery family').value='a';
+ await new Promise(r=>setTimeout(r,100));
+ const first=callback.args.index.value;
+ const previous=models.find(m=>m.label==='Previous candidate');
+ await previous.js_event_callbacks.button_click[0].execute(previous);
+ await new Promise(r=>setTimeout(r,100));
+ report.previous_filtered=callback.args.index.value!==first;
+ get('Gallery family').value='all';
  get('Exploratory score threshold').value=1;
  get('Gallery outcome at current threshold').value='TP';
  await new Promise(r=>setTimeout(r,100));
  report.empty=sources.every(s=>s.data.image.length===0);
+ const Tap=Bokeh.require('core/bokeh_events').Tap;
+ const plot=models.find(m=>m.js_event_callbacks?.tap?.length);
+ plot.trigger_event(new Tap(0,0,15.25,15.25,
+     {shift:false,ctrl:false,alt:false,meta:false}));
+ await new Promise(r=>setTimeout(r,100));
+ report.empty_tap=callback.args.selection.data.x.length===0 &&
+     callback.args.label_sources.every(s=>s.data.text.length===0);
+ plot.trigger_event(new Tap(0,0,NaN,NaN,
+     {shift:false,ctrl:false,alt:false,meta:false}));
  report.population=callback.args.queue.text.includes('FN 4, TN 4');
 } catch(e){report.error=String(e);}
 report.errors=window._errors;report.network=window._network;
@@ -113,7 +131,9 @@ pre.textContent=JSON.stringify(report);document.body.appendChild(pre);
         transformed=True,
         scales_unchanged=True,
         population=True,
+        previous_filtered=True,
         empty=True,
+        empty_tap=True,
         errors=[],
         network=0,
     )

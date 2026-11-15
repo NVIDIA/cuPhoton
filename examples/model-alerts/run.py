@@ -77,6 +77,7 @@ def main():
     ) as archive:
         for p in files:
             archive.write(p, "model-alerts/" + str(p.relative_to(HERE)))
+        archive.write(REPO / "LICENSE", "model-alerts/LICENSE")
     notebook = nbformat.read(snapshot / "model-alerts.ipynb", as_version=4)
     manager = KernelManager(kernel_name="python3")
     manager.kernel_spec.argv = [
@@ -114,7 +115,6 @@ def main():
                 ],
             ]
         ),
-        CUDA_VISIBLE_DEVICES="0",
         CUPHOTON_MODEL_ALERTS_REVISION=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
         ).strip(),

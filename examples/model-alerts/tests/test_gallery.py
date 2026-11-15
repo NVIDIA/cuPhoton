@@ -23,3 +23,21 @@ def test_gallery_is_deterministic_bounded_and_keeps_rare_errors():
     np.testing.assert_array_equal(
         first, gallery_indices(rows, labels, scores, 0.5)
     )
+
+
+def test_saved_gallery_preserves_receipt_order():
+    import pytest
+
+    pytest.importorskip("bokeh")
+    from views import candidate_explorer
+
+    rows = [
+        dict(candidate_id=i, snr=8.0, family="appearance")
+        for i in (90, 3, 17, 8)
+    ]
+    images = np.random.default_rng(318).normal(size=(4, 3, 31, 31))
+    labels, scores = np.array([1, 0, 1, 0]), np.array([0.9, 0.6, 0.3, 0.1])
+    _, receipt = candidate_explorer(
+        images, rows, labels, scores, 0.5, preselected=True
+    )
+    assert receipt["indices"] == [0, 1, 2, 3]

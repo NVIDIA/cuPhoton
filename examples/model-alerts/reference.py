@@ -44,6 +44,18 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def content_hashes(dataset):
+    """Hash full raw triplets across partitions, independent of row IDs."""
+    arrays = [
+        np.load(Path(dataset) / f"{name}.npy", mmap_mode="r")
+        for name in ("search", "template", "difference")
+    ]
+    return [
+        hashlib.sha256(np.stack(triplet).tobytes()).hexdigest()
+        for triplet in zip(*arrays, strict=True)
+    ]
+
+
 def infer(run, dataset, mode, *, feature_dir=None, device="cuda:0"):
     import torch
 
@@ -77,10 +89,10 @@ def _experiment(root, *, smoke, device):
     agreement = {}
     if device.startswith("cuda"):
         exposure = next(field_exposures(9000, design=design))
-        cpu_stamps, cpu_rows, cpu_fit = detect(
+        cpu_stamps, cpu_rows, cpu_fit, _ = detect(
             exposure, design=design, backend="cpu"
         )
-        gpu_stamps, gpu_rows, gpu_fit = detect(
+        gpu_stamps, gpu_rows, gpu_fit, _ = detect(
             exposure, design=design, backend="cupy"
         )
         valid = np.isfinite(cpu_fit.residual)
@@ -205,21 +217,42 @@ def _experiment(root, *, smoke, device):
             "50000" if smoke else "30000",
         )
     )
+    # Read every generated field, including zero-detection fields and earlier
+    # precision pilots. Candidate metadata alone would miss empty fields.
+    development_fields = {9000}
+    for generation_path in root.glob("development-*/raw/generation.json"):
+        generation = json.loads(generation_path.read_text())
+        development_fields.update(map(int, generation["fields"]))
+    test_fields = set(range(test_base, test_base + test_count))
+    shift_fields = set(range(shift_base, shift_base + shift_count))
     if (
-        test_base < 20000
-        or shift_base < 20000
-        or not (
-            test_base + test_count <= shift_base
-            or shift_base + shift_count <= test_base
-        )
+        min(test_base, shift_base) < 0
+        or test_fields & shift_fields
+        or (test_fields | shift_fields) & development_fields
     ):
         raise ValueError(
             "reserved seed blocks overlap development or each other"
         )
+    streams = [
+        0,
+        1,
+        *range(10, 10 + design.epochs),
+        1000,
+        *range(1100, 1100 + design.epochs),
+    ]
+    if len(streams) != len(set(streams)):
+        raise ValueError("generator stream roles overlap")
     # Reserved blocks are declared before their first generation. Separate
     # Smoke uses separate blocks; invalidated full reruns need fresh blocks.
     freeze = dict(
         design=asdict(design),
+        seed_audit=dict(
+            development_fields=sorted(development_fields),
+            development_field_count=len(development_fields),
+            stream_roles=streams,
+            seed_scheme="SeedSequence(root_seed, field, stream)",
+            reserved_blocks_disjoint=True,
+        ),
         train_fields=result["train_fields"],
         validation_fields=result["validation_fields"],
         test_fields=test_count,
@@ -265,7 +298,24 @@ def _experiment(root, *, smoke, device):
             development_coverage=fit_coverage, validation=fusion_result
         ),
         freeze=freeze,
-        coverage={},
+        coverage={
+            split: dict(
+                all_detected=len(split_rows),
+                eligible=sum(
+                    not r["ambiguous"] and not r["challenge"]
+                    for r in split_rows
+                ),
+                ambiguous=sum(r["ambiguous"] for r in split_rows),
+                overlapping_causes=sum(
+                    r["overlapping_causes"] for r in split_rows
+                ),
+                moving_challenge=sum(r["challenge"] for r in split_rows),
+            )
+            for split in ("train", "val")
+            for split_rows in [
+                [r for r in rows_at(raw) if r["split"] == split]
+            ]
+        },
         endpoints={},
         uncertainty={},
         shift={},
@@ -273,6 +323,8 @@ def _experiment(root, *, smoke, device):
         breakdowns={},
         high_confidence_mistakes={},
     )
+    seen_content = set(content_hashes(raw))
+    content_audit = {"development": len(seen_content)}
     for population, fields, shifted in (
         ("test", {test_base + i: "test" for i in range(test_count)}, False),
         ("shift", {shift_base + i: "test" for i in range(shift_count)}, True),
@@ -288,6 +340,15 @@ def _experiment(root, *, smoke, device):
             shifted=shifted,
             backend="cpu",
         )
+        digests = content_hashes(population_raw)
+        if seen_content.intersection(digests) or len(set(digests)) != len(
+            digests
+        ):
+            raise ValueError(
+                "duplicate candidate content across evaluation partitions"
+            )
+        seen_content.update(digests)
+        content_audit[population] = len(digests)
         prepare_training(
             population_raw,
             population_data,
@@ -353,6 +414,7 @@ def _experiment(root, *, smoke, device):
             all_detected=len(rows),
             eligible=int(eligible.sum()),
             ambiguous=sum(r["ambiguous"] for r in rows),
+            overlapping_causes=sum(r["overlapping_causes"] for r in rows),
             moving_challenge=int(movers.sum()),
             fit=coverage,
         )
@@ -368,6 +430,19 @@ def _experiment(root, *, smoke, device):
         )
         injected = sum(r["injected"] for r in generation["recovery"])
         detected = sum(r["detected"] for r in generation["recovery"])
+        detected_ids = {
+            identity for r in rows for identity in r["associated_injections"]
+        }
+        eligible_ids = {
+            identity
+            for i, r in enumerate(rows)
+            if eligible[i]
+            for identity in r["associated_injections"]
+        }
+        if len(detected_ids) != detected:
+            raise AssertionError(
+                "recovery and candidate association disagree"
+            )
         for key, value in scores.items():
             retained_ids = {
                 identity
@@ -378,22 +453,25 @@ def _experiment(root, *, smoke, device):
             metrics[key]["injections"] = dict(
                 injected=injected,
                 detected=detected,
+                eligible_detected=len(eligible_ids),
+                ineligible_only_detected=len(detected_ids - eligible_ids),
+                classifier_rejected_eligible=len(eligible_ids - retained_ids),
                 retained=len(retained_ids),
                 detection_recovery=detected / injected,
                 retained_fraction=len(retained_ids) / injected,
             )
         target = "endpoints" if population == "test" else "shift"
         report[target] = metrics
+        report["uncertainty"][population + "_model_field_intervals"] = {
+            key: field_rate_intervals(
+                labels[eligible],
+                value[eligible],
+                groups[eligible],
+                thresholds[key],
+            )
+            for key, value in scores.items()
+        }
         if population == "test":
-            report["uncertainty"]["model_field_intervals"] = {
-                key: field_rate_intervals(
-                    labels[eligible],
-                    value[eligible],
-                    groups[eligible],
-                    thresholds[key],
-                )
-                for key, value in scores.items()
-            }
             for outcome in result["outcomes"]:
                 if outcome["mode"] != "pair":
                     continue
@@ -516,6 +594,9 @@ def _experiment(root, *, smoke, device):
         artifact_sha256={
             str(p.relative_to(root)): sha(p) for p in root.glob("*.npz")
         },
+        content_audit=dict(
+            partition_counts=content_audit, all_triplets_unique=True
+        ),
         network_required_after_provisioning=False,
     )
     if device.startswith("cuda"):
