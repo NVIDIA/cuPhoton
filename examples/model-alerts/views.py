@@ -43,7 +43,14 @@ def gallery_indices(rows, labels, scores, threshold, maximum=96):
 
 
 def candidate_explorer(
-    images, rows, labels, scores, threshold, *, evaluation=None
+    images,
+    rows,
+    labels,
+    scores,
+    threshold,
+    *,
+    evaluation=None,
+    preselected=False,
 ):
     """All statistics from complete evaluation; at most 96 image triplets."""
     from bokeh.events import Tap
@@ -69,7 +76,13 @@ def candidate_explorer(
         raise ValueError("nonempty candidate triplets required")
     if images.shape[2] != images.shape[3]:
         raise ValueError("square stamps required")
-    chosen = gallery_indices(rows, labels, scores, threshold)
+    if preselected and len(rows) > 96:
+        raise ValueError("saved gallery exceeds the 96-candidate limit")
+    chosen = (
+        np.arange(len(rows))
+        if preselected
+        else gallery_indices(rows, labels, scores, threshold)
+    )
     stamps = images[chosen]
     size = images.shape[-1]
     bank = ColumnDataSource(
@@ -236,7 +249,13 @@ def candidate_explorer(
         plot.js_on_event(
             Tap,
             CustomJS(
-                args=dict(sources=sources, exact=exact, size=size),
+                args=dict(
+                    sources=sources,
+                    exact=exact,
+                    size=size,
+                    selection=selection,
+                    label_sources=label_sources,
+                ),
                 code=(
                     Path(__file__).with_name("pixel-readout.js")
                 ).read_text(),
@@ -276,8 +295,28 @@ def candidate_explorer(
     for button, delta in [(previous, -1), (following, 1)]:
         button.js_on_click(
             CustomJS(
-                args=dict(index=index, delta=delta, count=len(chosen)),
-                code="index.value=(index.value+delta+count)%count;",
+                args=dict(
+                    index=index,
+                    delta=delta,
+                    bank=bank,
+                    threshold=threshold_control,
+                    family=family,
+                    category=category,
+                ),
+                code="""
+const matches=[];
+for(let j=0;j<bank.data.score.length;j++) {
+ const keep=bank.data.score[j]>=threshold.value;
+ const positive=bank.data.label[j]===1;
+ const outcome=(positive===keep?'T':'F')+(keep?'P':'N');
+ if((family.value==='all'||family.value===bank.data.family[j]) &&
+    (category.value==='all'||category.value===outcome))matches.push(j);
+}
+if(!matches.length)return;
+let position=matches.indexOf(index.value);
+if(position<0)position=delta>0?-1:0;
+index.value=matches[(position+delta+matches.length)%matches.length];
+""",
             )
         )
     # Initial complete statistics are filled without waiting for an event.

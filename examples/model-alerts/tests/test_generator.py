@@ -60,9 +60,9 @@ def test_detection_uses_images_without_truth():
     from generator import detect
 
     exposure = next(field_exposures(10))
-    stamps, rows, _ = detect(exposure)
+    stamps, rows, _, _ = detect(exposure)
     exposure["causes"] = []
-    repeated_stamps, repeated_rows, _ = detect(exposure)
+    repeated_stamps, repeated_rows, _, _ = detect(exposure)
     assert rows == repeated_rows and len(rows) > 0
     for stamp, repeated, row in zip(
         stamps, repeated_stamps, rows, strict=True
@@ -82,3 +82,31 @@ def test_independent_calibration_is_estimated_not_generator_truth():
     assert calibration["background"] != 100
     assert calibration["read_variance"] != 16
     assert calibration["pixels"] == 4096
+
+
+def test_persistent_detector_defect_is_present_in_reference_and_search():
+    exposures = list(field_exposures(41))
+    for exposure in exposures:
+        cause = next(
+            c for c in exposure["causes"] if c["family"] == "bad_pixel"
+        )
+        x, y = int(cause["x"]), int(cause["y"])
+        for name in ("template", "search"):
+            image = exposure[name]
+            assert (
+                image[y, x] - np.median(image[y - 2 : y + 3, x - 2 : x + 3])
+                > 200
+            )
+
+
+def test_nearest_cause_defines_negative_family_independent_of_input_order():
+    far = dict(
+        x=2, y=0, positive=False, family="misregistration", challenge=False
+    )
+    near = dict(
+        x=0.1, y=0, positive=False, family="cosmic_ray", challenge=False
+    )
+    for causes in ([far, near], [near, far]):
+        result = associate(dict(x=0, y=0), causes, 3)
+        assert result["family"] == "cosmic_ray"
+        assert result["overlapping_causes"] and not result["ambiguous"]

@@ -27,7 +27,8 @@ def pilot(output, *, smoke=False, device="cuda:0", multiplier=1):
     fields = {i: "train" for i in range(train_count)}
     fields.update({10000 + i: "val" for i in range(val_count)})
     raw, prepared = output / "raw", output / "prepared"
-    write_dataset(raw, fields, design=Design(), backend="cpu")
+    design = Design()
+    write_dataset(raw, fields, design=design, backend="cpu")
     prepare_training(raw, prepared)
     baselines = development_baselines(raw, prepared, output / "baselines")
     outcomes = []
@@ -54,7 +55,7 @@ def pilot(output, *, smoke=False, device="cuda:0", multiplier=1):
         scientific_performance_qualified=False,
         train_fields=train_count,
         validation_fields=val_count,
-        epochs_per_field=3,
+        epochs_per_field=design.epochs,
         outcomes=outcomes,
         baselines=baselines,
         precision_requires_expansion=max(half_widths) > 0.05,

@@ -144,11 +144,13 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
     reference_mean = np.full(shape, background)
     for (x, y), flux in zip(positions, fluxes, strict=False):
         reference_mean += flux * psf(shape, x, y, reference_sigma)
+    # Detector dark-current defect is present in both reference and search.
+    hot_x, hot_y = rng.integers(margin, design.size - margin, 2)
+    hot_flux = rng.uniform(300, 1500)
+    reference_mean[hot_y, hot_x] += hot_flux
     template = expose(
         reference_mean, rng_for(design, field, 1), design.read_noise
     )
-    # A persistent hot detector pixel belongs to this field in every epoch.
-    hot_x, hot_y = rng.integers(margin, design.size - margin, 2)
     for epoch in range(design.epochs):
         erng = rng_for(design, field, 10 + epoch)
         sigma = erng.uniform(1.9, 2.6) if shifted else erng.uniform(1.2, 1.9)
@@ -213,8 +215,8 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
                 challenge=True,
             )
         )
+        expected[hot_y, hot_x] += hot_flux
         search = expose(expected, erng, design.read_noise)
-        search[hot_y, hot_x] += erng.uniform(300, 1500)
         causes.append(
             dict(
                 x=float(hot_x),
@@ -329,7 +331,7 @@ def detect(exposure, *, design=DEFAULT_DESIGN, backend="cpu"):
             np.stack([search[cut], template[cut], fit.residual[cut]])
         )
         metadata.append(dict(x=int(x), y=int(y), snr=float(snr[y, x])))
-    return stamps, metadata, fit
+    return stamps, metadata, fit, noise
 
 
 def associate(candidate, causes, radius):
@@ -340,6 +342,11 @@ def associate(candidate, causes, radius):
         if np.hypot(candidate["x"] - c["x"], candidate["y"] - c["y"])
         <= radius
     ]
+    near.sort(
+        key=lambda c: np.hypot(
+            candidate["x"] - c["x"], candidate["y"] - c["y"]
+        )
+    )
     real = [c for c in near if c["positive"]]
     artifacts = [
         c
@@ -387,17 +394,8 @@ def write_dataset(
         for exposure in field_exposures(
             field, design=design, shifted=shifted
         ):
-            stamps, candidates, fit = detect(
+            stamps, candidates, fit, noise = detect(
                 exposure, design=design, backend=backend
-            )
-            from cuphoton.xpois import standardize_constant_kernel_residual
-
-            search_var, template_var = input_variances(exposure)
-            noise = standardize_constant_kernel_residual(
-                fit.residual,
-                kernel=fit.kernel,
-                target_variance=search_var,
-                reference_variance=template_var,
             )
             positives = [
                 c

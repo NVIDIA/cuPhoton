@@ -57,7 +57,10 @@ APIs and export path and cannot substantiate scientific performance. Full
 reference starts with 180 training and 60 validation fields, reserves 60 test
 fields, and adds 60 shifted fields. Every field has three epochs. Development
 counts double if the primary validation field-bootstrap half-width exceeds
-five percentage points. Runtime and artifact sizes follow the actual counts.
+five percentage points. All reference models complete 12 training epochs;
+minimum validation loss selects the checkpoint. Validation fields are reused
+for checkpoint and threshold selection, so the precision rule is a conditional
+development heuristic. Runtime and artifact sizes follow the actual counts.
 
 The runner snapshots source, executes a fresh notebook kernel and preserves
 stdout, warnings and figures. It writes `model-alerts.executed.ipynb`,
@@ -71,7 +74,8 @@ lock explicitly.
 
 The ontology precedes training. Unmatched detections stay negative; movers
 are separate astrophysical challenges. Ambiguous associations remain counted
-in coverage. Training excludes those two special categories from primary
+in coverage, separately from overlapping causes. Injection retention separates
+losses from detection, eligibility exclusions and classification. Training excludes those two special categories from primary
 binary fitting and evaluation states the same coverage boundary.
 
 Native xScan validation and label-provenance checks guard independent fields.
@@ -82,7 +86,8 @@ the same candidate pool and three initialization seeds. Controls include
 SNR-only and measured-statistics baselines, one fixed training-label
 permutation, nested development learning curves and a rejected invalid split.
 xFit fusion uses native exact-candidate/stamp correspondence checks and
-reports failed-fit coverage.
+reports failed-fit coverage. Raw nonfinite and repeated-extreme fractions
+are measured by binary class to check trivial generator signatures.
 
 Each model/seed uses the highest inclusive score threshold achieving at least
 95% validation recall, including tied scores. The final endpoint is test FPR

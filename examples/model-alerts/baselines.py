@@ -15,16 +15,18 @@ FEATURE_NAMES = (
     "negative_absolute_flux_fraction",
     "difference_peak_to_rms",
     "search_template_correlation",
-    "mask_fraction",
-    "clipping_fraction",
+    "nonfinite_fraction",
+    "repeated_extreme_fraction",
 )
 
 
 def measured_features(images, snr):
     """Simple statistics from complete, unclipped raw electron cutouts.
 
-    No pixels are masked or clipped by the generator. Two explicit zero
-    columns expose this fact instead of introducing a label-specific mask.
+    Measure nonfinite pixels and repeated extrema rather than assuming they
+    are absent. Tied extrema can indicate clipping or quantization; they do
+    not prove either. Missing pixels are zero-filled only for this diagnostic
+    calculation; generated model inputs are required to be finite.
     """
     images = np.asarray(images, dtype=float)
     snr = np.asarray(snr, dtype=float)
@@ -34,6 +36,14 @@ def measured_features(images, snr):
         or snr.shape != (len(images),)
     ):
         raise ValueError("candidate triplets and one measured SNR required")
+    nonfinite = (~np.isfinite(images)).mean(axis=(1, 2, 3))
+    images = np.where(np.isfinite(images), images, 0)
+    planes = images.reshape(len(images), 3, -1)
+    low = (planes == planes.min(axis=2, keepdims=True)).sum(axis=2)
+    high = (planes == planes.max(axis=2, keepdims=True)).sum(axis=2)
+    repeated = np.minimum(
+        planes.shape[2], np.maximum(low - 1, 0) + np.maximum(high - 1, 0)
+    ).sum(axis=1) / (3 * planes.shape[2])
     search, reference, difference = images[:, 0], images[:, 1], images[:, 2]
     positive = np.maximum(difference, 0)
     absolute = np.abs(difference).sum(axis=(1, 2)) + 1e-12
@@ -56,8 +66,8 @@ def measured_features(images, snr):
             np.maximum(-difference, 0).sum(axis=(1, 2)) / absolute,
             difference.max(axis=(1, 2)) / rms,
             correlation,
-            np.zeros(len(images)),
-            np.zeros(len(images)),
+            nonfinite,
+            repeated,
         )
     )
 
@@ -179,6 +189,29 @@ def development_baselines(raw_dir, prepared_dir, output):
             model=model.receipt(),
             threshold=threshold,
             feature_names=[FEATURE_NAMES[i] for i in columns],
+            training_signature_audit={
+                str(label): {
+                    FEATURE_NAMES[i]: dict(
+                        minimum=float(
+                            features[
+                                (split == 0) & (labels == label), i
+                            ].min()
+                        ),
+                        maximum=float(
+                            features[
+                                (split == 0) & (labels == label), i
+                            ].max()
+                        ),
+                        nonzero=int(
+                            np.count_nonzero(
+                                features[(split == 0) & (labels == label), i]
+                            )
+                        ),
+                    )
+                    for i in (-2, -1)
+                }
+                for label in (0, 1)
+            },
             validation=confusion(
                 labels[validation], scores[validation], threshold
             ),
