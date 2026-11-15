@@ -10,10 +10,10 @@ from pathlib import Path
 
 import numpy as np
 from bokeh.layouts import column, row
-from bokeh.models import ColumnDataSource, CustomJS, Select
+from bokeh.models import ColumnDataSource, CustomJS, Div, Select
 from bokeh.plotting import figure
-from experiment import forward_prediction
-from scene import science_window
+from experiment import aperture_measurements, forward_prediction
+from scene import HELDOUT_FRAMES, TRAIN_FRAMES, catalog, science_window
 from views import linked_panels
 
 
@@ -28,26 +28,34 @@ def products(root, names):
 
 
 def exposures(root, case="trial-000", method="huber"):
+    methods = ("l2", "huber") if method == "compare" else (method,)
+    cases = {}
     with np.load(Path(root) / case / "page.npz") as saved:
-        predicted = forward_prediction(
-            saved[f"{method}_native"], saved["kernels"]
-        )
-        predicted = science_window(predicted)
-        labels = [
-            str(i + 1).zfill(2)
-            + (" (fit)" if i in saved["train_frames"] else " (held out)")
-            for i in range(12)
-        ]
-        cases = {
-            labels[i]: [
-                saved["observations"][..., i].copy(),
-                predicted[..., i],
-                saved["observations"][..., i] - predicted[..., i],
-            ]
-            for i in range(12)
-        }
-    return linked_panels(
-        cases, ["Observation", "Prediction", "Residual"], signed=(2,)
+        observations = saved["observations"]
+        frames = [observations[..., i].copy() for i in range(12)]
+        for current in methods:
+            predicted = science_window(
+                forward_prediction(
+                    saved[f"{current}_native"], saved["kernels"]
+                )
+            )
+            for i in range(12):
+                split = "fit" if i in saved["train_frames"] else "held out"
+                label = f"{current.upper()} {i + 1:02} ({split})"
+                cases[label] = [
+                    frames[i],
+                    predicted[..., i],
+                    frames[i] - predicted[..., i],
+                ]
+    return column(
+        Div(
+            text="<h4>"
+            + " / ".join(m.upper() for m in methods)
+            + " forward predictions</h4>"
+        ),
+        linked_panels(
+            cases, ["Observation", "Prediction", "Residual"], signed=(2,)
+        ),
     )
 
 
@@ -212,6 +220,7 @@ def case_measurement_table(root):
     rows = []
     for case in (
         "trial-000",
+        "boundary-failure",
         "outliers",
         "explicit-mask",
         "psf-width-0.95",
@@ -234,10 +243,26 @@ def case_measurement_table(root):
             centroid = np.mean(
                 [s["centroid_error_px"] for s in result["sources"]]
             )
+            residual = result.get("standardized_residual_ms_by_frame")
+            fit = (
+                f"{np.mean(np.asarray(residual)[list(TRAIN_FRAMES)]):.5f}"
+                if residual is not None
+                else "n/a"
+            )
+            held = (
+                f"{np.mean(np.asarray(residual)[list(HELDOUT_FRAMES)]):.5f}"
+                if residual is not None
+                else "n/a"
+            )
+            qualifier = (
+                " (noiseless science)"
+                if case in ("noiseless-physical", "perfect-factorization")
+                else " (noisy science)"
+            )
             rows.append(
-                f"<tr><td>{html.escape(case)}</td>"
+                f"<tr><td>{html.escape(case + qualifier)}</td>"
                 f"<td>{html.escape(method)}</td><td>{bias:.5f}</td>"
-                f"<td>{centroid:.5f}</td></tr>"
+                f"<td>{centroid:.5f}</td><td>{fit}</td><td>{held}</td></tr>"
             )
     floors = []
     for case in (
@@ -271,8 +296,77 @@ def case_measurement_table(root):
         "No trial error bars.</caption>"
         "<thead><tr><th>Case</th><th>Method</th>"
         "<th>Mean fractional aperture error</th>"
-        "<th>Mean centroid error (pixel)</th></tr></thead><tbody>"
+        "<th>Mean centroid error (pixel)</th>"
+        "<th>Fitted mean standardized residual²</th>"
+        "<th>Held-out mean standardized residual²</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
         + floor_table
+    )
+
+
+def posthoc_comparisons(root):
+    """Report descriptive additions to the frozen primary analysis."""
+    root = Path(root)
+    trials = json.loads((root / "trials.json").read_text())
+    protocol = json.loads((root / "protocol.json").read_text())
+    profile = json.loads((root.parent / "execution-profile.json").read_text())
+    sources = catalog(development=profile["profile"] == "quick")
+    rows = []
+    for index, source in enumerate(sources):
+        for first, second in (
+            ("l2", "coadd"),
+            ("huber", "coadd"),
+            ("huber", "l2"),
+        ):
+            values = np.array(
+                [
+                    trial[first]["sources"][index]["fractional_flux_error"]
+                    - trial[second]["sources"][index]["fractional_flux_error"]
+                    for trial in trials
+                ]
+            )
+            se = values.std(ddof=1) / np.sqrt(len(values))
+            rows.append(
+                f"<tr><td>{index}: {source.kind}, {source.flux:g} e</td>"
+                f"<td>{first} minus {second}</td>"
+                f"<td>{values.mean():.6f}</td><td>{se:.6f}</td></tr>"
+            )
+    with np.load(root / "trial-000/page.npz") as saved:
+        target_rows = aperture_measurements(
+            saved["truth"], sources, origin=protocol["science_window_origin"]
+        )
+    pair = [row for row in target_rows if row["kind"] == "blend"]
+    target_separation = np.hypot(
+        pair[0]["x"] - pair[1]["x"], pair[0]["y"] - pair[1]["y"]
+    )
+    separations = []
+    for method in ("coadd", "l2", "huber"):
+        values = (
+            np.array(
+                [
+                    t[method]["blend_aperture_centroid_separation_px"]
+                    for t in trials
+                ]
+            )
+            - target_separation
+        )
+        separations.append(
+            f"<li>{method}: mean {values.mean():.6f} px, "
+            f"SE {values.std(ddof=1) / np.sqrt(len(values)):.6f} px</li>"
+        )
+    return (
+        "<details><summary>Post hoc paired source and separation "
+        "diagnostics</summary>"
+        "<p>Descriptive comparisons on frozen draws, added after inspection; "
+        "they did not select parameters or change the primary endpoint.</p>"
+        "<table><thead><tr><th>Fixed source</th><th>Paired contrast</th>"
+        "<th>Mean fractional difference</th><th>Standard error</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        f"<p>The aperture-centroid estimator on target truth gives "
+        f"{target_separation:.6f} px; the intrinsic separation is 3 px. "
+        "The following errors use that same target estimator, and do not "
+        "establish deblended separation recovery.</p><ul>"
+        + "".join(separations)
+        + "</ul></details>"
     )

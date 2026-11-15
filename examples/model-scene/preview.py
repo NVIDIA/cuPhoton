@@ -132,6 +132,13 @@ def main():
         "protocol_sha256": receipt["protocol_sha256"],
         "packages": receipt["packages"],
         "architecture": receipt["architecture"],
+        "gpu": receipt.get("gpu"),
+        "device": receipt["device"],
+        "science_seeds": receipt["science_seeds"],
+        "calibration_seeds": receipt["calibration_seeds"],
+        "source_import": receipt["source_import"],
+        "source_tree_clean": receipt["source_tree_clean"],
+        "artifact_hashes": receipt["artifact_hashes"],
         "runtime_cuphoton_version": receipt.get("runtime_cuphoton_version"),
         "original_receipt_sha256": digest(
             executed.with_name("execution.json")

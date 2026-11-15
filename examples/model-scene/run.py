@@ -62,11 +62,18 @@ def main():
     protocol = json.loads(protocol_path.read_text())
     if args.profile == "reference" and not protocol["frozen"]:
         parser.error("Reference execution requires a frozen protocol")
-    source_hashes = {
-        p.relative_to(HERE).as_posix(): digest(p)
-        for p in HERE.rglob("*")
-        if p.is_file() and "__pycache__" not in p.parts
-    }
+    if args.profile == "reference" and not protocol.get(
+        "science_source_hashes"
+    ):
+        parser.error(
+            "Reference protocol must include scientific source hashes"
+        )
+    tracked = (
+        subprocess.check_output(["git", "ls-files", "-z", "."], cwd=HERE)
+        .decode()
+        .split("\0")
+    )
+    source_hashes = {name: digest(HERE / name) for name in tracked if name}
     for name, expected in protocol.get("science_source_hashes", {}).items():
         if digest(HERE / name) != expected:
             parser.error(f"Frozen scientific source changed: {name}")
@@ -76,6 +83,7 @@ def main():
         target = output / "source" / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(HERE / name, target)
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
     env = os.environ.copy()
     env["CUPHOTON_MODEL_SCENE_OUTPUT"] = str(output)
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")

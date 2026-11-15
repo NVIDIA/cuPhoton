@@ -53,8 +53,14 @@ def linked_panels(cases, labels, *, signed=(), units="electrons / exposure"):
         float(unsigned_values.min()),
         float(unsigned_values.max()),
     )
+    payload_cache = {}
     for index, label in enumerate(labels):
-        payloads = [_image_payload(group[index]) for group in images]
+        payloads = []
+        for group in images:
+            key = id(group[index])
+            if key not in payload_cache:
+                payload_cache[key] = _image_payload(group[index])
+            payloads.append(payload_cache[key])
         source = ColumnDataSource(payloads[0])
         bank = ColumnDataSource(
             {
