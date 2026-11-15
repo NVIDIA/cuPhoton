@@ -29,9 +29,14 @@ class Design:
     detection_threshold: float = 4.0
     association_radius: float = 3.0
     read_noise: float = 4.0
+    calibration_size: int = 64
     root_seed: int = 20261115
 
     def __post_init__(self):
+        if self.calibration_size < 2:
+            raise ValueError(
+                "calibration frames must contain at least 2x2 pixels"
+            )
         if self.stamp_size < 3 or self.stamp_size % 2 != 1:
             raise ValueError("stamp size must be odd and at least 3")
         if self.size <= self.stamp_size + 20:
@@ -87,6 +92,32 @@ def expose(expected, rng, read_noise):
     )
 
 
+def calibration_sample(background, read_noise, rng, *, size=64):
+    """Estimate sky/read variance from independent calibration frames."""
+    shape = (size, size)
+    sky = expose(np.full(shape, background), rng, read_noise)
+    dark_a = rng.normal(0, read_noise, shape)
+    dark_b = rng.normal(0, read_noise, shape)
+    return dict(
+        background=float(sky.mean()),
+        read_variance=float(np.var(dark_a - dark_b, ddof=1) / 2),
+        pixels=size * size,
+    )
+
+
+def input_variances(exposure):
+    """Measured source intensity plus independently estimated calibration."""
+    values = []
+    for name, prefix in (("search", "search"), ("template", "reference")):
+        background = exposure[prefix + "_background"]
+        values.append(
+            np.maximum(exposure[name] - background, 0)
+            + background
+            + exposure[prefix + "_read_variance"]
+        )
+    return tuple(values)
+
+
 def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
     """One shared template and independent search noise per epoch.
 
@@ -104,6 +135,12 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
     fluxes = np.exp(rng.uniform(np.log(400), np.log(18000), design.stars))
     reference_sigma = rng.uniform(0.9, 1.2)
     background = rng.uniform(60, 140)
+    reference_calibration = calibration_sample(
+        background,
+        design.read_noise,
+        rng_for(design, field, 1000),
+        size=design.calibration_size,
+    )
     reference_mean = np.full(shape, background)
     for (x, y), flux in zip(positions, fluxes, strict=False):
         reference_mean += flux * psf(shape, x, y, reference_sigma)
@@ -210,11 +247,19 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
                     challenge=False,
                 )
             )
+        search_calibration = calibration_sample(
+            sky,
+            design.read_noise,
+            rng_for(design, field, 1100 + epoch),
+            size=design.calibration_size,
+        )
         yield dict(
             template=template.copy(),
             search=search,
-            reference_background=float(background),
-            search_background=float(sky),
+            reference_background=reference_calibration["background"],
+            reference_read_variance=reference_calibration["read_variance"],
+            search_background=search_calibration["background"],
+            search_read_variance=search_calibration["read_variance"],
             field=int(field),
             epoch=epoch,
             causes=causes,
@@ -235,16 +280,7 @@ def detect(exposure, *, design=DEFAULT_DESIGN, backend="cpu"):
     )
 
     search, template = exposure["search"], exposure["template"]
-    variance = (
-        np.maximum(search - exposure["search_background"], 0)
-        + exposure["search_background"]
-        + design.read_noise**2
-    )
-    ref_variance = (
-        np.maximum(template - exposure["reference_background"], 0)
-        + exposure["reference_background"]
-        + design.read_noise**2
-    )
+    variance, ref_variance = input_variances(exposure)
     fit = solve_constant_kernel(
         template,
         search,
@@ -356,20 +392,7 @@ def write_dataset(
             )
             from cuphoton.xpois import standardize_constant_kernel_residual
 
-            search_var = (
-                np.maximum(
-                    exposure["search"] - exposure["search_background"], 0
-                )
-                + exposure["search_background"]
-                + design.read_noise**2
-            )
-            template_var = (
-                np.maximum(
-                    exposure["template"] - exposure["reference_background"], 0
-                )
-                + exposure["reference_background"]
-                + design.read_noise**2
-            )
+            search_var, template_var = input_variances(exposure)
             noise = standardize_constant_kernel_residual(
                 fit.residual,
                 kernel=fit.kernel,
@@ -394,6 +417,15 @@ def write_dataset(
                     field=field,
                     epoch=exposure["epoch"],
                     injected=len(positives),
+                    calibration=dict(
+                        reference_background=exposure["reference_background"],
+                        search_background=exposure["search_background"],
+                        reference_read_variance=exposure[
+                            "reference_read_variance"
+                        ],
+                        search_read_variance=exposure["search_read_variance"],
+                        pixels=design.calibration_size**2,
+                    ),
                     detected=recovered,
                 )
             )
