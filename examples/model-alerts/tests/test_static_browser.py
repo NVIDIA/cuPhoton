@@ -73,6 +73,19 @@ try {
   return Math.abs(m.low*sigma+center-limits[i][0])<1e-10 &&
          Math.abs(m.high*sigma+center-limits[i][1])<1e-10;
  });
+ const Tap=Bokeh.require('core/bokeh_events').Tap;
+ const plot=models.find(m=>m.js_event_callbacks?.tap?.length);
+ plot.trigger_event(new Tap(0,0,15.25,15.25,
+     {shift:false,ctrl:false,alt:false,meta:false}));
+ await new Promise(r=>setTimeout(r,100));
+ const selected=JSON.stringify(callback.args.selection.data);
+ const exact=callback.args.exact.text;
+ get('Display units').value='unit_robust';
+ get('Assumed positive prevalence').value=.2;
+ await new Promise(r=>setTimeout(r,100));
+ report.selection_persists=selected===JSON.stringify(callback.args.selection.data)
+     && exact===callback.args.exact.text
+     && callback.args.label_sources.every(s=>s.data.text.length===1);
  get('Gallery family').value='a';
  await new Promise(r=>setTimeout(r,100));
  const first=callback.args.index.value;
@@ -85,8 +98,7 @@ try {
  get('Gallery outcome at current threshold').value='TP';
  await new Promise(r=>setTimeout(r,100));
  report.empty=sources.every(s=>s.data.image.length===0);
- const Tap=Bokeh.require('core/bokeh_events').Tap;
- const plot=models.find(m=>m.js_event_callbacks?.tap?.length);
+
  plot.trigger_event(new Tap(0,0,15.25,15.25,
      {shift:false,ctrl:false,alt:false,meta:false}));
  await new Promise(r=>setTimeout(r,100));
@@ -130,6 +142,7 @@ pre.textContent=JSON.stringify(report);document.body.appendChild(pre);
         unchanged=True,
         transformed=True,
         scales_unchanged=True,
+        selection_persists=True,
         population=True,
         previous_filtered=True,
         empty=True,
