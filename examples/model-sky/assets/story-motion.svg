@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="360" viewBox="0 0 300 360" role="img" aria-labelledby="motion-title motion-description">
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .label { fill: #b7c9a9; font-size: 10px; font-weight: 600; letter-spacing: 1.15px; }
+      .small { fill: #b7c9a9; font-size: 11px; }
+      .note { fill: #8fa17f; font-size: 9px; letter-spacing: 1.1px; }
+      .number { fill: #b5ed39; font-size: 12px; font-weight: 700; }
+      .light { fill: #f0f4eb; }
+      .frame { fill: #0b1008; stroke: #34472b; }
+      .guide { fill: none; stroke: #34472b; stroke-width: 1; }
+    </style>
+    <linearGradient id="card-shade" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1a2813" />
+      <stop offset="1" stop-color="#10170c" />
+    </linearGradient>
+    <radialGradient id="star-halo">
+      <stop stop-color="#f0f4eb" stop-opacity=".55" />
+      <stop offset=".28" stop-color="#dce9bf" stop-opacity=".2" />
+      <stop offset="1" stop-color="#dce9bf" stop-opacity="0" />
+    </radialGradient>
+    <pattern id="sky-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#34472b" stroke-width=".7" opacity=".42" />
+    </pattern>
+    <marker id="arrow-green" viewBox="0 0 8 8" refX="6.8" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L8 4L0 8Z" fill="#b5ed39" />
+    </marker>
+    <g id="pin-star">
+      <circle r="10" fill="url(#star-halo)" />
+      <circle r="2.1" fill="#f0f4eb" />
+    </g>
+    <g id="target-star">
+      <circle r="27" fill="url(#star-halo)" />
+      <circle r="5" fill="#f0f4eb" />
+      <path d="M-10 0H10M0-10V10" stroke="#f0f4eb" stroke-width=".7" opacity=".5" />
+    </g>
+  </defs>
+  <g id="scene-motion" role="img" aria-labelledby="motion-title motion-description">
+    <title id="motion-title">Follow the star</title>
+    <desc id="motion-description">A single star occupies an earlier and a later position against the same background. Its displacement, divided by the elapsed time, gives its proper motion. The illustrated displacement is exaggerated for clarity.</desc>
+    <rect x=".5" y=".5" width="299" height="359" rx="18" fill="url(#card-shade)" stroke="#34472b" />
+    <circle cx="35" cy="34" r="14" fill="#253719" />
+    <text x="35" y="38" text-anchor="middle" class="number">03</text>
+    <text x="60" y="38" class="label">TWO EPOCHS</text>
+    <rect x="24" y="70" width="252" height="226" rx="12" class="frame" />
+    <rect x="25" y="71" width="250" height="224" rx="11" fill="url(#sky-grid)" />
+    <g opacity=".5">
+      <use href="#pin-star" x="61" y="110" />
+      <use href="#pin-star" x="229" y="99" />
+      <use href="#pin-star" x="227" y="234" />
+      <use href="#pin-star" x="66" y="263" />
+    </g>
+    <circle cx="100" cy="220" r="25" fill="#4ec9dc" opacity=".07" />
+    <circle cx="100" cy="220" r="16" fill="none" stroke="#4ec9dc" stroke-width="1.4" stroke-dasharray="3 4" />
+    <circle cx="100" cy="220" r="4" fill="#4ec9dc" opacity=".6" />
+    <path d="M118 203L165 153" fill="none" stroke="#b5ed39" stroke-width="1.8" marker-end="url(#arrow-green)" />
+    <path d="M100 220H180V138" fill="none" stroke="#81946f" stroke-width=".8" stroke-dasharray="3 5" opacity=".7" />
+    <use href="#target-star" x="180" y="138" />
+    <circle cx="180" cy="138" r="16" fill="none" stroke="#b5ed39" stroke-width="1.4" />
+    <text x="100" y="252" text-anchor="middle" fill="#79d7e4" font-size="11">earlier</text>
+    <text x="180" y="108" text-anchor="middle" fill="#b5ed39" font-size="11">later</text>
+    <text x="135" y="172" text-anchor="middle" fill="#b5ed39" font-size="10" transform="rotate(-47 135 172)">same star</text>
+    <text x="150" y="322" text-anchor="middle" class="small">Angular shift ÷ elapsed time</text>
+    <text x="150" y="344" text-anchor="middle" class="note">ILLUSTRATIVE SCHEMATIC</text>
+  </g>
+</svg>
