@@ -41,3 +41,6 @@
 
 # Original output-free Model Scene notebook.
 /examples/model-scene/model-scene.ipynb -filter diff merge text eol=lf
+
+# Model Alerts is reviewed and committed without notebook outputs.
+/examples/model-alerts/model-alerts.ipynb -filter diff merge text eol=lf
