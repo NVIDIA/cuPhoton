@@ -309,8 +309,9 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
 def detect(exposure, *, design=DEFAULT_DESIGN, backend="cpu"):
     """Fit xPois without truth masks, then find positive filtered maxima.
 
-    Variances use measured images plus independent gain/read-noise/sky
-    calibration. Kernel uncertainty and spatial covariance are omitted;
+    Variances use measured images, assumed unit gain and independently
+    estimated read-noise/sky calibration. Kernel uncertainty and spatial
+    covariance are omitted;
     resulting SNR is a diagnostic rather than a calibrated significance.
     """
     from cuphoton.xpois import (
@@ -454,6 +455,9 @@ def write_dataset(
                     field=field,
                     epoch=exposure["epoch"],
                     injected=len(positives),
+                    injection_families={
+                        c["injection_id"]: c["family"] for c in positives
+                    },
                     calibration=dict(
                         reference_background=exposure["reference_background"],
                         search_background=exposure["search_background"],
