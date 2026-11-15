@@ -64,6 +64,24 @@ def main():
         parser.error("CUDA execution requires --gpu-lock")
     if args.gpu_lock is not None and not args.gpu_lock.parent.is_dir():
         parser.error("shared GPU lock parent must already exist")
+    dirty = subprocess.check_output(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            "src",
+            "examples/model-alerts",
+            ".gitattributes",
+        ],
+        cwd=REPO,
+        text=True,
+    )
+    if dirty.strip():
+        parser.error(
+            "commit example and cuPhoton source edits before execution"
+        )
     files = source_files()
     hashes = {str(p.relative_to(HERE)): digest(p) for p in files}
     output.mkdir(parents=True)

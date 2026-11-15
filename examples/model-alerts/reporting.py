@@ -67,7 +67,11 @@ def model_rows(outcomes):
             dict(
                 model=name,
                 **{k: v for k, v in result.items() if k != "injections"},
-                **result.get("injections", {}),
+                **{
+                    k: v
+                    for k, v in result.get("injections", {}).items()
+                    if k != "by_family"
+                },
             )
         )
     return rows

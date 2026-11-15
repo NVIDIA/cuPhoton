@@ -43,17 +43,22 @@ def pilot(output, *, smoke=False, device="cuda:0", multiplier=1):
             for r in raw_rows
         ]
     )
-    selected = difference[mask]
-    rms = np.sqrt(np.mean(selected**2, axis=(1, 2)))
-    bipolar = (selected.max(axis=(1, 2)) > 3 * rms) & (
-        selected.min(axis=(1, 2)) < -3 * rms
+    center = design.stamp_size // 2
+    cut = np.s_[center - 4 : center + 5, center - 4 : center + 5]
+    selected = difference[mask][:, cut[0], cut[1]]
+    variance = np.load(raw / "variance.npy", mmap_mode="r")[mask][
+        :, cut[0], cut[1]
+    ]
+    standardized = selected / np.sqrt(variance)
+    bipolar = (standardized.max(axis=(1, 2)) >= 5) & (
+        standardized.min(axis=(1, 2)) <= -5
     )
     registration_diagnostic = dict(
         candidates=int(mask.sum()),
         bipolar_candidates=int(bipolar.sum()),
         criterion=(
-            "both signed peaks exceed 3 times whole-stamp RMS; "
-            "descriptive, not a detection significance"
+            "central 9x9 has both signs at >=5 marginal pixel sigma; "
+            "descriptive, not calibrated detection significance"
         ),
     )
     if not smoke and not bipolar.any():

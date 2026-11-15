@@ -469,6 +469,11 @@ def _experiment(root, *, smoke, device):
         generation = json.loads(
             (population_raw / "generation.json").read_text()
         )
+        injection_families = {
+            identity: family
+            for recovery in generation["recovery"]
+            for identity, family in recovery["injection_families"].items()
+        }
         injected = sum(r["injected"] for r in generation["recovery"])
         detected = sum(r["detected"] for r in generation["recovery"])
         detected_ids = {
@@ -500,6 +505,32 @@ def _experiment(root, *, smoke, device):
                 retained=len(retained_ids),
                 detection_recovery=detected / injected,
                 retained_fraction=len(retained_ids) / injected,
+                by_family={
+                    family: dict(
+                        injected=len(identities),
+                        detected=len(identities & detected_ids),
+                        eligible_detected=len(identities & eligible_ids),
+                        ineligible_only_detected=len(
+                            identities & (detected_ids - eligible_ids)
+                        ),
+                        classifier_rejected_eligible=len(
+                            identities & (eligible_ids - retained_ids)
+                        ),
+                        retained=len(identities & retained_ids),
+                        detection_recovery=len(identities & detected_ids)
+                        / len(identities),
+                        retained_fraction=len(identities & retained_ids)
+                        / len(identities),
+                    )
+                    for family in sorted(set(injection_families.values()))
+                    for identities in [
+                        {
+                            identity
+                            for identity, f in injection_families.items()
+                            if f == family
+                        }
+                    ]
+                },
             )
         target = "endpoints" if population == "test" else "shift"
         report[target] = metrics
@@ -685,12 +716,14 @@ def execute_reference(output, *, profile="quick-smoke", device="cuda:0"):
             "full-reference qualification requires CUDA execution"
         )
     root = Path(output).resolve()
-    source = Path(
-        os.environ.get(
-            "CUPHOTON_MODEL_ALERTS_SOURCE_REPO",
-            Path(__file__).resolve().parents[2],
+    source = Path(__file__).resolve().parent
+    if repo := os.environ.get("CUPHOTON_MODEL_ALERTS_SOURCE_REPO"):
+        source = Path(repo).resolve()
+    else:
+        # Extracted ZIPs may have no Git ancestor. Never assume a fixed depth.
+        source = next(
+            (p for p in source.parents if (p / ".git").exists()), source
         )
-    )
     if (
         root == source
         or root.is_relative_to(source)
