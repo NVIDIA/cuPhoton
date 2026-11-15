@@ -37,3 +37,6 @@
 
 # Keep this small, reviewed, output-free walkthrough readable in code reviews.
 /examples/imaging-pipeline/run_imaging_pipeline.ipynb -filter diff merge text eol=lf
+
+# Model Alerts is reviewed and committed without notebook outputs.
+/examples/model-alerts/model-alerts.ipynb -filter diff merge text eol=lf
