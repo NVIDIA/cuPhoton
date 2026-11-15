@@ -49,7 +49,7 @@ python examples/model-scene/run.py --profile reference --device cuda \
 
 `protocol.json` records the measurement definitions and seed ranges. A reference
 run refuses an unfrozen protocol or a change to its scientific source hashes.
-The reproducible development sweep uses its own catalog and seeds:
+The reproducible development sweep uses separate seeds and a catalog that shifts the two isolated stars by two pixels:
 
 ```sh
 python examples/model-scene/develop.py --device cuda \
@@ -57,8 +57,9 @@ python examples/model-scene/develop.py --device cuda \
   --output /path/outside/git/new-scene-development
 ```
 
-Development evidence determines the iteration budget and robust threshold before
-test draws. An invalidating scientific fix requires a new protocol revision
+Development evidence determines the iteration budget before
+test draws. The Huber threshold is declared in advance, not tuned by this sweep.
+An invalidating scientific fix requires a new protocol revision
 and fresh test seeds; retain the failed attempt and its receipt.
 
 The source notebook has no outputs, execution counts, attachments or datasets.
@@ -121,3 +122,8 @@ Workflow controls additionally require the xImage dependencies.
 [Publishing instructions](PUBLISHING.md) describe packaging and the current
 versioned-Pages integration gap. Opening or merging this source PR does not
 publish the rendered chapter.
+
+The frozen scientific source was replayed with the development command above.
+Its twelve rows agree numerically with the selection sweep. The external
+`development-v2-replay/development.json` receipt has SHA-256
+`355ce588c2ccc039a1d1bbfe312576d9f4b53206c8e36e27c4c720e3a6304d6f`.

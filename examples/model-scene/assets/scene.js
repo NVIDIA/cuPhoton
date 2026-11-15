@@ -56,8 +56,10 @@
       const rect = term.getBoundingClientRect();
       popup.style.left = Math.max(8, Math.min(rect.left,
         innerWidth - popup.offsetWidth - 8)) + 'px';
-      popup.style.top = Math.max(8, Math.min(rect.bottom + 6,
-        innerHeight - popup.offsetHeight - 8)) + 'px';
+      const below = rect.bottom + 6;
+      const top = below + popup.offsetHeight <= innerHeight - 8
+        ? below : rect.top - popup.offsetHeight - 6;
+      popup.style.top = Math.max(8, top) + 'px';
     }
     document.querySelectorAll('.scene-term').forEach(term => {
       let pointerWasOpen;
