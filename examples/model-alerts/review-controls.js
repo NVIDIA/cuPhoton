@@ -71,5 +71,8 @@ if(candidate_changed) {
  selection.data={x:[],y:[],width:[],height:[]};
  exact.text='Tap any image for exact raw pixel values.';
 } else if(selection.data.x.length) {
- inspector.execute({x:selection.data.x[0],y:selection.data.y[0]});
+ const point={x:selection.data.x[0],y:selection.data.y[0]};
+ // Native taps toggle the same pixel off; clear before refreshing its labels.
+ selection.data={x:[],y:[],width:[],height:[]};
+ inspector.execute(point);
 }
