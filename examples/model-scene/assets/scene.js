@@ -34,6 +34,12 @@
     // Bokeh embeds initialize after DOM parsing; the load event follows them.
     addEventListener('load', themePlots);
     themePlots();
+    document.querySelectorAll('.cell-output-display').forEach(region => {
+      if (region.querySelector('[data-root-id]')) {
+        region.tabIndex = 0;
+        region.setAttribute('aria-label', 'Interactive figure; arrow keys scroll this region');
+      }
+    });
     const popup = document.createElement('div');
     popup.id = 'scene-definition'; popup.role = 'tooltip'; popup.hidden = true;
     document.body.appendChild(popup);

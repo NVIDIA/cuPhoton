@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Browser-only adapters over public xScan data-only plotting primitives."""
+"""Browser adapters over data-only primitives in the public xScan source."""
 
 import numpy as np
 from bokeh.events import Tap
@@ -114,8 +114,10 @@ def linked_panels(cases, labels, *, signed=(), units="electrons / exposure"):
                 sources=sources,
                 banks=banks,
                 annotations=annotations,
+                selection=selection,
             ),
             code="""
+selection.data = {x:[],y:[],width:[],height:[]};
 const i = names.indexOf(cb_obj.value);
 for (let j=0; j<sources.length; ++j) {
   const data = {};
@@ -152,6 +154,40 @@ for (const mapper of mappers) {
 """,
         ),
     )
+    exact = Div(
+        text="<output>Tap a pixel for full-precision values.</output>",
+        styles={"font-family": "monospace", "white-space": "pre-wrap"},
+    )
+    selection.js_on_change(
+        "data",
+        CustomJS(
+            args=dict(
+                sources=sources,
+                labels=labels,
+                exact=exact,
+                selection=selection,
+                width=width,
+            ),
+            code="""
+if (!selection.data.x.length) {
+  exact.text = '<output>Tap a pixel for full-precision values.</output>';
+} else {
+  const col=Math.floor(selection.data.x[0]);
+  const row=Math.floor(selection.data.y[0]);
+  const index=row*width+col;
+  const values=sources.map((source,i) => {
+    const flat=source.data.flat[0];
+    const value=typeof flat.get === 'function'
+      ? flat.get(index) : flat[index];
+    return labels[i]+': '+Number(value).toString();
+  });
+  const lines=['Pixel ('+col+', '+row+')', ...values];
+  exact.text='<output aria-live="polite">'+
+    lines.join(String.fromCharCode(10))+'</output>';
+}
+""",
+        ),
+    )
     return column(
         Div(
             text="<p>Pan and zoom are linked. Tap a pixel for exact saved "
@@ -159,4 +195,5 @@ for (const mapper of mappers) {
         ),
         row(selector, display_range),
         row(*plots, sizing_mode="stretch_width"),
+        exact,
     )

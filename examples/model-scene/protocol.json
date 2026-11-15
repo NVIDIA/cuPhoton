@@ -1,15 +1,14 @@
 {
-  "revision": 1,
+  "revision": 2,
   "frozen": true,
   "iterations": 300,
   "noise_realizations": 50,
-  "test_seed_start": 81000,
-  "calibration_seed_start": 45000,
+  "test_seed_start": 82000,
+  "calibration_seed_start": 46000,
   "development_seeds": [
-    1001,
-    1002,
-    1003,
-    1004
+    1005,
+    1006,
+    1007
   ],
   "huber_delta": 2.0,
   "stop_tolerance": 1e-12,
@@ -21,11 +20,51 @@
   "minimum_bias_of_interest": 0.01,
   "precision_reporting": "per-source standard error and approximate 2.8 SE detectable bias",
   "inference_scope": "fixed modeled source catalog and independent noise realizations",
+  "image_size": 120,
+  "fit_size": 96,
+  "science_window_size": 48,
+  "science_window_origin": 36,
+  "supersedes": "Revision 1 retained: unconstrained halo contaminated common-resolution image boundary",
+  "calibration_example_seed": 46099,
+  "train_frames": [
+    0,
+    1,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10
+  ],
+  "heldout_frames": [
+    2,
+    5,
+    9,
+    11
+  ],
+  "pixel_phase": "integer-centered fixed catalog only",
+  "calibration_noise": "Poisson photons plus Gaussian read sigma 2 electrons",
+  "development_evidence": {
+    "artifact": "development-v2/development.json",
+    "sha256": "97c18564473895f99fb6c07d166c23ef7a3112a78b3c0be6a28c761b285e4962",
+    "iterations": [
+      25,
+      75,
+      150,
+      300
+    ],
+    "seeds": [
+      1005,
+      1006,
+      1007
+    ],
+    "selection": "300 chosen from development bias plateau; no test truth used"
+  },
   "science_source_hashes": {
-    "scene.py": "a66f32c0f01049763e2dae7971dc0f65f13b251a658302f758ecdbe598f95186",
-    "experiment.py": "872489941f49cc5bf4535669651ace4c6a519325312da08de2c516279dee6f19",
-    "measure.py": "8b64bc0e4d0270e924b3c32b4596b96cafbb186370c8abb842afeec6adc36321",
-    "study.py": "083ab840a808d0b6b01b5e8e902c0074e5fc50b55f2cda0eaa0d9c1fa2e7e569",
-    "controls.py": "81fe33752fa11b3f866d969fd090b43a082713002ce048c48e84ff9bfd154847"
+    "scene.py": "558c336b677e0ad3f578613c127a64efaa6ee7216dd7046eb59a001a64dbadc9",
+    "experiment.py": "30db0c8c285a2b074893d529b7c101d55228309041355cc4bc7772828e30cecc",
+    "measure.py": "e63151b6c036fc3503cd35b6d5f020c652fbffd3e8b40a20dec04be94c0c3522",
+    "study.py": "96d74f48c49f30e6983356be1eac696652af614105f28693b8ae555b132bdab0",
+    "controls.py": "197dd327315efdee7fd334d2b8988c97ba42dd86d082dfa89f7f2ba72fb7dccd"
   }
 }

@@ -12,6 +12,8 @@ Every input comes from the analytic generator in this directory. The example
 uses no survey images, calibration products, catalogs or downloaded fixtures.
 The physical renderer integrates continuous Gaussian mixtures over detector
 pixels. A separate discrete-operator control quantifies representation error.
+A 96×96 fitting region provides context around the central 48×48 science
+window. A separate compact-context case demonstrates halo contamination.
 The experiment uses a zero-dither grid and makes no alignment qualification.
 
 ## Execute
@@ -47,6 +49,14 @@ python examples/model-scene/run.py --profile reference --device cuda \
 
 `protocol.json` records the measurement definitions and seed ranges. A reference
 run refuses an unfrozen protocol or a change to its scientific source hashes.
+The reproducible development sweep uses its own catalog and seeds:
+
+```sh
+python examples/model-scene/develop.py --device cuda \
+  --gpu-lock /path/shared-by-all-gpu-users/gpu0.lock \
+  --output /path/outside/git/new-scene-development
+```
+
 Development evidence determines the iteration budget and robust threshold before
 test draws. An invalidating scientific fix requires a new protocol revision
 and fresh test seeds; retain the failed attempt and its receipt.

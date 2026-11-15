@@ -11,7 +11,14 @@ from pathlib import Path
 import numpy as np
 from experiment import calibrate, reconstruct
 from measure import evaluate, paired_summary
-from scene import generate, kernels
+from scene import (
+    HELDOUT_FRAMES,
+    TRAIN_FRAMES,
+    generate,
+    kernels,
+    pixel_gaussian,
+    science_window,
+)
 from scipy.signal import convolve2d
 
 
@@ -55,9 +62,10 @@ def run_case(
         huber=products["huber"],
         l2_native=images["l2"],
         huber_native=images["huber"],
-        observations=arrays["images"][0, 12:60, 12:60],
-        variances=arrays["variances"][0, 12:60, 12:60],
+        observations=science_window(arrays["images"][0]),
+        variances=science_window(arrays["variances"][0]),
         kernels=arrays["psfs"],
+        train_frames=np.array(TRAIN_FRAMES),
         l2_loss=np.load(runs["l2"].run_dir / "trace/loss.npy"),
         huber_loss=np.load(runs["huber"].run_dir / "trace/loss.npy"),
     )
@@ -65,8 +73,30 @@ def run_case(
     return result
 
 
+def validate_protocol(protocol):
+    """Reject descriptive protocol fields that contradict this fixed model."""
+    expected = {
+        "huber_delta": 2.0,
+        "stop_tolerance": 1e-12,
+        "background_electrons_per_pixel": 2.0,
+        "common_gaussian_sigma_pixels": 2.4,
+        "aperture_radius_pixels": 3,
+        "edge_exclusion_pixels": 5,
+        "image_size": 120,
+        "fit_size": 96,
+        "science_window_size": 48,
+        "science_window_origin": 36,
+        "train_frames": list(TRAIN_FRAMES),
+        "heldout_frames": list(HELDOUT_FRAMES),
+    }
+    for key, value in expected.items():
+        if protocol.get(key) != value:
+            raise ValueError(f"Protocol contradicts fixed model: {key}")
+
+
 def execute_study(root, protocol, *, device="cpu", quick=False):
     """Run a previously frozen protocol; evaluate truth after fitting."""
+    validate_protocol(protocol)
     root = Path(root)
     if root.exists() or root.is_symlink():
         raise FileExistsError(root)
@@ -75,8 +105,19 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
     count = 2 if quick else protocol["noise_realizations"]
     write_json(root / "protocol.json", protocol)
     trials = []
+
+    def make_data(seed, **kwargs):
+        return generate(seed, development=quick, **kwargs)
+
+    science_seed = (
+        protocol["development_seeds"][0]
+        if quick
+        else protocol["test_seed_start"]
+    )
+    calibration_seed = 2000 if quick else protocol["calibration_seed_start"]
+    example_seed = 2099 if quick else protocol["calibration_example_seed"]
     for index in range(count):
-        arrays, truth = generate(protocol["test_seed_start"] + index)
+        arrays, truth = make_data(science_seed + index)
         trials.append(
             run_case(
                 root / f"trial-{index:03}",
@@ -92,10 +133,10 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
         )
         write_json(root / "trials.json", trials)
     write_json(root / "summary.json", paired_summary(trials))
-    # Same first noise realization is paired across every stress case.
-    seed = protocol["test_seed_start"]
+    # Gaussian cases share noise; other noise models use separate draws.
+    seed = science_seed
     for case in ("outliers", "photon-read", "transient"):
-        arrays, truth = generate(seed, case=case)
+        arrays, truth = make_data(seed, case=case)
         run_case(
             root / case, arrays, truth, device=device, iterations=iterations
         )
@@ -109,7 +150,7 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
                 masked=True,
             )
     for factor in (0.95, 1.05):
-        arrays, truth = generate(seed)
+        arrays, truth = make_data(seed)
         arrays["psfs"] = kernels(truth["widths"] * factor)[:, :, None, :]
         run_case(
             root / f"psf-width-{factor}",
@@ -118,7 +159,7 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
             device=device,
             iterations=iterations,
         )
-    arrays, truth = generate(seed)
+    arrays, truth = make_data(seed)
     arrays["variances"] *= 4
     run_case(
         root / "variance-times-four",
@@ -127,7 +168,15 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
         device=device,
         iterations=iterations,
     )
-    arrays, truth = generate(seed, matched=True)
+    arrays, truth = make_data(seed, compact=True)
+    run_case(
+        root / "boundary-failure",
+        arrays,
+        truth,
+        device=device,
+        iterations=iterations,
+    )
+    arrays, truth = make_data(seed, matched=True)
     run_case(
         root / "matched-operator",
         arrays,
@@ -135,7 +184,7 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
         device=device,
         iterations=iterations,
     )
-    arrays, truth = generate(seed)
+    arrays, truth = make_data(seed)
     arrays["images"] = truth["expectation"][None].copy()
     run_case(
         root / "noiseless-physical",
@@ -150,11 +199,14 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
     calibration_report = {}
     for method in ("mm", "adam"):
         run, measured = calibrate(
-            calibration_root, method=method, device=device
+            calibration_root,
+            method=method,
+            device=device,
+            seed=example_seed,
         )
         solved = np.load(run.run_dir / "artifacts/psfs.npy")
         np.save(calibration_root / f"{method}-measured.npy", measured)
-        arrays, truth = generate(seed)
+        arrays, truth = make_data(seed)
         arrays["psfs"] = solved
         if method == "mm":
             run_case(
@@ -193,17 +245,24 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
             "sums": solved.sum(axis=(0, 1, 2)).tolist(),
             "shape": list(solved.shape),
         }
-    # Exact-kernel factorization isolates reference-solve error.
+    # Noise-free integrated stamps isolate finite calibration uncertainty.
     exact_root = calibration_root / "perfect"
     exact_root.mkdir()
     run, _ = calibrate(
         exact_root,
         device=device,
-        target_override=kernels(np.linspace(0.9, 1.7, 12)),
+        target_override=np.stack(
+            [
+                pixel_gaussian(15, 7, 7, width)
+                for width in np.linspace(0.9, 1.7, 12)
+            ],
+            axis=-1,
+        ),
     )
-    arrays, truth = generate(seed)
+    arrays, truth = make_data(seed)
     arrays["psfs"] = np.load(run.run_dir / "artifacts/psfs.npy")
-    run_case(
+    arrays["images"] = truth["expectation"][None].copy()
+    perfect_result = run_case(
         root / "perfect-factorization",
         arrays,
         truth,
@@ -216,9 +275,11 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
         draw_root = calibration_root / f"draw-{index:03}"
         draw_root.mkdir()
         run, measured = calibrate(
-            draw_root, seed=45000 + index, device=device
+            draw_root,
+            seed=calibration_seed + index,
+            device=device,
         )
-        arrays, truth = generate(seed)
+        arrays, truth = make_data(seed)
         arrays["images"] = truth["expectation"][None].copy()
         arrays["psfs"] = np.load(run.run_dir / "artifacts/psfs.npy")
         result = run_case(
@@ -229,6 +290,16 @@ def execute_study(root, protocol, *, device="cpu", quick=False):
             iterations=iterations,
             reference_sigma=0.55,
         )
+        for method in ("l2", "huber"):
+            for measured, reference in zip(
+                result[method]["sources"],
+                perfect_result[method]["sources"],
+                strict=True,
+            ):
+                measured["calibration_flux_error_increment"] = (
+                    measured["fractional_flux_error"]
+                    - reference["fractional_flux_error"]
+                )
         finite_calibration.append(result)
         write_json(
             calibration_root / "finite-calibration.json", finite_calibration

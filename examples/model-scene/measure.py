@@ -6,7 +6,13 @@
 
 import numpy as np
 from experiment import aperture_measurements, forward_prediction
-from scene import catalog, render
+from scene import (
+    HELDOUT_FRAMES,
+    TRAIN_FRAMES,
+    catalog,
+    render,
+    science_window,
+)
 from scipy.ndimage import gaussian_filter
 
 TARGET_SIGMA = 2.4
@@ -21,54 +27,75 @@ def comparison_products(arrays, truth, reconstructions, reference_sigma=0.0):
     Discrete Gaussian filtering approximates continuous smoothing; measure
     its noiseless discrepancy explicitly rather than claiming exact equality.
     """
-    widths = truth["widths"][:8]
+    widths = truth["widths"][list(TRAIN_FRAMES)]
     data = arrays["images"][0]
-    common_coadd = np.mean(
-        [
-            gaussian_filter(
-                data[..., i],
-                np.sqrt(TARGET_SIGMA**2 - width**2),
-                mode="constant",
-                cval=2,
-            )
-            for i, width in enumerate(widths)
-        ],
-        axis=0,
-    )[12:60, 12:60]
+    common_coadd = science_window(
+        np.mean(
+            [
+                gaussian_filter(
+                    data[..., TRAIN_FRAMES[i]],
+                    np.sqrt(TARGET_SIGMA**2 - width**2),
+                    mode="constant",
+                    cval=2,
+                )
+                for i, width in enumerate(widths)
+            ],
+            axis=0,
+        )
+    )
     products = {"coadd": common_coadd}
     for name, image in reconstructions.items():
-        if image.shape != (62, 62):
+        expected_size = arrays["images"].shape[1] - 10
+        if image.shape != (expected_size, expected_size):
             raise ValueError(
                 f"Unexpected VALID restoration shape {image.shape}"
             )
-        products[name] = gaussian_filter(
-            image,
-            np.sqrt(TARGET_SIGMA**2 - reference_sigma**2),
-            mode="constant",
-            cval=2,
-        )[7:-7, 7:-7]
+        products[name] = science_window(
+            gaussian_filter(
+                image,
+                np.sqrt(TARGET_SIGMA**2 - reference_sigma**2),
+                mode="constant",
+                cval=2,
+            )
+        )
     return products
 
 
 def evaluate(
-    arrays, truth, reconstructions, *, development=False, reference_sigma=0.0
+    arrays, truth, reconstructions, *, development=None, reference_sigma=0.0
 ):
     """Compare apertures and frame predictions with independent truth."""
-    sources = catalog(development)
-    target = (
-        gaussian_filter(
-            truth["truth"], TARGET_SIGMA, mode="constant", cval=2
-        )[12:60, 12:60]
+    if development is None:
+        development = truth.get("development", False)
+    sources = catalog(development, offset=truth["source_offset"])
+    origin = truth["view_origin"]
+    target = science_window(
+        gaussian_filter(truth["truth"], TARGET_SIGMA, mode="constant", cval=2)
         if truth.get("matched", False)
-        else render(sources, sigma=TARGET_SIGMA)[12:60, 12:60]
+        else render(
+            sources, sigma=TARGET_SIGMA, size=arrays["images"].shape[1]
+        )
     )
-    expected = aperture_measurements(target, sources)
+    if not truth.get("boundary_failure", False):
+        last_fit_pixel = arrays["images"].shape[1] - 13
+        for source in sources:
+            margin = min(
+                source.x - 12,
+                source.y - 12,
+                last_fit_pixel - source.x,
+                last_fit_pixel - source.y,
+            )
+            if margin < 13:
+                raise ValueError(
+                    "Insufficient fitting context for blur and aperture"
+                )
+    expected = aperture_measurements(target, sources, origin=origin)
     products = comparison_products(
         arrays, truth, reconstructions, reference_sigma=reference_sigma
     )
     results = {}
     for name, image in products.items():
-        measured = aperture_measurements(image, sources)
+        measured = aperture_measurements(image, sources, origin=origin)
         errors = []
         for got, reference in zip(measured, expected, strict=True):
             errors.append(
@@ -114,8 +141,12 @@ def evaluate(
             prediction = forward_prediction(
                 reconstructions[name], arrays["psfs"]
             )
-            residual = arrays["images"][0, 12:60, 12:60] - prediction
-            variance = arrays["variances"][0, 12:60, 12:60]
+            full_residual = arrays["images"][0, 12:-12, 12:-12] - prediction
+            results[name]["context_prediction_mse_by_frame"] = np.mean(
+                full_residual**2, axis=(0, 1)
+            ).tolist()
+            residual = science_window(full_residual)
+            variance = science_window(arrays["variances"][0])
             results[name]["prediction_mse_by_frame"] = np.mean(
                 residual**2, axis=(0, 1)
             ).tolist()
@@ -123,7 +154,7 @@ def evaluate(
                 residual**2 / variance, axis=(0, 1)
             ).tolist()
             results[name]["heldout_mean_residual"] = float(
-                residual[..., 8:].mean()
+                residual[..., list(HELDOUT_FRAMES)].mean()
             )
     return results, products, target
 
@@ -180,6 +211,28 @@ def paired_summary(trials):
                 }
             )
     for method in ("l2", "huber"):
+        summary[method]["forward_prediction"] = {}
+        if "standardized_residual_ms_by_frame" in trials[0][method]:
+            for label, indices in (
+                ("fitted", TRAIN_FRAMES),
+                ("heldout", HELDOUT_FRAMES),
+            ):
+                values = np.array(
+                    [
+                        np.mean(
+                            np.asarray(
+                                t[method]["standardized_residual_ms_by_frame"]
+                            )[list(indices)]
+                        )
+                        for t in trials
+                    ]
+                )
+                summary[method]["forward_prediction"][label] = {
+                    "mean_standardized_residual_ms": float(values.mean()),
+                    "standard_error": float(
+                        values.std(ddof=1) / np.sqrt(len(values))
+                    ),
+                }
         differences = np.array(
             [
                 np.mean(

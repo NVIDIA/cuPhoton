@@ -17,6 +17,9 @@ import numpy as np
 from scipy.signal import convolve2d
 from scipy.special import ndtr
 
+TRAIN_FRAMES = (0, 1, 3, 4, 6, 7, 8, 10)
+HELDOUT_FRAMES = (2, 5, 9, 11)
+
 
 @dataclass(frozen=True)
 class Source:
@@ -27,16 +30,21 @@ class Source:
     kind: str
 
 
-def catalog(development=False):
+def catalog(development=False, offset=24):
     """Declare catalogs before noise draws or reconstruction measurements."""
+    shift = offset
     offset = 2.0 if development else 0.0
-    return (
+    sources = (
         Source(18 + offset, 20, 1200, 0.22, "isolated"),
         Source(46, 19 + offset, 300, 0.22, "isolated"),
         Source(30, 38, 900, 0.22, "blend"),
         Source(33, 38, 450, 0.22, "blend"),
         Source(20, 53, 2200, 2.5, "extended"),
         Source(49, 50, 3200, 4.0, "extended"),
+    )
+    return tuple(
+        Source(s.x + shift, s.y + shift, s.flux, s.sigma, s.kind)
+        for s in sources
     )
 
 
@@ -50,7 +58,7 @@ def pixel_gaussian(size, x, y, sigma):
     return py[:, None] * px[None, :]
 
 
-def render(sources, sigma=0.0, size=72, background=2.0):
+def render(sources, sigma=0.0, size=120, background=2.0):
     """Continuous Gaussian convolution followed by detector pixel integration.
 
     This differs deliberately from convolving an already pixel-integrated
@@ -73,22 +81,26 @@ def kernels(widths, support=15):
     return result / result.sum(axis=(0, 1), keepdims=True)
 
 
-def generate(seed, *, development=False, matched=False, case="gaussian"):
+def generate(
+    seed, *, development=False, matched=False, case="gaussian", compact=False
+):
     """Return twelve shared-grid frames: eight training and four held out.
 
     Units are electrons per unit exposure; all exposure times are exactly one.
     Known Gaussian variance is 4 electrons squared in the principal case.
     Noise draws are paired across methods by saving and reusing this bundle.
     """
-    sources = catalog(development)
-    truth = render(sources)
+    size = 72 if compact else 120
+    offset = 0 if compact else 24
+    sources = catalog(development, offset=offset)
+    truth = render(sources, size=size)
     widths = np.linspace(0.9, 1.7, 12)
     psfs = kernels(widths)
     expectation = np.stack(
         [
             convolve2d(truth, psfs[..., i], mode="same", boundary="fill")
             if matched
-            else render(sources, sigma=width)
+            else render(sources, sigma=width, size=size)
             for i, width in enumerate(widths)
         ],
         axis=-1,
@@ -107,8 +119,10 @@ def generate(seed, *, development=False, matched=False, case="gaussian"):
         )
         variances = expectation + 4
     elif case == "transient":
-        transient = 1200 * pixel_gaussian(72, 43, 36, 1.2)
-        images[..., [1, 6, 9]] += transient[..., None]
+        for i in (1, 6, 9):
+            images[..., i] += 1200 * pixel_gaussian(
+                size, 43 + offset, 36 + offset, np.hypot(0.22, widths[i])
+            )
     elif case != "gaussian":
         raise ValueError(f"Unknown case: {case}")
     return {
@@ -123,6 +137,10 @@ def generate(seed, *, development=False, matched=False, case="gaussian"):
         "expectation": expectation,
         "widths": widths,
         "matched": matched,
+        "development": development,
+        "boundary_failure": compact,
+        "source_offset": offset,
+        "view_origin": (size - 48) // 2,
     }
 
 
@@ -166,3 +184,9 @@ def write_bundle(destination: Path, arrays):
         )
         + "\n"
     )
+
+
+def science_window(image):
+    """Select the central 48-pixel science window after support operations."""
+    start = (image.shape[0] - 48) // 2
+    return image[start : start + 48, start : start + 48, ...]

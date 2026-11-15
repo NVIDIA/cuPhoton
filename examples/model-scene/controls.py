@@ -12,7 +12,7 @@ from scene import generate
 def numerical_controls(root, *, device="cpu"):
     """Exercise actual workflow preprocessing and solvers on paired inputs."""
     root.mkdir(parents=True, exist_ok=False)
-    arrays, _ = generate(1901, development=True, matched=True)
+    arrays, truth = generate(1901, development=True, matched=True)
 
     def fit(name, data, algorithm="l2", delta=2):
         return reconstruct(
@@ -53,7 +53,17 @@ def numerical_controls(root, *, device="cpu"):
         rtol=1e-10,
         atol=1e-10,
     )
+    from measure import comparison_products
+
+    common = comparison_products(
+        arrays, truth, {"base": baseline, "weighted": weighted}
+    )
+    common_error = float(np.max(np.abs(common["base"] - common["weighted"])))
+    np.testing.assert_allclose(
+        common["base"], common["weighted"], rtol=1e-10, atol=1e-10
+    )
     return {
+        "science_window_variance_scale_max_abs": common_error,
         "l2_variance_scale_roi_max_abs": float(
             np.max(np.abs(weighted[7:-7, 7:-7] - baseline[7:-7, 7:-7]))
         ),
@@ -106,7 +116,7 @@ def asymmetric_operator_control(root):
     )[None]
     write_bundle(root, arrays)
     config = ReconstructionConfig(
-        algorithm="l2", device="cpu", roi=dict(height=48, width=48)
+        algorithm="l2", device="cpu", roi=dict(height=96, width=96)
     )
     with load_ximage_bundle(root) as bundle:
         prepared = prepare_torch_reconstruction_inputs(
@@ -116,7 +126,7 @@ def asymmetric_operator_control(root):
             dtype=torch.float64,
             psfs=psfs,
         )
-    latent = torch.tensor(truth["truth"][5:67, 5:67])[None, None]
+    latent = torch.tensor(truth["truth"][5:-5, 5:-5])[None, None]
     predicted = torch.nn.functional.conv2d(latent, prepared.f)
     np.testing.assert_allclose(
         predicted.numpy(), prepared.y.numpy(), atol=1e-12, rtol=1e-12
