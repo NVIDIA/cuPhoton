@@ -83,8 +83,13 @@ def _experiment(root, *, smoke, device):
         gpu_stamps, gpu_rows, gpu_fit = detect(
             exposure, design=design, backend="cupy"
         )
+        valid = np.isfinite(cpu_fit.residual)
+        np.testing.assert_array_equal(valid, np.isfinite(gpu_fit.residual))
         np.testing.assert_allclose(
-            cpu_fit.residual, gpu_fit.residual, rtol=1e-8, atol=1e-7
+            cpu_fit.residual[valid],
+            gpu_fit.residual[valid],
+            rtol=1e-8,
+            atol=1e-7,
         )
         if [(r["x"], r["y"]) for r in cpu_rows] != [
             (r["x"], r["y"]) for r in gpu_rows
@@ -99,10 +104,13 @@ def _experiment(root, *, smoke, device):
             backend_pair=["cpu", "cupy"],
             field=9000,
             candidate_count=len(cpu_rows),
+            valid_residual_pixels=int(valid.sum()),
             relative_tolerance=1e-8,
             absolute_tolerance=1e-7,
             maximum_residual_difference=float(
-                np.max(np.abs(cpu_fit.residual - gpu_fit.residual))
+                np.max(
+                    np.abs(cpu_fit.residual[valid] - gpu_fit.residual[valid])
+                )
             ),
         )
     multiplier = 1
