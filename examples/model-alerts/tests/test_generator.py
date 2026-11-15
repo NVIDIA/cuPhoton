@@ -110,3 +110,37 @@ def test_nearest_cause_defines_negative_family_independent_of_input_order():
         result = associate(dict(x=0, y=0), causes, 3)
         assert result["family"] == "cosmic_ray"
         assert result["overlapping_causes"] and not result["ambiguous"]
+
+
+def test_local_registration_varies_by_star_and_hosts_avoid_mismatch():
+    exposures = list(field_exposures(82))
+    first = np.array([[c["x"], c["y"]] for c in exposures[0]["causes"][:22]])
+    second = np.array([[c["x"], c["y"]] for c in exposures[1]["causes"][:22]])
+    assert np.all((second - first).std(axis=0) > 0.1)
+    for exposure in exposures:
+        static = exposure["causes"][:22]
+        for change in exposure["causes"]:
+            if change["family"] == "brightening":
+                host = min(
+                    static,
+                    key=lambda c: np.hypot(
+                        c["x"] - change["x"], c["y"] - change["y"]
+                    ),
+                )
+                assert host["x"] == change["x"] and host["y"] == change["y"]
+                assert host["family"] != "psf_mismatch"
+
+
+def test_extended_column_association_includes_endpoints():
+    column = dict(
+        x=10,
+        y=10,
+        segment_half_length=5,
+        positive=False,
+        family="column_bleed",
+        challenge=False,
+    )
+    assert (
+        associate(dict(x=10, y=15), [column], 3)["family"] == "column_bleed"
+    )
+    assert associate(dict(x=10, y=19), [column], 3)["family"] == "noise"

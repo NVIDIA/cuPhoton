@@ -31,12 +31,17 @@ if(found<0) {
  }
  selection.data={x:[],y:[],width:[],height:[]};
  exact.text='No selected candidate.';
+ state.data={candidate:[-1]};
  return;
 }
 i=found;
 if(index.value!==found)index.value=found;
 metadata.text=`Candidate ${bank.data.identifier[i]}, gallery ${i+1}/${bank.data.score.length}; `+
  `family ${bank.data.family[i]}; label ${bank.data.label[i]}; score ${bank.data.score[i]}; measured SNR ${bank.data.snr[i]}.`;
+const candidate_changed=state.data.candidate[0]!==i;
+const display_changed=cb_obj===transform;
+if(!candidate_changed && !display_changed)return;
+state.data={candidate:[i]};
 const keys=['search','template','difference'];
 for(let p=0;p<3;p++) {
  const values=Array.from(bank.data[keys[p]][i]);
@@ -62,5 +67,9 @@ for(let p=0;p<3;p++) {
  sources[p].change.emit();
  label_sources[p].data={x:[],y:[],x_offset:[],y_offset:[],text:[]};
 }
-selection.data={x:[],y:[],width:[],height:[]};
-exact.text='Tap any image for exact raw pixel values.';
+if(candidate_changed) {
+ selection.data={x:[],y:[],width:[],height:[]};
+ exact.text='Tap any image for exact raw pixel values.';
+} else if(selection.data.x.length) {
+ inspector.execute({x:selection.data.x[0],y:selection.data.y[0]});
+}

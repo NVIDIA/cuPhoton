@@ -36,7 +36,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--source-ref",
-        default="main",
+        default=None,
         help="GitHub branch, tag or commit for the visible notebook link",
     )
     parser.add_argument(
@@ -46,7 +46,7 @@ def main() -> None:
     )
     options = parser.parse_args()
     output = options.output.resolve()
-    if output == HERE or output.is_relative_to(HERE):
+    if output == REPO or output.is_relative_to(REPO):
         parser.error("--output must be outside the example source directory")
     if output.exists() and any(output.iterdir()):
         parser.error("--output must be absent or empty")
@@ -176,10 +176,11 @@ def main() -> None:
             "href": "https://github.com/NVIDIA/cuPhoton",
         },
     ]
+    source_ref = options.source_ref or receipt["cuphoton_revision"]
     source_link = (
         "[View the source Jupyter notebook in NVIDIA/cuPhoton]"
         "(https://github.com/NVIDIA/cuPhoton/blob/"
-        f"{quote(options.source_ref, safe='')}/"
+        f"{quote(source_ref, safe='')}/"
         "examples/model-alerts/model-alerts.ipynb).\n\n"
     )
     first.source = (

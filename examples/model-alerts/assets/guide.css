@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+body {
+  --model-alerts-font: ui-sans-serif, system-ui, sans-serif;
+  --model-alerts-mono: ui-monospace, Consolas, monospace;
+}
+
 body.quarto-dark {
   color-scheme: dark;
   --model-alerts-background: #0b1008;

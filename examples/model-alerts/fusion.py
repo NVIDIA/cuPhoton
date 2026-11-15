@@ -21,6 +21,7 @@ def fit_feature_bundle(dataset, output, *, backend="cupy"):
     fits remain represented by the native feature gates.
     """
     from cuphoton.xscan.xfit_features import (
+        TRANSFORM_CONSTANTS,
         build_xfit_feature_bundle,
         export_xfit_input,
         load_xfit_feature_matrix,
@@ -83,6 +84,11 @@ def fit_feature_bundle(dataset, output, *, backend="cupy"):
     receipt = dict(
         rows=len(matrix.values),
         backend=backend,
+        feature_scaling=dict(
+            fitted_split=None,
+            strategy="fixed native row-local transforms",
+            constants=dict(TRANSFORM_CONSTANTS),
+        ),
         source_verification=exported["source_hash_verification"],
         native_join_diagnostics=matrix.join_diagnostics,
     )

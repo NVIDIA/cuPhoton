@@ -81,6 +81,16 @@ def infer(run, dataset, mode, *, feature_dir=None, device="cuda:0"):
         device=torch.device(device),
         performance=performance,
     )
+    expected_rows = rows_at(dataset)
+    expected_indices = data.indices.tolist()
+    np.testing.assert_array_equal(
+        result["labels"],
+        np.load(Path(dataset) / "labels.npy")[expected_indices],
+    )
+    if [r["candidate_id"] for r in result["metadata_rows"]] != [
+        expected_rows[i]["candidate_id"] for i in expected_indices
+    ]:
+        raise AssertionError("native inference row identities changed order")
     return result["probabilities"]
 
 
@@ -145,6 +155,7 @@ def _experiment(root, *, smoke, device):
     prepared, raw = development / "prepared", development / "raw"
     epochs = 1 if smoke else 12
     controls = dict(
+        registration_diagnostic=result["registration_diagnostic"],
         cpu_cuda_agreement=agreement,
         invalid_split=rejected_split_control(
             prepared, root / "invalid-split"
@@ -161,7 +172,7 @@ def _experiment(root, *, smoke, device):
         device=device,
     )
     controls["permutation_review_required"] = (
-        controls["permutation"]["validation_roc_auc"] > 0.65
+        abs(controls["permutation"]["validation_roc_auc"] - 0.5) > 0.15
     )
     if not smoke and controls["permutation_review_required"]:
         raise RuntimeError(
@@ -261,6 +272,7 @@ def _experiment(root, *, smoke, device):
         shift_seed_block=[shift_base, shift_base + shift_count],
         normalization=normalization,
         operating_points=result["outcomes"],
+        baselines=result["baselines"],
         fusion_operating_point=fusion_result,
         checkpoints={
             str(p.relative_to(root)): sha(p)
@@ -309,7 +321,9 @@ def _experiment(root, *, smoke, device):
                 overlapping_causes=sum(
                     r["overlapping_causes"] for r in split_rows
                 ),
-                moving_challenge=sum(r["challenge"] for r in split_rows),
+                moving_challenge=sum(
+                    r["challenge"] and not r["ambiguous"] for r in split_rows
+                ),
             )
             for split in ("train", "val")
             for split_rows in [
@@ -320,8 +334,8 @@ def _experiment(root, *, smoke, device):
         uncertainty={},
         shift={},
         moving_source_challenge={},
-        breakdowns={},
-        high_confidence_mistakes={},
+        breakdowns={"test": {}, "shift": {}},
+        high_confidence_mistakes={"test": {}, "shift": {}},
     )
     seen_content = set(content_hashes(raw))
     content_audit = {"development": len(seen_content)}
@@ -386,6 +400,33 @@ def _experiment(root, *, smoke, device):
                 device=device,
             )
             thresholds[key] = outcome["threshold"]
+        if population == "test" and device.startswith("cuda"):
+            cpu_scores = infer(
+                development / "triplet-11",
+                population_data,
+                "triplet",
+                device="cpu",
+            )
+            gpu_scores = scores["triplet-11"]
+            np.testing.assert_allclose(
+                cpu_scores, gpu_scores, rtol=2e-4, atol=2e-5
+            )
+            report["controls"]["cpu_cuda_inference"] = dict(
+                mode="triplet",
+                seed=11,
+                rows=len(cpu_scores),
+                maximum_score_difference=float(
+                    np.max(np.abs(cpu_scores - gpu_scores))
+                ),
+                threshold_decision_flips=int(
+                    np.sum(
+                        (cpu_scores >= thresholds["triplet-11"])
+                        != (gpu_scores >= thresholds["triplet-11"])
+                    )
+                ),
+                relative_tolerance=2e-4,
+                absolute_tolerance=2e-5,
+            )
         scores["fusion-11"] = infer(
             root / "fusion-run",
             population_data,
@@ -528,45 +569,68 @@ def _experiment(root, *, smoke, device):
                 maximum=96,
                 rule="round-robin confusion/SNR/family, candidate-ID order",
             )
-            for key, value in selected_scores.items():
-                by_family = {}
-                for family in sorted({r["family"] for r in selected_rows}):
-                    mask = np.array(
-                        [r["family"] == family for r in selected_rows]
+        selected_rows = [
+            r for r, keep in zip(rows, eligible, strict=True) if keep
+        ]
+        selected_scores = {
+            key: value[eligible] for key, value in scores.items()
+        }
+        selected_labels = labels[eligible]
+        for key, value in selected_scores.items():
+            by_family = {}
+            for family in sorted({r["family"] for r in selected_rows}):
+                mask = np.array(
+                    [r["family"] == family for r in selected_rows]
+                )
+                by_family[family] = confusion(
+                    selected_labels[mask], value[mask], thresholds[key]
+                )
+            by_snr = {}
+            snr = np.array([r["snr"] for r in selected_rows])
+            for lo, hi in ((4, 5), (5, 10), (10, 20), (20, float("inf"))):
+                mask = (snr >= lo) & (snr < hi)
+                by_snr[f"{lo}:{hi}"] = (
+                    confusion(
+                        selected_labels[mask],
+                        value[mask],
+                        thresholds[key],
                     )
-                    by_family[family] = confusion(
+                    if mask.any()
+                    else dict(count=0)
+                )
+            report["breakdowns"][population][key] = dict(
+                family=by_family,
+                snr=by_snr,
+                overlap={
+                    str(overlap): confusion(
                         selected_labels[mask], value[mask], thresholds[key]
                     )
-                by_snr = {}
-                snr = np.array([r["snr"] for r in selected_rows])
-                for lo, hi in ((4, 5), (5, 10), (10, 20), (20, float("inf"))):
-                    mask = (snr >= lo) & (snr < hi)
-                    by_snr[f"{lo}:{hi}"] = (
-                        confusion(
-                            selected_labels[mask],
-                            value[mask],
-                            thresholds[key],
+                    for overlap in (False, True)
+                    for mask in [
+                        np.array(
+                            [
+                                r["overlapping_causes"] == overlap
+                                for r in selected_rows
+                            ]
                         )
-                        if mask.any()
-                        else dict(count=0)
-                    )
-                report["breakdowns"][key] = dict(family=by_family, snr=by_snr)
-                wrong = (value >= thresholds[key]) != selected_labels.astype(
-                    bool
+                    ]
+                    if mask.any()
+                },
+            )
+            wrong = (value >= thresholds[key]) != selected_labels.astype(bool)
+            order = np.argsort(
+                -np.abs(value - selected_labels), kind="stable"
+            )
+            report["high_confidence_mistakes"][population][key] = [
+                dict(
+                    candidate_id=selected_rows[i]["candidate_id"],
+                    score=float(value[i]),
+                    label=int(selected_labels[i]),
+                    family=selected_rows[i]["family"],
                 )
-                order = np.argsort(
-                    -np.abs(value - selected_labels), kind="stable"
-                )
-                report["high_confidence_mistakes"][key] = [
-                    dict(
-                        candidate_id=selected_rows[i]["candidate_id"],
-                        score=float(value[i]),
-                        label=int(selected_labels[i]),
-                        family=selected_rows[i]["family"],
-                    )
-                    for i in order
-                    if wrong[i]
-                ][:12]
+                for i in order
+                if wrong[i]
+            ][:12]
     import torch
 
     report["provenance"] = dict(
@@ -621,7 +685,12 @@ def execute_reference(output, *, profile="quick-smoke", device="cuda:0"):
             "full-reference qualification requires CUDA execution"
         )
     root = Path(output).resolve()
-    source = Path(__file__).resolve().parent
+    source = Path(
+        os.environ.get(
+            "CUPHOTON_MODEL_ALERTS_SOURCE_REPO",
+            Path(__file__).resolve().parents[2],
+        )
+    )
     if (
         root == source
         or root.is_relative_to(source)
