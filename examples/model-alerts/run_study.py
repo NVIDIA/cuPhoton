@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 from baselines import development_baselines
 from generator import Design, write_dataset
 from study import prepare_training, train_development
@@ -29,6 +30,36 @@ def pilot(output, *, smoke=False, device="cuda:0", multiplier=1):
     raw, prepared = output / "raw", output / "prepared"
     design = Design()
     write_dataset(raw, fields, design=design, backend="cpu")
+    raw_rows = [
+        json.loads(line)
+        for line in (raw / "metadata.jsonl").read_text().splitlines()
+    ]
+    difference = np.load(raw / "difference.npy", mmap_mode="r")
+    mask = np.array(
+        [
+            r["family"] == "misregistration"
+            and not r["label"]
+            and not r["ambiguous"]
+            for r in raw_rows
+        ]
+    )
+    selected = difference[mask]
+    rms = np.sqrt(np.mean(selected**2, axis=(1, 2)))
+    bipolar = (selected.max(axis=(1, 2)) > 3 * rms) & (
+        selected.min(axis=(1, 2)) < -3 * rms
+    )
+    registration_diagnostic = dict(
+        candidates=int(mask.sum()),
+        bipolar_candidates=int(bipolar.sum()),
+        criterion=(
+            "both signed peaks exceed 3 times whole-stamp RMS; "
+            "descriptive, not a detection significance"
+        ),
+    )
+    if not smoke and not bipolar.any():
+        raise RuntimeError(
+            "development contains no bipolar registration residuals"
+        )
     prepare_training(raw, prepared)
     baselines = development_baselines(raw, prepared, output / "baselines")
     outcomes = []
@@ -64,6 +95,7 @@ def pilot(output, *, smoke=False, device="cuda:0", multiplier=1):
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
             for p in Path(__file__).parent.glob("*.py")
         },
+        registration_diagnostic=registration_diagnostic,
         final_test_generated=False,
     )
     (output / "pilot.json").write_text(json.dumps(receipt, indent=2) + "\n")

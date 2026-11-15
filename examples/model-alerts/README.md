@@ -93,7 +93,11 @@ Each model/seed uses the highest inclusive score threshold achieving at least
 95% validation recall, including tied scores. The final endpoint is test FPR
 at that frozen threshold; achieved test and shift recall are reported
 separately. Field bootstrap preserves epoch dependence and pairs comparisons
-on the same fields. Seed outcomes are shown individually.
+on the same fields. Seed outcomes are shown individually. Both evaluation
+populations include family, SNR and overlapping-cause breakdowns. Local
+registration offsets vary by star; brightening hosts are randomized among
+non-mismatch stars. The development receipt counts bipolar registration
+residuals. All generator mixture amplitudes are declared in `Design`.
 
 `study/freeze.json` precedes reserved-field generation. Never retune after
 unblinding. If a bug invalidates final evaluation, retain that attempt and set
@@ -122,7 +126,7 @@ contains gallery pixels and evaluation statistics; full training arrays and
 weights are separate artifacts.
 
 The source reuses Model Sky's public notebook presentation code and the
-public xScan raw-comparison/Alard-Lupton display primitives. It does not read
+existing xScan raw-comparison/Alard-Lupton display helpers. It does not read
 live demo fixtures or open a Bokeh server. Existing server viewer behavior
 is unchanged. See [PUBLISHING.md](PUBLISHING.md) for Quarto export, source/hash
 verification, packaging and the future versioned Pages integration work.

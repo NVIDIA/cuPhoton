@@ -30,6 +30,19 @@ class Design:
     association_radius: float = 3.0
     read_noise: float = 4.0
     calibration_size: int = 64
+    star_flux_min: float = 400.0
+    star_flux_max: float = 18000.0
+    hot_flux_min: float = 300.0
+    hot_flux_max: float = 1500.0
+    cosmic_flux_min: float = 200.0
+    cosmic_flux_max: float = 900.0
+    moving_flux: float = 1800.0
+    global_offset_sigma: float = 0.2
+    local_offset_sigma: float = 0.35
+    mismatch_factor: float = 1.25
+    column_flux_min: float = 100.0
+    column_flux_max: float = 400.0
+    column_half_length: int = 5
     root_seed: int = 20261115
 
     def __post_init__(self):
@@ -132,7 +145,13 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
     shape = (design.size, design.size)
     margin = design.stamp_size // 2 + 9
     positions = rng.uniform(margin, design.size - margin, (design.stars, 2))
-    fluxes = np.exp(rng.uniform(np.log(400), np.log(18000), design.stars))
+    fluxes = np.exp(
+        rng.uniform(
+            np.log(design.star_flux_min),
+            np.log(design.star_flux_max),
+            design.stars,
+        )
+    )
     reference_sigma = rng.uniform(0.9, 1.2)
     background = rng.uniform(60, 140)
     reference_calibration = calibration_sample(
@@ -146,7 +165,7 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
         reference_mean += flux * psf(shape, x, y, reference_sigma)
     # Detector dark-current defect is present in both reference and search.
     hot_x, hot_y = rng.integers(margin, design.size - margin, 2)
-    hot_flux = rng.uniform(300, 1500)
+    hot_flux = rng.uniform(design.hot_flux_min, design.hot_flux_max)
     reference_mean[hot_y, hot_x] += hot_flux
     template = expose(
         reference_mean, rng_for(design, field, 1), design.read_noise
@@ -157,13 +176,26 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
         sky = erng.uniform(180, 300) if shifted else erng.uniform(60, 140)
         expected = np.full(shape, sky)
         causes = []
-        # Whole-field registration error cannot be represented exactly by a
-        # finite Gaussian-polynomial kernel. Some static residuals survive.
-        dx, dy = erng.normal(0, 0.2, 2)
+        # A single constant kernel can absorb a common translation, but not
+        # independent local astrometric errors for different static sources.
+        offsets = erng.normal(0, design.global_offset_sigma, 2) + erng.normal(
+            0, design.local_offset_sigma, (design.stars, 2)
+        )
+        mismatch = np.arange(design.stars) % 7 == 0
+        host_pool = np.flatnonzero(~mismatch)
+        host_count = (design.changes + 1) // 2
+        if host_count > len(host_pool):
+            raise ValueError(
+                "not enough non-mismatch stars for brightening hosts"
+            )
+        hosts = erng.choice(host_pool, host_count, replace=False)
         for index, ((x, y), flux) in enumerate(
             zip(positions, fluxes, strict=False)
         ):
-            local_sigma = sigma * (1.25 if index % 7 == 0 else 1)
+            dx, dy = offsets[index]
+            local_sigma = sigma * (
+                design.mismatch_factor if mismatch[index] else 1
+            )
             expected += flux * psf(shape, x + dx, y + dy, local_sigma)
             causes.append(
                 dict(
@@ -189,8 +221,8 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
             )
             # Half brighten an existing source; half appear on blank sky.
             if index % 2 == 0:
-                x, y = positions[index]
-                x, y = x + dx, y + dy
+                host = hosts[index // 2]
+                x, y = positions[host] + offsets[host]
             expected += flux * psf(shape, x, y, sigma)
             causes.append(
                 dict(
@@ -205,7 +237,7 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
             )
         # One untrailed mover is a held-out astrophysical challenge per epoch.
         x, y = erng.uniform(margin, design.size - margin, 2)
-        expected += 1800 * psf(shape, x, y, sigma)
+        expected += design.moving_flux * psf(shape, x, y, sigma)
         causes.append(
             dict(
                 x=float(x),
@@ -227,7 +259,9 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
             )
         )
         x, y = erng.integers(margin, design.size - margin, 2)
-        search[y, x : x + 3] += erng.uniform(200, 900, 3)
+        search[y, x : x + 3] += erng.uniform(
+            design.cosmic_flux_min, design.cosmic_flux_max, 3
+        )
         causes.append(
             dict(
                 x=float(x + 1),
@@ -239,12 +273,16 @@ def field_exposures(field, *, design=DEFAULT_DESIGN, shifted=False):
         )
         if shifted:
             x, y = erng.integers(margin, design.size - margin, 2)
-            search[y - 5 : y + 6, x] += erng.uniform(100, 400)
+            extent = design.column_half_length
+            search[y - extent : y + extent + 1, x] += erng.uniform(
+                design.column_flux_min, design.column_flux_max
+            )
             causes.append(
                 dict(
                     x=float(x),
                     y=float(y),
                     family="column_bleed",
+                    segment_half_length=extent,
                     positive=False,
                     challenge=False,
                 )
@@ -336,17 +374,18 @@ def detect(exposure, *, design=DEFAULT_DESIGN, backend="cpu"):
 
 def associate(candidate, causes, radius):
     """Associate truth after detection and flag coverage limits."""
-    near = [
-        c
-        for c in causes
-        if np.hypot(candidate["x"] - c["x"], candidate["y"] - c["y"])
-        <= radius
-    ]
-    near.sort(
-        key=lambda c: np.hypot(
-            candidate["x"] - c["x"], candidate["y"] - c["y"]
+
+    def distance(cause):
+        dx = candidate["x"] - cause["x"]
+        dy = max(
+            abs(candidate["y"] - cause["y"])
+            - cause.get("segment_half_length", 0),
+            0,
         )
-    )
+        return np.hypot(dx, dy)
+
+    near = [c for c in causes if distance(c) <= radius]
+    near.sort(key=distance)
     real = [c for c in near if c["positive"]]
     artifacts = [
         c

@@ -55,7 +55,7 @@
       ["#ed91bd", colors.pink], ["#ab3d75", colors.pink],
       ["#82938a", colors.muted], ["#93a6b8", colors.muted], ["#d97a00", "#a35600"],
     ]);
-    const replace = (value) => light && typeof value === "string"
+    const replace = (value) => typeof value === "string"
       ? (replacements.get(value.toLowerCase()) || value) : value;
     for (const model of doc._all_models.values()) {
       const type = model.type;
@@ -96,10 +96,10 @@
         if (!(property in model.properties)) continue;
         const before = remember(model, property);
         if (typeof before === "string") {
-          set(property, replace(before), true);
+          set(property, replace(before));
         } else if (before && typeof before.value === "string") {
           const value = replace(before.value);
-          set(property, value === before.value ? before : {...before, value}, true);
+          set(property, value === before.value ? before : {...before, value});
         }
       }
       if (type === "ColumnDataSource" && Array.isArray(model.data.color)

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Browser-only candidate review using the public xScan image primitives."""
+"""Browser-only candidate review using existing xScan image helpers."""
 
 from __future__ import annotations
 
@@ -196,6 +196,14 @@ def candidate_explorer(
         Button(label="Previous candidate"),
         Button(label="Next candidate"),
     )
+    state = ColumnDataSource(dict(candidate=[0]))
+    restore = Button(label="Restore frozen threshold")
+    restore.js_on_click(
+        CustomJS(
+            args=dict(threshold=threshold_control, frozen=float(threshold)),
+            code="threshold.value=frozen;",
+        )
+    )
     metadata, queue, exact = (
         Div(),
         Div(),
@@ -265,6 +273,8 @@ def candidate_explorer(
         args=dict(
             bank=bank,
             metrics=metrics,
+            state=state,
+            inspector=inspector,
             index=index,
             threshold=threshold_control,
             threshold_line=threshold_line,
@@ -329,13 +339,15 @@ index.value=matches[(position+delta+matches.length)%matches.length];
         "Move a slider to explore the queue."
     )
     metadata.text = (
-        f"Gallery: {len(chosen)} of {len(population_labels)} "
-        "evaluation candidates, stratified by confusion/SNR/family."
+        f"Candidate {bank.data['identifier'][0]}, gallery 1/{len(chosen)}; "
+        f"family {bank.data['family'][0]}; label {labels[chosen][0]}; "
+        f"score {scores[chosen][0]}; measured SNR {bank.data['snr'][0]}. "
+        f"Gallery from {len(population_labels)} evaluation candidates."
     )
     return column(
         queue,
         score_plot,
-        row(threshold_control, prevalence),
+        row(threshold_control, prevalence, restore),
         row(family, category, transform),
         row(previous, index, following),
         metadata,

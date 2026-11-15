@@ -56,7 +56,7 @@ def main():
     )
     args = parser.parse_args()
     output = args.output.resolve()
-    if output.exists() or output == HERE or output.is_relative_to(HERE):
+    if output.exists() or output == REPO or output.is_relative_to(REPO):
         parser.error(
             "--output must be a new directory outside example sources"
         )
@@ -89,7 +89,7 @@ def main():
     ]
     client = NotebookClient(
         notebook,
-        timeout=7200,
+        timeout=None if args.profile == "full-reference" else 7200,
         km=manager,
         resources={"metadata": {"path": str(snapshot)}},
         record_timing=True,
@@ -97,6 +97,7 @@ def main():
     environment = os.environ.copy()
     environment.update(
         CUPHOTON_MODEL_ALERTS_OUTPUT=str(output / "study"),
+        CUPHOTON_MODEL_ALERTS_SOURCE_REPO=str(REPO),
         CUPHOTON_MODEL_ALERTS_PROFILE=args.profile,
         CUPHOTON_MODEL_ALERTS_GPU_LOCK=str(args.gpu_lock.resolve())
         if args.gpu_lock is not None
@@ -131,17 +132,27 @@ def main():
             if cell.cell_type != "code":
                 continue
             for item in cell.outputs:
+                replacements = [
+                    (str(output), "<reference-output>"),
+                    (str(REPO), "<cuphoton-source>"),
+                    (sys.prefix, "<python-environment>"),
+                    (str(Path(sys.prefix).resolve()), "<python-environment>"),
+                    (str(Path.home()), "<user-home>"),
+                ]
+
+                def portable(text, replacements=tuple(replacements)):
+                    for prefix, label in sorted(
+                        replacements, key=lambda p: -len(p[0])
+                    ):
+                        text = text.replace(prefix, label)
+                    return text
+
                 if item.output_type == "stream":
-                    for prefix in {
-                        sys.prefix,
-                        str(Path(sys.prefix).resolve()),
-                    }:
-                        item.text = item.text.replace(
-                            prefix, "<python-environment>"
-                        )
-                    item.text = item.text.replace(
-                        str(output), "<reference-output>"
-                    )
+                    item.text = portable(item.text)
+                elif item.output_type in ("display_data", "execute_result"):
+                    for mime in ("text/plain", "text/html", "text/markdown"):
+                        if isinstance(item.data.get(mime), str):
+                            item.data[mime] = portable(item.data[mime])
         nbformat.write(notebook, output / "model-alerts.executed.ipynb")
     errors = [
         o

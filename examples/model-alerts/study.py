@@ -153,6 +153,10 @@ def train_development(
         ),
     )
     summary = train_classifier(config, run_dir=run_dir)
+    if summary["epochs_completed"] != epochs:
+        raise AssertionError(
+            "native training did not complete the declared epoch budget"
+        )
     model, _, performance = load_model_from_checkpoint(
         run_dir, device=torch.device(device)
     )
