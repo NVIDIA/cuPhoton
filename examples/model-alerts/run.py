@@ -26,7 +26,8 @@ REPO = HERE.parents[1]
 
 
 def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def source_files():
@@ -122,6 +123,25 @@ def main():
     try:
         client.execute(env=environment, cwd=str(snapshot))
     finally:
+        if manager.has_kernel:
+            manager.shutdown_kernel(now=True)
+        # Preserve warnings and numbers; replace only machine-local prefixes,
+        # following the Model Sky execution workflow.
+        for cell in notebook.cells:
+            if cell.cell_type != "code":
+                continue
+            for item in cell.outputs:
+                if item.output_type == "stream":
+                    for prefix in {
+                        sys.prefix,
+                        str(Path(sys.prefix).resolve()),
+                    }:
+                        item.text = item.text.replace(
+                            prefix, "<python-environment>"
+                        )
+                    item.text = item.text.replace(
+                        str(output), "<reference-output>"
+                    )
         nbformat.write(notebook, output / "model-alerts.executed.ipynb")
     errors = [
         o
@@ -167,6 +187,23 @@ def main():
         },
         code_cells=sum(c.cell_type == "code" for c in notebook.cells),
         study_profile=report["design"],
+        artifact_sha256={
+            str(p.relative_to(output)): digest(p)
+            for p in output.rglob("*")
+            if p.is_file()
+            and "__pycache__" not in p.parts
+            and p.suffix
+            in (
+                ".npy",
+                ".npz",
+                ".pt",
+                ".parquet",
+                ".jsonl",
+                ".json",
+                ".ipynb",
+                ".zip",
+            )
+        },
     )
     (output / "execution.json").write_text(
         json.dumps(receipt, indent=2) + "\n"
