@@ -13,6 +13,7 @@ from bokeh.layouts import column, row
 from bokeh.models import ColumnDataSource, CustomJS, Select
 from bokeh.plotting import figure
 from experiment import forward_prediction
+from scene import science_window
 from views import linked_panels
 
 
@@ -31,8 +32,14 @@ def exposures(root, case="trial-000", method="huber"):
         predicted = forward_prediction(
             saved[f"{method}_native"], saved["kernels"]
         )
+        predicted = science_window(predicted)
+        labels = [
+            str(i + 1).zfill(2)
+            + (" (fit)" if i in saved["train_frames"] else " (held out)")
+            for i in range(12)
+        ]
         cases = {
-            f"{i + 1:02} ({'fit' if i < 8 else 'held out'})": [
+            labels[i]: [
                 saved["observations"][..., i].copy(),
                 predicted[..., i],
                 saved["observations"][..., i] - predicted[..., i],
@@ -178,12 +185,15 @@ def calibration_diagnostics(root):
     trials = json.loads((root / "finite-calibration.json").read_text())
     errors = np.array(
         [
-            [s["fractional_flux_error"] for s in trial["l2"]["sources"]]
+            [
+                s["calibration_flux_error_increment"]
+                for s in trial["l2"]["sources"]
+            ]
             for trial in trials
         ]
     )
     uncertainty = figure(
-        title="Independent calibration draws: L2 flux error",
+        title="Calibration draws minus noiseless control: L2 ±1 SD",
         x_axis_label="Source",
         y_axis_label="Fractional aperture error",
         width=700,
@@ -209,6 +219,8 @@ def case_measurement_table(root):
         "variance-times-four",
         "photon-read",
         "transient",
+        "matched-operator",
+        "noiseless-physical",
         "calibrated-mm",
         "perfect-factorization",
     ):
@@ -227,12 +239,40 @@ def case_measurement_table(root):
                 f"<td>{html.escape(method)}</td><td>{bias:.5f}</td>"
                 f"<td>{centroid:.5f}</td></tr>"
             )
+    floors = []
+    for case in (
+        "matched-operator",
+        "noiseless-physical",
+        "perfect-factorization",
+    ):
+        values = json.loads(
+            (Path(root) / case / "measurements.json").read_text()
+        )
+        for method, result in values.items():
+            for source in result["sources"]:
+                floors.append(
+                    f"<tr><td>{case}</td><td>{method}</td>"
+                    f"<td>{source['kind']}</td>"
+                    f"<td>{source['input_flux']}</td>"
+                    f"<td>{source['fractional_flux_error']:.6f}</td>"
+                    "</tr>"
+                )
+    floor_table = (
+        "<details><summary>Per-source numerical bias floors</summary>"
+        "<table><thead><tr><th>Control</th><th>Method</th>"
+        "<th>Environment</th><th>Input flux</th>"
+        "<th>Fractional aperture error</th></tr></thead><tbody>"
+        + "".join(floors)
+        + "</tbody></table></details>"
+    )
     return (
-        "<table><caption>Paired first-realization controls; "
-        "these rows have no independent-trial error bars.</caption>"
+        "<table><caption>Case controls; "
+        "photon/read and compact context use separate draws. "
+        "No trial error bars.</caption>"
         "<thead><tr><th>Case</th><th>Method</th>"
         "<th>Mean fractional aperture error</th>"
         "<th>Mean centroid error (pixel)</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
+        + floor_table
     )

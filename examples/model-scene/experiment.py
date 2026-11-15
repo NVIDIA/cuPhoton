@@ -8,11 +8,8 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from scene import pixel_gaussian, write_bundle
-from scipy.ndimage import gaussian_filter
+from scene import TRAIN_FRAMES, pixel_gaussian, write_bundle
 from scipy.signal import convolve2d
-
-ROI = (slice(12, 60), slice(12, 60))
 
 
 def reconstruct(
@@ -45,10 +42,13 @@ def reconstruct(
         "algorithm": algorithm,
         "data": {
             "base": str(bundle_path.resolve()),
-            "exposure_indices": list(range(8)),
+            "exposure_indices": list(TRAIN_FRAMES),
         },
         "output": {"root_dir": str((root / "runs").resolve()), "name": name},
-        "roi": {"height": 48, "width": 48},
+        "roi": {
+            "height": arrays["images"].shape[1] - 24,
+            "width": arrays["images"].shape[2] - 24,
+        },
         "mask": {"mode": "provided" if masked else "none"},
         "padding": "VALID",
         "srf": 1,
@@ -73,8 +73,8 @@ def calibrate(
 ):
     """Measure separate calibration stars and solve reference PSFs.
 
-    Unit-flux stars have known locations and total flux 100,000 electrons.
-    Gaussian read noise is independent of every science noise realization.
+    Calibration stars have known locations and flux 100,000 electrons.
+    Poisson counts and Gaussian read noise are independent of science noise.
     These star stamps are the observations; analytic widths are never passed
     to the calibration solver. Background is known and subtracted. Negative
     noisy samples are clipped before unit-sum normalization; quantify this
@@ -87,15 +87,18 @@ def calibrate(
     stars = np.stack(
         [pixel_gaussian(15, 7, 7, width) for width in widths], axis=-1
     )
-    counts = stars * 100000 + rng.normal(0, 2, stars.shape)
+    counts = rng.poisson(stars * 100000) + rng.normal(0, 2, stars.shape)
     measured = np.maximum(counts, 0)
     measured /= measured.sum(axis=(0, 1), keepdims=True)
     if target_override is not None:
         measured = np.asarray(target_override, dtype=float).copy()
+        counts = measured * 100000
+        measured /= measured.sum(axis=(0, 1), keepdims=True)
     path = Path(root) / f"calibration-{method}"
     # Loader requires only the explicitly requested PSF artifact here.
     path.mkdir(parents=True, exist_ok=False)
     np.save(path / "psfs.npy", measured[:, :, None, :])
+    np.save(path / "star-counts.npy", counts)
     config = {
         "backend": "torch",
         "device": device,
@@ -116,11 +119,6 @@ def calibrate(
     cfg.write_text(yaml.safe_dump(config))
     run = run_psf_solve(cfg)
     return run, measured
-
-
-def common_resolution(image, sigma):
-    """Blur to a declared attainable Gaussian target."""
-    return gaussian_filter(image, sigma, mode="constant", cval=2)
 
 
 def aperture_measurements(image, sources, *, origin=12, radius=3):

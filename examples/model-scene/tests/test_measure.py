@@ -31,11 +31,11 @@ def test_independent_renderer_discrepancy_is_visible():
 
 def test_valid_forward_prediction_uses_real_halo():
     arrays, truth = generate(9, matched=True)
-    full = truth["truth"][5:67, 5:67]
+    full = truth["truth"][5:-5, 5:-5]
     prediction = forward_prediction(full, arrays["psfs"])
-    assert prediction.shape == (48, 48, 12)
+    assert prediction.shape == (96, 96, 12)
     np.testing.assert_allclose(
-        prediction, truth["expectation"][12:60, 12:60], atol=1e-12
+        prediction, truth["expectation"][12:-12, 12:-12], atol=1e-12
     )
 
 
@@ -63,3 +63,30 @@ def test_uncertainty_uses_independent_realizations():
     assert (
         result["l2"]["paired_difference_vs_coadd"]["standard_error"] < 1e-15
     )
+
+
+def test_truth_reconstruction_has_zero_error_for_matched_operator():
+    from measure import evaluate
+
+    arrays, truth = generate(1005, development=True, matched=True)
+    arrays["images"] = truth["expectation"][None].copy()
+    latent = truth["truth"][5:-5, 5:-5]
+    measured, _, _ = evaluate(arrays, truth, {"l2": latent, "huber": latent})
+    assert (
+        max(
+            abs(s["fractional_flux_error"]) for s in measured["l2"]["sources"]
+        )
+        < 1e-12
+    )
+    assert max(measured["l2"]["prediction_mse_by_frame"]) < 1e-24
+
+
+def test_primary_evaluation_refuses_insufficient_context():
+    import pytest
+    from measure import evaluate
+
+    arrays, truth = generate(1005, compact=True)
+    truth["boundary_failure"] = False
+    latent = truth["truth"][5:-5, 5:-5]
+    with pytest.raises(ValueError, match="Insufficient fitting context"):
+        evaluate(arrays, truth, {"l2": latent})

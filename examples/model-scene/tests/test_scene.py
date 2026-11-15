@@ -56,7 +56,7 @@ def test_independent_convolution_against_quadrature():
 
 def test_bundle_axes_mask_polarity_and_noise_pairing():
     arrays, _ = generate(101, case="outliers")
-    assert arrays["images"].shape == (1, 72, 72, 12)
+    assert arrays["images"].shape == (1, 120, 120, 12)
     assert arrays["psfs"].shape == (15, 15, 1, 12)
     assert arrays["masks"].dtype == bool
     assert np.all(arrays["variances"] > 0)
@@ -71,8 +71,8 @@ def test_bundle_axes_mask_polarity_and_noise_pairing():
 
 def test_real_border_context_and_refuse_overwrite(tmp_path):
     arrays, _ = generate(5)
-    # 48-pixel measurement ROI leaves 12 real pixels per side for radius 7.
-    assert (72 - 48) // 2 > kernels([1.7]).shape[0] // 2
+    # The 96-pixel fitting ROI retains real support for the radius-7 PSF.
+    assert (120 - 96) // 2 > kernels([1.7]).shape[0] // 2
     assert np.all(arrays["images"][:, :7].std(axis=-1) > 0)
     destination = tmp_path / "bundle"
     write_bundle(destination, arrays)
