@@ -1,0 +1,31 @@
+{
+  "revision": 1,
+  "frozen": true,
+  "iterations": 300,
+  "noise_realizations": 50,
+  "test_seed_start": 81000,
+  "calibration_seed_start": 45000,
+  "development_seeds": [
+    1001,
+    1002,
+    1003,
+    1004
+  ],
+  "huber_delta": 2.0,
+  "stop_tolerance": 1e-12,
+  "background_electrons_per_pixel": 2.0,
+  "common_gaussian_sigma_pixels": 2.4,
+  "aperture_radius_pixels": 3,
+  "edge_exclusion_pixels": 5,
+  "primary_endpoint": "fractional aperture flux error against target truth",
+  "minimum_bias_of_interest": 0.01,
+  "precision_reporting": "per-source standard error and approximate 2.8 SE detectable bias",
+  "inference_scope": "fixed modeled source catalog and independent noise realizations",
+  "science_source_hashes": {
+    "scene.py": "a66f32c0f01049763e2dae7971dc0f65f13b251a658302f758ecdbe598f95186",
+    "experiment.py": "872489941f49cc5bf4535669651ace4c6a519325312da08de2c516279dee6f19",
+    "measure.py": "8b64bc0e4d0270e924b3c32b4596b96cafbb186370c8abb842afeec6adc36321",
+    "study.py": "083ab840a808d0b6b01b5e8e902c0074e5fc50b55f2cda0eaa0d9c1fa2e7e569",
+    "controls.py": "81fe33752fa11b3f866d969fd090b43a082713002ce048c48e84ff9bfd154847"
+  }
+}

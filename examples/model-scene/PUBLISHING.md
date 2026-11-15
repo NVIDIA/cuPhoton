@@ -1,0 +1,99 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+# Publishing Model Scene
+
+The source notebook is output-free. The interactive HTML and numerical study
+are generated artifacts kept outside Git. This example exports a local static
+chapter inside the user guide; merging its source does not add it to the
+automatically published versioned site.
+
+## Build a reviewable artifact
+
+1. Check out the intended committed source revision and keep it unchanged
+   through execution and rendering. Install that checkout's cuPhoton with
+   xImage and the optional example requirements, as described in README.md.
+2. Execute the reference profile in a CUDA 13 environment, retaining the shared
+   GPU lock. Use a fresh destination outside the source checkout:
+
+   ```sh
+   python examples/model-scene/run.py --profile reference --device cuda \
+     --gpu-lock /path/shared-by-all-gpu-users/gpu0.lock \
+     --output /path/new-scene-reference
+   ```
+
+3. Check `execution.json`, `protocol.json`, `execution.log`, and the study
+   diagnostics. Verify source hashes against this checkout, protocol hashes
+   against the executed protocol, and artifact hashes against the actual files.
+   Inspect the independent-truth endpoints and calibration controls; a successful
+   process exit alone does not establish scientific fidelity.
+4. In the CPU documentation environment, render the completed notebook with
+   `preview.py --executed ... --output ... --source-ref COMMITTED_PUSHED_REF`.
+   The command verifies input hashes and invokes the existing postprocessor
+   and snapshot checks. Normal CPU guide chapters execute; the GPU notebook
+   retains its saved outputs. Build include fragments stay outside the
+   published guide resource tree.
+5. Test the chapter under `file://` and static HTTP, including a versioned
+   `/cuPhoton/<version>/` prefix. Check desktop/mobile, light/dark, keyboard,
+   touch, terminology definitions, all selectors, linked pixel values and
+   display scales. Block scientific runtime network access and verify that
+   there are no WebSocket connections. Audit the HTML and public receipt for
+   private paths and restricted material. Confirm GitHub source links resolve.
+
+## Package static files
+
+The complete `_book` directory retains guide navigation and source downloads.
+The chapter embeds its plot resources; a local static web server is sufficient.
+After verification, package the rendered directory and executed notebook:
+
+```sh
+tar -czf /path/model-scene-guide.tar.gz \
+  -C /path/new-scene-preview/guide/_book .
+cp /path/new-scene-preview/guide/_book/source/model-scene.executed.ipynb \
+  /path/model-scene.executed.ipynb
+cp /path/new-scene-preview/guide/_book/source/model-scene-execution.json \
+  /path/model-scene-execution.json
+sha256sum /path/model-scene-guide.tar.gz \
+  /path/model-scene.executed.ipynb /path/model-scene-execution.json \
+  > /path/model-scene-SHA256SUMS
+```
+
+Use the sanitized exported notebook/receipt for public distribution. Retain raw
+native workflow records privately when they contain machine-local paths.
+Full repeated-trial arrays can be archived separately; the HTML contains selected
+experiments and the complete summary diagnostics. Measure the archive and page
+sizes before distribution. Preserve numeric precision and avoid embedding
+repeated-trial arrays merely to make them accessible from a selector.
+
+Uploading assets is a separate future action. After approval, use an existing
+GitHub Release whose tag contains the exact validated source:
+
+```sh
+gh release upload RELEASE_TAG --repo NVIDIA/cuPhoton \
+  /path/model-scene-guide.tar.gz /path/model-scene.executed.ipynb \
+  /path/model-scene-execution.json /path/model-scene-SHA256SUMS
+```
+
+This uploads assets; it neither creates a software release nor updates Pages.
+Preserve existing assets. No Release upload is part of this example's local
+preview or PR workflow.
+
+## Versioned Pages integration still required
+
+The current CPU builder globally requests execution. It needs a verified way to
+stage the pre-executed GPU notebook with matching source/protocol/dependency
+receipts while continuing to execute the ordinary CPU chapters. The local
+preview demonstrates that separation without changing the central publisher.
+
+The publisher also needs durable storage and restoration of large static
+artifacts keyed to the exact source revision. A Release upload alone does not
+make the publisher consume those assets. Main needs durable revision-keyed
+artifacts too; expiring PR artifacts and a mutable latest-release fallback do
+not satisfy source provenance. Keep rendered HTML out of `gh-pages` source
+commits until that integration has an approved storage design.
+
+Before enabling automatic publication, validate main, a release that contains
+Model Scene, and an older release without it. Verify source links, navigation,
+search, version switching, artifact integrity and preservation of earlier
+snapshots. Future `nvidia.github.io` hosting must consume static artifacts only.
+No public Python or Bokeh server is available or required.
