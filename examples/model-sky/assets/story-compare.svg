@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="360" viewBox="0 0 300 360" role="img" aria-labelledby="subtraction-title subtraction-description">
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .label { fill: #b7c9a9; font-size: 10px; font-weight: 600; letter-spacing: 1.15px; }
+      .small { fill: #b7c9a9; font-size: 11px; }
+      .note { fill: #8fa17f; font-size: 9px; letter-spacing: 1.1px; }
+      .number { fill: #b5ed39; font-size: 12px; font-weight: 700; }
+      .light { fill: #f0f4eb; }
+      .frame { fill: #0b1008; stroke: #34472b; }
+      .guide { fill: none; stroke: #34472b; stroke-width: 1; }
+    </style>
+    <linearGradient id="card-shade" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1a2813" />
+      <stop offset="1" stop-color="#10170c" />
+    </linearGradient>
+    <radialGradient id="star-halo">
+      <stop stop-color="#f0f4eb" stop-opacity=".55" />
+      <stop offset=".28" stop-color="#dce9bf" stop-opacity=".2" />
+      <stop offset="1" stop-color="#dce9bf" stop-opacity="0" />
+    </radialGradient>
+    <marker id="arrow-muted" viewBox="0 0 8 8" refX="6.8" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0 0L8 4L0 8Z" fill="#80946e" />
+    </marker>
+    <g id="pin-star">
+      <circle r="10" fill="url(#star-halo)" />
+      <circle r="2.1" fill="#f0f4eb" />
+    </g>
+    <g id="target-star">
+      <circle r="27" fill="url(#star-halo)" />
+      <circle r="5" fill="#f0f4eb" />
+      <path d="M-10 0H10M0-10V10" stroke="#f0f4eb" stroke-width=".7" opacity=".5" />
+    </g>
+  </defs>
+  <g id="scene-subtraction" role="img" aria-labelledby="subtraction-title subtraction-description">
+    <title id="subtraction-title">Compare the images</title>
+    <desc id="subtraction-description">A reference image and a new image share a coordinate frame and matched stellar shapes. Subtraction removes their steady stars and leaves a blue and pink residual where one source changed position.</desc>
+    <rect x=".5" y=".5" width="299" height="359" rx="18" fill="url(#card-shade)" stroke="#34472b" />
+    <circle cx="35" cy="34" r="14" fill="#253719" />
+    <text x="35" y="38" text-anchor="middle" class="number">02</text>
+    <text x="60" y="38" class="label">A COMMON FRAME</text>
+    <text x="79" y="80" text-anchor="middle" class="label">REFERENCE</text>
+    <text x="221" y="80" text-anchor="middle" class="label">NEW IMAGE</text>
+    <rect x="24" y="94" width="110" height="112" rx="10" class="frame" />
+    <rect x="166" y="94" width="110" height="112" rx="10" class="frame" />
+    <g fill="none" stroke="#34472b" stroke-width=".7" opacity=".65">
+      <path d="M61 94V206M98 94V206M24 131H134M24 168H134" />
+      <path d="M203 94V206M240 94V206M166 131H276M166 168H276" />
+    </g>
+    <g>
+      <use href="#pin-star" x="46" y="118" />
+      <use href="#pin-star" x="113" y="141" />
+      <use href="#pin-star" x="54" y="185" />
+      <use href="#pin-star" x="110" y="187" />
+      <use href="#target-star" x="79" y="153" />
+      <use href="#pin-star" x="188" y="118" />
+      <use href="#pin-star" x="255" y="141" />
+      <use href="#pin-star" x="196" y="185" />
+      <use href="#pin-star" x="252" y="187" />
+      <use href="#target-star" x="228" y="147" />
+    </g>
+    <path d="M79 216V228H221V216M150 233V245" fill="none" stroke="#80946e" stroke-width="1.4" marker-end="url(#arrow-muted)" />
+    <rect x="98" y="217" width="104" height="17" rx="4" fill="#14200f" />
+    <text x="150" y="229" text-anchor="middle" fill="#b5ed39" font-size="10.5">new − reference</text>
+    <rect x="24" y="253" width="252" height="58" rx="10" class="frame" />
+    <text x="39" y="276" class="label">WHAT</text>
+    <text x="39" y="290" class="label">CHANGED</text>
+    <circle cx="189" cy="286" r="18" fill="#55a7d9" opacity=".08" />
+    <circle cx="189" cy="286" r="10" fill="#55a7d9" opacity=".25" />
+    <circle cx="189" cy="286" r="5" fill="#55a7d9" />
+    <circle cx="203" cy="277" r="18" fill="#f08572" opacity=".08" />
+    <circle cx="203" cy="277" r="10" fill="#f08572" opacity=".25" />
+    <circle cx="203" cy="277" r="5" fill="#f08572" />
+    <circle cx="67" cy="326" r="3" fill="#55a7d9" />
+    <text x="77" y="330" class="small">negative</text>
+    <circle cx="173" cy="326" r="3" fill="#f08572" />
+    <text x="183" y="330" class="small">positive</text>
+    <text x="150" y="347" text-anchor="middle" class="note">ILLUSTRATIVE SCHEMATIC</text>
+  </g>
+</svg>

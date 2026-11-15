@@ -1,0 +1,11 @@
+# Generated inputs, execution records and rendered results.
+data/
+results/
+output/
+model-sky-output/
+*.executed.ipynb
+*.html
+!assets/guide-include.html
+!assets/guide-head.html
+__pycache__/
+.pytest_cache/
