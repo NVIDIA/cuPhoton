@@ -71,3 +71,14 @@ def test_detection_uses_images_without_truth():
         assert stamp.shape == (3, 31, 31)
         assert row["snr"] >= 4
         assert stamp[0, 15, 15] == exposure["search"][row["y"], row["x"]]
+
+
+def test_independent_calibration_is_estimated_not_generator_truth():
+    from generator import calibration_sample
+
+    calibration = calibration_sample(100.0, 4.0, np.random.default_rng(785))
+    assert 99 < calibration["background"] < 101
+    assert 14 < calibration["read_variance"] < 18
+    assert calibration["background"] != 100
+    assert calibration["read_variance"] != 16
+    assert calibration["pixels"] == 4096
