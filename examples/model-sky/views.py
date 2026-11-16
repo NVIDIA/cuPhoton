@@ -675,6 +675,7 @@ def transit_view(
     flux_error,
     model,
     *,
+    transit_model,
     stamps,
     difference_stamps,
     valid=None,
@@ -690,17 +691,21 @@ def transit_view(
 
     Arrays share cadence order and units. Excluded points remain visible
     but are excluded from both means. ``model`` is the supplied fit,
-    not a fit performed here. Transit membership is defined by
-    the model lying below half-depth; baseline uses less than 5% of depth.
+    not a fit performed here. ``transit_model`` is its baseline-normalized
+    transit component: membership uses half-depth and the baseline uses
+    less than 5% of depth. The full model remains the light-curve line.
     """
     times, flux, error, model = map(
         lambda a: np.asarray(a, dtype=float),
         (times_minutes, flux, flux_error, model),
     )
     n = len(times)
+    transit_model = np.asarray(transit_model, dtype=float)
     stamps = np.asarray(stamps, dtype=np.float32)
     differences = np.asarray(difference_stamps, dtype=np.float32)
-    if n < 2 or any(a.shape != (n,) for a in (times, flux, error, model)):
+    if n < 2 or any(
+        a.shape != (n,) for a in (times, flux, error, model, transit_model)
+    ):
         raise ValueError(
             "Light-curve arrays must be 1D with at least two cadences."
         )
@@ -724,16 +729,20 @@ def transit_view(
     if valid.shape != (n,):
         raise ValueError("valid must have one Boolean per cadence.")
     usable = (
-        valid & np.isfinite(flux) & np.isfinite(error) & np.isfinite(model)
+        valid
+        & np.isfinite(flux)
+        & np.isfinite(error)
+        & np.isfinite(model)
+        & np.isfinite(transit_model)
     )
-    model_finite = model[np.isfinite(model)]
+    model_finite = transit_model[np.isfinite(transit_model)]
     if not model_finite.size:
         raise ValueError(
             "The supplied model needs at least one finite value."
         )
     floor, ceiling = np.min(model_finite), np.max(model_finite)
-    in_transit = usable & (model < (floor + ceiling) / 2)
-    baseline = usable & (model > ceiling - 0.05 * (ceiling - floor))
+    in_transit = usable & (transit_model < (floor + ceiling) / 2)
+    baseline = usable & (transit_model > ceiling - 0.05 * (ceiling - floor))
     coadd = (
         np.nanmean(differences[in_transit], axis=0)
         - np.nanmean(differences[baseline], axis=0)
@@ -1041,7 +1050,7 @@ def export_html(
     path.parent.mkdir(parents=True, exist_ok=True)
     references = Path(
         sources or Path(__file__).with_name("sources.md")
-    ).read_text()
+    ).read_text(encoding="utf-8")
     footer = Div(
         text=(
             "<details><summary>Sources and further reading</summary>"

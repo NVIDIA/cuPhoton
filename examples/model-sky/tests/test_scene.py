@@ -90,7 +90,9 @@ def test_geometric_transit_has_ingress_and_52_minute_duration():
     assert np.all(np.diff(flux[(times > -24) & (times < -20)]) < 0)
 
 
-def test_bundle_preserves_astrometry_and_keeps_truth_separate(tmp_path):
+def test_bundle_preserves_astrometry_and_keeps_truth_separate(
+    tmp_path, monkeypatch
+):
     calibration = tmp_path / "calibration"
     calibration.mkdir()
     wcs = WCS(naxis=2)
@@ -144,4 +146,23 @@ def test_bundle_preserves_astrometry_and_keeps_truth_separate(tmp_path):
             assert sky_epoch.separation(sky_new).arcsec < 1e-6
             assert np.all(exposure["variance"] > 0)
             assert set(np.unique(exposure["mask"])) <= {0, 1}
+    assert prepare_bundle(calibration, output, config=config) == manifest
+    reference = output / manifest["files"]["reference_old"]
+    reference.write_bytes(reference.read_bytes() + b"changed")
+    with pytest.raises(ValueError, match="hash mismatch"):
+        prepare_bundle(calibration, output, config=config)
+
+    import scene
+
+    write_exposure = scene._write_exposure
+
+    def fail_after_write(*args, **kwargs):
+        write_exposure(*args, **kwargs)
+        raise RuntimeError("interrupted regeneration")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(scene, "_write_exposure", fail_after_write)
+        with pytest.raises(RuntimeError, match="interrupted regeneration"):
+            prepare_bundle(calibration, output, config=config, force=True)
+    assert not (output / "bundle.json").exists()
     assert prepare_bundle(calibration, output, config=config) == manifest

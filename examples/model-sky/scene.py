@@ -333,9 +333,12 @@ def prepare_bundle(
             raise ValueError(
                 "bundle inputs changed; use --force to regenerate"
             )
-        for relative in previous["sha256"]:
-            if not (output_dir / relative).is_file():
-                raise FileNotFoundError(output_dir / relative)
+        for relative, expected in previous["sha256"].items():
+            path = output_dir / relative
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            if sha256(path) != expected:
+                raise ValueError(f"bundle file hash mismatch: {relative}")
         return previous
     metadata = json.loads(inputs[2].read_text())
     with np.load(inputs[0]) as arrays:
@@ -447,6 +450,9 @@ def prepare_bundle(
         ("trail", -45, current_xy, 1.4, 1, True),
     ]
     reference_psfs, all_paths = [], []
+    # An interrupted forced rebuild must not leave a completion marker for
+    # a mixture of old and newly written exposures.
+    manifest_path.unlink(missing_ok=True)
     for key, time_min, xy, blur, n_average, with_trail in specifications:
         image, variance, mask, psf, trail = render(
             time_min,
