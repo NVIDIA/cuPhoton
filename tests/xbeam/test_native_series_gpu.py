@@ -91,11 +91,22 @@ def compare_results(actual, expected, precision):
                 assert x is None
             else:
                 assert x.dtype == y.dtype
-                np.testing.assert_allclose(
-                    x, y, rtol=tolerance, atol=tolerance, err_msg=name
-                )
-                reference_norm = np.linalg.norm(y, axis=-1)
                 reference_peak = np.max(np.abs(y), axis=-1)
+                # Near-zero FP64 FFT roundoff follows each pair's scale.
+                for pair, peak in enumerate(reference_peak):
+                    absolute_tolerance = (
+                        tolerance * max(1.0, float(peak))
+                        if precision == "float64"
+                        else tolerance
+                    )
+                    np.testing.assert_allclose(
+                        x[pair],
+                        y[pair],
+                        rtol=tolerance,
+                        atol=absolute_tolerance,
+                        err_msg=f"{name}, pair {pair}",
+                    )
+                reference_norm = np.linalg.norm(y, axis=-1)
                 error_norm = np.linalg.norm(x - y, axis=-1)
                 error_peak = np.max(np.abs(x - y), axis=-1)
                 assert np.all(error_norm <= 2e-6 * reference_norm)
