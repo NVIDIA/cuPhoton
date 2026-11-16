@@ -40,7 +40,9 @@ def _filesystem_type(
         with open(mountinfo, encoding="utf-8") as lines:
             for line in lines:
                 head, separator, tail = line.partition(" - ")
-                fields = head.split()
+                # mountinfo separates fields with ASCII spaces; other
+                # Unicode whitespace can be part of a mount-point name.
+                fields = head.split(" ")
                 if not separator or len(fields) < 5 or not tail.split():
                     continue
                 mount = _MOUNTINFO_ESCAPE.sub(

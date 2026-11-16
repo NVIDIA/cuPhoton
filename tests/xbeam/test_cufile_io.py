@@ -403,15 +403,17 @@ def test_filesystem_type_prefers_later_entry_for_same_mount(tmp_path):
     assert _filesystem_type(tmp_path / "a", mountinfo) == "tmpfs"
 
 
-def test_filesystem_type_decodes_escaped_mount_points(tmp_path):
+@pytest.mark.parametrize("mount_name", ["données raw", "données\u00a0raw"])
+def test_filesystem_type_decodes_escaped_mount_points(tmp_path, mount_name):
     from cuphoton.xbeam.cufile_io import _filesystem_type
 
     mountinfo = tmp_path / "mountinfo"
+    escaped_name = mount_name.replace(" ", r"\040")
     mountinfo.write_text(
         "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n"
-        "2 1 0:30 / /mnt/données\\040raw rw - tmpfs tmpfs rw\n"
+        f"2 1 0:30 / /mnt/{escaped_name} rw - tmpfs tmpfs rw\n"
     )
-    assert _filesystem_type("/mnt/données raw/a", mountinfo) == "tmpfs"
+    assert _filesystem_type(f"/mnt/{mount_name}/a", mountinfo) == "tmpfs"
 
 
 def test_negative_read_status_on_tmpfs_names_filesystem(
