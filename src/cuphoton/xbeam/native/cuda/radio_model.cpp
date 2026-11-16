@@ -29,7 +29,12 @@ std::unique_ptr<IndexReader> open_index(
     std::string error;
     for (const auto& path : candidates) {
         try {
-            return std::make_unique<IndexReader>(source, path.string());
+            auto index = std::make_unique<IndexReader>(source, path.string());
+            if (Json::parse(index->metadata_json()).at("schema_version") != 4) {
+                throw RadioError(
+                    "native execution requires a schema-v4 sidecar");
+            }
+            return index;
         } catch (const std::exception& e) {
             error = e.what();
         }

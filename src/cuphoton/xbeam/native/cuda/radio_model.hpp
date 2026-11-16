@@ -34,7 +34,7 @@ struct Product {
 // Cross products of every baseline plus, when requested, the autocorrelations.
 std::vector<Product> products(const Json& job);
 
-// First valid sidecar `<source filename>.*.vdix` in `directory`.
+// First valid schema-v4 sidecar `<source filename>.*.vdix` in `directory`.
 std::unique_ptr<IndexReader> open_index(
     const std::string& source, const std::filesystem::path& directory);
 

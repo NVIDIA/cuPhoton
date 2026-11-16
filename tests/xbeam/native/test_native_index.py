@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib.util
+import json
 import os
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +12,7 @@ from cuphoton.xbeam.adapters.vdif.vdif_sidecar import SIDECAR_HEADER_BYTES
 from cuphoton.xbeam.adapters.vdif.vdif_sidecar_builder import (
     build_vdif_binary_index,
 )
-from tests.xbeam.test_vdif_sidecar import _frame
+from tests.xbeam.test_vdif_sidecar import _frame, _replace_with_v2
 
 
 @pytest.fixture(scope="module")
@@ -122,3 +124,43 @@ def test_native_physical_validity_retains_invalid_clock(binding, tmp_path):
     ]
     with pytest.raises(RuntimeError, match="exceeds"):
         reader.frame_validity(3, 2)
+
+
+def test_execution_selects_v4_after_older_valid_sidecar(
+    native_executable, tmp_path
+):
+    source, summary = make_index(tmp_path)
+    current_bytes = summary.index_path.read_bytes()
+    _replace_with_v2(summary)
+    directory = tmp_path / "candidates"
+    directory.mkdir()
+    old = directory / (source.name + ".000-old.vdix")
+    current = directory / (source.name + ".zzz-current.vdix")
+    old.write_bytes(summary.index_path.read_bytes())
+    current.write_bytes(current_bytes)
+    root = Path(__file__).resolve().parents[3]
+    native = root / "src/cuphoton/xbeam/native"
+    executable = tmp_path / "index-selection"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++17",
+            "-I" + str(native / "include"),
+            "-I" + str(native / "cuda"),
+            "-I" + str(native / "third_party"),
+            str(Path(__file__).with_name("index_selection_smoke.cpp")),
+            str(native / "cuda/radio_model.cpp"),
+            str(native_executable.parent / "libxbeam_radio.a"),
+            "-lcrypto",
+            "-o",
+            str(executable),
+        ],
+        check=True,
+    )
+    arguments = [str(executable), str(source), str(directory)]
+    selected = json.loads(subprocess.check_output(arguments))
+    assert selected["schema_version"] == 4
+    current.unlink()
+    refused = subprocess.run(arguments, capture_output=True, text=True)
+    assert refused.returncode == 1
+    assert "schema-v4" in refused.stderr

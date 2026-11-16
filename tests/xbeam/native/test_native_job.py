@@ -9,7 +9,11 @@ import pytest
 
 from cuphoton.xbeam.adapters.radio.models import job_from_dict
 from cuphoton.xbeam.commands import load_interop_job
-from cuphoton.xbeam.errors import JobLoadError, UnsupportedFeatureError
+from cuphoton.xbeam.errors import (
+    ConfigurationError,
+    JobLoadError,
+    UnsupportedFeatureError,
+)
 from tests.xbeam.native.job_fixtures import write_job
 
 
@@ -80,6 +84,88 @@ def test_native_rejects_negative_file_count(tmp_path, native_executable):
     )
     assert result.returncode == 1
     assert "file count must be nonnegative" in result.stderr
+
+
+def test_native_rejects_duplicate_scan_identifiers(
+    tmp_path, native_executable
+):
+    path = write_job(tmp_path)
+    calc = tmp_path / "job.calc"
+    text = calc.read_text()
+    second_scan = "\n".join(
+        line.replace("SCAN 0", "SCAN 1")
+        for line in text.splitlines()
+        if line.startswith("SCAN 0")
+    )
+    calc.write_text(
+        text.replace("NUM SCANS: 1", "NUM SCANS: 2") + second_scan + "\n"
+    )
+    model = tmp_path / "job.im"
+    text = model.read_text()
+    second_model = text[text.index("SCAN 0 POINTING SRC") :].replace(
+        "SCAN 0", "SCAN 1"
+    )
+    model.write_text(
+        text.replace("NUM SCANS: 1", "NUM SCANS: 2") + second_model
+    )
+    with pytest.raises(ConfigurationError, match="duplicate scan identifier"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "duplicate scan identifier" in result.stderr
+
+
+def test_native_rejects_model_starting_after_scan(
+    tmp_path, native_executable
+):
+    path = write_job(tmp_path)
+    model = tmp_path / "job.im"
+    model.write_text(
+        model.read_text().replace("POLY 0 SEC: 0", "POLY 0 SEC: 1")
+    )
+    with pytest.raises(ConfigurationError, match="starts after"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "first model starts after" in result.stderr
+
+
+def test_missing_reader_geometry_is_inspectable_but_cannot_replay(
+    tmp_path, native_executable
+):
+    path = write_job(tmp_path)
+    metadata = json.loads(
+        subprocess.check_output(
+            [str(native_executable), "inspect-job", str(path)]
+        )
+    )
+    assert metadata["buffered_reader"] is None
+    result = subprocess.run(
+        [
+            str(native_executable),
+            "inspect-replay",
+            str(path),
+            "0",
+            "0",
+            str(tmp_path / "absent.vdix"),
+            "scan",
+            "0",
+            "1",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "native replay requires DATA BUFFER FACTOR" in result.stderr
 
 
 @pytest.mark.parametrize("field", ["OVERSAMPLE FAC.", "DECIMATION FAC."])

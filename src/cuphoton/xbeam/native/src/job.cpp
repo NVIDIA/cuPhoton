@@ -7,6 +7,7 @@
 #include <map>
 #include <nlohmann/json.hpp>
 #include <regex>
+#include <set>
 #include <sstream>
 namespace xbeam {
 namespace {
@@ -693,9 +694,16 @@ std::string load_interop_job_json(const std::string& name) {
     }
     auto ims = sections(im, keys);
     job["scans"] = J::array();
+    std::set<std::string> scan_names;
     D fraction(seconds.value % power(seconds.scale), seconds.scale);
     for (int s = 0; s < scans; ++s) {
         auto sid = std::to_string(s), prefix = "SCAN " + sid;
+        const auto name = calc.one(prefix + " IDENTIFIER");
+        if (!scan_names.insert(name).second) {
+            throw RadioError("duplicate scan identifier: " + name);
+        }
+        const D start = D(calc.one(prefix + " START (S)")) - fraction;
+        const D effective_start = start.value < 0 ? D(0, 0) : start;
         auto& d = ims[s];
         if (calc.integer(prefix + " NUM PHS CTRS") != 1) {
             throw RadioError("multiple phase centres unsupported");
@@ -705,11 +713,15 @@ std::string load_interop_job_json(const std::string& name) {
         if (polys < 1) {
             throw RadioError("missing scan polynomials");
         }
+        D first_epoch(0, 0);
         for (int p = 0; p < polys; ++p) {
             auto poly = prefix + " POLY " + std::to_string(p);
             D epoch =
                 D(std::to_string((d.integer(poly + " MJD") - mjd) * 86400))
                 + D(d.one(poly + " SEC")) - seconds;
+            if (p == 0 || (epoch - first_epoch).value < 0) {
+                first_epoch = epoch;
+            }
             for (int a = 0; a < stations; ++a) {
                 auto key = "SRC 0 ANT " + std::to_string(a);
                 models.push_back(
@@ -722,10 +734,13 @@ std::string load_interop_job_json(const std::string& name) {
                         {"w_coefficients_m", coeff(d, key + " W (m)", p, 1.)}});
             }
         }
+        if ((first_epoch - effective_start).value > 0) {
+            throw RadioError(
+                "first model starts after the scan execution interval");
+        }
         job["scans"].push_back(
-            {{"identifier", calc.one(prefix + " IDENTIFIER")},
-                {"start_offset_s",
-                    (D(calc.one(prefix + " START (S)")) - fraction).str()},
+            {{"identifier", name},
+                {"start_offset_s", start.str()},
                 {"duration_s", D(calc.one(prefix + " DUR (S)")).str()},
                 {"source_id", calc.one(prefix + " POINTING SRC")},
                 {"configuration_id", "0"},

@@ -6,6 +6,15 @@
 namespace xbeam {
 namespace {
 using J = nlohmann::json;
+J recording_document(const RadioJob& job) {
+    auto document = J::parse(job.normalized_json());
+    if (document.at("buffered_reader").is_null()) {
+        throw RadioError(
+            "native replay requires DATA BUFFER FACTOR, NUM DATA SEGMENTS "
+            "and NUM BUFFERED FFTS in the job metadata");
+    }
+    return document;
+}
 const J& by_id(const J& array, int id) {
     for (const auto& row : array) {
         if (row.at("identifier") == id) {
@@ -42,7 +51,7 @@ struct RadioRecording::Impl {
         IndexReader* validated)
         : job(input),
           stream_id(id),
-          document(J::parse(input.normalized_json())),
+          document(recording_document(input)),
           stream(by_id(document.at("datastreams"), id)),
           index(
               validated ? std::move(*validated)
