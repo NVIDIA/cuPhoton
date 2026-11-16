@@ -106,7 +106,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/monitor.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c04d1a5018773ce0e30f00d881916a886340c384" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="monitor.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/monitor.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="d8d8c7630d6299058db6378e5fdccfdb47c7c4b1" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="monitor.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -502,7 +502,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="15.1" id="save-some-results-to-monitor">
 <h2 class="anchored" data-anchor-id="save-some-results-to-monitor" data-number="15.1"><span class="header-section-number">15.1</span> Save some results to monitor</h2>
 <p>A pipeline often writes one small result file per image. The block below writes ten such files with two synthetic measurements each. The first is the image’s noise in DN (data numbers, the detector’s count unit). The second is its zero-point ratio. This ratio is the image’s flux scale relative to a reference image, computed from their zero points (the calibration that converts counts to brightness). Image 6 has a bright sky, image 3 has no zero point, and one file is corrupt.</p>
-<div class="cell" data-execution_count="1" id="2eb1649a">
+<div class="cell" data-execution_count="1" id="4fff15be">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="im">import</span> shutil</span>
 <span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
@@ -531,7 +531,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="15.2" id="turn-one-result-into-a-sample">
 <h2 class="anchored" data-anchor-id="turn-one-result-into-a-sample" data-number="15.2"><span class="header-section-number">15.2</span> Turn one result into a sample</h2>
 <p>Write an analyzer, a function that takes one input and returns a <code>Sample</code>. The sample holds the subject’s measurements, the findings of your rules, and references to its files. <code>sequence</code> sets the display order. The observation times use your own unit and origin.</p>
-<div class="cell" data-execution_count="2" id="d2f9b87f">
+<div class="cell" data-execution_count="2" id="dea23ec8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.artifacts <span class="im">import</span> file_sha256</span>
 <span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> Artifact, Finding, Measurement, Sample</span>
 <span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
@@ -564,7 +564,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="15.3" id="replay-the-results-into-a-monitor">
 <h2 class="anchored" data-anchor-id="replay-the-results-into-a-monitor" data-number="15.3"><span class="header-section-number">15.3</span> Replay the results into a monitor</h2>
 <p>A <code>Monitor</code> owns one state directory and rewrites <code>state.json</code> there after every change. <code>replay</code> passes each input to the analyzer in order and publishes the returned samples. When the analyzer raises, xLens records the error and goes on with the next input.</p>
-<div class="cell" data-execution_count="3" id="f6695814">
+<div class="cell" data-execution_count="3" id="0e62adea">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> Monitor</span>
 <span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a></span>
 <span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a>monitor <span class="op">=</span> Monitor(<span class="st">"runs/monitor/state"</span>, run_id<span class="op">=</span><span class="st">"night-1"</span>)</span>
@@ -622,7 +622,7 @@ Figure 15.1: The two measurements of the ten recorded samples against their obs
 <section class="level2" data-number="15.5" id="revise-a-sample">
 <h2 class="anchored" data-anchor-id="revise-a-sample" data-number="15.5"><span class="header-section-number">15.5</span> Revise a sample</h2>
 <p>When you reprocess an image, publish the new evidence under the same <code>id</code> with a higher <code>revision</code>. xLens keeps the old revision in the history. Publishing the same evidence again changes nothing and returns <code>False</code>. Changed evidence with the same revision raises an error.</p>
-<div class="cell" data-execution_count="5" id="016942cd">
+<div class="cell" data-execution_count="5" id="7f5d0593">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> dataclasses <span class="im">import</span> replace</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>old <span class="op">=</span> <span class="bu">next</span>(sample <span class="cf">for</span> sample <span class="kw">in</span> monitor.samples <span class="cf">if</span> sample.<span class="bu">id</span> <span class="op">==</span> <span class="st">"image-03"</span>)</span>
@@ -645,7 +645,7 @@ ValueError: changed evidence requires an increasing revision
 <section class="level2" data-number="15.6" id="open-a-saved-run">
 <h2 class="anchored" data-anchor-id="open-a-saved-run" data-number="15.6"><span class="header-section-number">15.6</span> Open a saved run</h2>
 <p>The state directory is the saved run. <code>Monitor.load</code> opens it again. With <code>recover=False</code>, loading reads without writing, for example while the run’s own process still writes. Default recovery marks unfinished collection as interrupted. Use it only when you own the writer role: loading does not acquire an exclusive lock. Keep one writer per state directory.</p>
-<div class="cell" data-execution_count="6" id="323f2247">
+<div class="cell" data-execution_count="6" id="a9368d07">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a>viewer <span class="op">=</span> Monitor.load(<span class="st">"runs/monitor/state"</span>, recover<span class="op">=</span><span class="va">False</span>)</span>
 <span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a>image_03 <span class="op">=</span> viewer.samples[<span class="dv">3</span>]</span>
 <span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a><span class="bu">print</span>(viewer.snapshot()[<span class="st">"run_id"</span>], <span class="bu">len</span>(viewer.samples), <span class="st">"samples"</span>)</span>
@@ -659,7 +659,7 @@ image-03 revision 2 0.998</code></pre>
 <section class="level2" data-number="15.7" id="export-or-serve-the-dashboard">
 <h2 class="anchored" data-anchor-id="export-or-serve-the-dashboard" data-number="15.7"><span class="header-section-number">15.7</span> Export or serve the dashboard</h2>
 <p><code>Dashboard.export</code> writes the run into one HTML file that opens in a browser without a server. The file is a fixed snapshot, and its content security policy blocks network requests.</p>
-<div class="cell" data-execution_count="7" id="111b43fb">
+<div class="cell" data-execution_count="7" id="a43f8a37">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xlens <span class="im">import</span> Dashboard</span>
 <span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a></span>
 <span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a>page <span class="op">=</span> Dashboard(viewer, title<span class="op">=</span><span class="st">"Night 1 images"</span>).export(<span class="st">"runs/monitor/report.html"</span>)</span>
@@ -702,7 +702,7 @@ image-03 revision 2 0.998</code></pre>
 </tbody>
 </table>
 <p><code>make_server</code> builds the same server in Python. The block below starts it on a free port, reads <code>/health</code>, and stops it:</p>
-<div class="cell" data-execution_count="8" id="34b16dc2">
+<div class="cell" data-execution_count="8" id="928e31f0">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="im">import</span> threading</span>
 <span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a><span class="im">import</span> urllib.request</span>
 <span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a></span>

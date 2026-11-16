@@ -21,4 +21,5 @@
   max-width: 100%;
 }
 .cuphoton-version select:focus-visible { outline: 3px solid #76b900; }
+#cuphoton-version-select:enabled + a { display: none; }
 #cuphoton-version-notice { flex-basis: 100%; }
