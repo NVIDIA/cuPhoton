@@ -93,6 +93,7 @@ qualification for a particular input and execution configuration.
 
 To build the optional CUDA Cython interface, set
 `CUPHOTON_XBEAM_BUILD_EXT=1 CUPHOTON_XBEAM_NATIVE_CUDA=1` during installation.
+This binding links cuFFT and cuFile, so both development libraries are required.
 `CUDA_HOME` selects the toolkit, and
 `CUPHOTON_XBEAM_CUDA_ARCHITECTURES` can select explicit CMake CUDA targets for
 builds without an accessible GPU. Then the same execution library is available
@@ -111,6 +112,9 @@ report = correlate(
 
 The CPU-only extension explicitly refuses correlation. It never silently
 falls back to Python execution.
+Python callers must supply `integration_count` and `profile` explicitly.
+Input delivery defaults to buffered POSIX reads. Each call runs its selected
+window to completion; use bounded windows for interactive applications.
 
 With the CUDA extension installed, the command line calls the same Cython
 entry point without entering Python radio loading, planning, or execution:
@@ -158,3 +162,15 @@ separate from cuFile/GDS and is not automatically selected for POSIX.
 Outputs should be written to node-local scratch before publication to shared
 storage. Numerical acceptance should compare the complete selected integration
 scope; output assembly and comparison are currently external to this backend.
+
+The standalone runner can distribute one integration scope dynamically with
+`--claim-dir DIRECTORY --workers-total N --min-chunk COUNT`. Create an empty
+claim directory for that scope, give every worker the same job, scan,
+integration range and scheduling options, and give each worker its own new
+output directory. Workers claim chunks atomically and list their completed
+files in `native-run.json`. Assembly must verify complete, nonoverlapping
+coverage across all worker reports.
+
+Claims remain assigned if a worker fails. Treat that campaign as incomplete
+and use fresh claim and output directories when rerunning its scope. Claim
+directories belong to one campaign and its common configuration.
