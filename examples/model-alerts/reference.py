@@ -10,6 +10,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -94,7 +95,7 @@ def infer(run, dataset, mode, *, feature_dir=None, device="cuda:0"):
     return result["probabilities"]
 
 
-def _experiment(root, *, smoke, device):
+def _experiment(root, *, smoke, device, revision):
     design = Design()
     agreement = {}
     if device.startswith("cuda"):
@@ -671,10 +672,7 @@ def _experiment(root, *, smoke, device):
             else "CPU"
         },
         source_sha256=freeze["source_sha256"],
-        cuphoton_revision=os.environ.get("CUPHOTON_MODEL_ALERTS_REVISION")
-        or subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip(),
+        cuphoton_revision=revision,
         dependencies={
             name: importlib.metadata.version(name)
             for name in (
@@ -709,6 +707,9 @@ def _experiment(root, *, smoke, device):
 
 def execute_reference(output, *, profile="quick-smoke", device="cuda:0"):
     """Execute once in a new directory, retaining the shared GPU lease."""
+    from cuphoton.xscan.training import resolve_device
+
+    device = str(resolve_device(device))
     if profile not in ("quick-smoke", "full-reference"):
         raise ValueError("profile must be quick-smoke or full-reference")
     if profile == "full-reference" and not device.startswith("cuda"):
@@ -739,6 +740,15 @@ def execute_reference(output, *, profile="quick-smoke", device="cuda:0"):
         raise ValueError(
             "CUDA execution requires CUPHOTON_MODEL_ALERTS_GPU_LOCK"
         )
+    revision = os.environ.get("CUPHOTON_MODEL_ALERTS_REVISION")
+    if not revision:
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=source, text=True
+        ).strip()
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError(
+            "cuPhoton revision must be a complete Git commit SHA"
+        )
     root.mkdir(parents=True)
     if device.startswith("cuda"):
         with Path(lock_path).open("a") as lock:
@@ -746,6 +756,11 @@ def execute_reference(output, *, profile="quick-smoke", device="cuda:0"):
             fcntl.flock(lock, fcntl.LOCK_EX)
             print("Acquired shared GPU lock", flush=True)
             return _experiment(
-                root, smoke=profile == "quick-smoke", device=device
+                root,
+                smoke=profile == "quick-smoke",
+                device=device,
+                revision=revision,
             )
-    return _experiment(root, smoke=profile == "quick-smoke", device=device)
+    return _experiment(
+        root, smoke=profile == "quick-smoke", device=device, revision=revision
+    )

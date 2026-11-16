@@ -78,6 +78,10 @@ def candidate_explorer(
         raise ValueError("square stamps required")
     if preselected and len(rows) > 96:
         raise ValueError("saved gallery exceeds the 96-candidate limit")
+    if preselected and evaluation is None:
+        raise ValueError(
+            "preselected galleries require complete evaluation arrays"
+        )
     chosen = (
         np.arange(len(rows))
         if preselected
