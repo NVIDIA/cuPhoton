@@ -37,7 +37,23 @@ def test_saved_gallery_preserves_receipt_order():
     ]
     images = np.random.default_rng(318).normal(size=(4, 3, 31, 31))
     labels, scores = np.array([1, 0, 1, 0]), np.array([0.9, 0.6, 0.3, 0.1])
+    with pytest.raises(ValueError, match="complete evaluation"):
+        candidate_explorer(
+            images, rows, labels, scores, 0.5, preselected=True
+        )
     _, receipt = candidate_explorer(
-        images, rows, labels, scores, 0.5, preselected=True
+        images,
+        rows,
+        labels,
+        scores,
+        0.5,
+        preselected=True,
+        evaluation=dict(
+            labels=labels,
+            scores=scores,
+            snr=[r["snr"] for r in rows],
+            candidate_id=[r["candidate_id"] for r in rows],
+            family=[r["family"] for r in rows],
+        ),
     )
     assert receipt["indices"] == [0, 1, 2, 3]

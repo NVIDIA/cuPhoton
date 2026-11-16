@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 import nbformat
-from jupyter_client import KernelManager
+from jupyter_client import AsyncKernelManager
 from nbclient import NotebookClient
 
 HERE = Path(__file__).resolve().parent
@@ -40,6 +40,29 @@ def source_files():
         and p.suffix
         in (".py", ".js", ".css", ".html", ".md", ".ipynb", ".txt")
     )
+
+
+def source_status():
+    return subprocess.check_output(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            "src",
+            "examples/model-alerts",
+            ".gitattributes",
+        ],
+        cwd=REPO,
+        text=True,
+    ).strip()
+
+
+def source_revision():
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
+    ).strip()
 
 
 def main():
@@ -64,21 +87,8 @@ def main():
         parser.error("CUDA execution requires --gpu-lock")
     if args.gpu_lock is not None and not args.gpu_lock.parent.is_dir():
         parser.error("shared GPU lock parent must already exist")
-    dirty = subprocess.check_output(
-        [
-            "git",
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            "--",
-            "src",
-            "examples/model-alerts",
-            ".gitattributes",
-        ],
-        cwd=REPO,
-        text=True,
-    )
-    if dirty.strip():
+    revision = source_revision()
+    if source_status():
         parser.error(
             "commit example and cuPhoton source edits before execution"
         )
@@ -97,7 +107,7 @@ def main():
             archive.write(p, "model-alerts/" + str(p.relative_to(HERE)))
         archive.write(REPO / "LICENSE", "model-alerts/LICENSE")
     notebook = nbformat.read(snapshot / "model-alerts.ipynb", as_version=4)
-    manager = KernelManager(kernel_name="python3")
+    manager = AsyncKernelManager(kernel_name="python3")
     manager.kernel_spec.argv = [
         sys.executable,
         "-m",
@@ -134,16 +144,12 @@ def main():
                 ],
             ]
         ),
-        CUPHOTON_MODEL_ALERTS_REVISION=subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
-        ).strip(),
+        CUPHOTON_MODEL_ALERTS_REVISION=revision,
     )
     started = time.monotonic()
     try:
-        client.execute(env=environment, cwd=str(snapshot))
+        client.execute(env=environment, cwd=str(snapshot), cleanup_kc=True)
     finally:
-        if manager.has_kernel:
-            manager.shutdown_kernel(now=True)
         # Preserve warnings and numbers; replace only machine-local prefixes,
         # following the Model Sky execution workflow.
         for cell in notebook.cells:
@@ -181,6 +187,10 @@ def main():
     ]
     if errors:
         raise RuntimeError("notebook execution contains errors")
+    if source_status() or source_revision() != revision:
+        raise RuntimeError(
+            "cuPhoton source changed during reference execution"
+        )
     if any(
         digest(HERE / name) != expected for name, expected in hashes.items()
     ):
@@ -191,9 +201,7 @@ def main():
         profile=args.profile,
         elapsed_seconds=time.monotonic() - started,
         source_sha256=hashes,
-        cuphoton_revision=subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
-        ).strip(),
+        cuphoton_revision=revision,
         dependencies={
             name: importlib.metadata.version(name)
             for name in (

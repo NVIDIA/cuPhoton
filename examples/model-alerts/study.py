@@ -114,16 +114,16 @@ def train_development(
 
     This function never accesses a test split or generates reserved fields.
     """
-    import torch
-
     from cuphoton.xscan.config import ModelConfig, TrainingConfig
     from cuphoton.xscan.dataset import StampDataset
     from cuphoton.xscan.training import (
         load_model_from_checkpoint,
         predict_dataset,
+        resolve_device,
         train_classifier,
     )
 
+    resolved_device = resolve_device(device)
     run_dir, dataset_dir = Path(run_dir), Path(dataset_dir)
     if run_dir.exists():
         raise ValueError("run directory must not exist")
@@ -135,7 +135,7 @@ def train_development(
         batch_size=64,
         learning_rate=3e-4,
         seed=seed,
-        device=device,
+        device=str(resolved_device),
         early_stopping_metric="val_loss",
         early_stopping_patience=epochs,
         use_xfit_features=xfit_feature_dir is not None,
@@ -158,7 +158,7 @@ def train_development(
             "native training did not complete the declared epoch budget"
         )
     model, _, performance = load_model_from_checkpoint(
-        run_dir, device=torch.device(device)
+        run_dir, device=resolved_device
     )
     validation = StampDataset(
         dataset_dir,
@@ -170,7 +170,7 @@ def train_development(
         model=model,
         dataset=validation,
         batch_size=64,
-        device=torch.device(device),
+        device=resolved_device,
         performance=performance,
     )
     labels, scores = prediction["labels"], prediction["probabilities"]

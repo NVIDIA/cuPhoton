@@ -118,7 +118,10 @@ def main():
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--gpu-lock", type=Path)
     args = parser.parse_args()
-    if args.device.startswith("cuda"):
+    from cuphoton.xscan.training import resolve_device
+
+    device = str(resolve_device(args.device))
+    if device.startswith("cuda"):
         if args.gpu_lock is None:
             parser.error("CUDA runs require an explicit shared --gpu-lock")
         with args.gpu_lock.open("a") as lock:
@@ -128,13 +131,13 @@ def main():
             pilot(
                 args.output,
                 smoke=args.profile == "quick-smoke",
-                device=args.device,
+                device=device,
             )
     else:
         pilot(
             args.output,
             smoke=args.profile == "quick-smoke",
-            device=args.device,
+            device=device,
         )
 
 
