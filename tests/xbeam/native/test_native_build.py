@@ -6,6 +6,7 @@
 
 import ctypes
 import importlib
+import os
 import shutil
 import subprocess
 import sys
@@ -96,7 +97,9 @@ def test_native_binding_recompiles_changed_headers(native_build):
         'extern "C" int probe() { return PROBE_VALUE; }\n'
     )
     assert build(extension(cuda=False), "header_before") == 10
+    previous = header.stat()
     header.write_text("#define PROBE_VALUE 20\n")
+    os.utime(header, ns=(previous.st_atime_ns, previous.st_mtime_ns))
     assert build(extension(cuda=False), "header_after") == 20
 
 

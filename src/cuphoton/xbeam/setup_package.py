@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build helpers for the optional native execution extension."""
 
+import hashlib
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from setuptools import Extension
@@ -22,8 +24,6 @@ def get_extensions():
     mode_file = Path("build/xbeam-native-binding-mode").resolve()
     mode = "cuda\n" if cuda_enabled else "cpu\n"
     mode_file.parent.mkdir(parents=True, exist_ok=True)
-    if not mode_file.exists() or mode_file.read_text() != mode:
-        mode_file.write_text(mode)
     depends = [
         str(mode_file),
         *(str(path) for path in sorted((source / "include").rglob("*.hpp"))),
@@ -76,6 +76,29 @@ def get_extensions():
             str(build / "libxbeam_execution.a"),
             str(build / "libxbeam_cuda.a"),
         ]
+    # Rapid edits can have identical dependency mtimes on coarse filesystems.
+    # Fingerprint owned sources as well as linked archives, then stamp changes
+    # with the precise clock instead of relying on a directory's coarse clock.
+    fingerprint = hashlib.sha256(mode.encode())
+    inputs = sorted(
+        {
+            *[Path(path) for path in depends if path != str(mode_file)],
+            *[
+                path
+                for path in source.rglob("*")
+                if path.suffix in {".cpp", ".cu", ".hpp", ".pyx"}
+            ],
+        }
+    )
+    for path in inputs:
+        fingerprint.update(str(path).encode())
+        if path.is_file():
+            fingerprint.update(path.read_bytes())
+    signature = mode + fingerprint.hexdigest() + "\n"
+    if not mode_file.exists() or mode_file.read_text() != signature:
+        mode_file.write_text(signature)
+        now = time.time_ns()
+        os.utime(mode_file, ns=(now, now))
     return cythonize(
         [
             Extension(
