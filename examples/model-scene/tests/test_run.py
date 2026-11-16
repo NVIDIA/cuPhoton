@@ -120,3 +120,25 @@ def test_source_guard_rejects_clean_revision_change(source_tree):
     with pytest.raises(RuntimeError, match="Source revision changed"):
         runner.check_source(repo, receipt)
     assert receipt["source_tree_clean"] is True
+
+
+def test_notebook_timeout_stops_and_cleans_the_kernel():
+    import nbformat
+    from nbclient.exceptions import CellTimeoutError
+
+    notebook = nbformat.v4.new_notebook(
+        cells=[nbformat.v4.new_code_cell("import time; time.sleep(30)")]
+    )
+    manager = runner.AsyncKernelManager(kernel_name="python3")
+    manager.kernel_spec.argv = [
+        sys.executable,
+        "-m",
+        "ipykernel_launcher",
+        "-f",
+        "{connection_file}",
+    ]
+    client = runner.NotebookClient(notebook, km=manager, timeout=1)
+    with pytest.raises(CellTimeoutError):
+        client.execute(cleanup_kc=True)
+    assert not manager.has_kernel
+    assert client.kc is None

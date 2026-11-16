@@ -20,7 +20,7 @@ from pathlib import Path
 import nbformat
 import numpy as np
 from controls import asymmetric_operator_control, numerical_controls
-from jupyter_client import KernelManager
+from jupyter_client import AsyncKernelManager
 from nbclient import NotebookClient
 from scene import science_window
 from study import execute_study
@@ -215,7 +215,7 @@ def main():
                         quick=args.profile == "quick",
                     )
             notebook = nbformat.read(HERE / "model-scene.ipynb", as_version=4)
-            manager = KernelManager(kernel_name="python3")
+            manager = AsyncKernelManager(kernel_name="python3")
             manager.kernel_spec.argv = [
                 sys.executable,
                 "-m",
@@ -231,10 +231,8 @@ def main():
                 record_timing=True,
             )
             try:
-                client.execute(cwd=str(HERE), env=env)
+                client.execute(cwd=str(HERE), env=env, cleanup_kc=True)
             finally:
-                if manager.has_kernel:
-                    manager.shutdown_kernel(now=True)
                 nbformat.write(
                     notebook, output / "model-scene.executed.ipynb"
                 )
