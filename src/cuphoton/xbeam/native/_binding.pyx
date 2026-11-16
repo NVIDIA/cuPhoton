@@ -343,7 +343,7 @@ cdef extern from "xbeam/replay.hpp" namespace "xbeam":
 
 cdef class NativeRawState:
     cdef RawRequestState state
-    def __cinit__(self,NativeTimeline timeline,int64_t samples_per_frame,int64_t timestamp_origin,bint clock_frame_owner):
+    def __cinit__(self,NativeTimeline timeline not None,int64_t samples_per_frame,int64_t timestamp_origin,bint clock_frame_owner):
         with nogil:
             self.state=raw_request_state(timeline.timeline[0],samples_per_frame,timestamp_origin,clock_frame_owner)
     def snapshot(self):
@@ -417,7 +417,7 @@ def window_geometry(int64_t spf,int64_t fft,int64_t rate,int64_t subint_num,int6
 def leading_frame_head(int64_t output,double delay,int64_t rate,int64_t spf,int64_t quantum):
     return leading_head(output,delay,rate,spf,quantum)
 
-def returned_window_contract(NativeTimeline timeline,NativeRawState state,dict inputs,
+def returned_window_contract(NativeTimeline timeline not None,NativeRawState state not None,dict inputs,
                              tuple geometry,tuple extent,int64_t source_stop,
                              int64_t quantum=1,int64_t control=30):
     cdef RequestGeometry g
@@ -470,8 +470,8 @@ def cuda_available():
     return bool(native_cuda_available())
 
 def correlate(job,output,index_dir,str scan,long long first_integration=0,
-              long long integration_count=1,int fft_tile=1250,int device=0,
-              str vdif_io="cufile",*,str profile,int upload_workers=4,bint prefetch=True):
+              int fft_tile=1250,int device=0,str vdif_io="posix",*,
+              long long integration_count,str profile,int upload_workers=4,bint prefetch=True):
     """Run native radio execution; release the GIL for the complete run."""
     import os
     import json

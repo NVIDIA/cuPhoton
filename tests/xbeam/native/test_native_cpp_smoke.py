@@ -9,13 +9,17 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "name", ["header", "request", "work_queue", "run_report"]
+    "name", ["header", "request", "work_queue", "run_report", "radio_options"]
 )
 def test_native_cpp_contract(name, native_executable, tmp_path):
     compiler = shutil.which("c++")
     if compiler is None:
         pytest.skip("a C++17 compiler is required")
     root = Path(__file__).resolve().parents[3]
+    options_source = root / "src/cuphoton/xbeam/native/cuda/radio_options.cpp"
+    sources = [str(Path(__file__).with_name(name + "_smoke.cpp"))]
+    if name == "radio_options":
+        sources.append(str(options_source))
     output = tmp_path / name
     subprocess.run(
         [
@@ -25,7 +29,7 @@ def test_native_cpp_contract(name, native_executable, tmp_path):
             "-ffp-contract=off",
             "-I" + str(root / "src/cuphoton/xbeam/native/include"),
             "-I" + str(root / "src/cuphoton/xbeam/native/cuda"),
-            str(Path(__file__).with_name(name + "_smoke.cpp")),
+            *sources,
             str(native_executable.parent / "libxbeam_radio.a"),
             "-lcrypto",
             "-o",

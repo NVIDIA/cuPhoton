@@ -9,7 +9,7 @@ namespace xbeam {
 
 struct Options {
     std::string job, output, index_dir, scan, profile;
-    std::int64_t first_integration = 0, integration_count = 0, fft_tile = 400;
+    std::int64_t first_integration = 0, integration_count = 0, fft_tile = 1250;
     int device = 0;
     ReadMode read_mode = ReadMode::Buffered;
     bool shared_staging = false;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "radio_options.hpp"
 #include "xbeam/radio.hpp"
+#include <limits>
 #include <map>
 #include <set>
 namespace xbeam {
@@ -18,9 +19,34 @@ std::string text(const Raw& raw, const char* key, const char* fallback) {
     auto found = raw.find(key);
     return found == raw.end() ? fallback : found->second;
 }
+std::int64_t parse_integer(const std::string& value, const char* key) {
+    const auto error = std::string("invalid native integer option ") + key;
+    std::size_t consumed = 0;
+    std::int64_t parsed;
+    try {
+        parsed = std::stoll(value, &consumed);
+    } catch (const std::invalid_argument&) {
+        throw RadioError(error);
+    } catch (const std::out_of_range&) {
+        throw RadioError(error);
+    }
+    if (consumed != value.size()) {
+        throw RadioError(error);
+    }
+    return parsed;
+}
 std::int64_t integer(const Raw& raw, const char* key, std::int64_t fallback) {
     auto found = raw.find(key);
-    return found == raw.end() ? fallback : std::stoll(found->second);
+    return found == raw.end() ? fallback : parse_integer(found->second, key);
+}
+int narrow_integer(const Raw& raw, const char* key, int fallback) {
+    const auto value = integer(raw, key, fallback);
+    if (value < std::numeric_limits<int>::min()
+        || value > std::numeric_limits<int>::max()) {
+        throw RadioError(
+            std::string("native integer option exceeds int: ") + key);
+    }
+    return static_cast<int>(value);
 }
 bool toggle(const Raw& raw, const char* key, const char* what) {
     const auto value = text(raw, key, "on");
@@ -91,7 +117,7 @@ Options Options::parse(const std::vector<std::string>& argv) {
     o.output = required(raw, "--output");
     o.index_dir = required(raw, "--index-dir");
     o.scan = required(raw, "--scan");
-    o.device = static_cast<int>(integer(raw, "--device", 0));
+    o.device = narrow_integer(raw, "--device", 0);
 
     const auto io = text(raw, "--vdif-io", "posix");
     if (io == "posix") {
@@ -120,15 +146,16 @@ Options Options::parse(const std::vector<std::string>& argv) {
     }
 
     o.first_integration = integer(raw, "--first-integration", 0);
-    o.integration_count = std::stoll(required(raw, "--integration-count"));
+    o.integration_count = parse_integer(
+        required(raw, "--integration-count"), "--integration-count");
     o.fft_tile = integer(raw, "--fft-tile", o.fft_tile);
     o.upload_workers =
-        static_cast<int>(integer(raw, "--upload-workers", o.upload_workers));
+        narrow_integer(raw, "--upload-workers", o.upload_workers);
     if (o.upload_workers < 1 || o.upload_workers > 64) {
         throw RadioError("native upload workers must be between 1 and 64");
     }
-    o.xmac_pack_products = static_cast<int>(
-        integer(raw, "--xmac-pack-products", o.xmac_pack_products));
+    o.xmac_pack_products =
+        narrow_integer(raw, "--xmac-pack-products", o.xmac_pack_products);
     o.xmac_reuse_sources =
         toggle(raw, "--xmac-reuse-sources", "XMAC source reuse");
 
@@ -137,7 +164,7 @@ Options Options::parse(const std::vector<std::string>& argv) {
         && (raw.count("--workers-total") || raw.count("--min-chunk"))) {
         throw RadioError("chunk options require --claim-dir");
     }
-    o.workers_total = static_cast<int>(integer(raw, "--workers-total", 1));
+    o.workers_total = narrow_integer(raw, "--workers-total", 1);
     o.min_chunk = integer(raw, "--min-chunk", 4);
     if (o.dynamic()
         && (o.workers_total < 1 || o.workers_total > 4096 || o.min_chunk < 1)) {

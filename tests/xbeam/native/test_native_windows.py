@@ -252,12 +252,34 @@ def test_cpu_inspection_binding_declines_gpu_execution(binding):
             "unused-output",
             "unused-index",
             "scan",
+            integration_count=1,
             profile="interop-real-usb-buffered-window-replay-v1",
         )
 
 
-def test_binding_requires_explicit_profile(binding):
-    with pytest.raises(TypeError, match="profile"):
+@pytest.mark.parametrize("missing", ["integration_count", "profile"])
+def test_binding_requires_explicit_execution_scope(binding, missing):
+    options = {
+        "integration_count": 1,
+        "profile": "interop-real-usb-buffered-window-replay-v1",
+    }
+    del options[missing]
+    with pytest.raises(TypeError, match=missing):
         binding.correlate(
-            "unused.input", "unused-output", "unused-index", "scan"
+            "unused.input", "unused-output", "unused-index", "scan", **options
         )
+
+
+def test_binding_rejects_missing_native_objects(binding):
+    with pytest.raises(TypeError, match="timeline"):
+        binding.NativeRawState(None, 1, 0, False)
+    timeline = binding.NativeTimeline([(0, 1, 0)], 1)
+    state = binding.NativeRawState(timeline, 1, 0, False)
+    for timeline_arg, state_arg, missing in (
+        (None, state, "timeline"),
+        (timeline, None, "state"),
+    ):
+        with pytest.raises(TypeError, match=missing):
+            binding.returned_window_contract(
+                timeline_arg, state_arg, {}, (), (), 0
+            )
