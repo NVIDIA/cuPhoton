@@ -22,7 +22,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import nbformat
-from jupyter_client import KernelManager
+from jupyter_client import AsyncKernelManager
 from nbclient import NotebookClient
 
 HERE = Path(__file__).resolve().parent
@@ -135,7 +135,7 @@ def main() -> None:
     input_hashes = {
         path.relative_to(output).as_posix(): sha256(path) for path in inputs
     }
-    manager = KernelManager(kernel_name="python3")
+    manager = AsyncKernelManager(kernel_name="python3")
     manager.kernel_spec.argv = [
         sys.executable,
         "-m",
@@ -163,10 +163,8 @@ def main() -> None:
     executed = output / "model-sky.executed.ipynb"
     started = time.monotonic()
     try:
-        client.execute(cwd=str(output), env=env)
+        client.execute(cwd=str(output), env=env, cleanup_kc=True)
     finally:
-        if manager.has_kernel:
-            manager.shutdown_kernel(now=True)
         # Preserve every output, including warnings. Only machine-local path
         # prefixes in streams are replaced; figures and numbers are untouched.
         for cell in code:

@@ -41,6 +41,8 @@ def main() -> None:
     output = options.output.resolve()
     if output == HERE or output.is_relative_to(HERE):
         parser.error("--output must be outside the example source directory")
+    if output.is_relative_to((REPO / "docs/guide").resolve()):
+        parser.error("--output must be outside the guide source directory")
     if output.exists() and any(output.iterdir()):
         parser.error("--output must be absent or empty")
 

@@ -285,7 +285,11 @@ def detect_trail(difference, variance, good=None, *, width_scale=1.0):
 
 def subtract(reference, science, *, exclude=(), trail_width=1.0):
     """Fit, detect a trail, exclude it, then refit the xPois kernel."""
-    usable = good_pixels(reference) & good_pixels(science)
+    kernel_shape = (21, 21)
+    contaminated = ndimage.binary_dilation(
+        ~good_pixels(reference), structure=np.ones(kernel_shape, dtype=bool)
+    )
+    usable = ~contaminated & good_pixels(science)
     fitting = usable & ~exclusion_disks(usable.shape, exclude)
     components = [
         GaussianBasisComponent(sigma=0.7, degree=2),
@@ -300,7 +304,7 @@ def subtract(reference, science, *, exclude=(), trail_width=1.0):
             components,
             variance=science["variance"],
             fit_mask=mask,
-            kernel_shape=(21, 21),
+            kernel_shape=kernel_shape,
             background_degree=0,
             backend="cupy",
         )
@@ -552,11 +556,16 @@ def fit_transit(times, flux, errors, valid, assumptions):
         [0.1, 0, 1, 0],
         bounds=([0.01, -25, 0.95, -0.05], [0.3, 25, 1.05, 0.05]),
     )
+    if np.linalg.matrix_rank(result.jac) < len(result.x):
+        raise ValueError("transit fit is unconstrained")
     covariance = np.linalg.pinv(result.jac.T @ result.jac)
     return {
         "parameters": result.x,
         "covariance": covariance,
         "model": model(result.x, times),
+        "transit_model": transit_shape(
+            times, result.x[0], result.x[1], assumptions
+        ),
         "success": bool(result.success),
         "radius_ratio": float(result.x[0]),
         "radius_ratio_error": float(np.sqrt(covariance[0, 0])),

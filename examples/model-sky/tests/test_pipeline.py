@@ -6,6 +6,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -66,6 +67,49 @@ def test_rejects_insufficient_photometry():
         pipeline.fit_transit(
             np.arange(10), np.ones(10), np.ones(10), np.ones(10, bool), {}
         )
+
+
+def test_rejects_epochs_that_do_not_constrain_the_transit():
+    times = np.linspace(60, 120, 60)
+    with pytest.raises(ValueError, match="unconstrained"):
+        pipeline.fit_transit(
+            times, np.ones(60), np.full(60, 0.001), np.ones(60, bool), {}
+        )
+
+
+def test_bad_reference_pixel_excludes_its_full_kernel_footprint(monkeypatch):
+    clean = np.random.default_rng(53).normal(100, 5, (64, 64))
+    reference = {
+        "science": clean.copy(),
+        "variance": np.ones_like(clean),
+        "mask": np.zeros_like(clean, dtype=np.uint8),
+    }
+    reference["science"][32, 32] = 1e7
+    reference["mask"][32, 32] = 1
+    science = {
+        "science": gaussian_filter(clean, 0.8) + 3,
+        "variance": np.ones_like(clean),
+        "mask": np.zeros_like(clean, dtype=np.uint8),
+    }
+
+    def solve(
+        reference, target, components, *, fit_mask, kernel_shape, **kwargs
+    ):
+        return SimpleNamespace(
+            residual=np.zeros_like(target),
+            kernel=np.ones(kernel_shape) / np.prod(kernel_shape),
+            matched=target,
+            background=np.zeros_like(target),
+            fit_mask=fit_mask,
+            backend="test",
+        )
+
+    monkeypatch.setattr(pipeline, "solve_constant_kernel", solve)
+    result = pipeline.subtract(reference, science)
+    assert not result["fit_mask"][22:43, 22:43].any()
+    assert not result["valid"][22:43, 22:43].any()
+    assert result["fit_mask"][21, 21]
+    assert result["valid"][21, 21]
 
 
 def test_cuda_motion_recovers_shift_with_broader_seeing():

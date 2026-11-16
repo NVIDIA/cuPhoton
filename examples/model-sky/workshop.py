@@ -171,6 +171,7 @@ def export_views(output, manifest, trail, motion, transit, *, png=False):
             transit["flux"],
             transit["flux_error"],
             transit["fit"]["model"],
+            transit_model=transit["fit"]["transit_model"],
             stamps=transit["stamps"],
             difference_stamps=transit["difference_stamps"],
             valid=transit["valid"],
