@@ -15,7 +15,8 @@ def correlate(
     fft_tile: int = ...,
     device: int = ...,
     vdif_io: str = ...,
-    profile: str = ...,
+    *,
+    profile: str,
     upload_workers: int = ...,
     prefetch: bool = ...,
 ) -> dict[str, Any]: ...

@@ -471,8 +471,7 @@ def cuda_available():
 
 def correlate(job,output,index_dir,str scan,long long first_integration=0,
               long long integration_count=1,int fft_tile=1250,int device=0,
-              str vdif_io="cufile",
-              str profile="interop-real-usb-buffered-window-replay-v1",int upload_workers=4,bint prefetch=True):
+              str vdif_io="cufile",*,str profile,int upload_workers=4,bint prefetch=True):
     """Run native radio execution; release the GIL for the complete run."""
     import os
     import json

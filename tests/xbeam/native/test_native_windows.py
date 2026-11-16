@@ -248,5 +248,16 @@ def test_cpu_inspection_binding_declines_gpu_execution(binding):
         RuntimeError, match="native CUDA execution was not built"
     ):
         binding.correlate(
+            "unused.input",
+            "unused-output",
+            "unused-index",
+            "scan",
+            profile="interop-real-usb-buffered-window-replay-v1",
+        )
+
+
+def test_binding_requires_explicit_profile(binding):
+    with pytest.raises(TypeError, match="profile"):
+        binding.correlate(
             "unused.input", "unused-output", "unused-index", "scan"
         )
