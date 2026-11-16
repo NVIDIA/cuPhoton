@@ -465,3 +465,10 @@ DragonHPC, `mpi4py`, MPI, and CUDA runtime libraries are installed separately.
 A development source build links against the available CFITSIO and CUDA
 libraries. Distributors must retain the licenses and notices for the libraries
 included in their artifacts.
+
+## nlohmann/json (native xBeam)
+
+Version 3.12.0, copyright Niels Lohmann, distributed under the MIT License.
+The pinned single-header source and complete license are included under
+`src/cuphoton/xbeam/native/third_party/nlohmann/`.
+Upstream: https://github.com/nlohmann/json/tree/v3.12.0

@@ -38,3 +38,5 @@ recursive-include src/cuphoton/xfit/src *.cpp *.cu *.cuh *.h
 recursive-include src/cuphoton/core/src *.cpp *.cu *.h
 recursive-include src/cuphoton/xray/src *.cpp *.cu *.h
 recursive-include src/cuphoton/xbeam/schemas *.json
+
+recursive-include src/cuphoton/xbeam/native *.pyi *.pyx *.hpp *.cpp *.cu *.py CMakeLists.txt LICENSE.MIT

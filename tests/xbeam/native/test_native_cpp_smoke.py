@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Exercise the native header, cursor, and worker-drain contracts."""
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.parametrize("name", ["header", "request", "work_queue"])
+def test_native_cpp_contract(name, native_executable, tmp_path):
+    compiler = shutil.which("c++")
+    if compiler is None:
+        pytest.skip("a C++17 compiler is required")
+    root = Path(__file__).resolve().parents[3]
+    output = tmp_path / name
+    subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-pthread",
+            "-ffp-contract=off",
+            "-I" + str(root / "src/cuphoton/xbeam/native/include"),
+            str(Path(__file__).with_name(name + "_smoke.cpp")),
+            str(native_executable.parent / "libxbeam_radio.a"),
+            "-lcrypto",
+            "-o",
+            str(output),
+        ],
+        check=True,
+    )
+    subprocess.run([str(output)], check=True, timeout=30)

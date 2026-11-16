@@ -133,3 +133,9 @@ batches, with asynchronous uploads for GPU execution. Automatic limits preserve
 the backend defaults.
 The radio command still accepts `--vdif-upload-workers` as an alias.
 See [time-series input](time-series.md) for HDF5 queue and worker bounds.
+
+## Experimental native radio backend
+
+An optional [C++/CUDA backend](native.md) provides standalone radio execution
+and a Cython entry point. It is built separately; the existing Python backends
+and their defaults are unchanged.
