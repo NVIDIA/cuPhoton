@@ -3,6 +3,7 @@
 #include "gpu.hpp"
 #include "radio_model.hpp"
 #include "radio_options.hpp"
+#include "run_report.hpp"
 #include "xbeam/cuda.hpp"
 #include "xbeam/execution.hpp"
 #include "xbeam/recording.hpp"
@@ -689,8 +690,7 @@ Json Run::execute() {
         }
     }
     auto result = report(std::move(chunks));
-    std::ofstream(std::filesystem::path(opts_.output) / "native-run.json")
-        << result.dump(2) << '\n';
+    publish_run_report(opts_.output, result.dump(2));
     return result;
 }
 

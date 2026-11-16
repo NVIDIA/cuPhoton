@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise the native header, cursor, and worker-drain contracts."""
+"""Exercise native C++ contracts without a CUDA runtime."""
 
 import shutil
 import subprocess
@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("name", ["header", "request", "work_queue"])
+@pytest.mark.parametrize(
+    "name", ["header", "request", "work_queue", "run_report"]
+)
 def test_native_cpp_contract(name, native_executable, tmp_path):
     compiler = shutil.which("c++")
     if compiler is None:
@@ -22,6 +24,7 @@ def test_native_cpp_contract(name, native_executable, tmp_path):
             "-pthread",
             "-ffp-contract=off",
             "-I" + str(root / "src/cuphoton/xbeam/native/include"),
+            "-I" + str(root / "src/cuphoton/xbeam/native/cuda"),
             str(Path(__file__).with_name(name + "_smoke.cpp")),
             str(native_executable.parent / "libxbeam_radio.a"),
             "-lcrypto",
@@ -30,4 +33,4 @@ def test_native_cpp_contract(name, native_executable, tmp_path):
         ],
         check=True,
     )
-    subprocess.run([str(output)], check=True, timeout=30)
+    subprocess.run([str(output)], check=True, timeout=30, cwd=tmp_path)
