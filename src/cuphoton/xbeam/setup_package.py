@@ -18,7 +18,18 @@ def get_extensions():
     library_dirs = []
     macros = []
     runtime_dirs = []
-    if os.environ.get("CUPHOTON_XBEAM_NATIVE_CUDA", "0") == "1":
+    cuda_enabled = os.environ.get("CUPHOTON_XBEAM_NATIVE_CUDA", "0") == "1"
+    mode_file = Path("build/xbeam-native-binding-mode").resolve()
+    mode = "cuda\n" if cuda_enabled else "cpu\n"
+    mode_file.parent.mkdir(parents=True, exist_ok=True)
+    if not mode_file.exists() or mode_file.read_text() != mode:
+        mode_file.write_text(mode)
+    depends = [
+        str(mode_file),
+        *(str(path) for path in sorted((source / "include").rglob("*.hpp"))),
+        str(source / "third_party/nlohmann/json.hpp"),
+    ]
+    if cuda_enabled:
         cuda = Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
         build = Path("build/xbeam-native-cuda").resolve()
         subprocess.run(
@@ -61,6 +72,10 @@ def get_extensions():
         library_dirs += [str(build), str(cuda / "lib64")]
         runtime_dirs += [str(cuda / "lib64")]
         macros += [("XBEAM_BIND_CUDA", "1")]
+        depends += [
+            str(build / "libxbeam_execution.a"),
+            str(build / "libxbeam_cuda.a"),
+        ]
     return cythonize(
         [
             Extension(
@@ -83,7 +98,7 @@ def get_extensions():
                     str(source / "include"),
                     str(source / "third_party"),
                 ],
-                depends=[str(source / "include/xbeam/radio.hpp")],
+                depends=depends,
                 language="c++",
                 libraries=libraries,
                 library_dirs=library_dirs,

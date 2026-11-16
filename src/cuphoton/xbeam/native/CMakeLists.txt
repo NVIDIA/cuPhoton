@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.24)
 project(xbeam_native LANGUAGES CXX)
 add_library(xbeam_radio STATIC src/vdif.cpp src/swin.cpp src/requests.cpp src/job_text.cpp src/job.cpp src/index.cpp src/timeline.cpp src/replay.cpp src/window.cpp src/recording.cpp src/execution_bridge.cpp)
 target_include_directories(xbeam_radio PUBLIC include PRIVATE third_party)
@@ -17,6 +17,9 @@ option(XBEAM_ENABLE_CUDA "Build native CUDA station execution" OFF)
 if(XBEAM_ENABLE_CUDA)
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
+    if(CUDAToolkit_VERSION VERSION_LESS 13 OR NOT CUDAToolkit_VERSION VERSION_LESS 14)
+        message(FATAL_ERROR "The native xBeam backend requires a CUDA 13 toolkit")
+    endif()
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(generated "${CMAKE_CURRENT_BINARY_DIR}/kernels")
     add_custom_command(OUTPUT "${generated}/front.inc" "${generated}/channel.inc" "${generated}/products.inc" "${generated}/multi_products.inc"
