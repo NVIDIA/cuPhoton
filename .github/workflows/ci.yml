@@ -151,7 +151,8 @@ jobs:
         run: |
           cmake -S src/cuphoton/xbeam/native -B build/xbeam-native -DCMAKE_BUILD_TYPE=Release
           cmake --build build/xbeam-native -j2
-          CUPHOTON_XBEAM_BUILD_EXT=1 uv run --no-sync --with Cython --with setuptools-scm \
+          uv sync --locked --group native-build --inexact
+          CUPHOTON_XBEAM_BUILD_EXT=1 uv run --no-sync \
             python setup.py build_ext --build-lib build/native-binding
           XBEAM_NATIVE_BINDING_DIR=build/native-binding uv run --no-sync pytest -q -rs \
             --junitxml="${RUNNER_TEMP}/xbeam-native-cpu.xml" tests/xbeam/native

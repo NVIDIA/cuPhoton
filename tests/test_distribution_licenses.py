@@ -45,6 +45,7 @@ def make_archive(
     imaging_elf=None,
     cccl_license=CCCL_LICENSE,
     bison_license=BISON_LICENSE,
+    omitted_sources=(),
 ):
     version = "0.1.4"
     expression = expression or (
@@ -97,7 +98,9 @@ def make_archive(
         path = tmp_path / f"cuphoton-{version}.tar.gz"
         with tarfile.open(path, "w:gz") as archive:
             for name in sorted(
-                distributions.SOURCES | distributions.LICENSES | {"PKG-INFO"}
+                (distributions.SOURCES - set(omitted_sources))
+                | distributions.LICENSES
+                | {"PKG-INFO"}
             ):
                 content = {
                     "PKG-INFO": metadata,
@@ -109,6 +112,13 @@ def make_archive(
                 member.size = len(content)
                 archive.addfile(member, io.BytesIO(content))
     return path
+
+
+def test_sdist_requires_native_smoke_sources(tmp_path):
+    source = "tests/xbeam/native/header_smoke.cpp"
+    path = make_archive(tmp_path, "sdist", NOTICES, omitted_sources=(source,))
+    with pytest.raises(ValueError, match=re.escape(source)):
+        distributions.check_sdist(path)
 
 
 @pytest.mark.parametrize("kind", ["wheel", "sdist"])

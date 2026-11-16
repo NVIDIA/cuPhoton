@@ -5,6 +5,7 @@
 """Incremental builds must use current native code and execution mode."""
 
 import ctypes
+import importlib
 import shutil
 import subprocess
 import sys
@@ -21,11 +22,16 @@ from cuphoton.xbeam import setup_package
 @pytest.fixture
 def native_build(tmp_path, monkeypatch, native_executable):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setitem(
-        sys.modules,
-        "Cython.Build",
-        SimpleNamespace(cythonize=lambda e, **k: e),
-    )
+    try:
+        cython_build = importlib.import_module("Cython.Build")
+    except ModuleNotFoundError:
+        monkeypatch.setitem(
+            sys.modules,
+            "Cython.Build",
+            SimpleNamespace(cythonize=lambda e, **k: e),
+        )
+    else:
+        monkeypatch.setattr(cython_build, "cythonize", lambda e, **k: e)
     # Exercise setuptools with small real C++ inputs; CUDA compilation is
     # independently covered by the native execution build.
     monkeypatch.setattr(
