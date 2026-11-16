@@ -76,7 +76,14 @@
     });
     document.addEventListener('keydown', e => { if(e.key === 'Escape') close(); });
     document.addEventListener('click', close);
-    addEventListener('scroll', close, {passive:true});
+    addEventListener('scroll', () => {
+      // Keyboard focus can scroll a term into view after its focus event.
+      if (active && document.activeElement === active) {
+        const rect = active.getBoundingClientRect();
+        if (rect.bottom > 0 && rect.top < innerHeight) open(active);
+        else close();
+      } else close();
+    }, {passive:true});
   }
   if (document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', start); else start();
