@@ -93,9 +93,9 @@ void CudaProducts::configure(const std::vector<VisibilityProduct>& products) {
         return;
     }
     check(cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(state.stream)));
-    state.groups.clear();
-    state.singles.clear();
-    state.previous = products;
+    auto previous = products;
+    std::vector<std::unique_ptr<Group>> groups;
+    std::vector<int> singles;
     std::map<std::pair<int, int>, std::vector<int>> compatible;
     for (std::size_t k = 0; k < products.size(); ++k) {
         const auto& p = products[k];
@@ -109,7 +109,7 @@ void CudaProducts::configure(const std::vector<VisibilityProduct>& products) {
         if (p.averaging == 1 || p.averaging == 4 || p.averaging == 32) {
             compatible[{p.channels, p.averaging}].push_back(k);
         } else {
-            state.singles.push_back(k);
+            singles.push_back(k);
         }
     }
     for (const auto& entry : compatible) {
@@ -231,8 +231,11 @@ void CudaProducts::configure(const std::vector<VisibilityProduct>& products) {
         group->wb.upload(wb);
         group->multiply.upload(multiply);
         group->normalization.upload(normalizations);
-        state.groups.push_back(std::move(group));
+        groups.push_back(std::move(group));
     }
+    state.groups.swap(groups);
+    state.singles.swap(singles);
+    state.previous.swap(previous);
 }
 void CudaProducts::submit(
     int groups,

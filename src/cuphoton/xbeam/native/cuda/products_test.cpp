@@ -240,6 +240,20 @@ int main() {
                         xbeam::CudaProducts prepared(pack_products, reuse);
                         prepared.configure(products);
                         prepared.configure(products);
+                        auto invalid_products = products;
+                        invalid_products.back().channels = 0;
+                        for (int attempt = 0; attempt < 2; ++attempt) {
+                            bool rejected = false;
+                            try {
+                                prepared.configure(invalid_products);
+                            } catch (const std::exception&) {
+                                rejected = true;
+                            }
+                            if (!rejected) {
+                                throw std::runtime_error(
+                                    "invalid prepared configuration accepted");
+                            }
+                        }
                         prepared.submit(
                             2,
                             ds.address(),
@@ -277,8 +291,11 @@ int main() {
                                         (7 + (product * 2 + group) * out + c)
                                         * 2;
                                     auto truth = expected(product, group, c);
-                                    if (std::abs(
-                                            packed_host[index] - truth.first)
+                                    if (!std::isfinite(packed_host[index])
+                                        || !std::isfinite(
+                                            packed_host[index + 1])
+                                        || std::abs(
+                                               packed_host[index] - truth.first)
                                             > 5e-4
                                         || std::abs(
                                                packed_host[index + 1]
@@ -307,7 +324,10 @@ int main() {
                             packed_host.size() * 4,
                             cudaMemcpyDeviceToHost));
                         auto refreshed = expected(0, 0, 0);
-                        if (std::abs(packed_host[14] - refreshed.first) > 5e-4
+                        if (!std::isfinite(packed_host[14])
+                            || !std::isfinite(packed_host[15])
+                            || std::abs(packed_host[14] - refreshed.first)
+                                > 5e-4
                             || std::abs(packed_host[15] - refreshed.second)
                                 > 5e-4) {
                             throw std::runtime_error(
