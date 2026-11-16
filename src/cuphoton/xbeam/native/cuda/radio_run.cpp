@@ -28,10 +28,20 @@ using Clock = std::chrono::steady_clock;
 using Extent =
     std::pair<std::int64_t, std::int64_t>;  // frame range [first, stop)
 
-int select_device(int device) {
-    check(cudaSetDevice(device));
-    return device;
-}
+class DeviceScope {
+    int previous_;
+
+public:
+    explicit DeviceScope(int device) {
+        check(cudaGetDevice(&previous_));
+        check(cudaSetDevice(device));
+    }
+    DeviceScope(const DeviceScope&) = delete;
+    DeviceScope& operator=(const DeviceScope&) = delete;
+    ~DeviceScope() {
+        cudaSetDevice(previous_);
+    }
+};
 double since(Clock::time_point start) {
     return std::chrono::duration<double>(Clock::now() - start).count();
 }
@@ -40,10 +50,11 @@ double since(Clock::time_point start) {
 struct Parent {
     RadioReplayBatch plan;
     StationLayout layout{};
-    std::unique_ptr<CudaStation> executor;
     gpu::Memory parameters;
     gpu::Pinned parameters_host;
     gpu::Event done;
+    // Drain station work before releasing parameters on exceptional exits too.
+    std::unique_ptr<CudaStation> executor;
 };
 // One physical recording, double-buffered so the next tile reads during compute.
 struct Input {
@@ -134,7 +145,8 @@ private:
     // The clock includes CUDA context creation, as in every earlier report.
     const Clock::time_point started_ = Clock::now();
     // Must precede every GPU resource below, which binds to the current device.
-    const int device_ = select_device(opts_.device);
+    const DeviceScope device_scope_{opts_.device};
+    const int device_ = opts_.device;
     RadioJob native_;
     Json job_;
 
@@ -153,10 +165,11 @@ private:
     std::ofstream file_;
     gpu::Memory output_, weights_, starts_, lengths_, offsets_, weight_offsets_;
     WorkQueue workers_;
+    // Output copies must finish before these pinned destinations are freed.
+    gpu::Pinned host_output_, host_exposure_;
     // Declared before the products so it outlives their destructor.
     gpu::Stream xmac_stream_;
     CudaProducts products_;
-    gpu::Pinned host_output_, host_exposure_;
     int uploaded_rows_ = -1;
 
     std::uint64_t records_ = 0;
