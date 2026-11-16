@@ -34,7 +34,7 @@ def test_exact_swin_bytes(binding, channels, polarization, tmp_path):
     reference = SwinRecord(
         258,
         60000,
-        42.5,
+        42.123456789,
         2,
         3,
         7,
