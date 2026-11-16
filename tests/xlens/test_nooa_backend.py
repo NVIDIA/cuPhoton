@@ -398,12 +398,17 @@ def test_deadline_and_cancel_reap_worker(monkeypatch, cancel):
                 await asyncio.Event().wait()
             return response("execute_python", {"code": "while True: pass"})
 
-        task = asyncio.create_task(run(request, timeout_seconds=8))
+        task = asyncio.create_task(
+            run(request, timeout_seconds=60 if cancel else 8)
+        )
         if cancel:
-            await asyncio.wait_for(entered.wait(), 7)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await bounded(task, processes)
+            try:
+                # Worker imports must finish before testing cancellation.
+                await asyncio.wait_for(entered.wait(), 30)
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await bounded(task, processes)
         else:
             with pytest.raises(backend.NooaError, match="deadline"):
                 await bounded(task, processes)
