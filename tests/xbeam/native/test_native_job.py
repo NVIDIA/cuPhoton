@@ -9,6 +9,7 @@ import pytest
 
 from cuphoton.xbeam.adapters.radio.models import job_from_dict
 from cuphoton.xbeam.commands import load_interop_job
+from cuphoton.xbeam.errors import JobLoadError, UnsupportedFeatureError
 from tests.xbeam.native.job_fixtures import write_job
 
 
@@ -35,6 +36,153 @@ def test_native_job_matches_python(
         )
     )
     assert job_from_dict(actual) == load_interop_job(path)
+
+
+@pytest.mark.parametrize("target", [None, 0])
+def test_native_rejects_incompatible_sky_grids(
+    tmp_path, native_executable, target
+):
+    path = write_job(tmp_path, second_edge=1001, targets=(target,))
+    with pytest.raises(UnsupportedFeatureError, match="regridding"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "regridding" in result.stderr
+
+
+def test_native_accepts_equivalent_usb_lsb_grids(tmp_path, native_executable):
+    path = write_job(tmp_path, second_edge=1016, second_sideband="L")
+    actual = json.loads(
+        subprocess.check_output(
+            [str(native_executable), "inspect-job", str(path)]
+        )
+    )
+    assert job_from_dict(actual) == load_interop_job(path)
+
+
+def test_native_rejects_negative_file_count(tmp_path, native_executable):
+    path = write_job(tmp_path)
+    path.write_text(
+        path.read_text().replace(
+            "D/STREAM 0 FILES: 1", "D/STREAM 0 FILES: -1"
+        )
+    )
+    with pytest.raises(JobLoadError, match="FILES must be nonnegative"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "file count must be nonnegative" in result.stderr
+
+
+@pytest.mark.parametrize("field", ["OVERSAMPLE FAC.", "DECIMATION FAC."])
+def test_native_rejects_unimplemented_sampling_factors(
+    tmp_path, native_executable, field
+):
+    path = write_job(tmp_path)
+    path.write_text(
+        path.read_text().replace(f"{field} 0: 1", f"{field} 0: 2")
+    )
+    with pytest.raises(UnsupportedFeatureError, match="factor of 1"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "factors must be 1" in result.stderr
+
+
+def test_native_rejects_zoom_with_different_channel_spacing(
+    tmp_path, native_executable
+):
+    path = write_job(tmp_path, zoom=True, band=1)
+    path.write_text(
+        path.read_text().replace("NUM CHANNELS 2: 16", "NUM CHANNELS 2: 8")
+    )
+    with pytest.raises(UnsupportedFeatureError, match="parent slice"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "parent slice" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "original,replacement",
+    [
+        ("NUM CHANNELS 1: 32", "NUM CHANNELS 1: 64"),
+        ("BW (MHZ) 1: 16", "BW (MHZ) 1: 8"),
+    ],
+)
+def test_native_rejects_mixed_recorded_fft_grids(
+    tmp_path, native_executable, original, replacement
+):
+    path = write_job(tmp_path)
+    text = path.read_text().replace(original, replacement)
+    text = text.replace("NUM RECORDED FREQS: 1", "NUM RECORDED FREQS: 2")
+    text = text.replace(
+        "NUM REC POLS 0: 1",
+        "NUM REC POLS 0: 1\nREC FREQ INDEX 1: 1\nNUM REC POLS 1: 1\n"
+        "CLK OFFSET 1 (us): 0\nFREQ OFFSET 1 (Hz): 0",
+    )
+    text = text.replace(
+        "REC BAND 0 INDEX: 0",
+        "REC BAND 0 INDEX: 0\nREC BAND 1 POL: L\nREC BAND 1 INDEX: 1",
+    )
+    path.write_text(text)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "recorded bands must share one FFT grid" in result.stderr
+
+
+@pytest.mark.parametrize("owner", ["clock", "delay"])
+def test_native_rejects_cubic_terms_for_quadratic_fringe_order(
+    tmp_path, native_executable, owner
+):
+    path = write_job(tmp_path)
+    text = path.read_text().replace(
+        "FRINGE ROTN ORDER: 1", "FRINGE ROTN ORDER: 2"
+    )
+    if owner == "clock":
+        text = text.replace("CLOCK POLY ORDER 0: 0", "CLOCK POLY ORDER 0: 3")
+        text = text.replace(
+            "CLOCK COEFF 0/0: 0",
+            "CLOCK COEFF 0/0: 0\nCLOCK COEFF 0/1: 0\n"
+            "CLOCK COEFF 0/2: 0\nCLOCK COEFF 0/3: 1",
+        )
+    else:
+        model = tmp_path / "job.im"
+        model.write_text(
+            model.read_text().replace(
+                "DELAY (us): 0 0", "DELAY (us): 0 0 0 1"
+            )
+        )
+    path.write_text(text)
+    with pytest.raises(UnsupportedFeatureError, match="cubic or higher"):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "cubic or higher" in result.stderr
 
 
 @pytest.mark.parametrize("transition", [False, True])

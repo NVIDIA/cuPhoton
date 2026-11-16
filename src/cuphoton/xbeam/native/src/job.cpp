@@ -235,6 +235,123 @@ double low(const J& f) {
     return f.at("band_edge_hz").get<double>()
         - (f.at("sideband") == "LSB" ? f.at("bandwidth_hz").get<double>() : 0.);
 }
+bool same_frequency(double a, double b) {
+    return std::abs(a - b)
+        <= std::max(1e-6, 1e-12 * std::max(std::abs(a), std::abs(b)));
+}
+struct Grid {
+    int channels;
+    double low, spacing;
+};
+Grid grid(const J& frequency) {
+    const int channels = frequency.at("channel_count");
+    return {channels,
+        low(frequency),
+        frequency.at("bandwidth_hz").get<double>() / channels};
+}
+bool same_grid(const Grid& a, const Grid& b) {
+    return a.channels == b.channels && same_frequency(a.low, b.low)
+        && same_frequency(a.spacing, b.spacing);
+}
+void validate_spectral_geometry(const J& job) {
+    const auto& frequencies = job.at("frequencies");
+    const auto& streams = job.at("datastreams");
+    auto band_grid = [&](int stream_id, int band_id) {
+        for (const auto& stream : streams) {
+            if (stream.at("identifier") != stream_id) {
+                continue;
+            }
+            for (const auto& band : stream.at("recorded_bands")) {
+                if (band.at("identifier") == band_id) {
+                    return grid(
+                        frequencies.at(band.at("frequency_id").get<int>()));
+                }
+            }
+            for (const auto& zoom : stream.at("zoom_bands")) {
+                if (zoom.at("identifier") == band_id) {
+                    return grid(frequencies.at(
+                        zoom.at("output_frequency_id").get<int>()));
+                }
+            }
+        }
+        throw RadioError("unknown visibility band");
+    };
+    for (const auto& stream : streams) {
+        const auto& bands = stream.at("recorded_bands");
+        if (bands.empty()) {
+            throw RadioError("recording declares no bands");
+        }
+        const int channels =
+            frequencies.at(bands.at(0).at("frequency_id").get<int>())
+                .at("channel_count");
+        for (const auto& band : bands) {
+            const auto& frequency =
+                frequencies.at(band.at("frequency_id").get<int>());
+            const double rate = frequency.at("bandwidth_hz").get<double>()
+                * (stream.at("sampling") == "real" ? 2. : 1.);
+            if (!same_frequency(rate, stream.at("sample_rate_hz"))
+                || frequency.at("channel_count") != channels) {
+                throw RadioError(
+                    "native recorded bands must share one FFT grid");
+            }
+        }
+        for (const auto& zoom : stream.at("zoom_bands")) {
+            const auto parent =
+                band_grid(stream.at("identifier"), zoom.at("parent_band_id"));
+            const auto output =
+                grid(frequencies.at(zoom.at("output_frequency_id").get<int>()));
+            const int start = zoom.at("start_channel");
+            if (start < 0 || output.channels > parent.channels - start
+                || !same_grid(
+                    output,
+                    {output.channels,
+                        parent.low + start * parent.spacing,
+                        parent.spacing})) {
+                throw RadioError(
+                    "zoom output must describe its channel-aligned parent slice");
+            }
+        }
+    }
+    for (const auto& baseline : job.at("baselines")) {
+        for (const auto& product : baseline.at("products")) {
+            const auto a = band_grid(
+                baseline.at("datastream_a_id"), product.at("band_a_id"));
+            const auto b = band_grid(
+                baseline.at("datastream_b_id"), product.at("band_b_id"));
+            const auto output = grid(
+                frequencies.at(product.at("output_frequency_id").get<int>()));
+            if (!same_grid(a, b) || !same_grid(a, output)) {
+                throw RadioError(
+                    "visibility bands require unsupported spectral regridding");
+            }
+        }
+    }
+}
+void validate_fringe_order(const J& job) {
+    const int order = job.at("fringe_approximation_order");
+    if (order < 0 || order > 2) {
+        throw RadioError("unsupported fringe approximation order");
+    }
+    if (order != 2) {
+        return;
+    }
+    auto check = [](const J& coefficients) {
+        for (std::size_t i = 3; i < coefficients.size(); ++i) {
+            if (coefficients[i].get<double>() != 0.) {
+                throw RadioError(
+                    "fringe order 2 does not support cubic or higher delay terms");
+            }
+        }
+    };
+    for (const auto& station : job.at("stations")) {
+        check(station.at("clock").at("coefficients_s"));
+    }
+    for (const auto& scan : job.at("scans")) {
+        for (const auto& model : scan.at("station_models")) {
+            check(model.at("delay_coefficients_s"));
+        }
+    }
+}
 }  // namespace
 std::string load_interop_job_json(const std::string& name) {
     namespace fs = std::filesystem;
@@ -342,6 +459,19 @@ std::string load_interop_job_json(const std::string& name) {
                 {"channels_to_average", input.integer("CHANS TO AVG " + id)},
                 {"oversampling", input.integer("OVERSAMPLE FAC. " + id)},
                 {"decimation", input.integer("DECIMATION FAC. " + id)}});
+        const auto& frequency = frequencies.back();
+        const int channels = frequency.at("channel_count"),
+                  average = frequency.at("channels_to_average");
+        if (frequency.at("bandwidth_hz").get<double>() <= 0
+            || frequency.at("band_edge_hz").get<double>() < 0 || channels <= 0
+            || average <= 0 || channels % average) {
+            throw RadioError("invalid native frequency geometry");
+        }
+        if (frequency.at("oversampling") != 1
+            || frequency.at("decimation") != 1) {
+            throw RadioError(
+                "native oversampling and decimation factors must be 1");
+        }
     }
     std::vector<std::size_t> starts;
     for (std::size_t i = 0; i < input.entries.size(); ++i) {
@@ -455,7 +585,11 @@ std::string load_interop_job_json(const std::string& name) {
                     {"channel_count", f.at("channel_count")},
                     {"polarization", pol}});
         }
-        for (int f = 0; f < input.integer("D/STREAM " + id + " FILES"); ++f) {
+        const int source_count = input.integer("D/STREAM " + id + " FILES");
+        if (source_count < 0) {
+            throw RadioError("recording file count must be nonnegative");
+        }
+        for (int f = 0; f < source_count; ++f) {
             files.push_back(
                 fs::weakly_canonical(
                     path.parent_path()
@@ -597,6 +731,8 @@ std::string load_interop_job_json(const std::string& name) {
                 {"configuration_id", "0"},
                 {"station_models", models}});
     }
+    validate_spectral_geometry(job);
+    validate_fringe_order(job);
     return job.dump();
 }
 }  // namespace xbeam
