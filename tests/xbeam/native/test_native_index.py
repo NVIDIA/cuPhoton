@@ -64,6 +64,20 @@ def test_index_entries_match_python(binding, tmp_path):
     assert reader.query(1023, 0, 2**64 - 1) == []
 
 
+def test_index_queries_across_read_windows(binding, tmp_path):
+    source = tmp_path / "ordered.vdif"
+    count = 6000
+    source.write_bytes(b"".join(_frame(i) for i in reversed(range(count))))
+    summary = build_vdif_binary_index(source, backend="posix")
+    reader = binding.NativeIndex(source, summary.index_path)
+    rows = reader.query(0, 0, 2**64 - 1)
+    assert len(rows) == count
+    assert [row[1] for row in rows] == list(reversed(range(count)))
+    assert [row[2:] for row in rows] == [(0, 0)] * count
+    assert reader.query(0, rows[2500][0], rows[3500][0]) == rows[2500:3500]
+    assert len(reader.physical_runs()) == count
+
+
 def test_index_replacement_rejected(binding, tmp_path):
     source, summary = make_index(tmp_path)
     reader = binding.NativeIndex(source, summary.index_path)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "xbeam/radio.hpp"
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -8,7 +9,6 @@
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <sstream>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 namespace xbeam {
@@ -82,6 +82,29 @@ struct File {
         }
     }
 };
+// Own a bounded read window so concurrent file changes cannot invalidate
+// memory being inspected. Each query owns its cache and remains independent.
+struct ReadCache {
+    const File& file;
+    std::array<unsigned char, 65536> data;
+    std::uint64_t first = 0;
+    std::size_t cached = 0;
+    explicit ReadCache(const File& source)
+        : file(source) {}
+    const unsigned char* read(std::uint64_t offset, std::size_t count) {
+        const auto size = std::uint64_t(file.identity.st_size);
+        if (count > data.size() || offset > size || count > size - offset) {
+            throw RadioError("index read exceeds sidecar extent");
+        }
+        if (offset < first || offset - first > cached
+            || count > cached - (offset - first)) {
+            first = offset;
+            cached = std::min<std::uint64_t>(data.size(), size - first);
+            file.read(data.data(), cached, first);
+        }
+        return data.data() + (offset - first);
+    }
+};
 std::string fingerprint(const File& f, std::uint64_t frame) {
     auto n = std::min<std::uint64_t>(frame, 4096);
     std::vector<unsigned char> data(n * 2);
@@ -103,7 +126,6 @@ std::string fingerprint(const File& f, std::uint64_t frame) {
 }  // namespace
 struct IndexReader::Impl {
     File source, index;
-    void* mapping = MAP_FAILED;
     std::size_t size;
     std::uint64_t count, frame_count;
     int version, stride;
@@ -188,12 +210,8 @@ struct IndexReader::Impl {
                 throw RadioError("invalid thread geometry");
             }
         }
-        mapping = ::mmap(nullptr, size, PROT_READ, MAP_PRIVATE, index.fd, 0);
-        if (mapping == MAP_FAILED) {
-            throw RadioError("cannot map sidecar");
-        }
-        try {
-            auto base = static_cast<const unsigned char*>(mapping);
+        {
+            ReadCache rows(index);
             std::uint64_t prev_stop = 0;
             if (version == 4) {
                 if (metadata.at("physical_timestamp_run_layout")
@@ -204,7 +222,7 @@ struct IndexReader::Impl {
                     throw RadioError("invalid physical run layout");
                 }
                 for (std::uint64_t i = 0; i < runs; ++i) {
-                    auto p = base + run_offset + i * 24;
+                    auto p = rows.read(run_offset + i * 24, 24);
                     auto first = u64(p), last = u64(p + 8), time = u64(p + 16);
                     if (first >= last || last > count || first < prev_stop
                         || time >= (std::uint64_t(1) << 60)
@@ -221,7 +239,7 @@ struct IndexReader::Impl {
             std::uint64_t previous = 0;
             validity.resize(count);
             for (std::uint64_t i = 0; i < count; ++i) {
-                auto entry = base + 65536 + i * stride;
+                auto entry = rows.read(65536 + i * stride, stride);
                 auto timestamp = u64(entry), location = u64(entry + 8);
                 auto ordinal = location & ((std::uint64_t(1) << 53) - 1);
                 auto state = version == 2 ? (((location >> 53) & 1) ? 8 : 0)
@@ -245,19 +263,7 @@ struct IndexReader::Impl {
             }
             source.unchanged();
             index.unchanged();
-        } catch (...) {
-            ::munmap(mapping, size);
-            mapping = MAP_FAILED;
-            throw;
         }
-    }
-    ~Impl() {
-        if (mapping != MAP_FAILED) {
-            ::munmap(mapping, size);
-        }
-    }
-    const unsigned char* row(std::uint64_t i) const {
-        return static_cast<const unsigned char*>(mapping) + 65536 + i * stride;
     }
 };
 IndexReader::IndexReader(const std::string& source, const std::string& index)
@@ -274,11 +280,17 @@ std::vector<IndexFrame> IndexReader::query(
     if (thread > 1023 || first > stop) {
         throw RadioError("invalid sidecar query");
     }
+    impl->source.unchanged();
+    impl->index.unchanged();
+    ReadCache rows(impl->index);
+    auto row = [&](std::uint64_t i) {
+        return rows.read(65536 + i * impl->stride, impl->stride);
+    };
     auto lower = [&](std::uint64_t value) {
         std::uint64_t lo = 0, hi = impl->count;
         while (lo < hi) {
             auto mid = lo + (hi - lo) / 2;
-            if (u64(impl->row(mid)) < value) {
+            if (u64(row(mid)) < value) {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -288,14 +300,14 @@ std::vector<IndexFrame> IndexReader::query(
     };
     std::vector<IndexFrame> result;
     for (auto i = lower(first), end = lower(stop); i < end; ++i) {
-        auto row = impl->row(i);
-        auto loc = u64(row + 8);
+        auto entry = row(i);
+        auto loc = u64(entry + 8);
         if ((loc >> 54) != thread) {
             continue;
         }
         auto physical = loc & ((std::uint64_t(1) << 53) - 1);
         auto state =
-            impl->version == 2 ? ((loc >> 53) & 1 ? 8 : 0) : u64(row + 16);
+            impl->version == 2 ? ((loc >> 53) & 1 ? 8 : 0) : u64(entry + 16);
         if (physical >= impl->frame_count
             || (impl->version >= 3
                 && ((state & ~std::uint64_t(23))
@@ -303,7 +315,7 @@ std::vector<IndexFrame> IndexReader::query(
             throw RadioError("invalid sidecar frame entry");
         }
         result.push_back(
-            {u64(row), physical, thread, static_cast<std::uint8_t>(state)});
+            {u64(entry), physical, thread, static_cast<std::uint8_t>(state)});
     }
     impl->source.unchanged();
     impl->index.unchanged();
