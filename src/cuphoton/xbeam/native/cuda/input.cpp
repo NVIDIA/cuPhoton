@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "gpu.hpp"
 #include "xbeam/cuda.hpp"
+#include "xbeam/series.hpp"
 #include "xbeam/radio.hpp"
 #include <cuda_runtime.h>
 #ifdef XBEAM_HAVE_CUFILE
@@ -91,6 +92,13 @@ ThreadStaging& worker_staging(std::size_t bytes) {
 }
 #endif
 }  // namespace
+void ensure_cufile_driver() {
+#ifdef XBEAM_HAVE_CUFILE
+    static Driver driver;
+#else
+    throw RadioError("native CUDA build does not include cuFile");
+#endif
+}
 struct CudaRecordingInput::Impl {
     int fd = -1;
     const ReadMode mode;
@@ -161,7 +169,7 @@ struct CudaRecordingInput::Impl {
             check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 #ifdef XBEAM_HAVE_CUFILE
             if (gds()) {
-                static Driver driver;
+                ensure_cufile_driver();
                 CUfileDescr_t descriptor{};
                 descriptor.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
                 descriptor.handle.fd = fd;

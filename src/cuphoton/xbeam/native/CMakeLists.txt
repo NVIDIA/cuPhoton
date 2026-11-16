@@ -13,7 +13,7 @@ target_link_libraries(xbeam-native PRIVATE xbeam_radio)
 install(TARGETS xbeam_radio xbeam-native)
 install(DIRECTORY include/ DESTINATION include)
 
-option(XBEAM_ENABLE_CUDA "Build native CUDA station execution" OFF)
+option(XBEAM_ENABLE_CUDA "Build native CUDA execution" OFF)
 if(XBEAM_ENABLE_CUDA)
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
@@ -26,9 +26,9 @@ if(XBEAM_ENABLE_CUDA)
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/cuda/generate.py"
                 "${CMAKE_CURRENT_SOURCE_DIR}/.." "${generated}"
         DEPENDS cuda/generate.py ../cuda_front.py ../cuda_channelize.py ../core/cuda_products.py)
-    add_library(xbeam_cuda STATIC cuda/front.cu cuda/channel.cu cuda/products.cu cuda/multi_products.cu cuda/station.cpp cuda/input.cu cuda/input.cpp
+    add_library(xbeam_cuda STATIC cuda/front.cu cuda/channel.cu cuda/products.cu cuda/multi_products.cu cuda/station.cpp cuda/input.cu cuda/input.cpp cuda/series.cpp cuda/series_kernels.cu
                 "${generated}/front.inc" "${generated}/channel.inc" "${generated}/products.inc" "${generated}/multi_products.inc")
-    target_include_directories(xbeam_cuda PUBLIC include PRIVATE "${generated}")
+    target_include_directories(xbeam_cuda PUBLIC include PRIVATE "${generated}" third_party)
     target_compile_features(xbeam_cuda PUBLIC cxx_std_17)
     set_target_properties(xbeam_cuda PROPERTIES CUDA_STANDARD 17 POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(xbeam_cuda PUBLIC xbeam_radio CUDA::cudart CUDA::cufft)

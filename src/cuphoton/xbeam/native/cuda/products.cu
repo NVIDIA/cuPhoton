@@ -120,3 +120,49 @@ void submit_product(
     }
 }
 }  // namespace xbeam
+
+namespace xbeam {
+void sum_series_spectra(
+    bool wide,
+    int rows,
+    int channels,
+    const void* a,
+    const void* b,
+    const double* weights,
+    double scale,
+    void* output,
+    double* exposure,
+    std::uintptr_t stream) {
+    const auto work = reinterpret_cast<cudaStream_t>(stream);
+    const dim3 grid((channels + 31) / 32);
+    if (wide) {
+        visibility_product_double_avg1<<<grid, 256, 0, work>>>(
+            static_cast<const double2*>(a),
+            static_cast<const double2*>(b),
+            weights,
+            weights,
+            false,
+            rows,
+            channels,
+            scale,
+            static_cast<double2*>(output),
+            exposure);
+    } else {
+        visibility_product_float_avg1<<<grid, 256, 0, work>>>(
+            static_cast<const float2*>(a),
+            static_cast<const float2*>(b),
+            weights,
+            weights,
+            false,
+            rows,
+            channels,
+            scale,
+            static_cast<float2*>(output),
+            exposure);
+    }
+    auto status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        throw RadioError(cudaGetErrorString(status));
+    }
+}
+}  // namespace xbeam

@@ -489,3 +489,62 @@ def correlate(job,output,index_dir,str scan,long long first_integration=0,
     with nogil:
         report=correlate_native(arguments)
     return json.loads(report.decode('utf-8'))
+
+
+cdef extern from "xbeam/series.hpp" namespace "xbeam":
+    cdef cppclass NativeSeries:
+        pass
+    NativeSeries* create_native_series(const string&) except + nogil
+    void destroy_native_series(NativeSeries*) noexcept nogil
+    void run_native_series(NativeSeries*, int64_t, int, void*, size_t,
+                           void*, size_t, int64_t*, size_t,
+                           int64_t*, size_t) except + nogil
+
+cdef class SeriesExecutor:
+    """Native descriptor, IO, and DSP owner. Every submitted result is synchronous."""
+    cdef NativeSeries* _owner
+    cdef bint _active
+
+    def __cinit__(self, configuration):
+        import json
+        cdef string encoded = json.dumps(configuration).encode("utf-8")
+        with nogil:
+            self._owner = create_native_series(encoded)
+
+    def close(self):
+        cdef NativeSeries* owner
+        if self._active:
+            raise RuntimeError("native series executor is active")
+        owner = self._owner
+        self._owner = NULL
+        if owner != NULL:
+            with nogil:
+                destroy_native_series(owner)
+
+    def __dealloc__(self):
+        if self._owner != NULL:
+            destroy_native_series(self._owner)
+
+    def run(self, int64_t first, int windows, unsigned char[::1] spectrum,
+            unsigned char[::1] lag, int64_t[::1] statistics,
+            int64_t[::1] coverage):
+        cdef void* spectrum_ptr = NULL
+        cdef void* lag_ptr = NULL
+        cdef int64_t* stats_ptr = NULL
+        cdef int64_t* coverage_ptr = NULL
+        if self._owner == NULL:
+            raise RuntimeError("native series executor is closed")
+        if spectrum.shape[0]: spectrum_ptr = &spectrum[0]
+        if lag.shape[0]: lag_ptr = &lag[0]
+        if statistics.shape[0]: stats_ptr = &statistics[0]
+        if coverage.shape[0]: coverage_ptr = &coverage[0]
+        if self._active:
+            raise RuntimeError("native series executor is active")
+        self._active = True
+        try:
+            with nogil:
+                run_native_series(self._owner, first, windows, spectrum_ptr,
+                    spectrum.shape[0], lag_ptr, lag.shape[0], stats_ptr,
+                    statistics.shape[0], coverage_ptr, coverage.shape[0])
+        finally:
+            self._active = False

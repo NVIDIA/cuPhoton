@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Build helpers for the optional native radio extension."""
+"""Build helpers for the optional native execution extension."""
 
 import os
 import subprocess

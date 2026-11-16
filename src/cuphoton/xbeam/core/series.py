@@ -317,6 +317,11 @@ def correlate_series(
     Device results expose wait(stream) and to_host() for explicit downstream
     ownership. Changing a consumer stream cannot race input-slot reuse.
     """
+    if spec.backend == "native":
+        from ..native.series import correlate_source
+
+        yield from correlate_source(source, spec)
+        return
     xp = get_backend(spec.backend)
     if spec.backend != "cupy":
         yield from _correlate_series(source, spec)

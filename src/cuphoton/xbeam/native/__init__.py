@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Optional native radio execution with a thin Cython interface."""
+"""Optional native CUDA execution with a thin Cython interface."""
 
 
 def cuda_available() -> bool:

@@ -1,7 +1,9 @@
-# Experimental native radio backend
+# Experimental native backend
 
-The C++17/CUDA implementation under `src/cuphoton/xbeam/native` runs without
-Python or CuPy at runtime. It is experimental and has a restricted execution contract. The optional
+The C++17/CUDA execution library lives under `src/cuphoton/xbeam/native`.
+The standalone radio runner needs neither Python nor CuPy at runtime. The
+HDF5 adapter uses Python for metadata and result serialization while keeping
+raw reads and numerical execution in C++. Support is experimental. The optional
 Cython interface exposes the experimental `native-correlate` command;
 it is not a production `cuphoton xbeam correlate` backend.
 
@@ -67,7 +69,7 @@ output positions and per-product normalization and weight rules are retained.
 Failed or incomplete reads cannot publish an input buffer. Chunk tasks drain
 before their input allocations are released.
 
-Current execution requires one real-sampled physical recording per datastream,
+Radio execution requires one real-sampled physical recording per datastream,
 a shared FFT time grid, whole subintegrations per output integration, and
 whole reader requests per tile. The profile remains explicit; unsupported
 geometry fails rather than delegating to Python or substituting a profile.
@@ -174,3 +176,58 @@ coverage across all worker reports.
 Claims remain assigned if a worker fails. Treat that campaign as incomplete
 and use fresh claim and output directories when rerunning its scope. Claim
 directories belong to one campaign and its common configuration.
+
+## HDF5 time series
+
+The native engine also computes generic time-series spectra and lag
+correlations. HDF5 metadata is validated by the existing Python adapter;
+C++ owns raw file reads, pinned/device buffers, cuFFT plans, cross-products,
+validity statistics, and inverse transforms. Python serializes the owned
+host results through the existing result writer. This path requires the
+CUDA Cython extension and does not require CuPy at runtime.
+
+Use the existing series configuration with `--backend native`:
+
+```bash
+cuphoton xbeam correlate-series series.json \
+  --backend native --output results.h5 --upload-workers 2
+```
+
+```json
+{
+  "input": "signals.h5",
+  "datasets": {"a": "/signals/a", "b": "/signals/b"},
+  "io_backend": "posix",
+  "correlation": {
+    "pairs": [["a", "b"]],
+    "window_samples": 4096,
+    "hop_samples": 2048,
+    "windows_per_result": 16,
+    "batch_windows": 8,
+    "output": "both",
+    "lag_mode": "linear"
+  }
+}
+```
+
+Both `posix` and `cufile` use the same native numerical pipeline and the
+existing time-series result schema. cuFile requires the existing aligned
+HDF5 raw-layout contract. The native path currently requires contiguous,
+allocated, native-endian float32/float64 or complex64/complex128 vectors;
+optional Boolean validity vectors must also be contiguous. Compressed,
+chunked, virtual, externally stored, and integer inputs are rejected rather
+than delegated to a Python engine. Each signal retains its required
+`sample_rate_hz` and `origin_seconds` attributes.
+
+FP32/FP64 selection, overlapping or separated windows, pair ordering,
+linear/circular lags, validity and exposure counts, and result sharding
+follow the existing series API. Incomplete result groups are dropped.
+The executor captures the CUDA device selected at construction; separate
+processes can select GPUs with `CUDA_VISIBLE_DEVICES` and partition result
+ordinals using `shard_count` and `shard_index` in `correlation`.
+
+Reads use two reusable slots; `io_queue_depth` must currently be 2.
+`read_buffer_bytes` bounds each raw input span, reducing the processing batch
+when needed. A single window must fit that bound. `prefetch_batches=0`
+disables the overlap. Results are host-owned; no borrowed device arrays
+are exposed by this backend.

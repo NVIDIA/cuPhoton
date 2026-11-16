@@ -176,6 +176,12 @@ class BackendInvariant(SetInvariant):
     _set = {"cupy", "numpy"}
 
 
+class SeriesBackendInvariant(BackendInvariant):
+    """Series execution backends, including the optional native CUDA path."""
+
+    _set = BackendInvariant._set | {"native"}
+
+
 class VdifIoInvariant(SetInvariant):
     """Supported file-to-device VDIF data paths."""
 
@@ -1039,7 +1045,7 @@ class CorrelateSeriesCommand(XBeamCommand):
         _mandatory = True
         _metavar = "OUTPUT"
 
-    class BackendArg(BackendInvariant):
+    class BackendArg(SeriesBackendInvariant):
         _arg = "--backend"
         _help = "Array backend. [default: %default]"
         _mandatory = False
