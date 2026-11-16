@@ -72,11 +72,13 @@ NormalExtent normal_extent(
         || ratio <= 0 || num <= 0 || den <= 0) {
         throw RadioError("invalid normal returned extent");
     }
+    const auto allocation_frames = positive(I(requests) * ratio);
+    const auto allocation_bytes = positive(I(allocation_frames) * frame);
+    // Both factors are now bounded by the validated allocation extent.
     I spf = I(payload) * num, admission = I(requests) * frame * num;
     if (spf % den || admission % den) {
         throw RadioError("normal return requires integral samples");
     }
-    positive(I(requests) * ratio);
     return {frame,
         payload,
         requests,
@@ -86,7 +88,7 @@ NormalExtent normal_extent(
         positive(spf / den),
         positive(admission / den),
         positive(I(requests) * (spf / den)),
-        positive(I(requests) * ratio * frame)};
+        allocation_bytes};
 }
 std::int64_t leading_head(
     std::int64_t output,

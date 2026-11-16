@@ -9,6 +9,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <tuple>
 namespace xbeam {
 namespace {
 using J = nlohmann::json;
@@ -637,6 +638,7 @@ std::string load_interop_job_json(const std::string& name) {
         auto& sa = streams.at(a);
         streams.at(c);
         J products = J::array();
+        std::set<std::tuple<int, int, int>> product_keys;
         std::map<int, int> occurrences;
         for (int f = 0; f < d.integer("NUM FREQS " + id); ++f) {
             auto fid = id + "/" + std::to_string(f);
@@ -666,6 +668,9 @@ std::string load_interop_job_json(const std::string& name) {
                 }
                 if (output < 0) {
                     throw RadioError("invalid product band");
+                }
+                if (!product_keys.emplace(ba, bb, output).second) {
+                    throw RadioError("duplicate baseline product");
                 }
                 products.push_back(
                     {{"band_a_id", ba},
@@ -714,11 +719,18 @@ std::string load_interop_job_json(const std::string& name) {
             throw RadioError("missing scan polynomials");
         }
         D first_epoch(0, 0);
+        std::set<double> runtime_epochs;
         for (int p = 0; p < polys; ++p) {
             auto poly = prefix + " POLY " + std::to_string(p);
             D epoch =
                 D(std::to_string((d.integer(poly + " MJD") - mjd) * 86400))
                 + D(d.one(poly + " SEC")) - seconds;
+            const auto runtime_epoch = std::stod(epoch.str());
+            if (!std::isfinite(runtime_epoch)
+                || !runtime_epochs.insert(runtime_epoch).second) {
+                throw RadioError(
+                    "duplicate/nonfinite model epoch at runtime precision");
+            }
             if (p == 0 || (epoch - first_epoch).value < 0) {
                 first_epoch = epoch;
             }

@@ -68,6 +68,58 @@ def test_native_accepts_equivalent_usb_lsb_grids(tmp_path, native_executable):
     assert job_from_dict(actual) == load_interop_job(path)
 
 
+def test_native_rejects_duplicate_baseline_products(
+    tmp_path, native_executable
+):
+    path = write_job(tmp_path, targets=(0, 0))
+    with pytest.raises(
+        ConfigurationError, match="duplicate baseline product"
+    ):
+        load_interop_job(path)
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "duplicate baseline product" in result.stderr
+
+
+@pytest.mark.parametrize("second", ["1", "1.00000000000000001", "2"])
+def test_native_model_epochs_match_python(
+    tmp_path, native_executable, second
+):
+    path = write_job(tmp_path)
+    calc = tmp_path / "job.calc"
+    calc.write_text(calc.read_text().replace("START (S): 0", "START (S): 2"))
+    model = tmp_path / "job.im"
+    text = model.read_text()
+    polynomial = text[text.index("SCAN 0 POLY 0 MJD") :]
+    model.write_text(
+        text.replace("NUM POLY: 1", "NUM POLY: 2").replace(
+            "POLY 0 SEC: 0", "POLY 0 SEC: 1"
+        )
+        + polynomial.replace("POLY 0", "POLY 1").replace(
+            "POLY 1 SEC: 0", f"POLY 1 SEC: {second}"
+        )
+    )
+    result = subprocess.run(
+        [str(native_executable), "inspect-job", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    if second == "2":
+        assert result.returncode == 0, result.stderr
+        assert job_from_dict(json.loads(result.stdout)) == load_interop_job(
+            path
+        )
+    else:
+        with pytest.raises(ConfigurationError, match="model epoch"):
+            load_interop_job(path)
+        assert result.returncode == 1
+        assert "model epoch" in result.stderr
+
+
 def test_native_rejects_negative_file_count(tmp_path, native_executable):
     path = write_job(tmp_path)
     path.write_text(
