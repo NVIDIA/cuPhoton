@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from cuphoton.xbeam.adapters.radio.difx_job import load_interop_job
 from cuphoton.xbeam.adapters.radio.models import job_from_dict
-from tests.xbeam.test_difx_legacy_metadata import _write_job
+from cuphoton.xbeam.commands import load_interop_job
+from tests.xbeam.native.job_fixtures import write_job
 
 
 @pytest.mark.parametrize("zoom", [False, True])
@@ -18,7 +18,7 @@ def test_native_job_matches_python(
     tmp_path, zoom, explicit, native_executable
 ):
     target, band = (2, 1) if zoom else (0, 0)
-    path = _write_job(
+    path = write_job(
         tmp_path,
         band=band,
         zoom=zoom,
@@ -55,7 +55,7 @@ def test_native_source_blocks_match_python(tmp_path, transition):
     spec = importlib.util.spec_from_file_location("_binding", files[0])
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
-    path = _write_job(tmp_path)
+    path = write_job(tmp_path)
     model = tmp_path / "job.im"
     text = model.read_text().replace(
         "DELAY (us): 0 0", "DELAY (us): -7.125 0.007"
@@ -120,7 +120,7 @@ def test_native_request_clocks_match_python(
     spec = importlib.util.spec_from_file_location("_binding", files[0])
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
-    path = _write_job(tmp_path)
+    path = write_job(tmp_path)
     model = tmp_path / "job.im"
     model.write_text(
         model.read_text().replace(
@@ -208,7 +208,7 @@ def test_native_record_time_and_coordinates(tmp_path, integration):
     spec = importlib.util.spec_from_file_location("_binding", files[0])
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
-    path = _write_job(tmp_path)
+    path = write_job(tmp_path)
     job = load_interop_job(path)
     actual = native.NativeJob(path).record_metadata(
         job.scans[0].identifier, integration, 0, 1, 0, b"RR"

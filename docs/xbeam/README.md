@@ -38,7 +38,7 @@ lag conventions, validity masks and independent result shards.
 
 A radio job describes station clocks, spectral bands, baseline products,
 scans and their delay models. The radio adapter reads two-bit, non-legacy
-VDIF files. Pass a normalized JSON job or supported DiFX `.input` metadata.
+VDIF files. Pass a normalized JSON job or supported text `.input` metadata.
 Correlation reads each recording through a header index
 (a sidecar). Build a sidecar for every recording first with
 `build-vdif-sidecar`, or pass `--assume-ordered` for recordings you have

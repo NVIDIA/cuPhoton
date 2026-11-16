@@ -307,7 +307,7 @@ void Run::allocate_device_state() {
     }
     if (!opts_.dynamic()) {
         file_.open(
-            std::filesystem::path(opts_.output) / "DIFX_native.s0000.b0000",
+            std::filesystem::path(opts_.output) / "visibilities.swin",
             std::ios::binary | std::ios::out);
         if (!file_) {
             throw RadioError("cannot create native output");
@@ -654,7 +654,7 @@ Json Run::run_chunks() {
             }
             continue;  // another worker owns it
         }
-        std::snprintf(name, sizeof name, "DIFX_native.chunk-%06zu", c);
+        std::snprintf(name, sizeof name, "visibilities.chunk-%06zu.swin", c);
         const auto began = Clock::now();
         const auto before = records_;
         file_.open(output / name, std::ios::binary | std::ios::out);

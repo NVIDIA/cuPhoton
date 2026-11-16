@@ -42,6 +42,8 @@ schema-v4 sidecars; computes buffered-window source selection, timing and
 validity; reads physical frames; performs rotation, FFT, channelization and
 XMAC; accumulates integrations; and writes a SWIN file plus `native-run.json`.
 The output directory must be new. A failed run has no completion report.
+A contiguous run writes `visibilities.swin`; dynamically scheduled runs write
+`visibilities.chunk-NNNNNN.swin` files, listed in the completion report.
 Choose `--vdif-io posix` for reads through pinned host memory. Both delivery
 paths use the same GPU frame-payload extraction and correlation kernels.
 cuFile sessions, file handles and device registrations persist across reads.

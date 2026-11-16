@@ -25,22 +25,22 @@ def binding():
     return module
 
 
-@pytest.mark.parametrize("channels", [0, 1, 116, 125, 4096])
+@pytest.mark.parametrize("channels", [0, 1, 3, 257, 4099])
 @pytest.mark.parametrize("polarization", ["XX", "XY", "RR", "LL", "XL"])
 def test_exact_swin_bytes(binding, channels, polarization, tmp_path):
     rng = np.random.default_rng(42)
     spectrum = rng.normal(size=channels) + 1j * rng.normal(size=channels)
     spectrum = spectrum.astype(np.complex64)
     reference = SwinRecord(
-        260,
-        58233,
-        11815.4,
+        258,
+        60000,
+        42.5,
         2,
         3,
-        47,
+        7,
         polarization,
         0,
-        0.9501000046730042,
+        0.875,
         -123456.75,
         1.125,
         99999.25,
@@ -77,7 +77,7 @@ def test_invalid_baselines(binding, baseline):
     with pytest.raises(RuntimeError, match="baseline"):
         binding.encode_visibility(
             baseline,
-            58233,
+            60000,
             0,
             0,
             0,
