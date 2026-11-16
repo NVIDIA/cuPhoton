@@ -1631,7 +1631,7 @@ class NativeCorrelateCommand(XBeamCommand):
             )
         self._emit_json(
             correlate(
-                self.job,
+                str(Path(self.job).expanduser()),
                 self.output_path.expanduser(),
                 Path(self.index_dir).expanduser(),
                 self.scan,

@@ -2,6 +2,8 @@
 """Native CLI dispatch must not enter Python radio planning or execution."""
 
 from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -88,6 +90,27 @@ def test_native_cli_missing_cuda_is_actionable(tmp_path, monkeypatch):
     assert run_component("xbeam", _arguments(tmp_path), err=error) != 0
     assert "CUPHOTON_XBEAM_NATIVE_CUDA=1" in error.getvalue()
     assert not (tmp_path / "output").exists()
+
+
+def test_native_cli_expands_quoted_home_job_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(native, "cuda_available", lambda: True)
+    calls = []
+
+    def execute(job, *args, **kwargs):
+        calls.append(job)
+        return {"records": 1}
+
+    monkeypatch.setattr(native, "correlate", execute)
+    with TemporaryDirectory(dir=Path.home()) as directory:
+        job = Path(directory) / "job.input"
+        job.write_text("parsed only by C++")
+        arguments = _arguments(tmp_path)
+        arguments[1] = "~/" + str(job.relative_to(Path.home()))
+        error = StringIO()
+        assert run_component("xbeam", arguments, err=error) == 0, (
+            error.getvalue()
+        )
+        assert calls == [str(job)]
 
 
 def test_native_cli_requires_explicit_profile(tmp_path, monkeypatch):
