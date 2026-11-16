@@ -165,4 +165,13 @@ def test_bundle_preserves_astrometry_and_keeps_truth_separate(
         with pytest.raises(RuntimeError, match="interrupted regeneration"):
             prepare_bundle(calibration, output, config=config, force=True)
     assert not (output / "bundle.json").exists()
-    assert prepare_bundle(calibration, output, config=config) == manifest
+    recovered = prepare_bundle(calibration, output, config=config)
+    assert recovered["fingerprint"] == manifest["fingerprint"]
+    recovered_old = load_exposure(
+        output / recovered["files"]["reference_old"]
+    )
+    for plane in ("science", "variance", "mask"):
+        np.testing.assert_array_equal(recovered_old[plane], old[plane])
+    for relative, expected in recovered["sha256"].items():
+        assert scene.sha256(output / relative) == expected
+    assert prepare_bundle(calibration, output, config=config) == recovered
