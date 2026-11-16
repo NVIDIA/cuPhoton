@@ -7,11 +7,14 @@ from __future__ import annotations
 import importlib
 import subprocess
 import sys
+import tomllib
 from importlib import metadata, resources
 from pathlib import Path
 
 import pytest
+import yaml
 from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 import cuphoton
 
@@ -28,6 +31,36 @@ COMPONENTS = (
     "xlens",
     "xbeam",
 )
+
+
+def test_no_isolation_builds_supply_declared_build_requirements() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    required = {
+        canonicalize_name(Requirement(value).name)
+        for value in project["build-system"]["requires"]
+    }
+    wheel_requirements = (
+        (ROOT / "scripts/wheels/build-requirements.txt")
+        .read_text()
+        .splitlines()
+    )
+    conda = yaml.safe_load((ROOT / "packaging/conda/recipe.yaml").read_text())
+    environments = {
+        "wheels": [
+            Requirement(line).name
+            for line in wheel_requirements
+            if line.strip() and not line.startswith("#")
+        ],
+        "conda": [line.split()[0] for line in conda["requirements"]["host"]],
+        "native-build": [
+            Requirement(value).name
+            for value in project["dependency-groups"]["native-build"]
+        ],
+    }
+    for name, provided in environments.items():
+        assert required <= {canonicalize_name(item) for item in provided}, (
+            name
+        )
 
 
 def test_xfit_contains_no_npy_or_pickle_enabled_loads() -> None:
