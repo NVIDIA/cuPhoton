@@ -165,7 +165,7 @@ def _generate(archive: Path, catalog: dict[str, Any], site_url: str) -> None:
         ul { list-style: none; padding: 0; }
         li { margin: .75rem 0; }
         a {
-          display: block; padding: .85rem 1rem; color: #3f8500;
+          display: block; padding: .85rem 1rem; color: #387a00;
           border: 1px solid #dce1d6; border-radius: .3rem;
           text-underline-offset: .2em;
         }
