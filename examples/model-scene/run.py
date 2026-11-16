@@ -34,6 +34,20 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def check_source(repo, receipt):
+    """Reject a changed revision or uncommitted reference inputs."""
+    receipt["source_tree_clean"] = not subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=repo, text=True
+    ).strip()
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    if revision != receipt["source_revision"]:
+        raise RuntimeError("Source revision changed during execution")
+    if receipt["profile"] == "reference" and not receipt["source_tree_clean"]:
+        raise RuntimeError("Source tree changed during reference execution")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -142,15 +156,16 @@ def main():
             }
         )
     )
-    lock_context = (
-        open(args.gpu_lock, "a")
-        if args.gpu_lock
-        else contextlib.nullcontext()
-    )
     try:
+        lock_context = (
+            open(args.gpu_lock, "a")
+            if args.gpu_lock
+            else contextlib.nullcontext()
+        )
         with lock_context as lock:
             if args.device == "cuda":
                 fcntl.flock(lock, fcntl.LOCK_EX)
+            check_source(repo, receipt)
             import torch
 
             torch.set_num_threads(4)
@@ -223,6 +238,7 @@ def main():
                 nbformat.write(
                     notebook, output / "model-scene.executed.ipynb"
                 )
+        check_source(repo, receipt)
         for name, expected in source_hashes.items():
             if digest(HERE / name) != expected:
                 raise RuntimeError(f"Source changed during execution: {name}")
