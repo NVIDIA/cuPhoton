@@ -15,3 +15,17 @@ details.science { border-left:3px solid var(--scene-accent); padding:1rem;
 details.science summary { cursor:pointer; font-weight:600; }
 .cell-output-display { max-width:100%; overflow-x:auto; }
 @media(max-width:700px) { main { padding:.5rem; } }
+.scene-pipeline { margin:1.5rem 0; padding:1rem; border:1px solid color-mix(in srgb, CanvasText 30%, Canvas); border-radius:.5rem; }
+.scene-pipeline-preparation { display:flex; align-items:center; justify-content:center; gap:1rem; }
+.scene-pipeline-node { display:flex; flex-direction:column; gap:.2rem; padding:.7rem 1rem; border:1px solid currentColor; border-radius:.35rem; }
+.scene-pipeline-node strong { font-size:1.15em; }
+.scene-pipeline-arrow { font-size:1.8em; }
+.scene-pipeline-junction { text-align:center; padding:.8rem 0; border-bottom:1px solid currentColor; }
+.scene-pipeline-branches { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+.scene-pipeline-branch { min-width:0; padding:1rem; border:1px solid color-mix(in srgb, CanvasText 30%, Canvas); border-radius:.4rem; }
+.scene-pipeline-current { border:3px solid var(--scene-accent); background:color-mix(in srgb, var(--scene-accent) 8%, Canvas); }
+.scene-pipeline-label { font-weight:700; margin-top:0; }
+.scene-pipeline-current .scene-pipeline-label { color:var(--scene-accent); }
+.scene-pipeline-connector { border-left:2px solid currentColor; margin-left:1rem; padding:.5rem .8rem; }
+.scene-pipeline figcaption { margin-top:1rem; font-size:.9em; }
+@media(max-width:700px) { .scene-pipeline-branches { grid-template-columns:1fr; } .scene-pipeline-preparation { flex-direction:column; } .scene-pipeline-arrow { transform:rotate(90deg); } }
