@@ -171,7 +171,7 @@ jobs:
           uv sync --locked --group native-build --inexact
           CUPHOTON_XBEAM_BUILD_EXT=1 uv run --no-sync \
             python setup.py build_ext --build-lib build/native-binding
-          XBEAM_NATIVE_BINDING_DIR=build/native-binding uv run --no-sync pytest -q -rs \
+          XBEAM_NATIVE_BINDING_DIR=build/native-binding uv run --no-sync pytest -q -rs -m 'not gpu' \
             --junitxml="${RUNNER_TEMP}/xbeam-native-cpu.xml" tests/xbeam/native
           uv run --no-sync python - <<'PYTEST'
           import os
