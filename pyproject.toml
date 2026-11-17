@@ -70,7 +70,7 @@ torch = [
 viz = [
   "bokeh>=3.9",
   "pillow>=13.0.0",
-  "tornado>=6.6",
+  "tornado>=6.6.1",
 ]
 io = [
   "cuda-pathfinder>=1.5.6,<2; platform_system == 'Linux'",
