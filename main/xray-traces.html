@@ -106,7 +106,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/xray-traces.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="ea2b1f533840479167172256c174d4fc5506e5f0" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="xray-traces.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/xray-traces.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="1e1553cc66e8255b4f3064ec1bee7d646cf31e6b" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="xray-traces.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -509,13 +509,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="check-the-environment" data-number="12.1"><span class="header-section-number">12.1</span> Check the environment</h2>
 <p>Run the xRay doctor on a new machine. It lists the libraries xRay found:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="ex">cuphoton</span> xray doctor</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="1" id="7912abbf">
+<div class="cell" data-execution_count="1" id="9c1451bc">
 <div class="cell-output cell-output-stdout">
 <pre><code>xray doctor
 
 Runtime:
   Python: 3.12.3
-  cuPhoton: 0.3.0.dev101+gea2b1f5
+  cuPhoton: 0.3.0.dev102+g1e1553c
   NumPy: 2.4.6
   CuPy: not installed
 
@@ -584,7 +584,7 @@ CUDA visibility: empty</code></pre>
 </tbody>
 </table>
 <p>The <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/xray/README.md#single-node-hdf5-workflow">xRay guide</a> describes the other layout, <code>legate-cube</code>. The block below writes <code>xray-sample/on.h5</code> and <code>xray-sample/off.h5</code>. The laser-on frames change by two damped oscillations and a small constant, on top of Poisson counts.</p>
-<div class="cell" data-execution_count="2" id="52d6c068">
+<div class="cell" data-execution_count="2" id="ff2eaa7d">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and h5py only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="co"># Writes xray-sample/on.h5 and xray-sample/off.h5: 97 delay frames of a 32 x 32</span></span>
@@ -615,7 +615,7 @@ CUDA visibility: empty</code></pre>
 </details>
 </div>
 <p>Probe the pair before an analysis. <code>probe_hdf5_pair</code> reports the layout of each file and the monitor xRay normalizes by:</p>
-<div class="cell" data-execution_count="3" id="49ca1569">
+<div class="cell" data-execution_count="3" id="214e2dae">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.hdf5 <span class="im">import</span> probe_hdf5_pair</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a>probe <span class="op">=</span> probe_hdf5_pair(h5dir<span class="op">=</span><span class="st">"xray-sample"</span>, fon<span class="op">=</span><span class="st">"on.h5"</span>, foff<span class="op">=</span><span class="st">"off.h5"</span>)</span>
@@ -631,7 +631,7 @@ off.h5 cropped-cube normalized by i0</code></pre>
 <section class="level2" data-number="12.3" id="extract-a-trace">
 <h2 class="anchored" data-anchor-id="extract-a-trace" data-number="12.3"><span class="header-section-number">12.3</span> Extract a trace</h2>
 <p><code>load_hdf5_pair_roi_trace</code> reduces the pair to one trace for a region of interest (ROI). Give the ROI’s origin (<code>roi_x</code>, <code>roi_y</code>) and size (<code>roi_width</code>, <code>roi_height</code>) in detector pixels. The block takes one 16 × 16 pixel tile:</p>
-<div class="cell" data-execution_count="4" id="16b4bb7d">
+<div class="cell" data-execution_count="4" id="a54753af">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.hdf5 <span class="im">import</span> load_hdf5_pair_roi_trace</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a></span>
 <span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>pair <span class="op">=</span> load_hdf5_pair_roi_trace(h5dir<span class="op">=</span><span class="st">"xray-sample"</span>, fon<span class="op">=</span><span class="st">"on.h5"</span>, foff<span class="op">=</span><span class="st">"off.h5"</span>,</span>
@@ -650,7 +650,7 @@ trace from -0.0142 to 0.0319</code></pre>
 <h2 class="anchored" data-anchor-id="choose-the-model-order" data-number="12.4"><span class="header-section-number">12.4</span> Choose the model order</h2>
 <p>Linear prediction fits a sum of damped cosines plus a constant with no starting guess. It assumes finite samples at uniformly increasing delays; check that condition before fitting your own trace. It turns the fit into linear algebra and reads each mode’s frequency and decay rate from the roots of a polynomial. The one choice you make is the model order, <code>n_components</code>, the number of singular values the fit keeps. Each oscillating mode adds two to the order. Too small an order misses a mode, and too large an order fits noise.</p>
 <p><code>model_order_sweep</code> fits the trace at each requested order. It picks the smallest order whose RMS (root-mean-square) residual is within 1% of the best:</p>
-<div class="cell" data-execution_count="5" id="c448b7e6">
+<div class="cell" data-execution_count="5" id="5f4a5f9a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.linear_prediction <span class="im">import</span> model_order_sweep</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>sweep <span class="op">=</span> model_order_sweep(delay, trace, <span class="bu">tuple</span>(<span class="bu">range</span>(<span class="dv">1</span>, <span class="dv">10</span>)))</span>
@@ -675,7 +675,7 @@ chosen order: 4</code></pre>
 <section class="level2" data-number="12.5" id="fit-the-trace-with-linear-prediction">
 <h2 class="anchored" data-anchor-id="fit-the-trace-with-linear-prediction" data-number="12.5"><span class="header-section-number">12.5</span> Fit the trace with linear prediction</h2>
 <p>Fit the trace at the chosen order and print each mode:</p>
-<div class="cell" data-execution_count="6" id="82d3bdca">
+<div class="cell" data-execution_count="6" id="9107a9fc">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.linear_prediction <span class="im">import</span> linear_prediction_numpy</span>
 <span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a></span>
 <span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a>fit <span class="op">=</span> linear_prediction_numpy(delay, trace, sweep.best_components)</span>
@@ -779,7 +779,7 @@ Figure 12.1: Linear prediction at the chosen order on the sample tile trace. Le
 </ol>
 <p>These steps change the trace’s support and amplitude. Detector fits therefore differ from a fit of the tile trace above. Plan the run first. <code>detector-mask</code> counts the tiles and row fits on the CPU:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a><span class="ex">cuphoton</span> xray detector-mask <span class="at">--roi-lower</span> 0 0 <span class="at">--roi-dim</span> 32 32</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="8" id="1eaa4315">
+<div class="cell" data-execution_count="8" id="39f679d7">
 <div class="cell-output cell-output-stdout">
 <pre><code>roi=[0:32,0:32]
 tile_size=16x16
@@ -859,7 +859,7 @@ skipped_row_fits=0</code></pre>
 </tbody>
 </table>
 <p>The default <code>dense</code> layout stores each spectrum at every pixel. <code>tile-rows</code> stores it once per tile row, in <code>*.tile-rows.npy</code> files. <code>load_detector_array</code> reads either layout by its plain name and expands only the slice you index:</p>
-<div class="cell" data-execution_count="9" id="80b68a84">
+<div class="cell" data-execution_count="9" id="1de5c70f">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.detector_storage <span class="im">import</span> load_detector_array</span>
 <span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a></span>
 <span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>freq <span class="op">=</span> load_detector_array(<span class="st">"xray-artifacts/freq_all.npy"</span>)  <span class="co"># opens freq_all.tile-rows.npy</span></span>
@@ -1018,7 +1018,7 @@ skipped_row_fits=0</code></pre>
 <section class="level2" data-number="12.10" id="on-a-gpu">
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="12.10"><span class="header-section-number">12.10</span> On a GPU</h2>
 <p>With the <code>gpu</code> profile, <code>linear_prediction_cupy</code> runs the same fit on CuPy and returns NumPy arrays. <code>build_detector_artifacts_cupy</code> is the Python form of <code>detector-artifacts</code>:</p>
-<div class="cell" data-execution_count="10" id="2ffeb0d4">
+<div class="cell" data-execution_count="10" id="e2ffed87">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.detector_artifacts <span class="im">import</span> build_detector_artifacts_cupy</span>
 <span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xray.linear_prediction <span class="im">import</span> linear_prediction_cupy</span>
 <span id="cb18-3"><a aria-hidden="true" href="#cb18-3" tabindex="-1"></a></span>
@@ -1038,7 +1038,7 @@ skipped_row_fits=0</code></pre>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="ex">cuphoton</span> xray extract-trace <span class="at">--h5dir</span> xray-sample <span class="at">--fon</span> on.h5 <span class="at">--foff</span> off.h5 <span class="dt">\</span></span>
 <span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a>  <span class="at">--roi-lower</span> 0 0 <span class="at">--roi-dim</span> 16 16 <span class="at">--output</span> tile.npz</span>
 <span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a><span class="ex">cuphoton</span> xray model-order-sweep <span class="at">--trace-npz</span> tile.npz <span class="at">--min-components</span> 2 <span class="at">--max-components</span> 8 <span class="at">--step</span> 2</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="11" id="c8b372eb">
+<div class="cell" data-execution_count="11" id="a524cf9e">
 <div class="cell-output cell-output-stdout">
 <pre><code>artifact=tile.npz
 samples=96
