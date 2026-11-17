@@ -14,7 +14,9 @@ from cuphoton.xbeam.adapters.vdif.vdif_sidecar_builder import (
 
 SAMPLE_RATE = 4096
 # Align each reader request to the profile's 8192-byte packed-data grid.
-INTEGRATION_SECONDS = 8
+SUBINTEGRATION_SECONDS = 8
+# Two 256-FFT tiles exercise prefetch and accumulation between tiles.
+INTEGRATION_SECONDS = 2 * SUBINTEGRATION_SECONDS
 INTEGRATION_SAMPLES = SAMPLE_RATE * INTEGRATION_SECONDS
 FFT_SAMPLES = 128
 CHANNELS = FFT_SAMPLES // 2
@@ -92,14 +94,14 @@ def write_closure_job(directory):
 
     lines = [
         "CALC FILENAME: closure.calc",
-        "EXECUTE TIME (SEC): 16",
+        f"EXECUTE TIME (SEC): {2 * INTEGRATION_SECONDS}",
         "START MJD: 58849",
         "START SECONDS: 0",
         "OUTPUT FORMAT: SWIN",
         "OUTPUT FILENAME: unused",
         "NUM CONFIGURATIONS: 1",
-        "INT TIME (SEC): 8",
-        "SUBINT NANOSECONDS: 8000000000",
+        f"INT TIME (SEC): {INTEGRATION_SECONDS}",
+        f"SUBINT NANOSECONDS: {SUBINTEGRATION_SECONDS * 10**9}",
         "FRINGE ROTN ORDER: 1",
         "WRITE AUTOCORRS: TRUE",
         "PULSAR BINNING: FALSE",
@@ -166,7 +168,7 @@ def write_closure_job(directory):
     path.write_text("\n".join(lines) + "\n")
     (directory / "closure.calc").write_text(
         "IM FILENAME: closure.im\nNUM SCANS: 1\nSCAN 0 IDENTIFIER: closure\n"
-        "SCAN 0 START (S): 0\nSCAN 0 DUR (S): 16\n"
+        f"SCAN 0 START (S): 0\nSCAN 0 DUR (S): {2 * INTEGRATION_SECONDS}\n"
         "SCAN 0 POINTING SRC: 0\nSCAN 0 NUM PHS CTRS: 1\n"
     )
     model = [

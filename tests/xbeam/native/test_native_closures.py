@@ -180,6 +180,7 @@ def test_native_vdif_closures_match_reference(closure_job, prefetch):
     assert report["backend"] == "native-cuda"
     assert report["records"] == 20
     assert report["integration_count"] == 2
+    assert report["prefetch"] is (prefetch == "on")
     records = read_swin(output / "visibilities.swin", channel_count=CHANNELS)
     assert_visibilities(records, expected)
     assert_closures(records, expected)
