@@ -446,11 +446,25 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
     runtime, monkeypatch, nonblocking, budget
 ):
     cp = runtime
-    if cp.cuda.Device().compute_capability != "120":
-        pytest.skip("bounded graph schedule requires SM120")
+    capability = cp.cuda.Device().compute_capability
+    if capability not in {"100", "120"}:
+        pytest.skip("bounded graph schedule requires SM100 or SM120")
     _, ct = _tile_solver._runtime()
-    control_kernel = _tile_solver._singleton_graph_control()
-    iteration_kernel = _tile_solver._kernels(True)
+    sm100_normals = capability == "100"
+    control_kernel = (
+        _tile_solver._singleton_graph_control(True)
+        if sm100_normals
+        else _tile_solver._singleton_graph_control()
+    )
+    iteration_kernel = (
+        _tile_solver._kernels(
+            True,
+            normal_recipe="sm100-gemmsn",
+            known_non_singleton_cost=False,
+        )
+        if sm100_normals
+        else _tile_solver._kernels(True)
+    )
     launch = ct.launch
     stream = (
         cp.cuda.Stream(non_blocking=True)

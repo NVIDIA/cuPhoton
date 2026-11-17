@@ -1394,8 +1394,8 @@ def _kernels(
 
 
 @cache
-def _singleton_graph_control():
-    """Refresh the SM120 small-batch singleton schedule on the device."""
+def _singleton_graph_control(sm100_normals=False):
+    """Refresh the bounded graph singleton schedule on the device."""
     _, runtime_ct = _runtime()
     if TYPE_CHECKING:
         import cuda.tile as ct
@@ -1407,6 +1407,7 @@ def _singleton_graph_control():
         statuses,
         evaluations,
         singleton_flags,
+        finite_jacobian_output,
         batch: ct.Constant[int],
         max_evaluations: ct.Constant[int],
         tile_extent: ct.Constant[int],
@@ -1422,6 +1423,13 @@ def _singleton_graph_control():
             padding_mode=ct.PaddingMode.ZERO,
         )
         eligible = (rows < batch) & (status == 0) & (counts < max_evaluations)
+        if sm100_normals:
+            eligible &= ct.load(
+                finite_jacobian_output,
+                (0,),
+                (tile_extent,),
+                padding_mode=ct.PaddingMode.ZERO,
+            )
         count = ct.sum(eligible.astype(ct.int32), axis=0)
         ct.store(singleton_flags, (0,), eligible & (count == 1))
 
@@ -1606,20 +1614,36 @@ def _gaussian_iterations(
                     read_control(cp.count_nonzero(eligible), host_count)
                 )
                 if (
-                    capability == "120"
-                    and 2 <= batch <= 256
+                    2 <= batch <= 256
                     and host_transitions >= 16
-                    and 1 < eligible_count < 39
+                    and (
+                        (capability == "120" and 1 < eligible_count < 39)
+                        or (sm100_normals and 2 <= eligible_count <= 12)
+                    )
                     and graph is None
                 ):
-                    # Membership cannot grow, so the non-group4 recipe stays
-                    # valid. Warm the exact launches with one real caller-
-                    # stream step; capture must never trigger JIT.
-                    control_kernel = _singleton_graph_control()
+                    # Eligible membership cannot grow, so this contraction
+                    # recipe stays valid. Keep singleton cost selection live.
+                    # Warm real launches before capture to avoid lazy JIT.
+                    graph_kernel = (
+                        _kernels(
+                            singleton_normals,
+                            normal_recipe="sm100-mma",
+                            known_non_singleton_cost=False,
+                        )
+                        if sm100_normals
+                        else kernel
+                    )
+                    control_kernel = (
+                        _singleton_graph_control(True)
+                        if sm100_normals
+                        else _singleton_graph_control()
+                    )
                     control_arguments = (
                         outputs["status"],
                         outputs["evaluations"],
                         singleton_flags,
+                        finite_jacobian_output,
                         batch,
                         settings.max_evaluations,
                         1 << (batch - 1).bit_length(),
@@ -1633,6 +1657,7 @@ def _gaussian_iterations(
                         control_kernel=control_kernel,
                         control_arguments=control_arguments,
                         step_arguments=step_arguments,
+                        graph_kernel=graph_kernel,
                     ):
                         ct.launch(
                             target_stream,
@@ -1641,7 +1666,10 @@ def _gaussian_iterations(
                             control_arguments,
                         )
                         ct.launch(
-                            target_stream, (batch,), kernel, step_arguments
+                            target_stream,
+                            (batch,),
+                            graph_kernel,
+                            step_arguments,
                         )
 
                     graph_step(stream)
@@ -1683,6 +1711,8 @@ def _gaussian_iterations(
                                 outputs["evaluations"]
                                 < settings.max_evaluations
                             )
+                            if sm100_normals:
+                                remaining &= finite_jacobian_output
                             if (
                                 int(
                                     read_control(
