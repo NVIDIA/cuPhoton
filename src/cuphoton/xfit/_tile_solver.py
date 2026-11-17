@@ -10,9 +10,47 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .solver import _MAX_REJECTED_STEPS, LMStatus
+
+# Eight Gaussian parameters, followed by the residual and seven zero columns
+# in the augmented normal-equation tile. Each tile covers 32 observations.
 _PARAMETER_COUNT = 8
 _NORMAL_WIDTH = 16
 _OBSERVATIONS_PER_TILE = 32
+
+# The reference-specific reduction schedules below apply to one 51x51 plane.
+# Their partition widths preserve FP64 association; they are not tuning knobs.
+_SPECIALIZED_IMAGE_SHAPE = (51, 51)
+_SPECIALIZED_OBSERVATIONS = 2601  # 51 * 51
+_SM100_MMA_PARTITION_LENGTH = 218
+_SM100_MMA_LAST_PARTITION_LENGTH = 203  # 2601 - 11 * 218
+_SM100_GEMMSN_PARTITION_LENGTH = 1301  # ceil(2601 / 2)
+_SINGLETON_HESSIAN_PARTITION_LENGTH = 522
+
+# Qualified reference arithmetic-family boundaries, not hardware limits.
+_SM100_MMA_MAX_ELIGIBLE = 12
+_GROUP4_GRADIENT_MIN_ELIGIBLE = 39
+
+# Avoid capture for short fits; bound replay work between host status checks.
+# The batch cap records the qualified graph scope rather than a device limit.
+_GRAPH_MIN_HOST_TRANSITIONS = 16
+_GRAPH_TRANSITIONS_PER_REPLAY = 16
+_GRAPH_MAX_BATCH = 256
+
+# The kernel's extent argument encodes execution modes, not a tile dimension.
+# Zero refreshes normals only; current host callers use the two modes below.
+_ONE_TRANSITION = 1
+_PERSISTENT_TRANSITIONS = 2
+
+# Tile needs plain integer constants; use the shared solver's status codes.
+_ACTIVE = int(LMStatus.ACTIVE)
+_CONVERGED_F_TOL = int(LMStatus.CONVERGED_F_TOL)
+_CONVERGED_X_TOL = int(LMStatus.CONVERGED_X_TOL)
+_CONVERGED_G_TOL = int(LMStatus.CONVERGED_G_TOL)
+_MAX_EVALUATIONS = int(LMStatus.MAX_EVALUATIONS)
+_INVALID_RESIDUAL = int(LMStatus.INVALID_RESIDUAL)
+_SINGULAR = int(LMStatus.SINGULAR)
+_NO_PROGRESS = int(LMStatus.NO_PROGRESS)
 
 
 def _lm_control_bits(settings, dtype):
@@ -88,11 +126,23 @@ def _kernels(
         parameters = ct.reshape(ct.arange(16, dtype=ct.int32), (16, 1))
         lanes = ct.reshape(ct.arange(4, dtype=ct.int32), (1, 4))
         hessian = ct.zeros((16, 16), ct.float64)
+        # Singleton: eleven 218-observation partitions and a 203-observation
+        # tail (11 * 218 + 203 = 2601). Batched: one full-image partition.
+        # Each partition starts with its short residue, then uses tiles of
+        # 16 observations, each accumulated as four ordered K=4 MMA products.
         partitions = 12 if partitioned else 1
         for partition in range(partitions):
-            begin = 218 * partition if partitioned else 0
+            begin = (
+                _SM100_MMA_PARTITION_LENGTH * partition if partitioned else 0
+            )
             extent = (
-                ct.where(partition == 11, 203, 218) if partitioned else 2601
+                ct.where(
+                    partition == 11,
+                    _SM100_MMA_LAST_PARTITION_LENGTH,
+                    _SM100_MMA_PARTITION_LENGTH,
+                )
+                if partitioned
+                else _SPECIALIZED_OBSERVATIONS
             )
             residue = extent % 16
             partial = ct.zeros((16, 16), ct.float64)
@@ -119,11 +169,17 @@ def _kernels(
 
     def sm100_gemmsn_hessian(jacobian, row):
         """Preserve the two K ranges and zero-seeded 256-term FMA tiles."""
+        # The two ranges contain 1301 and 1300 observations. Each 256-product
+        # chunk starts from zero; chunk totals and then range totals are added
+        # with explicit round-to-nearest (RN), retaining the reference order.
         parameters = ct.reshape(ct.arange(8, dtype=ct.int32), (8, 1))
         halves = ct.zeros((2, 8, 8), ct.float64)
         for half in range(2):
-            begin = half * 1301
-            end = ct.minimum(begin + 1301, 2601)
+            begin = half * _SM100_GEMMSN_PARTITION_LENGTH
+            end = ct.minimum(
+                begin + _SM100_GEMMSN_PARTITION_LENGTH,
+                _SPECIALIZED_OBSERVATIONS,
+            )
             partial = ct.zeros((8, 8), ct.float64)
             for tile_begin in range(begin, end, 256):
                 tile = ct.zeros((8, 8), ct.float64)
@@ -146,6 +202,9 @@ def _kernels(
 
     def sm100_singleton_cost(residuals, row):
         """Match the singleton dot's chunks and serial partition fold."""
+        # 32 contiguous ranges of ceil(2601 / 32) = 82 observations. Each
+        # range uses ceil(82 / 16) = 6 zero-seeded chunks of 16 products;
+        # masks exclude both range padding and observations past the image.
         partitions = ct.arange(32, dtype=ct.int32)
         partials = ct.zeros((32,), ct.float64)
         for chunk in range(6):
@@ -153,7 +212,9 @@ def _kernels(
             for offset in range(16):
                 position = 16 * chunk + offset
                 observation = 82 * partitions + position
-                valid = (position < 82) & (observation < 2601)
+                valid = (position < 82) & (
+                    observation < _SPECIALIZED_OBSERVATIONS
+                )
                 residual = ct.gather(
                     residuals, (row, observation), mask=valid
                 )
@@ -161,6 +222,7 @@ def _kernels(
             partials = ct.add(
                 partials, values, rounding_mode=ct.RoundingMode.RN
             )
+        # Fold range totals serially; LM uses half the squared residual norm.
         cost = ct.extract(partials, (0,), (1,))
         for partition in range(1, 32):
             cost = ct.add(
@@ -172,6 +234,9 @@ def _kernels(
 
     def singleton_normal(jacobian, residuals, row):
         """Preserve the FP64 singleton accumulation order."""
+        # Each partition has 128 lanes. SM100 uses 10 partitions (stride
+        # 1280, up to three visits per lane); the other schedule uses 16
+        # (stride 2048, up to two visits). Storage pads both to 16 partitions.
         parameters = ct.reshape(ct.arange(8, dtype=ct.int32), (8, 1))
         lanes = ct.reshape(ct.arange(128, dtype=ct.int32), (1, 128))
         partials = ct.zeros((8, 16), ct.float64)
@@ -187,13 +252,17 @@ def _kernels(
                     + lanes
                     + offset * (1280 if sm100_normals else 2048)
                 )
-                valid = observations < 2601
+                valid = observations < _SPECIALIZED_OBSERVATIONS
                 jac = ct.gather(
                     jacobian, (row, parameters, observations), mask=valid
                 )
                 res = ct.gather(residuals, (row, observations), mask=valid)
                 values = ct.where(valid, jac * res + values, values)
             values = ct.add(values, 0.0, rounding_mode=ct.RoundingMode.RN)
+            # Reduce each parameter's 128 lane partials through a fixed tree:
+            # 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1. extract's (0, 1)
+            # selects the upper half-subtile at each stage, not element one.
+            # RN additions of lower and upper halves retain FP64 association.
             half = ct.add(
                 ct.extract(values, (0, 0), (8, 64)),
                 ct.extract(values, (0, 1), (8, 64)),
@@ -231,6 +300,9 @@ def _kernels(
             )
             partials = ct.insert(partials, (0, partition), half)
         gradient = ct.zeros((8, 1), ct.float64)
+        # Fold partition columns g, g+4, g+8, g+12 for each of four groups.
+        # The subsequent zero additions and identity multiply/add operations
+        # retain the reference's padded reduction and signed-zero behavior.
         for group_index in range(4):
             group = ct.zeros((8, 1), ct.float64)
             for offset in range(4):
@@ -251,14 +323,20 @@ def _kernels(
         else:
             # Parallelize independent partitions, retaining each partition's
             # sequential FP64 FMA recurrence and the final serial RN fold.
+            # Five partitions cover four * 522 + 513 = 2601 observations;
+            # the vector layout pads five partitions to eight slots.
             partitions = ct.reshape(ct.arange(8, dtype=ct.int32), (8, 1, 1))
             matrix_parameters = ct.reshape(
                 ct.arange(8, dtype=ct.int32), (1, 8, 1)
             )
             hessian_partials = ct.zeros((8, 8, 8), ct.float64)
-            for offset in range(522):
-                observations = 522 * partitions + offset
-                valid = (partitions < 5) & (observations < 2601)
+            for offset in range(_SINGLETON_HESSIAN_PARTITION_LENGTH):
+                observations = (
+                    _SINGLETON_HESSIAN_PARTITION_LENGTH * partitions + offset
+                )
+                valid = (partitions < 5) & (
+                    observations < _SPECIALIZED_OBSERVATIONS
+                )
                 jac = ct.gather(
                     jacobian,
                     (row, matrix_parameters, observations),
@@ -310,6 +388,8 @@ def _kernels(
             use_singleton = ct.reshape(
                 ct.load(singleton_flags, (block,), (1,)), ()
             )
+        # Parameter columns: amplitude, log(sigma_x), log(sigma_y), angle,
+        # positive-lobe x/y, then negative-lobe x/y.
         amplitude = ct.extract(parameter_tile, (0, 0), (1, 1))
         sigma_x = ct.exp(ct.extract(parameter_tile, (0, 1), (1, 1)))
         sigma_y = ct.exp(ct.extract(parameter_tile, (0, 2), (1, 1)))
@@ -334,6 +414,7 @@ def _kernels(
         inverse_y_squared = 1.0 / (sigma_y * sigma_y)
         sigma_x_cube = sigma_x**3.0
         sigma_y_cube = sigma_y**3.0
+        # Split-plane indices are difference, positive lobe, negative lobe.
         pixel_count = height * width
         finite_residual = ct.full((), True, ct.bool_)
         finite_jacobian = ct.full((), True, ct.bool_)
@@ -785,6 +866,8 @@ def _kernels(
                 if group4_gradient:
                     # Match the large-batch reduction: four observations,
                     # 32 lanes and dependent FP64 product accumulation.
+                    # Four groups of eight lanes receive successive tiles;
+                    # each lane adds its four adjacent observations in order.
                     quarter = observation_tile % 4
                     gradient_group = ct.extract(
                         gradient_lanes, (0, quarter), (8, 8)
@@ -829,6 +912,8 @@ def _kernels(
             # Keep the cost recurrence out of the model/Jacobian loop.
             # Read the stored, masked residuals in the same observation order.
             cost_lanes = ct.zeros((32,), dtype=parameter_tile.dtype)
+            # Singleton cost uses four groups of eight lanes, adding four
+            # adjacent residual squares per lane; other rows use 32 lanes.
             if known_non_singleton_cost or not use_singleton:
                 for cost_tile in range(observation_tile_count):
                     cost_values = ct.reshape(
@@ -871,6 +956,8 @@ def _kernels(
                     cost_lanes = ct.insert(cost_lanes, (quarter,), cost_group)
 
         if singleton_normals:
+            # The same lower-half + upper-half tree used above, now reducing
+            # 32 cost lanes to one: 32 -> 16 -> 8 -> 4 -> 2 -> 1.
             cost_half = ct.extract(cost_lanes, (0,), (16,)) + ct.extract(
                 cost_lanes, (1,), (16,)
             )
@@ -888,6 +975,8 @@ def _kernels(
             )
             cost = ct.reshape(cost_half, ())
         if sm100_normals or group4_gradient:
+            # Reduce the 32 lanes of each of eight parameter gradients in the
+            # same fixed tree. An unconstrained sum can change association.
             gradient_half = ct.extract(
                 gradient_lanes, (0, 0), (8, 16)
             ) + ct.extract(gradient_lanes, (0, 1), (8, 16))
@@ -951,7 +1040,7 @@ def _kernels(
         g_tol,
     ):
         if count >= max_evaluations:
-            status = ct.full((), 4, ct.int32)
+            status = ct.full((), _MAX_EVALUATIONS, ct.int32)
         else:
             # Rejected trials leave x and its normal equations unchanged.
             # Host resumes invalidate active diagnostics when the contraction
@@ -990,7 +1079,7 @@ def _kernels(
                     elif normal_recipe == "sm100-gemmsn":
                         h = sm100_gemmsn_hessian(jacobian_scratch, block)
             if ~finite_jacobian:
-                status = ct.full((), 5, ct.int32)
+                status = ct.full((), _INVALID_RESIDUAL, ct.int32)
             else:
                 current = ct.full((), True, ct.bool_)
                 index = ct.arange(8, dtype=ct.int32)
@@ -1005,6 +1094,7 @@ def _kernels(
                     ct.reshape(ct.abs(scaled_gradient), (-1,)),
                     propagate_nan=True,
                 )
+                # Zero requests normal equations without a trial step.
                 if extent != 0:
                     residual_norm = ct.sqrt(2.0 * cost)
                     if ~all_finite(residual_norm):
@@ -1042,7 +1132,7 @@ def _kernels(
                     if scaled <= g_tol * ct.maximum(
                         1.0, residual_norm, propagate_nan=True
                     ):
-                        status = ct.full((), 3, ct.int32)
+                        status = ct.full((), _CONVERGED_G_TOL, ct.int32)
                     else:
                         # Solve in Jacobian-scaled coordinates. An absolute
                         # diagonal floor changes the problem with parameter
@@ -1067,7 +1157,7 @@ def _kernels(
                         scaled_step, info = solve(system, -scaled_gradient)
                         step = scaled_step / scale_row
                         if (info != 0) | ~all_finite(step):
-                            status = ct.full((), 6, ct.int32)
+                            status = ct.full((), _SINGULAR, ct.int32)
                         else:
                             trial_x = x + step
                             (
@@ -1158,16 +1248,27 @@ def _kernels(
                                     & (prediction <= f_threshold)
                                     & (0.5 * reduction <= prediction)
                                 ):
-                                    status = ct.full((), 1, ct.int32)
+                                    status = ct.full(
+                                        (), _CONVERGED_F_TOL, ct.int32
+                                    )
                                 elif scaled_norm(scaled_step) <= x_tol * (
                                     x_tol + 1.0
                                 ):
-                                    status = ct.full((), 2, ct.int32)
+                                    status = ct.full(
+                                        (), _CONVERGED_X_TOL, ct.int32
+                                    )
                             else:
                                 damping *= increase
                                 rejected += 1
-                                if (damping > 1.0 / eps) | (rejected >= 32):
-                                    status = ct.where(trial_valid, 7, 5)
+                                # Bound damping growth and rejection streaks.
+                                if (damping > 1.0 / eps) | (
+                                    rejected >= _MAX_REJECTED_STEPS
+                                ):
+                                    status = ct.where(
+                                        trial_valid,
+                                        _NO_PROGRESS,
+                                        _INVALID_RESIDUAL,
+                                    )
         return (
             x,
             g,
@@ -1243,7 +1344,7 @@ def _kernels(
             # Ordinary resumes may change the contraction schedule. The
             # fixed graph invalidates caches at entry and singleton changes.
             # Preserve terminal and exhausted rows' diagnostic-current flags.
-            if not cache_normals and (status == 0) & (
+            if not cache_normals and (status == _ACTIVE) & (
                 count < max_evaluations
             ):
                 current = ct.full((), False, ct.bool_)
@@ -1257,16 +1358,17 @@ def _kernels(
             cost = ct.full((), 0, parameters.dtype)
             if (
                 cache_normals
-                and (status == 0) & (count < max_evaluations) & current
+                and (status == _ACTIVE) & (count < max_evaluations) & current
             ):
                 cost = ct.reshape(
                     ct.load(normal_cost_output, (block,), (1,)), ()
                 )
         else:
             damping = ct.full((), initial_damping, parameters.dtype)
+            # The initial residual evaluation consumes the first budget slot.
             count = ct.full((), 1, ct.int32)
             rejected = ct.full((), 0, ct.int32)
-            status = ct.full((), 0, ct.int32)
+            status = ct.full((), _ACTIVE, ct.int32)
             info = ct.full((), 0, ct.int32)
             current = ct.full((), False, ct.bool_)
             step = ct.zeros((1, 8), parameters.dtype)
@@ -1291,9 +1393,9 @@ def _kernels(
                     ct.reshape(finite_jacobian, (1,)),
                 )
             if ~all_finite(x) | ~valid:
-                status = ct.full((), 5, ct.int32)
-        if extent == 2 and not initialize_only:
-            while status == 0:
+                status = ct.full((), _INVALID_RESIDUAL, ct.int32)
+        if extent == _PERSISTENT_TRANSITIONS and not initialize_only:
+            while status == _ACTIVE:
                 (
                     x,
                     g,
@@ -1341,7 +1443,7 @@ def _kernels(
                     g_tol,
                 )
         elif not initialize_only:
-            if status == 0:
+            if status == _ACTIVE:
                 (
                     x,
                     g,
@@ -1438,7 +1540,9 @@ def _singleton_graph_control(sm100_normals=False):
             (tile_extent,),
             padding_mode=ct.PaddingMode.ZERO,
         )
-        eligible = (rows < batch) & (status == 0) & (counts < max_evaluations)
+        eligible = (
+            (rows < batch) & (status == _ACTIVE) & (counts < max_evaluations)
+        )
         if sm100_normals:
             eligible &= ct.load(
                 finite_jacobian_output,
@@ -1462,7 +1566,9 @@ def _singleton_graph_control(sm100_normals=False):
                 padding_mode=ct.PaddingMode.ZERO,
             )
             active = (
-                (rows < batch) & (status == 0) & (counts < max_evaluations)
+                (rows < batch)
+                & (status == _ACTIVE)
+                & (counts < max_evaluations)
             )
             current &= ~(active & (previous_flags != updated_flags))
             ct.store(diagnostics_current, (0,), current)
@@ -1492,7 +1598,7 @@ def _gaussian_iterations(
 
     if (
         parameters.ndim != 2
-        or parameters.shape[1] != 8
+        or parameters.shape[1] != _PARAMETER_COUNT
         or not len(parameters)
     ):
         raise ValueError("parameters must have shape (batch, 8)")
@@ -1516,7 +1622,7 @@ def _gaussian_iterations(
         raise ValueError(
             "Tile/SIMT fitting supports solver_version='v0.2' only"
         )
-    settings = _settings(selected_config, dtype, 8)
+    settings = _settings(selected_config, dtype, _PARAMETER_COUNT)
     if settings.use_finite_difference:
         raise ValueError(
             "Tile/SIMT Gaussian kernels require analytic derivatives"
@@ -1536,7 +1642,9 @@ def _gaussian_iterations(
             "parameters": x,
             "residuals": cp.empty_like(data),
             "gradients": cp.empty_like(x),
-            "hessians": cp.empty((batch, 8, 8), dtype=dtype),
+            "hessians": cp.empty(
+                (batch, _PARAMETER_COUNT, _PARAMETER_COUNT), dtype=dtype
+            ),
             "steps": cp.empty_like(x),
             "info": cp.empty(batch, dtype=cp.int32),
             "status": cp.empty(batch, dtype=cp.int8),
@@ -1547,7 +1655,9 @@ def _gaussian_iterations(
         }
         trial = cp.empty_like(data)
         jacobian_scratch = cp.empty(
-            (batch, 8, observations) if singleton_normals else (1, 1, 1),
+            (batch, _PARAMETER_COUNT, observations)
+            if singleton_normals
+            else (1, 1, 1),
             dtype=dtype,
         )
         singleton_flags = cp.full(
@@ -1566,15 +1676,22 @@ def _gaussian_iterations(
         def iteration_kernel(eligible_count):
             options = {}
             if sm100_normals:
+                # Match the qualified 51x51 reference's Hessian association:
+                # MMA for 2-12 eligible rows; singleton has its own schedule.
                 options["normal_recipe"] = (
                     "sm100-mma"
-                    if 2 <= eligible_count <= 12
+                    if 2 <= eligible_count <= _SM100_MMA_MAX_ELIGIBLE
                     else "sm100-gemmsn"
                 )
                 # At these boundaries every singleton flag is false. Keep the
                 # per-row decision for count one and invalid-J companions.
                 options["known_non_singleton_cost"] = eligible_count != 1
-            if not sm100_normals and eligible_count >= 39:
+            # The qualified SM120 reference changes gradient association at
+            # 39 eligible rows. This boundary is provider/shape-specific.
+            if (
+                not sm100_normals
+                and eligible_count >= _GROUP4_GRADIENT_MIN_ELIGIBLE
+            ):
                 options["group4_gradient"] = True
             return _kernels(singleton_normals, **options)
 
@@ -1603,7 +1720,7 @@ def _gaussian_iterations(
             int(height),
             int(width),
             planes,
-            math.ceil(observations / 32),
+            math.ceil(observations / _OBSERVATIONS_PER_TILE),
         )
         controls = (
             settings.max_evaluations,
@@ -1611,7 +1728,9 @@ def _gaussian_iterations(
         )
         # Establish validity before choosing the contraction cardinality.
         initialize_only = singleton_normals
-        initial_extent = 1 if initialize_only else 2
+        initial_extent = (
+            _ONE_TRANSITION if initialize_only else _PERSISTENT_TRANSITIONS
+        )
         ct.launch(
             stream,
             (batch,),
@@ -1623,7 +1742,8 @@ def _gaussian_iterations(
         )
         if singleton_normals:
             # Keep control readbacks pinned while this stream completes.
-            # Retain existing reductions and boundary decisions.
+            # Byte 0 holds the bool; bytes 1-7 pad to the int64 at byte 8.
+            # All 16 bytes keep the values aligned and disjoint.
             host_control = cp.cuda.alloc_pinned_memory(16)
             host_active = np.ndarray((), dtype=np.bool_, buffer=host_control)
             host_count = np.ndarray(
@@ -1638,9 +1758,11 @@ def _gaussian_iterations(
             graph = None
             capture_stream = None
             while bool(
-                read_control(cp.any(outputs["status"] == 0), host_active)
+                read_control(
+                    cp.any(outputs["status"] == _ACTIVE), host_active
+                )
             ):
-                eligible = (outputs["status"] == 0) & (
+                eligible = (outputs["status"] == _ACTIVE) & (
                     outputs["evaluations"] < settings.max_evaluations
                 )
                 if sm100_normals:
@@ -1649,11 +1771,19 @@ def _gaussian_iterations(
                     read_control(cp.count_nonzero(eligible), host_count)
                 )
                 if (
-                    2 <= batch <= 256
-                    and host_transitions >= 16
+                    2 <= batch <= _GRAPH_MAX_BATCH
+                    and host_transitions >= _GRAPH_MIN_HOST_TRANSITIONS
                     and (
-                        (capability == "120" and 1 < eligible_count < 39)
-                        or (sm100_normals and 2 <= eligible_count <= 12)
+                        (
+                            capability == "120"
+                            and 1
+                            < eligible_count
+                            < _GROUP4_GRADIENT_MIN_ELIGIBLE
+                        )
+                        or (
+                            sm100_normals
+                            and 2 <= eligible_count <= _SM100_MMA_MAX_ELIGIBLE
+                        )
                     )
                     and graph is None
                 ):
@@ -1682,6 +1812,8 @@ def _gaussian_iterations(
                         finite_jacobian_output,
                         batch,
                         settings.max_evaluations,
+                        # One power-of-two reduction tile covers every row;
+                        # the control kernel masks slots beyond the batch.
                         1 << (batch - 1).bit_length(),
                         outputs["diagnostics_current"],
                     )
@@ -1689,13 +1821,13 @@ def _gaussian_iterations(
                     normal_cost_output = outputs["damping"]
                     if sm100_normals:
                         normal_cost_output = cp.empty(batch, dtype=dtype)
-                        active = (outputs["status"] == 0) & (
+                        active = (outputs["status"] == _ACTIVE) & (
                             outputs["evaluations"] < settings.max_evaluations
                         )
                         outputs["diagnostics_current"][active] = False
                     step_arguments = (
                         arguments
-                        + (1,)
+                        + (_ONE_TRANSITION,)
                         + controls
                         + (normal_cost_output, True, False)
                     )
@@ -1723,7 +1855,7 @@ def _gaussian_iterations(
                     graph_step(stream)
                     if bool(
                         read_control(
-                            cp.any(outputs["status"] == 0), host_active
+                            cp.any(outputs["status"] == _ACTIVE), host_active
                         )
                     ):
                         # Capture records launches; execution stays on the
@@ -1735,7 +1867,9 @@ def _gaussian_iterations(
                                 mode=cp.cuda.runtime.streamCaptureModeThreadLocal
                             )
                             capturing = True
-                            for _graph_step in range(16):
+                            for _graph_step in range(
+                                _GRAPH_TRANSITIONS_PER_REPLAY
+                            ):
                                 graph_step(capture_stream)
                             graph = capture_stream.end_capture()
                             capturing = False
@@ -1750,12 +1884,12 @@ def _gaussian_iterations(
                             graph.launch(stream=stream)
                             if not bool(
                                 read_control(
-                                    cp.any(outputs["status"] == 0),
+                                    cp.any(outputs["status"] == _ACTIVE),
                                     host_active,
                                 )
                             ):
                                 break
-                            remaining = (outputs["status"] == 0) & (
+                            remaining = (outputs["status"] == _ACTIVE) & (
                                 outputs["evaluations"]
                                 < settings.max_evaluations
                             )
@@ -1780,7 +1914,11 @@ def _gaussian_iterations(
                     eligible if eligible_count == 1 else False
                 )
                 # Eligible membership cannot grow after this boundary.
-                extent = 2 if eligible_count == 1 else 1
+                extent = (
+                    _PERSISTENT_TRANSITIONS
+                    if eligible_count == 1
+                    else _ONE_TRANSITION
+                )
                 ct.launch(
                     stream,
                     (batch,),
@@ -1834,7 +1972,7 @@ def fit_gaussian_pipeline(
         singleton_normals = (
             np.dtype(x0.dtype) == np.dtype("float64")
             and fit_mode == "difference"
-            and shape == (51, 51)
+            and shape == _SPECIALIZED_IMAGE_SHAPE
             and capability in {"100", "120"}
         )
         out = _gaussian_iterations(
