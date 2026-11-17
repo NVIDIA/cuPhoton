@@ -465,6 +465,16 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
         if sm100_normals
         else _tile_solver._kernels(True)
     )
+    cached_kernel = (
+        _tile_solver._kernels(
+            True,
+            normal_recipe="sm100-mma",
+            known_non_singleton_cost=False,
+            cache_normals=True,
+        )
+        if sm100_normals
+        else None
+    )
     launch = ct.launch
     stream = (
         cp.cuda.Stream(non_blocking=True)
@@ -473,8 +483,15 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
     )
     captured_controls = []
     singleton_tail = []
+    cached_diagnostics = []
 
     def record_launch(target_stream, grid, kernel, arguments):
+        if kernel is cached_kernel and target_stream.ptr == stream.ptr:
+            active = (arguments[9] == 0) & (arguments[10] < budget)
+            assert not cp.asnumpy(arguments[11])[cp.asnumpy(active)].any()
+            # The first real graph step must initialize every readable cost.
+            arguments[-3].fill(cp.nan)
+            cached_diagnostics.append(arguments[11])
         if kernel is control_kernel and target_stream.ptr != stream.ptr:
             captured_controls.append(True)
         if (
@@ -517,6 +534,14 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
         np.testing.assert_array_equal(cp.asnumpy(device_initial), initial)
         assert not cp.shares_memory(result.parameters, device_initial)
         assert not cp.shares_memory(result.residuals, device_images)
+        if sm100_normals:
+            assert len(cached_diagnostics) == 1
+            if budget == 25:
+                # Rejection preserves current diagnostics at the budget limit.
+                np.testing.assert_array_equal(
+                    cp.asnumpy(cached_diagnostics[0]),
+                    [False, True, True, False],
+                )
     assert captured_controls, "the long-fit fixture did not enter capture"
     if budget == 60:
         assert singleton_tail, "the remaining fit did not return to extent2"

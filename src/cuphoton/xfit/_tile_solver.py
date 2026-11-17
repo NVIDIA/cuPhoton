@@ -51,10 +51,13 @@ def _kernels(
     group4_gradient: bool = False,
     normal_recipe: str = "tile",
     known_non_singleton_cost: bool = False,
+    cache_normals: bool = False,
 ):
     if normal_recipe not in {"tile", "sm100-gemmsn", "sm100-mma"}:
         raise ValueError("unsupported normal accumulation recipe")
     sm100_normals = normal_recipe != "tile"
+    if cache_normals and not (singleton_normals and sm100_normals):
+        raise ValueError("normal caching requires the SM100 graph schedule")
     cp, runtime_ct = _runtime()
     try:
         import nvmath.tile.linalg as mlinalg
@@ -1211,6 +1214,7 @@ def _kernels(
         f_tol_bits: ct.Constant[int],
         x_tol_bits: ct.Constant[int],
         g_tol_bits: ct.Constant[int],
+        normal_cost_output,
         resume: ct.Constant[bool],
         initialize_only: ct.Constant[bool],
     ):
@@ -1236,19 +1240,28 @@ def _kernels(
             current = ct.reshape(
                 ct.load(diagnostics_current, (block,), (1,)), ()
             )
-            # A resumed active row may use a different contraction schedule,
-            # and cost is not stored between launches. Preserve terminal and
-            # exhausted rows' existing diagnostic-current flags.
-            if (status == 0) & (count < max_evaluations):
+            # Ordinary resumes may change the contraction schedule. The
+            # fixed graph invalidates caches at entry and singleton changes.
+            # Preserve terminal and exhausted rows' diagnostic-current flags.
+            if not cache_normals and (status == 0) & (
+                count < max_evaluations
+            ):
                 current = ct.full((), False, ct.bool_)
             step = ct.load(steps, (block, 0), (1, 8))
             g = ct.load(gradients, (block, 0), (1, 8))
             h = ct.reshape(
                 ct.load(hessians, (block, 0, 0), (1, 8, 8)), (8, 8)
             )
-            # Active rows recompute cost below before using it. Exhausted and
-            # completed rows preserve their residuals and diagnostic buffers.
+            # A graph cache becomes readable only after a valid normal step.
+            # Its cost is the gradient-stopping cost, not acceptance_cost.
             cost = ct.full((), 0, parameters.dtype)
+            if (
+                cache_normals
+                and (status == 0) & (count < max_evaluations) & current
+            ):
+                cost = ct.reshape(
+                    ct.load(normal_cost_output, (block,), (1,)), ()
+                )
         else:
             damping = ct.full((), initial_damping, parameters.dtype)
             count = ct.full((), 1, ct.int32)
@@ -1389,6 +1402,8 @@ def _kernels(
         ct.store(diagnostics_current, (block,), ct.reshape(current, (1,)))
         ct.store(damping_output, (block,), ct.reshape(damping, (1,)))
         ct.store(rejected_output, (block,), ct.reshape(rejected, (1,)))
+        if cache_normals:
+            ct.store(normal_cost_output, (block,), ct.reshape(cost, (1,)))
 
     return iteration_kernel
 
@@ -1411,6 +1426,7 @@ def _singleton_graph_control(sm100_normals=False):
         batch: ct.Constant[int],
         max_evaluations: ct.Constant[int],
         tile_extent: ct.Constant[int],
+        diagnostics_current,
     ):
         rows = ct.arange(tile_extent, dtype=ct.int32)
         status = ct.load(
@@ -1431,7 +1447,26 @@ def _singleton_graph_control(sm100_normals=False):
                 padding_mode=ct.PaddingMode.ZERO,
             )
         count = ct.sum(eligible.astype(ct.int32), axis=0)
-        ct.store(singleton_flags, (0,), eligible & (count == 1))
+        updated_flags = eligible & (count == 1)
+        if sm100_normals:
+            previous_flags = ct.load(
+                singleton_flags,
+                (0,),
+                (tile_extent,),
+                padding_mode=ct.PaddingMode.ZERO,
+            )
+            current = ct.load(
+                diagnostics_current,
+                (0,),
+                (tile_extent,),
+                padding_mode=ct.PaddingMode.ZERO,
+            )
+            active = (
+                (rows < batch) & (status == 0) & (counts < max_evaluations)
+            )
+            current &= ~(active & (previous_flags != updated_flags))
+            ct.store(diagnostics_current, (0,), current)
+        ct.store(singleton_flags, (0,), updated_flags)
 
     return kernel
 
@@ -1584,7 +1619,7 @@ def _gaussian_iterations(
             arguments
             + (initial_extent,)
             + controls
-            + (False, initialize_only),
+            + (outputs["damping"], False, initialize_only),
         )
         if singleton_normals:
             # Keep control readbacks pinned while this stream completes.
@@ -1630,6 +1665,7 @@ def _gaussian_iterations(
                             singleton_normals,
                             normal_recipe="sm100-mma",
                             known_non_singleton_cost=False,
+                            cache_normals=True,
                         )
                         if sm100_normals
                         else kernel
@@ -1647,9 +1683,21 @@ def _gaussian_iterations(
                         batch,
                         settings.max_evaluations,
                         1 << (batch - 1).bit_length(),
+                        outputs["diagnostics_current"],
                     )
+                    # Non-caching kernels never access this placeholder.
+                    normal_cost_output = outputs["damping"]
+                    if sm100_normals:
+                        normal_cost_output = cp.empty(batch, dtype=dtype)
+                        active = (outputs["status"] == 0) & (
+                            outputs["evaluations"] < settings.max_evaluations
+                        )
+                        outputs["diagnostics_current"][active] = False
                     step_arguments = (
-                        arguments + (1,) + controls + (True, False)
+                        arguments
+                        + (1,)
+                        + controls
+                        + (normal_cost_output, True, False)
                     )
 
                     def graph_step(
@@ -1737,7 +1785,10 @@ def _gaussian_iterations(
                     stream,
                     (batch,),
                     selected_kernel,
-                    arguments + (extent,) + controls + (True, False),
+                    arguments
+                    + (extent,)
+                    + controls
+                    + (outputs["damping"], True, False),
                 )
                 host_transitions += 1
         stream.synchronize()
