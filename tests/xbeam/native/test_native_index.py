@@ -78,6 +78,85 @@ def test_index_queries_across_read_windows(binding, tmp_path):
     assert len(reader.physical_runs()) == count
 
 
+@pytest.mark.parametrize("phase", ["admission", "query"])
+def test_index_truncation_raises_without_terminating(
+    native_executable, tmp_path, phase
+):
+    source, summary = make_index(tmp_path)
+    probe = tmp_path / "truncate.cpp"
+    probe.write_text(
+        "// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION "
+        "& AFFILIATES. All rights reserved.\n"
+        r"""// SPDX-License-Identifier: Apache-2.0
+#include "xbeam/radio.hpp"
+#include <iostream>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static const char* index_path;
+static bool during_admission = false;
+static bool truncated = false;
+
+extern "C" ssize_t __real_pread(int, void*, size_t, off_t);
+extern "C" ssize_t __wrap_pread(
+    int fd, void* data, size_t size, off_t offset) {
+    const auto result = __real_pread(fd, data, size, offset);
+    // Truncate after the header read so admission has already recorded the
+    // original extent, but has not accessed the index entries yet.
+    struct stat opened{}, named{};
+    if (during_admission && !truncated && offset == 16 && result > 0
+        && !fstat(fd, &opened) && !stat(index_path, &named)
+        && opened.st_dev == named.st_dev && opened.st_ino == named.st_ino) {
+        truncated = truncate(index_path, 65536) == 0;
+    }
+    return result;
+}
+
+int main(int argc, char** argv) {
+    if (argc != 4) return 2;
+    index_path = argv[2];
+    during_admission = std::string(argv[3]) == "admission";
+    try {
+        xbeam::IndexReader reader(argv[1], index_path);
+        if (!during_admission) {
+            truncated = truncate(index_path, 65536) == 0;
+            reader.query(0, 0, UINT64_MAX);
+        }
+    } catch (const xbeam::RadioError& error) {
+        std::cout << error.what() << '\n';
+        return truncated ? 0 : 3;
+    }
+    return 1;
+}
+"""
+    )
+    native = Path(__file__).resolve().parents[3] / "src/cuphoton/xbeam/native"
+    executable = tmp_path / "truncate-index"
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++17",
+            "-I" + str(native / "include"),
+            str(probe),
+            str(native_executable.parent / "libxbeam_radio.a"),
+            "-Wl,--wrap=pread",
+            "-lcrypto",
+            "-o",
+            str(executable),
+        ],
+        check=True,
+    )
+    result = subprocess.run(
+        [str(executable), str(source), str(summary.index_path), phase],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "truncated" in result.stdout or "changed" in result.stdout
+
+
 def test_index_replacement_rejected(binding, tmp_path):
     source, summary = make_index(tmp_path)
     reader = binding.NativeIndex(source, summary.index_path)
