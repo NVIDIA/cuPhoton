@@ -155,7 +155,7 @@ class DeviceDipoleFitResult:
         init=False,
         default="levenberg-marquardt",
     )
-    backend: Literal["cupy", "cutile", "native"] = "cupy"
+    backend: Literal["cupy", "cutile", "native", "tile-simt"] = "cupy"
     result_location: Literal["device"] = field(
         init=False,
         default="device",
@@ -165,10 +165,15 @@ class DeviceDipoleFitResult:
 
     def __post_init__(self) -> None:
         _validate_solver_version(self.solver_version)
-        if self.backend not in {"cupy", "cutile", "native"}:
+        if self.backend not in {"cupy", "cutile", "native", "tile-simt"}:
             raise ValueError("unsupported device xFit backend")
-        if self.backend == "cutile" and self.model != "gaussian":
-            raise ValueError("backend='cutile' supports only Gaussian fits")
+        if (
+            self.backend in {"cutile", "tile-simt"}
+            and self.model != "gaussian"
+        ):
+            raise ValueError(
+                f"backend={self.backend!r} supports only Gaussian fits"
+            )
         if isinstance(self.device_id, bool) or not isinstance(
             self.device_id, (int, np.integer)
         ):
@@ -685,8 +690,23 @@ def _fit_dipoles_backend(
     resolved: Backend,
     config: LMConfig | None = None,
     fusion: bool = False,
+    _solver: Any | None = None,
 ) -> _BackendDipoleFitResult:
     """Fit dipoles while retaining all result arrays in ``resolved``."""
+
+    if resolved.name == "tile-simt":
+        from ._tile_solver import fit_gaussian_pipeline
+
+        return fit_gaussian_pipeline(
+            images,
+            model=model,
+            initial=initial,
+            mask=mask,
+            variance=variance,
+            mode=mode,
+            resolved=resolved,
+            config=config,
+        )
 
     if resolved.name == "native":
         from ._native import fit_gaussian_pipeline
@@ -919,11 +939,16 @@ def _fit_dipoles_backend(
         jacobian_function,
         normal_equations=normal_equations,
     )
-    low_level = batched_levenberg_marquardt(
-        problem,
-        solver_initial,
-        config=config,
-    )
+    if _solver is not None:
+        low_level = _solver(
+            problem, solver_initial, images_array, weights, mode, config
+        )
+    else:
+        low_level = batched_levenberg_marquardt(
+            problem,
+            solver_initial,
+            config=config,
+        )
     parameters_backend = model_parameters(low_level.parameters)
     if gaussian_model:
         # An ellipse orientation is periodic modulo pi. Keep portable fit
@@ -1128,14 +1153,19 @@ def _validate_execution_options(
     config: LMConfig | None,
 ) -> None:
     if (
-        backend == "native"
+        backend in {"native", "tile-simt"}
         and isinstance(model, GaussianDipoleModel)
         and type(model) is not GaussianDipoleModel
     ):
         raise ValueError(
             f"{backend} xFit does not support custom Gaussian models"
         )
-    if backend in {"cutile", "native"}:
+    if backend == "tile-simt" and config is not None:
+        if config.solver_version != "v0.2":
+            raise ValueError(
+                "Tile/SIMT fitting supports solver_version='v0.2' only"
+            )
+    if backend in {"cutile", "native", "tile-simt"}:
         if isinstance(model, StampDipoleModel) or model == "stamp":
             raise ValueError(
                 f"backend={backend!r} currently supports only "
@@ -1184,6 +1214,9 @@ def fit_dipoles(
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
     evaluation with ``backend="cupy"`` or ``backend="cutile"``. Both retain
     CuPy normal-equation contractions and require analytic derivatives.
+    ``backend="tile-simt"`` fuses FP64 Gaussian evaluation, normal equations
+    and LU-based LM transitions through cuTile and nvmath. It requires
+    ``solver_version="v0.2"`` and uses ``fusion=False``.
 
     ``config=LMConfig(solver_version="v0.1.3")`` selects the legacy scaling,
     stopping and covariance rules. The default ``"v0.2"`` retains the current
@@ -1218,7 +1251,7 @@ def fit_dipoles_device(
     variance: ArrayLike | None = None,
     mode: FitMode = "difference",
     config: LMConfig | None = None,
-    backend: Literal["cupy", "cutile", "native"] = "cupy",
+    backend: Literal["cupy", "cutile", "native", "tile-simt"] = "cupy",
     fusion: bool = False,
 ) -> DeviceDipoleFitResult:
     """Fit dipoles while keeping every result array on the active GPU.
@@ -1234,7 +1267,9 @@ def fit_dipoles_device(
     ``fusion=True`` selects fused Gaussian residual and analytic-Jacobian
     kernels for the requested CuPy or cuTile backend, while retaining the
     default CuPy normal-equation contractions.
-    Native fits, sampled stamps and finite differences require
+    ``backend="tile-simt"`` fuses FP64 Gaussian LM transitions through
+    cuTile and nvmath and supports ``solver_version="v0.2"`` only.
+    Native and Tile/SIMT fits, sampled stamps and finite differences require
     ``fusion=False``.
 
     The solver may copy per-fit status, evaluation counts and boolean
@@ -1251,7 +1286,7 @@ def fit_dipoles_device(
 
     _validate_execution_options(model, backend, config)
     _validate_fusion(fusion, backend=backend, model=model, config=config)
-    if backend not in {"cupy", "cutile", "native"}:
+    if backend not in {"cupy", "cutile", "native", "tile-simt"}:
         raise ValueError("unsupported device xFit backend")
     if backend == "native":
         from ._native import load_extension
