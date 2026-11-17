@@ -9,13 +9,13 @@ Choose the extras for your workflow from the 0.2 release series:
 
 ```bash
 # GPU FITS I/O
-python -m pip install 'cuphoton[io]==0.2.*'
+python -m pip install --upgrade 'cuphoton[io]==0.2.*'
 # GPU imaging and fitting
-python -m pip install 'cuphoton[gpu]==0.2.*'
+python -m pip install --upgrade 'cuphoton[gpu]==0.2.*'
 # GPU workflows with visualization and catalogs
-python -m pip install 'cuphoton[gpu,viz,catalog]==0.2.*'
+python -m pip install --upgrade 'cuphoton[gpu,viz,catalog]==0.2.*'
 # Scene reconstruction
-python -m pip install 'cuphoton[ximage]==0.2.*'
+python -m pip install --upgrade 'cuphoton[ximage]==0.2.*'
 ```
 
 Linux wheels support CPython 3.12–3.14 on x86-64 and ARM64. GPU execution
