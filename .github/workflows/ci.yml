@@ -303,6 +303,7 @@ jobs:
           tests/xpois/test_native_workspace.py
           tests/xrep/test_native_backend.py
           tests/xdr/test_native_postprocess.py
+          tests/xdr/test_reader.py::test_image_reader_scales_int32_images_without_rounding
       - name: Require native tests to execute
         run: |
           uv run --no-sync python - <<'PY'
