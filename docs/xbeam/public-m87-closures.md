@@ -36,7 +36,7 @@ For this file, expect 7,447 visibility records across 781 integration times,
 sets contain algebraic redundancies; these counts are not counts of
 independent measurements. Missing station combinations remain unavailable
 and are counted separately. The example requires identical available
-closure keys in both implementations.
+closure keys in both implementations for the requested station tuples.
 
 Optional offline adapter tests use a synthetic observation and require no
 network or observational data:
@@ -53,9 +53,12 @@ Collaboration's [2019-D01-01 calibrated data release](https://doi.org/10.25739/g
 Its public [release README](https://github.com/eventhorizontelescope/2019-D01-01/blob/27ae76aacb9067a83388395c3826012b97aac371/README.md)
 describes EHT-HOPS fringe fitting, a priori calibration and network
 calibration. The data have already been averaged over 10 seconds and all 32
-intermediate frequencies. The release is dedicated to the public domain
-under the Open Data Commons PDDL; cite the EHT Collaboration and
-[M87 Paper III](https://doi.org/10.3847/2041-8213/ab0c57) when using it.
+intermediate frequencies. The data files use the
+[Open Data Commons PDDL](https://github.com/eventhorizontelescope/2019-D01-01/blob/27ae76aacb9067a83388395c3826012b97aac371/LICENSE.txt).
+The dataset citation is: The Event Horizon Telescope Collaboration (2019),
+[*First M87 EHT Results: Calibrated Data*](https://doi.org/10.25739/g85n-f134),
+CyVerse Data Commons. Also cite
+[M87 Paper III](https://doi.org/10.3847/2041-8213/ab0c57) when using these data.
 
 - File: `SR1_M87_2017_101_lo_hops_netcal_StokesI.uvfits`
 - [Public download](https://data.cyverse.org/dav-anon/iplant/home/shared/commons_repo/curated/EHTC_FirstM87Results_Apr2019/uvfits/SR1_M87_2017_101_lo_hops_netcal_StokesI.uvfits)
@@ -67,6 +70,10 @@ both contain that estimate; RL and LR are zero with zero statistical weight.
 The example loads Stokes I and does not interpret those products as measured
 polarization. The upstream loader may warn about zero-weight cross-hands;
 the comparison checks that the loaded Stokes I inputs are finite and valid.
+eht-imaging may also warn that its optional NFFT package is absent, or emit
+a NumPy `ComplexWarning` when converting its real-valued closure phases from
+a complex table. NFFT is unused here; these messages go to stderr, and the
+comparison still requires finite results within the stated tolerance.
 
 ## Matching conventions and limits
 
@@ -74,6 +81,10 @@ Both paths receive the same `eht-imaging` UVFITS load, with no further
 averaging, SNR cut, calibration or amplitude debiasing. This isolates the
 closure calculations from file parsing and calibration. It does not
 independently validate the UVFITS loader.
+The requested triangle and quadrangle station tuples also come from
+eht-imaging's output. The arithmetic is independent; station-tuple selection
+is shared. Coverage matching checks availability across timestamps for those
+requested tuples.
 
 For triangle `(a, b, c)`, both compute `arg(Vab Vbc Vca)`. For quadrangle
 `(a, b, c, d)`, xBeam computes `log|Vab Vcd / (Vac Vbd)|`.

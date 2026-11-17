@@ -44,8 +44,8 @@ def compare_observation(obs, *, tolerance: float = 1e-12) -> dict:
     """Check all finite, available maximal-set closures without averaging.
 
     This consumes an eht-imaging Stokes I observation, not raw recordings.
-    The loader, frequency averaging and Stokes conversion are shared inputs;
-    the closure calculations are independent.
+    The loader, frequency averaging, Stokes conversion and requested station
+    tuples are shared inputs; the closure arithmetic is independent.
     """
     if not np.isfinite(tolerance) or tolerance <= 0:
         raise ValueError("tolerance must be finite and positive")
