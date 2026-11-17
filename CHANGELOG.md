@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
+
+These changes are relative to 0.1.3.
 
 ### Breaking changes
 
@@ -24,6 +26,13 @@
   CI checks the export against `uv.lock`.
 - Lock notebook and native Python build tools in dependency groups. The xDR
   source-build helper preserves installed runtime dependencies when rebuilding.
+
+### Native wheel fixes
+
+- Build bundled CFITSIO without its unused Fortran wrappers and retain
+  the generated parser notice and Bison exception in the wheel licenses.
+- Fix intermittent failures while CFITSIO converts IRAF headers by
+  bounding comment-card handling.
 
 ### xFit solver errata
 
