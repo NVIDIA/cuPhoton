@@ -21,6 +21,8 @@ These changes are relative to 0.1.3.
 
 ### Installation and development
 
+- Require Tornado 6.6.1 or newer for visualization workflows, including its
+  additional redirect security fixes.
 - Add `make sync-dragon` and a generated, hashed `requirements-dragon.txt`
   for Python 3.12/3.13 GPU environments, including catalog dependencies.
   CI checks the export against `uv.lock`.
