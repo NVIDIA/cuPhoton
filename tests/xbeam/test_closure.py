@@ -130,6 +130,30 @@ def test_nontrivial_closures_match_direct_dft_and_cancel_station_gains():
         np.testing.assert_allclose(gained.values, oracle, rtol=0, atol=2e-14)
 
 
+def test_iterator_reusing_spectrum_buffer_preserves_each_baseline():
+    spectrum = np.empty(1, dtype=np.complex128)
+
+    def records():
+        for a, b, value in [
+            ("A", "B", 2j),
+            ("B", "C", 1),
+            ("C", "A", 1),
+            ("C", "D", 3),
+            ("B", "D", 1),
+        ]:
+            spectrum[:] = value
+            yield record(a, b, spectrum)
+
+    phase, amplitude = closures(records())
+    assert phase.valid.all() and amplitude.valid.all()
+    np.testing.assert_allclose(
+        phase.values, [math.pi / 2], rtol=0, atol=1e-15
+    )
+    np.testing.assert_allclose(
+        amplitude.values, [math.log(6)], rtol=0, atol=1e-15
+    )
+
+
 @pytest.mark.parametrize("format_name", ["xbeam-v1", "swin"])
 def test_saved_outputs_and_reversed_edges_preserve_closures(
     tmp_path, format_name
