@@ -9,7 +9,13 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from cuphoton.xfit import GaussianDipoleModel, LMConfig, _tile_solver, api
+from cuphoton.xfit import (
+    GaussianDipoleModel,
+    LMConfig,
+    LMStatus,
+    _tile_solver,
+    api,
+)
 from cuphoton.xfit.backend import Backend
 
 
@@ -321,6 +327,65 @@ def test_rejected_trials_preserve_and_refresh_normal_equations(
         )
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize("budget", [4, 100])
+def test_singleton_loop_preserves_mixed_terminal_rows(
+    runtime, monkeypatch, budget
+):
+    cp = runtime
+    if cp.cuda.Device().compute_capability not in {"100", "120"}:
+        pytest.skip("specialized singleton schedule requires SM100 or SM120")
+    model = GaussianDipoleModel((51, 51))
+    truth = np.array([[5.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7]])
+    images = np.concatenate((model.evaluate(truth), np.zeros((2, 51, 51))))
+    initial = np.array(
+        [
+            [1.0, 1.2, 1.0, 0.5, -2.4, 0.4, 3.2, -3.2],
+            [0.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7],
+            [1.0, 1e-200, 1.0, 0.0, 0.25, 0.0, -0.25, 0.0],
+        ]
+    )
+    config = LMConfig(initial_damping=1e-12, max_evaluations=budget)
+    iterations = _tile_solver._gaussian_iterations
+    states = []
+
+    def capture(*args, **kwargs):
+        state = iterations(*args, **kwargs)
+        states.append(state)
+        return state
+
+    monkeypatch.setattr(_tile_solver, "_gaussian_iterations", capture)
+    result = api.fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="tile-simt",
+        config=config,
+    )
+    # A solved row and a finite-residual/nonfinite-J row leave one eligible
+    # fit. Their flags and budgets must survive its remaining transitions.
+    np.testing.assert_array_equal(
+        result.status[1:], ["converged_g_tol", "invalid_residual"]
+    )
+    np.testing.assert_array_equal(result.evaluations[1:], [1, 1])
+    np.testing.assert_array_equal(
+        cp.asnumpy(states[0]["diagnostics_current"])[1:], [True, False]
+    )
+    if budget == 4:
+        np.testing.assert_allclose(
+            result.parameters[0], initial[0], rtol=2e-15, atol=0
+        )
+        assert result.evaluations[0] == budget
+        assert bool(cp.asnumpy(states[0]["diagnostics_current"])[0])
+        assert int(cp.asnumpy(states[0]["rejected_steps"])[0]) >= 2
+    else:
+        assert result.converged[0]
+        assert result.evaluations[0] > 17
+        np.testing.assert_allclose(
+            result.parameters[0], truth[0], rtol=2e-7, atol=2e-8
+        )
+
+
 @pytest.mark.parametrize("drain_fails", [False, True])
 @pytest.mark.parametrize(
     "failure_stage", ["prepare", "launch", "synchronize"]
@@ -372,3 +437,86 @@ def test_launch_failure_drains_stream_and_preserves_exception(
             mode="difference",
         )
     assert drained == [True] * (2 if failure_stage == "synchronize" else 1)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("nonblocking", [False, True])
+@pytest.mark.parametrize("budget", [25, 60])
+def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
+    runtime, monkeypatch, nonblocking, budget
+):
+    cp = runtime
+    if cp.cuda.Device().compute_capability != "120":
+        pytest.skip("bounded graph schedule requires SM120")
+    _, ct = _tile_solver._runtime()
+    control_kernel = _tile_solver._singleton_graph_control()
+    iteration_kernel = _tile_solver._kernels(True)
+    launch = ct.launch
+    stream = (
+        cp.cuda.Stream(non_blocking=True)
+        if nonblocking
+        else cp.cuda.Stream.null
+    )
+    captured_controls = []
+    singleton_tail = []
+
+    def record_launch(target_stream, grid, kernel, arguments):
+        if kernel is control_kernel and target_stream.ptr != stream.ptr:
+            captured_controls.append(True)
+        if (
+            captured_controls
+            and target_stream.ptr == stream.ptr
+            and kernel is iteration_kernel
+            and arguments[21] == 2
+        ):
+            singleton_tail.append(True)
+        return launch(target_stream, grid, kernel, arguments)
+
+    monkeypatch.setattr(ct, "launch", record_launch)
+    model = GaussianDipoleModel((51, 51))
+    truth = np.array([[5.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7]])
+    image = model.evaluate(truth)
+    images = np.concatenate((image, image, np.zeros((2, 51, 51))))
+    initial = np.array(
+        [
+            [1.0, 1.2, 1.0, 0.5, -2.4, 0.4, 3.2, -3.2],
+            [1.0, 1.3, 2.6, -0.6, 3.0, -3.5, 1.3, -0.8],
+            [0.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7],
+            [1.0, 1e-200, 1.0, 0.0, 0.25, 0.0, -0.25, 0.0],
+        ]
+    )
+    with stream:
+        device_images = cp.asarray(images)
+        device_initial = cp.asarray(initial)
+        result = api.fit_dipoles_device(
+            device_images,
+            model=model,
+            initial=device_initial,
+            backend="tile-simt",
+            config=LMConfig(initial_damping=1e-12, max_evaluations=budget),
+        )
+        status = cp.asnumpy(result.status_codes)
+        evaluations = cp.asnumpy(result.evaluations)
+        converged = cp.asnumpy(result.converged)
+        parameters = cp.asnumpy(result.parameters)
+        np.testing.assert_array_equal(cp.asnumpy(device_images), images)
+        np.testing.assert_array_equal(cp.asnumpy(device_initial), initial)
+        assert not cp.shares_memory(result.parameters, device_initial)
+        assert not cp.shares_memory(result.residuals, device_images)
+    assert captured_controls, "the long-fit fixture did not enter capture"
+    if budget == 60:
+        assert singleton_tail, "the remaining fit did not return to extent2"
+    # One fit converges inside the first replay; the other reaches its budget.
+    # Budget 25 exhausts inside that replay; its remaining nodes are no-ops.
+    np.testing.assert_array_equal(converged, [True, False, True, False])
+    np.testing.assert_array_equal(
+        status[1:],
+        [
+            LMStatus.MAX_EVALUATIONS,
+            LMStatus.CONVERGED_G_TOL,
+            LMStatus.INVALID_RESIDUAL,
+        ],
+    )
+    np.testing.assert_array_equal(evaluations[1:], [budget, 1, 1])
+    assert evaluations[0] <= budget
+    np.testing.assert_allclose(parameters[0], truth[0], rtol=2e-7, atol=2e-8)

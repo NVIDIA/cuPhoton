@@ -246,14 +246,34 @@ def _kernels(
         if sm100_normals:
             hessian = sm100_mma_hessian(jacobian, row, True)
         else:
+            # Parallelize independent partitions, retaining each partition's
+            # sequential FP64 FMA recurrence and the final serial RN fold.
+            partitions = ct.reshape(ct.arange(8, dtype=ct.int32), (8, 1, 1))
+            matrix_parameters = ct.reshape(
+                ct.arange(8, dtype=ct.int32), (1, 8, 1)
+            )
+            hessian_partials = ct.zeros((8, 8, 8), ct.float64)
+            for offset in range(522):
+                observations = 522 * partitions + offset
+                valid = (partitions < 5) & (observations < 2601)
+                jac = ct.gather(
+                    jacobian,
+                    (row, matrix_parameters, observations),
+                    mask=valid,
+                )
+                hessian_partials = ct.where(
+                    valid,
+                    jac * ct.transpose(jac, 1, 2) + hessian_partials,
+                    hessian_partials,
+                )
             hessian = ct.zeros((8, 8), ct.float64)
             for partition in range(5):
-                partial = ct.zeros((8, 8), ct.float64)
-                begin = partition * 522
-                end = ct.minimum(begin + 522, 2601)
-                for observation in range(begin, end):
-                    jac = ct.gather(jacobian, (row, parameters, observation))
-                    partial = jac * ct.transpose(jac) + partial
+                partial = ct.reshape(
+                    ct.extract(
+                        hessian_partials, (partition, 0, 0), (1, 8, 8)
+                    ),
+                    (8, 8),
+                )
                 hessian = ct.add(
                     partial, hessian, rounding_mode=ct.RoundingMode.RN
                 )
@@ -931,12 +951,10 @@ def _kernels(
             status = ct.full((), 4, ct.int32)
         else:
             # Rejected trials leave x and its normal equations unchanged.
-            # The generic loop retains its cost and contraction schedule, so
-            # reuse those equations until an accepted step changes x. The
-            # specialized host-boundary path must recompute: its schedule can
-            # change with the active batch, and its cost is not persisted.
+            # Host resumes invalidate active diagnostics when the contraction
+            # schedule can change; accepted steps invalidate them below.
             finite_jacobian = ct.full((), True, ct.bool_)
-            if singleton_normals or ~current:
+            if ~current:
                 g, h, cost, valid, finite_jacobian = normal(
                     x,
                     images,
@@ -1070,6 +1088,7 @@ def _kernels(
                                 need_normal=False,
                             )
                             count += 1
+                            acceptance_cost = cost
                             if (
                                 sm100_normals
                                 and not known_non_singleton_cost
@@ -1080,11 +1099,13 @@ def _kernels(
                             ):
                                 # Acceptance uses the singleton dot schedule;
                                 # the earlier gradient stopping norm is kept.
-                                cost = sm100_singleton_cost(residuals, block)
+                                acceptance_cost = sm100_singleton_cost(
+                                    residuals, block
+                                )
                                 trial_cost = sm100_singleton_cost(
                                     trial_residuals, block
                                 )
-                            reduction = cost - trial_cost
+                            reduction = acceptance_cost - trial_cost
                             if trial_valid & (reduction > 0):
                                 # Quadratic-model reduction using the
                                 # damping that produced this step.
@@ -1107,7 +1128,7 @@ def _kernels(
                                             trial_finite_jacobian, (1,)
                                         ),
                                     )
-                                old_cost = cost
+                                old_cost = acceptance_cost
                                 cost = trial_cost
                                 current = ct.full((), False, ct.bool_)
                                 damping = ct.maximum(
@@ -1215,6 +1236,11 @@ def _kernels(
             current = ct.reshape(
                 ct.load(diagnostics_current, (block,), (1,)), ()
             )
+            # A resumed active row may use a different contraction schedule,
+            # and cost is not stored between launches. Preserve terminal and
+            # exhausted rows' existing diagnostic-current flags.
+            if (status == 0) & (count < max_evaluations):
+                current = ct.full((), False, ct.bool_)
             step = ct.load(steps, (block, 0), (1, 8))
             g = ct.load(gradients, (block, 0), (1, 8))
             h = ct.reshape(
@@ -1254,8 +1280,6 @@ def _kernels(
             if ~all_finite(x) | ~valid:
                 status = ct.full((), 5, ct.int32)
         if extent == 2 and not initialize_only:
-            if singleton_normals:
-                completed_transitions = ct.full((), 0, ct.int32)
             while status == 0:
                 (
                     x,
@@ -1303,11 +1327,6 @@ def _kernels(
                     x_tol,
                     g_tol,
                 )
-                if singleton_normals:
-                    completed_transitions += 1
-                    # Resume active rows at the next completed host boundary.
-                    if completed_transitions >= 16:
-                        break
         elif not initialize_only:
             if status == 0:
                 (
@@ -1372,6 +1391,41 @@ def _kernels(
         ct.store(rejected_output, (block,), ct.reshape(rejected, (1,)))
 
     return iteration_kernel
+
+
+@cache
+def _singleton_graph_control():
+    """Refresh the SM120 small-batch singleton schedule on the device."""
+    _, runtime_ct = _runtime()
+    if TYPE_CHECKING:
+        import cuda.tile as ct
+    else:
+        ct = runtime_ct
+
+    @ct.kernel
+    def kernel(
+        statuses,
+        evaluations,
+        singleton_flags,
+        batch: ct.Constant[int],
+        max_evaluations: ct.Constant[int],
+        tile_extent: ct.Constant[int],
+    ):
+        rows = ct.arange(tile_extent, dtype=ct.int32)
+        status = ct.load(
+            statuses, (0,), (tile_extent,), padding_mode=ct.PaddingMode.ZERO
+        )
+        counts = ct.load(
+            evaluations,
+            (0,),
+            (tile_extent,),
+            padding_mode=ct.PaddingMode.ZERO,
+        )
+        eligible = (rows < batch) & (status == 0) & (counts < max_evaluations)
+        count = ct.sum(eligible.astype(ct.int32), axis=0)
+        ct.store(singleton_flags, (0,), eligible & (count == 1))
+
+    return kernel
 
 
 def _gaussian_iterations(
@@ -1537,6 +1591,9 @@ def _gaussian_iterations(
                 value.get(out=target, stream=stream, blocking=True)
                 return target.item()
 
+            host_transitions = 0
+            graph = None
+            capture_stream = None
             while bool(
                 read_control(cp.any(outputs["status"] == 0), host_active)
             ):
@@ -1548,6 +1605,96 @@ def _gaussian_iterations(
                 eligible_count = int(
                     read_control(cp.count_nonzero(eligible), host_count)
                 )
+                if (
+                    capability == "120"
+                    and 2 <= batch <= 256
+                    and host_transitions >= 16
+                    and 1 < eligible_count < 39
+                    and graph is None
+                ):
+                    # Membership cannot grow, so the non-group4 recipe stays
+                    # valid. Warm the exact launches with one real caller-
+                    # stream step; capture must never trigger JIT.
+                    control_kernel = _singleton_graph_control()
+                    control_arguments = (
+                        outputs["status"],
+                        outputs["evaluations"],
+                        singleton_flags,
+                        batch,
+                        settings.max_evaluations,
+                        1 << (batch - 1).bit_length(),
+                    )
+                    step_arguments = (
+                        arguments + (1,) + controls + (True, False)
+                    )
+
+                    def graph_step(
+                        target_stream,
+                        control_kernel=control_kernel,
+                        control_arguments=control_arguments,
+                        step_arguments=step_arguments,
+                    ):
+                        ct.launch(
+                            target_stream,
+                            (1,),
+                            control_kernel,
+                            control_arguments,
+                        )
+                        ct.launch(
+                            target_stream, (batch,), kernel, step_arguments
+                        )
+
+                    graph_step(stream)
+                    if bool(
+                        read_control(
+                            cp.any(outputs["status"] == 0), host_active
+                        )
+                    ):
+                        # Capture records launches; execution stays on the
+                        # caller stream, including legacy/default streams.
+                        capture_stream = cp.cuda.Stream(non_blocking=True)
+                        capturing = False
+                        try:
+                            capture_stream.begin_capture(
+                                mode=cp.cuda.runtime.streamCaptureModeThreadLocal
+                            )
+                            capturing = True
+                            for _graph_step in range(16):
+                                graph_step(capture_stream)
+                            graph = capture_stream.end_capture()
+                            capturing = False
+                        except BaseException:
+                            if capturing:
+                                try:
+                                    capture_stream.end_capture()
+                                except BaseException:
+                                    pass
+                            raise
+                        while True:
+                            graph.launch(stream=stream)
+                            if not bool(
+                                read_control(
+                                    cp.any(outputs["status"] == 0),
+                                    host_active,
+                                )
+                            ):
+                                break
+                            remaining = (outputs["status"] == 0) & (
+                                outputs["evaluations"]
+                                < settings.max_evaluations
+                            )
+                            if (
+                                int(
+                                    read_control(
+                                        cp.count_nonzero(remaining),
+                                        host_count,
+                                    )
+                                )
+                                <= 1
+                            ):
+                                # Resume the persistent singleton loop.
+                                break
+                    continue
                 # Re-select at every completed boundary because compaction can
                 # change the reference contraction's active-batch schedule.
                 selected_kernel = iteration_kernel(eligible_count)
@@ -1562,6 +1709,7 @@ def _gaussian_iterations(
                     selected_kernel,
                     arguments + (extent,) + controls + (True, False),
                 )
+                host_transitions += 1
         stream.synchronize()
     except BaseException:
         # Setup or control can fail after asynchronous work is enqueued.
