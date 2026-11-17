@@ -36,7 +36,8 @@ def observation():
                 continue
             row = np.zeros((), dtype=eh.const_def.DTPOL_STOKES)
             row["time"], row["tint"] = time, 10.0
-            # Reverse the stored orientation to exercise the record adapter.
+            # Obsdata normalizes these reversed rows to forward orientation
+            # before they reach the record adapter.
             row["t1"], row["t2"] = b, a
             row["vis"] = (1 + i * 0.3) * np.exp(1j * (i * i + 1) * 0.2)
             row["sigma"] = 0.01
