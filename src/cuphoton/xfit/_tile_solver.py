@@ -930,35 +930,44 @@ def _kernels(
         if count >= max_evaluations:
             status = ct.full((), 4, ct.int32)
         else:
-            g, h, cost, valid, finite_jacobian = normal(
-                x,
-                images,
-                weights,
-                residuals,
-                jacobian_scratch,
-                singleton_flags,
-                block,
-                height,
-                width,
-                planes,
-                tiles,
-                need_normal=True,
-            )
-            if sm100_normals:
-                ct.store(
-                    finite_jacobian_output,
-                    (block,),
-                    ct.reshape(finite_jacobian, (1,)),
+            # Rejected trials leave x and its normal equations unchanged.
+            # The generic loop retains its cost and contraction schedule, so
+            # reuse those equations until an accepted step changes x. The
+            # specialized host-boundary path must recompute: its schedule can
+            # change with the active batch, and its cost is not persisted.
+            finite_jacobian = ct.full((), True, ct.bool_)
+            if singleton_normals or ~current:
+                g, h, cost, valid, finite_jacobian = normal(
+                    x,
+                    images,
+                    weights,
+                    residuals,
+                    jacobian_scratch,
+                    singleton_flags,
+                    block,
+                    height,
+                    width,
+                    planes,
+                    tiles,
+                    need_normal=True,
                 )
-            if singleton_normals:
-                if ct.reshape(ct.load(singleton_flags, (block,), (1,)), ()):
-                    g, h = singleton_normal(
-                        jacobian_scratch, residuals, block
+                if sm100_normals:
+                    ct.store(
+                        finite_jacobian_output,
+                        (block,),
+                        ct.reshape(finite_jacobian, (1,)),
                     )
-                elif normal_recipe == "sm100-mma":
-                    h = sm100_mma_hessian(jacobian_scratch, block, False)
-                elif normal_recipe == "sm100-gemmsn":
-                    h = sm100_gemmsn_hessian(jacobian_scratch, block)
+                if singleton_normals:
+                    if ct.reshape(
+                        ct.load(singleton_flags, (block,), (1,)), ()
+                    ):
+                        g, h = singleton_normal(
+                            jacobian_scratch, residuals, block
+                        )
+                    elif normal_recipe == "sm100-mma":
+                        h = sm100_mma_hessian(jacobian_scratch, block, False)
+                    elif normal_recipe == "sm100-gemmsn":
+                        h = sm100_gemmsn_hessian(jacobian_scratch, block)
             if ~finite_jacobian:
                 status = ct.full((), 5, ct.int32)
             else:
@@ -1418,11 +1427,8 @@ def _gaussian_iterations(
     cp, ct = _runtime()
     sm100_normals = False
     if singleton_normals:
-        properties = cp.cuda.runtime.getDeviceProperties(
-            cp.cuda.runtime.getDevice()
-        )
-        capability = (properties["major"], properties["minor"])
-        sm100_normals = capability == (10, 0)
+        capability = cp.cuda.Device().compute_capability
+        sm100_normals = capability == "100"
     stream = cp.cuda.get_current_stream()
     try:
         x = cp.array(parameters, copy=True, order="C")
@@ -1595,15 +1601,12 @@ def fit_gaussian_pipeline(
             )
         flat_images = observed.reshape(len(x0), -1)
         shape = tuple(observed.shape[-2:])
-        properties = cp.cuda.runtime.getDeviceProperties(
-            cp.cuda.runtime.getDevice()
-        )
-        capability = (properties["major"], properties["minor"])
+        capability = cp.cuda.Device().compute_capability
         singleton_normals = (
             np.dtype(x0.dtype) == np.dtype("float64")
             and fit_mode == "difference"
             and shape == (51, 51)
-            and capability in {(10, 0), (12, 0)}
+            and capability in {"100", "120"}
         )
         out = _gaussian_iterations(
             x0,
@@ -1636,8 +1639,9 @@ def fit_gaussian_pipeline(
         mask=mask,
         variance=variance,
         mode=mode,
-        resolved=Backend("cupy", resolved.module, resolved.device),
+        resolved=Backend("cutile", resolved.module, resolved.device),
         config=selected_config,
+        fusion=True,
         _solver=run,
     )
     return replace(result, backend="tile-simt")

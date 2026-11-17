@@ -268,6 +268,59 @@ def test_overflowing_cost_does_not_imply_gradient_convergence(runtime):
     np.testing.assert_array_equal(result.converged, [False])
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize("budget", [4, 100])
+def test_rejected_trials_preserve_and_refresh_normal_equations(
+    runtime, monkeypatch, budget
+):
+    cp = runtime
+    model = GaussianDipoleModel((11, 15))
+    truth = np.array([[5.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7]])
+    initial = np.array([[1.0, 1.2, 1.0, 0.5, -2.4, 0.4, 3.2, -3.2]])
+    images = model.evaluate(truth)
+    config = LMConfig(initial_damping=1e-12, max_evaluations=budget)
+    iterations = _tile_solver._gaussian_iterations
+    states = []
+
+    def capture(*args, **kwargs):
+        state = iterations(*args, **kwargs)
+        states.append(state)
+        return state
+
+    monkeypatch.setattr(_tile_solver, "_gaussian_iterations", capture)
+    result = api.fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="tile-simt",
+        config=config,
+    )
+    reference = api.fit_dipoles(
+        images,
+        model=model,
+        initial=initial,
+        backend="numpy",
+        config=config,
+    )
+    np.testing.assert_allclose(
+        result.parameters, reference.parameters, rtol=2e-7, atol=2e-8
+    )
+    np.testing.assert_array_equal(result.converged, reference.converged)
+    if budget == 4:
+        # The first step is accepted, then at least two trials are rejected.
+        # The terminal row must retain diagnostics for that accepted point.
+        assert int(cp.asnumpy(states[0]["rejected_steps"])[0]) >= 2
+        assert bool(cp.asnumpy(states[0]["diagnostics_current"])[0])
+        np.testing.assert_array_equal(result.evaluations, [budget])
+    else:
+        # Later accepted steps must invalidate the cached equations so the
+        # same fit can leave the rejection plateau and reach its solution.
+        np.testing.assert_array_equal(result.converged, [True])
+        np.testing.assert_allclose(
+            model.evaluate(result.parameters), images, rtol=2e-7, atol=2e-8
+        )
+
+
 @pytest.mark.parametrize("drain_fails", [False, True])
 @pytest.mark.parametrize(
     "failure_stage", ["prepare", "launch", "synchronize"]
