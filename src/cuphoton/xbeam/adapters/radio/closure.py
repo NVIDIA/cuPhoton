@@ -149,7 +149,7 @@ def compute_closures(
             continue
         if not key.seconds_of_day.is_finite():
             raise ValueError("visibility timestamp must be finite")
-        spectrum = np.asarray(record.spectrum, dtype=np.complex128)
+        spectrum = np.array(record.spectrum, dtype=np.complex128, copy=True)
         if spectrum.ndim != 1 or spectrum.size == 0:
             raise ValueError("visibility spectrum must be nonempty and 1D")
         edges = groups.setdefault(key, {})
