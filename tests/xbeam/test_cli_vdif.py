@@ -38,6 +38,7 @@ def test_cli_uses_shared_component_command_discovery() -> None:
         "merge-shards",
         "inspect-vdif",
         "build-vdif-sidecar",
+        "native-correlate",
     )
     assert get_component("xbeam").module_name == "cuphoton.xbeam.commands"
 

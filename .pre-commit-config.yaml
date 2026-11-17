@@ -39,6 +39,7 @@ repos:
     rev: v22.1.8
     hooks:
       - id: clang-format
+        exclude: ^src/cuphoton/xbeam/native/third_party/
         # identify classifies both .cu and .cuh as cuda.
         types_or: [c++, c, cuda]
 

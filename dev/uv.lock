@@ -205,6 +205,7 @@ docs = [
     { name = "torch", specifier = ">=2.13,<3", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "cuphoton", group = "docs" } },
 ]
 native-build = [
+    { name = "cython", specifier = ">=3.1,<4" },
     { name = "pybind11", specifier = ">=3.0,<4" },
     { name = "setuptools", specifier = ">=84.2.1" },
     { name = "setuptools-scm", specifier = "==10.3.4" },
