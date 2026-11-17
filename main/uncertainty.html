@@ -134,7 +134,7 @@ window.Quarto = {
   typesetMath
 };
 </script>
-<link href="https://nvidia.github.io/cuPhoton/main/uncertainty.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="d8d8c7630d6299058db6378e5fdccfdb47c7c4b1" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="uncertainty.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/uncertainty.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="ea2b1f533840479167172256c174d4fc5506e5f0" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="uncertainty.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -538,7 +538,7 @@ window.Quarto = {
 <section class="level2" data-number="10.1" id="make-a-sample-pair">
 <h2 class="anchored" data-anchor-id="make-a-sample-pair" data-number="10.1"><span class="header-section-number">10.1</span> Make a sample pair</h2>
 <p>The block below writes the pair of <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>. The target is rotated by 3 degrees against the reference and has slightly larger pixels.</p>
-<div class="cell" data-execution_count="1" id="07b450c9">
+<div class="cell" data-execution_count="1" id="71ae45d5">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -638,7 +638,7 @@ window.Quarto = {
 </tbody>
 </table>
 <p>These variance planes store one variance per pixel, without covariances between pixels. The subtraction diagnostic below treats the fitted kernel as fixed, and the xFit errors initially assume independent pixels. The blocks align and subtract as in <a class="quarto-xref" href="measure.html"><span>Chapter 7</span></a>, and print the median variance after each step.</p>
-<div class="cell" data-execution_count="2" id="e61cfdb6">
+<div class="cell" data-execution_count="2" id="2bba9a18">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
@@ -655,7 +655,7 @@ window.Quarto = {
 <span id="cb2-14"><a aria-hidden="true" href="#cb2-14" tabindex="-1"></a>no_bad_pixels <span class="op">=</span> np.zeros(reference.shape, dtype<span class="op">=</span><span class="bu">bool</span>)</span>
 <span id="cb2-15"><a aria-hidden="true" href="#cb2-15" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, no_bad_pixels, spec, backend<span class="op">=</span><span class="st">"cpu"</span>, prepared<span class="op">=</span>prepared)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
-<div class="cell" data-execution_count="3" id="9261cdd1">
+<div class="cell" data-execution_count="3" id="7445352a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> (GaussianBasisComponent, identify_residual_hotspots, solve_constant_kernel,</span>
 <span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a>                            standardize_constant_kernel_residual)</span>
 <span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
@@ -682,7 +682,7 @@ difference                     median variance  60.78</code></pre>
 <section class="level2" data-number="10.3" id="measure-the-candidates">
 <h2 class="anchored" data-anchor-id="measure-the-candidates" data-number="10.3"><span class="header-section-number">10.3</span> Measure the candidates</h2>
 <p>Find the two candidates and fit them with xFit. The window, <span class="math inline">\(2\lceil 5\sigma\rceil + 1\)</span> pixels for a PSF (point spread function) width <span class="math inline">\(\sigma\)</span>, is the one the transient chain uses.</p>
-<div class="cell" data-execution_count="4" id="8fb3bb22">
+<div class="cell" data-execution_count="4" id="e6e9cc5a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> fit_single_sources</span>
 <span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> window_stamps</span>
 <span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a></span>
@@ -711,7 +711,7 @@ x position error [0.0194 0.0393]</code></pre>
 <section class="level3" data-number="10.4.1" id="measure-the-factor-at-empty-positions">
 <h3 class="anchored" data-anchor-id="measure-the-factor-at-empty-positions" data-number="10.4.1"><span class="header-section-number">10.4.1</span> Measure the factor at empty positions</h3>
 <p><code>empty_positions</code> picks pixels more than one window from every candidate and every loud pixel. <code>empirical_correlation_factor</code> divides the weighted sum of the difference at each by its predicted error, and returns the squared robust spread (1.4826 times the median absolute deviation) of the ratios. <code>psf_weights</code> builds a Gaussian PSF and its derivatives. These approximate flux and position weights for a symmetric PSF in uniform noise; inverse-variance weighting, masks and joint parameter fitting change the actual weights.</p>
-<div class="cell" data-execution_count="5" id="c461563a">
+<div class="cell" data-execution_count="5" id="0f38b8f0">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> empirical_correlation_factor, empty_positions, psf_weights</span>
 <span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
 <span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a><span class="co"># loud: pixels more than 5 robust sigmas from the median of the difference</span></span>
@@ -731,7 +731,7 @@ x position error [0.0194 0.0393]</code></pre>
 <section class="level3" data-number="10.4.2" id="apply-the-factor">
 <h3 class="anchored" data-anchor-id="apply-the-factor" data-number="10.4.2"><span class="header-section-number">10.4.2</span> Apply the factor</h3>
 <p>The following scaling illustrates an approximate adjustment to the fitted errors. A factor measured with background PSF weights need not describe a bright source or a joint nonlinear fit exactly. For a particular estimator, use its weights and variance, as the forced-photometry example below does. Flooring the factor at one is the chain’s conservative policy, not a mathematical bound on <span class="math inline">\(f\)</span>.</p>
-<div class="cell" data-execution_count="6" id="2f7b7a12">
+<div class="cell" data-execution_count="6" id="126355c2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a>f_flux, f_x, f_y <span class="op">=</span> np.maximum(measured.factor, <span class="fl">1.0</span>)</span>
 <span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"flux error      "</span>, sources.flux_error.<span class="bu">round</span>(<span class="dv">1</span>), <span class="st">"-&gt;"</span>, (sources.flux_error <span class="op">*</span> np.sqrt(f_flux)).<span class="bu">round</span>(<span class="dv">1</span>))</span>
 <span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"x position error"</span>, sources.position_error_x.<span class="bu">round</span>(<span class="dv">4</span>), <span class="st">"-&gt;"</span>, (sources.position_error_x <span class="op">*</span> np.sqrt(f_x)).<span class="bu">round</span>(<span class="dv">4</span>))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -744,7 +744,7 @@ x position error [0.0194 0.0393] -&gt; [0.02   0.0405]</code></pre>
 <section class="level3" data-number="10.4.3" id="compute-the-factor-in-closed-form">
 <h3 class="anchored" data-anchor-id="compute-the-factor-in-closed-form" data-number="10.4.3"><span class="header-section-number">10.4.3</span> Compute the factor in closed form</h3>
 <p><code>correlation_factor</code> estimates <span class="math inline">\(f\)</span> at each position from the kernel, both variance planes and the interpolation weights that xRep applied there, which <code>resampling_weights_at</code> returns. It assumes independent target and reference input noise, a fixed kernel, and locally stationary resampling. It infers a local reference-noise level from the resampled variance; this is not exact propagation of an arbitrary spatially varying input covariance. Pass <code>resampling_weights_at</code> the prepared mapping of the alignment.</p>
-<div class="cell" data-execution_count="7" id="5ce54429">
+<div class="cell" data-execution_count="7" id="0da01cdf">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> correlation_factor</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> resampling_weights_at</span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a></span>
@@ -764,7 +764,7 @@ local Jacobian, reference pixels per target pixel:
 </div>
 <p>The closed form is supported only where the mapping between the grids is locally a shift. <code>is_translation</code> is false where the local Jacobian, the change of reference pixel per target pixel, differs from the identity by more than <code>1e-3</code>. Here it shows the rotation and the change of pixel scale. On such a pair, a measured factor can still diagnose the noise. When the chain’s correlation term is active, an undefined closed-form factor leaves the affected computed error bars NaN; the measured factor does not replace it (<a class="quarto-xref" href="transient-chain.html#sec-transient-chain-errors"><span>Section 9.11.1</span></a>).</p>
 <p>Write a target that only a shift separates from the reference, and subtract it. <code>make_wcs</code> and <code>render</code> come from the sample-pair block.</p>
-<div class="cell" data-execution_count="8" id="6d3230ab">
+<div class="cell" data-execution_count="8" id="33a380b6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a>shift_wcs <span class="op">=</span> make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="fl">4.3</span>, <span class="fl">6.3</span>))  <span class="co"># the reference's scale and orientation</span></span>
 <span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a>shifted <span class="op">=</span> render((<span class="dv">256</span>, <span class="dv">256</span>), shift_wcs, target_ra, target_dec, target_flux, psf_sigma, <span class="fl">120.0</span>,</span>
 <span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>                 target_header[<span class="st">"GAIN"</span>]).astype(np.float64)</span>
@@ -781,7 +781,7 @@ local Jacobian, reference pixels per target pixel:
 <span id="cb13-14"><a aria-hidden="true" href="#cb13-14" tabindex="-1"></a>                                                   reference_variance<span class="op">=</span>shift_aligned.variance)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
 <p>Read the resampling weights at empty positions of the new difference:</p>
-<div class="cell" data-execution_count="9" id="0a2afe2f">
+<div class="cell" data-execution_count="9" id="4dfc53c3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a>shift_regions <span class="op">=</span> identify_residual_hotspots(shift_noise.standardized_residual, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span>
 <span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a>shift_candidates <span class="op">=</span> np.array([region[<span class="st">"peak_yx"</span>][::<span class="op">-</span><span class="dv">1</span>] <span class="cf">for</span> region <span class="kw">in</span> shift_regions], dtype<span class="op">=</span><span class="bu">float</span>)</span>
 <span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>shift_empty, _ <span class="op">=</span> empty_positions(shift_noise.valid_mask, exclude_xy<span class="op">=</span>shift_candidates, window<span class="op">=</span>size, count<span class="op">=</span><span class="dv">500</span>,</span>
@@ -794,7 +794,7 @@ local Jacobian, reference pixels per target pixel:
 </div>
 </div>
 <p>Compute both factors at those positions. With weights of shape <code>(N, q, s, s)</code>, one call returns <code>q</code> factors per position.</p>
-<div class="cell" data-execution_count="10" id="5ee71ac1">
+<div class="cell" data-execution_count="10" id="6698b8d2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a>shift_closed <span class="op">=</span> correlation_factor(np.broadcast_to(weights, (<span class="bu">len</span>(shift_empty),) <span class="op">+</span> weights.shape),</span>
 <span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a>                                  kernel<span class="op">=</span>shift_fit.kernel, target_variance<span class="op">=</span>shifted_variance,</span>
 <span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>                                  reference_variance<span class="op">=</span>shift_aligned.variance, resampling_weights<span class="op">=</span>shift_taps.weights,</span>
@@ -941,7 +941,7 @@ Table 10.1: The terms of the chain’s error budget, from <code>docs/uncertaint
 </tbody>
 </table>
 <p>With the budget enabled, quote <code>&lt;q&gt;_err</code>. It is NaN when its fit error is nonfinite, its required window is unusable or its active correlation factor is undefined. A window needs at least half its pixels usable, and center estimates require both lobes within the configured reach. <code>uq_valid</code> covers the quantities that the budget computed; it does not certify every catalog output or the availability of all terms. With <code>uq.enabled: false</code>, the flag is set true without those checks. The block below, which needs a finished run (<a class="quarto-xref" href="transient-chain.html#sec-transient-chain-errors"><span>Section 9.11.1</span></a>), rebuilds an error bar without one term.</p>
-<div class="cell" data-execution_count="11" id="22117c9e">
+<div class="cell" data-execution_count="11" id="95608bbf">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
 <span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a></span>
@@ -1005,7 +1005,7 @@ Table 10.1: The terms of the chain’s error budget, from <code>docs/uncertaint
 <p>Inject sources of known flux into your difference image and measure them as you measure your candidates. A source’s pull is its measured minus true flux, over its error bar. Unbiased estimates with calibrated errors should have pulls centered near zero with width near one in the tested regime.</p>
 <p>This example tests fixed-position forced photometry conditional on an already fitted subtraction. It does not test detection and selection, errors in fitted positions, or the effect of injected sources on alignment and kernel fitting. For those, inject into the input exposures and rerun the relevant stages.</p>
 <p>The correction matters when the reference’s noise is a large part of the difference image’s noise, and xRep resampled the reference onto the target grid. The sample reference is much deeper than the target, and its correction is small. Make a second reference as noisy as the target, on the same grid, and subtract it from the shifted target:</p>
-<div class="cell" data-execution_count="12" id="b47a4077">
+<div class="cell" data-execution_count="12" id="351f37c5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a>gain <span class="op">=</span> target_header[<span class="st">"GAIN"</span>]</span>
 <span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a><span class="co"># the sample reference's stars, grid and PSF, with the target's sky level and gain</span></span>
 <span id="cb20-3"><a aria-hidden="true" href="#cb20-3" tabindex="-1"></a>shallow <span class="op">=</span> render(reference.shape, WCS(reference_header), ra, dec, flux, reference_header[<span class="st">"PSFSIG"</span>], <span class="fl">120.0</span>,</span>
@@ -1025,7 +1025,7 @@ Table 10.1: The terms of the chain’s error budget, from <code>docs/uncertaint
 </div>
 </div>
 <p>Place one source per cell of an 11 pixel grid where the window is empty, adding a Gaussian approximation to photon noise. Both pairs get the same sources and noise. Their measurement windows overlap, so the pulls are not independent samples.</p>
-<div class="cell" data-execution_count="13" id="0c15fd80">
+<div class="cell" data-execution_count="13" id="387c7cb7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">0</span>)  <span class="co"># a new seed for the injection</span></span>
 <span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a>all_empty, _ <span class="op">=</span> empty_positions(shift_noise.valid_mask, exclude_xy<span class="op">=</span>shift_candidates, window<span class="op">=</span>size,</span>
 <span id="cb22-3"><a aria-hidden="true" href="#cb22-3" tabindex="-1"></a>                               count<span class="op">=</span>shifted.size, loud<span class="op">=</span>(shift_fit.residual, <span class="fl">5.0</span>))</span>
@@ -1047,7 +1047,7 @@ Table 10.1: The terms of the chain’s error budget, from <code>docs/uncertaint
 </div>
 </div>
 <p><code>injection_test</code> injects the sources into one difference and measures them with <code>forced_flux_at</code> at their true positions, without estimating a local sky. It adjusts each flux error with the closed-form factor for that forced estimator’s inverse-variance weights. It also measures the background factor at the empty positions.</p>
-<div class="cell" data-execution_count="14" id="250d37ed">
+<div class="cell" data-execution_count="14" id="65039d68">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a aria-hidden="true" href="#cb24-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> forced_flux_at</span>
 <span id="cb24-2"><a aria-hidden="true" href="#cb24-2" tabindex="-1"></a></span>
 <span id="cb24-3"><a aria-hidden="true" href="#cb24-3" tabindex="-1"></a>source_taps <span class="op">=</span> resampling_weights_at(shift_spec, true_xy[:, <span class="dv">0</span>], true_xy[:, <span class="dv">1</span>], prepared<span class="op">=</span>shift_prepared,</span>
@@ -1070,7 +1070,7 @@ Table 10.1: The terms of the chain’s error budget, from <code>docs/uncertaint
 <span id="cb24-20"><a aria-hidden="true" href="#cb24-20" tabindex="-1"></a>    <span class="cf">return</span> pull, pull <span class="op">/</span> np.sqrt(np.maximum(closed, <span class="fl">1.0</span>)), closed, measured</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
 <p>Run it on both pairs and compare:</p>
-<div class="cell" data-execution_count="15" id="5c9d34bc">
+<div class="cell" data-execution_count="15" id="04232f7c">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a>results <span class="op">=</span> {<span class="st">"deep reference"</span>: injection_test(shift_aligned, shift_fit, shift_noise),</span>
 <span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a>           <span class="st">"shallow reference"</span>: injection_test(shallow_aligned, shallow_fit, shallow_noise)}</span>
 <span id="cb25-3"><a aria-hidden="true" href="#cb25-3" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:18s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'measured factor'</span><span class="sc">:&gt;16s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'closed form'</span><span class="sc">:&gt;12s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'fit-only width'</span><span class="sc">:&gt;15s}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'corrected width'</span><span class="sc">:&gt;16s}</span><span class="ss">"</span>)</span>
@@ -1233,7 +1233,7 @@ Figure 10.1: Pulls of the injected sources, measured minus true flux over the f
 <section class="level2" data-number="10.9" id="on-a-gpu">
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="10.9"><span class="header-section-number">10.9</span> On a GPU</h2>
 <p><code>empty_positions</code>, <code>empirical_correlation_factor</code>, <code>correlation_factor</code> and <code>forced_flux_at</code> follow the array module of their inputs. With the <code>gpu</code> profile, pass CuPy arrays. They run on the GPU and return CuPy arrays:</p>
-<div class="cell" data-execution_count="17" id="07ec2e48">
+<div class="cell" data-execution_count="17" id="a3eecc36">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a aria-hidden="true" href="#cb29-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
 <span id="cb29-2"><a aria-hidden="true" href="#cb29-2" tabindex="-1"></a></span>
 <span id="cb29-3"><a aria-hidden="true" href="#cb29-3" tabindex="-1"></a>d_difference, d_variance <span class="op">=</span> cp.asarray(difference), cp.asarray(difference_variance)</span>
