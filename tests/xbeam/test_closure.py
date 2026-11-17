@@ -124,8 +124,10 @@ def test_nontrivial_closures_match_direct_dft_and_cancel_station_gains():
         original, corrupted, expected, strict=True
     ):
         assert baseline.valid.all() and gained.valid.all()
-        np.testing.assert_allclose(baseline.values, oracle, atol=2e-14)
-        np.testing.assert_allclose(gained.values, oracle, atol=2e-14)
+        np.testing.assert_allclose(
+            baseline.values, oracle, rtol=0, atol=2e-14
+        )
+        np.testing.assert_allclose(gained.values, oracle, rtol=0, atol=2e-14)
 
 
 @pytest.mark.parametrize("format_name", ["xbeam-v1", "swin"])
@@ -171,7 +173,9 @@ def test_saved_outputs_and_reversed_edges_preserve_closures(
         )
     for result, reference in zip(actual, expected, strict=True):
         assert result.valid.all()
-        np.testing.assert_allclose(result.values, reference.values, atol=2e-7)
+        np.testing.assert_allclose(
+            result.values, reference.values, rtol=0, atol=2e-7
+        )
 
 
 def test_triangle_order_changes_sign_and_quad_order_changes_ratio():
@@ -183,10 +187,10 @@ def test_triangle_order_changes_sign_and_quad_order_changes_ratio():
         quadrangles=[("A", "C", "B", "D")],
     )
     np.testing.assert_allclose(
-        actual[0].values, -expected[0].values, atol=1e-14
+        actual[0].values, -expected[0].values, rtol=0, atol=1e-14
     )
     np.testing.assert_allclose(
-        actual[1].values, -expected[1].values, atol=1e-14
+        actual[1].values, -expected[1].values, rtol=0, atol=1e-14
     )
 
 
@@ -303,5 +307,5 @@ def test_extreme_finite_amplitudes_do_not_overflow_products(scale):
     for result, reference in zip(actual, expected, strict=True):
         assert result.valid.all()
         np.testing.assert_allclose(
-            result.values, reference.values, atol=3e-13
+            result.values, reference.values, rtol=0, atol=3e-13
         )
