@@ -149,7 +149,36 @@ def _generate(archive: Path, catalog: dict[str, Any], site_url: str) -> None:
     (archive / "versions.html").write_text(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>cuPhoton documentation versions</title></head><body>"
+        "<title>cuPhoton documentation versions</title>"
+        """<style>
+        :root { color-scheme: light dark; }
+        body {
+          margin: 0; background: #fff; color: #222;
+          font: 1rem/1.6 "NVIDIA Sans", "Helvetica Neue", Arial, sans-serif;
+        }
+        main { max-width: 48rem; margin: 4rem auto; padding: 0 1.5rem; }
+        h1 {
+          font-size: clamp(1.75rem, 5vw, 2.5rem); line-height: 1.2;
+          font-weight: 600; padding-bottom: 1rem;
+          border-bottom: 2px solid #76b900;
+        }
+        ul { list-style: none; padding: 0; }
+        li { margin: .75rem 0; }
+        a {
+          display: block; padding: .85rem 1rem; color: #387a00;
+          border: 1px solid #dce1d6; border-radius: .3rem;
+          text-underline-offset: .2em;
+        }
+        a:hover { background: #f5f7f2; }
+        a:focus-visible {
+          outline: 3px solid currentColor; outline-offset: 3px;
+        }
+        @media (prefers-color-scheme: dark) {
+          body { background: #181818; color: #e8e8e8; }
+          a { color: #76b900; border-color: #3a3f34; }
+          a:hover { background: #252821; }
+        }
+        </style></head><body>"""
         "<main><h1>cuPhoton documentation versions</h1><ul>"
         + items
         + "</ul></main></body></html>\n",

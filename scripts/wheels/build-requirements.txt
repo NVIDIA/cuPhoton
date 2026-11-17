@@ -7,6 +7,7 @@ setuptools==84.2.1
 setuptools-scm==10.3.4
 vcs-versioning==2.5.0
 wheel==0.48.0
+Cython==3.3.1
 pybind11==3.0.4
 libkvikio-cu13==26.6.0
 rapids-logger==0.2.3

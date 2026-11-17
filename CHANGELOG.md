@@ -24,6 +24,8 @@
 
 ### Installation and development
 
+- Require Tornado 6.6.1 or newer for visualization workflows, including its
+  additional redirect security fixes.
 - Add `make sync-dragon` and a generated, hashed `requirements-dragon.txt`
   for Python 3.12/3.13 GPU environments, including catalog dependencies.
   CI checks the export against `uv.lock`.
@@ -63,6 +65,14 @@
 - Use the shared `cuphoton xbeam` CLI for correlation, VDIF inspection,
   sidecar creation and radio shard merging. See the
   [xBeam guide](docs/xbeam/README.md) for installation and examples.
+
+### xDR
+
+- `GpuImageReader.read()`, `batch_to_device` and `batch_to_device_stream`
+  return scaled 32-bit integer images (BITPIX = 32 with BSCALE or BZERO)
+  as float64 instead of float32, so values above 2**24, including the
+  unsigned 32-bit convention, are no longer rounded. These images now use
+  twice the device memory. Scaled 8- and 16-bit images remain float32.
 
 ## 0.1.3
 

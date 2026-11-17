@@ -146,6 +146,27 @@ jobs:
           uv sync --locked --python "${PYTHON_VERSION}"
           --extra dev --extra torch --extra viz --extra photometry --extra ximage --extra rubin --extra catalog
       - run: make ci-test-cpu
+      - name: Build and test native xBeam CPU backend
+        if: matrix.name == 'linux-x64' && matrix.python == '3.12'
+        run: |
+          cmake -S src/cuphoton/xbeam/native -B build/xbeam-native -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/xbeam-native -j2
+          uv sync --locked --group native-build --inexact
+          CUPHOTON_XBEAM_BUILD_EXT=1 uv run --no-sync \
+            python setup.py build_ext --build-lib build/native-binding
+          XBEAM_NATIVE_BINDING_DIR=build/native-binding uv run --no-sync pytest -q -rs \
+            --junitxml="${RUNNER_TEMP}/xbeam-native-cpu.xml" tests/xbeam/native
+          uv run --no-sync python - <<'PYTEST'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xbeam-native-cpu.xml")
+          assert report.findall(".//testcase"), "Native xBeam tests must execute"
+          assert not report.findall(".//skipped"), "Native xBeam tests must not skip"
+          assert not report.findall(".//failure")
+          assert not report.findall(".//error")
+          PYTEST
       - name: Build native xRay CPU extension
         if: matrix.name == 'linux-x64' && matrix.python == '3.12'
         env:
@@ -411,6 +432,7 @@ jobs:
           tests/xpois/test_native_workspace.py
           tests/xrep/test_native_backend.py
           tests/xdr/test_native_postprocess.py
+          tests/xdr/test_reader.py::test_image_reader_scales_int32_images_without_rounding
       - name: Require native tests to execute
         run: |
           uv run --no-sync python - <<'PY'

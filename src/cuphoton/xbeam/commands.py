@@ -176,6 +176,12 @@ class BackendInvariant(SetInvariant):
     _set = {"cupy", "numpy"}
 
 
+class SeriesBackendInvariant(BackendInvariant):
+    """Series execution backends, including the optional native CUDA path."""
+
+    _set = BackendInvariant._set | {"native"}
+
+
 class VdifIoInvariant(SetInvariant):
     """Supported file-to-device VDIF data paths."""
 
@@ -1039,7 +1045,7 @@ class CorrelateSeriesCommand(XBeamCommand):
         _mandatory = True
         _metavar = "OUTPUT"
 
-    class BackendArg(BackendInvariant):
+    class BackendArg(SeriesBackendInvariant):
         _arg = "--backend"
         _help = "Array backend. [default: %default]"
         _mandatory = False
@@ -1529,10 +1535,123 @@ def _write_manifest(output: Path, manifest: dict[str, object]) -> None:
     )
 
 
+class NativeCorrelateCommand(XBeamCommand):
+    """Run the experimental native radio engine through Cython."""
+
+    job: str
+    output_path: Path
+    index_dir: Path
+    scan: str
+    integration_count: int
+    profile: str
+    first_integration = 0
+    fft_tile = 1250
+    device = 0
+    vdif_io = "posix"
+    upload_workers = 4
+    prefetch = "on"
+
+    class JobArg(ExistingPathInvariant):
+        _help = "Supported .input job; loaded entirely by the native engine."
+        _metavar = "JOB"
+
+    class OutputPathArg(PathValueInvariant):
+        _arg = "--output"
+        _help = "New native SWIN output directory."
+        _mandatory = True
+
+    class IndexDirArg(ExistingPathInvariant):
+        _arg = "--index-dir"
+        _help = "Directory containing validated VDIF sidecars."
+        _mandatory = True
+
+    class ScanArg(StringInvariant):
+        _arg = "--scan"
+        _help = "Scan identifier."
+        _mandatory = True
+
+    class IntegrationCountArg(PositiveIntegerInvariant):
+        _arg = "--integration-count"
+        _help = "Number of complete integrations."
+        _mandatory = True
+
+    class ProfileArg(StringInvariant):
+        _arg = "--profile"
+        _help = "Explicit native processing contract."
+        _mandatory = True
+
+    class FirstIntegrationArg(NonNegativeIntegerInvariant):
+        _arg = "--first-integration"
+        _help = "Zero-based first integration."
+        _mandatory = False
+        _default = 0
+
+    class FftTileArg(PositiveIntegerInvariant):
+        _arg = "--fft-tile"
+        _help = "Maximum FFT rows per native processing tile."
+        _mandatory = False
+        _default = 1250
+
+    class DeviceArg(NonNegativeIntegerInvariant):
+        _arg = "--device"
+        _help = "Logical CUDA device."
+        _mandatory = False
+        _default = 0
+
+    class VdifIoArg(VdifIoInvariant):
+        _arg = "--vdif-io"
+        _help = "Native input delivery: posix or cufile."
+        _mandatory = False
+        _default = "posix"
+
+    class UploadWorkersArg(PositiveIntegerInvariant):
+        _arg = "--upload-workers"
+        _help = "Maximum native read workers."
+        _mandatory = False
+        _default = 4
+
+    class PrefetchArg(SetInvariant):
+        _arg = "--prefetch"
+        _help = "Overlap delivery with GPU processing: on or off."
+        _set = {"on", "off"}
+        _mandatory = False
+        _default = "on"
+
+    def run(self) -> None:
+        self._call(self._run_native)
+
+    def _run_native(self) -> None:
+        from .native import correlate, cuda_available
+
+        if not cuda_available():
+            raise RuntimeError(
+                "native CUDA execution was not built; enable "
+                "CUPHOTON_XBEAM_BUILD_EXT=1 and CUPHOTON_XBEAM_NATIVE_CUDA=1 "
+                "during installation"
+            )
+        self._emit_json(
+            correlate(
+                str(Path(self.job).expanduser()),
+                self.output_path.expanduser(),
+                Path(self.index_dir).expanduser(),
+                self.scan,
+                first_integration=self.first_integration,
+                integration_count=self.integration_count,
+                fft_tile=self.fft_tile,
+                device=self.device,
+                vdif_io=self.vdif_io,
+                profile=self.profile,
+                upload_workers=self.upload_workers,
+                prefetch=self.prefetch == "on",
+            )
+        )
+
+
 __all__ = [
     "BuildVdifSidecarCommand",
     "CorrelateCommand",
     "CorrelateSeriesCommand",
     "InspectVdifCommand",
     "MergeShardsCommand",
+    "NativeCorrelateCommand",
 ]
