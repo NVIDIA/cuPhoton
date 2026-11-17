@@ -189,7 +189,7 @@ requires-dist = [
     { name = "setuptools", marker = "extra == 'dev'", specifier = ">=84.2.1" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=2.13,<3" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.13,<3" },
-    { name = "tornado", marker = "extra == 'viz'", specifier = ">=6.6" },
+    { name = "tornado", marker = "extra == 'viz'", specifier = ">=6.6.1" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12" },
     { name = "virtualenv", marker = "extra == 'dev'", specifier = ">=21.15.4" },
     { name = "zarr", marker = "extra == 'ximage'", specifier = ">=3,<4" },
