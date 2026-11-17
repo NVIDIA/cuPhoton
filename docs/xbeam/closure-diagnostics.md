@@ -63,3 +63,6 @@ It cannot expose every station-based error, verify UVW coordinates, or
 remove polarization leakage or baseline-dependent corruption. Closure of
 averaged visibilities also need not equal an average of individual closures
 when station gains vary within the averaging interval.
+
+See the [public M87 comparison](public-m87-closures.md) for a reproducible
+check against eht-imaging on released observational visibilities.
