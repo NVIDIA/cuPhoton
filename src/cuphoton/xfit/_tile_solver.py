@@ -852,13 +852,17 @@ def _kernels(
             )
             if need_normal or sm100_normals:
                 finite_jacobian = finite_jacobian & all_finite(jacobian)
+            # Graph trials already form derivatives for validity checks.
+            # Reuse this allocation only while its separate flag is true.
+            if (
+                need_normal and (sm100_normals or use_singleton)
+            ) or cache_normals:
+                ct.store(
+                    jacobian_scratch,
+                    (block, 0, observation_tile),
+                    ct.reshape(jacobian, (1, 8, _OBSERVATIONS_PER_TILE)),
+                )
             if need_normal:
-                if sm100_normals or use_singleton:
-                    ct.store(
-                        jacobian_scratch,
-                        (block, 0, observation_tile),
-                        ct.reshape(jacobian, (1, 8, _OBSERVATIONS_PER_TILE)),
-                    )
                 if not sm100_normals:
                     normal = ct.mma(
                         ct.transpose(augmented), augmented, normal
@@ -998,6 +1002,128 @@ def _kernels(
         hessian = ct.extract(normal, (0, 0), (8, 8))
         return gradient, hessian, 0.5 * cost, finite_residual, finite_jacobian
 
+    def saved_normal(
+        jacobian_scratch,
+        residuals,
+        singleton_flags,
+        block,
+        observation_tile_count: ct.Constant[int],
+    ):
+        """Fold accepted trial values using the original stopping recipe."""
+        use_singleton = ct.reshape(
+            ct.load(singleton_flags, (block,), (1,)), ()
+        )
+        gradient_lanes = ct.zeros((8, 32), dtype=residuals.dtype)
+        for observation_tile in range(observation_tile_count):
+            jacobian = ct.reshape(
+                ct.load(
+                    jacobian_scratch,
+                    (block, 0, observation_tile),
+                    (1, 8, _OBSERVATIONS_PER_TILE),
+                    padding_mode=ct.PaddingMode.ZERO,
+                ),
+                (8, 32),
+            )
+            residual = ct.load(
+                residuals,
+                (block, observation_tile),
+                (1, _OBSERVATIONS_PER_TILE),
+                padding_mode=ct.PaddingMode.ZERO,
+            )
+            gradient_lanes = gradient_lanes + jacobian * residual
+        # Keep the cost recurrence out of the model/Jacobian loop.
+        # Read the stored, masked residuals in the same observation order.
+        cost_lanes = ct.zeros((32,), dtype=residuals.dtype)
+        # Singleton cost uses four groups of eight lanes, adding four
+        # adjacent residual squares per lane; other rows use 32 lanes.
+        if known_non_singleton_cost or not use_singleton:
+            for cost_tile in range(observation_tile_count):
+                cost_values = ct.reshape(
+                    ct.load(
+                        residuals,
+                        (block, cost_tile),
+                        (1, _OBSERVATIONS_PER_TILE),
+                        padding_mode=ct.PaddingMode.ZERO,
+                    ),
+                    (32,),
+                )
+                cost_lanes = cost_lanes + cost_values * cost_values
+        else:
+            for cost_tile in range(observation_tile_count):
+                cost_residual = ct.load(
+                    residuals,
+                    (block, cost_tile),
+                    (1, _OBSERVATIONS_PER_TILE),
+                    padding_mode=ct.PaddingMode.ZERO,
+                )
+                quarter = cost_tile % 4
+                cost_group = ct.extract(cost_lanes, (quarter,), (8,))
+                residual_groups = ct.reshape(cost_residual, (8, 4))
+                residual_value = ct.reshape(
+                    ct.extract(residual_groups, (0, 0), (8, 1)), (8,)
+                )
+                cost_group = cost_group + residual_value * residual_value
+                residual_value = ct.reshape(
+                    ct.extract(residual_groups, (0, 1), (8, 1)), (8,)
+                )
+                cost_group = cost_group + residual_value * residual_value
+                residual_value = ct.reshape(
+                    ct.extract(residual_groups, (0, 2), (8, 1)), (8,)
+                )
+                cost_group = cost_group + residual_value * residual_value
+                residual_value = ct.reshape(
+                    ct.extract(residual_groups, (0, 3), (8, 1)), (8,)
+                )
+                cost_group = cost_group + residual_value * residual_value
+                cost_lanes = ct.insert(cost_lanes, (quarter,), cost_group)
+        if singleton_normals:
+            # The same lower-half + upper-half tree used above, now reducing
+            # 32 cost lanes to one: 32 -> 16 -> 8 -> 4 -> 2 -> 1.
+            cost_half = ct.extract(cost_lanes, (0,), (16,)) + ct.extract(
+                cost_lanes, (1,), (16,)
+            )
+            cost_half = ct.extract(cost_half, (0,), (8,)) + ct.extract(
+                cost_half, (1,), (8,)
+            )
+            cost_half = ct.extract(cost_half, (0,), (4,)) + ct.extract(
+                cost_half, (1,), (4,)
+            )
+            cost_half = ct.extract(cost_half, (0,), (2,)) + ct.extract(
+                cost_half, (1,), (2,)
+            )
+            cost_half = ct.extract(cost_half, (0,), (1,)) + ct.extract(
+                cost_half, (1,), (1,)
+            )
+            cost = ct.reshape(cost_half, ())
+        if sm100_normals or group4_gradient:
+            # Reduce the 32 lanes of each of eight parameter gradients in the
+            # same fixed tree. An unconstrained sum can change association.
+            gradient_half = ct.extract(
+                gradient_lanes, (0, 0), (8, 16)
+            ) + ct.extract(gradient_lanes, (0, 1), (8, 16))
+            gradient_half = ct.extract(
+                gradient_half, (0, 0), (8, 8)
+            ) + ct.extract(gradient_half, (0, 1), (8, 8))
+            gradient_half = ct.extract(
+                gradient_half, (0, 0), (8, 4)
+            ) + ct.extract(gradient_half, (0, 1), (8, 4))
+            gradient_half = ct.extract(
+                gradient_half, (0, 0), (8, 2)
+            ) + ct.extract(gradient_half, (0, 1), (8, 2))
+            gradient_half = ct.extract(
+                gradient_half, (0, 0), (8, 1)
+            ) + ct.extract(gradient_half, (0, 1), (8, 1))
+            gradient = ct.reshape(gradient_half, (1, 8))
+        else:
+            gradient = ct.reshape(ct.sum(gradient_lanes, axis=1), (1, 8))
+        return (
+            gradient,
+            ct.zeros((8, 8), residuals.dtype),
+            0.5 * cost,
+            ct.full((), True, ct.bool_),
+            ct.full((), True, ct.bool_),
+        )
+
     def control_scalar(bits: ct.Constant[int], parameters):
         if parameters.dtype == ct.float64:
             word = ct.full((), bits, ct.uint64)
@@ -1025,6 +1151,7 @@ def _kernels(
         jacobian_scratch,
         singleton_flags,
         finite_jacobian_output,
+        accepted_jacobian_flags,
         block,
         height: ct.Constant[int],
         width: ct.Constant[int],
@@ -1047,20 +1174,34 @@ def _kernels(
             # schedule can change; accepted steps invalidate them below.
             finite_jacobian = ct.full((), True, ct.bool_)
             if ~current:
-                g, h, cost, valid, finite_jacobian = normal(
-                    x,
-                    images,
-                    weights,
-                    residuals,
-                    jacobian_scratch,
-                    singleton_flags,
-                    block,
-                    height,
-                    width,
-                    planes,
-                    tiles,
-                    need_normal=True,
-                )
+                reuse_jacobian = False
+                if cache_normals:
+                    reuse_jacobian = ct.reshape(
+                        ct.load(accepted_jacobian_flags, (block,), (1,)), ()
+                    )
+                if reuse_jacobian:
+                    g, h, cost, valid, finite_jacobian = saved_normal(
+                        jacobian_scratch,
+                        residuals,
+                        singleton_flags,
+                        block,
+                        tiles,
+                    )
+                else:
+                    g, h, cost, valid, finite_jacobian = normal(
+                        x,
+                        images,
+                        weights,
+                        residuals,
+                        jacobian_scratch,
+                        singleton_flags,
+                        block,
+                        height,
+                        width,
+                        planes,
+                        tiles,
+                        need_normal=True,
+                    )
                 if sm100_normals:
                     ct.store(
                         finite_jacobian_output,
@@ -1079,6 +1220,12 @@ def _kernels(
                     elif normal_recipe == "sm100-gemmsn":
                         h = sm100_gemmsn_hessian(jacobian_scratch, block)
             if ~finite_jacobian:
+                if cache_normals:
+                    ct.store(
+                        accepted_jacobian_flags,
+                        (block,),
+                        ct.full((1,), False, ct.bool_),
+                    )
                 status = ct.full((), _INVALID_RESIDUAL, ct.int32)
             else:
                 current = ct.full((), True, ct.bool_)
@@ -1160,6 +1307,14 @@ def _kernels(
                             status = ct.full((), _SINGULAR, ct.int32)
                         else:
                             trial_x = x + step
+                            if cache_normals:
+                                # A rejected trial overwrites J, but leaves
+                                # the independent normal-equation cache valid.
+                                ct.store(
+                                    accepted_jacobian_flags,
+                                    (block,),
+                                    ct.full((1,), False, ct.bool_),
+                                )
                             (
                                 _,
                                 _,
@@ -1213,6 +1368,14 @@ def _kernels(
                                     )
                                 )
                                 x = trial_x
+                                if cache_normals:
+                                    ct.store(
+                                        accepted_jacobian_flags,
+                                        (block,),
+                                        ct.reshape(
+                                            trial_finite_jacobian, (1,)
+                                        ),
+                                    )
                                 if sm100_normals:
                                     ct.store(
                                         finite_jacobian_output,
@@ -1315,6 +1478,7 @@ def _kernels(
         f_tol_bits: ct.Constant[int],
         x_tol_bits: ct.Constant[int],
         g_tol_bits: ct.Constant[int],
+        accepted_jacobian_flags,
         normal_cost_output,
         resume: ct.Constant[bool],
         initialize_only: ct.Constant[bool],
@@ -1428,6 +1592,7 @@ def _kernels(
                     jacobian_scratch,
                     singleton_flags,
                     finite_jacobian_output,
+                    accepted_jacobian_flags,
                     block,
                     height,
                     width,
@@ -1476,6 +1641,7 @@ def _kernels(
                     jacobian_scratch,
                     singleton_flags,
                     finite_jacobian_output,
+                    accepted_jacobian_flags,
                     block,
                     height,
                     width,
@@ -1673,6 +1839,13 @@ def _gaussian_iterations(
             else singleton_flags
         )
 
+        # Only graph kernels read this independent scratch-validity flag.
+        accepted_jacobian_flags = (
+            cp.zeros(batch, dtype=cp.bool_)
+            if sm100_normals
+            else singleton_flags
+        )
+
         def iteration_kernel(eligible_count):
             options = {}
             if sm100_normals:
@@ -1725,6 +1898,7 @@ def _gaussian_iterations(
         controls = (
             settings.max_evaluations,
             *_lm_control_bits(settings, dtype),
+            accepted_jacobian_flags,
         )
         # Establish validity before choosing the contraction cardinality.
         initialize_only = singleton_normals

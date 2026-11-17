@@ -4,7 +4,7 @@
 
 """Contracts and numerical checks for public Tile/SIMT Gaussian fitting."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import numpy as np
 import pytest
@@ -441,7 +441,7 @@ def test_launch_failure_drains_stream_and_preserves_exception(
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("nonblocking", [False, True])
-@pytest.mark.parametrize("budget", [25, 60])
+@pytest.mark.parametrize("budget", [18, 25, 60])
 def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
     runtime, monkeypatch, nonblocking, budget
 ):
@@ -451,6 +451,8 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
         pytest.skip("bounded graph schedule requires SM100 or SM120")
     _, ct = _tile_solver._runtime()
     sm100_normals = capability == "100"
+    if budget == 18 and not sm100_normals:
+        pytest.skip("accepted-Jacobian graph caching requires SM100")
     control_kernel = (
         _tile_solver._singleton_graph_control(True)
         if sm100_normals
@@ -536,6 +538,10 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
         assert not cp.shares_memory(result.residuals, device_images)
         if sm100_normals:
             assert len(cached_diagnostics) == 1
+            if budget == 18:
+                # Acceptance at the budget limit leaves final diagnostics
+                # stale; the public finalizer must refresh the returned fit.
+                assert not bool(cp.asnumpy(cached_diagnostics[0])[0])
             if budget == 25:
                 # Rejection preserves current diagnostics at the budget limit.
                 np.testing.assert_array_equal(
@@ -545,9 +551,11 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
     assert captured_controls, "the long-fit fixture did not enter capture"
     if budget == 60:
         assert singleton_tail, "the remaining fit did not return to extent2"
-    # One fit converges inside the first replay; the other reaches its budget.
-    # Budget 25 exhausts inside that replay; its remaining nodes are no-ops.
-    np.testing.assert_array_equal(converged, [True, False, True, False])
+    # Budget 18 exhausts after the warm transition. Later budgets let one
+    # fit converge inside the first replay while the other reaches its limit.
+    np.testing.assert_array_equal(
+        converged, [budget != 18, False, True, False]
+    )
     np.testing.assert_array_equal(
         status[1:],
         [
@@ -558,4 +566,40 @@ def test_graph_preserves_terminal_rows_budget_and_singleton_tail(
     )
     np.testing.assert_array_equal(evaluations[1:], [budget, 1, 1])
     assert evaluations[0] <= budget
-    np.testing.assert_allclose(parameters[0], truth[0], rtol=2e-7, atol=2e-8)
+    if budget == 18:
+        assert status[0] == LMStatus.MAX_EVALUATIONS
+        assert evaluations[0] == budget
+    else:
+        np.testing.assert_allclose(
+            parameters[0], truth[0], rtol=2e-7, atol=2e-8
+        )
+    if sm100_normals:
+        # Ordinary transitions recompute accepted derivatives. Graph reuse
+        # must preserve every public result, including final diagnostics.
+        with monkeypatch.context() as reference_patch, stream:
+            reference_patch.setattr(ct, "launch", launch)
+            reference_patch.setattr(
+                _tile_solver, "_GRAPH_MIN_HOST_TRANSITIONS", budget + 1
+            )
+            reference = api.fit_dipoles_device(
+                device_images,
+                model=model,
+                initial=device_initial,
+                backend="tile-simt",
+                config=LMConfig(
+                    initial_damping=1e-12, max_evaluations=budget
+                ),
+            )
+            for field in fields(result):
+                actual = getattr(result, field.name)
+                expected = getattr(reference, field.name)
+                if isinstance(actual, cp.ndarray):
+                    assert isinstance(expected, cp.ndarray), field.name
+                    actual = cp.asnumpy(actual)
+                    expected = cp.asnumpy(expected)
+                    assert actual.shape == expected.shape, field.name
+                    assert actual.dtype == expected.dtype, field.name
+                    assert actual.tobytes() == expected.tobytes(), field.name
+                else:
+                    assert type(actual) is type(expected), field.name
+                    assert actual == expected, field.name
