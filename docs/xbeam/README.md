@@ -55,6 +55,9 @@ carry visibility spectra, timestamps, weights and baseline metadata. See
 the [data contract](data-contract.md) and
 [numerical profiles](conformance.md) for their interpretation.
 
+Use [closure diagnostics](closure-diagnostics.md) to compute per-channel
+triangle phases and four-station log amplitude ratios from those records.
+
 To build header indexes in a shared directory and use them for correlation:
 
 ```bash
