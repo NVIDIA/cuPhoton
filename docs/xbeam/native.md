@@ -140,7 +140,7 @@ through its text-job inputs and serialized SWIN output. It uses two independent
 noise sources with different station lags and mixing coefficients, giving
 nonzero closure phases and nonunit closure amplitudes. The fixture includes
 reversed baseline orientations, autocorrelations, two integration periods,
-nonzero UVW coordinates, and an invalid frame with fractional exposure.
+nonzero UVW coordinates, and an invalid frame that reduces integration exposure.
 No observational files are needed.
 
 After the CUDA CMake build above, run from a development checkout:
@@ -152,12 +152,13 @@ uv run --locked --extra dev pytest tests/xbeam/native/test_native_closures.py
 The CPU case compares the NumPy radio path with an independent direct DFT.
 The GPU cases run the standalone executable with POSIX reads and prefetch
 on and off. Each 16-second integration spans two 256-FFT tiles, exercising
-prefetch and accumulation between tiles. They check every visibility,
+prefetch and accumulation between tiles. Both paths check every visibility,
 timestamp, index, polarization, exposure weight, and UVW coordinate before
 checking triangle phases and four-station log closure amplitudes. GPU cases
 skip when the standalone CUDA executable has not been built or
 `CUDA_VISIBLE_DEVICES` explicitly disables devices (empty or `-1`);
-`-m "not gpu"` selects the CPU case.
+`-m "not gpu"` selects the CPU case. CI runs the CPU case; the standalone CUDA
+cases are currently run manually after the CUDA build.
 
 Closures complement visibility and metadata comparisons: station gains can
 cancel in closures, and closure agreement does not validate UVW coordinates.
