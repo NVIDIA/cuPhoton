@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -27,6 +28,58 @@ SPEC = importlib.util.spec_from_file_location(
 )
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
+
+
+@pytest.mark.parametrize("docs_only", [False, True])
+@pytest.mark.parametrize("vetted", [False, True])
+@pytest.mark.parametrize("developer_tools", [False, True])
+def test_ci_gate_requires_every_selected_job(
+    docs_only, vetted, developer_tools
+):
+    workflow = yaml.safe_load(
+        (SCRIPTS.parents[1] / ".github/workflows/ci.yml").read_text()
+    )
+    script = workflow["jobs"]["ci-required"]["steps"][0]["run"]
+    results = {
+        "CHANGES_RESULT": "success",
+        "LINT_RESULT": "success",
+        "DEV_RESULT": "success" if developer_tools else "skipped",
+        **{
+            name: "skipped" if docs_only else "success"
+            for name in (
+                "CPU_RESULT",
+                "NOOA_RESULT",
+                "COVERAGE_RESULT",
+                "CONDA_RESULT",
+            )
+        },
+        **{
+            name: "success" if vetted and not docs_only else "skipped"
+            for name in ("GPU_RESULT", "PACKAGE_RESULT")
+        },
+    }
+    env = {
+        **os.environ,
+        **results,
+        "DOCS_ONLY": str(docs_only).lower(),
+        "REQUIRE_FULL_CI": str(vetted).lower(),
+        "DEV_REQUIRED": str(developer_tools).lower(),
+    }
+
+    def run(overrides):
+        return subprocess.run(
+            ["bash", "-eu", "-c", script],
+            env={**env, **overrides},
+            capture_output=True,
+        ).returncode
+
+    assert run({}) == 0
+    for name, expected in results.items():
+        for outcome in ("success", "skipped", "failure", "cancelled"):
+            if outcome != expected:
+                assert run({name: outcome}) != 0, (name, outcome)
+    for name in ("DOCS_ONLY", "DEV_REQUIRED"):
+        assert run({name: ""}) != 0, name
 
 
 @pytest.mark.parametrize(
