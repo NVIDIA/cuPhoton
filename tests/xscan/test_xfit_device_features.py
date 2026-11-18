@@ -441,7 +441,10 @@ def test_device_features_accept_result_without_residuals(model: str) -> None:
     assert features.image_shape == _IMAGE_SHAPE
 
 
-def test_device_features_accept_actual_device_fit_result() -> None:
+@pytest.mark.parametrize("backend", ["cupy", "tile-simt"])
+def test_device_features_accept_actual_device_fit_result(backend) -> None:
+    if backend == "tile-simt":
+        pytest.importorskip("nvmath.tile.linalg")
     cp = _require_cupy_device()
     truth = np.asarray(
         [[5.0, 1.3, 1.8, 0.25, -2.0, 0.5, 2.2, -0.7]],
@@ -449,7 +452,9 @@ def test_device_features_accept_actual_device_fit_result() -> None:
     )
     model = GaussianDipoleModel(_IMAGE_SHAPE, dtype=np.float64)
     images = cp.asarray(model.evaluate(truth))
-    result = fit_dipoles_device(images, model=model, initial=truth)
+    result = fit_dipoles_device(
+        images, model=model, initial=truth, backend=backend
+    )
 
     features = transform_xfit_result_features_device(
         result,

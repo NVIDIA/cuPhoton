@@ -10,6 +10,9 @@ groups, including the optional DragonHPC and mpi4py packages.
 The optional NOOA investigation profile is also recorded in the lock; its
 Python dependencies, system bubblewrap executable and libseccomp library are
 installed separately and are not bundled in cuPhoton artifacts.
+The optional `tile-simt` profile installs MathDx, CUDA Tile and its preview
+package separately. Their Python modules, native libraries and Tile/SIMT
+provider libraries are not bundled in cuPhoton artifacts.
 The site-provided MPI implementation is not part of that lock. Isolated
 PEP 517 builds resolve build-system requirements separately from `uv.lock`;
 their `build` rows are labeled `not locked` below.
@@ -108,8 +111,10 @@ more than one license.
 | `io`, `gpu` | `nvidia-nvcomp-cu13==5.2.*` | `5.2.0.13` | NVIDIA License Agreement for Software Development Kits; no SPDX expression declared | [nvCOMP](https://developer.nvidia.com/nvcomp) | `uv / PyPI; NVIDIA SDK wheel` |
 | `wheel build` | `pybind11==3.0.4` | `build recipe` | `BSD-3-Clause` | [pybind11](https://github.com/pybind/pybind11) | `uv / PyPI` |
 | `gpu` | `torch>=2.13,<3` | `2.13.0` | `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT` | [PyTorch](https://github.com/pytorch/pytorch) | `uv / PyPI` |
-| `cutile` | `cuda-tile>=1.6,<2` | `1.6.0` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI` |
-| `cutile` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
+| `cutile`, `tile-simt` | `cuda-tile>=1.6,<2` | `1.8.1` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI; MathDx further constrains tile-simt to >=1.8.1,<1.9` |
+| `cutile`, `tile-simt` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
+| `tile-simt` | `nvidia-libmathdx-cu13[sysctk13-tile]>=0.5.0.7,<0.6` | `0.5.0.7` | NVIDIA License Agreement for Math Libraries Software Development Kits; no SPDX expression declared | [MathDx](https://docs.nvidia.com/cuda/libmathdx/index.html) | `uv / PyPI; separately installed NVIDIA SDK wheel` |
+| `tile-simt` | `cuda-tile-preview>=1.8.1,<1.9` through the MathDx extra | `1.8.1` | `Apache-2.0` | [CUDA Tile](https://github.com/NVIDIA/cutile-python) | `uv / PyPI; separately installed preview package` |
 | `dev`, `native-build` | `setuptools>=84.2.1` | `84.2.1` | `MIT` | [setuptools](https://github.com/pypa/setuptools) | `uv / PyPI` |
 | `dev` | `pre-commit>=4.0` | `4.6.0` | `MIT` | [pre-commit](https://github.com/pre-commit/pre-commit) | `uv / PyPI` |
 | `dev` | `virtualenv>=21.15.4` | `21.15.4` | `MIT` | [virtualenv](https://github.com/pypa/virtualenv) | `uv / PyPI; pre-commit environment creation` |
