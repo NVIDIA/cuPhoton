@@ -415,7 +415,10 @@ def test_requested_mps_is_checked_after_worker_cuda_initialization(
         "cuphoton.core.mps",
         SimpleNamespace(require_mps_client=require_client),
     )
-    result = _run(tmp_path, mps_pipe_directory=pipe_directory)
+    # Check MPS initialization ordering without a short filesystem deadline.
+    result = _run(
+        tmp_path, mps_pipe_directory=pipe_directory, result_timeout=5.0
+    )
     assert len(checked) == 2
     assert result.status == ("success" if connected else "failed")
     assert sorted(state.closed) == [0, 1]
