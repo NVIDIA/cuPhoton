@@ -1,0 +1,31 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<script>
+// Quarto's navigation and themes use storage. When browser policy blocks it,
+// retain current-page interactions without claiming to persist preferences.
+(() => {
+  try {
+    const storage = window.localStorage;
+    const probe = `model-alerts-storage-check-${Math.random()}`;
+    storage.setItem(probe, "1");
+    storage.removeItem(probe);
+    storage.getItem("quarto-color-scheme");
+    return;
+  } catch (_) {
+    const values = new Map();
+    const memory = {
+      get length() { return values.size; },
+      key(index) { return [...values.keys()][index] ?? null; },
+      getItem(key) { return values.get(String(key)) ?? null; },
+      setItem(key, value) { values.set(String(key), String(value)); },
+      removeItem(key) { values.delete(String(key)); },
+      clear() { values.clear(); },
+    };
+    try {
+      Object.defineProperty(window, "localStorage", {
+        configurable: true, enumerable: true, value: memory,
+      });
+    } catch (_) { /* A separate script may have locked the global property. */ }
+  }
+})();
+</script>
