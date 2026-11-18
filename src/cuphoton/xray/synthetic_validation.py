@@ -466,7 +466,10 @@ class ModeValidation:
 class ValidationLevel:
     """One sweep condition. A trial is successful when the estimator
     returned and every true mode was matched; ``estimator_errors`` counts
-    trials in which the estimator raised, which are also failed trials."""
+    trials in which the estimator raised, which are also failed trials.
+    Solver convergence is recorded separately from frequency-based recovery;
+    estimators without convergence diagnostics leave both counts at zero.
+    """
 
     snr_db: float
     noise_sigma: float
@@ -478,6 +481,8 @@ class ValidationLevel:
     modes: tuple[ModeValidation, ...]
     any_mode_lost_rate: float
     residual_ratio: float
+    solver_converged: int = 0
+    solver_unconverged: int = 0
 
     def __str__(self) -> str:
         lines = [
@@ -487,6 +492,11 @@ class ValidationLevel:
             f"any_mode_lost_rate={self.any_mode_lost_rate:.3f} "
             f"residual_ratio={self.residual_ratio:.2f}"
         ]
+        if self.solver_converged + self.solver_unconverged:
+            lines.append(
+                f"solver_converged={self.solver_converged} "
+                f"solver_unconverged={self.solver_unconverged}"
+            )
         lines.extend(f"  {mode}" for mode in self.modes)
         return "\n".join(lines)
 
@@ -617,7 +627,9 @@ def validation_sweep(
 
     ``estimator`` may return CuPy arrays; they are moved to the host. A
     trial in which the estimator raises is counted in ``estimator_errors``
-    and as a loss of every mode.
+    and as a loss of every mode. A returned ``converged`` flag is counted
+    separately: frequency recovery and conditional parameter statistics do
+    not imply solver convergence.
 
     Truth and fitted modes use nonnegative amplitudes and frequencies,
     with equivalent phases in ``[-pi, pi)``. The returned truth uses the
@@ -681,6 +693,8 @@ def validation_sweep(
         lost = np.zeros(len(modes), dtype=int)
         any_lost = 0
         errors = 0
+        solver_converged = 0
+        solver_unconverged = 0
         ratios = []
         for _ in range(trials):
             y = clean + rng.normal(0.0, sigma, size=base.time.shape)
@@ -691,6 +705,10 @@ def validation_sweep(
                 any_lost += 1
                 lost += 1
                 continue
+            status = getattr(r, "converged", None)
+            if status is not None:
+                solver_converged += int(bool(status))
+                solver_unconverged += int(not bool(status))
             d = _to_host(r.decay)
             a, w, p = _canonical(
                 _to_host(r.amplitude),
@@ -739,6 +757,8 @@ def validation_sweep(
                 trials_successful=trials - any_lost,
                 trials_failed=any_lost,
                 estimator_errors=errors,
+                solver_converged=solver_converged,
+                solver_unconverged=solver_unconverged,
                 n_components=n_components,
                 modes=tuple(per_mode),
                 any_mode_lost_rate=float(any_lost / trials),
@@ -770,14 +790,16 @@ def validate_linear_prediction(
     seed: int = 20260914,
     distortion: tuple[str, float] | None = None,
     output_dir: Path | str | None = None,
+    refine: bool = False,
 ) -> ValidationReport:
     """Validate linear prediction and optionally write its run artifacts.
 
     The returned report provides text and strict-JSON-compatible summaries
     of the same sweep. Set ``output_dir`` to write ``summary.json`` and,
-    when Bokeh is available, a validation figure.
+    when Bokeh is available, a validation figure. Set ``refine`` to compare
+    the experimental nonlinear estimator using the same noise realizations.
     """
-    sweeps = (
+    sweeps: tuple[ValidationSweep, ...] = (
         validation_sweep(
             samples=samples,
             snr_db=snr_db,
@@ -787,6 +809,26 @@ def validate_linear_prediction(
             distortion=distortion,
         ),
     )
+    if refine:
+        from .mode_refinement import linear_prediction_refined
+
+        n_modes = len(sweeps[0].modes)
+        sweeps += (
+            validation_sweep(
+                samples=samples,
+                snr_db=snr_db,
+                trials=trials,
+                n_components=n_components,
+                seed=seed,
+                distortion=distortion,
+                estimator=lambda time, trace, components: (
+                    linear_prediction_refined(
+                        time, trace, components, n_modes
+                    )
+                ),
+                backend="cpu-refined",
+            ),
+        )
     summary = (
         build_summary(sweeps)
         if output_dir is None
@@ -966,6 +1008,16 @@ def build_summary(
                         "failed": lvl.trials_failed,
                         "estimator_errors": lvl.estimator_errors,
                     },
+                    **(
+                        {
+                            "solver_convergence": {
+                                "converged": lvl.solver_converged,
+                                "unconverged": lvl.solver_unconverged,
+                            }
+                        }
+                        if lvl.solver_converged + lvl.solver_unconverged
+                        else {}
+                    ),
                     "any_mode_lost_rate": lvl.any_mode_lost_rate,
                     "residual_rms_over_sigma_median": (
                         lvl.residual_ratio
