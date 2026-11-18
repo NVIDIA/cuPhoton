@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -141,6 +142,76 @@ def source(tmp_path, monkeypatch):
     sha = git("rev-parse", "HEAD")
     git("update-ref", "refs/remotes/origin/main", sha)
     return git, sha
+
+
+@pytest.mark.parametrize("valid_artifact", [True, False])
+def test_publish_uses_release_validator_and_current_provenance_checks(
+    source, tmp_path, monkeypatch, valid_artifact
+):
+    workflow = yaml.safe_load(
+        (SCRIPTS.parents[1] / ".github/workflows/publish.yml").read_text()
+    )
+    step = next(
+        step
+        for step in workflow["jobs"]["stage"]["steps"]
+        if step.get("name")
+        == "Verify the build, tag, complete matrix, and unchanged bytes"
+    )
+    git, _ = source
+    scripts = tmp_path / "scripts/wheels"
+    scripts.mkdir(parents=True)
+    validator = scripts / "check_distributions.py"
+    validator.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "assert sys.argv[1:] == ['dist', '--version', '0.2.2']\n"
+        "assert Path('dist/artifact').read_text() == 'valid'\n"
+    )
+    helper = scripts / "release.py"
+    helper.write_text("raise RuntimeError('Used old release helper')\n")
+    git("add", "scripts")
+    git("commit", "-m", "Release source")
+    source_sha = git("rev-parse", "HEAD")
+
+    validator.write_text("raise RuntimeError('Used newer validator')\n")
+    helper.write_text(
+        "import sys\n"
+        "with open('release-calls', 'a') as stream:\n"
+        "    stream.write(sys.argv[1] + '\\n')\n"
+    )
+    git("add", "scripts")
+    git("commit", "-m", "Newer publishing checks")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist/artifact").write_text(
+        "valid" if valid_artifact else "corrupt"
+    )
+    (tmp_path / "provenance").mkdir()
+    (tmp_path / "provenance/provenance.json").write_text("{}\n")
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python").symlink_to(sys.executable)
+    uvx = bin_dir / "uvx"
+    uvx.write_text("#!/bin/sh\nexit 0\n")
+    uvx.chmod(0o755)
+    for name, value in {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RUNNER_TEMP": str(runner_temp),
+        "SOURCE_SHA": source_sha,
+        "RELEASE_TAG": "v0.2.2",
+        "RELEASE_VERSION": "0.2.2",
+        "BUILD_RUN_ID": "123",
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]], capture_output=True, text=True
+    )
+    assert (result.returncode == 0) == valid_artifact, result.stderr
+    assert (tmp_path / "release-calls").read_text().splitlines() == (
+        ["resolve", "verify"] if valid_artifact else ["resolve"]
+    )
 
 
 def test_tags_resolve_to_commits_and_detect_a_moved_tag(source):

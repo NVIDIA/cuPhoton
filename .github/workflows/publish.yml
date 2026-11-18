@@ -112,7 +112,9 @@ jobs:
           SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           python scripts/wheels/release.py resolve "$RELEASE_TAG" --expected-sha "$SOURCE_SHA"
-          python scripts/wheels/check_distributions.py dist --version "$RELEASE_VERSION"
+          # Validate contents against the release source, which may predate main.
+          git show "${SOURCE_SHA}:scripts/wheels/check_distributions.py" > "$RUNNER_TEMP/check_distributions.py"
+          python "$RUNNER_TEMP/check_distributions.py" dist --version "$RELEASE_VERSION"
           python scripts/wheels/release.py verify dist provenance/provenance.json \
             --tag "$RELEASE_TAG" --sha "$SOURCE_SHA" --run-id "$BUILD_RUN_ID"
           uvx --isolated --from twine==6.2.0 twine check --strict dist/*
