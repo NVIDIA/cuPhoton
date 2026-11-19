@@ -98,7 +98,7 @@ more than one license.
 | `torch`, `gpu`, `dev`, `docs` | `filelock>=4.2.1` | `4.2.10` | `MIT` | [filelock](https://github.com/tox-dev/filelock) | `uv / PyPI; shared dependency of PyTorch and virtualenv` |
 | `viz` | `bokeh>=3.9` | `3.9.1` | `BSD-3-Clause` | [Bokeh](https://github.com/bokeh/bokeh) | `uv / PyPI` |
 | `viz` | `pillow>=13.0.0` | `13.0.0` | `MIT-CMU` | [Pillow](https://github.com/python-pillow/Pillow) | `uv / PyPI` |
-| `viz` | `tornado>=6.6` | `6.6` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
+| `viz` | `tornado>=6.6.1` | `6.6.1` | `Apache-2.0` | [Tornado](https://github.com/tornadoweb/tornado) | `uv / PyPI` |
 | `io`, `gpu` | `cuda-pathfinder>=1.5.6,<2` | `1.5.6` | `Apache-2.0` | [CUDA Python](https://github.com/NVIDIA/cuda-python/tree/main/cuda_pathfinder) | `uv / PyPI; loaded separately for native xFit CUDA library discovery` |
 | `io`, `gpu` | `cuda-bindings>=13,<14` | `13.3.1` | `LicenseRef-NVIDIA-SOFTWARE-LICENSE` | [CUDA Python](https://github.com/NVIDIA/cuda-python) | `uv / PyPI` |
 | `io`, `gpu` | `cupy-cuda13x[ctk]>=14,<15` | `14.1.1` | `MIT`; its bundled CCCL headers have the component licenses below, and the `ctk` extra installs separately licensed NVIDIA CUDA component wheels | [CuPy](https://github.com/cupy/cupy) | `uv / PyPI` |
