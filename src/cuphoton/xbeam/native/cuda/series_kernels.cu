@@ -50,7 +50,9 @@ __global__ void pack(
                     atomicOr(error, 1);
                 }
             }
-            valid[(long long)row * samples + col] = live;
+            if (valid) {
+                valid[(long long)row * samples + col] = live;
+            }
         }
         Complex value;
         value.x = re;
