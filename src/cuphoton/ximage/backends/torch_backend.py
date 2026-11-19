@@ -85,6 +85,11 @@ class TorchBackend:
 
         device = _resolve_device(torch, getattr(config, "device", "auto"))
         dtype = _resolve_dtype(torch, getattr(config, "dtype", "float64"))
+        use_cuda_graph = getattr(config, "cuda_graph", False)
+        if use_cuda_graph and (
+            device.type != "cuda" or config.method != "adam"
+        ):
+            raise ValueError("cuda_graph requires the Adam solver on CUDA")
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
 
@@ -150,24 +155,24 @@ class TorchBackend:
         )
 
         optimizer = torch.optim.Adam([h_param], lr=config.lr)
-        trace_loss: list[float] = []
-        trace_iterations: list[int] = []
+        kernel_row = None
+        if config.grad_reg_coeff:
+            kernel_row = torch.tensor(
+                [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]],
+                device=device,
+                dtype=dtype,
+            ).reshape(1, 1, 3, 3)
 
-        initial_pred = _forward_psf_bank(
-            F, h_param, g_input, config.srf, config.padding
-        )
-        if initial_pred.shape != target.shape:
-            raise RuntimeError(
-                "Torch PSF solve produced shape "
-                f"{tuple(initial_pred.shape)} but expected "
-                f"{tuple(target.shape)}."
-            )
-
-        for step in range(int(config.num_steps)):
-            optimizer.zero_grad()
+        def forward_backward():
+            optimizer.zero_grad(set_to_none=True)
             pred = _forward_psf_bank(
                 F, h_param, g_input, config.srf, config.padding
             )
+            if pred.shape != target.shape:
+                raise RuntimeError(
+                    "Torch PSF solve produced shape "
+                    f"{tuple(pred.shape)} but expected {tuple(target.shape)}."
+                )
 
             if config.loss == "L2":
                 loss = torch.sum((target - pred) ** 2)
@@ -178,16 +183,25 @@ class TorchBackend:
                     f"Unsupported loss for torch PSF solve: {config.loss}"
                 )
 
-            if config.grad_reg_coeff:
+            if kernel_row is not None:
                 loss = loss + config.grad_reg_coeff * _gradient_penalty(
-                    F, h_param
+                    F, h_param, kernel_row
                 )
 
             loss.backward()
-            optimizer.step()
+            return loss.detach()
 
-            trace_iterations.append(step)
-            trace_loss.append(float(loss.detach().cpu().item()))
+        num_steps = int(config.num_steps)
+        if use_cuda_graph and num_steps > 3:
+            trace_loss = _adam_cuda_graph_losses(
+                torch, device, dtype, forward_backward, optimizer, num_steps
+            )
+        else:
+            trace_loss = []
+            for _ in range(num_steps):
+                loss = forward_backward()
+                optimizer.step()
+                trace_loss.append(float(loss.cpu().item()))
 
         # Adam fits correlation kernels; public PSFs are point-source images.
         h_out = (
@@ -203,7 +217,7 @@ class TorchBackend:
             "psfs": h_out,
             "gaussian_psf": gaussian_psf,
             "trace": {
-                "iterations": np.asarray(trace_iterations, dtype=np.int64),
+                "iterations": np.arange(num_steps, dtype=np.int64),
                 "loss": np.asarray(trace_loss, dtype=np.float64),
             },
         }
@@ -603,6 +617,36 @@ class TorchBackend:
             },
             "performance": performance,
         }
+
+
+def _adam_cuda_graph_losses(
+    torch, device, dtype, forward_backward, optimizer, num_steps
+):
+    """Replay the gradient calculation and retain Adam's eager update."""
+    stream = torch.cuda.Stream(device=device)
+    caller = torch.cuda.current_stream(device)
+    stream.wait_stream(caller)
+    try:
+        with torch.cuda.stream(stream):
+            losses = torch.empty(num_steps, device=device, dtype=dtype)
+            for step in range(3):
+                losses[step].copy_(forward_backward())
+                optimizer.step()
+
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, stream=stream):
+                # Backward allocates the gradient after set_to_none.
+                # Each replay overwrites that same buffer.
+                loss = forward_backward()
+
+            for step in range(3, num_steps):
+                graph.replay()
+                losses[step].copy_(loss)
+                optimizer.step()
+            return losses.cpu().numpy()
+    finally:
+        # The caller owns the inputs, including when a CUDA operation raises.
+        caller.wait_stream(stream)
 
 
 def _solve_psf_mm(
@@ -1165,13 +1209,7 @@ def _iter_exposure_slices(total_exposures: int, exposure_batch_size: int):
         yield slice(start, stop)
 
 
-def _gradient_penalty(F, h_param):
-    torch = _load_torch()
-    kernel_row = torch.tensor(
-        [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]],
-        device=h_param.device,
-        dtype=h_param.dtype,
-    ).reshape(1, 1, 3, 3)
+def _gradient_penalty(F, h_param, kernel_row):
     kernel_column = kernel_row.transpose(-1, -2)
     padded = F.pad(h_param, (1, 1, 1, 1), mode="reflect")
     row_gradient = F.conv2d(padded, kernel_row)

@@ -93,6 +93,13 @@ multiplicative updates. To reconstruct with calibrated kernels, set
 `psf_path` in the reconstruction configuration to the saved `psfs.npy`.
 With `psf_path: null`, reconstruction uses the bundle's PSFs.
 
+For longer Adam fits on CUDA, set `cuda_graph: true` in the PSF solve
+configuration to replay the forward and backward passes. The first three
+steps warm up the solver. Each run records its own graph and retains
+the usual Adam updates and loss trace. Use this option when the solver
+has exclusive use of CUDA within its process during capture. The default
+is eager execution.
+
 Each completed run contains `config.yaml`, `summary.json`, numeric result
 arrays under `artifacts/`, and numeric convergence traces under `trace/`.
 With `VALID` padding, the saved reconstruction includes PSF context around
