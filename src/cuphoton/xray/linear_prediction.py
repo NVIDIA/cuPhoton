@@ -3740,15 +3740,11 @@ def _linear_prediction_p1_coefficients_impl(*, xp, time, trace, n_components):
     rows = n - m
     if rows <= 0 or m <= 0:
         raise ValueError("trace is too short for linear prediction")
-    if xp is np:
-        # Copy all windows together so parallel CPU fits avoid a Python loop.
-        hankel = np.lib.stride_tricks.sliding_window_view(signal[1:], m)[
-            :rows
-        ].copy()
-    else:
-        hankel = xp.zeros((rows, m), dtype=signal.dtype)
-        for i in range(rows):
-            hankel[i, :] = signal[i + 1 : i + m + 1]
+    # H[i, j] = signal[1 + i + j]. Both axes advance by one input stride,
+    # and the last window ends at signal[rows + m - 1].
+    hankel = xp.lib.stride_tricks.as_strided(
+        signal[1:], shape=(rows, m), strides=signal.strides * 2
+    ).copy()
     u, singular_values, vh = xp.linalg.svd(hankel, full_matrices=False)
     selected_model_order = _component_count(
         xp,

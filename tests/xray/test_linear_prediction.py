@@ -482,7 +482,8 @@ def test_batched_p1_preserves_per_row_model_order():
         ]
     )
     gpu_time = cupy.asarray(time)
-    gpu_traces = cupy.asarray(traces)
+    # Each row is a strided trace, as when fitting one detector column.
+    gpu_traces = cupy.asarray(traces, order="F")
 
     serial = lp._linear_prediction_p1_cupy_serial(
         gpu_time,
