@@ -223,6 +223,51 @@ def test_torch_psf_solve_supports_grad_regularization() -> None:
     assert result["trace"]["loss"].shape[0] == 1
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    "num_steps,loss,dtype,srf,regularization",
+    [
+        (2, "L1", "float32", 1, 0.0),
+        (9, "L2", "float32", 1, 0.0),
+        (4, "L2", "float64", 2, 0.0),
+        (12, "L1", "float64", 1, 1e-3),
+    ],
+)
+def test_cuda_adam_graph_preserves_psfs_and_loss_history(
+    num_steps, loss, dtype, srf, regularization
+):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    psfs = np.random.default_rng(17).uniform(size=(5, 5, 1, 3))
+    config = _config().model_copy(
+        update={
+            "device": "cuda",
+            "num_steps": num_steps,
+            "loss": loss,
+            "dtype": dtype,
+            "srf": srf,
+            "grad_reg_coeff": regularization,
+        }
+    )
+    backend = TorchBackend()
+    expected = backend.solve_psf(_bundle(psfs), config)
+    actual = backend.solve_psf(
+        _bundle(psfs), config.model_copy(update={"cuda_graph": True})
+    )
+    np.testing.assert_array_equal(
+        actual["trace"]["iterations"], expected["trace"]["iterations"]
+    )
+    np.testing.assert_allclose(
+        actual["psfs"], expected["psfs"], rtol=1e-12, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        actual["trace"]["loss"],
+        expected["trace"]["loss"],
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
 def test_torch_psf_solve_supports_mm() -> None:
     backend = TorchBackend()
     config = _config().model_copy(

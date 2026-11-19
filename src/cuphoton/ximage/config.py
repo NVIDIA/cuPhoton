@@ -121,6 +121,7 @@ class PsfSolveConfig(WorkflowConfig):
     grad_reg_coeff: float = Field(default=0.0, ge=0.0)
     lr: float = Field(default=1e-3, gt=0.0)
     num_steps: int = Field(default=3100, ge=1)
+    cuda_graph: bool = False
     ucf: float = Field(default=2.0, ge=1.0)
     min_iter: int = Field(default=10, ge=0)
     max_iter: int = Field(default=100, ge=1)
