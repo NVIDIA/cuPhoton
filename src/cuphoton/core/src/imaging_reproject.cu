@@ -129,6 +129,7 @@ __device__ void sample(
     int interpolation,
     int a,
     bool two_a,
+    bool fused_bilinear_image,
     double& value,
     double& var) {
     const Index x0 = Index(floor(x)), y0 = Index(floor(y));
@@ -152,8 +153,9 @@ __device__ void sample(
             }
             const Index offset = ys[k] * width + xs[k];
             if (source) {
-                num = variance ? __fma_rn(w, source[offset], num)
-                               : __dadd_rn(num, __dmul_rn(w, source[offset]));
+                num = fused_bilinear_image
+                    ? __fma_rn(w, source[offset], num)
+                    : __dadd_rn(num, __dmul_rn(w, source[offset]));
             }
             if (variance) {
                 num_var = __fma_rn(w * w, variance[offset], num_var);
@@ -240,7 +242,7 @@ __global__ void reproject_kernel(
     int a,
     bool two_a,
     bool scale_area,
-    int mask_interpolation,
+    bool plane_aware,
     double fill,
     double variance_fill,
     Mask invalid_mask) {
@@ -262,6 +264,8 @@ __global__ void reproject_kernel(
                 interpolation,
                 a,
                 two_a,
+                // The host masked API uses standalone bilinear image rounding.
+                variance && !plane_aware,
                 value,
                 var);
             if (scale_area) {
@@ -288,6 +292,7 @@ __global__ void reproject_kernel(
     if (finite) {
         const Index x0 = Index(floor(x)), y0 = Index(floor(y));
         const double fx = x - double(x0), fy = y - double(y0);
+        const int mask_interpolation = plane_aware ? interpolation : 0;
         const int start = mask_interpolation == 0 ? 0 : (two_a ? -(a - 1) : -a);
         const int window =
             mask_interpolation == 0 ? 2 : (two_a ? 2 * a : 2 * a + 1);
@@ -440,7 +445,7 @@ PyObject* prepare_mapping(PyObject*, PyObject* args) {
 PyObject* reproject(PyObject*, PyObject* args) {
     PyObject *source_o, *variance_o, *mask_o, *x_o, *y_o, *area_o, *valid_o;
     PyObject *out_o, *out_var_o, *out_mask_o;
-    int interpolation, a, two_a, scale_area, mask_lanczos;
+    int interpolation, a, two_a, scale_area, plane_aware;
     double fill, variance_fill;
     unsigned long long invalid_mask, stream;
     if (!PyArg_ParseTuple(
@@ -460,7 +465,7 @@ PyObject* reproject(PyObject*, PyObject* args) {
             &a,
             &two_a,
             &scale_area,
-            &mask_lanczos,
+            &plane_aware,
             &fill,
             &variance_fill,
             &invalid_mask,
@@ -561,7 +566,7 @@ PyObject* reproject(PyObject*, PyObject* args) {
                         a,
                         bool(two_a),
                         bool(scale_area),
-                        mask_lanczos ? interpolation : 0,
+                        bool(plane_aware),
                         fill,
                         variance_fill,
                         Mask(invalid_mask));

@@ -228,6 +228,59 @@ def test_native_masked_api_preserves_full_kernel_mask_support(
     np.testing.assert_array_equal(actual.mask, reference.mask)
 
 
+def test_native_masked_bilinear_preserves_standalone_image_rounding():
+    from cuphoton.xrep import reproject_array
+
+    rng = np.random.default_rng(44)
+    source = rng.normal(size=(19, 23))
+    spec = ReprojectionSpec(
+        mapping=lambda points: points + np.array([0.31, 0.27]),
+        output_bbox=BBox(0, 0, 23, 19),
+        interpolation="bilinear",
+        mapping_grid_step=4,
+    )
+    expected = reproject_array(source, spec, backend="native")
+    actual = reproject_masked_array(
+        source,
+        np.ones_like(source),
+        np.zeros_like(source, dtype=np.uint16),
+        spec,
+        backend="native",
+    )
+    np.testing.assert_array_equal(actual.image, expected.image)
+
+
+def test_native_masked_reprojection_fits_a_per_plane_memory_pool():
+    size = 512
+    source = np.arange(size**2, dtype=np.float64).reshape(size, size)
+    variance = np.ones_like(source)
+    mask = source.astype(np.uint64)
+    spec = ReprojectionSpec(
+        mapping=lambda points: points + np.array([0.2, 0.3]),
+        output_bbox=BBox(0, 0, size, size),
+        interpolation="bilinear",
+        mapping_grid_step=16,
+    )
+    mapping = prepare_reprojection(
+        spec, source_shape=source.shape, backend="native"
+    )
+    kwargs = {"backend": "native", "prepared": mapping}
+    expected = reproject_masked_array(source, variance, mask, spec, **kwargs)
+
+    # Three 2 MiB inputs and three outputs cannot fit together.
+    pool = cp.cuda.MemoryPool()
+    pool.set_limit(size=7 << 20)
+    with cp.cuda.using_allocator(pool.malloc):
+        actual = reproject_masked_array(
+            source, variance, mask, spec, **kwargs
+        )
+
+    for name in ("image", "variance", "mask"):
+        np.testing.assert_array_equal(
+            getattr(actual, name), getattr(expected, name)
+        )
+
+
 def test_native_mapping_diagnostics_without_compilation(monkeypatch):
     from cuphoton.xrep.backends.native_backend import (
         mapping_edge_score,
