@@ -200,6 +200,33 @@ def reproject_masked_array(
     elif prepared.output_shape != spec.output_bbox.shape:
         raise ValueError("prepared output shape must match spec output bbox")
 
+    if backend == "native":
+        import cupy as cp
+
+        try:
+            planes = backend_impl.reproject_device(
+                image,
+                prepared,
+                spec,
+                source_mask=mask,
+                source_variance=variance_array,
+                variance_fill_value=variance_fill_value,
+                plane_aware=True,
+            )
+        except cp.cuda.memory.OutOfMemoryError:
+            # Release this attempt's buffers before the per-plane path below.
+            pass
+        else:
+            return MaskedReprojectionResult(
+                image=cp.asnumpy(planes.image),
+                variance=cp.asnumpy(planes.variance),
+                mask=cp.asnumpy(planes.mask),
+                bbox=planes.bbox,
+                backend=planes.backend,
+                interpolation=planes.interpolation,
+                metadata=planes.metadata,
+            )
+
     image_result = backend_impl.reproject(
         image,
         prepared,
