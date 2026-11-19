@@ -126,6 +126,14 @@ tensor with one row per candidate, ready on the device's current Torch stream. T
 DLPack owners until inference and the compact host transfer finish. Existing
 prepared-dataset training and inference continue to use their usual formats.
 
+For repeated CUDA inference with the same batch and stamp shape, you can
+ask PyTorch to capture the classifier forward pass in a CUDA Graph. In the
+checkpoint-loading example above, set
+`performance_override=PerformanceConfig(compile=True, compile_backend="cudagraphs")`
+and reuse the loaded model across calls. FITS reads and stamp extraction
+still run for each call. Compare first-call and warm timings separately on
+your workload. A new batch shape can require another capture.
+
 ## Optional xFit fusion
 
 Export the exact difference stamps, fit them, then build a portable,

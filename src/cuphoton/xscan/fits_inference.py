@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -142,14 +143,51 @@ def _read_planes(planes, *, reader, stream, xdr_options=None):
     )
 
 
+@cache
+def _crop_kernel():
+    import cupy as cp
+
+    return cp.ElementwiseKernel(
+        "raw T plane, int64 top, int64 left, int64 width, int64 height, "
+        "int64 image_width",
+        "float32 stamp",
+        """
+        const long long y = top + (i / width) % height;
+        const long long x = left + i % width;
+        stamp = plane[y * image_width + x];
+        """,
+        "xscan_crop_stamps",
+    )
+
+
 def _crop_planes(cp, planes, slices, stamp_shape, owners):
     stamps = cp.empty(
         (len(slices), len(planes), *stamp_shape), dtype=cp.float32
     )
     owners.append(stamps)
-    for row, section in enumerate(slices):
+    # Small batches cost less to slice directly than to upload coordinates.
+    if len(slices) < 8:
+        for row, section in enumerate(slices):
+            for channel, plane in enumerate(planes):
+                stamps[row, channel] = plane[section]
+    else:
+        corners = np.array([(y.start, x.start) for y, x in slices], np.int64)
+        origins = cp.asarray(corners)
+        owners.extend((corners, origins))
+        top = origins[:, 0, None, None]
+        left = origins[:, 1, None, None]
+        height, width = stamp_shape
+        crop = _crop_kernel()
         for channel, plane in enumerate(planes):
-            stamps[row, channel] = plane[section]
+            crop(
+                plane,
+                top,
+                left,
+                width,
+                height,
+                plane.shape[1],
+                stamps[:, channel],
+            )
     if not bool(cp.isfinite(stamps).all().item()):
         raise ValueError("candidate stamps must contain only finite values")
     return stamps
