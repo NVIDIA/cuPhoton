@@ -132,7 +132,7 @@ class NativeBackend(CupyBackend):
         variance_fill_value=float("nan"),
         want_image=True,
         want_mask=True,
-        mask_uses_lanczos=False,
+        plane_aware=False,
     ):
         import cupy as cp
 
@@ -201,7 +201,7 @@ class NativeBackend(CupyBackend):
             int(spec.lanczos_a),
             int(spec.two_a_footprint),
             int(spec.area_scaling),
-            int(mask_uses_lanczos),
+            int(plane_aware),
             float(spec.fill_value),
             float(variance_fill_value),
             invalid_bits,
@@ -218,6 +218,7 @@ class NativeBackend(CupyBackend):
         source_mask=None,
         source_variance=None,
         variance_fill_value=float("nan"),
+        plane_aware=False,
     ) -> DeviceReprojectionResult:
         import cupy as cp
 
@@ -228,6 +229,7 @@ class NativeBackend(CupyBackend):
             source_mask=source_mask,
             source_variance=source_variance,
             variance_fill_value=variance_fill_value,
+            plane_aware=plane_aware,
         )
         metadata = {
             "area_scaling": spec.area_scaling,
@@ -284,6 +286,6 @@ class NativeBackend(CupyBackend):
             spec,
             source_mask=source_mask,
             want_image=False,
-            mask_uses_lanczos=True,
+            plane_aware=True,
         )
         return cp.asnumpy(mask)
