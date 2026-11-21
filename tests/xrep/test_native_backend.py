@@ -270,11 +270,22 @@ def test_native_masked_reprojection_fits_a_per_plane_memory_pool():
     # Three 2 MiB inputs and three outputs cannot fit together.
     pool = cp.cuda.MemoryPool()
     pool.set_limit(size=7 << 20)
-    with cp.cuda.using_allocator(pool.malloc):
+    allocation_failed = False
+
+    def limited_malloc(size):
+        nonlocal allocation_failed
+        try:
+            return pool.malloc(size)
+        except cp.cuda.memory.OutOfMemoryError:
+            allocation_failed = True
+            raise
+
+    with cp.cuda.using_allocator(limited_malloc):
         actual = reproject_masked_array(
             source, variance, mask, spec, **kwargs
         )
 
+    assert allocation_failed
     for name in ("image", "variance", "mask"):
         np.testing.assert_array_equal(
             getattr(actual, name), getattr(expected, name)
