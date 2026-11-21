@@ -223,6 +223,23 @@ def test_torch_psf_solve_supports_grad_regularization() -> None:
     assert result["trace"]["loss"].shape[0] == 1
 
 
+@pytest.mark.parametrize(
+    "device,method",
+    [("cpu", "adam"), pytest.param("cuda", "mm", marks=pytest.mark.gpu)],
+)
+def test_cuda_graph_requires_adam_on_cuda(device, method):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    config = _config().model_copy(
+        update={"device": device, "method": method, "cuda_graph": True}
+    )
+    bundle = _bundle(np.ones((5, 5, 1, 2)))
+    with pytest.raises(
+        ValueError, match="cuda_graph requires the Adam solver on CUDA"
+    ):
+        TorchBackend().solve_psf(bundle, config)
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize(
     "num_steps,loss,dtype,srf,regularization",
