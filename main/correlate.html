@@ -106,7 +106,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/correlate.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="fa37790049bc534b62c69ff4df33d77f78a1a998" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="correlate.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/correlate.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="a0e59b54380dd6bdb764d6c470f37b89aece3163" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="correlate.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -508,7 +508,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="13.1" id="make-two-signals-with-a-known-delay">
 <h2 class="anchored" data-anchor-id="make-two-signals-with-a-known-delay" data-number="13.1"><span class="header-section-number">13.1</span> Make two signals with a known delay</h2>
 <p>Signal <code>b</code> below is a copy of signal <code>a</code> that arrives 7 samples later, plus noise of its own:</p>
-<div class="cell" data-execution_count="1" id="9e3ed3aa">
+<div class="cell" data-execution_count="1" id="e5238416">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a></span>
 <span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">2026</span>)</span>
@@ -522,7 +522,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="13.2" id="wrap-the-signals-in-a-source">
 <h2 class="anchored" data-anchor-id="wrap-the-signals-in-a-source" data-number="13.2"><span class="header-section-number">13.2</span> Wrap the signals in a source</h2>
 <p>A source names each signal and holds the shared sample grid. <code>ArraySource</code> wraps NumPy or CuPy vectors:</p>
-<div class="cell" data-execution_count="2" id="a7426139">
+<div class="cell" data-execution_count="2" id="d3c4220c">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> ArraySource</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a></span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a>source <span class="op">=</span> ArraySource({<span class="st">"a"</span>: a, <span class="st">"b"</span>: b}, sample_rate_hz<span class="op">=</span>sample_rate)</span>
@@ -536,7 +536,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="13.3" id="correlate-the-pair">
 <h2 class="anchored" data-anchor-id="correlate-the-pair" data-number="13.3"><span class="header-section-number">13.3</span> Correlate the pair</h2>
 <p>A <code>CorrelationSpec</code> names the pairs to correlate and sets how to cut the signals into windows (<a class="quarto-xref" href="#sec-correlate-options"><span>Section 13.8</span></a>). <code>correlate_series</code> yields one result per group of <code>windows_per_result</code> windows:</p>
-<div class="cell" data-execution_count="3" id="86258d03">
+<div class="cell" data-execution_count="3" id="fa8d27df">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> CorrelationSpec, correlate_series</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a>spec <span class="op">=</span> CorrelationSpec(pairs<span class="op">=</span>((<span class="st">"a"</span>, <span class="st">"b"</span>),), window_samples<span class="op">=</span><span class="dv">1024</span>, windows_per_result<span class="op">=</span><span class="dv">4</span>, output<span class="op">=</span><span class="st">"both"</span>)</span>
@@ -589,7 +589,7 @@ result 1: samples 4096 to 8192, spectrum (1, 2048), lag (1, 2047)</code></pre>
 <section class="level2" data-number="13.4" id="read-the-delay-from-the-lag-correlation">
 <h2 class="anchored" data-anchor-id="read-the-delay-from-the-lag-correlation" data-number="13.4"><span class="header-section-number">13.4</span> Read the delay from the lag correlation</h2>
 <p>The lag correlation is <code>R(k) = sum_n a[n] * conj(b[n + k])</code>. It peaks at the delay. A positive lag means the second signal of the pair arrives later:</p>
-<div class="cell" data-execution_count="4" id="ab91928e">
+<div class="cell" data-execution_count="4" id="d86f2101">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> results:</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a>    peak <span class="op">=</span> r.lag_samples[np.argmax(np.<span class="bu">abs</span>(r.lag[<span class="dv">0</span>]))]</span>
 <span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"result </span><span class="sc">{</span>r<span class="sc">.</span>result_index<span class="sc">}</span><span class="ss">: b arrives </span><span class="sc">{</span>peak<span class="sc">}</span><span class="ss"> samples (</span><span class="sc">{</span><span class="fl">1e3</span> <span class="op">*</span> peak <span class="op">/</span> r<span class="sc">.</span>sample_rate_hz<span class="sc">:.2f}</span><span class="ss"> ms) after a"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -603,7 +603,7 @@ result 1: b arrives 7 samples (6.84 ms) after a</code></pre>
 <section class="level2" data-number="13.5" id="read-the-delay-from-the-cross-spectrum">
 <h2 class="anchored" data-anchor-id="read-the-delay-from-the-cross-spectrum" data-number="13.5"><span class="header-section-number">13.5</span> Read the delay from the cross-spectrum</h2>
 <p>The cross-spectrum is <code>FFT(a) * conj(FFT(b))</code>. When <code>b</code> arrives τ seconds late, the phase at frequency f is 2πfτ. The slope of the phase against frequency therefore measures the delay, including fractions of a sample. Average the results, then fit a line to the unwrapped phase at positive frequencies:</p>
-<div class="cell" data-execution_count="5" id="9c71ab69">
+<div class="cell" data-execution_count="5" id="c77feb4b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a>spectrum <span class="op">=</span> np.mean([r.spectrum[<span class="dv">0</span>] <span class="cf">for</span> r <span class="kw">in</span> results], axis<span class="op">=</span><span class="dv">0</span>)</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a>freq <span class="op">=</span> results[<span class="dv">0</span>].frequencies_hz</span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>positive <span class="op">=</span> freq <span class="op">&gt;</span> <span class="dv">0</span></span>
@@ -652,7 +652,7 @@ Figure 13.1: The two readings of the delay between the sample signals. Left: th
 <section class="level2" data-number="13.6" id="sec-correlate-hdf5">
 <h2 class="anchored" data-anchor-id="sec-correlate-hdf5" data-number="13.6"><span class="header-section-number">13.6</span> Correlate signals stored in HDF5</h2>
 <p><code>Hdf5Source</code> reads each signal from a one-dimensional dataset in an HDF5 file (Hierarchical Data Format 5, a format for named arrays). Each dataset has scalar <code>sample_rate_hz</code> and <code>origin_seconds</code> attributes. Write the sample pair to <code>signals.h5</code>:</p>
-<div class="cell" data-execution_count="7" id="665d29df">
+<div class="cell" data-execution_count="7" id="70ca2a02">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">import</span> h5py</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a></span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a><span class="cf">with</span> h5py.File(<span class="st">"signals.h5"</span>, <span class="st">"w"</span>) <span class="im">as</span> h5:</span>
@@ -662,7 +662,7 @@ Figure 13.1: The two readings of the delay between the sample signals. Left: th
 <span id="cb11-7"><a aria-hidden="true" href="#cb11-7" tabindex="-1"></a>        dataset.attrs[<span class="st">"origin_seconds"</span>] <span class="op">=</span> <span class="fl">0.0</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
 <p><code>Hdf5Source</code> reads bounded slices, not the whole file. Use it as a context manager and consume the results inside the <code>with</code> block:</p>
-<div class="cell" data-execution_count="8" id="1dfd19b0">
+<div class="cell" data-execution_count="8" id="1e283e36">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> Hdf5Source</span>
 <span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a></span>
 <span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a><span class="cf">with</span> Hdf5Source(<span class="st">"signals.h5"</span>, {<span class="st">"a"</span>: <span class="st">"/signals/a"</span>, <span class="st">"b"</span>: <span class="st">"/signals/b"</span>}) <span class="im">as</span> file_source:</span>
@@ -677,7 +677,7 @@ Figure 13.1: The two readings of the delay between the sample signals. Left: th
 <section class="level2" data-number="13.7" id="shard-a-long-series">
 <h2 class="anchored" data-anchor-id="shard-a-long-series" data-number="13.7"><span class="header-section-number">13.7</span> Shard a long series</h2>
 <p>To split a long recording among independent tasks, give every task the same spec with a common <code>shard_count</code> and its own <code>shard_index</code>. <code>plan_series_shards</code> shows which results and samples each shard covers:</p>
-<div class="cell" data-execution_count="9" id="2649cf3e">
+<div class="cell" data-execution_count="9" id="baeb7cd7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xbeam <span class="im">import</span> plan_series_shards</span>
 <span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a></span>
 <span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>sharded <span class="op">=</span> CorrelationSpec(pairs<span class="op">=</span>((<span class="st">"a"</span>, <span class="st">"b"</span>),), window_samples<span class="op">=</span><span class="dv">1024</span>, windows_per_result<span class="op">=</span><span class="dv">4</span>,</span>
@@ -772,7 +772,7 @@ shard 1 yields results [1]</code></pre>
 <section class="level2" data-number="13.9" id="on-a-gpu">
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="13.9"><span class="header-section-number">13.9</span> On a GPU</h2>
 <p>With the <code>gpu</code> profile, or the smaller <code>io</code> extra, set <code>backend="cupy"</code> in the spec. The transforms and products run on the GPU, and the results are host NumPy arrays:</p>
-<div class="cell" data-execution_count="10" id="adee9c38">
+<div class="cell" data-execution_count="10" id="3bd22f9b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
 <span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a></span>
 <span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>gpu_source <span class="op">=</span> ArraySource({<span class="st">"a"</span>: cp.asarray(a), <span class="st">"b"</span>: cp.asarray(b)}, sample_rate_hz<span class="op">=</span>sample_rate)</span>
@@ -788,7 +788,7 @@ shard 1 yields results [1]</code></pre>
 <section class="level2" data-number="13.10" id="command-line">
 <h2 class="anchored" data-anchor-id="command-line" data-number="13.10"><span class="header-section-number">13.10</span> Command line</h2>
 <p><code>correlate-series</code> reads a JSON file. Its <code>correlation</code> object holds the <code>CorrelationSpec</code> fields except <code>backend</code>, which the command sets. The input path is relative to the JSON file:</p>
-<div class="cell" data-execution_count="11" id="ef6d157b">
+<div class="cell" data-execution_count="11" id="2b616968">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
 <span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a></span>
@@ -804,13 +804,13 @@ shard 1 yields results [1]</code></pre>
 </div>
 <p>Run it. The command prints nothing on success and never overwrites an existing output file:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="ex">cuphoton</span> xbeam correlate-series series.json <span class="at">--output</span> results.h5 <span class="at">--backend</span> numpy</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="12" id="04c03961">
+<div class="cell" data-execution_count="12" id="b62f1bbd">
 <div class="cell-output cell-output-stdout">
 <pre><code></code></pre>
 </div>
 </div>
 <p>The file stores each result under <code>/results/&lt;result_index&gt;</code>, with arrays named after the <code>SeriesResult</code> fields:</p>
-<div class="cell" data-execution_count="13" id="1f5aaed5">
+<div class="cell" data-execution_count="13" id="f265a05c">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="cf">with</span> h5py.File(<span class="st">"results.h5"</span>) <span class="im">as</span> h5:</span>
 <span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a>    <span class="bu">print</span>(h5.attrs[<span class="st">"schema"</span>], <span class="st">"complete:"</span>, h5.attrs[<span class="st">"complete"</span>], <span class="st">"results:"</span>, <span class="bu">list</span>(h5[<span class="st">"results"</span>]))</span>
 <span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a>    first <span class="op">=</span> h5[<span class="st">"results/0"</span>]</span>
