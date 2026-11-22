@@ -103,7 +103,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/scale.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="bb5b8d1ff5c8c5bc48241c0dc5bf3be432deed10" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="scale.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/scale.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="5cd467aed210bae899ec7a31e9f6679578f9b81d" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="scale.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -588,7 +588,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="14.2" id="run-a-command-locally-first">
 <h2 class="anchored" data-anchor-id="run-a-command-locally-first" data-number="14.2"><span class="header-section-number">14.2</span> Run a command locally first</h2>
 <p>Before you request GPUs, try the command on a small input. The block below writes eight synthetic dipole cutouts to an NPZ archive for <code>xfit fit-dipoles</code>. A dipole is a positive and a negative lobe side by side, the shape a slightly moved star leaves in a difference image.</p>
-<div class="cell" data-execution_count="1" id="491c4fbf">
+<div class="cell" data-execution_count="1" id="cd69cf62">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a><span class="im">import</span> os</span>
 <span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a><span class="im">import</span> shutil</span>
@@ -615,7 +615,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="ex">cuphoton</span> xfit fit-dipoles <span class="at">--input</span> runs/scale/stamps.npz <span class="at">--model</span> gaussian <span class="at">--backend</span> numpy <span class="dt">\</span></span>
 <span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a>  <span class="at">--output-dir</span> runs/scale/xfit-local</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>The command prints a JSON run summary and saves it as <code>summary.json</code> next to the fit results. Read the parts to check:</p>
-<div class="cell" data-execution_count="3" id="7b35c14f">
+<div class="cell" data-execution_count="3" id="563d2e7f">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a>run <span class="op">=</span> Path(<span class="st">"runs/scale/xfit-local"</span>)</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a>summary <span class="op">=</span> json.loads((run <span class="op">/</span> <span class="st">"summary.json"</span>).read_text())</span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a><span class="bu">print</span>(summary[<span class="st">"backend"</span>], summary[<span class="st">"device"</span>], summary[<span class="st">"metrics"</span>][<span class="st">"status_counts"</span>])</span>
@@ -630,7 +630,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="14.3" id="write-a-pipeline-manifest">
 <h2 class="anchored" data-anchor-id="write-a-pipeline-manifest" data-number="14.3"><span class="header-section-number">14.3</span> Write a pipeline manifest</h2>
 <p><code>xscan run-pipeline</code> reads a JSON manifest with three keys: <code>schema</code>, <code>configuration</code> (the model checkpoint, its feature schema, and the xPois and xFit settings) and <code>items</code> (one entry per image pair). The repository’s example script writes a small workload without a GPU: 256 by 256 pixel image pairs, nine candidates per pair, a model and <code>pipeline.json</code>. The model is untrained and only exercises execution.</p>
-<div class="cell" data-execution_count="4" id="30634cfd">
+<div class="cell" data-execution_count="4" id="1a746617">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a>REPO <span class="op">=</span> Path(os.environ.get(<span class="st">"CUPHOTON_REPO"</span>, <span class="st">"."</span>))</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a>script <span class="op">=</span> REPO <span class="op">/</span> <span class="st">"examples"</span> <span class="op">/</span> <span class="st">"distributed-pipeline"</span> <span class="op">/</span> <span class="st">"prepare_example.py"</span></span>
 <span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>subprocess.run([sys.executable, <span class="bu">str</span>(script), <span class="st">"--output"</span>, <span class="st">"runs/scale/input"</span>, <span class="st">"--images"</span>, <span class="st">"4"</span>],</span>
@@ -661,7 +661,7 @@ first candidate: {'candidate_id': 'image-0000-candidate-0006', 'center_x': 15, '
 <section class="level2" data-number="14.4" id="check-the-manifest-and-plan-the-shards">
 <h2 class="anchored" data-anchor-id="check-the-manifest-and-plan-the-shards" data-number="14.4"><span class="header-section-number">14.4</span> Check the manifest and plan the shards</h2>
 <p>You can check a manifest on the CPU before you launch. <code>load_pipeline_manifest</code> parses it. <code>prepare_pipeline_workload</code> checks the files against their hashes and returns the work items an executor receives. <code>partition_byte_balanced</code> shows the shards for a worker count.</p>
-<div class="cell" data-execution_count="5" id="5fb93c9a">
+<div class="cell" data-execution_count="5" id="861eb39b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.bulk <span class="im">import</span> partition_byte_balanced</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.pipeline_executor <span class="im">import</span> load_pipeline_manifest, prepare_pipeline_workload</span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a></span>
@@ -701,7 +701,7 @@ first candidate: {'candidate_id': 'image-0000-candidate-0006', 'center_x': 15, '
 <p>Each rank must see one GPU before Python starts. <code>cuphoton-openmpi-rank-exec</code> picks one entry of the node’s <code>CUDA_VISIBLE_DEVICES</code> by the rank’s position on its node, then runs the command. It is specific to Open MPI. When the scheduler already gives each task one GPU, launch without the wrapper. You can check the wrapper on any machine:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="va">CUDA_VISIBLE_DEVICES</span><span class="op">=</span>0,1,2,3 <span class="va">OMPI_COMM_WORLD_LOCAL_SIZE</span><span class="op">=</span>4 <span class="va">OMPI_COMM_WORLD_LOCAL_RANK</span><span class="op">=</span>2 <span class="dt">\</span></span>
 <span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a>  <span class="ex">cuphoton-openmpi-rank-exec</span> <span class="at">--</span> env <span class="kw">|</span> <span class="fu">grep</span> CUDA_VISIBLE_DEVICES</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="6" id="24ec4976">
+<div class="cell" data-execution_count="6" id="b8f02b93">
 <div class="cell-output cell-output-stdout">
 <pre><code>CUDA_VISIBLE_DEVICES=2
 CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES=0,1,2,3</code></pre>
@@ -751,7 +751,7 @@ CUPHOTON_ALLOCATED_CUDA_VISIBLE_DEVICES=0,1,2,3</code></pre>
 <section class="level2" data-number="14.9" id="check-a-multi-node-run">
 <h2 class="anchored" data-anchor-id="check-a-multi-node-run" data-number="14.9"><span class="header-section-number">14.9</span> Check a multi-node run</h2>
 <p>Each run writes <code>&lt;output-dir&gt;/&lt;name&gt;/summary.json</code>. With round options, each pass keeps its outputs under <code>rounds/warmup-*</code> or <code>rounds/measure-*</code>. Every worker writes a record of where it ran and what it finished. Read them after the launcher exits:</p>
-<div class="cell" data-execution_count="7" id="04f9bef2">
+<div class="cell" data-execution_count="7" id="0293eb20">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a>run <span class="op">=</span> Path(<span class="st">"/shared/cuphoton-demo/runs/slurm-mpi"</span>)</span>
 <span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a>summary <span class="op">=</span> json.loads((run <span class="op">/</span> <span class="st">"summary.json"</span>).read_text())</span>
 <span id="cb20-3"><a aria-hidden="true" href="#cb20-3" tabindex="-1"></a><span class="bu">print</span>(summary[<span class="st">"executor"</span>], summary[<span class="st">"status"</span>])</span>
