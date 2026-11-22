@@ -103,7 +103,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/concepts.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="5f185ebee54701d4a7441dcb50966e11f5f49781" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="concepts.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/concepts.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="dfe0e1c67dab3cb9a59990ed185a60a88a1a0c11" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="concepts.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -493,7 +493,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <p>Some examples read the sample pair from <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>. The block below writes it to <code>sample/</code>.</p>
-<div class="cell" data-execution_count="1" id="cca450ca">
+<div class="cell" data-execution_count="1" id="732be332">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -550,7 +550,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="arrays-in-arrays-out" data-number="3.1"><span class="header-section-number">3.1</span> Arrays in, arrays out</h2>
 <p>The low-level imaging calls in this guide take arrays and return arrays or small result objects. NumPy arrays serve the CPU paths. Many GPU paths accept CuPy arrays; xScan’s model and tensor APIs use PyTorch tensors. File-based workflows also accept paths and configurations.</p>
 <p>The host-result APIs, including <code>reproject_masked_array</code> and <code>fit_dipoles</code>, return NumPy arrays whichever backend ran. Other calls follow their input: xFit’s <code>fit_single_sources</code> returns NumPy arrays for NumPy input and CuPy arrays for CuPy input. Its array helper recognizes CuPy and otherwise tries NumPy conversion. A CPU PyTorch tensor that supports that conversion therefore works, and the result comes back as NumPy:</p>
-<div class="cell" data-execution_count="2" id="bd8b5458">
+<div class="cell" data-execution_count="2" id="2d91f9b5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">import</span> torch</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> fit_single_sources</span>
@@ -667,7 +667,7 @@ Table 3.2: What <code>auto</code> resolves to.
 </figure>
 </div>
 <p><code>auto</code> never selects <code>cutile</code> or <code>native</code>. Request them by name. The <code>native</code> kernels are compiled when you build cuPhoton. CuPy compiles nothing for them at run time. An explicit name fails when it cannot run, instead of falling back. On this CPU host:</p>
-<div class="cell" data-execution_count="3" id="325f478e">
+<div class="cell" data-execution_count="3" id="d1ed5835">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> BBox, ReprojectionSpec, reproject_masked_array</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a>image <span class="op">=</span> np.random.default_rng(<span class="dv">2</span>).normal(<span class="dv">100</span>, <span class="dv">1</span>, (<span class="dv">64</span>, <span class="dv">64</span>)).astype(np.float32)</span>
@@ -698,7 +698,7 @@ backend='cupy': Requested backend is unavailable: cupy. Run 'uv sync --extra gpu
 <li>xFit’s <code>fit_dipoles</code> and <code>fit_single_sources</code> preserve float32 or float64 image precision; other input dtypes become float64. <code>fit_single_sources</code> also accepts <code>compute_dtype="float32"</code> or <code>"float64"</code>. <code>forced_psf_photometry</code> computes in float64.</li>
 <li>xImage runs in <code>float64</code> by default. Its configuration’s <code>dtype</code> can select <code>float32</code>.</li>
 </ul>
-<div class="cell" data-execution_count="4" id="a5a45a83">
+<div class="cell" data-execution_count="4" id="a4d88619">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a></span>
 <span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>read <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>])</span>
@@ -717,7 +717,7 @@ xFit, float32 in, compute_dtype='float64': float64</code></pre>
 </div>
 </div>
 <p>Results that are NumPy arrays live in host memory, even when a GPU backend ran. Functions whose names end in <code>_device</code> keep their results in GPU memory as CuPy arrays. They are <code>reproject_array_device</code> in xRep, <code>solve_constant_kernel_device</code> in xPois and <code>fit_dipoles_device</code> in xFit. The xPois and xFit versions copy NumPy inputs to the active GPU. CuPy inputs must already be on that GPU. The FITS reader with <code>device=True</code> returns CuPy arrays. On a host with the <code>gpu</code> profile:</p>
-<div class="cell" data-execution_count="5" id="efb8942d">
+<div class="cell" data-execution_count="5" id="b812742d">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.arrays <span class="im">import</span> array_module, to_host</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>read <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>], device<span class="op">=</span><span class="va">True</span>)</span>
@@ -730,7 +730,7 @@ xFit, float32 in, compute_dtype='float64': float64</code></pre>
 <h2 class="anchored" data-anchor-id="variance-and-masks" data-number="3.4"><span class="header-section-number">3.4</span> Variance and masks</h2>
 <p>An image travels with two more planes of the same shape. The variance plane holds each pixel’s expected squared error, in squared image units. The mask says which pixels to use.</p>
 <p>Pass a variance plane when you have a noise model. In weighted least squares it sets the squared-residual weight, one over the variance, and the scale of the reported errors. Without it, xPois’s kernel solver uses unit weights and xFit’s <code>fit_dipoles</code> scales its covariance by the reduced chi-square. Some detection and quality checks estimate a robust noise scale from the pixels. The errors from xFit’s <code>fit_single_sources</code> follow the variance you pass:</p>
-<div class="cell" data-execution_count="6" id="0bfab257">
+<div class="cell" data-execution_count="6" id="30da1250">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="cf">for</span> scale <span class="kw">in</span> (<span class="fl">1.0</span>, <span class="fl">4.0</span>):</span>
 <span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a>    fit <span class="op">=</span> fit_single_sources(stamps, scale <span class="op">*</span> variance, start, psf_sigma<span class="op">=</span><span class="fl">1.5</span>)</span>
 <span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"variance </span><span class="sc">{</span>scale<span class="sc">:.0f}</span><span class="ss">: flux </span><span class="sc">{</span>fit<span class="sc">.</span>flux[<span class="dv">0</span>]<span class="sc">:.1f}</span><span class="ss"> +- </span><span class="sc">{</span>fit<span class="sc">.</span>flux_error[<span class="dv">0</span>]<span class="sc">:.2f}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -746,7 +746,7 @@ variance 4: flux 393.8 +- 10.63</code></pre>
 <li>A fit mask is boolean. <code>True</code> means use the pixel.</li>
 </ul>
 <p>xRep resamples a bit mask together with the image and its variance. Each output pixel gets the bitwise OR of the input flags that fed it. Output pixels outside the input get the flag <code>1</code> by default, and NaN image and variance. Here a shift of half a pixel in x moves one flagged pixel:</p>
-<div class="cell" data-execution_count="7" id="6ddee755">
+<div class="cell" data-execution_count="7" id="f38e1c75">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a>flat <span class="op">=</span> np.full((<span class="dv">8</span>, <span class="dv">8</span>), <span class="fl">10.0</span>)</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a>flags <span class="op">=</span> np.zeros((<span class="dv">8</span>, <span class="dv">8</span>), dtype<span class="op">=</span>np.uint8)</span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a>flags[<span class="dv">4</span>, <span class="dv">4</span>] <span class="op">=</span> <span class="dv">4</span>  <span class="co"># one flagged pixel, bit 2 set</span></span>
@@ -844,7 +844,7 @@ Table 3.3: Axis order by call. Pixel positions count from zero.
 </figure>
 </div>
 <p>A WCS (world coordinate system) is the header’s map from pixel position to sky position, given as right ascension (RA) and declination (Dec). Astropy reads it. Here the new source in the sample target goes from array index to sky and back:</p>
-<div class="cell" data-execution_count="8" id="a3597342">
+<div class="cell" data-execution_count="8" id="58c431c9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
 <span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a></span>
 <span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>y, x <span class="op">=</span> <span class="dv">167</span>, <span class="dv">80</span>  <span class="co"># the new source, as (row, column)</span></span>
@@ -864,7 +864,7 @@ back to pixels (x, y): [ 80. 167.]</code></pre>
 <section class="level2" data-number="3.6" id="receipts">
 <h2 class="anchored" data-anchor-id="receipts" data-number="3.6"><span class="header-section-number">3.6</span> Receipts</h2>
 <p>A receipt is the record a result carries of what ran. It shows whether a call used the GPU or fell back, and why. The FITS reader returns one with every read. Ask for <code>auto</code> on a CPU host, and the receipt records the fallback:</p>
-<div class="cell" data-execution_count="9" id="6587a06b">
+<div class="cell" data-execution_count="9" id="0084aedb">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a>receipt <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>], reader<span class="op">=</span><span class="st">"auto"</span>).metadata()</span>
 <span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a><span class="cf">for</span> key, value <span class="kw">in</span> receipt.items():</span>
 <span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>key<span class="sc">:17s}</span><span class="ss"> </span><span class="sc">{</span>value<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -885,7 +885,7 @@ decoded_bytes     262144</code></pre>
 <li>xFit’s <code>fit_dipoles</code> results: <code>backend</code>, <code>device</code> and <code>dtype</code>.</li>
 <li>Command-line runs: <code>summary.json</code> (refer to the next section).</li>
 </ul>
-<div class="cell" data-execution_count="10" id="99acf767">
+<div class="cell" data-execution_count="10" id="fdcbbb43">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="bu">print</span>(moved.backend, moved.interpolation)</span>
 <span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="bu">print</span>(moved.metadata)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -965,7 +965,7 @@ Table 3.4: Shared command-line flags.
 </div>
 <p>Run-producing commands write a summary and numeric artifacts, but their layouts differ. xRep uses <code>summary.json</code> and an <code>artifacts/</code> subdirectory; xFit’s <code>fit-dipoles</code> writes its table and arrays directly under <code>--output-dir</code>. Some workflows also save the effective configuration. Shared CLI logs use <code>logs/</code> in the group’s state directory, which moves with <code>XDG_STATE_HOME</code>. Many commands refuse to overwrite an existing run directory. Choose a new <code>--name</code> or output root.</p>
 <p>Run xRep on the sample target. This cell calls the CLI with a unique output root so earlier runs remain intact. The command also prints its summary as JSON, which this example discards:</p>
-<div class="cell" data-execution_count="11" id="c30c4ed5">
+<div class="cell" data-execution_count="11" id="5043cedf">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a aria-hidden="true" href="#cb20-1" tabindex="-1"></a><span class="im">import</span> subprocess</span>
 <span id="cb20-2"><a aria-hidden="true" href="#cb20-2" tabindex="-1"></a><span class="im">import</span> sys</span>
 <span id="cb20-3"><a aria-hidden="true" href="#cb20-3" tabindex="-1"></a><span class="im">import</span> tempfile</span>
@@ -983,13 +983,13 @@ Table 3.4: Shared command-line flags.
 <span id="cb20-15"><a aria-hidden="true" href="#cb20-15" tabindex="-1"></a>    <span class="cf">if</span> path.is_file():</span>
 <span id="cb20-16"><a aria-hidden="true" href="#cb20-16" tabindex="-1"></a>        <span class="bu">print</span>(path.relative_to(Path.cwd()))</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>runs/concepts-qei61ork/reproject-image-20261122-185029/artifacts/mask.npy
-runs/concepts-qei61ork/reproject-image-20261122-185029/artifacts/reprojected.npy
-runs/concepts-qei61ork/reproject-image-20261122-185029/summary.json</code></pre>
+<pre><code>runs/concepts-a0hshgqw/reproject-image-20261122-193003/artifacts/mask.npy
+runs/concepts-a0hshgqw/reproject-image-20261122-193003/artifacts/reprojected.npy
+runs/concepts-a0hshgqw/reproject-image-20261122-193003/summary.json</code></pre>
 </div>
 </div>
 <p><code>summary.json</code> is the run’s receipt. Read it before you rely on the backend or device:</p>
-<div class="cell" data-execution_count="12" id="4c7a6ac0">
+<div class="cell" data-execution_count="12" id="21a02f03">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
 <span id="cb22-3"><a aria-hidden="true" href="#cb22-3" tabindex="-1"></a></span>
