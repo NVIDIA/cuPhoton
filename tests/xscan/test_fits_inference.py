@@ -246,9 +246,10 @@ def test_nonfinite_model_outputs_are_rejected(tmp_path, cpu_boundaries):
         )
 
 
+@pytest.mark.parametrize("candidate_count", [2, 12])
 @pytest.mark.parametrize("reader", ["astropy", "xdr"])
 def test_gpu_fits_predictions_match_tensor_path_on_nondefault_stream(
-    tmp_path, reader
+    tmp_path, reader, candidate_count
 ):
     if not torch.cuda.is_available():
         pytest.skip("Torch CUDA is required")
@@ -279,15 +280,15 @@ def test_gpu_fits_predictions_match_tensor_path_on_nondefault_stream(
     consumer = torch.cuda.Stream(device=device)
     with torch.cuda.stream(consumer):
         model = _Model(3, features=True).to(device)
-        features = torch.tensor([[0.25], [-0.5]], device=device)
-        centers = [(7, 8), (3, 4)]
+        centers = ([(7, 8), (3, 4), (1, 2), (9, 10)] * 3)[:candidate_count]
+        features = torch.arange(len(centers), device=device).float()[:, None]
         result = predict_fits(
             model=model,
             search=FitsPlane(path, 1),
             template=FitsPlane(path, 2),
             difference=FitsPlane(path, 3),
             centers_yx=centers,
-            candidate_ids=("later", "earlier"),
+            candidate_ids=list(range(len(centers))),
             stamp_shape=(3, 5),
             device=device,
             performance=PerformanceConfig(),
