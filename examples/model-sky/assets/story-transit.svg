@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="360" viewBox="0 0 300 360" role="img" aria-labelledby="transit-title transit-description">
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .label { fill: #b7c9a9; font-size: 10px; font-weight: 600; letter-spacing: 1.15px; }
+      .small { fill: #b7c9a9; font-size: 11px; }
+      .note { fill: #8fa17f; font-size: 9px; letter-spacing: 1.1px; }
+      .number { fill: #b5ed39; font-size: 12px; font-weight: 700; }
+      .light { fill: #f0f4eb; }
+      .frame { fill: #0b1008; stroke: #34472b; }
+      .guide { fill: none; stroke: #34472b; stroke-width: 1; }
+    </style>
+    <linearGradient id="card-shade" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1a2813" />
+      <stop offset="1" stop-color="#10170c" />
+    </linearGradient>
+    <radialGradient id="star-halo">
+      <stop stop-color="#f0f4eb" stop-opacity=".55" />
+      <stop offset=".28" stop-color="#dce9bf" stop-opacity=".2" />
+      <stop offset="1" stop-color="#dce9bf" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="transit-star" cx=".4" cy=".36" r=".65">
+      <stop stop-color="#fff8d8" />
+      <stop offset=".65" stop-color="#e9d48c" />
+      <stop offset="1" stop-color="#bca45b" />
+    </radialGradient>
+  </defs>
+  <g id="scene-transit" role="img" aria-labelledby="transit-title transit-description">
+    <title id="transit-title">Catch the shadow</title>
+    <desc id="transit-description">A planet passes in front of a star. A schematic light curve below shows the resulting small temporary dimming. Neither the plotted points nor the planet and star sizes represent measured data.</desc>
+    <rect x=".5" y=".5" width="299" height="359" rx="18" fill="url(#card-shade)" stroke="#34472b" />
+    <circle cx="35" cy="34" r="14" fill="#253719" />
+    <text x="35" y="38" text-anchor="middle" class="number">04</text>
+    <text x="60" y="38" class="label">A SMALLER SHADOW</text>
+    <circle cx="150" cy="127" r="70" fill="url(#star-halo)" opacity=".55" />
+    <circle cx="150" cy="127" r="45" fill="url(#transit-star)" />
+    <path d="M48 140Q150 113 252 140" fill="none" stroke="#b7c9a9" stroke-width="1" stroke-dasharray="3 5" opacity=".65" />
+    <circle cx="163" cy="127" r="11" fill="#10170c" stroke="#fff8d8" stroke-width=".6" />
+    <path d="M179 97L208 79H254" fill="none" stroke="#80946e" stroke-width="1" />
+    <text x="254" y="70" text-anchor="end" class="small">planet in front</text>
+    <text x="150" y="197" text-anchor="middle" class="small">Transit light curve</text>
+    <path d="M36 220V307H269" fill="none" stroke="#80946e" stroke-width="1" />
+    <path d="M37 239H268M37 274H268" stroke="#34472b" stroke-width=".7" />
+    <text x="24" y="274" text-anchor="middle" class="small" transform="rotate(-90 24 274)">starlight</text>
+    <text x="260" y="324" text-anchor="end" class="small">time →</text>
+    <path d="M47 239H94C108 239 111 276 126 279Q152 285 178 279C193 276 196 239 210 239H262" fill="none" stroke="#ed8eb7" stroke-width="2" />
+    <g fill="#4ec9dc">
+      <circle cx="51" cy="237" r="2.8" />
+      <circle cx="68" cy="241" r="2.8" />
+      <circle cx="86" cy="238" r="2.8" />
+      <circle cx="104" cy="251" r="2.8" />
+      <circle cx="120" cy="277" r="2.8" />
+      <circle cx="138" cy="283" r="2.8" />
+      <circle cx="155" cy="280" r="2.8" />
+      <circle cx="173" cy="281" r="2.8" />
+      <circle cx="189" cy="268" r="2.8" />
+      <circle cx="206" cy="240" r="2.8" />
+      <circle cx="226" cy="237" r="2.8" />
+      <circle cx="245" cy="240" r="2.8" />
+    </g>
+    <text x="150" y="344" text-anchor="middle" class="note">ILLUSTRATIVE SCHEMATIC</text>
+  </g>
+</svg>

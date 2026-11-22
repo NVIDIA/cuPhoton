@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="360" viewBox="0 0 300 360" role="img" aria-labelledby="trail-title trail-description">
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .label { fill: #b7c9a9; font-size: 10px; font-weight: 600; letter-spacing: 1.15px; }
+      .small { fill: #b7c9a9; font-size: 11px; }
+      .note { fill: #8fa17f; font-size: 9px; letter-spacing: 1.1px; }
+      .number { fill: #b5ed39; font-size: 12px; font-weight: 700; }
+      .light { fill: #f0f4eb; }
+      .frame { fill: #0b1008; stroke: #34472b; }
+      .guide { fill: none; stroke: #34472b; stroke-width: 1; }
+    </style>
+    <linearGradient id="card-shade" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1a2813" />
+      <stop offset="1" stop-color="#10170c" />
+    </linearGradient>
+    <radialGradient id="star-halo">
+      <stop stop-color="#f0f4eb" stop-opacity=".55" />
+      <stop offset=".28" stop-color="#dce9bf" stop-opacity=".2" />
+      <stop offset="1" stop-color="#dce9bf" stop-opacity="0" />
+    </radialGradient>
+    <pattern id="mask-hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(25)">
+      <path d="M0 0V7" stroke="#f0bc62" stroke-width="1.5" opacity=".55" />
+    </pattern>
+    <g id="pin-star">
+      <circle r="10" fill="url(#star-halo)" />
+      <circle r="2.1" fill="#f0f4eb" />
+    </g>
+    <g id="target-star">
+      <circle r="27" fill="url(#star-halo)" />
+      <circle r="5" fill="#f0f4eb" />
+      <path d="M-10 0H10M0-10V10" stroke="#f0f4eb" stroke-width=".7" opacity=".5" />
+    </g>
+    <g id="sky-field">
+      <use href="#pin-star" x="28" y="34" />
+      <use href="#pin-star" x="94" y="25" transform="translate(28 34) scale(.7) translate(-28 -34)" />
+      <use href="#pin-star" x="202" y="44" />
+      <use href="#pin-star" x="57" y="98" />
+      <use href="#pin-star" x="222" y="133" />
+      <use href="#pin-star" x="31" y="183" />
+      <use href="#pin-star" x="102" y="188" />
+      <use href="#pin-star" x="191" y="204" />
+      <circle cx="126" cy="71" r="1" fill="#b7c9a9" />
+      <circle cx="175" cy="121" r="1" fill="#b7c9a9" />
+      <circle cx="78" cy="149" r=".9" fill="#b7c9a9" />
+      <circle cx="231" cy="87" r=".9" fill="#b7c9a9" />
+      <ellipse cx="155" cy="173" rx="7" ry="3" transform="rotate(-24 155 173)" fill="#bdc6b4" opacity=".45" />
+    </g>
+    <clipPath id="trail-clip">
+      <rect x="24" y="70" width="252" height="226" rx="12" />
+    </clipPath>
+  </defs>
+  <g id="scene-trail" role="img" aria-labelledby="trail-title trail-description">
+    <title id="trail-title">Read the field</title>
+    <desc id="trail-description">A bright diagonal satellite trail crosses a schematic star field. An amber exclusion band covers the trail while the surrounding sky remains available.</desc>
+    <rect x=".5" y=".5" width="299" height="359" rx="18" fill="url(#card-shade)" stroke="#34472b" />
+    <circle cx="35" cy="34" r="14" fill="#253719" />
+    <text x="35" y="38" text-anchor="middle" class="number">01</text>
+    <text x="60" y="38" class="label">ONE EXPOSURE</text>
+    <rect x="24" y="70" width="252" height="226" rx="12" class="frame" />
+    <g clip-path="url(#trail-clip)">
+      <use href="#sky-field" x="24" y="70" />
+      <use href="#target-star" x="183" y="242" />
+      <path d="M9 248L291 113" stroke="#f0bc62" stroke-width="31" opacity=".12" />
+      <path d="M9 248L291 113" stroke="url(#mask-hatch)" stroke-width="30" />
+      <path d="M9 248L291 113" stroke="#f0bc62" stroke-width="7" opacity=".35" />
+      <path d="M9 248L291 113" stroke="#ffe3a4" stroke-width="2.4" />
+    </g>
+    <path d="M191 147L210 114H255" stroke="#f0bc62" stroke-width="1" fill="none" />
+    <text x="254" y="105" text-anchor="end" fill="#f0bc62" font-size="11">trail mask</text>
+    <path d="M179 268L167 281H48" stroke="#80946e" stroke-width="1" fill="none" />
+    <text x="39" y="272" class="small">unmasked field</text>
+    <circle cx="35" cy="318" r="3" fill="#f0bc62" />
+    <text x="46" y="322" class="small">excluded pixels</text>
+    <text x="150" y="344" text-anchor="middle" class="note">ILLUSTRATIVE SCHEMATIC</text>
+  </g>
+</svg>
