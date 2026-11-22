@@ -106,7 +106,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/align.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="665c1721684de4995be033040cfce169da9a34f7" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="align.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/align.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="5f185ebee54701d4a7441dcb50966e11f5f49781" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="align.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -505,7 +505,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <p>The folded block writes <code>sample/reference.fits</code> and <code>sample/target.fits</code>. The reference has smaller pixels, on a grid rotated by 3 degrees from the target’s.</p>
-<div class="cell" data-execution_count="1" id="ee754b57">
+<div class="cell" data-execution_count="1" id="d2ef46a8">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -561,7 +561,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="5.1" id="read-the-pair">
 <h2 class="anchored" data-anchor-id="read-the-pair" data-number="5.1"><span class="header-section-number">5.1</span> Read the pair</h2>
 <p>Read both images and their WCS (<a class="quarto-xref" href="read-fits.html"><span>Chapter 4</span></a>).</p>
-<div class="cell" data-execution_count="2" id="62197802">
+<div class="cell" data-execution_count="2" id="8f87d711">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
@@ -581,7 +581,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="5.2" id="flag-bad-pixels">
 <h2 class="anchored" data-anchor-id="flag-bad-pixels" data-number="5.2"><span class="header-section-number">5.2</span> Flag bad pixels</h2>
 <p>Real images come with a bad-pixel mask, an integer array in which each bit marks one kind of fault. The sample pair has none. This block adds a hot column and a hot pixel to the reference and flags them with mask values 2 and 4 (bit positions 1 and 2). It then builds the variance plane, one noise variance per pixel (<a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>).</p>
-<div class="cell" data-execution_count="3" id="0f8da7c0">
+<div class="cell" data-execution_count="3" id="79d4deff">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a>mask <span class="op">=</span> np.zeros(reference.shape, dtype<span class="op">=</span>np.int32)</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a>reference[:, <span class="dv">120</span>] <span class="op">+=</span> <span class="fl">500.0</span>  <span class="co"># a hot column at x = 120 (NumPy indexes [y, x])</span></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a>mask[:, <span class="dv">120</span>] <span class="op">|=</span> <span class="dv">2</span></span>
@@ -594,7 +594,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="5.3" id="map-target-pixels-to-reference-pixels">
 <h2 class="anchored" data-anchor-id="map-target-pixels-to-reference-pixels" data-number="5.3"><span class="header-section-number">5.3</span> Map target pixels to reference pixels</h2>
 <p>For each output pixel, xRep finds where that pixel falls in the source image and interpolates the source there. <code>make_wcs_pair_transform</code> builds that mapping from two WCS, target pixel to sky to reference pixel. It maps an (N, 2) array of zero-based (x, y) pixel positions:</p>
-<div class="cell" data-execution_count="4" id="16a37d11">
+<div class="cell" data-execution_count="4" id="6fd8bca4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> make_wcs_pair_transform</span>
 <span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a></span>
 <span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a>mapping <span class="op">=</span> make_wcs_pair_transform(target_wcs, reference_wcs)</span>
@@ -608,7 +608,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="5.4" id="describe-the-output-grid">
 <h2 class="anchored" data-anchor-id="describe-the-output-grid" data-number="5.4"><span class="header-section-number">5.4</span> Describe the output grid</h2>
 <p>A <code>ReprojectionSpec</code> holds the mapping, the output region and the resampling options (refer to “Options”). <code>BBox</code> gives the region as its origin, width and height on the output grid. This one covers the whole target grid:</p>
-<div class="cell" data-execution_count="5" id="8cb80f19">
+<div class="cell" data-execution_count="5" id="9c86aa3c">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> BBox, ReprojectionSpec</span>
 <span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
 <span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a>height, width <span class="op">=</span> target.shape</span>
@@ -623,7 +623,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="5.5" id="reproject-the-image-variance-and-mask">
 <h2 class="anchored" data-anchor-id="reproject-the-image-variance-and-mask" data-number="5.5"><span class="header-section-number">5.5</span> Reproject the image, variance and mask</h2>
 <p><code>reproject_masked_array</code> resamples the three planes with one mapping:</p>
-<div class="cell" data-execution_count="6" id="c0dd3b8a">
+<div class="cell" data-execution_count="6" id="8a9b9c52">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> reproject_masked_array</span>
 <span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a></span>
 <span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, mask, spec, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
@@ -639,7 +639,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="5.6" id="read-the-aligned-mask">
 <h2 class="anchored" data-anchor-id="read-the-aligned-mask" data-number="5.6"><span class="header-section-number">5.6</span> Read the aligned mask</h2>
 <p>Each pixel of <code>aligned.mask</code> holds the bitwise OR of the mask bits of every source pixel that feeds it with a nonzero weight. A flagged source pixel therefore marks every output pixel that its value reached. Output pixels outside the reference get <code>invalid_mask_value</code> (1) in the mask and NaN in the image and the variance.</p>
-<div class="cell" data-execution_count="7" id="c74a914f">
+<div class="cell" data-execution_count="7" id="0ced3fd0">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="cf">for</span> bit, name <span class="kw">in</span> [(<span class="dv">1</span>, <span class="st">"outside the reference"</span>), (<span class="dv">2</span>, <span class="st">"hot column"</span>), (<span class="dv">4</span>, <span class="st">"hot pixel"</span>)]:</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"bit </span><span class="sc">{</span>bit<span class="sc">}</span><span class="ss"> (</span><span class="sc">{</span>name<span class="sc">}</span><span class="ss">): reference </span><span class="sc">{</span>np<span class="sc">.</span>count_nonzero(mask <span class="op">&amp;</span> bit)<span class="sc">}</span><span class="ss">, "</span></span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a>          <span class="ss">f"aligned </span><span class="sc">{</span>np<span class="sc">.</span>count_nonzero(aligned.mask <span class="op">&amp;</span> bit)<span class="sc">}</span><span class="ss"> pixels"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -693,7 +693,7 @@ Figure 5.1: The reference before and after xRep. Left: the reference as stored,
 <section class="level2" data-number="5.7" id="reuse-the-mapping-for-more-images">
 <h2 class="anchored" data-anchor-id="reuse-the-mapping-for-more-images" data-number="5.7"><span class="header-section-number">5.7</span> Reuse the mapping for more images</h2>
 <p><code>reproject_masked_array</code> evaluates the mapping once per call. <code>prepare_reprojection</code> does it once for many calls, and returns the source position, area ratio and a valid flag of every output pixel. Pass it as <code>prepared</code> to reproject other images with the reference’s shape and WCS, such as a model of the reference. This block aligns a flat sky of 100 DN (data numbers, the detector’s unit) per reference pixel:</p>
-<div class="cell" data-execution_count="9" id="2ccf601b">
+<div class="cell" data-execution_count="9" id="ea1adb9f">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> prepare_reprojection</span>
 <span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a></span>
 <span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>prepared <span class="op">=</span> prepare_reprojection(spec, source_shape<span class="op">=</span>reference.shape)</span>
@@ -713,7 +713,7 @@ flat sky on the target grid: 107.84 DN per pixel</code></pre>
 <section class="level2" data-number="5.8" id="stack-several-images-on-one-grid">
 <h2 class="anchored" data-anchor-id="stack-several-images-on-one-grid" data-number="5.8"><span class="header-section-number">5.8</span> Stack several images on one grid</h2>
 <p>An xRep stack resamples several images onto one grid and returns one array with shape (images, height, width). It does not combine them. <code>build_stack_spec_from_fits</code> reads the files and builds one spec per image, and <code>reproject_stack</code> resamples them:</p>
-<div class="cell" data-execution_count="10" id="b2a77701">
+<div class="cell" data-execution_count="10" id="7227abcf">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> build_stack_spec_from_fits, reproject_stack</span>
 <span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a></span>
 <span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>images, stack_spec <span class="op">=</span> build_stack_spec_from_fits([<span class="st">"sample/target.fits"</span>, <span class="st">"sample/reference.fits"</span>])</span>
@@ -727,7 +727,7 @@ flat sky on the target grid: 107.84 DN per pixel</code></pre>
 </div>
 <p>Without a <code>grid</code>, the stack uses a north-up grid with the first image’s pixel scale and grid pixel (0, 0) at the first image’s center. The box covers every footprint. Its origin can therefore be negative. Each image is NaN, and flagged in <code>stack.masks</code>, where it has no data (<a class="quarto-xref" href="#fig-align-stack">Figure <span>5.2</span></a>). For the target’s grid instead, pass <code>grid=Grid.from_wcs(target_wcs)</code> and <code>output_bbox=BBox(0, 0, width, height)</code>.</p>
 <p><code>reproject_stack</code> returns no variance. Without source masks, its masks mark the geometric footprint; with source masks, it propagates flags only from the 2 by 2 bilinear neighborhood, even for Lanczos interpolation. For variance and full-kernel masks, call <code>reproject_masked_array</code> with each member’s spec:</p>
-<div class="cell" data-execution_count="11" id="f4f8ca95">
+<div class="cell" data-execution_count="11" id="0e89dd02">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a>member <span class="op">=</span> reproject_masked_array(reference, reference_variance, mask, stack_spec.members[<span class="dv">1</span>], backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
 <span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a><span class="bu">print</span>(member.image.shape, np.count_nonzero(member.mask <span class="op">&amp;</span> <span class="dv">1</span>), <span class="st">"pixels outside the reference"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -836,11 +836,11 @@ Figure 5.2: The two images of the stack on the shared north-up grid, on one col
 <section class="level2" data-number="5.10" id="on-a-gpu">
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="5.10"><span class="header-section-number">5.10</span> On a GPU</h2>
 <p>With the <code>gpu</code> profile, pass <code>backend="cupy"</code>, or <code>backend="native"</code> for the precompiled kernels of the native extension (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). <code>reproject_masked_array</code> still takes and returns NumPy arrays:</p>
-<div class="cell" data-execution_count="13" id="8499a99e">
+<div class="cell" data-execution_count="13" id="a00d7359">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, mask, spec, backend<span class="op">=</span><span class="st">"cupy"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
 <p>To keep the result on the GPU, use <code>reproject_array_device</code> with CuPy inputs. It runs on the <code>cupy</code> backend, the default, or on <code>native</code>. Its mask covers the bilinear neighborhood. It does not check the variance for negative values, because that check needs a copy to the host.</p>
-<div class="cell" data-execution_count="14" id="9dbca536">
+<div class="cell" data-execution_count="14" id="f1651771">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
 <span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> reproject_array_device</span>
 <span id="cb22-3"><a aria-hidden="true" href="#cb22-3" tabindex="-1"></a></span>
@@ -857,7 +857,7 @@ Figure 5.2: The two images of the stack on the shared north-up grid, on one col
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="ex">cuphoton</span> xrep reproject-stack <span class="at">--inputs</span> sample/reference.fits <span class="at">--target-wcs</span> sample/target.fits <span class="dt">\</span></span>
 <span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a>  <span class="at">--backend</span> cpu <span class="at">--mapping-grid-step</span> 1 <span class="at">--output-dir</span> runs/align</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>The command writes a new run directory under <code>runs/align</code>, with <code>summary.json</code> and the arrays in <code>artifacts/</code>. <code>--write-fits</code> adds a FITS copy with the target’s WCS. From Python, run the command and print part of its summary:</p>
-<div class="cell" data-execution_count="15" id="7f59aaae">
+<div class="cell" data-execution_count="15" id="50b4d3c7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a aria-hidden="true" href="#cb24-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb24-2"><a aria-hidden="true" href="#cb24-2" tabindex="-1"></a><span class="im">import</span> subprocess</span>
 <span id="cb24-3"><a aria-hidden="true" href="#cb24-3" tabindex="-1"></a><span class="im">import</span> sys</span>
