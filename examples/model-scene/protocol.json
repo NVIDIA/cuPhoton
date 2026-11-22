@@ -1,0 +1,70 @@
+{
+  "revision": 2,
+  "frozen": true,
+  "iterations": 300,
+  "noise_realizations": 50,
+  "test_seed_start": 82000,
+  "calibration_seed_start": 46000,
+  "development_seeds": [
+    1005,
+    1006,
+    1007
+  ],
+  "huber_delta": 2.0,
+  "stop_tolerance": 1e-12,
+  "background_electrons_per_pixel": 2.0,
+  "common_gaussian_sigma_pixels": 2.4,
+  "aperture_radius_pixels": 3,
+  "edge_exclusion_pixels": 5,
+  "primary_endpoint": "fractional aperture flux error against target truth",
+  "minimum_bias_of_interest": 0.01,
+  "precision_reporting": "per-source standard error and approximate 2.8 SE detectable bias",
+  "inference_scope": "fixed modeled source catalog and independent noise realizations",
+  "image_size": 120,
+  "fit_size": 96,
+  "science_window_size": 48,
+  "science_window_origin": 36,
+  "supersedes": "Revision 1 retained: unconstrained halo contaminated common-resolution image boundary",
+  "calibration_example_seed": 46099,
+  "train_frames": [
+    0,
+    1,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10
+  ],
+  "heldout_frames": [
+    2,
+    5,
+    9,
+    11
+  ],
+  "pixel_phase": "integer-centered fixed catalog only",
+  "calibration_noise": "Poisson photons plus Gaussian read sigma 2 electrons",
+  "development_evidence": {
+    "artifact": "development-v2/development.json",
+    "sha256": "97c18564473895f99fb6c07d166c23ef7a3112a78b3c0be6a28c761b285e4962",
+    "iterations": [
+      25,
+      75,
+      150,
+      300
+    ],
+    "seeds": [
+      1005,
+      1006,
+      1007
+    ],
+    "selection": "300 chosen from development bias plateau; no test truth used"
+  },
+  "science_source_hashes": {
+    "scene.py": "558c336b677e0ad3f578613c127a64efaa6ee7216dd7046eb59a001a64dbadc9",
+    "experiment.py": "30db0c8c285a2b074893d529b7c101d55228309041355cc4bc7772828e30cecc",
+    "measure.py": "e63151b6c036fc3503cd35b6d5f020c652fbffd3e8b40a20dec04be94c0c3522",
+    "study.py": "96d74f48c49f30e6983356be1eac696652af614105f28693b8ae555b132bdab0",
+    "controls.py": "197dd327315efdee7fd334d2b8988c97ba42dd86d082dfa89f7f2ba72fb7dccd"
+  }
+}
