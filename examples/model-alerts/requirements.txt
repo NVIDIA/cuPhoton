@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Optional example additions to a CUDA 13 cuPhoton installation.
+bokeh==3.9.1
+ipykernel==7.4.0
+nbclient==0.11.0
+nbformat>=5.10.4,<6
+# Local guide export and the current repository's developer postprocessor.
+beautifulsoup4>=4.14,<5
+matplotlib>=3.10,<4

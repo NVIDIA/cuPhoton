@@ -1,0 +1,133 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+body {
+  --model-alerts-font: ui-sans-serif, system-ui, sans-serif;
+  --model-alerts-mono: ui-monospace, Consolas, monospace;
+}
+
+body.quarto-dark {
+  color-scheme: dark;
+  --model-alerts-background: #0b1008;
+  --model-alerts-panel: #121a0e;
+  --model-alerts-panel-raised: #1a2514;
+  --model-alerts-text: #f0f4eb;
+  --model-alerts-green: #76b900;
+  --model-alerts-accent: #b5ed39;
+  --model-alerts-line: #2b3b20;
+  --model-alerts-plot-background: #10180d;
+  --model-alerts-plot-text: #f0f4eb;
+  --model-alerts-plot-muted: #b7c9a9;
+  --model-alerts-plot-border: #34472b;
+  --model-alerts-plot-cyan: #67d5e5;
+  --model-alerts-plot-pink: #ed91bd;
+  --model-alerts-font: "NVIDIA Sans", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --model-alerts-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas,
+    "Liberation Mono", monospace;
+}
+
+body.quarto-light {
+  --model-alerts-green: #76b900;
+  color-scheme: light;
+  --model-alerts-background: #f7f9f4;
+  --model-alerts-panel: #ffffff;
+  --model-alerts-panel-raised: #edf3e6;
+  --model-alerts-text: #20291b;
+  --model-alerts-accent: #426900;
+  --model-alerts-line: #ccd7c2;
+  --model-alerts-plot-background: #ffffff;
+  --model-alerts-plot-text: #20291b;
+  --model-alerts-plot-muted: #4f6043;
+  --model-alerts-plot-border: #ccd7c2;
+  --model-alerts-plot-cyan: #007f99;
+  --model-alerts-plot-pink: #ab3d75;
+}
+
+main.content a.model-alerts-glossary-term {
+  color: inherit;
+  text-decoration: underline dotted var(--model-alerts-accent);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1.5px;
+  cursor: help;
+}
+main.content a.model-alerts-glossary-term:hover,
+main.content a.model-alerts-glossary-term:focus-visible { color: var(--model-alerts-accent); }
+.model-alerts-glossary-term:focus-visible, .model-alerts-science summary:focus-visible {
+  outline: 2px solid var(--model-alerts-accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+main.content .model-alerts-glossary dt {
+  margin-top: 1.25rem;
+  font-weight: 700;
+  scroll-margin-top: 7rem;
+}
+main.content .model-alerts-glossary dd { margin: 0.3rem 0 0; max-width: 95ch; }
+.model-alerts-glossary dt:target, .model-alerts-glossary dt:focus {
+  color: var(--model-alerts-accent);
+  outline: 2px solid var(--model-alerts-accent);
+  outline-offset: 4px;
+}
+#model-alerts-glossary-tip {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(25rem, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  color: var(--model-alerts-text);
+  background: var(--model-alerts-panel-raised);
+  border: 1px solid var(--model-alerts-accent);
+  border-radius: 8px;
+  box-shadow: 0 5px 24px rgb(0 0 0 / 35%);
+  font: 15px/1.55 var(--model-alerts-font);
+  overflow-wrap: break-word;
+}
+#model-alerts-glossary-tip[hidden] { display: none; }
+#model-alerts-glossary-tip strong { display: block; margin-bottom: 0.35em; color: var(--model-alerts-accent); }
+main.content details.model-alerts-science {
+  margin: 1.15rem 0;
+  padding: 0.8rem 1.1rem;
+  border: 1px solid var(--model-alerts-line);
+  border-left: 3px solid var(--model-alerts-green);
+  border-radius: 6px;
+  background: var(--model-alerts-panel);
+}
+.model-alerts-science summary { cursor: pointer; font-weight: 650; color: var(--model-alerts-accent); }
+.model-alerts-science[open] summary { margin-bottom: 1rem; }
+.model-alerts-equation {
+  margin: 1rem 0;
+  padding: 0.7rem 1rem;
+  overflow-x: auto;
+  color: var(--model-alerts-text);
+  background: var(--model-alerts-panel-raised);
+  border-radius: 4px;
+  font: 1.05rem/1.8 var(--model-alerts-mono);
+}
+@media print { #model-alerts-glossary-tip { display: none; } }
+
+.cell, .cell-output-display { min-width: 0; max-width: 100%; }
+.cell-output-display { overflow-x: auto; }
+.model-alerts-story-card { border: 1px solid var(--model-alerts-line); border-radius: 10px; background: var(--model-alerts-panel); overflow: hidden; }
+.model-alerts-story-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+@media (max-width: 575px) {
+  .model-alerts-story-grid { grid-template-columns: 1fr !important; }
+}
+
+/* Keep the compact guide navbar inside a phone viewport. */
+@media (max-width: 575px) {
+  #quarto-header .navbar-container { flex-wrap: nowrap; min-width: 0; }
+  #quarto-header .navbar-brand-container { min-width: 0; flex-shrink: 1; }
+  #quarto-header .navbar-brand { margin-right: .35rem; }
+  #quarto-header .navbar-logo { max-height: 22px; }
+  #quarto-header .navbar-title { font-size: 1rem; }
+}
+.model-alerts-table { max-width: 100%; overflow-x: auto; margin: 1rem 0; }
+.model-alerts-table table { width: 100%; border-collapse: collapse; }
+.model-alerts-table th, .model-alerts-table td {
+  padding: .4rem .6rem; border-bottom: 1px solid var(--model-alerts-line);
+  text-align: left; vertical-align: top;
+}
