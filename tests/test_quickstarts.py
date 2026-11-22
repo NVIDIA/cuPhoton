@@ -188,3 +188,43 @@ def test_quickstart_output_directory_must_be_new(tmp_path: Path) -> None:
             require_gpu=False,
             components=["xray"],
         )
+
+
+def test_quickstart_main_existing_output_keeps_previous_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    previous = '{"status": "ok"}\n'
+    summary_path.write_text(previous)
+
+    assert run_quickstarts.main(["--output-dir", str(tmp_path)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "already exists" in captured.err
+    assert summary_path.read_text() == previous
+
+
+def test_quickstart_main_reports_current_component_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("component failed")
+
+    monkeypatch.setattr(run_quickstarts, "detect_hardware", _cpu_hardware)
+    monkeypatch.setitem(run_quickstarts.RUNNERS, "xray", fail)
+    output = tmp_path / "new"
+
+    assert (
+        run_quickstarts.main(
+            ["--component", "xray", "--output-dir", str(output)]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == (output / "summary.json").read_text()
+    assert json.loads(captured.out)["status"] == "failed"
+    assert "ValueError: component failed" in captured.err

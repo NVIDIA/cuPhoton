@@ -619,8 +619,9 @@ def run_quickstarts(
     profile: str,
     require_gpu: bool,
     components: Sequence[str],
+    on_failure: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Run selected synthetic workflows and return their root summary."""
+    """Return the root summary, reporting component failures to on_failure."""
 
     if profile not in {"auto", "cpu"}:
         raise ValueError("profile must be 'auto' or 'cpu'")
@@ -679,6 +680,8 @@ def run_quickstarts(
             }
             summary["status"] = "failed"
             _write_json(summary_path, summary)
+            if on_failure is not None:
+                on_failure(summary)
             raise
         _write_json(summary_path, summary)
 
@@ -716,6 +719,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_summary(summary: dict[str, Any]) -> None:
+    print(json.dumps(summary, allow_nan=False, indent=2, sort_keys=True))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -727,17 +734,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             profile=args.profile,
             require_gpu=args.require_gpu,
             components=args.component,
+            on_failure=_print_summary,
         )
     except Exception as exc:
         print(
             f"quickstart failed: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
-        summary_path = args.output_dir.expanduser().resolve() / "summary.json"
-        if summary_path.is_file():
-            print(summary_path.read_text(encoding="utf-8"), end="")
         return 1
-    print(json.dumps(summary, allow_nan=False, indent=2, sort_keys=True))
+    _print_summary(summary)
     return 0
 
 
