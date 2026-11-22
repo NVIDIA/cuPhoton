@@ -190,10 +190,20 @@ jobs:
           git rev-parse HEAD
           nvidia-smi
       - name: Install native build prerequisites
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config zlib1g-dev
+          packages=(build-essential pkg-config zlib1g-dev)
+          arch=$(dpkg --print-architecture) || arch=
+          for package in "${packages[@]}"; do
+            if [[ -n "$arch" ]] &&
+               status=$(dpkg-query -W -f='${db:Status-Eflag} ${db:Status-Status}' "$package:$arch") &&
+               [[ "$status" == "ok installed" ]]; then
+              continue
+            fi
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${packages[@]}"
+            break
+          done
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.1"
