@@ -310,8 +310,6 @@ struct NativeSeries::Impl {
                 }
             }
             input->spectrum.reserve(sample_bytes);
-            input->validity.reserve(
-                bounded_bytes(std::int64_t(batch_n) * n, 1));
             masks |= input->mask_offset >= 0;
             inputs.push_back(std::move(input));
         }
@@ -339,7 +337,13 @@ struct NativeSeries::Impl {
         product.reserve(std::size_t(fft_n) * complex_bytes);
         exposure.reserve(8);
         error.reserve(4);
-        statistics.reserve(pair_count * 2 * 8);
+        if (masks) {
+            statistics.reserve(pair_count * 2 * 8);
+            for (auto& input : inputs) {
+                input->validity.reserve(
+                    bounded_bytes(std::int64_t(batch_n) * n, 1));
+            }
+        }
         dummy_weights.upload(std::vector<double>(batch_n, 1));
         const int threads = c.at("upload_workers");
         if (threads < 1 || threads > 64) {
@@ -497,13 +501,15 @@ struct NativeSeries::Impl {
                 static_cast<char*>(total.p)
                     + std::size_t(k) * fft_n * complex_bytes,
                 work);
-            series_statistics(
-                static_cast<const unsigned char*>(a.validity.p),
-                static_cast<const unsigned char*>(b.validity.p),
-                rows,
-                n,
-                static_cast<std::int64_t*>(statistics.p) + 2 * k,
-                work);
+            if (masks) {
+                series_statistics(
+                    static_cast<const unsigned char*>(a.validity.p),
+                    static_cast<const unsigned char*>(b.validity.p),
+                    rows,
+                    n,
+                    static_cast<std::int64_t*>(statistics.p) + 2 * k,
+                    work);
+            }
             if (want_lag && masks) {
                 sum_series_spectra(
                     true,
@@ -574,8 +580,10 @@ void NativeSeries::run(
         0,
         std::size_t(p.pair_count) * p.fft_n * p.complex_bytes,
         p.stream.value));
-    check(cudaMemsetAsync(
-        p.statistics.p, 0, p.pair_count * 2 * 8, p.stream.value));
+    if (p.masks) {
+        check(cudaMemsetAsync(
+            p.statistics.p, 0, p.pair_count * 2 * 8, p.stream.value));
+    }
     check(cudaMemsetAsync(p.error.p, 0, 4, p.stream.value));
     if (p.want_lag && p.masks) {
         check(cudaMemsetAsync(
@@ -613,11 +621,18 @@ void NativeSeries::run(
         check(cudaMemcpy(
             spectrum, p.total.p, spectrum_bytes, cudaMemcpyDeviceToHost));
     }
-    check(cudaMemcpy(
-        statistics,
-        p.statistics.p,
-        statistics_count * 8,
-        cudaMemcpyDeviceToHost));
+    if (p.masks) {
+        check(cudaMemcpy(
+            statistics,
+            p.statistics.p,
+            statistics_count * 8,
+            cudaMemcpyDeviceToHost));
+    } else {
+        for (int k = 0; k < p.pair_count; ++k) {
+            statistics[2 * k] = windows;
+            statistics[2 * k + 1] = std::int64_t(windows) * p.n;
+        }
+    }
     if (p.want_lag) {
         if (p.wide) {
             fft_check(cufftExecZ2Z(

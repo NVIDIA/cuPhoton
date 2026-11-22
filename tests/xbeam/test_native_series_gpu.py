@@ -206,9 +206,10 @@ def _shards(tmp_path, io):
     compare_results(actual, expected, "float32")
 
 
-def test_native_rejects_nonfinite_valid_input(tmp_path):
+@pytest.mark.parametrize("masks", [False, True])
+def test_native_rejects_nonfinite_valid_input(tmp_path, masks):
     path = tmp_path / "bad.h5"
-    validity = write_signals(path, "float64", bad=0)
+    validity = write_signals(path, "float64", masks=masks, bad=0)
     with Hdf5Source(
         path, {"a": "a", "b": "b"}, validity_paths=validity
     ) as source:
