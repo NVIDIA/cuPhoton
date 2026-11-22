@@ -134,7 +134,7 @@ window.Quarto = {
   typesetMath
 };
 </script>
-<link href="https://nvidia.github.io/cuPhoton/main/measure.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="5c11f8139bd8f84da926aed6db515b9a219aef55" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="measure.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/measure.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="47d2c9960cefceafed26ba36bf89fd1a98223efa" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="measure.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -531,7 +531,7 @@ window.Quarto = {
 <p>This page runs on a small synthetic pair. The printed values only demonstrate the API.</p>
 </div>
 </div>
-<div class="cell" data-execution_count="1" id="eabeb0f1">
+<div class="cell" data-execution_count="1" id="7765b63f">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -587,7 +587,7 @@ window.Quarto = {
 <section class="level2" data-number="7.1" id="make-a-difference-image">
 <h2 class="anchored" data-anchor-id="make-a-difference-image" data-number="7.1"><span class="header-section-number">7.1</span> Make a difference image</h2>
 <p>The two blocks run the alignment and subtraction of <a class="quarto-xref" href="subtract.html"><span>Chapter 6</span></a> in short form, without the refit.</p>
-<div class="cell" data-execution_count="2" id="20a52421">
+<div class="cell" data-execution_count="2" id="48abe8a3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
@@ -602,7 +602,7 @@ window.Quarto = {
 <span id="cb2-12"><a aria-hidden="true" href="#cb2-12" tabindex="-1"></a>                        output_bbox<span class="op">=</span>BBox(<span class="dv">0</span>, <span class="dv">0</span>, target.shape[<span class="dv">1</span>], target.shape[<span class="dv">0</span>]))  <span class="co"># (x, y) origin, then the size</span></span>
 <span id="cb2-13"><a aria-hidden="true" href="#cb2-13" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, np.zeros(reference.shape, dtype<span class="op">=</span><span class="bu">bool</span>), spec, backend<span class="op">=</span><span class="st">"cpu"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
-<div class="cell" data-execution_count="3" id="5db31a06">
+<div class="cell" data-execution_count="3" id="ab588fda">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> (GaussianBasisComponent, identify_residual_hotspots, solve_constant_kernel,</span>
 <span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a>                            standardize_constant_kernel_residual)</span>
 <span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
@@ -623,7 +623,7 @@ window.Quarto = {
 <section class="level2" data-number="7.2" id="cut-cutouts-around-the-candidates">
 <h2 class="anchored" data-anchor-id="cut-cutouts-around-the-candidates" data-number="7.2"><span class="header-section-number">7.2</span> Cut cutouts around the candidates</h2>
 <p>xFit takes cutouts as an array of shape <code>(batch, y, x)</code>. <code>window_stamps</code> from xPois cuts a square window around each <code>(x, y)</code> position, with NaN outside the image. Cut the difference and its variance the same way.</p>
-<div class="cell" data-execution_count="4" id="8af7aaad">
+<div class="cell" data-execution_count="4" id="724515e4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> window_stamps</span>
 <span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a></span>
 <span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a>positions <span class="op">=</span> np.array([region[<span class="st">"peak_yx"</span>][::<span class="op">-</span><span class="dv">1</span>] <span class="cf">for</span> region <span class="kw">in</span> regions], dtype<span class="op">=</span><span class="bu">float</span>)  <span class="co"># (x, y)</span></span>
@@ -687,7 +687,7 @@ window.Quarto = {
 <section class="level2" data-number="7.4" id="fit-one-source-per-cutout">
 <h2 class="anchored" data-anchor-id="fit-one-source-per-cutout" data-number="7.4"><span class="header-section-number">7.4</span> Fit one source per cutout</h2>
 <p><code>fit_single_sources</code> fits one Gaussian lobe per cutout, from the start position you pass. With <code>psf_sigma</code> the lobe is round with that width, and only its amplitude and position are fitted. Without it, the widths and orientation are free. <code>sign=+1</code> starts a brightening source and <code>sign=-1</code> a fading one; without <code>sign</code>, a matched filter at the start sets it. This initializes the amplitude, whose fitted sign is free to change.</p>
-<div class="cell" data-execution_count="5" id="48bff100">
+<div class="cell" data-execution_count="5" id="430bc2e5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> fit_single_sources</span>
 <span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
 <span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a>psf_sigma <span class="op">=</span> target_header[<span class="st">"PSFSIG"</span>]  <span class="co"># the target PSF width, in pixels</span></span>
@@ -707,7 +707,7 @@ x +0.20 +- 0.04, y +0.05 +- 0.04, flux 4140 +- 71, converged True</code></pre>
 <section class="level2" data-number="7.5" id="measure-the-flux-at-a-fixed-position">
 <h2 class="anchored" data-anchor-id="measure-the-flux-at-a-fixed-position" data-number="7.5"><span class="header-section-number">7.5</span> Measure the flux at a fixed position</h2>
 <p><code>forced_psf_photometry</code> fits only the flux of a unit-flux Gaussian PSF at fixed positions. The model is linear in the flux. The flux and its error therefore follow without iteration. Pass the fitted positions, or positions from a catalog.</p>
-<div class="cell" data-execution_count="6" id="4e6a70ab">
+<div class="cell" data-execution_count="6" id="4cc6c99c">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> forced_psf_photometry</span>
 <span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a></span>
 <span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a>fixed <span class="op">=</span> np.column_stack([sources.x, sources.y])  <span class="co"># (x, y) from each cutout center</span></span>
@@ -722,7 +722,7 @@ x +0.20 +- 0.04, y +0.05 +- 0.04, flux 4140 +- 71, converged True</code></pre>
 <section class="level2" data-number="7.6" id="build-a-dipole-cutout">
 <h2 class="anchored" data-anchor-id="build-a-dipole-cutout" data-number="7.6"><span class="header-section-number">7.6</span> Build a dipole cutout</h2>
 <p>The sample pair has no dipole. Build one with NumPy. A star of flux 6,000 sits at (x, y) = <code>(2, 1)</code> in the target and at <code>(-1, -1)</code> in the reference. The difference is target minus matched reference. The star therefore leaves a positive lobe where it is in the target and a negative lobe where it was in the reference. The noise matches the sky of the difference image.</p>
-<div class="cell" data-execution_count="7" id="1b227597">
+<div class="cell" data-execution_count="7" id="9f0a06a9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">3</span>)</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a>y, x <span class="op">=</span> np.mgrid[<span class="op">-</span><span class="dv">15</span>:<span class="dv">16</span>, <span class="op">-</span><span class="dv">15</span>:<span class="dv">16</span>]  <span class="co"># pixels from the cutout center</span></span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a></span>
@@ -738,7 +738,7 @@ x +0.20 +- 0.04, y +0.05 +- 0.04, flux 4140 +- 71, converged True</code></pre>
 <section class="level2" data-number="7.7" id="fit-dipoles">
 <h2 class="anchored" data-anchor-id="fit-dipoles" data-number="7.7"><span class="header-section-number">7.7</span> Fit dipoles</h2>
 <p><code>GaussianDipoleModel</code> draws one elliptical Gaussian twice, with opposite signs. Both lobes share one <code>amplitude</code>, their peak height, and one shape, set by the widths <code>sigma_x</code> and <code>sigma_y</code> and the orientation <code>theta</code>. The other four parameters are the lobe centers <code>x_pos</code>, <code>y_pos</code>, <code>x_neg</code> and <code>y_neg</code>. The lobe at <code>(x_pos, y_pos)</code> has the sign of <code>amplitude</code>, and the lobe at <code>(x_neg, y_neg)</code> has the opposite sign. <code>GaussianDipoleModel((31, 31))</code> takes the cutout shape, <code>(height, width)</code>, which must match the images. <code>model="gaussian"</code> builds the same model from the image shape. Fit the two candidates and the dipole in one batch, with a <code>mask</code> that excludes every non-finite pixel.</p>
-<div class="cell" data-execution_count="8" id="17f71a11">
+<div class="cell" data-execution_count="8" id="c4fa163b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> GaussianDipoleModel, fit_dipoles</span>
 <span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a></span>
 <span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a>images <span class="op">=</span> np.concatenate([cutouts, dipole[<span class="va">None</span>]])</span>
@@ -811,7 +811,7 @@ y_neg        -1.00 +- 0.08</code></pre>
 <section class="level2" data-number="7.8" id="derive-catalog-quantities">
 <h2 class="anchored" data-anchor-id="derive-catalog-quantities" data-number="7.8"><span class="header-section-number">7.8</span> Derive catalog quantities</h2>
 <p><code>derived_dipole_quantities</code> turns each Gaussian dipole fit into its center, the position of the positive lobe (where the source is in the target), the lobe separation and the lobe flux. It propagates the full covariance to each error. The cross terms matter, because amplitude and widths are anticorrelated.</p>
-<div class="cell" data-execution_count="9" id="10d094e0">
+<div class="cell" data-execution_count="9" id="0e65687e">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> derived_dipole_quantities</span>
 <span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a></span>
 <span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>q <span class="op">=</span> derived_dipole_quantities(dipoles)</span>
@@ -830,7 +830,7 @@ lobe flux 5813 +- 455</code></pre>
 <section class="level2" data-number="7.9" id="sec-measure-flags">
 <h2 class="anchored" data-anchor-id="sec-measure-flags" data-number="7.9"><span class="header-section-number">7.9</span> Screen the fits with quality flags</h2>
 <p>A converged fit can still be wrong. <code>dipole_quality_flags</code> returns one integer of <code>DipoleQualityFlag</code> bits per fit. Set <code>width_range</code> from the PSF, for example 0.5 to 2.5 times its width.</p>
-<div class="cell" data-execution_count="10" id="2d15b722">
+<div class="cell" data-execution_count="10" id="d1a64917">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> DipoleQualityFlag, dipole_quality_flags</span>
 <span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a></span>
 <span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a>flags <span class="op">=</span> dipole_quality_flags(dipoles, images, variance<span class="op">=</span>variance, mask<span class="op">=</span>mask,</span>
@@ -941,7 +941,7 @@ Figure 7.1: The three cutouts, each on its own red-blue scale centered on zero,
 <section class="level2" data-number="7.11" id="use-a-sampled-psf">
 <h2 class="anchored" data-anchor-id="use-a-sampled-psf" data-number="7.11"><span class="header-section-number">7.11</span> Use a sampled PSF</h2>
 <p><code>StampDipoleModel</code> shifts copies of a PSF image instead of drawing Gaussians. Its five parameters are the two lobe centers and one shared <code>flux</code>. Use it when you have an image of the PSF, such as a survey’s PSF model, and the PSF is not Gaussian. The block uses a sampled Gaussian as the PSF image.</p>
-<div class="cell" data-execution_count="12" id="df2f9534">
+<div class="cell" data-execution_count="12" id="4f70bdd3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> StampDipoleModel</span>
 <span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a></span>
 <span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a>py, px <span class="op">=</span> np.mgrid[<span class="op">-</span><span class="dv">7</span>:<span class="dv">8</span>, <span class="op">-</span><span class="dv">7</span>:<span class="dv">8</span>]</span>
@@ -1088,7 +1088,7 @@ Figure 7.1: The three cutouts, each on its own red-blue scale centered on zero,
 <section class="level2" data-number="7.13" id="on-a-gpu">
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="7.13"><span class="header-section-number">7.13</span> On a GPU</h2>
 <p>With the <code>gpu</code> profile, pass <code>backend="cupy"</code> to <code>fit_dipoles</code>, which still returns NumPy arrays. <code>fit_dipoles_device</code> keeps the result on the GPU. The other xFit calls return CuPy arrays for CuPy inputs. The <code>cutile</code> and <code>native</code> backends fit Gaussian models only, as the <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xfit.md">xFit reference</a> describes. <code>cutile</code> needs the <code>cutile</code> extra, and <code>native</code> needs the native extension (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>).</p>
-<div class="cell" data-execution_count="13" id="650a007b">
+<div class="cell" data-execution_count="13" id="390630d7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
 <span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> fit_dipoles_device</span>
 <span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a></span>
@@ -1102,7 +1102,7 @@ Figure 7.1: The three cutouts, each on its own red-blue scale centered on zero,
 <section class="level2" data-number="7.14" id="command-line">
 <h2 class="anchored" data-anchor-id="command-line" data-number="7.14"><span class="header-section-number">7.14</span> Command line</h2>
 <p><code>cuphoton xfit fit-dipoles</code> fits a batch of cutouts saved as an NPZ archive. The archive needs <code>candidate_id</code> and <code>images</code>, and can hold <code>initial</code>, <code>mask</code>, <code>variance</code> and <code>stamp_basis</code>.</p>
-<div class="cell" data-execution_count="14" id="d863b2fb">
+<div class="cell" data-execution_count="14" id="85a54863">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a>np.savez(<span class="st">"sample/cutouts.npz"</span>, candidate_id<span class="op">=</span>np.array([<span class="st">"star"</span>, <span class="st">"new"</span>, <span class="st">"dipole"</span>]),</span>
 <span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a>         images<span class="op">=</span>images, variance<span class="op">=</span>variance, mask<span class="op">=</span>mask)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
@@ -1110,12 +1110,12 @@ Figure 7.1: The three cutouts, each on its own red-blue scale centered on zero,
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="ex">cuphoton</span> xfit data-validate <span class="at">--input</span> sample/cutouts.npz <span class="at">--model</span> gaussian <span class="at">--mode</span> difference</span>
 <span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a><span class="ex">cuphoton</span> xfit fit-dipoles <span class="at">--input</span> sample/cutouts.npz <span class="at">--model</span> gaussian <span class="at">--backend</span> numpy <span class="at">--output-dir</span> runs/dipoles</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p><code>data-validate</code> prints the array shapes and <code>"valid": true</code>. <code>fit-dipoles</code> writes <code>summary.json</code>, <code>fits.parquet</code> and <code>fit-arrays.npz</code> into a new directory and prints the summary. Its <code>metrics</code> block reads:</p>
-<div class="cell" data-execution_count="15" id="83340af3">
+<div class="cell" data-execution_count="15" id="cf8c638c">
 <div class="cell-output cell-output-stdout">
 <pre><code>{
   "candidate_count": 3,
   "converged_count": 3,
-  "median_reduced_chi_square": 0.9760938088356045,
+  "median_reduced_chi_square": 0.9760938088355317,
   "status_counts": {
     "converged_f_tol": 3
   },
@@ -1124,7 +1124,7 @@ Figure 7.1: The three cutouts, each on its own red-blue scale centered on zero,
 </div>
 </div>
 <p><code>fits.parquet</code> holds one row per candidate, with each parameter and its standard error:</p>
-<div class="cell" data-execution_count="16" id="48300826">
+<div class="cell" data-execution_count="16" id="016cc928">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
 <span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a></span>
 <span id="cb25-3"><a aria-hidden="true" href="#cb25-3" tabindex="-1"></a>table <span class="op">=</span> pd.read_parquet(<span class="st">"runs/dipoles/fits.parquet"</span>)</span>

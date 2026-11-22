@@ -106,7 +106,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/transient-chain.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="5c11f8139bd8f84da926aed6db515b9a219aef55" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="transient-chain.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/transient-chain.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="47d2c9960cefceafed26ba36bf89fd1a98223efa" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="transient-chain.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -575,7 +575,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="9.1" id="make-a-sample-pair">
 <h2 class="anchored" data-anchor-id="make-a-sample-pair" data-number="9.1"><span class="header-section-number">9.1</span> Make a sample pair</h2>
 <p>The block below writes <code>sample/reference.fits</code> and <code>sample/target.fits</code>, the pair of <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>.</p>
-<div class="cell" data-execution_count="1" id="e584e1a6">
+<div class="cell" data-execution_count="1" id="2ee35ae8">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -629,7 +629,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </details>
 </div>
 <p>The correlation term of the chain’s error budget requires a locally translation-only mapping. When that term is active, a rotated or rescaled grid gives undefined error bars (<a class="quarto-xref" href="#sec-transient-chain-errors"><span>Section 9.11.1</span></a>). Write a second target that keeps the reference’s pixel scale and orientation, with the same two changes:</p>
-<div class="cell" data-execution_count="2" id="22df7f3a">
+<div class="cell" data-execution_count="2" id="60a46513">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a>wcs <span class="op">=</span> make_wcs((<span class="dv">256</span>, <span class="dv">256</span>), <span class="fl">0.26</span>, <span class="fl">0.0</span>, (<span class="fl">4.3</span>, <span class="fl">6.3</span>))  <span class="co"># the reference's scale, no rotation, shifted by a few pixels</span></span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a>header <span class="op">=</span> wcs.to_header()</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a>header[<span class="st">"GAIN"</span>], header[<span class="st">"PSFSIG"</span>] <span class="op">=</span> <span class="fl">2.0</span>, <span class="fl">1.8</span></span>
@@ -642,7 +642,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The example is a separate package inside the checkout. Start with the GPU environment from <a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>, which includes the catalog dependencies, then install the example from the checkout root. For a distributed executor, include <code>--extra dragon</code> or <code>--extra mpi</code> in that environment’s sync command. A later <code>uv sync</code> removes the example, so install it again after each sync.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="ex">uv</span> pip install <span class="at">-e</span> examples/transient-chain</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>On a CPU machine you can skip the install. The block below imports the example from the checkout, as <code>launch.py</code> does.</p>
-<div class="cell" data-execution_count="3" id="b696b180">
+<div class="cell" data-execution_count="3" id="252ba965">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">import</span> os</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a><span class="im">import</span> sys</span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
@@ -660,7 +660,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="9.3" id="read-the-shipped-configurations">
 <h2 class="anchored" data-anchor-id="read-the-shipped-configurations" data-number="9.3"><span class="header-section-number">9.3</span> Read the shipped configurations</h2>
 <p><code>load_config</code> reads a configuration file as <code>launch.py</code> does. It fills in defaults, rejects unknown keys and checks each value. Load both files and compare the settings you are most likely to change:</p>
-<div class="cell" data-execution_count="4" id="8ce2348b">
+<div class="cell" data-execution_count="4" id="7167bf34">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a><span class="im">from</span> transient_chain.config <span class="im">import</span> load_config</span>
 <span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a></span>
@@ -689,7 +689,7 @@ blocks that differ: ['survey']</code></pre>
 <section class="level2" data-number="9.4" id="describe-your-files-to-the-survey-adapter">
 <h2 class="anchored" data-anchor-id="describe-your-files-to-the-survey-adapter" data-number="9.4"><span class="header-section-number">9.4</span> Describe your files to the survey adapter</h2>
 <p>The <code>survey</code> block picks an adapter, the code that turns one entry of the selections file into image planes. The <code>generic</code> adapter reads each plane from a file and an HDU (header/data unit; here, an image inside a FITS file) that you name. The template is the reference image. Print the layout that <code>config-generic.yaml</code> ships:</p>
-<div class="cell" data-execution_count="5" id="d7bd658b">
+<div class="cell" data-execution_count="5" id="a128cb3f">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a>params <span class="op">=</span> generic[<span class="st">"survey"</span>][<span class="st">"params"</span>]</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a><span class="bu">print</span>(pd.DataFrame({<span class="st">"target"</span>: params[<span class="st">"target"</span>], <span class="st">"template"</span>: params[<span class="st">"template"</span>]}).to_string(na_rep<span class="op">=</span><span class="st">""</span>))</span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"identity:"</span>, params[<span class="st">"identity"</span>], <span class="st">" extra_keys:"</span>, params.get(<span class="st">"extra_keys"</span>), <span class="st">" mask_policy:"</span>, params[<span class="st">"mask_policy"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -809,7 +809,7 @@ Table 9.1: Defaults of the generic adapter, from <code>transient_chain/surveys/
 <section class="level2" data-number="9.5" id="give-each-image-a-variance-plane">
 <h2 class="anchored" data-anchor-id="give-each-image-a-variance-plane" data-number="9.5"><span class="header-section-number">9.5</span> Give each image a variance plane</h2>
 <p>The sample pair has no variance planes. Approximate its Gaussian noise variance from the positive, sky-inclusive image and gain (electrons per data number), as in <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>. Real data need their calibrated noise model, including sky and read noise:</p>
-<div class="cell" data-execution_count="6" id="d397b8f6">
+<div class="cell" data-execution_count="6" id="a58b756e">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a><span class="im">from</span> astropy.io <span class="im">import</span> fits</span>
 <span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a></span>
@@ -821,7 +821,7 @@ Table 9.1: Defaults of the generic adapter, from <code>transient_chain/surveys/
 <section class="level2" data-number="9.6" id="write-a-configuration-for-your-files">
 <h2 class="anchored" data-anchor-id="write-a-configuration-for-your-files" data-number="9.6"><span class="header-section-number">9.6</span> Write a configuration for your files</h2>
 <p>Copy <code>config-generic.yaml</code> and replace its survey parameters. Each sample image sits in its primary HDU, with one variance file and no mask. Keys that you leave out take the adapter’s defaults.</p>
-<div class="cell" data-execution_count="7" id="2a7ca605">
+<div class="cell" data-execution_count="7" id="f6f94634">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">import</span> yaml</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a></span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a>config <span class="op">=</span> yaml.safe_load((EXAMPLE <span class="op">/</span> <span class="st">"config-generic.yaml"</span>).read_text())</span>
@@ -841,7 +841,7 @@ Table 9.1: Defaults of the generic adapter, from <code>transient_chain/surveys/
 <section class="level2" data-number="9.7" id="write-the-selections-file">
 <h2 class="anchored" data-anchor-id="write-the-selections-file" data-number="9.7"><span class="header-section-number">9.7</span> Write the selections file</h2>
 <p>The selections file lists one entry per target image. Each entry holds the identity keys (<code>exposure_id</code>, <code>ccd_id</code> and <code>band</code> by default) and the path keys that you named. Each process reads a relative path from the directory it starts in. Write absolute paths.</p>
-<div class="cell" data-execution_count="8" id="085f5e25">
+<div class="cell" data-execution_count="8" id="276e88ac">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a></span>
 <span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>entry <span class="op">=</span> {<span class="st">"exposure_id"</span>: <span class="dv">1</span>, <span class="st">"ccd_id"</span>: <span class="st">"S1"</span>, <span class="st">"band"</span>: <span class="st">"r"</span>}</span>
@@ -857,7 +857,7 @@ Table 9.1: Defaults of the generic adapter, from <code>transient_chain/surveys/
 <section class="level2" data-number="9.8" id="check-the-inputs">
 <h2 class="anchored" data-anchor-id="check-the-inputs" data-number="9.8"><span class="header-section-number">9.8</span> Check the inputs</h2>
 <p><code>prepare_workload</code> runs the input checks that <code>launch.py</code> runs before it starts a worker. It loads the configuration, builds the adapter, and checks each entry for missing keys and files. The third argument is the checkpoint directory.</p>
-<div class="cell" data-execution_count="9" id="33c46685">
+<div class="cell" data-execution_count="9" id="4251e4b5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="im">from</span> transient_chain.workload <span class="im">import</span> prepare_workload</span>
 <span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a></span>
 <span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>spec <span class="op">=</span> prepare_workload(Path(<span class="st">"sample/selections.json"</span>), Path(<span class="st">"sample/chain.yaml"</span>), <span class="va">None</span>)</span>
@@ -871,7 +871,7 @@ Table 9.1: Defaults of the generic adapter, from <code>transient_chain/surveys/
 <section class="level2" data-number="9.9" id="look-at-what-the-adapter-reads">
 <h2 class="anchored" data-anchor-id="look-at-what-the-adapter-reads" data-number="9.9"><span class="header-section-number">9.9</span> Look at what the adapter reads</h2>
 <p>Run the adapter’s loaders with a host reader. <code>load_target</code> returns the target planes. <code>template</code> returns a provider whose <code>build</code> reprojects the reference onto the target grid with xRep, as the worker does on the GPU.</p>
-<div class="cell" data-execution_count="10" id="906dc214">
+<div class="cell" data-execution_count="10" id="e51a95e6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="im">from</span> transient_chain.fitsio <span class="im">import</span> PlaneReader</span>
 <span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="im">from</span> transient_chain.surveys <span class="im">import</span> make_adapter</span>
 <span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a></span>
@@ -967,7 +967,7 @@ Figure 9.1: What the generic adapter hands the chain for the sample pair, read 
 <section class="level2" data-number="9.11" id="read-the-catalog-and-the-summary">
 <h2 class="anchored" data-anchor-id="read-the-catalog-and-the-summary" data-number="9.11"><span class="header-section-number">9.11</span> Read the catalog and the summary</h2>
 <p>The <code>local</code> run writes <code>out/items/&lt;item&gt;/catalog.parquet</code> and <code>summary.json</code> for each item, and <code>out/catalog.parquet</code> with the rows of all items. Dragon and MPI write the same files under <code>&lt;output-dir&gt;/&lt;name&gt;/</code>. Every item writes the same columns with the same types, also when it finds no candidates. Print the column count, the flux columns and the error terms:</p>
-<div class="cell" data-execution_count="12" id="a1510231">
+<div class="cell" data-execution_count="12" id="edc4dd45">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> GaussianDipoleModel</span>
 <span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a><span class="im">from</span> transient_chain <span class="im">import</span> catalog</span>
 <span id="cb22-3"><a aria-hidden="true" href="#cb22-3" tabindex="-1"></a></span>
@@ -1043,7 +1043,7 @@ mis     residual misalignment (0 for psf_flux)</code></pre>
 <p><code>source_x_err</code> and <code>source_y_err</code> normally copy the <code>positive_*</code> bars. For a fading candidate identified by the lobe-support flags whose one-lobe refit was not accepted, <code>source_*</code> instead selects the dipole’s negative lobe and its position errors are NaN: the budget was computed for the positive lobe.</p>
 <p>When <code>corr</code> is active, its factor is undefined where the grid mapping between the two images is not locally a shift, for example a reference that is rotated or has a different pixel scale. The affected computed quantities get NaN error bars and <code>uq_valid</code> is false. <code>summary.json</code> counts them under <code>uq.undefined_factor</code>, and those on a rotated grid under <code>uq.rotated_grid</code>. The example’s README explains why. This page’s sample target shares the reference’s pixel scale and orientation for that reason.</p>
 <p>After a GPU run, inspect the rows and read how the item’s bars were built. This block needs a finished run and is not run here.</p>
-<div class="cell" data-execution_count="13" id="afd82162">
+<div class="cell" data-execution_count="13" id="68eb8984">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a aria-hidden="true" href="#cb24-1" tabindex="-1"></a>table <span class="op">=</span> pd.read_parquet(<span class="st">"out/catalog.parquet"</span>)</span>
 <span id="cb24-2"><a aria-hidden="true" href="#cb24-2" tabindex="-1"></a>columns <span class="op">=</span> [<span class="st">"x"</span>, <span class="st">"y"</span>, <span class="st">"fit_model"</span>, <span class="st">"quality_flags"</span>, <span class="st">"psf_flux"</span>, <span class="st">"psf_flux_err"</span>, <span class="st">"source_x_err"</span>, <span class="st">"uq_valid"</span>]</span>
 <span id="cb24-3"><a aria-hidden="true" href="#cb24-3" tabindex="-1"></a><span class="bu">print</span>(table[columns].to_string())</span>
@@ -1061,7 +1061,7 @@ mis     residual misalignment (0 for psf_flux)</code></pre>
 <section class="level2" data-number="9.12" id="turn-the-error-budget-on-or-off">
 <h2 class="anchored" data-anchor-id="turn-the-error-budget-on-or-off" data-number="9.12"><span class="header-section-number">9.12</span> Turn the error budget on or off</h2>
 <p>The <code>uq</code> block controls the error budget, which is on by default. The second argument of <code>load_config</code> takes the same overrides as <code>--set</code>. Compare the shipped block with the one that <code>uq.enabled=false</code> gives:</p>
-<div class="cell" data-execution_count="14" id="738790d9">
+<div class="cell" data-execution_count="14" id="12a4a7bb">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a>fit_only <span class="op">=</span> load_config(EXAMPLE <span class="op">/</span> <span class="st">"config-generic.yaml"</span>, [<span class="st">"uq.enabled=false"</span>])</span>
 <span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a><span class="bu">print</span>(pd.DataFrame({<span class="st">"shipped"</span>: generic[<span class="st">"uq"</span>], <span class="st">"uq.enabled=false"</span>: fit_only[<span class="st">"uq"</span>]}).to_string())</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
