@@ -663,6 +663,7 @@ def _solve_psf_mm(
     active = torch.ones(num_psfs, device=device, dtype=torch.bool)
     previous_u = None
     previous_previous_u = None
+    prediction = _conv_single(F, kernel, h, config.srf, config.padding)
 
     for step in range(int(config.max_iter)):
         if not bool(torch.any(active).item()):
@@ -682,7 +683,6 @@ def _solve_psf_mm(
                 if active_cpu[index]:
                     traces[index]["u_score"].append(float(scores_cpu[index]))
             next_active = active & (scores >= config.tol)
-        prediction = _conv_single(F, kernel, h, config.srf, config.padding)
         upsampled_prediction = _resize_psf(F, prediction, h_size)
         u_denom = _conv_transpose_single(
             kernel, upsampled_prediction, config.padding
