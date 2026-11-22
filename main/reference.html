@@ -102,7 +102,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/reference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c14f6df1274eb8386473f974900c878b38a0dc88" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/reference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="8496dd66fea0f4c6313f190a323d188152e57727" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -613,7 +613,7 @@ Table A.2: Topics across modules.
 <section class="level2" data-number="A.2" id="command-line">
 <h2 class="anchored" data-anchor-id="command-line" data-number="A.2"><span class="header-section-number">A.2</span> Command line</h2>
 <p><code>cuphoton --help</code> lists the command groups, one per module:</p>
-<div class="cell" data-execution_count="1" id="167f3b38">
+<div class="cell" data-execution_count="1" id="37f02a01">
 <div class="cell-output cell-output-stdout">
 <pre><code>cuphoton
 
@@ -638,7 +638,7 @@ Use 'cuphoton GROUP --help' for group help.</code></pre>
 <section class="level2" data-number="A.3" id="python-api">
 <h2 class="anchored" data-anchor-id="python-api" data-number="A.3"><span class="header-section-number">A.3</span> Python API</h2>
 <p>Each function’s docstring documents its arguments, defaults and return fields. Print a signature with <code>inspect</code>, or the whole docstring with <code>help</code>:</p>
-<div class="cell" data-execution_count="2" id="573813a9">
+<div class="cell" data-execution_count="2" id="0107c64e">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> inspect</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> reproject_masked_array</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a></span>
@@ -648,7 +648,7 @@ Use 'cuphoton GROUP --help' for group help.</code></pre>
 </div>
 </div>
 <p>Each package lists its public names in <code>__all__</code>:</p>
-<div class="cell" data-execution_count="3" id="59f1b8a6">
+<div class="cell" data-execution_count="3" id="fb96b40c">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">import</span> importlib</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"package          public names"</span>)</span>

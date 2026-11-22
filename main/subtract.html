@@ -134,7 +134,7 @@ window.Quarto = {
   typesetMath
 };
 </script>
-<link href="https://nvidia.github.io/cuPhoton/main/subtract.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="c14f6df1274eb8386473f974900c878b38a0dc88" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="subtract.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/subtract.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="8496dd66fea0f4c6313f190a323d188152e57727" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="subtract.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -529,7 +529,7 @@ window.Quarto = {
 <p>This page runs on a small synthetic pair. The printed values only demonstrate the API.</p>
 </div>
 </div>
-<div class="cell" data-execution_count="1" id="50d2cc76">
+<div class="cell" data-execution_count="1" id="d9208f15">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -585,7 +585,7 @@ window.Quarto = {
 <section class="level2" data-number="6.1" id="put-the-pair-on-one-grid">
 <h2 class="anchored" data-anchor-id="put-the-pair-on-one-grid" data-number="6.1"><span class="header-section-number">6.1</span> Put the pair on one grid</h2>
 <p>xPois needs a reference and a target on one grid. The block repeats the alignment of <a class="quarto-xref" href="first-difference.html"><span>Chapter 2</span></a>, which <a class="quarto-xref" href="align.html"><span>Chapter 5</span></a> explains.</p>
-<div class="cell" data-execution_count="2" id="00e6d03e">
+<div class="cell" data-execution_count="2" id="61a9dc0a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
@@ -612,7 +612,7 @@ window.Quarto = {
 <section class="level2" data-number="6.2" id="sec-subtract-basis">
 <h2 class="anchored" data-anchor-id="sec-subtract-basis" data-number="6.2"><span class="header-section-number">6.2</span> Choose the kernel basis</h2>
 <p>The kernel must turn the reference PSF (point spread function: the blur pattern of a point of light) into the target PSF. When the target is blurrier than the reference and both PSFs are Gaussian, the matching kernel is a Gaussian of width <span class="math inline">\(\sqrt{\sigma_T^2 - \sigma_R^2}\)</span> with both widths in target pixels. xPois builds the kernel from basis functions. Each <code>GaussianBasisComponent(sigma, degree)</code> is a Gaussian of width <code>sigma</code> pixels times every polynomial up to total degree <code>degree</code>. The example places a narrow, a matching and a wide Gaussian around the needed width. For real images, inspect the residuals and adjust the basis; resampling and non-Gaussian PSFs change the matching problem. If the target is sharper, swap the subtraction roles or choose a sharper reference instead of taking the square root of a negative width difference.</p>
-<div class="cell" data-execution_count="3" id="1076f474">
+<div class="cell" data-execution_count="3" id="ab02284d">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> astropy.wcs.utils <span class="im">import</span> proj_plane_pixel_scales</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> GaussianBasisComponent</span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a></span>
@@ -631,7 +631,7 @@ window.Quarto = {
 <section class="level2" data-number="6.3" id="fit-the-kernel-and-subtract">
 <h2 class="anchored" data-anchor-id="fit-the-kernel-and-subtract" data-number="6.3"><span class="header-section-number">6.3</span> Fit the kernel and subtract</h2>
 <p><code>solve_constant_kernel</code> fits one kernel for the whole image by least squares, with each pixel weighted by one over its target variance.</p>
-<div class="cell" data-execution_count="4" id="f143e2b9">
+<div class="cell" data-execution_count="4" id="59f64344">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> solve_constant_kernel</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a></span>
 <span id="cb6-3"><a aria-hidden="true" href="#cb6-3" tabindex="-1"></a>fit <span class="op">=</span> solve_constant_kernel(aligned.image, target, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>),</span>
@@ -701,7 +701,7 @@ chi2/dof 1.289 over 56644 pixels
 <section class="level2" data-number="6.4" id="predict-the-noise-of-the-difference">
 <h2 class="anchored" data-anchor-id="predict-the-noise-of-the-difference" data-number="6.4"><span class="header-section-number">6.4</span> Predict the noise of the difference</h2>
 <p>The difference holds noise from both images. <code>standardize_constant_kernel_residual</code> predicts the variance of every difference pixel. It adds the target variance and the reference variance convolved with the squared kernel. Then it divides the difference by the square root of that sum.</p>
-<div class="cell" data-execution_count="5" id="ee782d16">
+<div class="cell" data-execution_count="5" id="4f8eb22b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> standardize_constant_kernel_residual</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>noise <span class="op">=</span> standardize_constant_kernel_residual(difference, kernel<span class="op">=</span>fit.kernel, target_variance<span class="op">=</span>target_variance,</span>
@@ -726,7 +726,7 @@ chi2/dof 1.289 over 56644 pixels
 <section class="level2" data-number="6.5" id="find-the-candidates">
 <h2 class="anchored" data-anchor-id="find-the-candidates" data-number="6.5"><span class="header-section-number">6.5</span> Find the candidates</h2>
 <p><code>identify_residual_hotspots</code> divides an image by <code>robust_sigma</code> and marks every pixel whose absolute value reaches <code>threshold_sigma</code>. It groups marked pixels that touch horizontally or vertically into regions, and sorts the regions by peak significance, then by size. Using <code>robust_sigma=1.0</code> thresholds the supplied <code>z</code> values directly; it does not calibrate their statistical significance.</p>
-<div class="cell" data-execution_count="6" id="c13befe1">
+<div class="cell" data-execution_count="6" id="ccd18423">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> identify_residual_hotspots</span>
 <span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a></span>
 <span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a>regions <span class="op">=</span> identify_residual_hotspots(z, robust_sigma<span class="op">=</span><span class="fl">1.0</span>, threshold_sigma<span class="op">=</span><span class="fl">5.0</span>, max_regions<span class="op">=</span><span class="va">None</span>)</span>
@@ -744,7 +744,7 @@ chi2/dof 1.289 over 56644 pixels
 <section class="level2" data-number="6.6" id="keep-changed-pixels-out-of-the-fit">
 <h2 class="anchored" data-anchor-id="keep-changed-pixels-out-of-the-fit" data-number="6.6"><span class="header-section-number">6.6</span> Keep changed pixels out of the fit</h2>
 <p>A source that changed is not a blur difference, and inside the fit it pulls the kernel. Mask each region with a margin, then fit again. <code>fit_mask</code> is a boolean image of the pixels to fit. The solver also drops the edge band and invalid pixels.</p>
-<div class="cell" data-execution_count="7" id="6673f380">
+<div class="cell" data-execution_count="7" id="012ce016">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a>fit_mask <span class="op">=</span> np.ones(target.shape, dtype<span class="op">=</span><span class="bu">bool</span>)</span>
 <span id="cb12-2"><a aria-hidden="true" href="#cb12-2" tabindex="-1"></a><span class="cf">for</span> region <span class="kw">in</span> regions:</span>
 <span id="cb12-3"><a aria-hidden="true" href="#cb12-3" tabindex="-1"></a>    y0, y1, x0, x1 <span class="op">=</span> region[<span class="st">"bbox_y0y1x0x1"</span>]  <span class="co"># rows y0 to y1, columns x0 to x1</span></span>
@@ -805,7 +805,7 @@ Figure 6.1: The subtraction of the sample pair after the refit. Left: the fitte
 <section class="level2" data-number="6.8" id="sec-subtract-bad-pixels">
 <h2 class="anchored" data-anchor-id="sec-subtract-bad-pixels" data-number="6.8"><span class="header-section-number">6.8</span> Keep bad pixels out of the subtraction</h2>
 <p>A bad-pixel mask flags pixels whose values are wrong, such as a hot column. Set those pixels to NaN in the image and its variance. <code>solve_constant_kernel</code> then leaves out each non-finite target pixel, and every pixel whose kernel footprint holds a non-finite reference pixel. This block flags a hot column in the reference and a hot pixel in the target. It aligns the reference with its mask, which puts both masks on the target grid (<a class="quarto-xref" href="align.html"><span>Chapter 5</span></a>).</p>
-<div class="cell" data-execution_count="9" id="dfb0ea1d">
+<div class="cell" data-execution_count="9" id="d2cc51e9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a>flagged_reference, reference_mask <span class="op">=</span> reference.copy(), np.zeros(reference.shape, dtype<span class="op">=</span>np.int32)</span>
 <span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a>flagged_reference[:, <span class="dv">120</span>] <span class="op">+=</span> <span class="fl">500.0</span>  <span class="co"># a hot column at x = 120 (NumPy indexes [y, x])</span></span>
 <span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>reference_mask[:, <span class="dv">120</span>] <span class="op">|=</span> <span class="dv">2</span></span>
@@ -821,7 +821,7 @@ Figure 6.1: The subtraction of the sample pair after the refit. Left: the fitte
 </div>
 </div>
 <p>Fit the pair twice with the <code>fit_mask</code> of the refit. The first fit leaves the flagged values in. The second sets them to NaN.</p>
-<div class="cell" data-execution_count="10" id="e21287c5">
+<div class="cell" data-execution_count="10" id="2e3f0032">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="kw">def</span> fit_and_search(reference_image, reference_var, target_image, target_var):</span>
 <span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a>    result <span class="op">=</span> solve_constant_kernel(reference_image, target_image, basis, kernel_shape<span class="op">=</span>(<span class="dv">19</span>, <span class="dv">19</span>), variance<span class="op">=</span>target_var,</span>
 <span id="cb17-3"><a aria-hidden="true" href="#cb17-3" tabindex="-1"></a>                                   fit_mask<span class="op">=</span>fit_mask, background_degree<span class="op">=</span><span class="dv">1</span>, backend<span class="op">=</span><span class="st">"cpu"</span>)</span>
@@ -844,7 +844,7 @@ flags as NaN:  kernel sum 1.0005, 2 candidates at (y, x) [[21, 72], [167, 80]]</
 </div>
 <p>With NaN, the candidates are again the brightened star and the new source. With the flags left in, the bad values pull the kernel, and stars across the image become candidates.</p>
 <p>The cost is the kernel size. A flagged target pixel removes only itself, because the target is not convolved. A flagged reference pixel removes every difference pixel within half a kernel of it:</p>
-<div class="cell" data-execution_count="11" id="db2a661a">
+<div class="cell" data-execution_count="11" id="6f708e0a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a>excluded <span class="op">=</span> np.isnan(masked_fit.residual) <span class="op">&amp;</span> <span class="op">~</span>np.isnan(refit.residual)  <span class="co"># outside the edge band</span></span>
 <span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="bu">int</span>(reference_bad.<span class="bu">sum</span>() <span class="op">+</span> target_bad.<span class="bu">sum</span>())<span class="sc">}</span><span class="ss"> flagged pixels remove </span><span class="sc">{</span><span class="bu">int</span>(excluded.<span class="bu">sum</span>())<span class="sc">}</span><span class="ss"> difference pixels"</span>)</span>
 <span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"fit pixels: </span><span class="sc">{</span>refit<span class="sc">.</span>fit_pixel_count<span class="sc">}</span><span class="ss"> -&gt; </span><span class="sc">{</span>masked_fit<span class="sc">.</span>fit_pixel_count<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -907,7 +907,7 @@ fit pixels: 56013 -&gt; 50129</code></pre>
 </tbody>
 </table>
 <p><code>solve_spatial_als</code> takes its settings in a <code>SpatialALSConfig</code>. ALS stands for alternating least squares. The solver fits the vertical and horizontal profiles in turn.</p>
-<div class="cell" data-execution_count="12" id="49312d1a">
+<div class="cell" data-execution_count="12" id="6ff4a1ac">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> SpatialALSConfig, solve_spatial_als</span>
 <span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a></span>
 <span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a>config <span class="op">=</span> SpatialALSConfig(spatial_degree<span class="op">=</span><span class="dv">1</span>, background_degree<span class="op">=</span><span class="dv">1</span>, flux_conserve<span class="op">=</span><span class="va">True</span>)</span>
@@ -922,7 +922,7 @@ kernel sum at the image center 1.0000</code></pre>
 </div>
 <p><code>spatial_degree</code> is the total degree of the polynomials that describe how the profiles change across the image. <code>kernel_at(y, x)</code> returns the kernel at one pixel position. A fit that runs out of sweeps returns <code>converged=False</code> without an error. Check it.</p>
 <p>The spatial Gaussian-polynomial model is experimental. Import it from its submodule. It fits all basis terms in one linear solve, with separate polynomial fields for the kernel shape, the kernel sum and the background:</p>
-<div class="cell" data-execution_count="13" id="b2234f38">
+<div class="cell" data-execution_count="13" id="6549f795">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois.spatial_gaussian_polynomial <span class="im">import</span> (SpatialGaussianPolynomialKernelConfig,</span>
 <span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a>                                                        solve_spatial_gaussian_polynomial_kernel)</span>
 <span id="cb23-3"><a aria-hidden="true" href="#cb23-3" tabindex="-1"></a></span>
@@ -1073,7 +1073,7 @@ kernel sum at the image center 1.0001</code></pre>
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="6.11"><span class="header-section-number">6.11</span> On a GPU</h2>
 <p>With the <code>gpu</code> profile, pass <code>backend="cupy"</code>. <code>solve_constant_kernel</code> still returns NumPy arrays, while <code>solve_constant_kernel_device</code> keeps them on the GPU. The noise prediction and the hotspot search run in CuPy on CuPy inputs, and the search returns host records. <code>backend="cutile"</code> is experimental and needs the <code>cutile</code> extra.</p>
 <p><code>backend="native"</code> runs the constant-kernel and spatial Gaussian-polynomial fits with precompiled kernels. It needs the native extension (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). A native constant-kernel fit needs a kernel wider than one pixel in each axis and a background degree of at most 31. Use <code>cupy</code> otherwise.</p>
-<div class="cell" data-execution_count="14" id="7092b9fe">
+<div class="cell" data-execution_count="14" id="084660cf">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
 <span id="cb25-2"><a aria-hidden="true" href="#cb25-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> solve_constant_kernel_device</span>
 <span id="cb25-3"><a aria-hidden="true" href="#cb25-3" tabindex="-1"></a></span>
@@ -1089,7 +1089,7 @@ kernel sum at the image center 1.0001</code></pre>
 <section class="level2" data-number="6.12" id="command-line">
 <h2 class="anchored" data-anchor-id="command-line" data-number="6.12"><span class="header-section-number">6.12</span> Command line</h2>
 <p><code>cuphoton xpois subtract</code> runs the same fit on FITS or NPY files that share one grid. Save the aligned reference, the target variance and the fit mask first:</p>
-<div class="cell" data-execution_count="15" id="7f22aff5">
+<div class="cell" data-execution_count="15" id="7c581438">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a aria-hidden="true" href="#cb26-1" tabindex="-1"></a>np.save(<span class="st">"sample/reference_aligned.npy"</span>, aligned.image)</span>
 <span id="cb26-2"><a aria-hidden="true" href="#cb26-2" tabindex="-1"></a>np.save(<span class="st">"sample/target_variance.npy"</span>, target_variance)</span>
 <span id="cb26-3"><a aria-hidden="true" href="#cb26-3" tabindex="-1"></a>np.save(<span class="st">"sample/fit_mask.npy"</span>, fit_mask)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -1101,35 +1101,35 @@ kernel sum at the image center 1.0001</code></pre>
 <span id="cb27-4"><a aria-hidden="true" href="#cb27-4" tabindex="-1"></a>  <span class="at">--background-degree</span> 1 <span class="at">--backend</span> cpu <span class="at">--no-review</span> <span class="at">--output-dir</span> runs <span class="at">--name</span> sample</span>
 <span id="cb27-5"><a aria-hidden="true" href="#cb27-5" tabindex="-1"></a><span class="ex">cuphoton</span> xpois evaluate-subtraction <span class="at">--run-dir</span> runs/sample</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>The first command writes the arrays as NPY files under <code>runs/sample/artifacts/</code> and prints its receipt, <code>summary.json</code>. The second prints residual statistics of the saved run:</p>
-<div class="cell" data-execution_count="16" id="e4816530">
+<div class="cell" data-execution_count="16" id="3aa2dd15">
 <div class="cell-output cell-output-stdout">
 <pre><code>{
   "run_dir": "runs/sample",
   "solver": "constant",
-  "residual_mean": 0.5100083261685159,
-  "residual_std": 7.954808497289716,
-  "residual_rms": 7.971140866984718,
-  "residual_median": 0.5121798447923283,
-  "robust_sigma": 7.834784540726859,
-  "abs_residual_max": 49.06033034955544,
-  "all_pixels_residual_mean": 0.79932434321538,
-  "all_pixels_residual_std": 11.695412345466368,
-  "all_pixels_residual_rms": 11.722695480824527,
-  "all_pixels_residual_median": 0.5397546424814621,
-  "all_pixels_abs_residual_max": 609.7532102766145,
+  "residual_mean": 0.5100083261684937,
+  "residual_std": 7.954808497289786,
+  "residual_rms": 7.971140866984786,
+  "residual_median": 0.5121798447851091,
+  "robust_sigma": 7.834784540712912,
+  "abs_residual_max": 49.060330349913784,
+  "all_pixels_residual_mean": 0.799324343215357,
+  "all_pixels_residual_std": 11.695412345466481,
+  "all_pixels_residual_rms": 11.72269548082464,
+  "all_pixels_residual_median": 0.539754642479437,
+  "all_pixels_abs_residual_max": 609.753210276692,
   "pixels_gt_3sigma": 223,
   "pixels_gt_5sigma": 11,
-  "fit_region_residual_mean": 0.5100083261685159,
-  "fit_region_residual_std": 7.954808497289716,
-  "fit_region_residual_rms": 7.971140866984718,
-  "fit_region_residual_median": 0.5121798447923283,
+  "fit_region_residual_mean": 0.5100083261684937,
+  "fit_region_residual_std": 7.954808497289786,
+  "fit_region_residual_rms": 7.971140866984786,
+  "fit_region_residual_median": 0.5121798447851091,
   "fit_region_pixel_count": 56013,
-  "kernel_sum": 0.9999480806104099
+  "kernel_sum": 0.9999480806104534
 }</code></pre>
 </div>
 </div>
 <p><code>robust_sigma</code> is 1.4826 times the median absolute deviation of the residual inside the fit region, a noise estimate that is less sensitive to outliers than a standard deviation. The receipt matches the Python refit:</p>
-<div class="cell" data-execution_count="17" id="6ca12e9c">
+<div class="cell" data-execution_count="17" id="f47c450f">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a aria-hidden="true" href="#cb29-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb29-2"><a aria-hidden="true" href="#cb29-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
 <span id="cb29-3"><a aria-hidden="true" href="#cb29-3" tabindex="-1"></a></span>
@@ -1140,7 +1140,7 @@ kernel sum at the image center 1.0001</code></pre>
 </div>
 </div>
 <p>To keep bad pixels out (<a class="quarto-xref" href="#sec-subtract-bad-pixels"><span>Section 6.8</span></a>), pass <code>--reference-mask</code>, <code>--target-mask</code> and a <code>--mask-policy</code>. Both masks are FITS or NPY files on the shared grid. Save the flagged pair with the aligned reference mask:</p>
-<div class="cell" data-execution_count="18" id="8b5741e4">
+<div class="cell" data-execution_count="18" id="6a95ed49">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a aria-hidden="true" href="#cb31-1" tabindex="-1"></a>np.save(<span class="st">"sample/flagged_reference.npy"</span>, flagged.image)</span>
 <span id="cb31-2"><a aria-hidden="true" href="#cb31-2" tabindex="-1"></a>np.save(<span class="st">"sample/flagged_reference_mask.npy"</span>, flagged.mask)</span>
 <span id="cb31-3"><a aria-hidden="true" href="#cb31-3" tabindex="-1"></a>np.save(<span class="st">"sample/flagged_target.npy"</span>, flagged_target)</span>
@@ -1152,14 +1152,14 @@ kernel sum at the image center 1.0001</code></pre>
 <span id="cb32-4"><a aria-hidden="true" href="#cb32-4" tabindex="-1"></a>  <span class="at">--kernel-height</span> 19 <span class="at">--kernel-width</span> 19 <span class="at">--basis-sigmas</span> 0.7,1.4,2.8 <span class="at">--basis-degrees</span> 4,2,2 <span class="dt">\</span></span>
 <span id="cb32-5"><a aria-hidden="true" href="#cb32-5" tabindex="-1"></a>  <span class="at">--background-degree</span> 1 <span class="at">--backend</span> cpu <span class="at">--no-review</span> <span class="at">--output-dir</span> runs <span class="at">--name</span> sample-masked</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>The receipt records the policy and the flagged fraction of each image:</p>
-<div class="cell" data-execution_count="19" id="43d7096e">
+<div class="cell" data-execution_count="19" id="9eff0daf">
 <div class="cell-output cell-output-stdout">
 <pre><code>{
   "mask_policy": "strict",
   "reference_mask_fraction": 0.0225677490234375,
   "target_mask_fraction": 1.52587890625e-05,
   "fit_pixel_count": 50129,
-  "kernel_sum": 1.0005372100095427
+  "kernel_sum": 1.0005372100103367
 }</code></pre>
 </div>
 </div>
