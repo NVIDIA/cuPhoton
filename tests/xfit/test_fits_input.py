@@ -13,6 +13,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
+from astropy.utils.masked import Masked
 
 from cuphoton.core.cli import run_component
 from cuphoton.xfit import (
@@ -125,6 +126,30 @@ def test_forced_photometry_read_matches_full_image_pixel_windows(tmp_path):
     )
     assert measurement.flux[1, 0] == image[3, 4]
     assert measurement.flux_error[1, 0] == np.sqrt(2.0)
+
+
+@pytest.mark.parametrize(
+    "positions",
+    [
+        np.ma.array([[3.0, 4.0]], mask=[[False, True]]),
+        Masked(np.array([[3.0, 4.0]]), mask=[[True, False]]),
+        np.array([[3.0 + 0.5j, 4.0]]),
+    ],
+    ids=["numpy-masked", "astropy-masked", "complex"],
+)
+def test_forced_photometry_rejects_invalid_coordinates_before_read(
+    tmp_path, positions
+):
+    with pytest.raises(ValueError, match="unmasked real coordinates"):
+        read_forced_photometry_stamps(
+            tmp_path / "unopened.fits",
+            positions,
+            science_hdu=1,
+            variance_hdu=2,
+            mask_hdu=3,
+            bad_mask_bits=0,
+            stamp_shape=(3, 3),
+        )
 
 
 def test_forced_photometry_read_rejects_partial_stamp_and_mask_errors(

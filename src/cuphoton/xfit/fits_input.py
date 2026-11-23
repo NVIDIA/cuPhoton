@@ -335,7 +335,8 @@ def read_forced_photometry_stamps(
 ) -> ForcedPhotometryStamps:
     """Gather co-registered FITS planes for forced PSF or aperture photometry.
 
-    Supply finite, zero-based full-image (x, y) positions on the host, and
+    Supply finite, real, unmasked, zero-based full-image (x, y) positions
+    on the host, and
     odd (height, width) stamp dimensions. Each complete stamp is centered
     on floor(position + 0.5). The returned offsets are the target positions
     relative to their integer centers, in the input order. An out-of-image
@@ -363,6 +364,8 @@ def read_forced_photometry_stamps(
         or not 0 <= bad_mask_bits < 2**64
     ):
         raise ValueError("bad_mask_bits must be an unsigned 64-bit bitmask")
+    if np.ma.is_masked(positions) or np.iscomplexobj(positions):
+        raise ValueError("positions must contain unmasked real coordinates")
     xy = np.asarray(positions, dtype=np.float64)
     if (
         xy.ndim != 2
