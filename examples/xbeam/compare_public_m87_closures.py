@@ -122,13 +122,16 @@ def compare_observation(obs, *, tolerance: float = 1e-12) -> dict:
     closures = compute_closures(
         records, triangles=sorted(triangles), quadrangles=sorted(quadrangles)
     )
-    observed = {
-        (item.kind, item.key.seconds_of_day, item.stations): float(
-            item.values[0]
-        )
-        for item in closures
-        if item.valid[0]
-    }
+    observed = {}
+    unavailable = set()
+    for item in closures:
+        key = (item.kind, item.key.seconds_of_day, item.stations)
+        if key in observed or key in unavailable:
+            raise AssertionError(f"duplicate closure in xBeam output: {key}")
+        if item.valid[0]:
+            observed[key] = float(item.values[0])
+        else:
+            unavailable.add(key)
     if observed.keys() != reference.keys():
         missing = len(reference.keys() - observed.keys())
         extra = len(observed.keys() - reference.keys())
@@ -151,7 +154,7 @@ def compare_observation(obs, *, tolerance: float = 1e-12) -> dict:
         "integration_times": len(np.unique(data["time"])),
         "closure_phases": len(phases),
         "log_closure_amplitudes": len(amplitudes),
-        "unavailable_closures": len(closures) - len(observed),
+        "unavailable_closures": len(unavailable),
         "max_phase_error_rad": maximum_error["phase"],
         "max_log_amplitude_error": maximum_error["log_amplitude"],
         "tolerance": tolerance,

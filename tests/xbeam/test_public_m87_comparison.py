@@ -79,6 +79,20 @@ def test_comparison_detects_conjugation_error(observation, monkeypatch):
         compare(observation)
 
 
+def test_comparison_rejects_duplicate_xbeam_closure(observation, monkeypatch):
+    compare = comparison_example()["compare_observation"]
+    compute = compare.__globals__["compute_closures"]
+
+    def duplicated(*args, **kwargs):
+        records = compute(*args, **kwargs)
+        valid = next(record for record in records if record.valid[0])
+        return [replace(valid, values=valid.values + 0.5), *records]
+
+    monkeypatch.setitem(compare.__globals__, "compute_closures", duplicated)
+    with pytest.raises(AssertionError, match="duplicate closure in xBeam"):
+        compare(observation)
+
+
 def test_comparison_rejects_unpinned_input(tmp_path):
     source = tmp_path / "changed.uvfits"
     source.write_bytes(b"not the released data")
