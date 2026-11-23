@@ -134,7 +134,7 @@ window.Quarto = {
   typesetMath
 };
 </script>
-<link href="https://nvidia.github.io/cuPhoton/main/classify.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="8f0a6c56ae7a3db1c1e003230a46851ae9d75d4b" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="classify.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/classify.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="d0d4497a195ac0e690c4cff742cafb77a850ece4" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="classify.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -537,7 +537,7 @@ window.Quarto = {
 <section class="level2" data-number="8.1" id="make-labeled-cutouts">
 <h2 class="anchored" data-anchor-id="make-labeled-cutouts" data-number="8.1"><span class="header-section-number">8.1</span> Make labeled cutouts</h2>
 <p>The block below makes 240 synthetic candidates of 21 by 21 pixels, in units of the sky noise. Half are labeled real, with a new source in the target. The other half simulate artifacts: a stationary star misregistered by one pixel between the images, or a cosmic ray (one bright pixel in the target). A genuinely moving source can produce the same dipole shape; its label depends on your science target, not on the shape alone.</p>
-<div class="cell" data-execution_count="1" id="247da89c">
+<div class="cell" data-execution_count="1" id="1734c4f6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb1-2"><a aria-hidden="true" href="#cb1-2" tabindex="-1"></a></span>
 <span id="cb1-3"><a aria-hidden="true" href="#cb1-3" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">0</span>)</span>
@@ -624,7 +624,7 @@ Table 8.1: The files of an xScan dataset.
 </div>
 </figure>
 </div>
-<div class="cell" data-execution_count="2" id="d642b1d0">
+<div class="cell" data-execution_count="2" id="b201db1d">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a aria-hidden="true" href="#cb3-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb3-2"><a aria-hidden="true" href="#cb3-2" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
 <span id="cb3-3"><a aria-hidden="true" href="#cb3-3" tabindex="-1"></a></span>
@@ -647,7 +647,7 @@ Table 8.1: The files of an xScan dataset.
 <section class="level2" data-number="8.3" id="check-the-dataset">
 <h2 class="anchored" data-anchor-id="check-the-dataset" data-number="8.3"><span class="header-section-number">8.3</span> Check the dataset</h2>
 <p><code>validate_dataset_dir</code> checks shapes, splits and metadata fields. The label guard, <code>check_training_label_provenance</code>, checks that the labels are binary, match the metadata, have a named source, cover both classes and keep each <code>split_group</code> in one split.</p>
-<div class="cell" data-execution_count="3" id="5e4eb8df">
+<div class="cell" data-execution_count="3" id="eb5e8525">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.dataset <span class="im">import</span> validate_dataset_dir</span>
 <span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.training <span class="im">import</span> check_training_label_provenance</span>
 <span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a></span>
@@ -670,7 +670,7 @@ labels ok: True []</code></pre>
 <section class="level2" data-number="8.4" id="train-a-model">
 <h2 class="anchored" data-anchor-id="train-a-model" data-number="8.4"><span class="header-section-number">8.4</span> Train a model</h2>
 <p>Training reads a YAML file. The model settings below make a tiny network that trains in seconds on a CPU. For the default network, which takes 51-pixel cutouts, start from the repository’s <code>examples/xscan/train-triplet.example.yaml</code>.</p>
-<div class="cell" data-execution_count="4" id="04dfce49">
+<div class="cell" data-execution_count="4" id="7e1a2416">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a><span class="im">import</span> shutil</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a></span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a>Path(<span class="st">"runs"</span>).mkdir(exist_ok<span class="op">=</span><span class="va">True</span>)</span>
@@ -694,7 +694,7 @@ labels ok: True []</code></pre>
 <p>Train the triplet model, which reads all three channels. <code>train-inada-pair</code> reads the target and reference only. The command prints a JSON summary. Save it to a file:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan train-inada-triplet <span class="at">--config</span> runs/classify-train.yaml <span class="op">&gt;</span> runs/classify-train.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>The run directory <code>runs/classify-demo/</code> holds <code>checkpoint.pt</code>, the full configuration <code>config.yaml</code>, the per-epoch <code>history.json</code> and the run <code>summary.json</code>.</p>
-<div class="cell" data-execution_count="6" id="9bacdb2f">
+<div class="cell" data-execution_count="6" id="5f2a2681">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a>summary <span class="op">=</span> json.loads(Path(<span class="st">"runs/classify-train.json"</span>).read_text())</span>
 <span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"device:"</span>, summary[<span class="st">"device"</span>], <span class="st">"| saved epoch:"</span>, summary[<span class="st">"early_stopping"</span>][<span class="st">"best_epoch"</span>],</span>
 <span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a>      <span class="st">"| selected by:"</span>, summary[<span class="st">"best_metric"</span>][<span class="st">"name"</span>])</span>
@@ -713,7 +713,7 @@ epoch 2: train loss 0.069, validation loss 0.117, validation ROC AUC 1.000</code
 <h2 class="anchored" data-anchor-id="evaluate-on-the-test-split" data-number="8.5"><span class="header-section-number">8.5</span> Evaluate on the test split</h2>
 <p><code>evaluate-real-bogus</code> scores one split, <code>test</code> by default, and writes metrics, curves and per-candidate predictions to <code>runs/classify-demo/evaluation/test/</code>.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a aria-hidden="true" href="#cb12-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan evaluate-real-bogus <span class="at">--run-dir</span> runs/classify-demo <span class="at">--dataset-dir</span> sample/cutouts <span class="op">&gt;</span> runs/classify-evaluate.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="8" id="7e50cbce">
+<div class="cell" data-execution_count="8" id="aab94fcb">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a>evaluation <span class="op">=</span> json.loads(Path(<span class="st">"runs/classify-evaluate.json"</span>).read_text())</span>
 <span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"ROC AUC </span><span class="sc">{</span>evaluation[<span class="st">'roc_auc'</span>]<span class="sc">:.3f}</span><span class="ss">, PR AUC </span><span class="sc">{</span>evaluation[<span class="st">'pr_auc'</span>]<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
 <span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>thresholds <span class="op">=</span> evaluation[<span class="st">"threshold_diagnostics"</span>]</span>
@@ -734,7 +734,7 @@ validation-selected threshold 0.500: accuracy 0.950, real missed 2, bogus passed
 <h2 class="anchored" data-anchor-id="predict" data-number="8.6"><span class="header-section-number">8.6</span> Predict</h2>
 <p><code>infer-real-bogus</code> only scores. It writes the logits and probabilities of one split to <code>runs/classify-demo/inference/test/</code>.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan infer-real-bogus <span class="at">--run-dir</span> runs/classify-demo <span class="at">--dataset-dir</span> sample/cutouts <span class="op">&gt;</span> runs/classify-infer.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="10" id="f810d49e">
+<div class="cell" data-execution_count="10" id="0ab1208d">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a aria-hidden="true" href="#cb16-1" tabindex="-1"></a>probabilities <span class="op">=</span> np.load(<span class="st">"runs/classify-demo/inference/test/probabilities.npy"</span>)</span>
 <span id="cb16-2"><a aria-hidden="true" href="#cb16-2" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"p(real):"</span>, probabilities[:<span class="dv">6</span>].<span class="bu">round</span>(<span class="dv">3</span>))</span>
 <span id="cb16-3"><a aria-hidden="true" href="#cb16-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"labels: "</span>, labels[split <span class="op">==</span> <span class="dv">2</span>][:<span class="dv">6</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -748,7 +748,7 @@ labels:  [1 0 1 0 1 0]</code></pre>
 <section class="level2" data-number="8.7" id="score-your-own-cutouts-in-python">
 <h2 class="anchored" data-anchor-id="score-your-own-cutouts-in-python" data-number="8.7"><span class="header-section-number">8.7</span> Score your own cutouts in Python</h2>
 <p>For cutouts in memory, load the checkpoint and call the model. <code>load_model_from_checkpoint</code> rebuilds the network, loads the saved weights and sets evaluation mode. The triplet model takes a float32 tensor of shape (candidate, channel, y, x), with the channels target, reference, difference. It returns one logit per candidate. Its sigmoid is the model’s real-class score, exposed as <code>probabilities</code> by the inference commands.</p>
-<div class="cell" data-execution_count="11" id="5fa857f7">
+<div class="cell" data-execution_count="11" id="6147fc16">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a><span class="im">import</span> torch</span>
 <span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.training <span class="im">import</span> load_model_from_checkpoint</span>
 <span id="cb18-3"><a aria-hidden="true" href="#cb18-3" tabindex="-1"></a></span>
@@ -805,7 +805,7 @@ Figure 8.1: Six test cutouts, two of each kind in the synthetic set, titled wit
 <section class="level2" data-number="8.8" id="handle-checkpoints">
 <h2 class="anchored" data-anchor-id="handle-checkpoints" data-number="8.8"><span class="header-section-number">8.8</span> Handle checkpoints</h2>
 <p>A checkpoint is a dictionary. <code>model_config</code> holds the network’s shape, <code>model_state</code> its weights, <code>train_config</code> the training configuration and <code>xfit_feature_bundle</code> the identity of optional xFit features.</p>
-<div class="cell" data-execution_count="13" id="4dd788c3">
+<div class="cell" data-execution_count="13" id="b1b03c32">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(checkpoint))</span>
 <span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a>config <span class="op">=</span> checkpoint[<span class="st">"model_config"</span>]</span>
 <span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a><span class="bu">print</span>(config[<span class="st">"input_mode"</span>], config[<span class="st">"image_size"</span>], config[<span class="st">"embed_dims"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -815,7 +815,7 @@ triplet 21 [16, 16]</code></pre>
 </div>
 </div>
 <p><code>load_model_from_checkpoint</code> passes <code>model_config</code> to <code>build_model</code> and loads <code>model_state</code> into the result. Call <code>build_model(**checkpoint["model_config"])</code> to build the same network in your own PyTorch code. A checkpoint only works on cutouts with its input mode, size and preprocessing. A wrong size fails late, inside the network. To reject a checkpoint before any model is built, pass a <code>checkpoint_validator</code>, a function that raises <code>ValueError</code>:</p>
-<div class="cell" data-execution_count="14" id="18072a75">
+<div class="cell" data-execution_count="14" id="126d852e">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="kw">def</span> require_triplet(size):</span>
 <span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a>    <span class="kw">def</span> check(checkpoint):</span>
 <span id="cb23-3"><a aria-hidden="true" href="#cb23-3" tabindex="-1"></a>        config <span class="op">=</span> checkpoint[<span class="st">"model_config"</span>]</span>
@@ -838,7 +838,7 @@ triplet 21 [16, 16]</code></pre>
 <h2 class="anchored" data-anchor-id="queue-candidates-for-human-review" data-number="8.9"><span class="header-section-number">8.9</span> Queue candidates for human review</h2>
 <p>Reviewers correct and extend labels through a review queue. <code>review-queue</code> ranks the predictions of one split. The default strategy, <code>hybrid</code>, favors candidates near the decision threshold most.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb25-1"><a aria-hidden="true" href="#cb25-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan review-queue <span class="at">--run-dir</span> runs/classify-demo <span class="at">--dataset-dir</span> sample/cutouts <span class="at">--output-dir</span> runs/classify-demo/review <span class="at">--max-items</span> 8 <span class="op">&gt;</span> runs/classify-review.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
-<div class="cell" data-execution_count="16" id="efb67480">
+<div class="cell" data-execution_count="16" id="7c26ca70">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a aria-hidden="true" href="#cb26-1" tabindex="-1"></a>queue <span class="op">=</span> Path(<span class="st">"runs/classify-demo/review/queue.jsonl"</span>).read_text().splitlines()</span>
 <span id="cb26-2"><a aria-hidden="true" href="#cb26-2" tabindex="-1"></a><span class="cf">for</span> item <span class="kw">in</span> <span class="bu">map</span>(json.loads, queue[:<span class="dv">4</span>]):</span>
 <span id="cb26-3"><a aria-hidden="true" href="#cb26-3" tabindex="-1"></a>    <span class="bu">print</span>(item[<span class="st">"rank"</span>], item[<span class="st">"candidate_id"</span>], <span class="ss">f"p(real) </span><span class="sc">{</span>item[<span class="st">'probability'</span>]<span class="sc">:.2f}</span><span class="ss">"</span>, <span class="st">"|"</span>, item[<span class="st">"rank_reason"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -1004,7 +1004,7 @@ Table 8.3: Main options. The first rows go in the training YAML file, the last 
 <section class="level2" data-number="8.11" id="on-a-gpu">
 <h2 class="anchored" data-anchor-id="on-a-gpu" data-number="8.11"><span class="header-section-number">8.11</span> On a GPU</h2>
 <p>With the <code>gpu</code> extra, the same commands run on CUDA, which <code>device: auto</code> selects. GPU settings go in the <code>performance</code> section of the YAML file. They are off by default. On a CPU, xScan ignores mixed precision and pinned memory.</p>
-<div class="cell" data-execution_count="17" id="68a57e7e">
+<div class="cell" data-execution_count="17" id="92f4d38a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a aria-hidden="true" href="#cb28-1" tabindex="-1"></a><span class="im">import</span> yaml</span>
 <span id="cb28-2"><a aria-hidden="true" href="#cb28-2" tabindex="-1"></a></span>
 <span id="cb28-3"><a aria-hidden="true" href="#cb28-3" tabindex="-1"></a>config <span class="op">=</span> yaml.safe_load(Path(<span class="st">"runs/classify-train.yaml"</span>).read_text())</span>
@@ -1016,7 +1016,7 @@ Table 8.3: Main options. The first rows go in the training YAML file, the last 
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb29-1"><a aria-hidden="true" href="#cb29-1" tabindex="-1"></a><span class="ex">cuphoton</span> xscan train-inada-triplet <span class="at">--config</span> runs/classify-gpu.yaml <span class="op">&gt;</span> runs/classify-gpu.json</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>For cutouts already on the GPU, <code>predict_tensors</code> scores a contiguous float32 tensor on an explicit CUDA device and returns logits and probabilities on it:</p>
-<div class="cell" data-execution_count="18" id="23bd6438">
+<div class="cell" data-execution_count="18" id="de0d2562">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a aria-hidden="true" href="#cb30-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.training <span class="im">import</span> predict_tensors</span>
 <span id="cb30-2"><a aria-hidden="true" href="#cb30-2" tabindex="-1"></a></span>
 <span id="cb30-3"><a aria-hidden="true" href="#cb30-3" tabindex="-1"></a>device <span class="op">=</span> torch.device(<span class="st">"cuda:0"</span>)</span>
@@ -1026,7 +1026,7 @@ Table 8.3: Main options. The first rows go in the training YAML file, the last 
 <span id="cb30-7"><a aria-hidden="true" href="#cb30-7" tabindex="-1"></a><span class="bu">print</span>(result[<span class="st">"probabilities"</span>].cpu())</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
 <p><code>predict_fits</code> cuts and scores cutouts straight from aligned FITS images on the GPU, without a dataset directory. It needs CuPy and an explicit CUDA device, and the cutout sides in <code>stamp_shape</code> must be odd. It does not align, subtract or normalize the images.</p>
-<div class="cell" data-execution_count="19" id="edb4b9f5">
+<div class="cell" data-execution_count="19" id="f5108121">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a aria-hidden="true" href="#cb31-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xscan.fits_inference <span class="im">import</span> FitsPlane, predict_fits</span>
 <span id="cb31-2"><a aria-hidden="true" href="#cb31-2" tabindex="-1"></a></span>
 <span id="cb31-3"><a aria-hidden="true" href="#cb31-3" tabindex="-1"></a>result <span class="op">=</span> predict_fits(</span>
