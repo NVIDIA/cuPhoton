@@ -4,6 +4,8 @@
 
 ### Forced photometry
 
+- Read co-registered FITS regions directly into xFit forced photometry
+  stamps, with integer mask bits and subpixel positions on CPU or GPU.
 - Add uniform pixel weighting to xFit and xPois forced PSF photometry,
   with uncertainties propagated from the supplied pixel variances.
 - Measure circular aperture fluxes and errors for batches of NumPy or

@@ -15,7 +15,13 @@ import pytest
 from astropy.io import fits
 
 from cuphoton.core.cli import run_component
-from cuphoton.xfit import LMConfig, executor, fit_dipoles
+from cuphoton.xfit import (
+    LMConfig,
+    executor,
+    fit_dipoles,
+    forced_circular_aperture_photometry,
+    read_forced_photometry_stamps,
+)
 from cuphoton.xfit.fits_input import load_fits_input, plan_fits_input
 from cuphoton.xfit.io import load_xfit_dataset
 
@@ -59,6 +65,92 @@ def _input(tmp_path, *, mode="difference"):
     path = tmp_path / "input.json"
     path.write_text(json.dumps(data))
     return path, data, image, mask, variance
+
+
+def test_forced_photometry_read_matches_full_image_pixel_windows(tmp_path):
+    image = np.arange(128, dtype=np.float32).reshape(8, 16)
+    image[3, 3] = np.nan
+    variance = np.full(image.shape, 2.0, dtype=np.float64)
+    variance[2, 3] = 0
+    mask = np.zeros(image.shape, dtype=np.int16)
+    # The highest mask bit rejects pixels; the low bit is informational.
+    mask[2, 4] = -32768
+    mask[3, 4] = 1
+    path = tmp_path / "visit.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            *(
+                fits.CompImageHDU(
+                    plane, compression_type="GZIP_2", quantize_level=0
+                )
+                for plane in (image, variance, mask)
+            ),
+        ]
+    ).writeto(path)
+    positions = [[8.75, 4.25], [3.5, 2.5], [3.5, 2.5]]
+    batch = read_forced_photometry_stamps(
+        path,
+        positions,
+        science_hdu=1,
+        variance_hdu=2,
+        mask_hdu=3,
+        bad_mask_bits=32768,
+        stamp_shape=(3, 5),
+    )
+    assert batch.section == (slice(2, 6), slice(2, 12))
+    assert batch.metadata["reader"] == "astropy"
+    assert batch.metadata["location"] == "host"
+    np.testing.assert_equal(
+        batch.offsets, [[-0.25, 0.25], [-0.5, -0.5], [-0.5, -0.5]]
+    )
+    good = (mask >= 0) & np.isfinite(image) & (variance > 0)
+    for stamps, plane in (
+        (batch.science, image),
+        (batch.variance, variance),
+        (batch.mask, mask),
+        (batch.good, good),
+    ):
+        expected = np.stack(
+            (plane[3:6, 7:12], plane[2:5, 2:7], plane[2:5, 2:7])
+        )
+        np.testing.assert_equal(stamps, expected)
+        assert stamps.dtype == plane.dtype
+    measurement = forced_circular_aperture_photometry(
+        batch.science,
+        batch.variance,
+        batch.offsets,
+        radii=[1.0],
+        mask=batch.good,
+    )
+    assert measurement.flux[1, 0] == image[3, 4]
+    assert measurement.flux_error[1, 0] == np.sqrt(2.0)
+
+
+def test_forced_photometry_read_rejects_partial_stamp_and_mask_errors(
+    tmp_path,
+):
+    _, _, _, _, _ = _input(tmp_path)
+    path = tmp_path / "plane-0.fits"
+    args = dict(
+        science_hdu=1,
+        variance_hdu=3,
+        mask_hdu=2,
+        bad_mask_bits=1,
+        stamp_shape=(3, 5),
+    )
+    with pytest.raises(ValueError, match="section"):
+        read_forced_photometry_stamps(path, [[0, 2]], **args)
+    with pytest.raises(ValueError, match="integer bit mask"):
+        read_forced_photometry_stamps(
+            path, [[3, 2]], **(args | {"mask_hdu": 1})
+        )
+    with pytest.raises(ValueError, match="mask width"):
+        read_forced_photometry_stamps(
+            path, [[3, 2]], **(args | {"bad_mask_bits": 1 << 32})
+        )
+    with pytest.raises(ValueError, match="uncompressed FITS sections"):
+        read_forced_photometry_stamps(path, [[3, 2]], reader="xdr", **args)
 
 
 @pytest.mark.parametrize("mode", ["difference", "split"])

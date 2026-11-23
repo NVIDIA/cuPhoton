@@ -190,6 +190,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "DeviceDipoleFitResult",
         "DipoleFitResult",
         "DipoleFitUncertaintyReason",
+        "ForcedPhotometryStamps",
         "GaussianDipoleModel",
         "JacobianFunction",
         "LMConfig",
@@ -203,6 +204,7 @@ def test_xfit_curated_exports_and_fit_signature() -> None:
         "fit_dipoles",
         "fit_dipoles_device",
         "fit_single_sources",
+        "read_forced_photometry_stamps",
     }
 
     assert expected <= set(xfit.__all__)

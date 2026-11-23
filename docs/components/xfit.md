@@ -624,6 +624,42 @@ interpolation weights. Multiply the `flux_error` for this radius by the
 square root of the corresponding `factor`.
 See [Correlation factor of weighted sums](xpois.md#correlation-factor-of-weighted-sums).
 
+### Read one exposure for both measurements
+
+`read_forced_photometry_stamps` reads a single bounding rectangle containing
+the requested positions from co-registered FITS science, variance and integer
+mask planes. Supply zero-based image coordinates `pixel_xy` on the host
+and the HDU numbers and rejected mask bits for your exposure.
+
+```python
+from cuphoton.xfit import (
+    forced_circular_aperture_photometry,
+    forced_psf_photometry,
+    read_forced_photometry_stamps,
+)
+
+batch = read_forced_photometry_stamps(
+    "visit.fits", pixel_xy, science_hdu=1, variance_hdu=3, mask_hdu=2,
+    bad_mask_bits=0b101, stamp_shape=(31, 31), reader="xdr", device=True,
+)
+psf = forced_psf_photometry(
+    batch.science, batch.variance, batch.offsets, psf_sigma=1.8, mask=batch.good,
+)
+aperture = forced_circular_aperture_photometry(
+    batch.science, batch.variance, batch.offsets, radii=(3, 6), mask=batch.good,
+)
+```
+
+Each stamp must fit inside the image and have odd height and width.
+The nearest integer pixel centers the stamp, with a half-pixel tie rounded
+up. The returned offsets preserve the original subpixel positions. All
+stamps retain their FITS dtypes and input order, including repeated
+positions. `batch.good` selects finite science and finite positive
+variance with the requested mask bits clear. The default reader returns
+NumPy arrays. The example requires an xDR-supported compressed FITS
+section and returns CuPy arrays. `batch.metadata` records the reader and
+array location.
+
 ## Distributed fitting
 
 `fit-dipoles --executor dragon|mpi` distributes independent candidate chunks
