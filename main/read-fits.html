@@ -106,7 +106,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/read-fits.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="53a0163b1a67b128fd60e83c27a6d910e2725711" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="read-fits.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/read-fits.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="8f0a6c56ae7a3db1c1e003230a46851ae9d75d4b" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="read-fits.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -504,7 +504,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <p>The folded block writes <code>sample/reference.fits</code> and <code>sample/target.fits</code>.</p>
-<div class="cell" data-execution_count="1" id="93e7ec9e">
+<div class="cell" data-execution_count="1" id="1bb82c43">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -560,7 +560,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="4.1" id="list-the-images-in-a-file">
 <h2 class="anchored" data-anchor-id="list-the-images-in-a-file" data-number="4.1"><span class="header-section-number">4.1</span> List the images in a file</h2>
 <p>A FITS file holds one or more HDUs (header/data units), each a text header followed by binary data. <code>inspect_fits_images</code> lists the two-dimensional image HDUs from their headers, without decoding pixels.</p>
-<div class="cell" data-execution_count="2" id="d407683c">
+<div class="cell" data-execution_count="2" id="73b10546">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> inspect_fits_images</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a></span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a><span class="cf">for</span> info <span class="kw">in</span> inspect_fits_images(<span class="st">"sample/target.fits"</span>):</span>
@@ -574,7 +574,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="4.2" id="read-an-image">
 <h2 class="anchored" data-anchor-id="read-an-image" data-number="4.2"><span class="header-section-number">4.2</span> Read an image</h2>
 <p>Pass the file and a list of HDU indices. The result holds one array and one <code>FitsImageInfo</code> per index, in the order you list them.</p>
-<div class="cell" data-execution_count="3" id="642ae954">
+<div class="cell" data-execution_count="3" id="86bdf528">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a>result <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>])</span>
@@ -590,7 +590,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section class="level2" data-number="4.3" id="check-the-receipt">
 <h2 class="anchored" data-anchor-id="check-the-receipt" data-number="4.3"><span class="header-section-number">4.3</span> Check the receipt</h2>
 <p><code>result.metadata()</code> returns the receipt of the read:</p>
-<div class="cell" data-execution_count="4" id="dec08897">
+<div class="cell" data-execution_count="4" id="60d753ab">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a aria-hidden="true" href="#cb6-1" tabindex="-1"></a><span class="cf">for</span> key, value <span class="kw">in</span> result.metadata().items():</span>
 <span id="cb6-2"><a aria-hidden="true" href="#cb6-2" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>key<span class="sc">:17}</span><span class="ss"> </span><span class="sc">{</span>value<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -648,7 +648,7 @@ decoded_bytes     262144</code></pre>
 </tr>
 </tbody>
 </table>
-<div class="cell" data-execution_count="5" id="2ce34f8a">
+<div class="cell" data-execution_count="5" id="8eb7e859">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a aria-hidden="true" href="#cb8-1" tabindex="-1"></a>auto <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>], reader<span class="op">=</span><span class="st">"auto"</span>)</span>
 <span id="cb8-2"><a aria-hidden="true" href="#cb8-2" tabindex="-1"></a><span class="bu">print</span>(auto.metadata()[<span class="st">"reader"</span>], <span class="st">"|"</span>, auto.metadata()[<span class="st">"fallback_reason"</span>])</span>
 <span id="cb8-3"><a aria-hidden="true" href="#cb8-3" tabindex="-1"></a></span>
@@ -666,7 +666,7 @@ Cannot use xDR: xDR GPU dependencies or a CUDA device are unavailable</code></pr
 <section class="level2" data-number="4.5" id="read-a-section">
 <h2 class="anchored" data-anchor-id="read-a-section" data-number="4.5"><span class="header-section-number">4.5</span> Read a section</h2>
 <p><code>section</code> reads a rectangle of the image. Pass a <code>(y, x)</code> pair of unit-step slices that lie inside every listed image. This block reads a 36 by 36 pixel cutout around the target’s new source, near pixel (y, x) = (167, 80):</p>
-<div class="cell" data-execution_count="6" id="c74c9a3b">
+<div class="cell" data-execution_count="6" id="1b1be56b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a aria-hidden="true" href="#cb10-1" tabindex="-1"></a>box <span class="op">=</span> (<span class="bu">slice</span>(<span class="dv">150</span>, <span class="dv">186</span>), <span class="bu">slice</span>(<span class="dv">62</span>, <span class="dv">98</span>))</span>
 <span id="cb10-2"><a aria-hidden="true" href="#cb10-2" tabindex="-1"></a>cutout <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>], reader<span class="op">=</span><span class="st">"auto"</span>, section<span class="op">=</span>box)</span>
 <span id="cb10-3"><a aria-hidden="true" href="#cb10-3" tabindex="-1"></a><span class="bu">print</span>(cutout.arrays[<span class="dv">0</span>].shape, <span class="st">"|"</span>, cutout.metadata()[<span class="st">"fallback_reason"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -714,7 +714,7 @@ Figure 4.1: Left: the whole target image, with the section box in white. Right:
 <section class="level2" data-number="4.6" id="write-files-xdr-can-decode">
 <h2 class="anchored" data-anchor-id="write-files-xdr-can-decode" data-number="4.6"><span class="header-section-number">4.6</span> Write files xDR can decode</h2>
 <p>xDR decodes supported uncompressed images and lossless images tile-compressed with <code>GZIP_1</code> or <code>GZIP_2</code>; scaling, nulls and quantization have the restrictions listed below. Tile compression cuts an image into rectangles (tiles) and compresses each one on its own. The GPU can then decode all tiles at once. This block writes the target twice into one file with Astropy, as lossless <code>GZIP_2</code> in HDU 1 and with Astropy’s defaults in HDU 2.</p>
-<div class="cell" data-execution_count="8" id="d4b267fe">
+<div class="cell" data-execution_count="8" id="b11714c7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a aria-hidden="true" href="#cb13-1" tabindex="-1"></a><span class="im">from</span> astropy.io <span class="im">import</span> fits</span>
 <span id="cb13-2"><a aria-hidden="true" href="#cb13-2" tabindex="-1"></a></span>
 <span id="cb13-3"><a aria-hidden="true" href="#cb13-3" tabindex="-1"></a>fits.HDUList([</span>
@@ -731,7 +731,7 @@ Figure 4.1: Left: the whole target image, with the section box in white. Right:
 </div>
 </div>
 <p>For floating-point images, Astropy’s default is <code>RICE_1</code> after quantization, which rounds every pixel to a step set by the tile’s noise. Read both HDUs and compare them with the original:</p>
-<div class="cell" data-execution_count="9" id="0354f06b">
+<div class="cell" data-execution_count="9" id="fc1efd22">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a aria-hidden="true" href="#cb15-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb15-2"><a aria-hidden="true" href="#cb15-2" tabindex="-1"></a></span>
 <span id="cb15-3"><a aria-hidden="true" href="#cb15-3" tabindex="-1"></a>both <span class="op">=</span> read_fits_images(<span class="st">"sample/target-compressed.fits"</span>, [<span class="dv">1</span>, <span class="dv">2</span>], reader<span class="op">=</span><span class="st">"auto"</span>)</span>
@@ -811,7 +811,7 @@ RICE_1 copy, largest change: 0.31546783</code></pre>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb17-1"><a aria-hidden="true" href="#cb17-1" tabindex="-1"></a><span class="fu">bash</span> src/cuphoton/xdr/src/build.sh</span>
 <span id="cb17-2"><a aria-hidden="true" href="#cb17-2" tabindex="-1"></a><span class="ex">uv</span> run <span class="at">--no-sync</span> python <span class="at">-c</span> <span class="st">"from cuphoton.xdr.nvcomp_batch import cpp_helper_available; print(cpp_helper_available())"</span></span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>Pass <code>device=True</code> to keep the pixels on the GPU. The arrays are ready when the call returns. <code>xdr_options</code> chooses how xDR decodes:</p>
-<div class="cell" data-execution_count="10" id="fe8b435f">
+<div class="cell" data-execution_count="10" id="7c9f1bb8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a aria-hidden="true" href="#cb18-1" tabindex="-1"></a>gpu <span class="op">=</span> read_fits_images(<span class="st">"sample/target-compressed.fits"</span>, [<span class="dv">1</span>], reader<span class="op">=</span><span class="st">"xdr"</span>, device<span class="op">=</span><span class="va">True</span>,</span>
 <span id="cb18-2"><a aria-hidden="true" href="#cb18-2" tabindex="-1"></a>                       xdr_options<span class="op">=</span>{<span class="st">"postprocess"</span>: <span class="st">"separate"</span>, <span class="st">"gzip_decoder"</span>: <span class="st">"gzip"</span>,</span>
 <span id="cb18-3"><a aria-hidden="true" href="#cb18-3" tabindex="-1"></a>                                    <span class="st">"decompression_backend"</span>: <span class="st">"cuda"</span>})</span>
@@ -855,7 +855,7 @@ RICE_1 copy, largest change: 0.31546783</code></pre>
 </tbody>
 </table>
 <p><code>postprocess="native"</code> restores compressed tiles with the precompiled kernels of cuPhoton’s native extension (<a class="quarto-xref" href="install.html"><span>Chapter 1</span></a>). Every key defaults to <code>auto</code>. The keys choose how xDR decodes, not whether it runs, and none changes a pixel value. The call checks them on any machine and records them in the receipt:</p>
-<div class="cell" data-execution_count="11" id="2b03bb38">
+<div class="cell" data-execution_count="11" id="0c855ed4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a aria-hidden="true" href="#cb19-1" tabindex="-1"></a>checked <span class="op">=</span> read_fits_images(<span class="st">"sample/target.fits"</span>, [<span class="dv">0</span>], reader<span class="op">=</span><span class="st">"auto"</span>,</span>
 <span id="cb19-2"><a aria-hidden="true" href="#cb19-2" tabindex="-1"></a>                           xdr_options<span class="op">=</span>{<span class="st">"postprocess"</span>: <span class="st">"separate"</span>})</span>
 <span id="cb19-3"><a aria-hidden="true" href="#cb19-3" tabindex="-1"></a><span class="bu">print</span>(checked.metadata()[<span class="st">"xdr_options"</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -865,7 +865,7 @@ RICE_1 copy, largest change: 0.31546783</code></pre>
 </div>
 <p>Use <code>decompression_backend="hardware"</code> with <code>reader="xdr"</code> to require native Gzip hardware decoding for compressed HDUs. It fails when the hardware engine, buffers or tile sizes are incompatible. Uncompressed HDUs need no decompression. See <a href="https://github.com/NVIDIA/cuPhoton/blob/main/docs/components/xdr.md#hardware-eligibility-and-diagnostics">hardware eligibility</a> for supported devices and allocation requirements.</p>
 <p>The receipt records the requested choices, not the engine that ran. To load the same HDUs from many files of one shape, <code>batch_to_device</code> returns one CuPy array per HDU, shaped (file, y, x):</p>
-<div class="cell" data-execution_count="12" id="e11edea9">
+<div class="cell" data-execution_count="12" id="b4f0c8ab">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a aria-hidden="true" href="#cb21-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xdr <span class="im">import</span> batch_to_device</span>
 <span id="cb21-2"><a aria-hidden="true" href="#cb21-2" tabindex="-1"></a></span>
 <span id="cb21-3"><a aria-hidden="true" href="#cb21-3" tabindex="-1"></a>(images,) <span class="op">=</span> batch_to_device([<span class="st">"exposure-1.fits"</span>, <span class="st">"exposure-2.fits"</span>], hdu_indices<span class="op">=</span>[<span class="dv">1</span>])</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
@@ -878,7 +878,7 @@ RICE_1 copy, largest change: 0.31546783</code></pre>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb22-1"><a aria-hidden="true" href="#cb22-1" tabindex="-1"></a><span class="ex">cuphoton</span> xrep reproject-image <span class="at">--input</span> sample/target-compressed.fits <span class="at">--hdu</span> 1 <span class="dt">\</span></span>
 <span id="cb22-2"><a aria-hidden="true" href="#cb22-2" tabindex="-1"></a>  <span class="at">--backend</span> cpu <span class="at">--fits-reader</span> auto <span class="at">--output-dir</span> runs/read-fits</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 <p>The command prints its run summary as JSON and saves it as <code>summary.json</code> in a new directory under <code>runs/read-fits</code>. The summary lists one receipt per read under <code>fits_reads</code>. From Python, run the command and print the receipts:</p>
-<div class="cell" data-execution_count="13" id="59dc05ad">
+<div class="cell" data-execution_count="13" id="f0ecc942">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a aria-hidden="true" href="#cb23-1" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb23-2"><a aria-hidden="true" href="#cb23-2" tabindex="-1"></a><span class="im">import</span> subprocess</span>
 <span id="cb23-3"><a aria-hidden="true" href="#cb23-3" tabindex="-1"></a><span class="im">import</span> sys</span>
