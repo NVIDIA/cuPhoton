@@ -558,6 +558,15 @@ model stamps already evaluated at the positions (`cuphoton.xpois.psf_weights`
 with the sub-pixel offsets gives the same Gaussian); `cuphoton.xpois.forced_flux_at`
 uses it to measure fluxes at fixed positions on a full plane.
 
+`weighting="inverse_variance"` is the default. To use the pixel weighting
+of Rubin's `base_PsfFlux`, pass `weighting="uniform"` and the local PSF
+evaluated at each source position. Each usable pixel then has equal weight
+in the fit. Its measured variance still contributes to the standard error,
+`sqrt(sum(P**2 * V)) / sum(P**2)`, where `P` is the PSF and `V` is the
+pixel variance. For comparisons with catalog fluxes, apply the catalog's
+photometric and aperture corrections as appropriate.
+[Rubin PSF flux implementation](https://github.com/lsst/meas_base/blob/w.2025.19/src/PsfFlux.cc)
+
 `flux_error` is conditional: it assumes the position and the PSF width are
 fixed and correct and that the variance describes the noise. A position or a
 width fitted on the same noisy image adds uncertainty that `flux_error` leaves
@@ -566,6 +575,30 @@ independent measurement, such as the image's stars. Correlated noise between
 pixels, as in a resampled difference image, also makes `flux_error` too small
 unless the variance accounts for it. The computation stays on the backend of
 `images`.
+
+## Forced circular aperture photometry
+
+`forced_circular_aperture_photometry` measures each requested radius on a
+batch of stamps. Pass CuPy science and variance arrays to run the batch
+on a GPU, or NumPy arrays to run it on a CPU. Positions use the same
+centered `(x, y)` coordinates as the PSF fit. Radii are in pixels.
+
+```python
+from cuphoton.xfit import forced_circular_aperture_photometry
+
+apertures = forced_circular_aperture_photometry(
+    images, variance, positions, radii=(3.0, 6.0), mask=mask
+)
+flux_r3 = apertures.flux[:, 0]
+error_r6 = apertures.flux_error[:, 1]
+```
+
+The aperture sums the flux of usable pixels whose centers fall strictly
+inside the circle. This is the Photutils center-pixel convention. Rubin's
+sinc-weighted circular apertures use different boundary weights. The
+reported standard error is the square root of the sum of the included
+pixel variances, assuming independent noise. The result includes pixel
+counts and flags for checking partial coverage before comparing fluxes.
 
 ## Distributed fitting
 

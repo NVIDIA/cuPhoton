@@ -694,7 +694,9 @@ counts are the one host transfer. `forced_flux_at` cuts windows of a full
 plane with `window_stamps`, subtracts each window's median when `local_sky`
 is true (a plane with sources, such as the matched reference), builds the
 Gaussian with `psf_weights` at the sub-pixel offsets and hands the stamps to
-`cuphoton.xfit.forced_psf_photometry`, whose result it returns.
+`cuphoton.xfit.forced_psf_photometry`, whose result it returns. Set
+`weighting="uniform"` to give each usable pixel equal weight in that fit
+and propagate the supplied pixel variances into the flux error.
 
 Two review selectors take the same NumPy or CuPy planes.
 `build_compact_source_stamp_mask(image, variance=..., stamp_size=31,

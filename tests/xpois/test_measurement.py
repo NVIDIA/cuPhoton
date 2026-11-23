@@ -278,17 +278,25 @@ def test_forced_flux_local_sky_ignores_unusable_pixels(invalid_variance):
     np.testing.assert_allclose(actual.flux_error, expected.flux_error)
 
 
-def test_forced_flux_at_is_the_xfit_estimator_on_cut_windows():
+@pytest.mark.parametrize("weighting", ["inverse_variance", "uniform"])
+def test_forced_flux_at_is_the_xfit_estimator_on_cut_windows(weighting):
     """The same numbers as ``forced_psf_photometry`` on windows cut by
     ``window_stamps`` with ``psf_weights`` at the sub-pixel offsets; without
     a variance the weights are one; a non-finite position is NaN."""
 
     plane, variance, xy, sigma = _scene(seed=4)
+    variance *= np.linspace(1.0, 4.0, plane.shape[1])
     plane[12:14, :] = np.nan
     window = 15
     xy = np.vstack([xy, [[np.nan, 20.0], [2.0, 2.0]]])
     result = forced_flux_at(
-        plane, xy, sigma, window=window, variance=variance, local_sky=False
+        plane,
+        xy,
+        sigma,
+        window=window,
+        variance=variance,
+        local_sky=False,
+        weighting=weighting,
     )
     offset = xy - np.rint(xy)
     at = np.where(np.isfinite(xy), xy, 0.0)
@@ -298,6 +306,7 @@ def test_forced_flux_at_is_the_xfit_estimator_on_cut_windows():
         offset,
         sigma,
         psf=psf_weights(sigma, window, offset=offset),
+        weighting=weighting,
     )
     np.testing.assert_array_equal(result.flux, expected.flux)
     np.testing.assert_array_equal(result.flux_error, expected.flux_error)

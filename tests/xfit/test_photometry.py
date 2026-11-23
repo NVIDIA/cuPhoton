@@ -56,11 +56,16 @@ def test_masked_pixels_are_excluded():
     np.testing.assert_allclose(masked.flux, full.flux, rtol=1e-3)
 
 
-def test_invalid_rows_return_nan():
+@pytest.mark.parametrize("weighting", ["inverse_variance", "uniform"])
+def test_invalid_rows_return_nan(weighting):
     images, variance, positions = _sources(3, seed=3)
     variance[1] = np.nan
     result = forced_psf_photometry(
-        images, variance, positions, np.array([1.8, 1.8, 0.0])
+        images,
+        variance,
+        positions,
+        np.array([1.8, 1.8, 0.0]),
+        weighting=weighting,
     )
     assert result.valid.tolist() == [True, False, False]
     assert np.isnan(result.flux[1:]).all()
@@ -95,15 +100,37 @@ def test_supplied_psf_nonfinite_pixels_follow_image_validity(
     assert np.isnan(result.flux_error[1])
 
 
+def test_weighting_changes_signed_flux_and_propagates_pixel_noise():
+    images = np.array([[[-1.0, -4.0], [90.0, np.nan]]])
+    variance = np.array([[[1.0, 16.0], [np.inf, 0.0]]])
+    psf = np.array([[[0.2, 0.4], [0.1, 0.3]]])
+    # Only the first two pixels contribute to the fitted amplitude.
+    positions = np.zeros((1, 2))
+    uniform = forced_psf_photometry(
+        images, variance, positions, 1.0, psf=psf, weighting="uniform"
+    )
+    default = forced_psf_photometry(images, variance, positions, 1.0, psf=psf)
+    assert uniform.valid[0] and default.valid[0]
+    assert uniform.flux[0] == pytest.approx(-9.0)
+    assert uniform.flux_error[0] == pytest.approx(np.sqrt(2.6) / 0.2)
+    assert default.flux[0] == pytest.approx(-6.0)
+    assert default.flux_error[0] == pytest.approx(1.0 / np.sqrt(0.05))
+
+
 def test_shape_validation():
     images, variance, positions = _sources(2)
+    with pytest.raises(ValueError, match="weighting"):
+        forced_psf_photometry(
+            images, variance, positions, 1.8, weighting="bad"
+        )
     with pytest.raises(ValueError, match="positions"):
         forced_psf_photometry(images, variance, positions[:1], 1.8)
     with pytest.raises(ValueError, match="variance"):
         forced_psf_photometry(images, variance[:1], positions, 1.8)
 
 
-def test_cupy_matches_numpy():
+@pytest.mark.parametrize("weighting", ["inverse_variance", "uniform"])
+def test_cupy_matches_numpy(weighting):
     cp = pytest.importorskip("cupy")
     try:
         if int(cp.cuda.runtime.getDeviceCount()) < 1:
@@ -111,9 +138,19 @@ def test_cupy_matches_numpy():
     except Exception as exc:
         pytest.skip(f"CuPy CUDA runtime is not usable: {exc}")
     images, variance, positions = _sources(16, seed=4)
-    host = forced_psf_photometry(images, variance, positions, 1.8)
+    variance *= np.linspace(1.0, 4.0, SHAPE[1])
+    mask = np.ones_like(images, dtype=bool)
+    mask[:, 15, 14:16] = False
+    host = forced_psf_photometry(
+        images, variance, positions, 1.8, mask=mask, weighting=weighting
+    )
     device = forced_psf_photometry(
-        cp.asarray(images), cp.asarray(variance), cp.asarray(positions), 1.8
+        cp.asarray(images),
+        cp.asarray(variance),
+        cp.asarray(positions),
+        1.8,
+        mask=cp.asarray(mask),
+        weighting=weighting,
     )
     assert isinstance(device.flux, cp.ndarray)
     np.testing.assert_allclose(cp.asnumpy(device.flux), host.flux)

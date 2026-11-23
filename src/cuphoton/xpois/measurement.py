@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Any
+from typing import Any, Literal
 
 from cuphoton.xfit import ForcedPhotometryResult, forced_psf_photometry
 
@@ -198,17 +198,15 @@ def forced_flux_at(
     window: int,
     variance: Any | None = None,
     local_sky: bool = True,
+    weighting: Literal["inverse_variance", "uniform"] = "inverse_variance",
 ) -> ForcedPhotometryResult:
     """Forced PSF fluxes of a full plane at positions.
 
     Windows of side ``window`` are cut around the positions with
     :func:`window_stamps` and handed to
-    :func:`cuphoton.xfit.forced_psf_photometry`, the weighted least-squares
-    flux of a unit-flux circular Gaussian ``P`` centered on the sub-pixel
-    position: ``flux = sum(w P D) / sum(w P^2)`` and
-    ``flux_error = 1 / sqrt(sum(w P^2))`` over the usable pixels, ``w`` the
-    inverse variance. The Gaussian is :func:`psf_weights` at the position's
-    offset from its window's center pixel.
+    :func:`cuphoton.xfit.forced_psf_photometry`. The circular Gaussian PSF
+    is evaluated by :func:`psf_weights` at the subpixel offset from each
+    window's center.
 
     Parameters
     ----------
@@ -230,6 +228,10 @@ def forced_flux_at(
         Subtract each window's median before the fit, a local sky level for
         a plane that holds sources (the kernel-matched reference, say). The
         residual of a subtraction is measured with ``False``.
+    weighting
+        Pixel weights for the PSF fit. The default is inverse variance.
+        With ``"uniform"``, usable pixels have equal weight and the
+        supplied variances propagate into the flux error.
 
     Returns
     -------
@@ -261,7 +263,9 @@ def forced_flux_at(
             data = data - sky
     offset = xy - xp.rint(xy)
     psf = psf_weights(psf_sigma, int(window), offset=offset, xp=xp)
-    return forced_psf_photometry(data, var, offset, psf_sigma, psf=psf)
+    return forced_psf_photometry(
+        data, var, offset, psf_sigma, psf=psf, weighting=weighting
+    )
 
 
 def _loud_pixels(xp: Any, residual: Any, valid: Any, n_sigma: float) -> Any:
