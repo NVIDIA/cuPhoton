@@ -58,8 +58,27 @@ def test_comparison_matches_ehtim_with_missing_baseline(observation):
     result = comparison_example()["compare_observation"](observation)
     assert result["closure_phases"] == 6
     assert result["log_closure_amplitudes"] == 4
+    assert result["unavailable_closures"] == 4
     assert result["max_phase_error_rad"] < 1e-12
     assert result["max_log_amplitude_error"] < 1e-12
+
+
+def test_comparison_rejects_missing_unavailable_closure(
+    observation, monkeypatch
+):
+    compare = comparison_example()["compare_observation"]
+    compute = compare.__globals__["compute_closures"]
+
+    def omit_unavailable(*args, **kwargs):
+        records = compute(*args, **kwargs)
+        index = next(i for i, row in enumerate(records) if not row.valid[0])
+        return records[:index] + records[index + 1 :]
+
+    monkeypatch.setitem(
+        compare.__globals__, "compute_closures", omit_unavailable
+    )
+    with pytest.raises(AssertionError, match="missing requested xBeam"):
+        compare(observation)
 
 
 def test_comparison_detects_conjugation_error(observation, monkeypatch):

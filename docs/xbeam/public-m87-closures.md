@@ -12,15 +12,16 @@ From a development checkout containing the closure diagnostics:
 
 ```bash
 uv sync --locked --extra dev
-uv run --with 'ehtim==1.3.2' python \
+m87_dir=$(mktemp -d) && uv run --with 'ehtim==1.3.2' python \
   examples/xbeam/compare_public_m87_closures.py \
-  /tmp/m87-closures/SR1_M87_2017_101_lo_hops_netcal_StokesI.uvfits \
-  --download > /tmp/m87-closures-result.json
+  "$m87_dir/SR1_M87_2017_101_lo_hops_netcal_StokesI.uvfits" \
+  --download > "$m87_dir/result.json"
 ```
 
-The download is optional. To use a file already downloaded from the release,
-pass its path without `--download`. The example verifies SHA-256 before
-reading it and refuses a different file. The data and results stay outside
+To use an existing download, copy the UVFITS file into your private directory
+and pass the copy's path without `--download`. The example verifies SHA-256
+and then reopens the file by name. Keep the file and its directory under
+your control until the comparison finishes. The data and results stay outside
 the repository. `ehtim` is an optional reference dependency for this example.
 The comparison runs on CPU and does not use its optional NFFT package. The separately installed
 reference package is [GPLv3 licensed](https://github.com/achael/eht-imaging/blob/v1.3.2/LICENSE.txt);

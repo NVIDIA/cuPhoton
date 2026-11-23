@@ -122,16 +122,25 @@ def compare_observation(obs, *, tolerance: float = 1e-12) -> dict:
     closures = compute_closures(
         records, triangles=sorted(triangles), quadrangles=sorted(quadrangles)
     )
+    times = {record.seconds_of_day for record in records}
+    requested = {"phase": triangles, "log_amplitude": quadrangles}
     observed = {}
     unavailable = set()
     for item in closures:
         key = (item.kind, item.key.seconds_of_day, item.stations)
+        if (
+            item.key.seconds_of_day not in times
+            or item.stations not in requested.get(item.kind, ())
+        ):
+            raise AssertionError(f"unrequested xBeam closure at {key}")
         if key in observed or key in unavailable:
             raise AssertionError(f"duplicate closure in xBeam output: {key}")
         if item.valid[0]:
             observed[key] = float(item.values[0])
         else:
             unavailable.add(key)
+    if len(closures) != len(times) * (len(triangles) + len(quadrangles)):
+        raise AssertionError("missing requested xBeam closures")
     if observed.keys() != reference.keys():
         missing = len(reference.keys() - observed.keys())
         extra = len(observed.keys() - reference.keys())
