@@ -7,6 +7,7 @@
 import json
 import os
 import subprocess
+from collections import Counter
 from dataclasses import fields
 from pathlib import Path
 
@@ -94,7 +95,17 @@ def assert_closures(records, expected):
     closures = compute_closures(
         records, triangles=TRIANGLES, quadrangles=QUADRANGLES
     )
-    assert len(closures) == 2 * (len(TRIANGLES) + len(QUADRANGLES))
+    requested = [("phase", stations) for stations in TRIANGLES] + [
+        ("log_amplitude", stations) for stations in QUADRANGLES
+    ]
+    assert Counter(
+        (closure.key.seconds_of_day, closure.kind, closure.stations)
+        for closure in closures
+    ) == Counter(
+        ((integration + 0.5) * INTEGRATION_SECONDS, kind, stations)
+        for integration in range(2)
+        for kind, stations in requested
+    )
     for closure in closures:
         integration = int(closure.key.seconds_of_day) // INTEGRATION_SECONDS
 
