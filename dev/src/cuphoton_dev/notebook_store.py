@@ -82,7 +82,9 @@ def get_blob(digest: str, destination: Path) -> None:
     """Download and authenticate an asset before exposing it to callers."""
     with tempfile.TemporaryDirectory(dir=destination.parent) as scratch:
         incoming = Path(scratch) / "download"
-        if not _download(digest, incoming):
+        if not _download(digest, incoming) and not _download(
+            digest, incoming, fresh=True
+        ):
             raise FileNotFoundError(f"Missing documentation asset: {digest}")
         incoming.replace(destination)
 

@@ -83,7 +83,7 @@ def _check_reference(
         "setup.py",
         "pyproject.toml",
         "src/cuphoton/core",
-        "src/cuphoton/_photometry.py",
+        ":(top,glob)src/cuphoton/*.py",
         *(f"src/cuphoton/{part}" for part in COMPONENTS[name]),
     ]
     for file, expected in hashes.items():

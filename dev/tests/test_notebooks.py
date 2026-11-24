@@ -148,3 +148,23 @@ def test_blob_download_discards_corrupted_response(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         notebook_store.get_blob(digest, destination)
     assert not destination.exists()
+
+
+def test_fresh_read_recovers_a_cached_miss(tmp_path, monkeypatch):
+    from cuphoton_dev import notebook_store
+
+    payload = b"qualified"
+    digest = hashlib.sha256(payload).hexdigest()
+    attempts = []
+
+    def download(key, path, *, fresh=False):
+        attempts.append((key, fresh))
+        if fresh:
+            path.write_bytes(payload)
+        return fresh
+
+    monkeypatch.setattr(notebook_store, "_download", download)
+    output = tmp_path / "reference"
+    notebook_store.get_blob(digest, output)
+    assert output.read_bytes() == payload
+    assert attempts == [(digest, False), (digest, True)]
