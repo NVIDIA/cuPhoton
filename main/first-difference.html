@@ -134,7 +134,7 @@ window.Quarto = {
   typesetMath
 };
 </script>
-<link href="https://nvidia.github.io/cuPhoton/main/first-difference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="d0d4497a195ac0e690c4cff742cafb77a850ece4" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="first-difference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/first-difference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="348a9263f8ae755a48422506d739bac10f31e1b0" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="first-difference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -465,12 +465,41 @@ window.Quarto = {
 <li class="sidebar-item sidebar-item-section">
 <div class="sidebar-item-container">
 <a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
-<span class="menu-text">Appendices</span></a>
+<span class="menu-text">Science notebooks</span></a>
 <a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
 <i class="bi bi-chevron-right ms-2"></i>
 </a>
 </div>
 <ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./model-sky.html">
+<span class="menu-text"><span class="chapter-number">16</span>  <span class="chapter-title">Model Sky</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./model-scene.html">
+<span class="menu-text"><span class="chapter-number">17</span>  <span class="chapter-title">Model Scene</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./model-alerts.html">
+<span class="menu-text"><span class="chapter-number">18</span>  <span class="chapter-title">Model Alerts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-4" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-4" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-4">
 <li class="sidebar-item">
 <div class="sidebar-item-container">
 <a class="sidebar-item-text sidebar-link" href="./reference.html">
@@ -528,7 +557,7 @@ window.Quarto = {
 <section class="level2" data-number="2.1" id="make-a-sample-pair">
 <h2 class="anchored" data-anchor-id="make-a-sample-pair" data-number="2.1"><span class="header-section-number">2.1</span> Make a sample pair</h2>
 <p>The block below writes <code>sample/reference.fits</code> and <code>sample/target.fits</code>. They are two synthetic star fields of the same patch of sky. The reference is sharper and deeper. The target is rotated by 3 degrees, has slightly larger pixels, more blur and a brighter sky. It also holds one new source and one star that became three times brighter. You do not need to read the code. Expand it to copy it.</p>
-<div class="cell" data-execution_count="1" id="1b98c915">
+<div class="cell" data-execution_count="1" id="0baf310a">
 <details class="code-fold">
 <summary>Create the sample pair (NumPy and Astropy only)</summary>
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a aria-hidden="true" href="#cb1-1" tabindex="-1"></a><span class="co"># Writes sample/reference.fits and sample/target.fits: two synthetic star fields</span></span>
@@ -585,7 +614,7 @@ window.Quarto = {
 <section class="level2" data-number="2.2" id="read-the-images">
 <h2 class="anchored" data-anchor-id="read-the-images" data-number="2.2"><span class="header-section-number">2.2</span> Read the images</h2>
 <p><code>read_fits_images</code> reads the listed HDUs (header/data units; here, the images inside a FITS file) of one file. It returns the arrays, their headers and a receipt that records which reader ran.</p>
-<div class="cell" data-execution_count="2" id="e8c53b89">
+<div class="cell" data-execution_count="2" id="aa0c68f0">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> cuphoton.core.fits_io <span class="im">import</span> read_fits_images</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a></span>
@@ -605,7 +634,7 @@ window.Quarto = {
 <section class="level2" data-number="2.3" id="give-each-image-a-variance-plane">
 <h2 class="anchored" data-anchor-id="give-each-image-a-variance-plane" data-number="2.3"><span class="header-section-number">2.3</span> Give each image a variance plane</h2>
 <p>cuPhoton calls take the noise explicitly, as a variance plane: one number per pixel, in squared data units. For this sample, the noise variance is the expected image level divided by the gain (electrons per data number). The observed image is a convenient approximation because the sky is bright and has not been subtracted.</p>
-<div class="cell" data-execution_count="3" id="daf96acd">
+<div class="cell" data-execution_count="3" id="eb122f9b">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a>target_variance <span class="op">=</span> np.clip(target, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> target_header[<span class="st">"GAIN"</span>]</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a>reference_variance <span class="op">=</span> np.clip(reference, <span class="dv">0</span>, <span class="va">None</span>) <span class="op">/</span> reference_header[<span class="st">"GAIN"</span>]</span></code></pre></div><button class="code-copy-button" title="Copy to Clipboard"><i class="bi"></i></button></div>
 </div>
@@ -614,7 +643,7 @@ window.Quarto = {
 <section class="level2" data-number="2.4" id="put-the-reference-on-the-target-grid">
 <h2 class="anchored" data-anchor-id="put-the-reference-on-the-target-grid" data-number="2.4"><span class="header-section-number">2.4</span> Put the reference on the target grid</h2>
 <p>xRep resamples the reference onto the target’s pixel grid. <code>make_wcs_pair_transform</code> builds the mapping from target pixels to reference pixels out of the two WCS headers (world coordinate system: the mapping from pixel to sky position). <code>reproject_masked_array</code> then resamples the image, its variance and its mask together.</p>
-<div class="cell" data-execution_count="4" id="e9dfa684">
+<div class="cell" data-execution_count="4" id="32687fb0">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a aria-hidden="true" href="#cb5-1" tabindex="-1"></a><span class="im">from</span> astropy.wcs <span class="im">import</span> WCS</span>
 <span id="cb5-2"><a aria-hidden="true" href="#cb5-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> BBox, ReprojectionSpec, make_wcs_pair_transform, reproject_masked_array</span>
 <span id="cb5-3"><a aria-hidden="true" href="#cb5-3" tabindex="-1"></a></span>
@@ -633,7 +662,7 @@ window.Quarto = {
 <section class="level2" data-number="2.5" id="match-the-blur-and-subtract">
 <h2 class="anchored" data-anchor-id="match-the-blur-and-subtract" data-number="2.5"><span class="header-section-number">2.5</span> Match the blur and subtract</h2>
 <p>The target is blurrier than the reference. A plain subtraction would leave a ring at every star. xPois fits a convolution kernel that blurs the reference to match the target, plus a smooth background, then subtracts. The kernel is a sum of Gaussian basis functions. This example uses three widths with a few polynomial terms each. <a class="quarto-xref" href="subtract.html#sec-subtract-basis"><span>Section 6.2</span></a> shows how to choose the widths from the blur of each image.</p>
-<div class="cell" data-execution_count="5" id="cf30020b">
+<div class="cell" data-execution_count="5" id="48cede23">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a aria-hidden="true" href="#cb7-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> GaussianBasisComponent, solve_constant_kernel</span>
 <span id="cb7-2"><a aria-hidden="true" href="#cb7-2" tabindex="-1"></a></span>
 <span id="cb7-3"><a aria-hidden="true" href="#cb7-3" tabindex="-1"></a>basis <span class="op">=</span> [GaussianBasisComponent(<span class="fl">0.7</span>, <span class="dv">4</span>), GaussianBasisComponent(<span class="fl">1.4</span>, <span class="dv">2</span>), GaussianBasisComponent(<span class="fl">2.8</span>, <span class="dv">2</span>)]</span>
@@ -650,7 +679,7 @@ window.Quarto = {
 <section class="level2" data-number="2.6" id="find-the-candidates">
 <h2 class="anchored" data-anchor-id="find-the-candidates" data-number="2.6"><span class="header-section-number">2.6</span> Find the candidates</h2>
 <p>To find candidates, divide the difference image by its predicted noise and look for peaks. <code>standardize_constant_kernel_residual</code> returns a standardized image, <span class="math inline">\(z\)</span>, using independent-pixel variance propagation with a fixed kernel. It omits the covariance introduced by resampling and the uncertainty in the fitted kernel and background, so it is a noise diagnostic rather than calibrated detection significance. <code>identify_residual_hotspots</code> then groups pixels above a threshold into regions.</p>
-<div class="cell" data-execution_count="6" id="af18d047">
+<div class="cell" data-execution_count="6" id="bf30d630">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a aria-hidden="true" href="#cb9-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> identify_residual_hotspots, standardize_constant_kernel_residual</span>
 <span id="cb9-2"><a aria-hidden="true" href="#cb9-2" tabindex="-1"></a></span>
 <span id="cb9-3"><a aria-hidden="true" href="#cb9-3" tabindex="-1"></a>noise <span class="op">=</span> standardize_constant_kernel_residual(difference, kernel<span class="op">=</span>fit.kernel, target_variance<span class="op">=</span>target_variance,</span>
@@ -669,7 +698,7 @@ window.Quarto = {
 <section class="level2" data-number="2.7" id="measure-the-candidates">
 <h2 class="anchored" data-anchor-id="measure-the-candidates" data-number="2.7"><span class="header-section-number">2.7</span> Measure the candidates</h2>
 <p>xFit fits a model to a batch of cutouts at once. <code>window_stamps</code> from xPois cuts a square window around each position, with NaN where the window leaves the image. Cut the difference and its predicted variance the same way, then fit one Gaussian source per cutout. The fit returns each source’s flux and its error.</p>
-<div class="cell" data-execution_count="7" id="1c48cd52">
+<div class="cell" data-execution_count="7" id="7d8b9718">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a aria-hidden="true" href="#cb11-1" tabindex="-1"></a><span class="im">from</span> cuphoton.xfit <span class="im">import</span> fit_single_sources</span>
 <span id="cb11-2"><a aria-hidden="true" href="#cb11-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xpois <span class="im">import</span> window_stamps</span>
 <span id="cb11-3"><a aria-hidden="true" href="#cb11-3" tabindex="-1"></a></span>
@@ -731,7 +760,7 @@ Figure 2.1: The sample pair at three stages. Left: the target. Middle: the refe
 <section class="level2" data-number="2.9" id="run-it-on-a-gpu">
 <h2 class="anchored" data-anchor-id="run-it-on-a-gpu" data-number="2.9"><span class="header-section-number">2.9</span> Run it on a GPU</h2>
 <p>On a host with the <code>gpu</code> profile, select the GPU backends. xRep and xPois take a <code>backend</code> argument. xRep returns host (NumPy) arrays. xFit runs on the device when you pass it CuPy arrays, and returns CuPy arrays.</p>
-<div class="cell" data-execution_count="9" id="a4e578e2">
+<div class="cell" data-execution_count="9" id="4870dadb">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a aria-hidden="true" href="#cb14-1" tabindex="-1"></a><span class="im">import</span> cupy <span class="im">as</span> cp</span>
 <span id="cb14-2"><a aria-hidden="true" href="#cb14-2" tabindex="-1"></a></span>
 <span id="cb14-3"><a aria-hidden="true" href="#cb14-3" tabindex="-1"></a>aligned <span class="op">=</span> reproject_masked_array(reference, reference_variance, no_bad_pixels, spec, backend<span class="op">=</span><span class="st">"cupy"</span>)</span>

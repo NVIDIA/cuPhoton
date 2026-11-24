@@ -62,7 +62,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="site_libs/quarto-search/fuse.min.js"></script>
 <script src="site_libs/quarto-search/quarto-search.js"></script>
 <meta content="./" name="quarto:offset"/>
-<link href="./monitor.html" rel="prev"/>
+<link href="./model-alerts.html" rel="prev"/>
 <script src="site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="site_libs/quarto-html/popper.min.js"></script>
@@ -102,7 +102,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/reference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="d0d4497a195ac0e690c4cff742cafb77a850ece4" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/reference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="348a9263f8ae755a48422506d739bac10f31e1b0" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -433,12 +433,41 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li class="sidebar-item sidebar-item-section">
 <div class="sidebar-item-container">
 <a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
-<span class="menu-text">Appendices</span></a>
+<span class="menu-text">Science notebooks</span></a>
 <a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-3" data-bs-toggle="collapse" role="navigation">
 <i class="bi bi-chevron-right ms-2"></i>
 </a>
 </div>
 <ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-3">
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./model-sky.html">
+<span class="menu-text"><span class="chapter-number">16</span>  <span class="chapter-title">Model Sky</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./model-scene.html">
+<span class="menu-text"><span class="chapter-number">17</span>  <span class="chapter-title">Model Scene</span></span></a>
+</div>
+</li>
+<li class="sidebar-item">
+<div class="sidebar-item-container">
+<a class="sidebar-item-text sidebar-link" href="./model-alerts.html">
+<span class="menu-text"><span class="chapter-number">18</span>  <span class="chapter-title">Model Alerts</span></span></a>
+</div>
+</li>
+</ul>
+</li>
+<li class="sidebar-item sidebar-item-section">
+<div class="sidebar-item-container">
+<a aria-expanded="true" class="sidebar-item-text sidebar-link text-start" data-bs-target="#quarto-sidebar-section-4" data-bs-toggle="collapse" role="navigation">
+<span class="menu-text">Appendices</span></a>
+<a aria-expanded="true" aria-label="Toggle section" class="sidebar-item-toggle text-start" data-bs-target="#quarto-sidebar-section-4" data-bs-toggle="collapse" role="navigation">
+<i class="bi bi-chevron-right ms-2"></i>
+</a>
+</div>
+<ul class="collapse list-unstyled sidebar-section depth1 show" id="quarto-sidebar-section-4">
 <li class="sidebar-item">
 <div class="sidebar-item-container">
 <a class="sidebar-item-text sidebar-link active" href="./reference.html">
@@ -613,7 +642,7 @@ Table A.2: Topics across modules.
 <section class="level2" data-number="A.2" id="command-line">
 <h2 class="anchored" data-anchor-id="command-line" data-number="A.2"><span class="header-section-number">A.2</span> Command line</h2>
 <p><code>cuphoton --help</code> lists the command groups, one per module:</p>
-<div class="cell" data-execution_count="1" id="d5e8275f">
+<div class="cell" data-execution_count="1" id="7f09d48b">
 <div class="cell-output cell-output-stdout">
 <pre><code>cuphoton
 
@@ -638,7 +667,7 @@ Use 'cuphoton GROUP --help' for group help.</code></pre>
 <section class="level2" data-number="A.3" id="python-api">
 <h2 class="anchored" data-anchor-id="python-api" data-number="A.3"><span class="header-section-number">A.3</span> Python API</h2>
 <p>Each function’s docstring documents its arguments, defaults and return fields. Print a signature with <code>inspect</code>, or the whole docstring with <code>help</code>:</p>
-<div class="cell" data-execution_count="2" id="400e51c0">
+<div class="cell" data-execution_count="2" id="8e9244be">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> inspect</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> reproject_masked_array</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a></span>
@@ -648,7 +677,7 @@ Use 'cuphoton GROUP --help' for group help.</code></pre>
 </div>
 </div>
 <p>Each package lists its public names in <code>__all__</code>:</p>
-<div class="cell" data-execution_count="3" id="dd63a23c">
+<div class="cell" data-execution_count="3" id="7ba5bf0a">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">import</span> importlib</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"package          public names"</span>)</span>
@@ -1123,8 +1152,8 @@ cuphoton.xlens             11</code></pre>
   </script>
 <nav class="page-navigation">
 <div class="nav-page nav-page-previous">
-<a aria-label="Monitor runs" class="pagination-link" href="./monitor.html">
-<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">15</span>  <span class="chapter-title">Monitor runs</span></span>
+<a aria-label="Model Alerts" class="pagination-link" href="./model-alerts.html">
+<i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">18</span>  <span class="chapter-title">Model Alerts</span></span>
 </a>
 </div>
 <div class="nav-page nav-page-next">

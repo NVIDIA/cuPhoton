@@ -1,0 +1,112 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+body.quarto-dark {
+  color-scheme: dark;
+  --model-sky-background: #0b1008;
+  --model-sky-panel: #121a0e;
+  --model-sky-panel-raised: #1a2514;
+  --model-sky-text: #f0f4eb;
+  --model-sky-green: #76b900;
+  --model-sky-accent: #b5ed39;
+  --model-sky-line: #2b3b20;
+  --model-sky-plot-background: #10180d;
+  --model-sky-plot-text: #f0f4eb;
+  --model-sky-plot-muted: #b7c9a9;
+  --model-sky-plot-border: #34472b;
+  --model-sky-plot-cyan: #67d5e5;
+  --model-sky-plot-pink: #ed91bd;
+  --model-sky-font: "NVIDIA Sans", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --model-sky-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas,
+    "Liberation Mono", monospace;
+}
+
+body.quarto-light {
+  color-scheme: light;
+  --model-sky-background: #f7f9f4;
+  --model-sky-panel: #ffffff;
+  --model-sky-panel-raised: #edf3e6;
+  --model-sky-text: #20291b;
+  --model-sky-accent: #426900;
+  --model-sky-line: #ccd7c2;
+  --model-sky-plot-background: #ffffff;
+  --model-sky-plot-text: #20291b;
+  --model-sky-plot-muted: #4f6043;
+  --model-sky-plot-border: #ccd7c2;
+  --model-sky-plot-cyan: #007f99;
+  --model-sky-plot-pink: #ab3d75;
+}
+
+main.content a.model-sky-glossary-term {
+  color: inherit;
+  text-decoration: underline dotted var(--model-sky-accent);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1.5px;
+  cursor: help;
+}
+main.content a.model-sky-glossary-term:hover,
+main.content a.model-sky-glossary-term:focus-visible { color: var(--model-sky-accent); }
+.model-sky-glossary-term:focus-visible, .model-sky-science summary:focus-visible {
+  outline: 2px solid var(--model-sky-accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+main.content .model-sky-glossary dt {
+  margin-top: 1.25rem;
+  font-weight: 700;
+  scroll-margin-top: 7rem;
+}
+main.content .model-sky-glossary dd { margin: 0.3rem 0 0; max-width: 95ch; }
+.model-sky-glossary dt:target, .model-sky-glossary dt:focus {
+  color: var(--model-sky-accent);
+  outline: 2px solid var(--model-sky-accent);
+  outline-offset: 4px;
+}
+#model-sky-glossary-tip {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(25rem, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  color: var(--model-sky-text);
+  background: var(--model-sky-panel-raised);
+  border: 1px solid var(--model-sky-accent);
+  border-radius: 8px;
+  box-shadow: 0 5px 24px rgb(0 0 0 / 35%);
+  font: 15px/1.55 var(--model-sky-font);
+  overflow-wrap: break-word;
+}
+#model-sky-glossary-tip[hidden] { display: none; }
+#model-sky-glossary-tip strong { display: block; margin-bottom: 0.35em; color: var(--model-sky-accent); }
+main.content details.model-sky-science {
+  margin: 1.15rem 0;
+  padding: 0.8rem 1.1rem;
+  border: 1px solid var(--model-sky-line);
+  border-left: 3px solid var(--model-sky-green);
+  border-radius: 6px;
+  background: var(--model-sky-panel);
+}
+.model-sky-science summary { cursor: pointer; font-weight: 650; color: var(--model-sky-accent); }
+.model-sky-science[open] summary { margin-bottom: 1rem; }
+.model-sky-equation {
+  margin: 1rem 0;
+  padding: 0.7rem 1rem;
+  overflow-x: auto;
+  color: var(--model-sky-text);
+  background: var(--model-sky-panel-raised);
+  border-radius: 4px;
+  font: 1.05rem/1.8 var(--model-sky-mono);
+}
+@media print { #model-sky-glossary-tip { display: none; } }
+
+.cell, .cell-output-display { min-width: 0; max-width: 100%; }
+.cell-output-display { overflow-x: auto; }
+.model-sky-story-card { border: 1px solid var(--model-sky-line); border-radius: 10px; background: var(--model-sky-panel); overflow: hidden; }
+.model-sky-story-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+@media (max-width: 575px) {
+  .model-sky-story-grid { grid-template-columns: 1fr !important; }
+}
