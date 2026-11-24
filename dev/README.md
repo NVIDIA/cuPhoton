@@ -241,6 +241,44 @@ Compare served files to retained hashes and confirm older release hashes
 survive the next publication. A successful build alone is not deployment
 verification.
 
+### Recover notebook assets or roll back the publisher
+
+Keep the executed notebooks and receipts from each reference run in durable
+storage outside Git and the documentation release. Their expected hashes are
+in `docs/guide/notebooks.json` at the reviewed source revision. For each
+publication, save the complete site's `github-pages-RUN_ID-RUN_ATTEMPT`
+artifact before it expires. It contains `artifact.tar`. Record the protected
+`gh-pages` commit from the same run's `retain` job (`archive_sha`). The
+deployed site also supplies these bytes while it serves that revision.
+
+Set `SITE` to the extracted site, `BACKUP` to the absolute path of its backup
+directory and `ARCHIVE_SHA` to the archive commit for that deployment. From
+the repository, verify the backup against the archive:
+
+```sh
+git show "${ARCHIVE_SHA}:notebook-assets.json" > "$BACKUP/notebook-assets.json"
+jq -r '.files | to_entries[] | "\(.value)  \(.key)"' \
+  "$BACKUP/notebook-assets.json" > "$BACKUP/notebook-assets.sha256"
+(cd "$SITE" && sha256sum --check --strict "$BACKUP/notebook-assets.sha256")
+```
+
+If publication stops on a missing asset, find its path and digest in the
+manifest, verify the backup, and upload those exact bytes under their original
+`sha256-<digest>` name to the documentation release. If an existing asset
+returns different bytes, confirm the mismatch with a fresh download. Preserve
+the suspect copy, use `gh release upload` to place the verified file on a new
+documentation prerelease, then append its tag to `ASSET_RELEASES` so readers
+try it first. Run `cuphoton dev docs-check` on a fresh copy
+of the sparse archive before retrying publication. A failed restore leaves
+the deployed site available.
+
+When reverting a publisher change, keep the render and archive jobs reading
+`notebook-assets.json` and keep the archive job writing it. An older
+controller expects the referenced files in its checkout. To test it, extract
+the matching complete Pages artifact outside Git and run that controller's
+`cuphoton dev docs-check` on the site. Keep the protected archive sparse
+throughout the rollback.
+
 ## Future release hooks
 
 Before cutting a release, verify that its branch contains
