@@ -122,8 +122,21 @@ Main owns rendering orchestration, conversion and publication. Release tags
 own the source code, guide and dependency lock used to render their snapshot.
 Authored documentation continues to use main URLs; HTML postprocessing converts
 release links, install examples, labels, search data and canonical URLs.
-The `gh-pages` branch retains complete validated output. Main publications
-replace only `main/`; release publications retain existing release bytes.
+The `gh-pages` branch retains the validated guide, with a
+`notebook-assets.json` manifest for external notebook chapters and large
+downloads. Each SHA-256 names an asset on the `docs-notebook-assets`
+documentation prerelease. The archive job restores every declared file, checks
+its digest against the version's build receipt and assembles the complete site.
+Main publications replace only `main/`. Release publications retain existing
+release bytes. See [Updating a notebook chapter](../docs/README.md#updating-a-notebook-chapter)
+for recording an executed notebook and its receipt. Before the first notebook
+publication, create the public `docs-notebook-assets` prerelease and leave the
+latest software release selected. The archive writer uses its repository
+contents permission to add assets to this prerelease. Before reaching GitHub's
+[1,000 assets per release](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases),
+create another documentation prerelease and append its tag to
+`ASSET_RELEASES` in `notebook_store.py`. Keep earlier releases available
+to restore their snapshots.
 Catalogs and redirects are generated, not hand-maintained.
 The publisher records this generated output with GitHub Actions bot commits.
 These archive commits are exempt from source-contribution identity, signature

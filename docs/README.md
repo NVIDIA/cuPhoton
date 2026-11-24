@@ -19,6 +19,11 @@ provides installation notes for published versions.
 
 - [User guide](https://nvidia.github.io/cuPhoton/): installation, a first image
   difference, and task guides with executable examples.
+- [Model Sky](https://nvidia.github.io/cuPhoton/main/model-sky.html),
+  [Model Scene](https://nvidia.github.io/cuPhoton/main/model-scene.html) and
+  [Model Alerts](https://nvidia.github.io/cuPhoton/main/model-alerts.html)
+  are interactive notebooks in the development guide. Explore simulated sky
+  measurements, scene reconstruction and transient classification in a browser.
 - [Getting started](getting-started.md): prerequisites and installation
   profiles.
 - [Packaging](packaging.md): local wheel and Conda builds, source builds,
@@ -81,18 +86,73 @@ Project-wide policies are in [Contributing](../CONTRIBUTING.md),
 
 ## Building the user guide
 
-The Quarto book in [`guide/`](guide/) renders with Python 3.12 and Quarto
-1.9.36. From the repository root:
+Build the complete guide for a committed revision with Python 3.12 and the
+[documentation developer tools](../dev/README.md). Run these commands from
+the repository root and use a new output directory:
+
+```sh
+uv sync --project dev --locked --python 3.12
+uv run --project dev --locked cuphoton dev docs-build \
+  --ref HEAD --output /tmp/cuphoton-guide
+uv run --project dev --locked cuphoton dev docs-check /tmp/cuphoton-guide
+```
+
+Open `/tmp/cuphoton-guide/index.html`. The builder runs the CPU examples with
+the revision's locked dependencies and Quarto version. For revisions that
+declare notebook chapters, it retrieves their saved GPU results, verifies
+them and renders the chapters in the same book. Pull requests build a guide
+preview. Successful pushes to `main` publish the development guide. A formal
+release keeps the chapters declared by its own source revision.
+
+When editing the CPU chapters in `docs/guide`, a direct Quarto render provides a
+shorter local preview with output in `docs/guide/_book`:
 
 ```sh
 uv sync --locked --python 3.12 --group docs --extra ximage --extra catalog
 CUPHOTON_REPO="$PWD" QUARTO_PYTHON="$PWD/.venv/bin/python" quarto render docs/guide
 ```
 
-The documentation environment uses CPU PyTorch. Open
-`docs/guide/_book/index.html` to read the result. Generated HTML, sample
-outputs, and Quarto's execution cache are ignored by Git.
+## Updating a notebook chapter
 
-The `user guide` workflow builds pull requests and publishes successful
-`main` builds to GitHub Pages. It also supports a manual run on `main`.
-Each clean CI build executes the CPU examples from the checked-out source.
+Run and review the full reference study on a CUDA 13 system. Each example's
+publishing guide describes the required profile, scientific checks and local
+HTML preview. Follow the instructions for [Model Sky](../examples/model-sky/PUBLISHING.md),
+[Model Scene](../examples/model-scene/PUBLISHING.md) or
+[Model Alerts](../examples/model-alerts/PUBLISHING.md).
+
+Prepare the public files before uploading them. Set `REVISION` to the full Git
+commit used for GPU execution, `REFERENCE` to the reference run's output
+directory and `PUBLIC` to a new directory. For Model Sky:
+
+```sh
+uv run --project dev --locked python -m cuphoton_dev.notebook_export \
+  --name model-sky --revision "$REVISION" --reference "$REFERENCE" \
+  --output "$PUBLIC"
+```
+
+For Model Alerts, use `--name model-alerts`. For Model Scene, use
+`--name model-scene` and add `--scene-downloads /path/to/preview/guide/_book/source`
+to use the preview's sanitized notebook and receipt. Preparation checks the
+original execution hash, source revision and public notebook contents. Inspect
+the public files, including text output and warnings, before recording them.
+
+```sh
+uv run --project dev --locked python -m cuphoton_dev.notebooks record \
+  --name model-sky --revision "$REVISION" \
+  --notebook "$PUBLIC/model-sky.executed.ipynb" \
+  --receipt "$PUBLIC/model-sky-execution.json"
+```
+
+This command uploads content-addressed assets to the repository's
+`docs-notebook-assets` prerelease using the authenticated `gh` account.
+Use the entry it prints to update [`guide/notebooks.json`](guide/notebooks.json).
+Review the pinned source revision, notebook digest and receipt digest in the
+source PR. After committing the update, run the complete guide build and check
+the new chapter's figures, downloads, navigation and source links.
+
+The trusted publisher stores the large rendered HTML and notebook downloads
+alongside the execution inputs, under SHA-256 asset names. Its `gh-pages`
+archive retains the hashes. Each deployment restores and checks the declared
+files for every retained version. Keep those assets available for subsequent
+deployments. The [publishing runbook](../dev/README.md#publish-bootstrap-and-recover)
+covers release publication, retries and live verification.

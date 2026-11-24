@@ -129,7 +129,7 @@ The source reuses Model Sky's public notebook presentation code and the
 existing xScan raw-comparison/Alard-Lupton display helpers. It does not read
 live demo fixtures or open a Bokeh server. Existing server viewer behavior
 is unchanged. See [PUBLISHING.md](PUBLISHING.md) for Quarto export, source/hash
-verification, packaging and the future versioned Pages integration work.
+verification, downloadable bundles and versioned guide publication.
 
 ## Check source and interactions
 

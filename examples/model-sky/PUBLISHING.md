@@ -7,9 +7,9 @@ The repository contains the output-free notebook and its helpers. The rendered
 version includes cell outputs, six interactive figures, terminology hovers,
 expandable explanations, equations and the guide's light/dark themes.
 
-This example currently provides a local export workflow. Adding it to the
-automatically published, versioned guide requires the integration described
-below. Merging the example alone does not add Model Sky to GitHub Pages.
+Read the chapter in the [development guide](https://nvidia.github.io/cuPhoton/main/model-sky.html).
+The publisher renders it from a reviewed GPU execution. To reproduce the study
+or qualify a new execution locally, follow the steps below.
 
 ## Build and review an export
 
@@ -79,36 +79,11 @@ intact rather than replacing them. The generated FITS inputs are reproducible
 from the example and are not required to view the HTML. Recipients can extract
 the bundle and serve it with `python -m http.server`.
 
-## Publish a versioned GitHub Pages chapter
+## Update the versioned guide
 
-Complete these changes in the developer tooling before enabling automatic
-publication:
-
-1. Stage Model Sky from the selected source revision in `cuphoton dev
-   docs-build`. Accept an executed notebook with matching example hashes,
-   cuPhoton source revision and execution dependencies. Reuse its saved outputs
-   while executing ordinary CPU guide chapters; the builder's current global
-   `--execute` would try to rerun the GPU notebook in its CPU environment.
-2. Pass the rendered guide through the existing version postprocessor and
-   `docs-check`. Retain the chapter's HTML includes as build inputs only.
-   Existing source-link conversion should map `main` links to release tags.
-3. Add durable storage for the large rendered page and execution artifacts.
-   Keep a manifest of exact asset locations and hashes in `gh-pages`; restore
-   declared assets into the temporary deployment directory for every retained
-   version, then validate the complete site. The current publisher commits
-   every rendered file, so uploading Release assets alone does not avoid Git
-   growth. Main needs durable assets keyed to its source revision as well;
-   expiring PR artifacts and a mutable latest-release fallback are insufficient.
-4. Validate a main build, a release containing the example, and an older
-   release without it. Check source links, navigation, search, version
-   switching, missing/corrupted assets and preservation of earlier snapshots.
-   Keep rendering, archive writing and Pages deployment in their existing
-   separate jobs.
-5. Once that integration is merged and validated, use the normal main-push
-   publication workflow. For an eligible published release, use the existing
-   `cuphoton dev docs-publish --ref RELEASE_TAG` command when a manual dispatch
-   is needed. Verify the served chapter and source link after deployment.
-
-Expected routes are `main/model-sky.html` and, for releases that contain this
-example, `vX.Y.Z/model-sky.html` beneath the cuPhoton Pages site. Keep generated
-notebooks, data and HTML out of source commits throughout this process.
+Use the full reference execution and matching receipt from the review above.
+The [notebook publication procedure](../../docs/README.md#updating-a-notebook-chapter)
+records those inputs under `model-sky` and pins their digests in the guide
+manifest. Build the guide for that commit and check all six interactive plots
+and the source downloads. The versioned publisher renders the saved outputs
+for each revision that declares the chapter.

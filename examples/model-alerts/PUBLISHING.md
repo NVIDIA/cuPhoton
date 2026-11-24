@@ -1,11 +1,11 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Export and future publication
+# Publishing Model Alerts
 
-Model Alerts is source plus a local static export workflow. Merging this
-example alone does not add it to versioned GitHub Pages. No public application
-server is needed: future hosting must consume the static artifacts only.
+Read the chapter in the [development guide](https://nvidia.github.io/cuPhoton/main/model-alerts.html).
+Its interactive review uses saved results in the browser. Follow the local
+export workflow to inspect a full reference execution before recording it.
 
 ## Execute, verify and render
 
@@ -35,7 +35,7 @@ server is needed: future hosting must consume the static artifacts only.
    renderer verifies executed/source hashes before reusing GPU cell outputs,
    executes the ordinary CPU guide chapters, applies the current developer
    version postprocessor and runs `docs-check`. Includes remain build inputs
-   outside published resource trees. No central publisher is changed.
+   outside published resource trees.
    `--allow-smoke` enables an explicitly labeled engineering preview only.
 4. Serve only the rendered book, never its parent containing data/weights:
 
@@ -81,8 +81,8 @@ cp /absolute/path/full-reference/model-alerts-source.zip \
 Verify checksums after copying. An archive extracted locally must still open
 without an application server. Python's static HTTP server is optional.
 
-The following is a **future upload action**, after separate authorization and
-review of a matching existing Release tag:
+To distribute this optional standalone bundle, select an existing GitHub
+Release whose tag matches the source used for execution:
 
 ```sh
 gh release upload RELEASE_TAG --repo NVIDIA/cuPhoton \
@@ -93,27 +93,9 @@ gh release upload RELEASE_TAG --repo NVIDIA/cuPhoton \
   "$CUPHOTON_MODEL_ALERTS_EXPORT/model-alerts-SHA256SUMS"
 ```
 
-This task does not upload assets, merge, deploy or publish a software release.
-Keep existing Release assets intact; avoid replacement flags.
+## Update the versioned guide
 
-## Versioned Pages integration gap
-
-The current CPU builder executes ordinary chapters with global `--execute`.
-It needs a receipt-verified pre-executed GPU notebook path, while continuing
-normal CPU execution. The local preview demonstrates staging that distinction;
-it does not change automatic publication.
-
-A future integration must stage this chapter only for revisions containing
-its source, rewrite source links to the selected tag/ref, and pass all current
-version postprocessing and documentation checks. Main and eligible release
-versions need durable checksummed storage for the large static export and its
-companions. The current publisher commits rendered files to `gh-pages`;
-Release-asset upload by itself does not prevent that growth. Restore verified
-static assets into temporary deployment trees rather than silently committing
-large HTML or falling back to a mutable latest release.
-
-Qualify a main build, an eligible release and an older release without this
-example. Check navigation/search/version switching, missing or corrupted
-assets, source links and preservation of existing versions. Expected future
-routes are `main/model-alerts.html` and `vX.Y.Z/model-alerts.html` beneath the
-cuPhoton Pages site. Normal publication/deployment remains a separate action.
+Use the reviewed full-reference output and its matching execution receipt.
+Follow the [notebook publication procedure](../../docs/README.md#updating-a-notebook-chapter)
+with `--name model-alerts`. Validate the gallery, classification controls and source
+downloads in the guide built from the updated manifest.

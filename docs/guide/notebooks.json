@@ -1,0 +1,17 @@
+{
+  "model-sky": {
+    "source_revision": "d0d4497a195ac0e690c4cff742cafb77a850ece4",
+    "notebook_sha256": "647b5d0098d35cee47b88831876f2107d2c420ac70f19b4c0cfd282348810ff7",
+    "receipt_sha256": "87589db8411f1249272c3da0bf6e82b6b9847d66c23edb811a2b9e53930f2145"
+  },
+  "model-scene": {
+    "source_revision": "d0d4497a195ac0e690c4cff742cafb77a850ece4",
+    "notebook_sha256": "3faaa9ab40bfb8d53fe2d906a0b1f30fc830530badbfd98e1ead1b94f4007f7d",
+    "receipt_sha256": "d20ee0d9de72367300e057e203320439073ae3bb3eb4d7478f2d3099e3bdc694"
+  },
+  "model-alerts": {
+    "source_revision": "d0d4497a195ac0e690c4cff742cafb77a850ece4",
+    "notebook_sha256": "7f01390c14e591e6a879f832de36f463a542bb7d2dc77e41d65b2d53b5d95950",
+    "receipt_sha256": "87f821b343ebf9d68fffe83280aec3f288801dcf573d6e435ae9e8ddf6fcb3dc"
+  }
+}

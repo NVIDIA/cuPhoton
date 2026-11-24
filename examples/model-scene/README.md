@@ -113,15 +113,14 @@ Beautiful Soup) live in a separate environment from the CPU guide renderer.
 
 The preview verifies the execution receipt and source hashes, executes the
 ordinary CPU guide chapters, preserves the completed GPU notebook outputs,
-and invokes the current version postprocessor and snapshot checks. It does
-not modify the central publisher. Source links must name a pushed ref.
+and invokes the current version postprocessor and snapshot checks. Source links
+must name a pushed ref.
 
 Run the numerical tests with `python -m pytest examples/model-scene/tests`.
 Workflow controls additionally require the xImage dependencies.
 
-[Publishing instructions](PUBLISHING.md) describe packaging and the current
-versioned-Pages integration gap. Opening or merging this source PR does not
-publish the rendered chapter.
+[Publishing instructions](PUBLISHING.md) describe how to package the local
+preview and update the Model Scene chapter in the versioned guide.
 
 The frozen scientific source was replayed with the development command above.
 Its twelve rows agree numerically with the selection sweep. The external
