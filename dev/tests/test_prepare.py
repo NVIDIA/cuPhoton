@@ -197,12 +197,17 @@ def test_notebooks_survive_retries_outside_git(publication, monkeypatch):
     monkeypatch.setattr(notebook_store, "get_blob", get)
     first = publication.root / "site"
     initial = publish(tag="v0.2.0", output=first)
-    assert len(blobs) == 3  # Two versioned pages share one notebook download.
+    assert len(blobs) == 5  # Two versioned pages share three downloads.
     tree = git(
         publication.remote, "ls-tree", "-r", "--name-only", "gh-pages"
     ).splitlines()
     for version in ("main", "v0.2.0"):
-        for name in ("model-scene.html", "source/model-scene.executed.ipynb"):
+        for name in (
+            "model-scene.html",
+            "source/model-scene.executed.ipynb",
+            "source/model-scene-execution.json",
+            "source/model-scene.zip",
+        ):
             assert (first / version / name).is_file()
             assert f"{version}/{name}" not in tree
     assert "notebook-assets.json" in tree

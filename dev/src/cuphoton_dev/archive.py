@@ -35,6 +35,7 @@ _NOTEBOOK_FILES = {
     for member in (
         f"{chapter}.html",
         f"source/{chapter}.executed.ipynb",
+        f"source/{chapter}-execution.json",
         f"source/{chapter}.zip",
     )
 }
@@ -114,9 +115,6 @@ def retain_notebooks(
         for member in sorted(_NOTEBOOK_FILES & receipt["files"].keys()):
             relative = f"{version}/{member}"
             path = archive / relative
-            # Small, output-free source bundles can stay in Git.
-            if member.endswith(".zip") and path.stat().st_size < 1024**2:
-                continue
             digest = receipt["files"][member]
             if digest not in stored:
                 put_blob(path, digest)

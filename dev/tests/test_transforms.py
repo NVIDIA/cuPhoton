@@ -61,6 +61,8 @@ def rendered_guide(
     if notebook:
         (path / "source").mkdir()
         (path / "source/model-scene.executed.ipynb").write_text("GPU results")
+        (path / "source/model-scene-execution.json").write_text("{}")
+        (path / "source/model-scene.zip").write_bytes(b"archive fixture")
         pages["model-scene.html"] = (
             '<a href="source/model-scene.executed.ipynb">Notebook</a>'
         )

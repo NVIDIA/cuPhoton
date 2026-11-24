@@ -150,6 +150,16 @@ def _stage_chapter(
         checkout, name, entry["source_revision"], notebook, receipt
     )
 
+    revision = entry["source_revision"]
+    git(
+        checkout,
+        "archive",
+        "--format=zip",
+        f"--output={downloads / name}.zip",
+        revision,
+        "LICENSE",
+        f"examples/{name}",
+    )
     assets = guide / "assets" / name
     shutil.copytree(
         example / "assets", assets, ignore=shutil.ignore_patterns("*.html")
@@ -188,9 +198,9 @@ def _stage_chapter(
             "text": "Download executed notebook",
             "href": f"source/{notebook.name}",
         },
+        {"text": "Example sources", "href": f"source/{name}.zip"},
         {"text": "Execution receipt", "href": f"source/{receipt.name}"},
     ]
-    revision = entry["source_revision"]
     body = (
         f"GPU reference run from [cuPhoton {revision[:8]}]"
         f"(https://github.com/NVIDIA/cuPhoton/commit/{revision}).\n\n"
