@@ -14,8 +14,8 @@ import tempfile
 from pathlib import Path
 
 from cuphoton_dev.build import git
-from cuphoton_dev.notebook_store import CHAPTERS, digest_file
-from cuphoton_dev.notebooks import _check_reference
+from cuphoton_dev.notebook_store import digest_file
+from cuphoton_dev.notebooks import COMPONENTS, _check_reference
 
 
 def _check_scene_outputs(raw: Path, public: Path) -> None:
@@ -67,7 +67,7 @@ def prepare(
     output: Path,
     scene_downloads: Path | None = None,
 ) -> None:
-    if name not in CHAPTERS or not re.fullmatch(r"[0-9a-f]{40}", revision):
+    if name not in COMPONENTS or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Expected notebook name and full execution revision")
     if (name == "model-scene") != (scene_downloads is not None):
         raise ValueError(
@@ -96,7 +96,7 @@ def prepare(
         if (
             receipt["original_receipt_sha256"] != digest_file(raw_receipt)
             or receipt["public_notebook_sha256"] != digest_file(notebook)
-            or not record["source_tree_clean"]
+            or record.get("source_tree_clean") is not True
             or record["source_revision"] != revision
             or any(
                 record[k] != receipt[k]
@@ -117,8 +117,6 @@ def prepare(
         receipt = dict(record)
         if name == "model-sky":
             receipt["original_receipt_sha256"] = digest_file(raw_receipt)
-        elif record["cuphoton_revision"] != revision:
-            raise ValueError("Model Alerts cuPhoton revision differs")
         receipt["source_revision"] = revision
         receipt["public_notebook_sha256"] = digest_file(notebook)
 
@@ -140,7 +138,7 @@ def prepare(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--name", choices=CHAPTERS, required=True)
+    parser.add_argument("--name", choices=COMPONENTS, required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--scene-downloads", type=Path)

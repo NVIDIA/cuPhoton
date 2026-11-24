@@ -14,7 +14,18 @@ from pathlib import Path
 
 from cuphoton_dev.github import REPOSITORY
 
-CHAPTERS = ("model-sky", "model-scene", "model-alerts")
+# Append names and paths when publishing a new kind of notebook artifact.
+# Old releases still need these paths after a chapter leaves the guide.
+RETAINED_NOTEBOOK_FILES = frozenset(
+    member
+    for chapter in ("model-sky", "model-scene", "model-alerts")
+    for member in (
+        f"{chapter}.html",
+        f"source/{chapter}.executed.ipynb",
+        f"source/{chapter}-execution.json",
+        f"source/{chapter}.zip",
+    )
+)
 
 # Read older assets after a new documentation asset release is added.
 ASSET_RELEASES = ("docs-notebook-assets",)

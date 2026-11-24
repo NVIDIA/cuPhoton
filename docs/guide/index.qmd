@@ -32,9 +32,23 @@ This guide shows you how to use cuPhoton. Start with the first three pages, then
 ::: {.content-visible when-meta="science-notebooks"}
 ## Science notebooks
 
-- [Model Sky](model-sky.html) follows a simulated star through a satellite trail, stellar motion and a planetary transit.
-- [Model Scene](model-scene.html) measures which features xImage can recover from a set of blurred exposures.
-- [Model Alerts](model-alerts.html) follows a detected change through classification and human review.
+```{python}
+#| echo: false
+#| output: asis
+import json
+from pathlib import Path
+
+summaries = {
+    "model-sky": "follows a simulated star through a satellite trail, stellar motion and a planetary transit.",
+    "model-scene": "measures which features xImage can recover from a set of blurred exposures.",
+    "model-alerts": "follows a detected change through classification and human review.",
+}
+manifest = Path("notebooks.json")
+if manifest.is_file():
+    for name in json.loads(manifest.read_text()):
+        title = name.replace("-", " ").title()
+        print(f"- [{title}]({name}.html) {summaries.get(name, '')}".rstrip())
+```
 :::
 
 ## About this guide

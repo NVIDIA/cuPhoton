@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from cuphoton_dev.notebook_store import CHAPTERS, digest_file
+from cuphoton_dev.notebook_store import RETAINED_NOTEBOOK_FILES, digest_file
 from cuphoton_dev.transforms import (
     RECEIPT,
     RELEASE,
@@ -29,16 +29,6 @@ from cuphoton_dev.transforms import (
 # Only these chapter artifacts can be omitted from the Git archive. Every
 # declared path still belongs to its version's complete, hashed build receipt.
 _NOTEBOOK_MANIFEST = "notebook-assets.json"
-_NOTEBOOK_FILES = {
-    member
-    for chapter in CHAPTERS
-    for member in (
-        f"{chapter}.html",
-        f"source/{chapter}.executed.ipynb",
-        f"source/{chapter}-execution.json",
-        f"source/{chapter}.zip",
-    )
-}
 
 
 def _json(path: Path, value: Any) -> None:
@@ -71,7 +61,7 @@ def restore_notebooks(archive: Path) -> set[str]:
         validate_version(version)
         destination = archive / relative
         if (
-            member not in _NOTEBOOK_FILES
+            member not in RETAINED_NOTEBOOK_FILES
             or destination.resolve() != archive.resolve() / relative
             or destination.exists()
             or not isinstance(digest, str)
@@ -112,7 +102,9 @@ def retain_notebooks(
     for entry in catalog["versions"]:
         version = entry["version"]
         receipt = json.loads((archive / version / RECEIPT).read_text("utf-8"))
-        for member in sorted(_NOTEBOOK_FILES & receipt["files"].keys()):
+        for member in sorted(
+            RETAINED_NOTEBOOK_FILES & receipt["files"].keys()
+        ):
             relative = f"{version}/{member}"
             path = archive / relative
             digest = receipt["files"][member]

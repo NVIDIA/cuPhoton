@@ -82,6 +82,14 @@ project. See its [installation and publication runbook](dev/README.md) and
 extra do not include these tools. Keep both dependency locks synchronized when
 root dependencies change, and verify release-hook inheritance before tagging.
 
+Model Sky, Scene, and Alerts use recorded GPU studies. Main and pull request
+previews show the last qualified study when its example, cuPhoton components,
+or dependency inputs change. Each affected chapter identifies its execution
+commit and displays a warning. A final release requires matching inputs. Its
+build reports the paths that changed and the study to rerun. Follow
+[Updating a notebook chapter](docs/README.md#updating-a-notebook-chapter)
+to qualify and record the replacement before tagging.
+
 ## Checks
 
 Run focused tests for the code you changed, then run the repository checks

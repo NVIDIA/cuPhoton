@@ -215,6 +215,10 @@ def test_notebooks_survive_retries_outside_git(publication, monkeypatch):
     assert publisher.docs_check(first)["stable"] == "v0.2.0"
     archive = publication.root / "archive"
     publication.clone(archive)
+    # Archives still hydrate retired chapters after their renderer is gone.
+    from cuphoton_dev.notebooks import COMPONENTS
+
+    monkeypatch.delitem(COMPONENTS, "model-scene")
     assert publisher.docs_check(archive)["stable"] == "v0.2.0"
     assert not git(archive, "status", "--porcelain")
     retry = publication.root / "retry"

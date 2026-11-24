@@ -222,7 +222,7 @@ def docs_build(
             from cuphoton_dev.notebooks import stage_notebooks
 
             guide = Path(temporary) / "guide"
-            stage_notebooks(checkout, guide)
+            stage_notebooks(checkout, guide, release=version != "main")
             # Quarto executes QMD by default and preserves executed IPYNB
             # outputs. A global --execute would override the GPU references.
             execution = []
