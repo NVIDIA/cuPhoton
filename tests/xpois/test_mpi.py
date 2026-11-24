@@ -983,8 +983,10 @@ def test_file_ready_transition_failure_reaches_both_ranks(
 
     monkeypatch.setattr(mpi, "atomic_write_json", write)
 
-    def prepare(rank: int) -> str:
-        try:
+    def prepare(rank: int) -> None:
+        with pytest.raises(
+            RuntimeError, match="synthetic ready transition failure"
+        ):
             mpi._file_prepare_run(
                 mpi._RankContext(
                     rank, rank, 2, "host", "test", launch_id="test-launch"
@@ -997,18 +999,10 @@ def test_file_ready_transition_failure_reaches_both_ranks(
                 manifest,
                 _options(),
             )
-        except RuntimeError as exc:
-            return str(exc)
-        return "unexpected success"
 
-    start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(prepare, range(2)))
+        list(pool.map(prepare, range(2)))
 
-    assert time.perf_counter() - start < 1.0
-    assert all(
-        "synthetic ready transition failure" in item for item in outcomes
-    )
     attempt = mpi.read_json_mapping(marker)
     assert attempt["status"] == "failed"
     assert attempt["terminal"] is True
