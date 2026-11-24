@@ -3,10 +3,9 @@
 
 # Publishing Model Scene
 
-The source notebook is output-free. The interactive HTML and numerical study
-are generated artifacts kept outside Git. This example exports a local static
-chapter inside the user guide; merging its source does not add it to the
-automatically published versioned site.
+Read the interactive chapter in the [development guide](https://nvidia.github.io/cuPhoton/main/model-scene.html).
+Git contains its output-free source. The versioned publisher renders the saved
+GPU results. The following workflow produces a local static chapter for review.
 
 ## Build a reviewable artifact
 
@@ -65,8 +64,8 @@ experiments and the complete summary diagnostics. Measure the archive and page
 sizes before distribution. Preserve numeric precision and avoid embedding
 repeated-trial arrays merely to make them accessible from a selector.
 
-Uploading assets is a separate future action. After approval, use an existing
-GitHub Release whose tag contains the exact validated source:
+To distribute this optional standalone bundle, attach it to a GitHub Release
+whose tag contains the exact validated source:
 
 ```sh
 gh release upload RELEASE_TAG --repo NVIDIA/cuPhoton \
@@ -74,26 +73,10 @@ gh release upload RELEASE_TAG --repo NVIDIA/cuPhoton \
   /path/model-scene-execution.json /path/model-scene-SHA256SUMS
 ```
 
-This uploads assets; it neither creates a software release nor updates Pages.
-Preserve existing assets. No Release upload is part of this example's local
-preview or PR workflow.
+## Update the versioned guide
 
-## Versioned Pages integration still required
-
-The current CPU builder globally requests execution. It needs a verified way to
-stage the pre-executed GPU notebook with matching source/protocol/dependency
-receipts while continuing to execute the ordinary CPU chapters. The local
-preview demonstrates that separation without changing the central publisher.
-
-The publisher also needs durable storage and restoration of large static
-artifacts keyed to the exact source revision. A Release upload alone does not
-make the publisher consume those assets. Main needs durable revision-keyed
-artifacts too; expiring PR artifacts and a mutable latest-release fallback do
-not satisfy source provenance. Keep rendered HTML out of `gh-pages` source
-commits until that integration has an approved storage design.
-
-Before enabling automatic publication, validate main, a release that contains
-Model Scene, and an older release without it. Verify source links, navigation,
-search, version switching, artifact integrity and preservation of earlier
-snapshots. Future `nvidia.github.io` hosting must consume static artifacts only.
-No public Python or Bokeh server is available or required.
+Use the CUDA reference profile and inspect the local preview as described
+above. Follow the [notebook publication procedure](../../docs/README.md#updating-a-notebook-chapter)
+with `--name model-scene`, the qualified notebook and its corresponding
+execution receipt. Keep private machine paths out of the public inputs and
+check the rendered download links for the public notebook and receipt.

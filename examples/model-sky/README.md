@@ -91,4 +91,4 @@ The full executed notebook, generated images, data and rendered HTML belong
 in build or release assets. Keep the notebook committed to Git output-free.
 
 See [Publishing the Model Sky HTML](PUBLISHING.md) for export commands,
-Release-asset packaging and the remaining versioned Pages integration steps.
+downloadable bundles and the versioned guide publication procedure.

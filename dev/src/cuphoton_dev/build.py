@@ -217,12 +217,21 @@ def docs_build(
             env=env,
             capture=False,
         )
+        execution = ["--execute"]
+        if (guide / "notebooks.json").is_file():
+            from cuphoton_dev.notebooks import stage_notebooks
+
+            guide = Path(temporary) / "guide"
+            stage_notebooks(checkout, guide, release=version != "main")
+            # Quarto executes QMD by default and preserves executed IPYNB
+            # outputs. A global --execute would override the GPU references.
+            execution = []
         run(
             [
                 str(quarto),
                 "render",
-                "docs/guide",
-                "--execute",
+                str(guide),
+                *execution,
                 "--no-cache",
             ],
             cwd=checkout,

@@ -18,6 +18,8 @@ from xml.etree import ElementTree as ET
 
 from bs4 import BeautifulSoup, NavigableString
 
+from cuphoton_dev.notebook_store import RETAINED_NOTEBOOK_FILES
+
 SITE_URL = "https://nvidia.github.io/cuPhoton/"
 RELEASE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 RECEIPT = "build.json"
@@ -188,6 +190,17 @@ def postprocess(
         soup = BeautifulSoup(file.read_text(encoding="utf-8"), "html.parser")
         if soup.head is None or soup.body is None:
             raise ValueError(f"Missing HTML head/body: {relative}")
+        # Pandoc embeds previously rendered neighbours in the head of a
+        # self-contained chapter. Keep ordinary book navigation as URLs.
+        for direction, css in (("prev", "previous"), ("next", "next")):
+            link = soup.head.select_one(f'link[rel="{direction}"]')
+            if link and str(link.get("href", "")).startswith("data:"):
+                neighbour = soup.select_one(
+                    f".nav-page-{css} a.pagination-link[href]"
+                )
+                if neighbour is None:
+                    raise ValueError(f"Missing {direction} link: {relative}")
+                link["href"] = neighbour["href"]
         for node in soup.find_all(True):
             for attr in ("href", "src", "content", "data-url"):
                 value = node.get(attr)
@@ -238,6 +251,13 @@ def postprocess(
             ("cuphoton-version", version),
             ("cuphoton-source", source_sha),
         ):
+            # build.json records the guide revision. Keep unchanged notebook
+            # chapters reusable by digest across publications of this version.
+            if (
+                name == "cuphoton-source"
+                and relative in RETAINED_NOTEBOOK_FILES
+            ):
+                continue
             soup.head.append(
                 soup.new_tag("meta", attrs={"name": name, "content": value})
             )

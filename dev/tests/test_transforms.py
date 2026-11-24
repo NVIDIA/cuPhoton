@@ -22,7 +22,9 @@ from cuphoton_dev.transforms import (
 )
 
 
-def rendered_guide(path: Path, *, extra_page: bool = False) -> Path:
+def rendered_guide(
+    path: Path, *, extra_page: bool = False, notebook: bool = False
+) -> Path:
     """Small Quarto-shaped fixture preserving v0.2.0's split syntax spans."""
     path.mkdir(parents=True)
     pages = {
@@ -55,6 +57,14 @@ def rendered_guide(path: Path, *, extra_page: bool = False) -> Path:
     if extra_page:
         pages["nested/example.html"] = (
             '<a href="../index.html">Home</a><p id="new-topic">New</p>'
+        )
+    if notebook:
+        (path / "source").mkdir()
+        (path / "source/model-scene.executed.ipynb").write_text("GPU results")
+        (path / "source/model-scene-execution.json").write_text("{}")
+        (path / "source/model-scene.zip").write_bytes(b"archive fixture")
+        pages["model-scene.html"] = (
+            '<a href="source/model-scene.executed.ipynb">Notebook</a>'
         )
     for name, body in pages.items():
         file = path / name
@@ -139,6 +149,16 @@ def test_main_keeps_authored_install_and_source_links(tmp_path):
     assert "development branch" in (path / "install.html").read_text()
     assert "/cuPhoton/blob/main/" in (path / "reference.html").read_text()
     assert "main (development)" in (path / "index.html").read_text()
+
+
+def test_unchanged_notebook_is_reused_across_main_commits(tmp_path):
+    first = snapshot(tmp_path / "first", sha="a" * 40, notebook=True)
+    second = snapshot(tmp_path / "second", sha="c" * 40, notebook=True)
+    before, after = check_snapshot(first), check_snapshot(second)
+    chapter = "model-scene.html"
+    assert before["files"][chapter] == after["files"][chapter]
+    assert before["source_sha"] != after["source_sha"]
+    assert before["files"]["index.html"] != after["files"]["index.html"]
 
 
 @pytest.mark.parametrize("mutation", ["wording", "clone", "search", "link"])
@@ -456,3 +476,35 @@ def test_snapshot_rejects_inconsistent_metadata(
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         check_snapshot(path)
+
+
+def test_embedded_neighbour_is_restored_to_book_link(tmp_path):
+    guide = tmp_path / "render"
+    rendered_guide(guide, notebook=True)
+    page = guide / "model-scene.html"
+    page.write_text(
+        page.read_text()
+        .replace(
+            "</head>",
+            '<link rel="prev" href="data:text/html,duplicated"></head>',
+        )
+        .replace(
+            "</body>",
+            '<div class="nav-page-previous"><a class="pagination-link" '
+            'href="./index.html">Welcome</a></div></body>',
+        )
+    )
+    postprocess(
+        guide,
+        version="main",
+        source_sha="a" * 40,
+        controller_sha="b" * 40,
+        renderer="1.9.36",
+    )
+    assert "data:text/html" not in page.read_text()
+    assert (
+        BeautifulSoup(page.read_text(), "html.parser").select_one(
+            'link[rel="prev"]'
+        )["href"]
+        == "./index.html"
+    )

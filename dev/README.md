@@ -122,8 +122,23 @@ Main owns rendering orchestration, conversion and publication. Release tags
 own the source code, guide and dependency lock used to render their snapshot.
 Authored documentation continues to use main URLs; HTML postprocessing converts
 release links, install examples, labels, search data and canonical URLs.
-The `gh-pages` branch retains complete validated output. Main publications
-replace only `main/`; release publications retain existing release bytes.
+The `gh-pages` branch retains the validated guide, with a
+`notebook-assets.json` manifest for external notebook chapters and large
+downloads. Each SHA-256 names an asset on the `docs-notebook-assets`
+documentation prerelease. The archive job restores every declared file, checks
+its digest against the version's build receipt and assembles the complete site.
+The build receipt records the guide revision. An unrelated change to that
+revision reuses the same notebook HTML asset when the rendered content matches.
+Main publications replace only `main/`. Release publications retain existing
+release bytes. See [Updating a notebook chapter](../docs/README.md#updating-a-notebook-chapter)
+for recording an executed notebook and its receipt. Before the first notebook
+publication, create the public `docs-notebook-assets` prerelease and leave the
+latest software release selected. The archive writer uses its repository
+contents permission to add assets to this prerelease. Before reaching GitHub's
+[1,000 assets per release](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases),
+create another documentation prerelease and append its tag to
+`ASSET_RELEASES` in `notebook_store.py`. Keep earlier releases available
+to restore their snapshots.
 Catalogs and redirects are generated, not hand-maintained.
 The publisher records this generated output with GitHub Actions bot commits.
 These archive commits are exempt from source-contribution identity, signature
@@ -227,6 +242,48 @@ light/dark themes, desktop/mobile navigation and keyboard version selection.
 Compare served files to retained hashes and confirm older release hashes
 survive the next publication. A successful build alone is not deployment
 verification.
+
+### Recover notebook assets or roll back the publisher
+
+Keep the executed notebooks and receipts from each reference run in durable
+storage outside Git and the documentation release. Their expected hashes are
+in `docs/guide/notebooks.json` at the reviewed source revision. For each
+publication, save the complete site's `github-pages-RUN_ID-RUN_ATTEMPT`
+artifact before it expires. It contains `artifact.tar`. Record the protected
+`gh-pages` commit from the same run's `retain` job (`archive_sha`). The
+deployed site also supplies these bytes while it serves that revision.
+
+Set `SITE` to the extracted site, `BACKUP` to the absolute path of its backup
+directory and `ARCHIVE_SHA` to the archive commit for that deployment. From
+the repository, verify the backup against the archive:
+
+```sh
+git show "${ARCHIVE_SHA}:notebook-assets.json" > "$BACKUP/notebook-assets.json"
+jq -r '.files | to_entries[] | "\(.value)  \(.key)"' \
+  "$BACKUP/notebook-assets.json" > "$BACKUP/notebook-assets.sha256"
+(cd "$SITE" && sha256sum --check --strict "$BACKUP/notebook-assets.sha256")
+```
+
+If publication stops on a missing asset, find its path and digest in the
+manifest, verify the backup, and upload those exact bytes under their original
+`sha256-<digest>` name to the documentation release. Check a fresh copy of
+the sparse archive with `cuphoton dev docs-check`, then retry the failed run.
+
+If an existing asset returns different bytes, confirm the mismatch with a
+fresh download. Preserve the suspect copy and use `gh release upload` to
+place the verified file on a new documentation prerelease. Append its tag to
+`ASSET_RELEASES`, run `cuphoton dev docs-check` on a fresh copy of the sparse
+archive, and merge that change into `main`. Dispatch a new publication from
+the updated `main` for the affected guide version. GitHub reruns use the
+original workflow commit and its release list. A failed restore leaves the
+deployed site available.
+
+When reverting a publisher change, keep the render and archive jobs reading
+`notebook-assets.json` and keep the archive job writing it. An older
+controller expects the referenced files in its checkout. To test it, extract
+the matching complete Pages artifact outside Git and run that controller's
+`cuphoton dev docs-check` on the site. Keep the protected archive sparse
+throughout the rollback.
 
 ## Future release hooks
 

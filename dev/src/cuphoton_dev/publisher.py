@@ -226,6 +226,8 @@ def render_bundle(
     Retained snapshots are never copied into the bundle. The writer re-reads
     them independently, so a retry after retention does not rebuild history.
     """
+    from cuphoton_dev.archive import restore_notebooks
+
     repo, controller, tag, run_id, attempt = _context(tag)
     output = output.resolve()
     if output.exists():
@@ -234,6 +236,7 @@ def render_bundle(
         work = Path(temporary)
         retained = work / "archive"
         clone_archive(retained)
+        restore_notebooks(retained)
         sources, _ = _targets(repo, controller, tag, retained)
         bundle = work / "bundle"
         bundle.mkdir()
@@ -323,7 +326,12 @@ def prepare(
     The caller verifies the immutable Actions artifact identity and digest.
     This trusted-main phase independently checks source policy and receipts.
     """
-    from cuphoton_dev.archive import assemble, check_archive
+    from cuphoton_dev.archive import (
+        assemble,
+        check_archive,
+        restore_notebooks,
+        retain_notebooks,
+    )
 
     repo, controller, tag, run_id, attempt = _context(tag)
     output = output.resolve()
@@ -337,12 +345,14 @@ def prepare(
         attempt=attempt,
         request_id=request_id,
     )
+    output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
-        prefix="cuphoton-publication-"
+        prefix=".cuphoton-publication-", dir=output.parent
     ) as temporary:
         work = Path(temporary)
         retained = work / "archive"
         clone_archive(retained)
+        stored = restore_notebooks(retained)
         sources, eligible_tags = _targets(repo, controller, tag, retained)
         for target, source in supplied.items():
             # A downstream retry can find main already bootstrapped, possibly
@@ -368,7 +378,7 @@ def prepare(
                 raise ValueError(
                     f"Snapshot bundle is missing required {target}"
                 )
-            assemble(
+            catalog = assemble(
                 retained,
                 snapshot,
                 eligible_releases=eligible_tags,
@@ -377,7 +387,7 @@ def prepare(
                 ),
             )
         if not sources:
-            assemble(
+            catalog = assemble(
                 retained,
                 retained / "main",
                 eligible_releases=eligible_tags,
@@ -391,7 +401,11 @@ def prepare(
             raise RuntimeError(
                 "Release eligibility changed during publication; retry"
             )
-        catalog = check_archive(retained)
+        # Each assembled snapshot and the complete catalog passed validation.
+        # Keep the large bytes on the Pages side of the Git staging boundary.
+        site = work / "site"
+        retain_notebooks(retained, site, catalog, stored)
+        check_archive(site)
         git(retained, "add", "--all")
         changed = bool(git(retained, "status", "--porcelain"))
         if changed:
@@ -430,9 +444,7 @@ def prepare(
                 "HEAD:refs/heads/gh-pages",
             )
         archive_sha = resolve(retained, "HEAD")
-        shutil.copytree(
-            retained, output, ignore=shutil.ignore_patterns(".git")
-        )
+        site.rename(output)
     return {
         "request_id": request_id,
         "controller_sha": controller,

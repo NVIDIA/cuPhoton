@@ -29,6 +29,28 @@ This guide shows you how to use cuPhoton. Start with the first three pages, then
 
 @sec-reference lists where to find the full API, CLI and data-format documentation in the repository.
 
+::: {.content-visible when-meta="science-notebooks"}
+## Science notebooks
+
+```{python}
+#| echo: false
+#| output: asis
+import json
+from pathlib import Path
+
+summaries = {
+    "model-sky": "follows a simulated star through a satellite trail, stellar motion and a planetary transit.",
+    "model-scene": "measures which features xImage can recover from a set of blurred exposures.",
+    "model-alerts": "follows a detected change through classification and human review.",
+}
+manifest = Path("notebooks.json")
+if manifest.is_file():
+    for name in json.loads(manifest.read_text()):
+        title = name.replace("-", " ").title()
+        print(f"- [{title}]({name}.html) {summaries.get(name, '')}".rstrip())
+```
+:::
+
 ## About this guide
 
 The executable Python examples use small synthetic inputs that each page generates. Run a page's cells in order in the environment described in @sec-install. Commands that use your own files, a GPU, native extensions, or distributed launchers need the prerequisites and inputs described on their page.

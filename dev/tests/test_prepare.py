@@ -10,6 +10,8 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -168,6 +170,93 @@ def test_prepare_duplicate_release_and_next_main_preserve_history(
     assert len(publication.builds) == 3
     assert file_hashes(updated / "v0.2.0") == release_hashes
     assert publisher.docs_check(updated)["stable"] == "v0.2.0"
+
+
+def test_notebooks_survive_retries_outside_git(publication, monkeypatch):
+    from cuphoton_dev import notebook_store
+
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "rendered_guide",
+        partial(rendered_guide, notebook=True),
+    )
+    blobs = {}
+
+    def put(path, digest):
+        assert digest not in blobs
+        data = path.read_bytes()
+        assert hashlib.sha256(data).hexdigest() == digest
+        blobs[digest] = data
+
+    def get(digest, dest):
+        if digest not in blobs:
+            raise FileNotFoundError(digest)
+        dest.write_bytes(blobs[digest])
+
+    monkeypatch.setattr(notebook_store, "put_blob", put)
+    monkeypatch.setattr(notebook_store, "get_blob", get)
+    first = publication.root / "site"
+    initial = publish(tag="v0.2.0", output=first)
+    assert len(blobs) == 5  # Two versioned pages share three downloads.
+    tree = git(
+        publication.remote, "ls-tree", "-r", "--name-only", "gh-pages"
+    ).splitlines()
+    for version in ("main", "v0.2.0"):
+        for name in (
+            "model-scene.html",
+            "source/model-scene.executed.ipynb",
+            "source/model-scene-execution.json",
+            "source/model-scene.zip",
+        ):
+            assert (first / version / name).is_file()
+            assert f"{version}/{name}" not in tree
+    assert "notebook-assets.json" in tree
+    assert not (first / "notebook-assets.json").exists()
+    assert publisher.docs_check(first)["stable"] == "v0.2.0"
+    archive = publication.root / "archive"
+    publication.clone(archive)
+    # Archives still hydrate retired chapters after their renderer is gone.
+    from cuphoton_dev.notebooks import COMPONENTS
+
+    monkeypatch.delitem(COMPONENTS, "model-scene")
+    assert publisher.docs_check(archive)["stable"] == "v0.2.0"
+    assert not git(archive, "status", "--porcelain")
+    retry = publication.root / "retry"
+    assert (
+        publish(tag="main", output=retry)["archive_sha"]
+        == initial["archive_sha"]
+    )
+    assert file_hashes(retry) == file_hashes(first)
+    assert len(publication.builds) == 2
+
+    digest = next(iter(blobs))
+    blobs[digest] = b"corrupted store"
+    bad = publication.root / "failed"
+    with pytest.raises(ValueError, match="asset hash mismatch"):
+        publish(tag="main", output=bad)
+    del blobs[digest]
+    with pytest.raises(FileNotFoundError):
+        publish(tag="main", output=bad)
+    assert not bad.exists()
+    assert (
+        git(publication.remote, "rev-parse", "gh-pages")
+        == initial["archive_sha"]
+    )
+
+
+@pytest.mark.parametrize(
+    "path", ["../model-sky.html", "main/../model-sky.html", "main/index.html"]
+)
+def test_archive_rejects_undeclared_or_unsafe_notebook_paths(tmp_path, path):
+    from cuphoton_dev.archive import restore_notebooks
+
+    (tmp_path / "notebook-assets.json").write_text(
+        json.dumps({"schema": 1, "files": {path: "0" * 64}})
+    )
+    with pytest.raises(
+        ValueError, match="documentation version|external notebook"
+    ):
+        restore_notebooks(tmp_path)
 
 
 def test_prepare_rejects_moved_tag_without_pushing(publication, monkeypatch):
