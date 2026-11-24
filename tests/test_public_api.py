@@ -481,7 +481,7 @@ def test_xpois_device_api_does_not_eagerly_import_cupy() -> None:
     assert result.returncode == 0
 
 
-def test_xfit_device_api_does_not_eagerly_import_cupy() -> None:
+def test_xfit_api_does_not_eagerly_import_fits_or_cupy() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -489,7 +489,9 @@ def test_xfit_device_api_does_not_eagerly_import_cupy() -> None:
             (
                 "import sys; from cuphoton import xfit; "
                 "assert callable(xfit.fit_dipoles_device); "
-                "raise SystemExit('cupy' in sys.modules)"
+                "assert callable(xfit.read_forced_photometry_stamps); "
+                "assert 'astropy.io.fits' not in sys.modules; "
+                "assert 'cupy' not in sys.modules"
             ),
         ],
         check=False,

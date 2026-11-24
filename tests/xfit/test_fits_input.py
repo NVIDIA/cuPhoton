@@ -15,6 +15,7 @@ import pytest
 from astropy.io import fits
 from astropy.utils.masked import Masked
 
+from cuphoton.core import fits_io
 from cuphoton.core.cli import run_component
 from cuphoton.xfit import (
     LMConfig,
@@ -68,7 +69,21 @@ def _input(tmp_path, *, mode="difference"):
     return path, data, image, mask, variance
 
 
-def test_forced_photometry_read_matches_full_image_pixel_windows(tmp_path):
+@pytest.fixture
+def cupy_device():
+    if os.environ.get("CUDA_VISIBLE_DEVICES") == "":
+        pytest.skip("GPU tests disabled")
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() == 0:
+            pytest.skip("a CUDA device is required")
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("a CUDA device is required")
+    return cp
+
+
+@pytest.fixture
+def forced_photometry_visit(tmp_path):
     image = np.arange(128, dtype=np.float32).reshape(8, 16)
     image[3, 3] = np.nan
     variance = np.full(image.shape, 2.0, dtype=np.float64)
@@ -90,15 +105,21 @@ def test_forced_photometry_read_matches_full_image_pixel_windows(tmp_path):
         ]
     ).writeto(path)
     positions = [[8.75, 4.25], [3.5, 2.5], [3.5, 2.5]]
-    batch = read_forced_photometry_stamps(
-        path,
-        positions,
+    args = dict(
         science_hdu=1,
         variance_hdu=2,
         mask_hdu=3,
         bad_mask_bits=32768,
         stamp_shape=(3, 5),
     )
+    return path, positions, args, (image, variance, mask)
+
+
+def test_forced_photometry_read_matches_full_image_pixel_windows(
+    forced_photometry_visit,
+):
+    path, positions, args, (image, variance, mask) = forced_photometry_visit
+    batch = read_forced_photometry_stamps(path, positions, **args)
     assert batch.section == (slice(2, 6), slice(2, 12))
     assert batch.metadata["reader"] == "astropy"
     assert batch.metadata["location"] == "host"
@@ -126,6 +147,49 @@ def test_forced_photometry_read_matches_full_image_pixel_windows(tmp_path):
     )
     assert measurement.flux[1, 0] == image[3, 4]
     assert measurement.flux_error[1, 0] == np.sqrt(2.0)
+
+
+@pytest.mark.parametrize("reader", ["astropy", "xdr"])
+def test_forced_photometry_device_read_matches_host(
+    forced_photometry_visit, reader, cupy_device
+):
+    cp = cupy_device
+    path, positions, args, _ = forced_photometry_visit
+    host = read_forced_photometry_stamps(path, positions, **args)
+    device = read_forced_photometry_stamps(
+        path, positions, reader=reader, device=True, **args
+    )
+    assert device.section == host.section
+    assert device.metadata["reader"] == reader
+    assert device.metadata["location"] == "device"
+    for name in ("science", "variance", "mask", "good", "offsets"):
+        actual, expected = getattr(device, name), getattr(host, name)
+        assert isinstance(actual, cp.ndarray)
+        assert actual.dtype == expected.dtype
+        np.testing.assert_array_equal(cp.asnumpy(actual), expected)
+
+
+def test_forced_photometry_rejects_mismatched_full_plane_shapes(tmp_path):
+    path = tmp_path / "mismatched.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(np.ones((8, 8), dtype=np.float32)),
+            fits.ImageHDU(np.ones((8, 9), dtype=np.float32)),
+            fits.ImageHDU(np.zeros((8, 8), dtype=np.int16)),
+        ]
+    ).writeto(path)
+    # Every HDU contains the requested section.
+    with pytest.raises(ValueError, match="same full image shape"):
+        read_forced_photometry_stamps(
+            path,
+            [[3.25, 2.5]],
+            science_hdu=1,
+            variance_hdu=2,
+            mask_hdu=3,
+            bad_mask_bits=1,
+            stamp_shape=(3, 5),
+        )
 
 
 @pytest.mark.parametrize(
@@ -219,10 +283,9 @@ def test_fits_planning_does_not_decode_or_initialize_a_gpu(
     tmp_path, monkeypatch
 ):
     path, _, _, _, _ = _input(tmp_path)
-    import cuphoton.xfit.fits_input as source
 
     monkeypatch.setattr(
-        source,
+        fits_io,
         "read_fits_images",
         lambda *a, **k: pytest.fail("planning decoded image payloads"),
     )
@@ -405,15 +468,14 @@ def test_npz_and_fits_cli_keep_identical_numeric_outputs(
         mask=dataset.mask,
         variance=dataset.variance,
     )
-    import cuphoton.xfit.fits_input as source
 
-    original = source.read_fits_images
+    original = fits_io.read_fits_images
 
     def read(*args, **kwargs):
         assert kwargs["reader"] == "astropy"
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(source, "read_fits_images", read)
+    monkeypatch.setattr(fits_io, "read_fits_images", read)
     for label, input_path in (("fits", path), ("npz", npz)):
         assert (
             run_component(
@@ -459,19 +521,17 @@ def test_npz_and_fits_cli_keep_identical_numeric_outputs(
 def test_fits_distributed_finalizer_reuses_only_retained_audit_stamps(
     tmp_path, monkeypatch, retain_input
 ):
-    import cuphoton.xfit.fits_input as source
-
     path, _, _, _, _ = _input(tmp_path)
     original = executor.load_xfit_dataset
     monkeypatch.setattr(executor, "collect_gpu_identity", lambda _: {})
     decodes = []
-    original_read = source.read_fits_images
+    original_read = fits_io.read_fits_images
 
     def decode(*args, **kwargs):
         decodes.append(True)
         return original_read(*args, **kwargs)
 
-    monkeypatch.setattr(source, "read_fits_images", decode)
+    monkeypatch.setattr(fits_io, "read_fits_images", decode)
 
     def read(path, **kwargs):
         dataset = original(
@@ -563,19 +623,11 @@ def test_manifest_initial_and_stamp_basis_are_preserved(tmp_path):
     assert len(dataset.input_sources) == 2
 
 
-@pytest.mark.skipif(
-    os.environ.get("CUDA_VISIBLE_DEVICES") == "", reason="GPU tests disabled"
-)
 @pytest.mark.parametrize("compressed", [False, True])
 def test_gpu_fits_stamps_remain_on_device_and_match_host(
-    tmp_path, compressed
+    tmp_path, compressed, cupy_device
 ):
-    cp = pytest.importorskip("cupy")
-    try:
-        if cp.cuda.runtime.getDeviceCount() == 0:
-            pytest.skip("a CUDA device is required")
-    except cp.cuda.runtime.CUDARuntimeError:
-        pytest.skip("a CUDA device is required")
+    cp = cupy_device
     path, _, _, _, _ = _input(tmp_path)
     if compressed:
         source = tmp_path / "plane-0.fits"

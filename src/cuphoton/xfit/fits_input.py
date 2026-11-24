@@ -17,7 +17,6 @@ import numpy.typing as npt
 
 from cuphoton.core.arrays import array_module
 from cuphoton.core.artifacts import file_sha256
-from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
 from cuphoton.core.fits_options import (
     merge_xdr_options,
     normalize_xdr_options,
@@ -66,6 +65,8 @@ def _integer(value, name, *, minimum=0):
 
 
 def _plane(value, root, *, name, auxiliary=True):
+    from cuphoton.core.fits_io import inspect_fits_image
+
     keys = {"path", "hdu", "xdr_options"}
     if auxiliary:
         keys |= {"mask_hdu", "variance_hdu", "bad_mask_bits"}
@@ -350,6 +351,8 @@ def read_forced_photometry_stamps(
     reader="xdr" to require GPU decoding of a supported compressed section.
     The (y, x) section and core reader metadata describe the input read.
     """
+    from cuphoton.core.fits_io import read_fits_images
+
     if len(stamp_shape) != 2 or any(
         isinstance(n, bool)
         or not isinstance(n, (int, np.integer))
@@ -445,6 +448,8 @@ def load_fits_input(
     xdr_options=None,
 ):
     """Read the candidate bounding region and keep GPU stamps on device."""
+    from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
+
     from .io import XFitDataset, _validate_dataset_contract
 
     plan = plan_fits_input(path, mode=mode, model=model)
