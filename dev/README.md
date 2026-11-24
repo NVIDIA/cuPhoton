@@ -264,13 +264,17 @@ jq -r '.files | to_entries[] | "\(.value)  \(.key)"' \
 
 If publication stops on a missing asset, find its path and digest in the
 manifest, verify the backup, and upload those exact bytes under their original
-`sha256-<digest>` name to the documentation release. If an existing asset
-returns different bytes, confirm the mismatch with a fresh download. Preserve
-the suspect copy, use `gh release upload` to place the verified file on a new
-documentation prerelease, then append its tag to `ASSET_RELEASES` so readers
-try it first. Run `cuphoton dev docs-check` on a fresh copy
-of the sparse archive before retrying publication. A failed restore leaves
-the deployed site available.
+`sha256-<digest>` name to the documentation release. Check a fresh copy of
+the sparse archive with `cuphoton dev docs-check`, then retry the failed run.
+
+If an existing asset returns different bytes, confirm the mismatch with a
+fresh download. Preserve the suspect copy and use `gh release upload` to
+place the verified file on a new documentation prerelease. Append its tag to
+`ASSET_RELEASES`, run `cuphoton dev docs-check` on a fresh copy of the sparse
+archive, and merge that change into `main`. Dispatch a new publication from
+the updated `main` for the affected guide version. GitHub reruns use the
+original workflow commit and its release list. A failed restore leaves the
+deployed site available.
 
 When reverting a publisher change, keep the render and archive jobs reading
 `notebook-assets.json` and keep the archive job writing it. An older
