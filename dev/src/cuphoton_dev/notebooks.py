@@ -176,6 +176,8 @@ def _stage_chapter(
         ):
             shutil.copyfile(example / "assets" / file, includes / file)
             html[option] = f"../{includes.name}/{file}"
+    if name != "model-scene":
+        metadata["number-sections"] = False
     metadata["execute"] = {"enabled": False, "warning": True}
     metadata["code-links"] = [
         {
@@ -202,9 +204,6 @@ def _stage_chapter(
             markdown = "".join(cell["source"]).replace(
                 'src="assets/story-', f'src="assets/{name}/story-'
             )
-            # Pandoc concatenates line breaks inside display math. Preserve
-            # the space separating a TeX control word from its next operand.
-            markdown = re.sub(r"(\\q?quad)\n(?=[a-zA-Z])", r"\1 ", markdown)
             for peer in CHAPTERS:
                 # Replace peer review links with links into this guide.
                 markdown = re.sub(
@@ -212,7 +211,8 @@ def _stage_chapter(
                     f"{peer}.html",
                     markdown,
                 )
-            cell["source"] = markdown
+            # Quarto reads the on-disk Jupyter array of source lines.
+            cell["source"] = markdown.splitlines(keepends=True)
     (guide / f"{name}.ipynb").write_text(json.dumps(source), encoding="utf-8")
 
 

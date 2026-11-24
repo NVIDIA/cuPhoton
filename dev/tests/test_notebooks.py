@@ -96,7 +96,9 @@ def test_mixed_book_uses_the_reviewed_outputs(tmp_path, monkeypatch):
     for name in notebooks.CHAPTERS:
         cells = json.loads((guide / f"{name}.ipynb").read_text())["cells"]
         assert cells[1]["outputs"][0]["text"] == "Reference"
-        assert f"source/{name}.executed.ipynb" in cells[0]["source"]
+        lines = cells[0]["source"]
+        assert isinstance(lines, list) and lines[0] == "---\n"
+        assert f"source/{name}.executed.ipynb" in "".join(lines)
         assert (
             json.loads(
                 (checkout / "examples" / name / f"{name}.ipynb").read_text()
