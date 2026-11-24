@@ -188,6 +188,17 @@ def postprocess(
         soup = BeautifulSoup(file.read_text(encoding="utf-8"), "html.parser")
         if soup.head is None or soup.body is None:
             raise ValueError(f"Missing HTML head/body: {relative}")
+        # Pandoc embeds previously rendered neighbours in the head of a
+        # self-contained chapter. Keep ordinary book navigation as URLs.
+        for direction, css in (("prev", "previous"), ("next", "next")):
+            link = soup.head.select_one(f'link[rel="{direction}"]')
+            if link and str(link.get("href", "")).startswith("data:"):
+                neighbour = soup.select_one(
+                    f".nav-page-{css} a.pagination-link[href]"
+                )
+                if neighbour is None:
+                    raise ValueError(f"Missing {direction} link: {relative}")
+                link["href"] = neighbour["href"]
         for node in soup.find_all(True):
             for attr in ("href", "src", "content", "data-url"):
                 value = node.get(attr)

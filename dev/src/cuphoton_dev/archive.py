@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import posixpath
+import re
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -16,13 +17,122 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from cuphoton_dev.transforms import RELEASE, SITEMAP_NAMESPACE, check_snapshot
+from cuphoton_dev.notebook_store import CHAPTERS, digest_file
+from cuphoton_dev.transforms import (
+    RECEIPT,
+    RELEASE,
+    SITEMAP_NAMESPACE,
+    check_snapshot,
+    validate_version,
+)
+
+# Only these chapter artifacts can be omitted from the Git archive. Every
+# declared path still belongs to its version's complete, hashed build receipt.
+_NOTEBOOK_MANIFEST = "notebook-assets.json"
+_NOTEBOOK_FILES = {
+    member
+    for chapter in CHAPTERS
+    for member in (
+        f"{chapter}.html",
+        f"source/{chapter}.executed.ipynb",
+        f"source/{chapter}.zip",
+    )
+}
 
 
 def _json(path: Path, value: Any) -> None:
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def restore_notebooks(archive: Path) -> set[str]:
+    """Materialize declared notebook artifacts in this temporary checkout."""
+    from cuphoton_dev.notebook_store import get_blob
+
+    manifest = archive / _NOTEBOOK_MANIFEST
+    if manifest.is_symlink():
+        raise ValueError("Invalid notebook asset manifest")
+    if not manifest.exists():
+        return set()
+    record = json.loads(manifest.read_text(encoding="utf-8"))
+    if (
+        not isinstance(record, dict)
+        or record.get("schema") != 1
+        or not isinstance(record.get("files"), dict)
+    ):
+        raise ValueError("Invalid notebook asset manifest")
+
+    receipts: dict[str, dict[str, str]] = {}
+    restored: dict[str, Path] = {}
+    for relative, digest in record["files"].items():
+        version, _, member = relative.partition("/")
+        validate_version(version)
+        destination = archive / relative
+        if (
+            member not in _NOTEBOOK_FILES
+            or destination.resolve() != archive.resolve() / relative
+            or destination.exists()
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise ValueError(f"Invalid external notebook file: {relative}")
+
+        if version not in receipts:
+            receipt = archive / version / RECEIPT
+            if receipt.is_symlink():
+                raise ValueError(f"Invalid notebook build receipt: {version}")
+            receipts[version] = json.loads(receipt.read_text("utf-8"))[
+                "files"
+            ]
+        if receipts[version].get(member) != digest:
+            raise ValueError(
+                f"Notebook file differs from receipt: {relative}"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if digest in restored:
+            shutil.copyfile(restored[digest], destination)
+        else:
+            get_blob(digest, destination)
+            if digest_file(destination) != digest:
+                raise ValueError(f"Notebook asset hash mismatch: {relative}")
+            restored[digest] = destination
+    manifest.unlink()
+    return set(restored)
+
+
+def retain_notebooks(
+    archive: Path, site: Path, catalog: dict[str, Any], stored: set[str]
+) -> None:
+    """Split validated output into Git state and the complete Pages tree."""
+    from cuphoton_dev.notebook_store import put_blob
+
+    files = {}
+    for entry in catalog["versions"]:
+        version = entry["version"]
+        receipt = json.loads((archive / version / RECEIPT).read_text("utf-8"))
+        for member in sorted(_NOTEBOOK_FILES & receipt["files"].keys()):
+            relative = f"{version}/{member}"
+            path = archive / relative
+            # Small, output-free source bundles can stay in Git.
+            if member.endswith(".zip") and path.stat().st_size < 1024**2:
+                continue
+            digest = receipt["files"][member]
+            if digest not in stored:
+                put_blob(path, digest)
+                stored.add(digest)
+            files[relative] = digest
+            deployed = site / relative
+            deployed.parent.mkdir(parents=True, exist_ok=True)
+            path.rename(deployed)
+    shutil.copytree(
+        archive,
+        site,
+        ignore=shutil.ignore_patterns(".git"),
+        dirs_exist_ok=True,
+    )
+    if files:
+        _json(archive / _NOTEBOOK_MANIFEST, {"schema": 1, "files": files})
 
 
 def _release_key(version: str) -> tuple[int, ...]:
@@ -288,6 +398,16 @@ def check_archive(path: Path) -> dict[str, Any]:
             entry.is_file() and entry.stat().st_nlink != 1
         ):
             raise ValueError(f"Archive contains a link: {entry}")
+    if (path / _NOTEBOOK_MANIFEST).is_file():
+        # docs-check also accepts a detached gh-pages checkout. Verify every
+        # byte without modifying the supplied archive or its Git status.
+        with tempfile.TemporaryDirectory(
+            prefix="cuphoton-docs-check-"
+        ) as work:
+            site = Path(work) / "site"
+            shutil.copytree(path, site, ignore=shutil.ignore_patterns(".git"))
+            restore_notebooks(site)
+            return check_archive(site)
     catalog: dict[str, Any] = json.loads(
         (path / "versions.json").read_text(encoding="utf-8")
     )
