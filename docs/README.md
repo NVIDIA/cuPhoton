@@ -122,25 +122,25 @@ HTML preview. Follow the instructions for [Model Sky](../examples/model-sky/PUBL
 
 Prepare the public files before uploading them. Set `REVISION` to the full Git
 commit used for GPU execution, `REFERENCE` to the reference run's output
-directory and `PUBLIC` to a new directory. For Model Sky:
+directory and `PUBLIC` to a new directory. Set `CHAPTER` to `model-sky`,
+`model-scene` or `model-alerts`. Use the same value for both commands.
 
 ```sh
 uv run --project dev --locked python -m cuphoton_dev.notebook_export \
-  --name model-sky --revision "$REVISION" --reference "$REFERENCE" \
+  --name "$CHAPTER" --revision "$REVISION" --reference "$REFERENCE" \
   --output "$PUBLIC"
 ```
 
-For Model Alerts, use `--name model-alerts`. For Model Scene, use
-`--name model-scene` and add `--scene-downloads /path/to/preview/guide/_book/source`
+For Model Scene, add `--scene-downloads /path/to/preview/guide/_book/source`
 to use the preview's sanitized notebook and receipt. Preparation checks the
 original execution hash, source revision and public notebook contents. Inspect
 the public files, including text output and warnings, before recording them.
 
 ```sh
 uv run --project dev --locked python -m cuphoton_dev.notebooks record \
-  --name model-sky --revision "$REVISION" \
-  --notebook "$PUBLIC/model-sky.executed.ipynb" \
-  --receipt "$PUBLIC/model-sky-execution.json"
+  --name "$CHAPTER" --revision "$REVISION" \
+  --notebook "$PUBLIC/${CHAPTER}.executed.ipynb" \
+  --receipt "$PUBLIC/${CHAPTER}-execution.json"
 ```
 
 This command uploads content-addressed assets to the repository's

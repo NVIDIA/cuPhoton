@@ -66,8 +66,12 @@ def test_mixed_book_uses_the_reviewed_outputs(tmp_path, monkeypatch):
                 "public_notebook_sha256": nb_digest,
                 "output_sha256": {f"{name}.executed.ipynb": nb_digest},
                 "source_hashes": {f"{name}.ipynb": source_digest},
+                "environment": {
+                    "packages": {"cuphoton": "0.3.0.dev1+gaaaaaaaa"}
+                },
                 "status": "passed",
                 "completed": True,
+                "device": "cuda",
                 "profile": "reference"
                 if name == "model-scene"
                 else "full-reference",
@@ -82,6 +86,7 @@ def test_mixed_book_uses_the_reviewed_outputs(tmp_path, monkeypatch):
         blobs[rc_digest] = receipt.read_bytes()
     (original / "notebooks.json").write_text(json.dumps(entries))
     monkeypatch.setattr(notebooks, "git", lambda *args: "")
+    monkeypatch.setattr(notebooks, "resolve", lambda *args: revision)
     monkeypatch.setattr(
         notebooks, "get_blob", lambda d, p: p.write_bytes(blobs[d])
     )
@@ -106,6 +111,16 @@ def test_mixed_book_uses_the_reviewed_outputs(tmp_path, monkeypatch):
             == []
         )
     assert not list((guide / "assets").rglob("*.html"))
+
+    scene_notebook = guide / "source/model-scene.executed.ipynb"
+    scene_receipt = guide / "source/model-scene-execution.json"
+    proof = json.loads(scene_receipt.read_text())
+    proof["device"] = "cpu"
+    write_json(scene_receipt, proof)
+    with pytest.raises(ValueError, match="GPU reference execution required"):
+        notebooks._check_reference(
+            checkout, "model-scene", revision, scene_notebook, scene_receipt
+        )
 
     sky = entries["model-sky"]
     notebook = guide / "source/model-sky.executed.ipynb"

@@ -10,8 +10,17 @@ from cuphoton_dev import notebook_export, notebooks
 from cuphoton_dev.notebook_store import digest_file
 
 
-@pytest.mark.parametrize("name", ["model-sky", "model-alerts", "model-scene"])
-def test_prepare_public_reference(tmp_path, monkeypatch, name):
+@pytest.mark.parametrize(
+    ("name", "sky_version"),
+    [
+        ("model-sky", "0.3.0.dev1+gaaaaaaaa"),
+        ("model-sky", "0.2.2"),
+        ("model-sky", "0.2.2rc1"),
+        ("model-alerts", None),
+        ("model-scene", None),
+    ],
+)
+def test_prepare_public_reference(tmp_path, monkeypatch, name, sky_version):
     revision = "a" * 40
     checkout = tmp_path / "checkout"
     example = checkout / "examples" / name
@@ -55,9 +64,7 @@ def test_prepare_public_reference(tmp_path, monkeypatch, name):
             "output_sha256": {raw.name: digest},
         }
         if name == "model-sky":
-            record["environment"] = {
-                "packages": {"cuphoton": "0.3.0.dev1+gaaaaaaaa"}
-            }
+            record["environment"] = {"packages": {"cuphoton": sky_version}}
         else:
             record.update(
                 profile="full-reference", cuphoton_revision=revision
@@ -80,7 +87,15 @@ def test_prepare_public_reference(tmp_path, monkeypatch, name):
             json.dumps(projected)
         )
     monkeypatch.setattr(notebooks, "git", lambda *args: "")
-    monkeypatch.setattr(notebook_export, "resolve", lambda *args: revision)
+
+    def resolve_sky(repo, ref):
+        assert repo == checkout
+        assert ref == (
+            "aaaaaaaa" if "+" in sky_version else f"refs/tags/v{sky_version}"
+        )
+        return revision
+
+    monkeypatch.setattr(notebooks, "resolve", resolve_sky)
     kwargs = {
         "checkout": checkout,
         "name": name,
@@ -115,3 +130,23 @@ def test_prepare_public_reference(tmp_path, monkeypatch, name):
     with pytest.raises(ValueError, match=error):
         notebook_export.prepare(**kwargs, output=rejected)
     assert not rejected.exists()
+
+    if name == "model-sky":
+        del record["unexpected"]
+        version = (
+            sky_version if "+" in sky_version else "0.3.0.dev0+gaaaaaaaa"
+        )
+        record["environment"]["packages"]["cuphoton"] = version + ".d20261123"
+        receipt.write_text(json.dumps(record))
+        with pytest.raises(ValueError, match="clean source version"):
+            notebook_export.prepare(**kwargs, output=rejected)
+        assert not rejected.exists()
+
+        # Recording and staging also accept independently prepared pairs.
+        metadata["environment"] = record["environment"]
+        public_receipt = output / "model-sky-execution.json"
+        public_receipt.write_text(json.dumps(metadata))
+        with pytest.raises(ValueError, match="clean source version"):
+            notebooks._check_reference(
+                checkout, name, revision, published, public_receipt
+            )

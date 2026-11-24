@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-from cuphoton_dev.build import git
+from cuphoton_dev.build import git, resolve
 from cuphoton_dev.notebook_store import (
     CHAPTERS,
     digest_file,
@@ -58,17 +58,34 @@ def _check_reference(
         passed = (
             record.get("completed") is True
             and record.get("profile") == "reference"
+            and record.get("device") == "cuda"
         )
     else:
         original = record["output_sha256"][f"{name}.executed.ipynb"]
         if original != record["public_notebook_sha256"]:
             raise ValueError(f"{name}: original execution hash mismatch")
         passed = record.get("status") == "passed"
-        if name == "model-alerts":
+        if name == "model-sky":
+            # Sky records the installed SCM version. A dirty checkout adds a
+            # date to the local version and cannot be identified by Git SHA.
+            version = record["environment"]["packages"]["cuphoton"]
+            scm = re.fullmatch(
+                r"([0-9]+\.[0-9]+\.[0-9]+(?:rc[0-9]+)?)"
+                r"(?:\.dev[0-9]+\+g([0-9a-f]{7,40}))?",
+                version,
+            )
+            if not scm:
+                raise ValueError(
+                    "Model Sky receipt needs a clean source version"
+                )
+            ref = scm[2] or f"refs/tags/v{scm[1]}"
+            if resolve(checkout, ref) != revision:
+                raise ValueError("Model Sky cuPhoton revision differs")
+        elif name == "model-alerts":
             passed = passed and record.get("profile") == "full-reference"
     if not passed:
         raise ValueError(
-            f"{name}: successful full reference execution required"
+            f"{name}: successful full GPU reference execution required"
         )
 
     # The reference can span documentation-only commits. Require identical

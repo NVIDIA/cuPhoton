@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from cuphoton_dev.build import git, resolve
+from cuphoton_dev.build import git
 from cuphoton_dev.notebook_store import CHAPTERS, digest_file
 from cuphoton_dev.notebooks import _check_reference
 
@@ -116,17 +116,6 @@ def prepare(
     else:
         receipt = dict(record)
         if name == "model-sky":
-            # Older Sky runners record the installed SCM version. Resolve its
-            # abbreviated Git hash (or an exact release tag) to a full commit.
-            package = record["environment"]["packages"]["cuphoton"]
-            scm = re.search(r"(?:\+|\.)g([0-9a-f]{7,40})(?:\.|$)", package)
-            if not scm and not re.fullmatch(
-                r"[0-9]+\.[0-9]+\.[0-9]+", package
-            ):
-                raise ValueError("Model Sky receipt needs a source version")
-            ref = scm[1] if scm else f"refs/tags/v{package}"
-            if resolve(checkout, ref) != revision:
-                raise ValueError("Model Sky cuPhoton revision differs")
             receipt["original_receipt_sha256"] = digest_file(raw_receipt)
         elif record["cuphoton_revision"] != revision:
             raise ValueError("Model Alerts cuPhoton revision differs")
