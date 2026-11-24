@@ -18,6 +18,8 @@ from xml.etree import ElementTree as ET
 
 from bs4 import BeautifulSoup, NavigableString
 
+from cuphoton_dev.notebook_store import RETAINED_NOTEBOOK_FILES
+
 SITE_URL = "https://nvidia.github.io/cuPhoton/"
 RELEASE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 RECEIPT = "build.json"
@@ -249,6 +251,13 @@ def postprocess(
             ("cuphoton-version", version),
             ("cuphoton-source", source_sha),
         ):
+            # build.json records the guide revision. Keep unchanged notebook
+            # chapters reusable by digest across publications of this version.
+            if (
+                name == "cuphoton-source"
+                and relative in RETAINED_NOTEBOOK_FILES
+            ):
+                continue
             soup.head.append(
                 soup.new_tag("meta", attrs={"name": name, "content": value})
             )

@@ -151,6 +151,16 @@ def test_main_keeps_authored_install_and_source_links(tmp_path):
     assert "main (development)" in (path / "index.html").read_text()
 
 
+def test_unchanged_notebook_is_reused_across_main_commits(tmp_path):
+    first = snapshot(tmp_path / "first", sha="a" * 40, notebook=True)
+    second = snapshot(tmp_path / "second", sha="c" * 40, notebook=True)
+    before, after = check_snapshot(first), check_snapshot(second)
+    chapter = "model-scene.html"
+    assert before["files"][chapter] == after["files"][chapter]
+    assert before["source_sha"] != after["source_sha"]
+    assert before["files"]["index.html"] != after["files"]["index.html"]
+
+
 @pytest.mark.parametrize("mutation", ["wording", "clone", "search", "link"])
 def test_release_conversion_fails_on_changed_contract(tmp_path, mutation):
     path = rendered_guide(tmp_path / "render")

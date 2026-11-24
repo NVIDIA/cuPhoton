@@ -127,6 +127,8 @@ The `gh-pages` branch retains the validated guide, with a
 downloads. Each SHA-256 names an asset on the `docs-notebook-assets`
 documentation prerelease. The archive job restores every declared file, checks
 its digest against the version's build receipt and assembles the complete site.
+The build receipt records the guide revision. An unrelated change to that
+revision reuses the same notebook HTML asset when the rendered content matches.
 Main publications replace only `main/`. Release publications retain existing
 release bytes. See [Updating a notebook chapter](../docs/README.md#updating-a-notebook-chapter)
 for recording an executed notebook and its receipt. Before the first notebook
