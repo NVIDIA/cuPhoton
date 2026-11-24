@@ -51,7 +51,7 @@ def _reference_example(
     if name not in COMPONENTS or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Invalid reference notebook name or source revision")
     with tempfile.TemporaryDirectory() as temp:
-        archive = source_zip or Path(temp) / "source.zip"
+        archive = (source_zip or Path(temp) / "source.zip").resolve()
         git(
             checkout,
             "archive",
@@ -166,9 +166,13 @@ def _read_reference(
         ":(top,glob)src/cuphoton/*.py",
         *(f"src/cuphoton/{part}" for part in COMPONENTS[name]),
     ]
-    changed = git(
+    tracked = git(
         checkout, "diff", "--name-only", revision, "--", *inputs
     ).splitlines()
+    untracked = git(
+        checkout, "ls-files", "--others", "--exclude-standard", "--", *inputs
+    ).splitlines()
+    changed = sorted(set(tracked + untracked))
     if changed and strict:
         raise ValueError(
             f"{name}: execution inputs changed since {revision}: "
@@ -363,15 +367,30 @@ def main() -> None:
             ["git", "rev-parse", "--show-toplevel"], text=True
         ).strip()
     )
-    _check_reference(
-        checkout, args.name, args.revision, args.notebook, args.receipt
-    )
-    entry = {"source_revision": args.revision}
-    for kind in ("notebook", "receipt"):
-        path = getattr(args, kind)
-        digest = digest_file(path)
-        put_blob(path, digest)
-        entry[f"{kind}_sha256"] = digest
+    with tempfile.TemporaryDirectory() as temp:
+        # Callers may regenerate the originals during validation or upload.
+        snapshot = Path(temp)
+        for kind in ("notebook", "receipt"):
+            source = getattr(args, kind)
+            if not source.is_file():
+                raise ValueError(f"Expected a regular {kind} file: {source}")
+            path = snapshot / kind
+            shutil.copyfile(source, path, follow_symlinks=False)
+            if path.is_symlink():
+                raise ValueError(f"Invalid {kind} input: {source}")
+        _check_reference(
+            checkout,
+            args.name,
+            args.revision,
+            snapshot / "notebook",
+            snapshot / "receipt",
+        )
+        entry = {"source_revision": args.revision}
+        for kind in ("notebook", "receipt"):
+            path = snapshot / kind
+            digest = digest_file(path)
+            put_blob(path, digest)
+            entry[f"{kind}_sha256"] = digest
     print(json.dumps({args.name: entry}, indent=2))
 
 

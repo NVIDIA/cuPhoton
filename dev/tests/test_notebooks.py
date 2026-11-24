@@ -127,9 +127,12 @@ def reference_book(tmp_path, monkeypatch):
     return checkout, revision, entries, blobs
 
 
-def test_mixed_book_uses_the_reviewed_outputs(tmp_path, reference_book):
+def test_mixed_book_uses_the_reviewed_outputs(
+    tmp_path, monkeypatch, reference_book
+):
     checkout, revision, entries, _ = reference_book
-    guide = tmp_path / "guide"
+    monkeypatch.chdir(tmp_path)
+    guide = Path("preview/guide")
     notebooks.stage_notebooks(checkout, guide, release=True)
     config = yaml.safe_load((guide / "_quarto.yml").read_text())
     assert config["book"]["chapters"][0] == "index.qmd"

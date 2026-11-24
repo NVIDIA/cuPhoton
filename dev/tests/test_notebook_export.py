@@ -100,6 +100,27 @@ def reference_run(tmp_path, name, sky_version="development"):
     }
 
 
+def record_pair(monkeypatch, args, notebook, receipt):
+    monkeypatch.chdir(args["checkout"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "notebooks",
+            "record",
+            "--name",
+            args["name"],
+            "--revision",
+            args["revision"],
+            "--notebook",
+            str(notebook),
+            "--receipt",
+            str(receipt),
+        ],
+    )
+    notebooks.main()
+
+
 @pytest.mark.parametrize(
     ("name", "sky_version"),
     [
@@ -157,6 +178,11 @@ def test_prepare_public_reference(tmp_path, name, sky_version):
         ("model-sky", "resolved revision", "cuPhoton revision differs"),
         ("model-sky", "dirty version", "clean source version"),
         ("model-alerts", "recorded example changed", "inputs? changed"),
+        (
+            "model-alerts",
+            "untracked example",
+            "examples/model-alerts/extra.py",
+        ),
     ],
 )
 def test_rejects_invalid_reference(
@@ -187,34 +213,19 @@ def test_rejects_invalid_reference(
     elif change == "dirty version":
         for obj in (record, metadata):
             obj["environment"]["packages"]["cuphoton"] += ".d20261123"
+    elif change == "untracked example":
+        (checkout / "examples" / name / "extra.py").write_text("extra_fit()")
     else:
         (checkout / "examples" / name / "run.py").write_text(
             "modified_fit()\n"
         )
     upstream.write_text(json.dumps(record))
     receipt.write_text(json.dumps(metadata))
-    monkeypatch.chdir(checkout)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "notebooks",
-            "record",
-            "--name",
-            name,
-            "--revision",
-            args["revision"],
-            "--notebook",
-            str(published),
-            "--receipt",
-            str(receipt),
-        ],
-    )
     monkeypatch.setattr(
         notebooks, "put_blob", lambda *_: pytest.fail("Unexpected upload")
     )
     with pytest.raises(ValueError, match=error):
-        notebooks.main()
+        record_pair(monkeypatch, args, published, receipt)
 
     if change in {"public dirty tree", "cuPhoton revision"}:
         # Even if a new manifest pins the corrupted receipt, main staging
@@ -262,3 +273,78 @@ def test_scene_export_rejects_dirty_raw_execution(tmp_path):
     ):
         notebook_export.prepare(**args, output=tmp_path / "public")
     assert not (tmp_path / "public").exists()
+
+
+def test_untracked_component_marks_only_scientific_drift(tmp_path):
+    args = reference_run(tmp_path, "model-scene")
+    checkout, revision, name = (
+        args["checkout"],
+        args["revision"],
+        args["name"],
+    )
+    example = checkout / "examples" / name
+    (checkout / ".git/info/exclude").write_text("ignored.py\n")
+    (example / "ignored.py").touch()
+    (example / "README.md").touch()
+    (example / "tests").mkdir()
+    (example / "tests/test_example.py").touch()
+    (checkout / "unrelated.py").touch()
+    output = tmp_path / "public"
+    notebook_export.prepare(**args, output=output)
+
+    new_component_file = "src/cuphoton/ximage/new_fit.py"
+    component = checkout / new_component_file
+    component.parent.mkdir(parents=True)
+    component.touch()
+    with notebooks._reference_example(checkout, name, revision) as pinned:
+        _, changed = notebooks._read_reference(
+            checkout,
+            name,
+            revision,
+            output / f"{name}.executed.ipynb",
+            output / f"{name}-execution.json",
+            pinned,
+            strict=False,
+        )
+    assert changed == [new_component_file]
+
+
+def test_record_uploads_the_pair_it_validated(tmp_path, monkeypatch, capsys):
+    name = "model-alerts"
+    args = reference_run(tmp_path, name)
+    public = tmp_path / "public"
+    notebook_export.prepare(**args, output=public)
+    notebook = public / f"{name}.executed.ipynb"
+    receipt = public / f"{name}-execution.json"
+    entry = {
+        "source_revision": args["revision"],
+        "notebook_sha256": digest_file(notebook),
+        "receipt_sha256": digest_file(receipt),
+    }
+    expected = {digest_file(p): p.read_bytes() for p in (notebook, receipt)}
+    check = notebooks._check_reference
+    linked_notebook = tmp_path / "reviewed.ipynb"
+    linked_notebook.symlink_to(notebook)
+
+    def change_originals_after_validation(*args):
+        result = check(*args)
+        notebook.write_text("Unvalidated replacement notebook")
+        receipt.write_text("Unvalidated replacement receipt")
+        return result
+
+    uploaded = {}
+    monkeypatch.setattr(
+        notebooks, "_check_reference", change_originals_after_validation
+    )
+
+    def put_blob(path, digest):
+        assert not path.is_symlink()
+        uploaded[digest] = path.read_bytes()
+
+    monkeypatch.setattr(notebooks, "put_blob", put_blob)
+    with pytest.raises(ValueError, match="Invalid notebook input"):
+        record_pair(monkeypatch, args, linked_notebook, receipt)
+    assert not uploaded
+    record_pair(monkeypatch, args, notebook, receipt)
+    assert uploaded == expected
+    assert json.loads(capsys.readouterr().out) == {name: entry}
