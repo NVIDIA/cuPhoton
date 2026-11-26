@@ -615,13 +615,13 @@ radius, build a Boolean mask of shape `(N, s, s)`, one odd square window
 per target covering its measured footprint. Set it true only at centers
 included in the sum. Pass it as `valid` and use its 0/1 values as the
 top-hat weights. Keep the leading dimension even for one target
-(`mask_2d[None, :, :]`). When using full variance images, pass the
-full-image pixel coordinates as `positions`. Omit `positions` when
-passing variance stamps cut on the same windows.
-Supply the same diagonal variance used for the photometry as
-`residual_variance`, along with the target variance, resampled
-reference variance, fitted kernel and interpolation weights. Multiply
-`flux_error` by the square root of the returned `factor`.
+(`mask_2d[None, :, :]`). Use target, resampled reference and diagonal
+residual variance stamps cut from exactly the same pixels as the mask,
+including when the aperture is offset from the stamp center. With these
+aligned stamps, omit `positions`. Supply the diagonal variance used for
+the photometry as `residual_variance`, along with the fitted kernel and
+interpolation weights. Multiply the `flux_error` for this radius by the
+square root of the corresponding `factor`.
 See [Correlation factor of weighted sums](xpois.md#correlation-factor-of-weighted-sums).
 
 ## Distributed fitting
