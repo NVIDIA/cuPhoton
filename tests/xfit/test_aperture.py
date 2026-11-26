@@ -47,12 +47,60 @@ def test_aperture_membership_signed_flux_and_incomplete_coverage():
         [
             [0, 0],
             [Flag.MASKED, masked_empty],
-            [Flag.TRUNCATED, Flag.TRUNCATED],
+            [Flag.TRUNCATED, 0],
             [masked_empty, masked_empty],
             [outside, outside],
             [invalid, invalid],
         ],
     )
+
+
+def test_complete_center_aperture_crosses_pixel_edge():
+    for width in (5, 13):
+        image = np.ones((1, width, width))
+        result = forced_circular_aperture_photometry(
+            image, image, [[0, 0]], 2.6
+        )
+        assert (
+            result.in_bounds_pixels.item() == result.used_pixels.item() == 21
+        )
+        assert result.flags.item() == 0
+
+
+@pytest.mark.parametrize("shape", [(5, 5), (6, 4)])
+def test_truncated_means_a_selected_center_is_outside(shape):
+    height, width = shape
+    positions = [(2.625, 0.5), (-0.5, -2.625), (8.5, -9.25), (0, 0)]
+    radii = [0.1, 0.625, np.nextafter(0.625, 1), 2.6, 3.0]
+    image = np.ones((len(positions), height, width))
+    result = forced_circular_aperture_photometry(
+        image, image, positions, radii
+    )
+    # Extend the grid to contain every circle, including the far corner.
+    y, x = np.mgrid[-15 : height + 15, -15 : width + 15]
+    outside = (x < 0) | (x >= width) | (y < 0) | (y >= height)
+    x = x[outside] - (width - 1) / 2
+    y = y[outside] - (height - 1) / 2
+    for i, (cx, cy) in enumerate(positions):
+        d2 = (x - cx) ** 2 + (y - cy) ** 2
+        expected = [np.any(d2 < r * r) for r in radii]
+        np.testing.assert_array_equal(
+            (result.flags[i] & Flag.TRUNCATED) != 0, expected
+        )
+
+
+def test_unusable_pixels_outside_aperture_do_not_set_masked():
+    image = np.ones((1, 5, 5))
+    variance = np.ones_like(image)
+    mask = np.ones_like(image, dtype=bool)
+    image[0, 0, 0] = np.nan
+    variance[0, -1, -1] = 0
+    mask[0, 0, -1] = False
+    result = forced_circular_aperture_photometry(
+        image, variance, [[0, 0]], 1.5, mask=mask
+    )
+    assert result.in_bounds_pixels.item() == result.used_pixels.item() == 9
+    assert result.flags.item() == 0
 
 
 def test_subpixel_centers_match_photutils():

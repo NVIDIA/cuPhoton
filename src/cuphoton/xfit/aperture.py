@@ -40,6 +40,19 @@ class CircularApertureResult:
     flags: Any
 
 
+def _center_distances(position, size, xp):
+    """Nearest pixel-center distances along an axis, overall and outside."""
+    absolute = xp.abs(position)
+    fraction, _ = xp.modf(absolute)
+    if size % 2:
+        nearest = xp.minimum(fraction, 1 - fraction)
+    else:
+        nearest = xp.abs(fraction - 0.5)
+    # The first center beyond either edge is (size + 1) / 2 from the origin.
+    outside = xp.maximum(nearest, (size + 1) / 2 - absolute)
+    return nearest, outside
+
+
 def forced_circular_aperture_photometry(
     images: ArrayLike,
     variance: ArrayLike,
@@ -63,8 +76,8 @@ def forced_circular_aperture_photometry(
     is the square root of their summed variances, assuming independent noise.
     Subtract any sky background before measuring. Partial apertures retain
     their measured sums: MASKED indicates rejected pixels within the aperture
-    and TRUNCATED indicates the circle extends past the stamp's outer pixel
-    edges. An aperture with no usable pixels returns NaN flux and error and
+    and TRUNCATED indicates the aperture includes a pixel center outside the
+    stamp. An aperture with no usable pixels returns NaN flux and error and
     NO_COVERAGE. Nonfinite positions and nonpositive or nonfinite radii also
     set INVALID_GEOMETRY for the affected measurements.
 
@@ -96,15 +109,20 @@ def forced_circular_aperture_photometry(
     dx = x[None, None, :] - xy[:, 0, None, None]
     dy = y[None, :, None] - xy[:, 1, None, None]
     distance_squared = dx * dx + dy * dy
-    edge_distance = xp.minimum(
-        width / 2 - xp.abs(xy[:, 0]), height / 2 - xp.abs(xy[:, 1])
+    x_nearest, x_outside = _center_distances(xy[:, 0], width, xp)
+    y_nearest, y_outside = _center_distances(xy[:, 1], height, xp)
+    # An outside center is beyond the stamp on at least one axis.
+    nearest_outside_squared = xp.minimum(
+        x_outside * x_outside + y_nearest * y_nearest,
+        x_nearest * x_nearest + y_outside * y_outside,
     )
     finite_position = xp.isfinite(xy).all(axis=1)
     fluxes, errors, used_counts, in_bounds_counts, flags = [], [], [], [], []
     # A radius at a time bounds working memory independently of radius count.
     for radius in radius_values:
         geometry_ok = finite_position & xp.isfinite(radius) & (radius > 0)
-        inside = (distance_squared < radius * radius) & geometry_ok[
+        radius_squared = radius * radius
+        inside = (distance_squared < radius_squared) & geometry_ok[
             :, None, None
         ]
         usable = inside & good
@@ -115,7 +133,7 @@ def forced_circular_aperture_photometry(
         noise = xp.where(usable, var, 0).sum(axis=axes, dtype=xp.float64)
         flag = (
             (n_used < n_inside) * int(CircularApertureFlag.MASKED)
-            | (geometry_ok & (radius > edge_distance))
+            | (geometry_ok & (nearest_outside_squared < radius_squared))
             * int(CircularApertureFlag.TRUNCATED)
             | (n_used == 0) * int(CircularApertureFlag.NO_COVERAGE)
             | (~geometry_ok) * int(CircularApertureFlag.INVALID_GEOMETRY)

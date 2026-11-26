@@ -593,12 +593,31 @@ flux_r3 = apertures.flux[:, 0]
 error_r6 = apertures.flux_error[:, 1]
 ```
 
-The aperture sums the flux of usable pixels whose centers fall strictly
-inside the circle. This is the Photutils center-pixel convention. Rubin's
-sinc-weighted circular apertures use different boundary weights. The
-reported standard error is the square root of the sum of the included
-pixel variances, assuming independent noise. The result includes pixel
-counts and flags for checking partial coverage before comparing fluxes.
+The aperture follows the Photutils `method="center"` convention. A pixel
+belongs when its center satisfies `dx**2 + dy**2 < radius**2`, with offsets
+measured from the supplied position. Each selected pixel contributes its
+full value if its image value is finite, its variance is finite and
+strictly positive, and the optional mask is true there. Rubin's
+sinc-weighted circular apertures use different boundary weights.
+
+`in_bounds_pixels` counts selected centers on the stamp. `used_pixels`
+counts those that pass the validity checks. `MASKED` flags a rejected
+in-bounds pixel. `TRUNCATED` flags a selected pixel center outside the
+stamp. A circle can therefore cross a stamp edge and still have complete
+coverage. Partial apertures retain the sum over the pixels actually used.
+
+`flux_error` is the square root of the sum of the used pixel variances.
+Positive correlations between pixels can make this underestimate the flux
+uncertainty. For a difference image with independent target pixels and a
+locally translated reference grid, `cuphoton.xpois.correlation_factor`
+models correlations from reference resampling and convolution. For each
+aperture, use an odd square window covering its measured footprint, with
+top-hat weights of one on the used centers and zero elsewhere. Pass the
+pixel validity mask as `valid`, the same diagonal variance used for the
+photometry as `residual_variance`, and the target variance, resampled
+reference variance, fitted kernel and interpolation weights. Multiply
+`flux_error` by the square root of the returned `factor`.
+See [Correlation factor of weighted sums](xpois.md#correlation-factor-of-weighted-sums).
 
 ## Distributed fitting
 
