@@ -73,8 +73,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link class="quarto-color-scheme quarto-color-alternate" href="site_libs/quarto-html/quarto-syntax-highlighting-dark-c5c314e101365a69664fe3df1d0fe2c7.css" id="quarto-text-highlighting-styles" rel="stylesheet"/>
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet"/>
-<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-2beff4d6a6ecbc5c949316e93b3cb712.min.css" id="quarto-bootstrap" rel="stylesheet"/>
-<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-3ecc2830569df8c35ce4f2d7fe32422e.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme" data-mode="light" href="site_libs/bootstrap/bootstrap-651de1604c80857d276f23307ef1ec22.min.css" id="quarto-bootstrap" rel="stylesheet"/>
+<link append-hash="true" class="quarto-color-scheme quarto-color-alternate" data-mode="dark" href="site_libs/bootstrap/bootstrap-dark-4cc15ac5e29d5fe6d01e0ac31fcd9636.min.css" id="quarto-bootstrap" rel="stylesheet"/>
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -102,7 +102,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
-<link href="https://nvidia.github.io/cuPhoton/main/reference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="9a02d8d556853f3a2f359ef07dc1a4a3e3f17046" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
+<link href="https://nvidia.github.io/cuPhoton/main/reference.html" rel="canonical"/><meta content="main" name="cuphoton-version"/><meta content="7757397c884c61b9e01e57fecf18af8328ec6f34" name="cuphoton-source"/><link href="_version/selector.css" rel="stylesheet"/><script data-catalog="../versions.json" data-page="reference.html" data-version="main" defer="" src="_version/selector.js"></script></head>
 <body class="nav-sidebar docked nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
@@ -642,7 +642,7 @@ Table A.2: Topics across modules.
 <section class="level2" data-number="A.2" id="command-line">
 <h2 class="anchored" data-anchor-id="command-line" data-number="A.2"><span class="header-section-number">A.2</span> Command line</h2>
 <p><code>cuphoton --help</code> lists the command groups, one per module:</p>
-<div class="cell" data-execution_count="1" id="0de465cb">
+<div class="cell" data-execution_count="1" id="fbe84711">
 <div class="cell-output cell-output-stdout">
 <pre><code>cuphoton
 
@@ -667,7 +667,7 @@ Use 'cuphoton GROUP --help' for group help.</code></pre>
 <section class="level2" data-number="A.3" id="python-api">
 <h2 class="anchored" data-anchor-id="python-api" data-number="A.3"><span class="header-section-number">A.3</span> Python API</h2>
 <p>Each function’s docstring documents its arguments, defaults and return fields. Print a signature with <code>inspect</code>, or the whole docstring with <code>help</code>:</p>
-<div class="cell" data-execution_count="2" id="771a4524">
+<div class="cell" data-execution_count="2" id="6b99d631">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a aria-hidden="true" href="#cb2-1" tabindex="-1"></a><span class="im">import</span> inspect</span>
 <span id="cb2-2"><a aria-hidden="true" href="#cb2-2" tabindex="-1"></a><span class="im">from</span> cuphoton.xrep <span class="im">import</span> reproject_masked_array</span>
 <span id="cb2-3"><a aria-hidden="true" href="#cb2-3" tabindex="-1"></a></span>
@@ -677,7 +677,7 @@ Use 'cuphoton GROUP --help' for group help.</code></pre>
 </div>
 </div>
 <p>Each package lists its public names in <code>__all__</code>:</p>
-<div class="cell" data-execution_count="3" id="18e95140">
+<div class="cell" data-execution_count="3" id="b1becd69">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a aria-hidden="true" href="#cb4-1" tabindex="-1"></a><span class="im">import</span> importlib</span>
 <span id="cb4-2"><a aria-hidden="true" href="#cb4-2" tabindex="-1"></a></span>
 <span id="cb4-3"><a aria-hidden="true" href="#cb4-3" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"package          public names"</span>)</span>
@@ -691,7 +691,7 @@ cuphoton.xdr               11
 cuphoton.xrep              27
 cuphoton.ximage            14
 cuphoton.xpois             44
-cuphoton.xfit              37
+cuphoton.xfit              39
 cuphoton.xscan              1
 cuphoton.xray               1
 cuphoton.xbeam             52
