@@ -611,10 +611,11 @@ Positive correlations between pixels can make this underestimate the flux
 uncertainty. For a difference image with independent target pixels and a
 locally translated reference grid, `cuphoton.xpois.correlation_factor`
 models correlations from reference resampling and convolution. For each
-aperture, use an odd square window covering its measured footprint, with
-top-hat weights of one on the used centers and zero elsewhere. Pass the
-pixel validity mask as `valid`, the same diagonal variance used for the
-photometry as `residual_variance`, and the target variance, resampled
+aperture, use an odd square window covering its measured footprint.
+Build a Boolean mask that is true only at centers included in the sum.
+Pass it as `valid` and use its 0/1 values as the top-hat weights.
+Supply the same diagonal variance used for the photometry as
+`residual_variance`, along with the target variance, resampled
 reference variance, fitted kernel and interpolation weights. Multiply
 `flux_error` by the square root of the returned `factor`.
 See [Correlation factor of weighted sums](xpois.md#correlation-factor-of-weighted-sums).
