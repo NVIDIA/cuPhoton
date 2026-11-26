@@ -189,7 +189,7 @@ def main() -> None:
     parser.add_argument(
         "--backend",
         action="append",
-        choices=("numpy", "cupy", "cutile", "native"),
+        choices=("numpy", "cupy", "cutile", "tile-simt", "native"),
     )
     parser.add_argument("--compare-native", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
@@ -268,7 +268,7 @@ def main() -> None:
         "cupy-reference"
         if args.fusion
         else "cupy"
-        if "native" in treatments
+        if any(backend in {"native", "tile-simt"} for backend in treatments)
         else treatments[0]
     )
     dtype = np.dtype(args.dtype)

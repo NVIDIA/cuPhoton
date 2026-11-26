@@ -124,6 +124,7 @@ def test_distribution_metadata_declares_supported_profiles() -> None:
         "io",
         "mpi",
         "photometry",
+        "tile-simt",
         "torch",
         "viz",
         "ximage",

@@ -123,6 +123,36 @@ uv run --locked --python 3.12 --extra gpu --extra cutile \
   python examples/xfit/benchmark_gaussian.py --dtype float64
 ```
 
+### Experimental Tile/SIMT solver
+
+`backend="tile-simt"` runs Gaussian Levenberg--Marquardt iterations inside
+a Tile kernel. It calls the public MathDx pivoted LU solver through Tile/SIMT
+interop and uses the shared xFit final diagnostics for rank and covariance.
+Each fit owns its workspace and uses the caller's current CuPy stream.
+
+Install `cuphoton[tile-simt]` on Linux with Python 3.12 through 3.14 and
+configure a CUDA 13.5 toolkit. The extra installs MathDx 0.5 and its compatible
+`cuda-tile` and `cuda-tile-preview` packages. It uses the system toolkit so it
+can coexist with Torch's separately pinned CUDA packages. For example:
+
+```bash
+PATH=/usr/local/cuda-13.5/bin:$PATH CUDA_HOME=/usr/local/cuda-13.5 \
+  LD_LIBRARY_PATH=/usr/local/cuda-13.5/lib64 \
+  uv run --locked --extra tile-simt python examples/xfit/benchmark_gaussian.py \
+  --backend cupy --backend tile-simt --batch 16 --dtype float64
+```
+
+Both `fit_dipoles` and `fit_dipoles_device` accept this backend. It supports
+float64 fits with the current `solver_version="v0.2"` policy, analytic
+Gaussian derivatives, and difference or split images. Float32, legacy
+`v0.1.3`, and finite-difference fitting are rejected. Select the backend
+with the default `fusion=False`; its iteration loop is already fused.
+The default backend selection is unchanged.
+Tile/SIMT interop is a public preview. This backend is experimental:
+validate fitted parameters and uncertainties for the intended workload.
+Numerical trajectories can differ from CuPy because the reductions and
+small solves use different arithmetic.
+
 ### Optional native CUDA backend
 
 `backend="native"` runs Gaussian input preparation, LM iterations and final
