@@ -337,21 +337,22 @@ def read_forced_photometry_stamps(
     """Gather co-registered FITS planes for forced PSF or aperture photometry.
 
     Supply finite, real, unmasked, zero-based full-image (x, y) positions
-    on the host, and
-    odd (height, width) stamp dimensions. Each complete stamp is centered
-    on floor(position + 0.5). The returned offsets are the target positions
-    relative to their integer centers, in the input order. An out-of-image
-    footprint raises ValueError.
+    on the host and odd (height, width) stamp dimensions. Each stamp is
+    centered on the nearest pixel, with half-pixel ties rounded to even.
+    The offsets are relative to those integer centers in input order. A
+    ValueError lists the zero-based rows whose stamps cross an image edge.
 
     One shared reader call decodes the bounding rectangle for all positions.
     Science, variance and integer mask stamps preserve their logical FITS
     dtypes. A good pixel has finite science, finite positive variance, and
     no selected bad mask bit. Set bad_mask_bits=0 to admit all mask bits.
-    With device=True all five array fields are CuPy arrays. Select
+    With device=True all five array fields are CuPy arrays. Explicit
+    Astropy reads gather the stamps on the host before transfer. Select
     reader="xdr" to require GPU decoding of a supported compressed section.
-    The (y, x) section and core reader metadata describe the input read.
+    The (y, x) section and decoded byte count describe the input rectangle.
+    The metadata location describes the returned arrays.
     """
-    from cuphoton.core.fits_io import read_fits_images
+    from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
 
     if len(stamp_shape) != 2 or any(
         isinstance(n, bool)
@@ -377,12 +378,34 @@ def read_forced_photometry_stamps(
         or not np.isfinite(xy).all()
     ):
         raise ValueError("positions must be a nonempty finite (N, 2) array")
-    rounded = np.floor(xy + 0.5)
-    # Bound coordinates before converting to integer indices.
-    if np.any(rounded < 0) or np.any(rounded >= 2**63):
-        raise ValueError("positions exceed the supported pixel index range")
-    centers = rounded.astype(np.int64)
+    hdus = (science_hdu, variance_hdu, mask_hdu)
+    infos = tuple(inspect_fits_image(path, hdu) for hdu in hdus)
+    if len({info.shape for info in infos}) != 1:
+        raise ValueError(
+            "science, variance and mask must have the same full image shape"
+        )
+    mask_dtype = infos[2].dtype
+    if mask_dtype.kind not in "ui":
+        raise ValueError("mask_hdu must contain an integer bit mask")
+    bits = int(bad_mask_bits)
+    if bits.bit_length() > mask_dtype.itemsize * 8:
+        raise ValueError("bad_mask_bits exceeds the FITS mask width")
+
+    rounded = np.rint(xy)
     half_y, half_x = (int(n) // 2 for n in stamp_shape)
+    height, width = infos[0].shape
+    inside = (
+        (rounded[:, 0] >= half_x)
+        & (rounded[:, 0] < width - half_x)
+        & (rounded[:, 1] >= half_y)
+        & (rounded[:, 1] < height - half_y)
+    )
+    if not inside.all():
+        raise ValueError(
+            "stamp footprints cross the image boundary for position rows "
+            f"{np.flatnonzero(~inside).tolist()} (zero-based)"
+        )
+    centers = rounded.astype(np.int64)
     x0, y0 = (int(v) for v in centers.min(axis=0))
     x1, y1 = (int(v) for v in centers.max(axis=0))
     section = (
@@ -391,35 +414,43 @@ def read_forced_photometry_stamps(
     )
     result = read_fits_images(
         path,
-        [science_hdu, variance_hdu, mask_hdu],
+        hdus,
         section=section,
         reader=reader,
-        device=device,
+        device=device and reader != "astropy",
     )
-    if len({info.shape for info in result.infos}) != 1:
-        raise ValueError(
-            "science, variance and mask must have the same full image shape"
-        )
-    mask_dtype = result.arrays[2].dtype
-    if mask_dtype.kind not in "ui":
-        raise ValueError("mask_hdu must contain an integer bit mask")
-    bits = int(bad_mask_bits)
-    if bits.bit_length() > mask_dtype.itemsize * 8:
-        raise ValueError("bad_mask_bits exceeds the FITS mask width")
-    xp = array_module(result.arrays[0])
+    if any(
+        (before.shape, before.dtype) != (after.shape, after.dtype)
+        for before, after in zip(infos, result.infos, strict=True)
+    ):
+        raise RuntimeError("FITS image shape or dtype changed during read")
+    read_xp = array_module(result.arrays[0])
+    xp = read_xp
+    if device and read_xp is np:
+        import cupy
+
+        xp = cupy
+
     with _decoded_stamp_buffers(result, xp) as arrays:
         # Broadcast the row and column indices across all positions per plane.
-        local = xp.asarray(centers - [x0, y0])
+        local = read_xp.asarray(centers - [x0, y0])
         rows = (
-            local[:, 1, None, None] + xp.arange(stamp_shape[0])[None, :, None]
+            local[:, 1, None, None]
+            + read_xp.arange(stamp_shape[0])[None, :, None]
         )
         cols = (
-            local[:, 0, None, None] + xp.arange(stamp_shape[1])[None, None, :]
+            local[:, 0, None, None]
+            + read_xp.arange(stamp_shape[1])[None, None, :]
         )
         for role, plane in zip(
             ("science", "variance", "mask"), result.arrays, strict=True
         ):
-            arrays[role] = plane[rows, cols]
+            stamps = plane[rows, cols]
+            arrays[role] = (
+                xp.asarray(stamps, blocking=True)
+                if xp is not read_xp
+                else stamps
+            )
         science, variance, mask = (
             arrays["science"],
             arrays["variance"],
@@ -433,8 +464,10 @@ def read_forced_photometry_stamps(
             & (variance > 0)
         )
         arrays["offsets"] = xp.asarray(xy - rounded)
+    metadata = result.metadata()
+    metadata["location"] = "device" if device else "host"
     return ForcedPhotometryStamps(
-        **arrays, section=section, metadata=result.metadata()
+        **arrays, section=section, metadata=metadata
     )
 
 

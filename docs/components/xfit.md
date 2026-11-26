@@ -650,15 +650,24 @@ aperture = forced_circular_aperture_photometry(
 )
 ```
 
-Each stamp must fit inside the image and have odd height and width.
-The nearest integer pixel centers the stamp, with a half-pixel tie rounded
-up. The returned offsets preserve the original subpixel positions. All
-stamps retain their FITS dtypes and input order, including repeated
-positions. `batch.good` selects finite science and finite positive
-variance with the requested mask bits clear. The default reader returns
-NumPy arrays. The example requires an xDR-supported compressed FITS
-section and returns CuPy arrays. `batch.metadata` records the reader and
-array location.
+Each stamp must have odd height and width and fit inside the image. If a
+stamp crosses an edge, the error identifies its zero-based input row.
+The nearest integer pixel centers the stamp. Half-pixel ties round to
+the even integer, as in xPois. Both 9.5 and 10.5 center on pixel 10.
+The returned offsets preserve the original subpixel positions. Stamps
+retain their FITS dtypes and input order, including repeated positions.
+`batch.good` selects finite science and finite positive variance with
+the requested mask bits clear.
+
+Memory for the read scales with the bounding rectangle. For example, a
+4096 × 4096 rectangle with float32 science and variance and an int32 mask
+needs 192 MiB for the three decoded planes alone, even for just two
+targets. Group widely separated targets into smaller batches to limit
+that cost. With `reader="astropy"`, stamps are gathered on the host before
+copying them to the GPU when requested. The xDR example decodes its
+supported compressed section on the GPU. With either reader, `device=False`
+(the default) returns NumPy arrays and `device=True` returns CuPy arrays.
+`batch.metadata` records the reader and array location.
 
 ## Distributed fitting
 

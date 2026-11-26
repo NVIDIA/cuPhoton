@@ -120,11 +120,11 @@ def test_forced_photometry_read_matches_full_image_pixel_windows(
 ):
     path, positions, args, (image, variance, mask) = forced_photometry_visit
     batch = read_forced_photometry_stamps(path, positions, **args)
-    assert batch.section == (slice(2, 6), slice(2, 12))
+    assert batch.section == (slice(1, 6), slice(2, 12))
     assert batch.metadata["reader"] == "astropy"
     assert batch.metadata["location"] == "host"
     np.testing.assert_equal(
-        batch.offsets, [[-0.25, 0.25], [-0.5, -0.5], [-0.5, -0.5]]
+        batch.offsets, [[-0.25, 0.25], [-0.5, 0.5], [-0.5, 0.5]]
     )
     good = (mask >= 0) & np.isfinite(image) & (variance > 0)
     for stamps, plane in (
@@ -134,7 +134,7 @@ def test_forced_photometry_read_matches_full_image_pixel_windows(
         (batch.good, good),
     ):
         expected = np.stack(
-            (plane[3:6, 7:12], plane[2:5, 2:7], plane[2:5, 2:7])
+            (plane[3:6, 7:12], plane[1:4, 2:7], plane[1:4, 2:7])
         )
         np.testing.assert_equal(stamps, expected)
         assert stamps.dtype == plane.dtype
@@ -149,16 +149,47 @@ def test_forced_photometry_read_matches_full_image_pixel_windows(
     assert measurement.flux_error[1, 0] == np.sqrt(2.0)
 
 
+def test_forced_photometry_half_ties_match_window_centers(
+    forced_photometry_visit,
+):
+    from cuphoton.xpois.stamps import window_stamps
+
+    path, _, args, (image, _, _) = forced_photometry_visit
+    xy = np.array([[-0.5, -0.5], [0.5, 0.5], [1.5, 1.5], [10.5, 4.5]])
+    batch = read_forced_photometry_stamps(
+        path, xy, **(args | {"stamp_shape": (1, 1)})
+    )
+    np.testing.assert_equal(batch.science, window_stamps(image, xy, 1))
+    np.testing.assert_equal(
+        batch.offsets, [[-0.5, -0.5], [0.5, 0.5], [-0.5, -0.5], [0.5, 0.5]]
+    )
+
+
 @pytest.mark.parametrize("reader", ["astropy", "xdr"])
 def test_forced_photometry_device_read_matches_host(
-    forced_photometry_visit, reader, cupy_device
+    forced_photometry_visit, reader, cupy_device, monkeypatch
 ):
     cp = cupy_device
-    path, positions, args, _ = forced_photometry_visit
+    path, _, args, _ = forced_photometry_visit
+    positions = [[2, 1], [13, 6]]
     host = read_forced_photometry_stamps(path, positions, **args)
+    transfers = []
+    if reader == "astropy":
+        asarray = cp.asarray
+
+        def record_transfer(value, *args, **kwargs):
+            if isinstance(value, np.ndarray):
+                transfers.append(value.shape)
+            return asarray(value, *args, **kwargs)
+
+        monkeypatch.setattr(cp, "asarray", record_transfer)
     device = read_forced_photometry_stamps(
         path, positions, reader=reader, device=True, **args
     )
+    if reader == "astropy":
+        # The 8 x 16 rectangle stays on the host.
+        assert transfers.count((2, 3, 5)) >= 3
+        assert all(shape in {(2, 3, 5), (2, 2)} for shape in transfers)
     assert device.section == host.section
     assert device.metadata["reader"] == reader
     assert device.metadata["location"] == "device"
@@ -169,7 +200,13 @@ def test_forced_photometry_device_read_matches_host(
         np.testing.assert_array_equal(cp.asnumpy(actual), expected)
 
 
-def test_forced_photometry_rejects_mismatched_full_plane_shapes(tmp_path):
+def _unexpected_pixel_read(*args, **kwargs):
+    pytest.fail("pixel read attempted before header validation")
+
+
+def test_forced_photometry_rejects_mismatched_full_plane_shapes(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "mismatched.fits"
     fits.HDUList(
         [
@@ -180,6 +217,7 @@ def test_forced_photometry_rejects_mismatched_full_plane_shapes(tmp_path):
         ]
     ).writeto(path)
     # Every HDU contains the requested section.
+    monkeypatch.setattr(fits_io, "read_fits_images", _unexpected_pixel_read)
     with pytest.raises(ValueError, match="same full image shape"):
         read_forced_photometry_stamps(
             path,
@@ -217,7 +255,7 @@ def test_forced_photometry_rejects_invalid_coordinates_before_read(
 
 
 def test_forced_photometry_read_rejects_partial_stamp_and_mask_errors(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     _, _, _, _, _ = _input(tmp_path)
     path = tmp_path / "plane-0.fits"
@@ -228,16 +266,30 @@ def test_forced_photometry_read_rejects_partial_stamp_and_mask_errors(
         bad_mask_bits=1,
         stamp_shape=(3, 5),
     )
-    with pytest.raises(ValueError, match="section"):
-        read_forced_photometry_stamps(path, [[0, 2]], **args)
-    with pytest.raises(ValueError, match="integer bit mask"):
-        read_forced_photometry_stamps(
-            path, [[3, 2]], **(args | {"mask_hdu": 1})
-        )
-    with pytest.raises(ValueError, match="mask width"):
-        read_forced_photometry_stamps(
-            path, [[3, 2]], **(args | {"bad_mask_bits": 1 << 32})
-        )
+    with monkeypatch.context() as patch:
+        patch.setattr(fits_io, "read_fits_images", _unexpected_pixel_read)
+        xy = [
+            [3, 2],
+            [0, 2],
+            [5, 8],
+            [10, 3],
+            [-0.6, 4],
+            [3, 0],
+            [3, 9],
+            [1e200, 2],
+        ]
+        with pytest.raises(
+            ValueError, match=r"position rows \[1, 3, 4, 5, 6, 7\]"
+        ):
+            read_forced_photometry_stamps(path, xy, **args)
+        with pytest.raises(ValueError, match="integer bit mask"):
+            read_forced_photometry_stamps(
+                path, [[3, 2]], **(args | {"mask_hdu": 1})
+            )
+        with pytest.raises(ValueError, match="mask width"):
+            read_forced_photometry_stamps(
+                path, [[3, 2]], **(args | {"bad_mask_bits": 1 << 32})
+            )
     with pytest.raises(ValueError, match="uncompressed FITS sections"):
         read_forced_photometry_stamps(path, [[3, 2]], reader="xdr", **args)
 
