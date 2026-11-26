@@ -13,9 +13,17 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
+from astropy.utils.masked import Masked
 
+from cuphoton.core import fits_io
 from cuphoton.core.cli import run_component
-from cuphoton.xfit import LMConfig, executor, fit_dipoles
+from cuphoton.xfit import (
+    LMConfig,
+    executor,
+    fit_dipoles,
+    forced_circular_aperture_photometry,
+    read_forced_photometry_stamps,
+)
 from cuphoton.xfit.fits_input import load_fits_input, plan_fits_input
 from cuphoton.xfit.io import load_xfit_dataset
 
@@ -61,6 +69,254 @@ def _input(tmp_path, *, mode="difference"):
     return path, data, image, mask, variance
 
 
+@pytest.fixture
+def cupy_device():
+    if os.environ.get("CUDA_VISIBLE_DEVICES") == "":
+        pytest.skip("GPU tests disabled")
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() == 0:
+            pytest.skip("a CUDA device is required")
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("a CUDA device is required")
+    return cp
+
+
+@pytest.fixture
+def forced_photometry_visit(tmp_path):
+    image = np.arange(128, dtype=np.float32).reshape(8, 16)
+    image[3, 3] = np.nan
+    variance = np.full(image.shape, 2.0, dtype=np.float64)
+    variance[2, 3] = 0
+    mask = np.zeros(image.shape, dtype=np.int16)
+    # The highest mask bit rejects pixels; the low bit is informational.
+    mask[2, 4] = -32768
+    mask[3, 4] = 1
+    path = tmp_path / "visit.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            *(
+                fits.CompImageHDU(
+                    plane, compression_type="GZIP_2", quantize_level=0
+                )
+                for plane in (image, variance, mask)
+            ),
+        ]
+    ).writeto(path)
+    positions = [[8.75, 4.25], [3.5, 2.5], [3.5, 2.5]]
+    args = dict(
+        science_hdu=1,
+        variance_hdu=2,
+        mask_hdu=3,
+        bad_mask_bits=32768,
+        stamp_shape=(3, 5),
+    )
+    return path, positions, args, (image, variance, mask)
+
+
+def test_forced_photometry_read_matches_full_image_pixel_windows(
+    forced_photometry_visit,
+):
+    path, positions, args, (image, variance, mask) = forced_photometry_visit
+    batch = read_forced_photometry_stamps(path, positions, **args)
+    assert batch.section == (slice(1, 6), slice(2, 12))
+    assert batch.metadata["reader"] == "astropy"
+    assert batch.metadata["location"] == "host"
+    np.testing.assert_equal(
+        batch.offsets, [[-0.25, 0.25], [-0.5, 0.5], [-0.5, 0.5]]
+    )
+    good = (mask >= 0) & np.isfinite(image) & (variance > 0)
+    for stamps, plane in (
+        (batch.science, image),
+        (batch.variance, variance),
+        (batch.mask, mask),
+        (batch.good, good),
+    ):
+        expected = np.stack(
+            (plane[3:6, 7:12], plane[1:4, 2:7], plane[1:4, 2:7])
+        )
+        np.testing.assert_equal(stamps, expected)
+        assert stamps.dtype == plane.dtype
+    measurement = forced_circular_aperture_photometry(
+        batch.science,
+        batch.variance,
+        batch.offsets,
+        radii=[1.0],
+        mask=batch.good,
+    )
+    assert measurement.flux[1, 0] == image[3, 4]
+    assert measurement.flux_error[1, 0] == np.sqrt(2.0)
+
+
+def test_forced_photometry_half_ties_match_window_centers(
+    forced_photometry_visit,
+):
+    from cuphoton.xpois.stamps import window_stamps
+
+    path, _, args, (image, _, _) = forced_photometry_visit
+    xy = np.array([[-0.5, -0.5], [0.5, 0.5], [1.5, 1.5], [10.5, 4.5]])
+    batch = read_forced_photometry_stamps(
+        path, xy, **(args | {"stamp_shape": (1, 1)})
+    )
+    np.testing.assert_equal(batch.science, window_stamps(image, xy, 1))
+    np.testing.assert_equal(
+        batch.offsets, [[-0.5, -0.5], [0.5, 0.5], [-0.5, -0.5], [0.5, 0.5]]
+    )
+
+
+@pytest.mark.parametrize("reader", ["astropy", "xdr"])
+def test_forced_photometry_device_read_matches_host(
+    forced_photometry_visit, reader, cupy_device, monkeypatch
+):
+    cp = cupy_device
+    path, _, args, _ = forced_photometry_visit
+    positions = [[2, 1], [13, 6]]
+    host = read_forced_photometry_stamps(path, positions, **args)
+    transfers = []
+    if reader == "astropy":
+        asarray = cp.asarray
+
+        def record_transfer(value, *args, **kwargs):
+            if isinstance(value, np.ndarray):
+                transfers.append(value.shape)
+            return asarray(value, *args, **kwargs)
+
+        monkeypatch.setattr(cp, "asarray", record_transfer)
+    device = read_forced_photometry_stamps(
+        path, positions, reader=reader, device=True, **args
+    )
+    if reader == "astropy":
+        # The 8 x 16 rectangle stays on the host.
+        assert transfers.count((2, 3, 5)) >= 3
+        assert all(shape in {(2, 3, 5), (2, 2)} for shape in transfers)
+    assert device.section == host.section
+    assert device.metadata["reader"] == reader
+    assert device.metadata["location"] == "device"
+    for name in ("science", "variance", "mask", "good", "offsets"):
+        actual, expected = getattr(device, name), getattr(host, name)
+        assert isinstance(actual, cp.ndarray)
+        assert actual.dtype == expected.dtype
+        np.testing.assert_array_equal(cp.asnumpy(actual), expected)
+
+
+def _unexpected_pixel_read(*args, **kwargs):
+    pytest.fail("pixel read attempted before header validation")
+
+
+def test_forced_photometry_rejects_mismatched_full_plane_shapes(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "mismatched.fits"
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(np.ones((8, 8), dtype=np.float32)),
+            fits.ImageHDU(np.ones((8, 9), dtype=np.float32)),
+            fits.ImageHDU(np.zeros((8, 8), dtype=np.int16)),
+        ]
+    ).writeto(path)
+    # Every HDU contains the requested section.
+    monkeypatch.setattr(fits_io, "read_fits_images", _unexpected_pixel_read)
+    with pytest.raises(ValueError, match="same full image shape"):
+        read_forced_photometry_stamps(
+            path,
+            [[3.25, 2.5]],
+            science_hdu=1,
+            variance_hdu=2,
+            mask_hdu=3,
+            bad_mask_bits=1,
+            stamp_shape=(3, 5),
+        )
+
+
+@pytest.mark.parametrize(
+    "positions",
+    [
+        np.ma.array([[3.0, 4.0]], mask=[[False, True]]),
+        Masked(np.array([[3.0, 4.0]]), mask=[[True, False]]),
+        np.array([[3.0 + 0.5j, 4.0]]),
+        list(np.ma.array([[3.0, 4.0]], mask=[[True, False]])),
+        list(Masked(np.array([[3.0, 4.0]]), mask=[[True, False]])),
+        [[Masked(np.array(3.0), mask=True), 4.0]],
+        np.array([[np.complex128(3.0 + 0.5j), 4.0]], dtype=object),
+    ],
+    ids=[
+        "numpy-masked",
+        "astropy-masked",
+        "complex",
+        "numpy-masked-rows",
+        "astropy-masked-rows",
+        "astropy-masked-scalar",
+        "object-complex",
+    ],
+)
+def test_forced_photometry_rejects_invalid_coordinates_before_read(
+    tmp_path, positions
+):
+    with pytest.raises(ValueError, match="unmasked real coordinates"):
+        read_forced_photometry_stamps(
+            tmp_path / "unopened.fits",
+            positions,
+            science_hdu=1,
+            variance_hdu=2,
+            mask_hdu=3,
+            bad_mask_bits=0,
+            stamp_shape=(3, 3),
+        )
+
+
+def test_forced_photometry_accepts_unmasked_object_coordinates(
+    forced_photometry_visit,
+):
+    path, positions, args, _ = forced_photometry_visit
+    expected = read_forced_photometry_stamps(path, positions, **args)
+    rows = [np.ma.array(row, dtype=object, mask=False) for row in positions]
+    batch = read_forced_photometry_stamps(path, rows, **args)
+    np.testing.assert_array_equal(batch.science, expected.science)
+    np.testing.assert_array_equal(batch.offsets, expected.offsets)
+
+
+def test_forced_photometry_read_rejects_partial_stamp_and_mask_errors(
+    tmp_path, monkeypatch
+):
+    _, _, _, _, _ = _input(tmp_path)
+    path = tmp_path / "plane-0.fits"
+    args = dict(
+        science_hdu=1,
+        variance_hdu=3,
+        mask_hdu=2,
+        bad_mask_bits=1,
+        stamp_shape=(3, 5),
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(fits_io, "read_fits_images", _unexpected_pixel_read)
+        xy = [
+            [3, 2],
+            [0, 2],
+            [5, 8],
+            [10, 3],
+            [-0.6, 4],
+            [3, 0],
+            [3, 9],
+            [1e200, 2],
+        ]
+        with pytest.raises(
+            ValueError, match=r"position rows \[1, 3, 4, 5, 6, 7\]"
+        ):
+            read_forced_photometry_stamps(path, xy, **args)
+        with pytest.raises(ValueError, match="integer bit mask"):
+            read_forced_photometry_stamps(
+                path, [[3, 2]], **(args | {"mask_hdu": 1})
+            )
+        with pytest.raises(ValueError, match="mask width"):
+            read_forced_photometry_stamps(
+                path, [[3, 2]], **(args | {"bad_mask_bits": 1 << 32})
+            )
+    with pytest.raises(ValueError, match="uncompressed FITS sections"):
+        read_forced_photometry_stamps(path, [[3, 2]], reader="xdr", **args)
+
+
 @pytest.mark.parametrize("mode", ["difference", "split"])
 def test_fits_stamps_keep_order_pixels_masks_and_variances(tmp_path, mode):
     path, _, image, mask, variance = _input(tmp_path, mode=mode)
@@ -102,10 +358,9 @@ def test_fits_planning_does_not_decode_or_initialize_a_gpu(
     tmp_path, monkeypatch
 ):
     path, _, _, _, _ = _input(tmp_path)
-    import cuphoton.xfit.fits_input as source
 
     monkeypatch.setattr(
-        source,
+        fits_io,
         "read_fits_images",
         lambda *a, **k: pytest.fail("planning decoded image payloads"),
     )
@@ -288,15 +543,14 @@ def test_npz_and_fits_cli_keep_identical_numeric_outputs(
         mask=dataset.mask,
         variance=dataset.variance,
     )
-    import cuphoton.xfit.fits_input as source
 
-    original = source.read_fits_images
+    original = fits_io.read_fits_images
 
     def read(*args, **kwargs):
         assert kwargs["reader"] == "astropy"
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(source, "read_fits_images", read)
+    monkeypatch.setattr(fits_io, "read_fits_images", read)
     for label, input_path in (("fits", path), ("npz", npz)):
         assert (
             run_component(
@@ -342,19 +596,17 @@ def test_npz_and_fits_cli_keep_identical_numeric_outputs(
 def test_fits_distributed_finalizer_reuses_only_retained_audit_stamps(
     tmp_path, monkeypatch, retain_input
 ):
-    import cuphoton.xfit.fits_input as source
-
     path, _, _, _, _ = _input(tmp_path)
     original = executor.load_xfit_dataset
     monkeypatch.setattr(executor, "collect_gpu_identity", lambda _: {})
     decodes = []
-    original_read = source.read_fits_images
+    original_read = fits_io.read_fits_images
 
     def decode(*args, **kwargs):
         decodes.append(True)
         return original_read(*args, **kwargs)
 
-    monkeypatch.setattr(source, "read_fits_images", decode)
+    monkeypatch.setattr(fits_io, "read_fits_images", decode)
 
     def read(path, **kwargs):
         dataset = original(
@@ -446,19 +698,11 @@ def test_manifest_initial_and_stamp_basis_are_preserved(tmp_path):
     assert len(dataset.input_sources) == 2
 
 
-@pytest.mark.skipif(
-    os.environ.get("CUDA_VISIBLE_DEVICES") == "", reason="GPU tests disabled"
-)
 @pytest.mark.parametrize("compressed", [False, True])
 def test_gpu_fits_stamps_remain_on_device_and_match_host(
-    tmp_path, compressed
+    tmp_path, compressed, cupy_device
 ):
-    cp = pytest.importorskip("cupy")
-    try:
-        if cp.cuda.runtime.getDeviceCount() == 0:
-            pytest.skip("a CUDA device is required")
-    except cp.cuda.runtime.CUDARuntimeError:
-        pytest.skip("a CUDA device is required")
+    cp = cupy_device
     path, _, _, _, _ = _input(tmp_path)
     if compressed:
         source = tmp_path / "plane-0.fits"

@@ -30,6 +30,7 @@ from .api import (
     fit_dipoles_device,
 )
 from .derived import DerivedDipoleQuantities, derived_dipole_quantities
+from .fits_input import ForcedPhotometryStamps, read_forced_photometry_stamps
 from .models import GaussianDipoleModel, StampDipoleModel
 from .photometry import ForcedPhotometryResult, forced_psf_photometry
 from .quality import DipoleQualityFlag, dipole_quality_flags
@@ -63,6 +64,7 @@ __all__ = [
     "FitMode",
     "FloatDType",
     "ForcedPhotometryResult",
+    "ForcedPhotometryStamps",
     "GaussianDipoleModel",
     "JacobianFunction",
     "LMConfig",
@@ -83,5 +85,6 @@ __all__ = [
     "fit_dipoles_device",
     "forced_circular_aperture_photometry",
     "forced_psf_photometry",
+    "read_forced_photometry_stamps",
     "fit_single_sources",
 ]

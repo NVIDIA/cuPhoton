@@ -7,14 +7,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
+from cuphoton.core.arrays import array_module
 from cuphoton.core.artifacts import file_sha256
-from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
 from cuphoton.core.fits_options import (
     merge_xdr_options,
     normalize_xdr_options,
@@ -63,6 +66,8 @@ def _integer(value, name, *, minimum=0):
 
 
 def _plane(value, root, *, name, auxiliary=True):
+    from cuphoton.core.fits_io import inspect_fits_image
+
     keys = {"path", "hdu", "xdr_options"}
     if auxiliary:
         keys |= {"mask_hdu", "variance_hdu", "bad_mask_bits"}
@@ -260,26 +265,12 @@ def check_fits_sources(sources, *, hashes=False):
             raise ValueError("xFit referenced FITS input changed")
 
 
-def _candidate_stamps(result, keys, plan, *, offset, ap):
-    """Retain decoded owners until copies finish, including on errors."""
-    h, w = plan.stamp_shape
-    ox, oy = offset
+@contextmanager
+def _decoded_stamp_buffers(result, ap):
+    """Hold decoded planes and submitted copies until the GPU finishes."""
     arrays = {}
-
-    def copy_stamps():
-        for key, array in zip(keys, result.arrays, strict=True):
-            arrays[key] = ap.stack(
-                [
-                    array[
-                        y - h // 2 - oy : y + h // 2 + 1 - oy,
-                        x - w // 2 - ox : x + w // 2 + 1 - ox,
-                    ]
-                    for x, y in plan.centers
-                ]
-            )
-
     if ap is np:
-        copy_stamps()
+        yield arrays
     else:
         from cuphoton.xdr.prefetch import (
             _gpu_submission_guard,
@@ -295,10 +286,204 @@ def _candidate_stamps(result, keys, plan, *, offset, ap):
                 device_id=ap.cuda.runtime.getDevice(),
             )
             try:
-                copy_stamps()
+                yield arrays
             finally:
                 _synchronize_gpu_batch(handle, synchronize_stream=True)
+
+
+def _candidate_stamps(result, keys, plan, *, offset, ap):
+    """Retain decoded owners until copies finish, including on errors."""
+    h, w = plan.stamp_shape
+    ox, oy = offset
+    with _decoded_stamp_buffers(result, ap) as arrays:
+        for key, array in zip(keys, result.arrays, strict=True):
+            arrays[key] = ap.stack(
+                [
+                    array[
+                        y - h // 2 - oy : y + h // 2 + 1 - oy,
+                        x - w // 2 - ox : x + w // 2 + 1 - ox,
+                    ]
+                    for x, y in plan.centers
+                ]
+            )
+
     return arrays
+
+
+@dataclass(frozen=True)
+class ForcedPhotometryStamps:
+    """Aligned science, variance, mask bits and usable pixels per position."""
+
+    science: Any
+    variance: Any
+    mask: Any
+    good: Any
+    offsets: Any
+    section: tuple[slice, slice]
+    metadata: dict[str, Any]
+
+
+def _invalid_position_values(value: Any) -> bool:
+    # Numeric arrays expose their mask and dtype directly. Sequences and
+    # object arrays can lose a nested mask or imaginary part on conversion.
+    if np.ma.is_masked(value):
+        return True
+    if isinstance(value, np.ndarray) and value.dtype.kind == "O":
+        return any(_invalid_position_values(item) for item in value.flat)
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, memoryview)
+    ):
+        return any(_invalid_position_values(item) for item in value)
+    return np.iscomplexobj(value)
+
+
+def read_forced_photometry_stamps(
+    path: str | Path,
+    positions: npt.ArrayLike,
+    *,
+    science_hdu: int,
+    variance_hdu: int,
+    mask_hdu: int,
+    bad_mask_bits: int,
+    stamp_shape: tuple[int, int] = (41, 41),
+    reader: str = "astropy",
+    device: bool = False,
+) -> ForcedPhotometryStamps:
+    """Gather co-registered FITS planes for forced PSF or aperture photometry.
+
+    Supply finite, real, unmasked, zero-based full-image (x, y) positions
+    on the host and odd (height, width) stamp dimensions. Each stamp is
+    centered on the nearest pixel, with half-pixel ties rounded to even.
+    The offsets are relative to those integer centers in input order. A
+    ValueError lists the zero-based rows whose stamps cross an image edge.
+
+    One shared reader call decodes the bounding rectangle for all positions.
+    Science, variance and integer mask stamps preserve their logical FITS
+    dtypes. A good pixel has finite science, finite positive variance, and
+    no selected bad mask bit. Set bad_mask_bits=0 to admit all mask bits.
+    With device=True all five array fields are CuPy arrays. Explicit
+    Astropy reads gather the stamps on the host before transfer. Select
+    reader="xdr" to require GPU decoding of a supported compressed section.
+    The (y, x) section and decoded byte count describe the input rectangle.
+    The metadata location describes the returned arrays.
+    """
+    from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
+
+    if len(stamp_shape) != 2 or any(
+        isinstance(n, bool)
+        or not isinstance(n, (int, np.integer))
+        or n < 1
+        or n % 2 != 1
+        for n in stamp_shape
+    ):
+        raise ValueError("stamp_shape must contain two positive odd integers")
+    if (
+        isinstance(bad_mask_bits, bool)
+        or not isinstance(bad_mask_bits, (int, np.integer))
+        or not 0 <= bad_mask_bits < 2**64
+    ):
+        raise ValueError("bad_mask_bits must be an unsigned 64-bit bitmask")
+    if _invalid_position_values(positions):
+        raise ValueError("positions must contain unmasked real coordinates")
+    xy = np.asarray(positions, dtype=np.float64)
+    if (
+        xy.ndim != 2
+        or xy.shape[1] != 2
+        or not len(xy)
+        or not np.isfinite(xy).all()
+    ):
+        raise ValueError("positions must be a nonempty finite (N, 2) array")
+    hdus = (science_hdu, variance_hdu, mask_hdu)
+    infos = tuple(inspect_fits_image(path, hdu) for hdu in hdus)
+    if len({info.shape for info in infos}) != 1:
+        raise ValueError(
+            "science, variance and mask must have the same full image shape"
+        )
+    mask_dtype = infos[2].dtype
+    if mask_dtype.kind not in "ui":
+        raise ValueError("mask_hdu must contain an integer bit mask")
+    bits = int(bad_mask_bits)
+    if bits.bit_length() > mask_dtype.itemsize * 8:
+        raise ValueError("bad_mask_bits exceeds the FITS mask width")
+
+    rounded = np.rint(xy)
+    half_y, half_x = (int(n) // 2 for n in stamp_shape)
+    height, width = infos[0].shape
+    inside = (
+        (rounded[:, 0] >= half_x)
+        & (rounded[:, 0] < width - half_x)
+        & (rounded[:, 1] >= half_y)
+        & (rounded[:, 1] < height - half_y)
+    )
+    if not inside.all():
+        raise ValueError(
+            "stamp footprints cross the image boundary for position rows "
+            f"{np.flatnonzero(~inside).tolist()} (zero-based)"
+        )
+    centers = rounded.astype(np.int64)
+    x0, y0 = (int(v) for v in centers.min(axis=0))
+    x1, y1 = (int(v) for v in centers.max(axis=0))
+    section = (
+        slice(y0 - half_y, y1 + half_y + 1),
+        slice(x0 - half_x, x1 + half_x + 1),
+    )
+    result = read_fits_images(
+        path,
+        hdus,
+        section=section,
+        reader=reader,
+        device=device and reader != "astropy",
+    )
+    if any(
+        (before.shape, before.dtype) != (after.shape, after.dtype)
+        for before, after in zip(infos, result.infos, strict=True)
+    ):
+        raise RuntimeError("FITS image shape or dtype changed during read")
+    read_xp = array_module(result.arrays[0])
+    xp = read_xp
+    if device and read_xp is np:
+        import cupy
+
+        xp = cupy
+
+    with _decoded_stamp_buffers(result, xp) as arrays:
+        # Broadcast the row and column indices across all positions per plane.
+        local = read_xp.asarray(centers - [x0, y0])
+        rows = (
+            local[:, 1, None, None]
+            + read_xp.arange(stamp_shape[0])[None, :, None]
+        )
+        cols = (
+            local[:, 0, None, None]
+            + read_xp.arange(stamp_shape[1])[None, None, :]
+        )
+        for role, plane in zip(
+            ("science", "variance", "mask"), result.arrays, strict=True
+        ):
+            stamps = plane[rows, cols]
+            arrays[role] = (
+                xp.asarray(stamps, blocking=True)
+                if xp is not read_xp
+                else stamps
+            )
+        science, variance, mask = (
+            arrays["science"],
+            arrays["variance"],
+            arrays["mask"],
+        )
+        unsigned = np.dtype(f"u{mask_dtype.itemsize}")
+        arrays["good"] = (
+            ((mask.view(unsigned) & unsigned.type(bits)) == 0)
+            & xp.isfinite(science)
+            & xp.isfinite(variance)
+            & (variance > 0)
+        )
+        arrays["offsets"] = xp.asarray(xy - rounded)
+    metadata = result.metadata()
+    metadata["location"] = "device" if device else "host"
+    return ForcedPhotometryStamps(
+        **arrays, section=section, metadata=metadata
+    )
 
 
 def load_fits_input(
@@ -311,6 +496,8 @@ def load_fits_input(
     xdr_options=None,
 ):
     """Read the candidate bounding region and keep GPU stamps on device."""
+    from cuphoton.core.fits_io import inspect_fits_image, read_fits_images
+
     from .io import XFitDataset, _validate_dataset_contract
 
     plan = plan_fits_input(path, mode=mode, model=model)

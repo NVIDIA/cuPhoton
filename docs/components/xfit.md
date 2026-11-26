@@ -624,6 +624,51 @@ interpolation weights. Multiply the `flux_error` for this radius by the
 square root of the corresponding `factor`.
 See [Correlation factor of weighted sums](xpois.md#correlation-factor-of-weighted-sums).
 
+### Read one exposure for both measurements
+
+`read_forced_photometry_stamps` reads a single bounding rectangle containing
+the requested positions from co-registered FITS science, variance and integer
+mask planes. Supply zero-based image coordinates `pixel_xy` on the host
+and the HDU numbers and rejected mask bits for your exposure.
+
+```python
+from cuphoton.xfit import (
+    forced_circular_aperture_photometry,
+    forced_psf_photometry,
+    read_forced_photometry_stamps,
+)
+
+batch = read_forced_photometry_stamps(
+    "visit.fits", pixel_xy, science_hdu=1, variance_hdu=3, mask_hdu=2,
+    bad_mask_bits=0b101, stamp_shape=(31, 31), reader="xdr", device=True,
+)
+psf = forced_psf_photometry(
+    batch.science, batch.variance, batch.offsets, psf_sigma=1.8, mask=batch.good,
+)
+aperture = forced_circular_aperture_photometry(
+    batch.science, batch.variance, batch.offsets, radii=(3, 6), mask=batch.good,
+)
+```
+
+Each stamp must have odd height and width and fit inside the image. If a
+stamp crosses an edge, the error identifies its zero-based input row.
+The nearest integer pixel centers the stamp. Half-pixel ties round to
+the even integer, as in xPois. Both 9.5 and 10.5 center on pixel 10.
+The returned offsets preserve the original subpixel positions. Stamps
+retain their FITS dtypes and input order, including repeated positions.
+`batch.good` selects finite science and finite positive variance with
+the requested mask bits clear.
+
+Memory for the read scales with the bounding rectangle. For example, a
+4096 × 4096 rectangle with float32 science and variance and an int32 mask
+needs 192 MiB for the three decoded planes alone, even for just two
+targets. Group widely separated targets into smaller batches to limit
+that cost. With `reader="astropy"`, stamps are gathered on the host before
+copying them to the GPU when requested. The xDR example decodes its
+supported compressed section on the GPU. With either reader, `device=False`
+(the default) returns NumPy arrays and `device=True` returns CuPy arrays.
+`batch.metadata` records the reader and array location.
+
 ## Distributed fitting
 
 `fit-dipoles --executor dragon|mpi` distributes independent candidate chunks
