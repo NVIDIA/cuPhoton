@@ -162,6 +162,7 @@ def test_xpois_measurement_signatures_are_explicit() -> None:
         "window",
         "variance",
         "local_sky",
+        "weighting",
     ]
     assert list(inspect.signature(xfit.forced_psf_photometry).parameters) == [
         "images",
@@ -170,6 +171,7 @@ def test_xpois_measurement_signatures_are_explicit() -> None:
         "psf_sigma",
         "mask",
         "psf",
+        "weighting",
     ]
 
 

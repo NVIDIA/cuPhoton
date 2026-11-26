@@ -17,6 +17,11 @@ from ._types import (
     ResolvedBackend,
     StampEvaluation,
 )
+from .aperture import (
+    CircularApertureFlag,
+    CircularApertureResult,
+    forced_circular_aperture_photometry,
+)
 from .api import (
     DeviceDipoleFitResult,
     DipoleFitResult,
@@ -47,6 +52,8 @@ __all__ = [
     "BackendArray",
     "BackendRequest",
     "BatchedLeastSquaresProblem",
+    "CircularApertureFlag",
+    "CircularApertureResult",
     "ComputeDType",
     "DerivedDipoleQuantities",
     "DeviceDipoleFitResult",
@@ -74,6 +81,7 @@ __all__ = [
     "dipole_quality_flags",
     "fit_dipoles",
     "fit_dipoles_device",
+    "forced_circular_aperture_photometry",
     "forced_psf_photometry",
     "fit_single_sources",
 ]

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from ._types import ArrayLike
 from .io import _array_module
@@ -30,8 +30,9 @@ def forced_psf_photometry(
     *,
     mask: ArrayLike | None = None,
     psf: ArrayLike | None = None,
+    weighting: Literal["inverse_variance", "uniform"] = "inverse_variance",
 ) -> ForcedPhotometryResult:
-    """Fit the flux of a circular Gaussian PSF at fixed positions.
+    """Fit a signed PSF flux at each fixed position.
 
     ``images`` and ``variance`` have shape ``(batch, y, x)``. ``positions``
     has shape ``(batch, 2)`` as ``(x, y)`` in xFit's centered pixel
@@ -44,12 +45,13 @@ def forced_psf_photometry(
     estimator and pixel-validity rules are the same. ``psf_sigma`` is ignored
     when ``psf`` is supplied.
 
-    The model is linear in the flux, so the weighted least-squares solution
-    and its standard error are exact: ``flux = sum(w P D) / sum(w P^2)`` and
-    ``flux_error = 1 / sqrt(sum(w P^2))``, with ``w`` the inverse variance on
-    usable pixels, ``P`` the PSF and ``D`` the image. A pixel is usable when
-    ``mask`` (if given) is true and the image and a positive variance are
-    finite there.
+    The fitted flux is ``sum(w P D) / sum(w P^2)`` for PSF ``P`` and image
+    ``D``. The default ``weighting="inverse_variance"`` uses ``w = 1/V`` for
+    variance ``V`` and gives standard error ``1 / sqrt(sum(w P^2))``.
+    With ``weighting="uniform"``, all usable pixels have unit weight and the
+    standard error is ``sqrt(sum(P^2 V)) / sum(P^2)``. Both modes use
+    pixels with finite image values, finite positive variance, and a true
+    ``mask`` value when a mask is supplied.
 
     ``flux_error`` is the uncertainty conditional on ``positions`` and
     ``psf_sigma`` being fixed and correct and on ``variance`` describing the
@@ -75,7 +77,12 @@ def forced_psf_photometry(
     good = xp.isfinite(data) & xp.isfinite(var) & (var > 0)
     if mask is not None:
         good &= xp.asarray(mask, dtype=bool)
-    weight = xp.where(good, 1.0 / xp.where(good, var, 1.0), 0.0)
+    if weighting == "inverse_variance":
+        weight = xp.where(good, 1.0 / xp.where(good, var, 1.0), 0.0)
+    elif weighting == "uniform":
+        weight = good
+    else:
+        raise ValueError("weighting must be 'inverse_variance' or 'uniform'")
 
     if psf is None:
         sigma = xp.broadcast_to(
@@ -106,8 +113,13 @@ def forced_psf_photometry(
     safe = xp.where(valid, information, 1.0)
     weighted = weight * kernel * xp.where(good, data, 0.0)
     flux = weighted.sum(axis=(1, 2)) / safe
+    if weighting == "uniform":
+        noise = (kernel * kernel * xp.where(good, var, 0.0)).sum(axis=(1, 2))
+        flux_error = xp.sqrt(noise) / safe
+    else:
+        flux_error = 1.0 / xp.sqrt(safe)
     return ForcedPhotometryResult(
         flux=xp.where(valid, flux, xp.nan),
-        flux_error=xp.where(valid, 1.0 / xp.sqrt(safe), xp.nan),
+        flux_error=xp.where(valid, flux_error, xp.nan),
         valid=valid,
     )

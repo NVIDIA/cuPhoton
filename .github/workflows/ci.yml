@@ -351,6 +351,8 @@ jobs:
         run: >-
           uv run --no-sync pytest -q -rs
           --junitxml="${RUNNER_TEMP}/xfit-gpu.xml"
+          tests/xfit/test_aperture.py::test_gpu_parity_with_device_radii_and_stream
+          tests/xfit/test_photometry.py::test_cupy_matches_numpy
           tests/xfit/test_models.py::test_cupy_fit_matches_numpy_when_cuda_is_available
           tests/xfit/test_models.py::test_cupy_finite_difference_theta_fix_matches_numpy
           tests/xfit/test_models.py::test_fit_dipoles_device_matches_portable_result_without_bulk_d2h
@@ -373,7 +375,7 @@ jobs:
 
           report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "xfit-gpu.xml")
           cases = report.findall(".//testcase")
-          assert len(cases) == 70, len(cases)
+          assert len(cases) == 73, len(cases)
           assert not report.findall(".//skipped"), "GPU tests must not skip"
           assert not report.findall(".//failure")
           assert not report.findall(".//error")

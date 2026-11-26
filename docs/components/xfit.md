@@ -558,6 +558,15 @@ model stamps already evaluated at the positions (`cuphoton.xpois.psf_weights`
 with the sub-pixel offsets gives the same Gaussian); `cuphoton.xpois.forced_flux_at`
 uses it to measure fluxes at fixed positions on a full plane.
 
+`weighting="inverse_variance"` is the default. To use the pixel weighting
+of Rubin's `base_PsfFlux`, pass `weighting="uniform"` and the local PSF
+evaluated at each source position. Each usable pixel then has equal weight
+in the fit. Its measured variance still contributes to the standard error,
+`sqrt(sum(P**2 * V)) / sum(P**2)`, where `P` is the PSF and `V` is the
+pixel variance. For comparisons with catalog fluxes, apply the catalog's
+photometric and aperture corrections as appropriate.
+[Rubin PSF flux implementation](https://github.com/lsst/meas_base/blob/w.2025.19/src/PsfFlux.cc)
+
 `flux_error` is conditional: it assumes the position and the PSF width are
 fixed and correct and that the variance describes the noise. A position or a
 width fitted on the same noisy image adds uncertainty that `flux_error` leaves
@@ -566,6 +575,54 @@ independent measurement, such as the image's stars. Correlated noise between
 pixels, as in a resampled difference image, also makes `flux_error` too small
 unless the variance accounts for it. The computation stays on the backend of
 `images`.
+
+## Forced circular aperture photometry
+
+`forced_circular_aperture_photometry` measures each requested radius on a
+batch of stamps. Pass CuPy science and variance arrays to run the batch
+on a GPU, or NumPy arrays to run it on a CPU. Positions use the same
+centered `(x, y)` coordinates as the PSF fit. Radii are in pixels.
+
+```python
+from cuphoton.xfit import forced_circular_aperture_photometry
+
+apertures = forced_circular_aperture_photometry(
+    images, variance, positions, radii=(3.0, 6.0), mask=mask
+)
+flux_r3 = apertures.flux[:, 0]
+error_r6 = apertures.flux_error[:, 1]
+```
+
+The aperture follows the Photutils `method="center"` convention. A pixel
+belongs when its center satisfies `dx**2 + dy**2 < radius**2`, with offsets
+measured from the supplied position. Each selected pixel contributes its
+full value if its image value is finite, its variance is finite and
+strictly positive, and the optional mask is true there. Rubin's
+sinc-weighted circular apertures use different boundary weights.
+
+`in_bounds_pixels` counts selected centers on the stamp. `used_pixels`
+counts those that pass the validity checks. `MASKED` flags a rejected
+in-bounds pixel. `TRUNCATED` flags a selected pixel center outside the
+stamp. A circle can therefore cross a stamp edge and still have complete
+coverage. Partial apertures retain the sum over the pixels actually used.
+
+`flux_error` is the square root of the sum of the used pixel variances.
+Positive correlations between pixels can make this underestimate the flux
+uncertainty. For a difference image with independent target pixels and a
+locally translated reference grid, `cuphoton.xpois.correlation_factor`
+models correlations from reference resampling and convolution. For each
+radius, build a Boolean mask of shape `(N, s, s)`, one odd square window
+per target covering its measured footprint. Set it true only at centers
+included in the sum. Pass it as `valid` and use its 0/1 values as the
+top-hat weights. Keep the leading dimension even for one target
+(`mask_2d[None, :, :]`). Use target, resampled reference and diagonal
+residual variance stamps cut from exactly the same pixels as the mask,
+including when the aperture is offset from the stamp center. With these
+aligned stamps, omit `positions`. Supply the diagonal variance used for
+the photometry as `residual_variance`, along with the fitted kernel and
+interpolation weights. Multiply the `flux_error` for this radius by the
+square root of the corresponding `factor`.
+See [Correlation factor of weighted sums](xpois.md#correlation-factor-of-weighted-sums).
 
 ## Distributed fitting
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Forced photometry
+
+- Add uniform pixel weighting to xFit and xPois forced PSF photometry,
+  with uncertainties propagated from the supplied pixel variances.
+- Measure circular aperture fluxes and errors for batches of NumPy or
+  CuPy stamps at multiple radii with `xfit.forced_circular_aperture_photometry`.
+
 ### xLens
 
 - Add NOOA as an opt-in `xlens-nooa` extra for iterative evidence queries
