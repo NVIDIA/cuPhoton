@@ -236,8 +236,20 @@ def test_forced_photometry_rejects_mismatched_full_plane_shapes(
         np.ma.array([[3.0, 4.0]], mask=[[False, True]]),
         Masked(np.array([[3.0, 4.0]]), mask=[[True, False]]),
         np.array([[3.0 + 0.5j, 4.0]]),
+        list(np.ma.array([[3.0, 4.0]], mask=[[True, False]])),
+        list(Masked(np.array([[3.0, 4.0]]), mask=[[True, False]])),
+        [[Masked(np.array(3.0), mask=True), 4.0]],
+        np.array([[np.complex128(3.0 + 0.5j), 4.0]], dtype=object),
     ],
-    ids=["numpy-masked", "astropy-masked", "complex"],
+    ids=[
+        "numpy-masked",
+        "astropy-masked",
+        "complex",
+        "numpy-masked-rows",
+        "astropy-masked-rows",
+        "astropy-masked-scalar",
+        "object-complex",
+    ],
 )
 def test_forced_photometry_rejects_invalid_coordinates_before_read(
     tmp_path, positions
@@ -252,6 +264,17 @@ def test_forced_photometry_rejects_invalid_coordinates_before_read(
             bad_mask_bits=0,
             stamp_shape=(3, 3),
         )
+
+
+def test_forced_photometry_accepts_unmasked_object_coordinates(
+    forced_photometry_visit,
+):
+    path, positions, args, _ = forced_photometry_visit
+    expected = read_forced_photometry_stamps(path, positions, **args)
+    rows = [np.ma.array(row, dtype=object, mask=False) for row in positions]
+    batch = read_forced_photometry_stamps(path, rows, **args)
+    np.testing.assert_array_equal(batch.science, expected.science)
+    np.testing.assert_array_equal(batch.offsets, expected.offsets)
 
 
 def test_forced_photometry_read_rejects_partial_stamp_and_mask_errors(

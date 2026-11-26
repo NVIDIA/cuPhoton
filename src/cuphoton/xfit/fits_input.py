@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -322,6 +323,20 @@ class ForcedPhotometryStamps:
     metadata: dict[str, Any]
 
 
+def _invalid_position_values(value: Any) -> bool:
+    # Numeric arrays expose their mask and dtype directly. Sequences and
+    # object arrays can lose a nested mask or imaginary part on conversion.
+    if np.ma.is_masked(value):
+        return True
+    if isinstance(value, np.ndarray) and value.dtype.kind == "O":
+        return any(_invalid_position_values(item) for item in value.flat)
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, memoryview)
+    ):
+        return any(_invalid_position_values(item) for item in value)
+    return np.iscomplexobj(value)
+
+
 def read_forced_photometry_stamps(
     path: str | Path,
     positions: npt.ArrayLike,
@@ -368,7 +383,7 @@ def read_forced_photometry_stamps(
         or not 0 <= bad_mask_bits < 2**64
     ):
         raise ValueError("bad_mask_bits must be an unsigned 64-bit bitmask")
-    if np.ma.is_masked(positions) or np.iscomplexobj(positions):
+    if _invalid_position_values(positions):
         raise ValueError("positions must contain unmasked real coordinates")
     xy = np.asarray(positions, dtype=np.float64)
     if (
